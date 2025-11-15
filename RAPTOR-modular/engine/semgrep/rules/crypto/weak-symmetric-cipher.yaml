@@ -1,0 +1,35 @@
+rules:
+  - id: raptor.crypto.weak.symmetric.java
+    message: Weak symmetric cipher detected. Use AES-GCM or ChaCha20-Poly1305. Verify deprecation plan.
+    languages: [java, kotlin]
+    severity: HIGH
+    pattern-either:
+      - pattern: Cipher.getInstance("DES/...", ...)
+      - pattern: Cipher.getInstance("DESede/...", ...)
+      - pattern: Cipher.getInstance("RC4", ...)
+      - pattern: Cipher.getInstance("ARCFOUR", ...)
+    metadata:
+      cwe: ["CWE-326","CWE-327"]
+      asvs: ["V3.11"]
+
+  - id: raptor.crypto.weak.symmetric.go
+    message: Weak symmetric cipher detected. Use AES-GCM or ChaCha20-Poly1305. Verify deprecation plan.
+    languages: [go]
+    severity: HIGH
+    pattern-either:
+      - pattern: des.NewCipher(...)
+      - pattern: rc4.NewCipher(...)
+    metadata:
+      cwe: ["CWE-326","CWE-327"]
+      asvs: ["V3.11"]
+
+  - id: raptor.crypto.weak.symmetric.python
+    message: Weak symmetric cipher detected. Use AES-GCM or ChaCha20-Poly1305. Verify deprecation plan.
+    languages: [python]
+    severity: HIGH
+    pattern-either:
+      - pattern: Crypto.Cipher.DES.new(...)
+      - pattern: Crypto.Cipher.ARC4.new(...)
+    metadata:
+      cwe: ["CWE-326","CWE-327"]
+      asvs: ["V3.11"]

@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3:*)",
+      "Bash(mkdir:*)",
+      "Bash(semgrep:*)",
+      "Bash(find:*)",
+      "Bash(unset ANTHROPIC_API_KEY)",
+      "Bash(unset:*)",
+      "Bash(chmod:*)",
+      "Bash(./test_fixes.sh)",
+      "Bash(pip3 list:*)",
+      "Bash(pip3 install:*)",
+      "Bash(cat:*)",
+      "Bash(/opt/homebrew/bin/semgrep scan:*)",
+      "Bash(env)",
+      "Bash(echo:*)",
+      "Bash(xargs cat:*)",
+      "Bash(./vulnerable_test)",
+      "Bash(/Users/daniel/Downloads/raptor-modular/RAPTOR-daniel-modular/test/vulnerable_test)",
+      "Bash(./compile_test.sh:*)",
+      "Bash(./test/vulnerable_test)",
+      "Bash(afl-clang-fast:*)",
+      "Bash(/usr/local/bin/jamf:*)",
+      "Bash(gcc:*)",
+      "Bash(./build_testbench.sh:*)",
+      "Bash(./raptor_testbench_asan:*)",
+      "Bash(/usr/bin/grep:*)",
+      "Bash(timeout 90 python3:*)",
+      "Bash(./test/raptor_testbench_asan:*)",
+      "Bash(export CODEQL_QUERIES=/Users/daniel/reverse_engineering/codeql-queries)",
+      "Bash(export ANTHROPIC_API_KEY=sk-ant-api03-example)",
+      "Bash(kill:*)",
+      "Bash(pkill:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

@@ -1,0 +1,24 @@
+rules:
+  - id: raptor.crypto.iv.literal.java
+    message: IV or nonce is a constant literal. Use SecureRandom or library-generated nonces. Verify randomness.
+    languages: [java, kotlin]
+    severity: HIGH
+    pattern-either:
+      - pattern: new IvParameterSpec(new byte[] { ... })
+      - pattern: new GCMParameterSpec($T, new byte[] { ... })
+    metadata:
+      cwe: ["CWE-330"]
+      asvs: ["V7.3"]
+
+  - id: raptor.crypto.nonce.literal.python
+    message: Nonce is a constant literal. Use os.urandom() or library defaults. Verify randomness.
+    languages: [python]
+    severity: HIGH
+    patterns:
+      - pattern: AESGCM($K).encrypt($NONCE, $PT, $AD)
+      - metavariable-pattern:
+          metavariable: $NONCE
+          pattern: b"..."
+    metadata:
+      cwe: ["CWE-330"]
+      asvs: ["V7.3"]

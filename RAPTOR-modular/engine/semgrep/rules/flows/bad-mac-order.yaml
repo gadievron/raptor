@@ -1,0 +1,26 @@
+rules:
+  - id: raptor.crypto.flow.mac-on-plaintext-after-encrypt.java
+    message: MAC is computed on plaintext while also encrypting. Prefer Encrypt-then-MAC of ciphertext. Verify with test vectors.
+    languages: [java, kotlin]
+    severity: HIGH
+    patterns:
+      - pattern: |
+          $T1 $CT = $CIPHER.doFinal($PT);
+      - pattern: |
+          $MAC.doFinal($PT);
+    metadata:
+      cwe: ["CWE-353","CWE-310"]
+      asvs: ["V3.11"]
+
+  - id: raptor.crypto.flow.mac-after-decrypt.java
+    message: MAC verification is performed after decryption. Verify MAC before decryption.
+    languages: [java, kotlin]
+    severity: HIGH
+    patterns:
+      - pattern: |
+          $T2 $PT = $CIPHER.doFinal($CT);
+      - pattern: |
+          $MAC.doFinal($PT);
+    metadata:
+      cwe: ["CWE-353","CWE-310"]
+      asvs: ["V3.11"]

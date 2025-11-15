@@ -1,0 +1,32 @@
+rules:
+  - id: raptor.web.ssrf.dynamic-url
+    message: Dynamic URL fetch may lead to SSRF. Verify input constraints and allowlist domains. Capture egress logs for verification.
+    languages: [python, go, java, javascript, typescript]
+    severity: HIGH
+    pattern-either:
+      - pattern: requests.$FUNC($URL, ...)
+      - pattern: http.Get($URL)
+      - pattern: URL.openConnection()
+      - pattern: fetch($URL, ...)
+
+  - id: raptor.web.ssrf.taint.python
+    message: Untrusted data flows into outbound HTTP requests. Enforce strict allowlists.
+    languages: [python]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: request.GET[$_]
+          - pattern: request.POST[$_]
+          - pattern: flask.request.args[$_]
+          - pattern: flask.request.form[$_]
+          - pattern: input(...)
+    pattern-sinks:
+      - pattern-either:
+          - pattern: requests.get($URL, ...)
+          - pattern: requests.post($URL, ...)
+          - pattern: urllib.request.urlopen($URL, ...)
+    pattern-sanitizers:
+      - pattern: urllib.parse.urljoin($BASE, $URL)
+    metadata:
+      cwe: ["CWE-918"]

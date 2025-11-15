@@ -1,0 +1,35 @@
+rules:
+  - id: raptor.injection.sql.concatenation
+    message: SQL query formed by string concatenation; consider parameterised queries or prepared statements.
+    languages: [java, python, javascript, php]
+    severity: HIGH
+    pattern-either:
+      - pattern: executeQuery("SELECT " + $X + " FROM " + $Y)
+      - pattern: query = "SELECT " + ...
+    metadata:
+      cwe: ["CWE-89"]
+      asvs: ["V5.1"]
+
+  - id: raptor.injection.sql.taint.python
+    message: Untrusted data flows into SQL execution. Use parameterised queries or placeholders.
+    languages: [python]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: request.GET[$_]
+          - pattern: request.POST[$_]
+          - pattern: flask.request.args[$_]
+          - pattern: flask.request.form[$_]
+          - pattern: input(...)
+          - pattern: os.environ[$_]
+    pattern-sinks:
+      - pattern-either:
+          - pattern: $DB.execute($QUERY)
+          - pattern: $DB.executemany($QUERY)
+    pattern-sanitizers:
+      - pattern: psycopg2.sql.SQL(...)
+      - pattern: sqlalchemy.text(...)
+    metadata:
+      cwe: ["CWE-89"]
+      

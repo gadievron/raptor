@@ -1,0 +1,42 @@
+rules:
+  - id: raptor.crypto.rsa.small-key.java
+    message: RSA key size too small. Use >= 2048 bits. Verify by regenerating keys and updating tests.
+    languages: [java, kotlin]
+    severity: HIGH
+    patterns:
+      - pattern: |
+          KeyPairGenerator $KPG = KeyPairGenerator.getInstance("RSA");
+      - pattern: |
+          $KPG.initialize($N, ...)
+      - metavariable-comparison:
+          metavariable: $N
+          comparison: $N < 2048
+    metadata:
+      cwe: ["CWE-326"]
+      asvs: ["V3.11"]
+
+  - id: raptor.crypto.rsa.small-key.python
+    message: RSA key size too small. Use >= 2048 bits. Verify with known-answer tests.
+    languages: [python]
+    severity: HIGH
+    patterns:
+      - pattern: rsa.generate_private_key(public_exponent=$E, key_size=$N, ...)
+      - metavariable-comparison:
+          metavariable: $N
+          comparison: $N < 2048
+    metadata:
+      cwe: ["CWE-326"]
+      asvs: ["V3.11"]
+
+  - id: raptor.crypto.rsa.small-key.go
+    message: RSA key size too small. Use >= 2048 bits. Verify with known-answer tests.
+    languages: [go]
+    severity: HIGH
+    patterns:
+      - pattern: rsa.GenerateKey($R, $N)
+      - metavariable-comparison:
+          metavariable: $N
+          comparison: $N < 2048
+    metadata:
+      cwe: ["CWE-326"]
+      asvs: ["V3.11"]

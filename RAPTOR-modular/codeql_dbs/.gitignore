@@ -1,0 +1,4 @@
+# Ignore all CodeQL databases (they are large and can be regenerated)
+*
+!.gitignore
+!README.md

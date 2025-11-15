@@ -1,0 +1,34 @@
+rules:
+  - id: raptor.crypto.weak-hash.java
+    message: Weak hash function detected. Use SHA-256 or better. Verify migration and test vectors.
+    languages: [java, kotlin]
+    severity: HIGH
+    pattern-either:
+      - pattern: MessageDigest.getInstance("MD5")
+      - pattern: MessageDigest.getInstance("SHA1")
+      - pattern: MessageDigest.getInstance("SHA-1")
+    metadata:
+      cwe: ["CWE-328"]
+      asvs: ["V3.9"]
+
+  - id: raptor.crypto.weak-hash.python
+    message: Weak hash function detected. Use SHA-256 or better. Verify migration and test vectors.
+    languages: [python]
+    severity: HIGH
+    pattern-either:
+      - pattern: hashlib.md5(...)
+      - pattern: hashlib.sha1(...)
+    metadata:
+      cwe: ["CWE-328"]
+      asvs: ["V3.9"]
+
+  - id: raptor.crypto.weak-hash.go
+    message: Weak hash function detected. Use SHA-256 or better. Verify migration and test vectors.
+    languages: [go]
+    severity: HIGH
+    pattern-either:
+      - pattern: md5.New()
+      - pattern: sha1.New()
+    metadata:
+      cwe: ["CWE-328"]
+      asvs: ["V3.9"]

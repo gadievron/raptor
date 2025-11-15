@@ -1,0 +1,6 @@
+# environment variables:
+AFL_CUSTOM_INFO_PROGRAM=./vuln_fuzz_target_unprotected
+AFL_CUSTOM_INFO_PROGRAM_ARGV=@@
+AFL_CUSTOM_INFO_OUT=out/default
+# command line:
+'/opt/homebrew/Cellar/afl++/4.34c_1/libexec/afl-fuzz' '-i' 'in' '-o' 'out' '--' './vuln_fuzz_target_unprotected' '@@'

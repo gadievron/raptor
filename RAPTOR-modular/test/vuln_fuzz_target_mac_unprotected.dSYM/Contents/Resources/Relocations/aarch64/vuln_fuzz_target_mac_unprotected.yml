@@ -1,0 +1,5 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     vuln_fuzz_target_mac_unprotected
+relocations:     []
+...

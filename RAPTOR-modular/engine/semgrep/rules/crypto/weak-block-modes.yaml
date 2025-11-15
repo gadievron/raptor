@@ -1,0 +1,18 @@
+rules:
+  - id: raptor.crypto.aes.ecb.java
+    message: AES-ECB is insecure. Use AEAD modes like GCM. Verify migration plan.
+    languages: [java, kotlin]
+    severity: HIGH
+    pattern: Cipher.getInstance("AES/ECB/PKCS5Padding")
+    metadata:
+      cwe: ["CWE-327"]
+      asvs: ["V3.11"]
+
+  - id: raptor.crypto.aes.ecb.python
+    message: AES-ECB is insecure. Use AEAD modes like GCM. Verify migration plan.
+    languages: [python]
+    severity: HIGH
+    pattern: Crypto.Cipher.AES.new($K, Crypto.Cipher.AES.MODE_ECB, ...)
+    metadata:
+      cwe: ["CWE-327"]
+      asvs: ["V3.11"]

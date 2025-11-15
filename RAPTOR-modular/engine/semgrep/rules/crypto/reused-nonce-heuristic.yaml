@@ -1,0 +1,23 @@
+rules:
+  - id: raptor.crypto.nonce.reuse.gcm.literal.java
+    message: Potential nonce reuse. Detected literal or constant nonce with AES-GCM. Verify unique nonces per key.
+    languages: [java, kotlin]
+    severity: HIGH
+    pattern-either:
+      - pattern: new GCMParameterSpec($T, new byte[] { ... })
+    metadata:
+      cwe: ["CWE-323","CWE-330"]
+      asvs: ["V7.3"]
+
+  - id: raptor.crypto.nonce.reuse.gcm.literal.python
+    message: Potential nonce reuse. Literal nonce used for AEAD. Verify unique nonces per key.
+    languages: [python]
+    severity: HIGH
+    patterns:
+      - pattern: AESGCM($K).encrypt($NONCE, $PT, $AD)
+      - metavariable-pattern:
+          metavariable: $NONCE
+          pattern: b"..."
+    metadata:
+      cwe: ["CWE-323","CWE-330"]
+      asvs: ["V7.3"]

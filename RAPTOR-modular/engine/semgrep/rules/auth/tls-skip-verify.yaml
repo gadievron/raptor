@@ -1,0 +1,11 @@
+rules:
+  - id: raptor.tls.skip-verify
+    message: TLS verification disabled (insecure). Do not set verify=False or TrustAllHosts in production.
+    languages: [python, java, javascript]
+    severity: HIGH
+    pattern-either:
+      - pattern: requests.get(..., verify=False)
+      - pattern: HttpsURLConnection.setDefaultHostnameVerifier($X)
+    metadata:
+      cwe: ["CWE-295"]
+      asvs: ["V14.1"]
