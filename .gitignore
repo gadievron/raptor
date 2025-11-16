@@ -5,3 +5,6 @@
 *.pyc
 __pycache__/
 
+# RAPTOR outputs
+out/
+

@@ -99,6 +99,31 @@ RAPTOR supports multiple LLM providers with different capabilities:
 
 ### Run Your First Scan
 
+**NEW: Unified Launcher** - Single entry point for all RAPTOR capabilities!
+
+```bash
+# Full autonomous workflow (RECOMMENDED)
+python3 raptor.py agentic --repo /path/to/your/code
+
+# Static analysis only
+python3 raptor.py scan --repo /path/to/code --policy_groups secrets,owasp
+
+# Binary fuzzing
+python3 raptor.py fuzz --binary /path/to/binary --duration 3600
+
+# Web application scanning
+python3 raptor.py web --url https://example.com
+
+# CodeQL analysis
+python3 raptor.py codeql --repo /path/to/code --languages java
+
+# Get help
+python3 raptor.py --help
+python3 raptor.py help scan
+```
+
+**Classic Commands** (still supported):
+
 ```bash
 # Full autonomous workflow
 python3 raptor_agentic.py --repo /path/to/your/code
@@ -126,27 +151,34 @@ out/scan_<repo>_<timestamp>/
 
 ## Architecture Overview
 
-RAPTOR uses a clean modular architecture:
+RAPTOR uses a clean modular architecture with a **unified launcher**:
 
 ```
-RAPTOR-daniel-modular/
+raptor/
+├── raptor.py          # 🚀 UNIFIED LAUNCHER (new entry point!)
 ├── core/              # Shared utilities (config, logging, SARIF)
-├── packages/          # Security capabilities (5 independent packages)
+├── packages/          # Security capabilities (independent packages)
 │   ├── static-analysis/   # Semgrep + CodeQL scanning
-│   ├── llm-analysis/      # LLM-powered analysis & exploit generation
+│   ├── llm_analysis/      # LLM-powered analysis & exploit generation
+│   ├── codeql/            # CodeQL database & query management
+│   ├── fuzzing/           # AFL++ binary fuzzing
+│   ├── binary_analysis/   # GDB crash analysis
 │   ├── recon/             # Reconnaissance & tech enumeration
 │   ├── sca/               # Software Composition Analysis
 │   └── web/               # Web application testing
 ├── out/               # All outputs (scans, logs, reports)
 ├── docs/              # Documentation
-└── raptor_agentic.py  # Full workflow orchestrator
+├── raptor_agentic.py  # Full workflow orchestrator (legacy)
+├── raptor_codeql.py   # CodeQL workflow (legacy)
+└── raptor_fuzzing.py  # Fuzzing workflow (legacy)
 ```
 
 **Key Principles**:
 - ✅ **Modular**: Each package is independent and standalone
-- ✅ **Extensible**: Easy to add new security capabilities
+- ✅ **Extensible**: Easy to add new engines - just add to the launcher!
 - ✅ **Clean**: No circular dependencies, clear separation of concerns
 - ✅ **Testable**: Every component can be tested in isolation
+- 🆕 **Unified**: Single `raptor.py` launcher for all capabilities
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for detailed technical documentation.
 
@@ -154,11 +186,42 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for detailed technical docume
 
 ## Usage
 
-### 1. Static Analysis Only
+### Unified Launcher (Recommended)
+
+The new `raptor.py` launcher provides a single entry point for all capabilities:
+
+```bash
+# Show all available modes
+python3 raptor.py --help
+
+# Get help for a specific mode
+python3 raptor.py help scan
+python3 raptor.py help fuzz
+```
+
+### 1. Full Autonomous Workflow
+
+Run everything end-to-end with LLM-powered analysis:
+
+```bash
+# Using unified launcher (recommended)
+python3 raptor.py agentic --repo /path/to/code --max-findings 10
+
+# Classic command (still works)
+python3 raptor_agentic.py --repo /path/to/code --max-findings 10
+```
+
+**Output**: Complete security assessment with scans, analysis, exploits, and patches
+
+### 2. Static Analysis Only
 
 Scan your code with Semgrep:
 
 ```bash
+# Using unified launcher
+python3 raptor.py scan --repo /path/to/code --policy_groups secrets,owasp
+
+# Classic command
 python3 packages/static-analysis/scanner.py \
   --repo /path/to/code \
   --policy_groups secrets,owasp
@@ -166,12 +229,58 @@ python3 packages/static-analysis/scanner.py \
 
 **Output**: SARIF files with findings
 
-### 2. LLM Analysis Only
+### 3. CodeQL Analysis
+
+Deep static analysis with CodeQL:
+
+```bash
+# Using unified launcher
+python3 raptor.py codeql --repo /path/to/code --languages java
+
+# Classic command
+python3 raptor_codeql.py --repo /path/to/code --languages java
+```
+
+**Output**: CodeQL findings with dataflow analysis
+
+### 4. Binary Fuzzing
+
+Fuzz binaries with AFL++:
+
+```bash
+# Using unified launcher
+python3 raptor.py fuzz --binary /path/to/binary --duration 3600
+
+# Classic command
+python3 raptor_fuzzing.py --binary /path/to/binary --duration 3600
+```
+
+**Output**: Crash findings with LLM-powered exploit generation
+
+### 5. Web Application Testing
+
+Test web applications:
+
+```bash
+# Using unified launcher
+python3 raptor.py web --url https://example.com
+
+# Classic command
+python3 packages/web/scanner.py --url https://example.com
+```
+
+**Output**: Web vulnerability report
+
+### 6. LLM Analysis Only
 
 Analyze existing SARIF findings with LLM:
 
 ```bash
-python3 packages/llm-analysis/agent.py \
+# Using unified launcher
+python3 raptor.py analyze --repo /path/to/code --sarif findings.sarif --max-findings 10
+
+# Classic command
+python3 packages/llm_analysis/agent.py \
   --repo /path/to/code \
   --sarif findings.sarif \
   --max-findings 10
@@ -179,55 +288,38 @@ python3 packages/llm-analysis/agent.py \
 
 **Output**: Analysis report, exploits, patches
 
-### 3. Full Autonomous Workflow
 
-Run everything end-to-end:
+## Adding New Engines/Scanners
 
-```bash
-python3 raptor_agentic.py \
-  --repo /path/to/code \
-  --policy-groups all \
-  --max-findings 10 \
-  --mode thorough
+The unified launcher makes it easy to add new engines. Here's how:
+
+1. **Create your new scanner package** in `packages/my-scanner/`
+2. **Add an entry point** with CLI interface (`agent.py` or `scanner.py`)
+3. **Update raptor.py** to add your new mode:
+
+```python
+def mode_my_scanner(args: list) -> int:
+    """Run my new scanner."""
+    script_root = Path(__file__).parent
+    scanner_script = script_root / "packages/my-scanner/agent.py"
+    
+    if not scanner_script.exists():
+        print(f"✗ Scanner not found: {scanner_script}")
+        return 1
+    
+    print("\n[*] Running my scanner...\n")
+    return run_script(scanner_script, args)
+
+# Add to mode_handlers in main()
+mode_handlers = {
+    # ... existing modes ...
+    'myscan': mode_my_scanner,
+}
 ```
 
-**Output**: Complete security assessment
+4. **Users can now run**: `python3 raptor.py myscan --option value`
 
-### 4. Reconnaissance
-
-Enumerate technology stack:
-
-```bash
-python3 packages/recon/agent.py \
-  --target /path/to/code \
-  --out out/recon_report
-```
-
-**Output**: Technology stack report (languages, frameworks, dependencies)
-
-### 5. Software Composition Analysis (SCA)
-
-Check for vulnerable dependencies:
-
-```bash
-python3 packages/sca/agent.py \
-  --repo /path/to/code \
-  --out out/sca_report
-```
-
-**Output**: Dependency vulnerability report
-
-### 6. Web Application Testing
-
-Test running web applications:
-
-```bash
-python3 packages/web/scanner.py \
-  --url https://example.com \
-  --out out/web_report
-```
-
-**Output**: Web vulnerability report (OWASP Top 10 checks)
+That's it! No need to ask users to remember individual script paths.
 
 
 
