@@ -1,10 +1,35 @@
 # RAPTOR - Autonomous Offensive/Defensive Security Research Framework, based on Claude Code
 
-**Authors:** Gadi Evron & Daniel Cuthbert
-             (@gadievron, @danielcuthbert)
+**Authors:** Gadi Evron & Daniel Cuthbert (@gadievron, @danielcuthbert)
+
 **License:** MIT (see LICENSE file)
+
 **Repository:** https://github.com/gadievron/raptor
+
 **Dependencies:** See DEPENDENCIES.md for external tools and licenses
+
+```text
+╔═══════════════════════════════════════════════════════════════════════════╗ 
++                                                                            ║
+║    ██████╗  █████╗ ██████╗ ████████╗ ██████╗ ██████╗                      ║ 
+║    ██╔══██╗██╔══██╗██╔══██╗╚══██╔══╝██╔═══██╗██╔══██╗                     ║ 
+║    ██████╔╝███████║██████╔╝   ██║   ██║   ██║██████╔╝                     ║ 
+║    ██╔══██╗██╔══██║██╔═══╝    ██║   ██║   ██║██╔══██╗                     ║ 
+║    ██║  ██║██║  ██║██║        ██║   ╚██████╔╝██║  ██║                     ║ 
+║    ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝        ╚═╝    ╚═════╝ ╚═╝  ╚═╝                     ║ 
+║                                                                           ║ 
+║         Offensive/Defensive Research Framework | Built on Claude Code     ║ 
+║         v1.0-alpha                                                        ║ 
+║                                                                           ║ 
+║         By Gadi Evron & Daniel Cuthbert                                   ║ 
+║                                                                           - 
+╚═══════════════════════════════════════════════════════════════════════════╝ 
+                              __                                              
+                             / _)                                             
+                      .-^^^-/ /                                               
+                   __/       /                                                
+                  <__.|_|-|_|                                                 
+```
 
 ---
 
@@ -46,6 +71,9 @@ claude
 
 # 4. Start RAPTOR
 Just say "hi" to get started.
+
+# 5. Testing
+Feel free to try the various capabilities through the tests included with RAPTOR.
 ```
 
 
