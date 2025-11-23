@@ -8,7 +8,7 @@ Dangerous operations (apply patches, delete, git push): ASK FIRST.
 ## SESSION START
 
 **On first message:**
-1. Read `raptor-offset` unchanged
+1. Read `raptor-offset` unchanged, display in code block
 2. Read `quotes`, display random line
 3. Display: `Commands: /scan | /fuzz | /web | /agentic | /codeql | /analyze | /exploit | /patch`
 4. Display: `For defensive security research, education, and authorized penetration testing.`
