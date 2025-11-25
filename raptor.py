@@ -142,13 +142,26 @@ def mode_llm_analysis(args: list) -> int:
     """Run LLM-powered vulnerability analysis on existing SARIF files."""
     script_root = Path(__file__).parent
     llm_script = script_root / "packages/llm_analysis/agent.py"
-    
+
     if not llm_script.exists():
         print(f"✗ LLM analysis script not found: {llm_script}")
         return 1
-    
+
     print("\n[*] Running LLM-powered vulnerability analysis...\n")
     return run_script(llm_script, args)
+
+
+def mode_crash_analysis(args: list) -> int:
+    """Run crash root-cause analysis."""
+    script_root = Path(__file__).parent
+    crash_script = script_root / "raptor_crash_analysis.py"
+
+    if not crash_script.exists():
+        print(f"✗ Crash analysis script not found: {crash_script}")
+        return 1
+
+    print("\n[*] Starting crash root-cause analysis...\n")
+    return run_script(crash_script, args)
 
 
 def show_mode_help(mode: str) -> None:
@@ -162,6 +175,7 @@ def show_mode_help(mode: str) -> None:
         'agentic': script_root / "raptor_agentic.py",
         'codeql': script_root / "raptor_codeql.py",
         'analyze': script_root / "packages/llm_analysis/agent.py",
+        'crash-analysis': script_root / "raptor_crash_analysis.py",
     }
     
     if mode not in mode_scripts:
@@ -187,12 +201,13 @@ def main():
             formatter_class=argparse.RawDescriptionHelpFormatter,
             epilog="""
 Available Modes:
-  scan        - Static code analysis with Semgrep
-  fuzz        - Binary fuzzing with AFL++
-  web         - Web application security testing
-  agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
-  codeql      - CodeQL-only analysis
-  analyze     - LLM-powered vulnerability analysis (requires SARIF input)
+  scan           - Static code analysis with Semgrep
+  fuzz           - Binary fuzzing with AFL++
+  web            - Web application security testing
+  agentic        - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
+  codeql         - CodeQL-only analysis
+  analyze        - LLM-powered vulnerability analysis (requires SARIF input)
+  crash-analysis - Deep crash root-cause analysis
 
 Examples:
   # Full autonomous workflow
@@ -213,6 +228,12 @@ Examples:
   # LLM analysis of existing SARIF
   python3 raptor.py analyze --repo /path/to/code --sarif findings.sarif
 
+  # Crash analysis from bug URL
+  python3 raptor.py crash-analysis --bug-url <url> --git-url <repo>
+
+  # Crash analysis from fuzzing output
+  python3 raptor.py crash-analysis --crash-dir out/fuzz_*/crashes --repo /path/to/src
+
   # Get help for a specific mode
   python3 raptor.py help scan
   python3 raptor.py help fuzz
@@ -223,7 +244,7 @@ For more information, visit: https://github.com/gadievron/raptor
         )
         parser.print_help()
         return 0
-    
+
     # Get mode from first argument
     mode = sys.argv[1].lower()
     remaining = sys.argv[2:]
@@ -235,12 +256,13 @@ For more information, visit: https://github.com/gadievron/raptor
             formatter_class=argparse.RawDescriptionHelpFormatter,
             epilog="""
 Available Modes:
-  scan        - Static code analysis with Semgrep
-  fuzz        - Binary fuzzing with AFL++
-  web         - Web application security testing
-  agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
-  codeql      - CodeQL-only analysis
-  analyze     - LLM-powered vulnerability analysis (requires SARIF input)
+  scan           - Static code analysis with Semgrep
+  fuzz           - Binary fuzzing with AFL++
+  web            - Web application security testing
+  agentic        - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
+  codeql         - CodeQL-only analysis
+  analyze        - LLM-powered vulnerability analysis (requires SARIF input)
+  crash-analysis - Deep crash root-cause analysis
 
 Examples:
   # Full autonomous workflow
@@ -261,6 +283,12 @@ Examples:
   # LLM analysis of existing SARIF
   python3 raptor.py analyze --repo /path/to/code --sarif findings.sarif
 
+  # Crash analysis from bug URL
+  python3 raptor.py crash-analysis --bug-url <url> --git-url <repo>
+
+  # Crash analysis from fuzzing output
+  python3 raptor.py crash-analysis --crash-dir out/fuzz_*/crashes --repo /path/to/src
+
   # Get help for a specific mode
   python3 raptor.py help scan
   python3 raptor.py help fuzz
@@ -271,7 +299,7 @@ For more information, visit: https://github.com/gadievron/raptor
         )
         parser.print_help()
         return 0
-    
+
     # Handle help mode
     if mode == 'help':
         if remaining:
@@ -289,6 +317,7 @@ For more information, visit: https://github.com/gadievron/raptor
         'agentic': mode_agentic,
         'codeql': mode_codeql,
         'analyze': mode_llm_analysis,
+        'crash-analysis': mode_crash_analysis,
     }
     
     if mode not in mode_handlers:

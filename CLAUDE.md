@@ -20,6 +20,7 @@ Dangerous operations (apply patches, delete, git push): ASK FIRST.
 ## COMMANDS
 
 /scan /fuzz /web /agentic /codeql /analyze - Security testing
+/crash-analysis - Deep crash root-cause analysis (rr, function tracing, gcov)
 /exploit /patch - Generate PoCs and fixes (beta)
 /create-skill - Save approaches (alpha)
 

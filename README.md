@@ -92,12 +92,13 @@ Feel free to try the various capabilities through the tests included with RAPTOR
 
 **Security testing:**
 ```
-/scan     - Static code analysis (Semgrep + CodeQL)
-/fuzz     - Binary fuzzing with AFL++
-/web      - Web application security testing
-/agentic  - Full autonomous workflow (analysis + exploit/patch generation)
-/codeql   - CodeQL-only deep analysis with dataflow
-/analyze  - LLM analysis only (no exploit/patch generation - 50% faster & cheaper)
+/scan           - Static code analysis (Semgrep + CodeQL)
+/fuzz           - Binary fuzzing with AFL++
+/web            - Web application security testing
+/agentic        - Full autonomous workflow (analysis + exploit/patch generation)
+/codeql         - CodeQL-only deep analysis with dataflow
+/analyze        - LLM analysis only (no exploit/patch generation - 50% faster & cheaper)
+/crash-analysis - Deep crash root-cause analysis with rr, function tracing, gcov
 ```
 
 **Exploit development & patching:**
@@ -176,6 +177,8 @@ For scripting or CI/CD integration:
 python3 raptor.py agentic --repo /path/to/code
 python3 raptor.py scan --repo /path/to/code --policy_groups secrets
 python3 raptor.py fuzz --binary /path/to/binary --duration 3600
+python3 raptor.py crash-analysis --bug-url <url> --git-url <repo>
+python3 raptor.py crash-analysis --crash-dir out/fuzz_*/crashes --repo /path/to/src
 ```
 
 **See:** `docs/PYTHON_CLI.md` for complete Python CLI reference

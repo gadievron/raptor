@@ -45,6 +45,7 @@ raptor/
 │   ├── autonomous/        # Autonomous planning, memory, and dialogue
 │   ├── fuzzing/           # AFL++ fuzzing orchestration
 │   ├── binary_analysis/   # GDB crash analysis and triage
+│   ├── crash_analysis/    # Deep crash root-cause analysis (rr, gcov, tracing)
 │   ├── recon/             # Reconnaissance and enumeration
 │   ├── sca/               # Software Composition Analysis
 │   └── web/               # Web application testing
@@ -55,7 +56,8 @@ raptor/
 ├── raptor.py              # Main launcher (Claude Code integration)
 ├── raptor_agentic.py      # Source code analysis workflow
 ├── raptor_codeql.py       # CodeQL workflow
-└── raptor_fuzzing.py      # Binary fuzzing workflow
+├── raptor_fuzzing.py      # Binary fuzzing workflow
+└── raptor_crash_analysis.py  # Crash root-cause analysis workflow
 ```
 
 
@@ -634,6 +636,99 @@ python3 packages/web/scanner.py \
 **Design Rationale**: Independent from fuzzing package to allow standalone crash analysis of externally discovered crashes.
 
 
+### Package: `crash_analysis`
+
+**Purpose**: Deep crash root-cause analysis using rr, function tracing, and gcov coverage
+
+**Main Entry Point**: `orchestrator.py` (invoked via `raptor_crash_analysis.py`)
+
+**Components**:
+- `orchestrator.py` - Main workflow orchestrator for both external bug and local crash modes
+- `bug_fetcher.py` - Fetch and parse bug reports from URLs (GitHub, GitLab, Trac, etc.)
+- `build_detector.py` - Auto-detect build systems (CMake, Autotools, Makefile) and build with ASan
+- `skills/function_tracing/` - GCC `-finstrument-functions` based execution tracing
+- `skills/gcov_coverage/` - Code coverage with gcov and line-level queries
+- `skills/rr_debugger/` - Deterministic record-replay debugging with rr
+
+**CLI Interface**:
+```bash
+# External bug mode
+python3 raptor.py crash-analysis \
+  --bug-url https://github.com/foo/bar/issues/123 \
+  --git-url https://github.com/foo/bar.git
+
+# Local crash mode (from fuzzing)
+python3 raptor.py crash-analysis \
+  --crash-dir out/fuzz_target/crashes \
+  --repo /path/to/source
+```
+
+**Workflow (External Bug Mode)**:
+1. Fetch bug report from URL
+2. Clone repository and create analysis branch
+3. Auto-detect build system and build with ASan + debug symbols
+4. Reproduce crash from bug report
+5. Generate function-level execution trace
+6. Generate gcov coverage data
+7. Record crash with rr for deterministic replay
+8. Invoke crash-analyzer agent for root-cause hypothesis
+9. Invoke crash-analyzer-checker agent for validation
+10. Iterate until hypothesis confirmed
+
+**Workflow (Local Crash Mode)**:
+1. Load crash inputs from directory (AFL++/libFuzzer format)
+2. Use existing repository
+3. Rebuild with ASan if needed
+4. For each crash: reproduce, generate traces, record with rr
+5. Invoke crash-analyzer agent for each crash
+6. Validate hypotheses with checker agent
+7. Generate consolidated report
+
+**Outputs**:
+```
+out/crash-analysis-<timestamp>/
+├── analysis_context.json    # Context for Claude agents
+├── bug_report.json          # Fetched bug report (external mode)
+├── result.json              # Final analysis result
+├── repo/                    # Cloned repository (external mode)
+├── attachments/             # Downloaded crash inputs
+├── traces/                  # Function execution traces
+│   ├── trace_<tid>.log      # Raw trace files
+│   └── trace.json           # Perfetto format
+├── gcov/                    # Coverage data
+│   ├── *.gcov               # Line coverage files
+│   └── line-checker         # Line query tool
+├── rr-trace/                # rr recording
+└── hypotheses/              # Root cause hypotheses
+    └── root-cause-hypothesis-*.md
+```
+
+**Key Features**:
+- Generic URL fetching for any bug tracker (GitHub, GitLab, Trac, Bugzilla)
+- Auto-detection of CMake, Autotools, and Makefile build systems
+- Function-level execution tracing with Perfetto visualization
+- Line-level coverage queries with gcov
+- Deterministic crash replay with rr
+- Claude agent-driven hypothesis generation and validation
+- Integration with raptor fuzz output for complete fuzzing → analysis workflow
+
+**Claude Agents Used**:
+- `crash-analyzer` - Generates detailed root-cause hypotheses with rr verification
+- `crash-analyzer-checker` - Validates hypotheses against empirical data
+- `function-trace-generator` - Instruments and captures function traces
+- `coverage-analyzer` - Generates gcov coverage data
+
+**Dependencies**:
+- `core.config` (paths)
+- `core.logging` (logging)
+- External: `rr` (deterministic record-replay debugger)
+- External: `gcc/clang` (with `-finstrument-functions` and `--coverage` support)
+- External: `gcov` (coverage processor)
+- External: `gdb` (required for rr replay)
+
+**Design Rationale**: Provides deep root-cause analysis capabilities that go beyond simple crash triage. Uses rr for deterministic replay, function tracing for execution flow, and gcov for coverage to build complete causal chains from allocation to crash. Claude agents generate and validate hypotheses with empirical verification requirements.
+
+
 ## Analysis Engines
 
 ### `engine/codeql/`
@@ -879,6 +974,62 @@ RAPTOR operates in two mutually exclusive modes:
 These modes cannot be combined in a single run. Use source mode for design flaws and logic bugs; use binary mode for memory corruption and runtime behaviour.
 
 
+### `raptor_crash_analysis.py` - Crash Root-Cause Analysis
+
+**Purpose**: Deep crash root-cause analysis with rr, function tracing, and gcov
+
+**Usage**:
+```bash
+# External bug mode
+python3 raptor_crash_analysis.py \
+  --bug-url https://github.com/foo/bar/issues/123 \
+  --git-url https://github.com/foo/bar.git
+
+# Local crash mode (from fuzzing)
+python3 raptor_crash_analysis.py \
+  --crash-dir out/fuzz_target/crashes \
+  --repo /path/to/source
+```
+
+**Workflow**:
+1. **Phase 1**: Fetch bug report OR load local crashes
+2. **Phase 2**: Clone repository (external) OR use existing (local)
+3. **Phase 3**: Build with AddressSanitizer and debug symbols
+4. **Phase 4**: Reproduce crash and generate traces
+5. **Phase 5**: Record with rr for deterministic replay
+6. **Phase 6**: Claude agent hypothesis generation
+7. **Phase 7**: Claude agent hypothesis validation
+8. **Phase 8**: Human review of confirmed hypothesis
+
+**Parameters**:
+- `--bug-url`: URL to bug report (GitHub, GitLab, Trac, etc.)
+- `--git-url`: Git repository URL to clone
+- `--crash-dir`: Path to local crash directory (from fuzzing)
+- `--repo`: Path to existing source repository
+- `--branch`: Git branch to checkout (default: main)
+- `--build-cmd`: Custom build command (overrides auto-detection)
+- `-o, --output`: Output directory (default: auto-generated)
+- `--no-tracing`: Disable function call tracing
+- `--no-coverage`: Disable gcov coverage collection
+- `--no-rr`: Disable rr recording
+
+**Integration with Fuzzing**:
+```bash
+# Complete workflow: fuzz → discover crashes → deep root-cause analysis
+python3 raptor.py fuzz --binary ./target --duration 3600
+python3 raptor.py crash-analysis --crash-dir out/fuzz_target_*/crashes --repo /path/to/src
+```
+
+**Key Features**:
+- Generic URL fetching for any bug tracker
+- Auto-detection of CMake, Autotools, Makefile build systems
+- Function tracing with Perfetto visualization
+- gcov coverage for line-level execution queries
+- rr deterministic replay for debugging
+- Claude agent-driven hypothesis generation and validation
+
+**Design Rationale**: Provides comprehensive crash analysis that builds complete causal chains from memory allocation to crash, with empirical verification through rr recordings.
+
 
 ## CLI Interfaces
 
@@ -923,6 +1074,17 @@ All package agents follow a consistent CLI pattern:
 - `--duration`: Fuzzing duration in seconds
 - `--parallel`: Number of parallel AFL instances
 - `--max-crashes`: Maximum crashes to analyze
+
+**raptor_crash_analysis.py**:
+- `--bug-url`: URL to bug report (GitHub, GitLab, Trac, etc.)
+- `--git-url`: Git repository URL to clone
+- `--crash-dir`: Path to local crash directory (from fuzzing)
+- `--repo`: Path to existing source repository
+- `--branch`: Git branch to checkout (default: main)
+- `--build-cmd`: Custom build command
+- `--no-tracing`: Disable function call tracing
+- `--no-coverage`: Disable gcov coverage
+- `--no-rr`: Disable rr recording
 
 ### Help Text Standard
 
