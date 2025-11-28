@@ -1,21 +1,14 @@
 """
 GitHub Forensics Verifiable Evidence Schema
 
-Two evidence types, same base pattern (when, who, what):
+Two evidence types:
 
-1. Event       - Something happened
-                 when = when it happened
-                 who = who did it
-                 what = what they did
-                 Sources: GH Archive, git log
+1. Event - Something that happened (from GH Archive, git log)
+   when, who, what
 
-2. Observation - Something we found
-                 when = when we found it
-                 who = who created it (optional)
-                 what = what we found
-                 Sources: GH Archive, GitHub API, Wayback, security blogs
-
-IOC is a subtype of Observation.
+2. Observation - Something we observed (from GitHub, Wayback, security blogs)
+   Original: when, who, what (if known)
+   Observer: when observed, who observed, what they found
 """
 
 from __future__ import annotations
@@ -33,14 +26,13 @@ from pydantic import BaseModel, Field, HttpUrl
 
 
 class EvidenceSource(str, Enum):
-    """Where evidence was obtained from."""
+    """Where evidence was obtained."""
 
-    GHARCHIVE = "gharchive"
-    GIT_LOG = "git_log"
-    GITHUB_API = "github_api"
-    GITHUB_WEB = "github_web"
-    WAYBACK = "wayback"
-    SECURITY_BLOG = "security_blog"
+    GHARCHIVE = "gharchive"  # GH Archive via BigQuery
+    GIT = "git"  # Local git log/show
+    GITHUB = "github"  # GitHub API or web
+    WAYBACK = "wayback"  # Internet Archive
+    SECURITY_VENDOR = "security_vendor"  # Security blogs/reports
 
 
 class EventType(str, Enum):
@@ -87,8 +79,12 @@ class WorkflowConclusion(str, Enum):
 
 
 class IOCType(str, Enum):
+    """Indicator types - opinionated, no 'other'."""
+
     COMMIT_SHA = "commit_sha"
     FILE_PATH = "file_path"
+    FILE_HASH = "file_hash"  # SHA256 of file content
+    CODE_SNIPPET = "code_snippet"  # Malicious code pattern
     EMAIL = "email"
     USERNAME = "username"
     REPOSITORY = "repository"
@@ -97,10 +93,9 @@ class IOCType(str, Enum):
     WORKFLOW_NAME = "workflow_name"
     IP_ADDRESS = "ip_address"
     DOMAIN = "domain"
+    URL = "url"
     API_KEY = "api_key"
     SECRET = "secret"
-    URL = "url"
-    OTHER = "other"
 
 
 # =============================================================================
@@ -117,7 +112,7 @@ class GitHubActor(BaseModel):
 
 
 class GitHubRepository(BaseModel):
-    """GitHub repository reference."""
+    """GitHub repository."""
 
     owner: str
     name: str
@@ -135,39 +130,23 @@ class VerificationInfo(BaseModel):
 
 
 # =============================================================================
-# BASE EVIDENCE - when, who, what
+# EVENT - Something that happened
+#
+# when, who, what
+# Sources: GH Archive, git
 # =============================================================================
 
 
-class Evidence(BaseModel):
-    """
-    Base evidence model.
-
-    when - when it happened (event) or when found (observation)
-    who  - who did it (event) or who created it (observation, optional)
-    what - what happened (event) or what was found (observation)
-    """
+class Event(BaseModel):
+    """Something that happened."""
 
     evidence_id: str
-    when: datetime
-    who: GitHubActor | None = None
-    what: str
-    where: str | None = None  # Location (URL, path, repo)
-    repository: GitHubRepository | None = None
+    when: datetime  # When it happened
+    who: GitHubActor  # Who did it
+    what: str  # What they did
+    repository: GitHubRepository
     verification: VerificationInfo
     notes: str | None = None
-
-
-# =============================================================================
-# EVENT - Something that happened
-# Sources: GH Archive, git log
-# =============================================================================
-
-
-class Event(Evidence):
-    """Something that happened. who is required."""
-
-    who: GitHubActor  # Required for events
 
 
 class CommitInPush(BaseModel):
@@ -192,7 +171,7 @@ class PushEvent(Event):
 
 
 class PullRequestEvent(Event):
-    """PR action occurred."""
+    """PR action."""
 
     event_type: Literal["pull_request"] = "pull_request"
     action: PRAction
@@ -204,14 +183,13 @@ class PullRequestEvent(Event):
 
 
 class IssueEvent(Event):
-    """Issue action occurred."""
+    """Issue action."""
 
     event_type: Literal["issue"] = "issue"
     action: IssueAction
     issue_number: int
     issue_title: str
     issue_body: str | None = None
-    labels: list[str] = Field(default_factory=list)
 
 
 class IssueCommentEvent(Event):
@@ -268,13 +246,13 @@ class ReleaseEvent(Event):
 
 
 class WatchEvent(Event):
-    """Repo starred (recon indicator)."""
+    """Repo starred."""
 
     event_type: Literal["watch"] = "watch"
 
 
 class MemberEvent(Event):
-    """Collaborator added/removed."""
+    """Collaborator changed."""
 
     event_type: Literal["member"] = "member"
     action: Literal["added", "removed"]
@@ -304,15 +282,41 @@ AnyEvent = (
 
 
 # =============================================================================
-# OBSERVATION - Something we found
-# Sources: GH Archive, GitHub API, Wayback, security blogs
+# OBSERVATION - Something we observed
+#
+# Two sets of when/who/what:
+# - Original: when/who/what of the actual event (if known)
+# - Observer: when observed, who observed, what they found
+#
+# Sources: GitHub, Wayback, security vendors
 # =============================================================================
 
 
-class Observation(Evidence):
-    """Something we found. who is optional (creator if known)."""
+class Observation(BaseModel):
+    """
+    Something we observed.
 
-    found_by: EvidenceSource  # How we found it
+    Has two perspectives:
+    - Original event (if known): when it happened, who did it, what they did
+    - Observer: when we found it, who found it, what we found
+    """
+
+    evidence_id: str
+
+    # Original event (if known)
+    original_when: datetime | None = None  # When it actually happened
+    original_who: GitHubActor | None = None  # Who actually did it
+    original_what: str | None = None  # What actually happened
+
+    # Observer
+    observed_when: datetime  # When we/they found it
+    observed_by: EvidenceSource  # Who observed (wayback, vendor, us)
+    observed_what: str  # What was observed/found
+
+    # Context
+    repository: GitHubRepository | None = None
+    verification: VerificationInfo
+    notes: str | None = None
 
 
 # -----------------------------------------------------------------------------
@@ -335,7 +339,7 @@ class CommitFileChange(BaseModel):
 
 
 class CommitObservation(Observation):
-    """Full commit details from API/web/git."""
+    """Full commit details."""
 
     observation_type: Literal["commit"] = "commit"
     sha: Annotated[str, Field(min_length=40, max_length=40)]
@@ -374,7 +378,7 @@ class WaybackSnapshot(BaseModel):
 
 
 class WaybackObservation(Observation):
-    """Collection of Wayback snapshots for a URL."""
+    """Wayback snapshots for a URL."""
 
     observation_type: Literal["wayback"] = "wayback"
     original_url: HttpUrl
@@ -400,6 +404,7 @@ class RecoveredFile(Observation):
     observation_type: Literal["recovered_file"] = "recovered_file"
     file_path: str
     content: str
+    content_hash: str | None = None  # SHA256
     source_snapshot: WaybackSnapshot
 
 
@@ -426,7 +431,12 @@ class RecoveredForks(Observation):
 
 
 class IOC(Observation):
-    """Indicator of Compromise."""
+    """
+    Indicator of Compromise.
+
+    Subtype of Observation. original_* fields capture the actual
+    malicious event if known, observed_* captures discovery.
+    """
 
     observation_type: Literal["ioc"] = "ioc"
     ioc_type: IOCType
@@ -434,7 +444,7 @@ class IOC(Observation):
     confidence: Literal["confirmed", "high", "medium", "low"] = "medium"
     first_seen: datetime | None = None
     last_seen: datetime | None = None
-    extracted_from: str | None = None
+    extracted_from: str | None = None  # Evidence ID if extracted
 
 
 AnyObservation = (
@@ -450,57 +460,8 @@ AnyObservation = (
 
 
 # =============================================================================
-# INVESTIGATION CONTAINER
+# TYPE ALIASES
 # =============================================================================
 
 
 AnyEvidence = AnyEvent | AnyObservation
-
-
-class TimelineEntry(BaseModel):
-    """Single entry in investigation timeline."""
-
-    timestamp: datetime
-    evidence: AnyEvidence
-    significance: Literal["critical", "high", "medium", "low", "info"] = "info"
-    tags: list[str] = Field(default_factory=list)
-    analysis: str | None = None
-
-
-class ActorProfile(BaseModel):
-    """Profile of an actor in investigation."""
-
-    actor: GitHubActor
-    first_seen: datetime
-    last_seen: datetime
-    repositories: list[str] = Field(default_factory=list)
-    event_types: list[EventType] = Field(default_factory=list)
-    is_automation: bool = False
-    evidence_ids: list[str] = Field(default_factory=list)
-
-
-class Investigation(BaseModel):
-    """Complete investigation."""
-
-    investigation_id: str
-    title: str
-    description: str
-    created_at: datetime
-    updated_at: datetime
-    status: Literal["active", "completed", "archived"] = "active"
-
-    # Scope
-    target_repositories: list[GitHubRepository] = Field(default_factory=list)
-    target_actors: list[str] = Field(default_factory=list)
-    time_start: datetime | None = None
-    time_end: datetime | None = None
-
-    # Evidence
-    events: list[AnyEvent] = Field(default_factory=list)
-    observations: list[AnyObservation] = Field(default_factory=list)
-
-    # Analysis
-    timeline: list[TimelineEntry] = Field(default_factory=list)
-    actors: list[ActorProfile] = Field(default_factory=list)
-    findings: str | None = None
-    recommendations: list[str] = Field(default_factory=list)

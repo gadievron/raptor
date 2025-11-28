@@ -1,11 +1,8 @@
 """
-GitHub Forensics Verifiable Evidence Schema
+GitHub Forensics Evidence Schema
 
-Base pattern: when, who, what
-
-- Event: when it happened, who did it, what they did
-- Observation: when found, who created it (optional), what we found
-- IOC: subtype of Observation
+Event: when, who, what (something happened)
+Observation: original (when/who/what) + observer (when/by/what)
 """
 
 from .schema import (
@@ -21,8 +18,6 @@ from .schema import (
     GitHubActor,
     GitHubRepository,
     VerificationInfo,
-    # Base
-    Evidence,
     # Events
     Event,
     CommitInPush,
@@ -53,11 +48,7 @@ from .schema import (
     RecoveredForks,
     IOC,
     AnyObservation,
-    # Investigation
     AnyEvidence,
-    TimelineEntry,
-    ActorProfile,
-    Investigation,
 )
 
 __all__ = [
@@ -71,7 +62,6 @@ __all__ = [
     "GitHubActor",
     "GitHubRepository",
     "VerificationInfo",
-    "Evidence",
     "Event",
     "CommitInPush",
     "PushEvent",
@@ -101,7 +91,4 @@ __all__ = [
     "IOC",
     "AnyObservation",
     "AnyEvidence",
-    "TimelineEntry",
-    "ActorProfile",
-    "Investigation",
 ]
