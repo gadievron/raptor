@@ -61,8 +61,42 @@ from ._schema import (
     AnyEvidence,
 )
 
-# Derive __all__ from explicit imports to avoid duplication
 __all__ = [
-    name for name in dir()
-    if not name.startswith('_') and name[0].isupper()
+    # Common
+    "GitHubActor",
+    "GitHubRepository",
+    "VerificationInfo",
+    # Events
+    "Event",
+    "CommitInPush",
+    "PushEvent",
+    "PullRequestEvent",
+    "IssueEvent",
+    "IssueCommentEvent",
+    "CreateEvent",
+    "DeleteEvent",
+    "ForkEvent",
+    "WorkflowRunEvent",
+    "ReleaseEvent",
+    "WatchEvent",
+    "MemberEvent",
+    "PublicEvent",
+    "AnyEvent",
+    # Observations
+    "Observation",
+    "CommitAuthor",
+    "FileChange",
+    "CommitObservation",
+    "IssueObservation",
+    "FileObservation",
+    "ForkObservation",
+    "BranchObservation",
+    "TagObservation",
+    "ReleaseObservation",
+    "WaybackSnapshot",
+    "SnapshotObservation",
+    "IOC",
+    "ArticleObservation",
+    "AnyObservation",
+    "AnyEvidence",
 ]
