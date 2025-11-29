@@ -53,19 +53,22 @@ RAPTOR stands for Recursive Autonomous Penetration Testing and Observation Robot
    (https://news.ycombinator.com/item?id=45891016)
 8. **Reports** everything in structured formats
 
-RAPTOR combines traditional security tools with agentic automation and analysis, deeply understands your code, proves exploitability, and proposes patches.
+RAPTOR combines traditional security tools with agentic automation and analysis, deeply
+understands your code, proves exploitability, and proposes patches.
 
 **Disclaimer: It's a quick hack, and we can't live without it**:
-No matter the result we got to, RAPTOR itself was hacked together in free time, help together
-by vibe coding and duct tape. We encourage community contributions. it's open source, modular,
-and extensible.
+No matter the result we got to (and some of our tools are beyond useful), RAPTOR itself was
+hacked together in free time, held together by vibe coding and duct tape. We encourage community
+contributions. it's open source, modular, and extensible.
+
+**Be warned**: RAPTOR will automatically install tools without asking, check dependencies.txt
+first, and install dependencies. Or, contribute a Docker image so it's easier for others.
 
 ---
 
 ## What's unique about RAPTOR?
-Beyond RAPTOR's potential for autonomous security research and community collaboration, it demonstrates how Claude Code can be adapted for any purpose**, with RAPTOR packages.
-
-You can also use RAPTOR on most other coding agents by changing claude.md to the native rules file, from Copilot and Codex, to the VS Code-based ones such as Cursor, Windsurf, Devin, and Cline.
+Beyond RAPTOR's potential for autonomous security research and community collaboration, it
+demonstrates how Claude Code can be adapted for any purpose**, with RAPTOR packages.
 ---
 
 ## Quick Start
@@ -175,7 +178,8 @@ Model selection and API use is handled through Claude Code natively.
 | **Gemini 2.5**       | ✅ Compilable C code    | ~$0.03/vuln |
 | **Ollama (local)**   | ❌ Often broken         | FREE        |
 
-**Note:** Exploit generation requires frontier models (Claude, GPT, or Gemini). Local models work for analysis but may produce non-compilable exploit code.
+**Note:** Exploit generation requires frontier models (Claude, GPT, or Gemini). Local
+models work for analysis but may produce non-compilable exploit code.
 
 ---
 
@@ -213,6 +217,11 @@ RAPTOR is in alpha, and we welcome contributions from anyone, on anything.
 - Your second idea here
 
 Submit pull requests.
+
+A better web exploitation module? YARA signatures generation? Maybe a port into Cursor,
+Windsurf, Copilot, or Codex? Devin? Cline? Antigravity?
+
+Hacker poetry? :)
 
 Chat with us on the #raptor channel at the Prompt||GTFO Slack:
 https://join.slack.com/t/promptgtfo/shared_invite/zt-3alf92eqe-BpVLxPbWTI50Tbl11Hl46Q

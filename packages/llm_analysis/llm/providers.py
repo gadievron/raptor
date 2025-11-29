@@ -413,7 +413,6 @@ Respond with ONLY the JSON object, no markdown, no other text."""
             # For exploit generation, try to extract code from the response even if JSON is malformed
             if "exploit" in prompt.lower() and "code" in schema and "reasoning" in schema:
                 logger.warning("Attempting to extract code from malformed response...")
-                import re
 
                 # Try to extract code and reasoning using regex
                 code_match = re.search(r'"code"\s*:\s*"([^"]*(?:\\.[^"]*)*)"', response.content, re.DOTALL)
