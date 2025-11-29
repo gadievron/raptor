@@ -1,0 +1,38 @@
+{
+  "name": "RAPTOR Security Research Framework",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "GitHub.copilot",
+        "ms-vscode.cpptools",
+        "GitHub.vscode-codeql"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/bin/python3",
+        "python.terminal.activateEnvironment": true,
+        "editor.formatOnSave": true
+      }
+    }
+  },
+  "containerEnv": {
+    "GIT_TERMINAL_PROMPT": "0",
+    "PYTHONUNBUFFERED": "1",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "mounts": [
+    "source=${localWorkspaceFolder}/.env,target=/workspaces/raptor/.env,type=bind,consistency=cached"
+  ],
+  "postCreateCommand": "pip install -r requirements-dev.txt",
+  "remoteUser": "vscode"
+}

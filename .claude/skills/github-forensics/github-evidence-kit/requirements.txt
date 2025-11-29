@@ -10,6 +10,9 @@ requests>=2.28.0
 google-cloud-bigquery>=3.0.0
 google-auth>=2.0.0
 
+# Wayback Machine API (github-wayback-recovery skill)
+waybackpy>=3.0.0
+
 # Testing
 pytest>=7.0.0
 pytest-cov>=4.0.0
