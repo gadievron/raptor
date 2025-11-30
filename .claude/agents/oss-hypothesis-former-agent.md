@@ -2,7 +2,6 @@
 name: oss-hypothesis-former-agent
 description: Form evidence-backed hypotheses for forensic investigations
 tools: Read, Write, Task
-skills: github-evidence-kit
 model: inherit
 ---
 

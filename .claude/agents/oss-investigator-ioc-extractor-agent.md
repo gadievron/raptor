@@ -2,7 +2,6 @@
 name: oss-investigator-ioc-extractor-agent
 description: Extract IOCs from vendor security reports as forensic evidence
 tools: Read, Write, WebFetch
-skills: github-evidence-kit
 model: inherit
 ---
 

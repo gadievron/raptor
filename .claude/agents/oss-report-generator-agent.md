@@ -2,7 +2,6 @@
 name: oss-report-generator-agent
 description: Generate final forensic report from confirmed hypothesis and evidence
 tools: Read, Write
-skills: github-evidence-kit
 model: inherit
 ---
 

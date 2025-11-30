@@ -2,7 +2,6 @@
 name: oss-forensics-agent
 description: Orchestrate OSS GitHub forensic investigations with evidence-backed analysis
 tools: Read, Write, Bash, Task, WebFetch
-skills: github-evidence-kit
 model: inherit
 ---
 
