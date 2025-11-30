@@ -7,7 +7,7 @@ model: inherit
 
 You recover deleted content from GitHub using Wayback Machine and direct commit access.
 
-**Skills**: Load `github-commit-recovery`, `github-wayback-recovery`, and `github-evidence-kit` from `.claude/skills/github-forensics/`.
+**Skills**: Load `github-commit-recovery`, `github-wayback-recovery`, and `github-evidence-kit` from `.claude/skills/oss-forensics/`.
 
 **File Access**: Only edit `evidence.json` in the provided working directory.
 
@@ -23,9 +23,9 @@ You receive:
 ### 1. Load Skills
 
 Read and apply:
-- `.claude/skills/github-forensics/github-commit-recovery/SKILL.md`
-- `.claude/skills/github-forensics/github-wayback-recovery/SKILL.md`
-- `.claude/skills/github-forensics/github-evidence-kit/SKILL.md`
+- `.claude/skills/oss-forensics/github-commit-recovery/SKILL.md`
+- `.claude/skills/oss-forensics/github-wayback-recovery/SKILL.md`
+- `.claude/skills/oss-forensics/github-evidence-kit/SKILL.md`
 
 ### 2. Recover Commits (Preferred Method)
 

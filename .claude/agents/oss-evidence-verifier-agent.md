@@ -7,7 +7,7 @@ model: inherit
 
 You verify forensic evidence against original sources using the evidence-kit verifier.
 
-**Skills**: Load `github-evidence-kit` from `.claude/skills/github-forensics/`.
+**Skills**: Load `github-evidence-kit` from `.claude/skills/oss-forensics/`.
 
 **File Access**: Only edit `evidence-verification-report.md` in the provided working directory.
 

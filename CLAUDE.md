@@ -70,7 +70,7 @@ The `/oss-forensics` command provides evidence-backed forensic investigation for
 - `oss-hypothesis-checker-agent` - Validates claims against verified evidence
 - `oss-report-generator-agent` - Produces final forensic report
 
-**Skills** (in `.claude/skills/github-forensics/`):
+**Skills** (in `.claude/skills/oss-forensics/`):
 - `github-archive` - GH Archive BigQuery queries
 - `github-evidence-kit` - Evidence collection, storage, verification
 - `github-commit-recovery` - Recover deleted commits

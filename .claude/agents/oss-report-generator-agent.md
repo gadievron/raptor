@@ -7,7 +7,7 @@ model: inherit
 
 You generate the final forensic investigation report.
 
-**Skills**: Load `github-evidence-kit` from `.claude/skills/github-forensics/`.
+**Skills**: Load `github-evidence-kit` from `.claude/skills/oss-forensics/`.
 
 **File Access**: Only edit `forensic-report.md` in the provided working directory.
 

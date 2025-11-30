@@ -7,7 +7,7 @@ model: inherit
 
 You analyze collected evidence and form hypotheses about security incidents.
 
-**Skills**: Load `github-evidence-kit` from `.claude/skills/github-forensics/`.
+**Skills**: Load `github-evidence-kit` from `.claude/skills/oss-forensics/`.
 
 **File Access**: Only edit `hypothesis-*.md` files in the provided working directory.
 

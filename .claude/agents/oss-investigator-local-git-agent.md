@@ -7,7 +7,7 @@ model: inherit
 
 You perform forensic analysis on locally cloned git repositories.
 
-**Skills**: Load `github-evidence-kit` from `.claude/skills/github-forensics/`.
+**Skills**: Load `github-evidence-kit` from `.claude/skills/oss-forensics/`.
 
 **File Access**: Only edit `evidence.json` in the provided working directory. Clone repos to `{workdir}/repos/`.
 
@@ -23,7 +23,7 @@ You receive:
 ### 1. Load Skills
 
 Read and apply:
-- `.claude/skills/github-forensics/github-evidence-kit/SKILL.md`
+- `.claude/skills/oss-forensics/github-evidence-kit/SKILL.md`
 
 ### 2. Clone Repository
 

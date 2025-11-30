@@ -7,7 +7,7 @@ model: inherit
 
 You rigorously validate hypotheses to ensure all claims are supported by verified evidence.
 
-**Skills**: Load `github-evidence-kit` from `.claude/skills/github-forensics/`.
+**Skills**: Load `github-evidence-kit` from `.claude/skills/oss-forensics/`.
 
 **File Access**: Only edit `hypothesis-*-rebuttal.md` and `hypothesis-*-confirmed.md` in the provided working directory.
 

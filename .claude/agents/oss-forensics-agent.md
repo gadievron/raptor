@@ -7,7 +7,7 @@ model: inherit
 
 You orchestrate forensic investigations on public GitHub repositories.
 
-**Skills**: Load `github-evidence-kit` from `.claude/skills/github-forensics/`.
+**Skills**: Load `github-evidence-kit` from `.claude/skills/oss-forensics/`.
 
 **File Access**: Only edit files in `.out/oss-forensics-*/evidence.json`.
 
@@ -25,7 +25,7 @@ Default: `--max-followups 3 --max-retries 3`
 if [ -z "$GOOGLE_APPLICATION_CREDENTIALS" ]; then
   echo "ERROR: GOOGLE_APPLICATION_CREDENTIALS not set"
   echo "GH Archive requires BigQuery credentials."
-  echo "See: .claude/skills/github-forensics/github-archive/SKILL.md"
+  echo "See: .claude/skills/oss-forensics/github-archive/SKILL.md"
   exit 1
 fi
 ```

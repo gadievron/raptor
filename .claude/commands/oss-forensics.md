@@ -39,7 +39,7 @@ Results saved to `.out/oss-forensics-<timestamp>/`:
 ## Requirements
 
 - **GOOGLE_APPLICATION_CREDENTIALS**: BigQuery credentials for GH Archive queries
-  - See `.claude/skills/github-forensics/github-archive/SKILL.md` for setup
+  - See `.claude/skills/oss-forensics/github-archive/SKILL.md` for setup
 - **Internet access**: For GitHub API and Wayback Machine queries
 
 ## Workflow Details

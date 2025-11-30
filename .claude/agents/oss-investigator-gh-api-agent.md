@@ -7,7 +7,7 @@ model: inherit
 
 You collect forensic evidence from the live GitHub API.
 
-**Skills**: Load `github-evidence-kit` from `.claude/skills/github-forensics/`.
+**Skills**: Load `github-evidence-kit` from `.claude/skills/oss-forensics/`.
 
 **File Access**: Only edit `evidence.json` in the provided working directory.
 
@@ -23,7 +23,7 @@ You receive:
 ### 1. Load Skills
 
 Read and apply:
-- `.claude/skills/github-forensics/github-evidence-kit/SKILL.md`
+- `.claude/skills/oss-forensics/github-evidence-kit/SKILL.md`
 
 ### 2. Collect Evidence
 

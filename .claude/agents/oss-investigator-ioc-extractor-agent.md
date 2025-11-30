@@ -7,7 +7,7 @@ model: inherit
 
 You extract Indicators of Compromise (IOCs) from vendor security reports.
 
-**Skills**: Load `github-evidence-kit` from `.claude/skills/github-forensics/`.
+**Skills**: Load `github-evidence-kit` from `.claude/skills/oss-forensics/`.
 
 **File Access**: Only edit `evidence.json` in the provided working directory.
 
