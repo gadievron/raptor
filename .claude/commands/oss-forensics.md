@@ -47,16 +47,16 @@ Results saved to `.out/oss-forensics-<timestamp>/`:
 This command invokes `oss-forensics-agent` which orchestrates:
 
 **Evidence Collection** (parallel):
-- `gh-archive-investigator`: Queries GH Archive via BigQuery
-- `gh-api-investigator`: Queries live GitHub API
-- `gh-recovery-investigator`: Recovers deleted content via Wayback/commits
-- `local-git-investigator`: Analyzes cloned repos for dangling commits
-- `oss-ioc-extractor-agent`: Extracts IOCs from vendor reports (if URL provided)
+- `oss-investigator-gh-archive-agent`: Queries GH Archive via BigQuery
+- `oss-investigator-gh-api-agent`: Queries live GitHub API
+- `oss-investigator-gh-recovery-agent`: Recovers deleted content via Wayback/commits
+- `oss-investigator-local-git-agent`: Analyzes cloned repos for dangling commits
+- `oss-investigator-ioc-extractor-agent`: Extracts IOCs from vendor reports (if URL provided)
 
 **Analysis Pipeline**:
-- `oss-hypothesis-agent`: Forms hypothesis, can request more evidence (max 3 rounds)
+- `oss-hypothesis-former-agent`: Forms hypothesis, can request more evidence (max 3 rounds)
 - `oss-evidence-verifier-agent`: Verifies evidence via `store.verify_all()`
 - `oss-hypothesis-checker-agent`: Validates claims against verified evidence
 - `oss-report-generator-agent`: Produces final forensic report
 
-The analysis follows a hypothesis-validation loop - if the checker rejects, the hypothesis agent is re-invoked with feedback (max 3 retries).
+The analysis follows a hypothesis-validation loop - if the checker rejects, the hypothesis-former agent is re-invoked with feedback (max 3 retries).

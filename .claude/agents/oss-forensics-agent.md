@@ -72,15 +72,15 @@ store.save(f"{workdir}/evidence.json")
 Spawn investigators in parallel via Task tool:
 
 ```
-gh-archive-investigator    → Query GH Archive for events
-gh-api-investigator        → Query GitHub API for current state
-gh-recovery-investigator   → Recover deleted content
-local-git-investigator     → Clone repos, find dangling commits
+oss-investigator-gh-archive-agent    → Query GH Archive for events
+oss-investigator-gh-api-agent        → Query GitHub API for current state
+oss-investigator-gh-recovery-agent   → Recover deleted content
+oss-investigator-local-git-agent     → Clone repos, find dangling commits
 ```
 
 If vendor report URL in prompt, also spawn:
 ```
-oss-ioc-extractor-agent    → Extract IOCs as evidence
+oss-investigator-ioc-extractor-agent → Extract IOCs as evidence
 ```
 
 Pass to each: research question, working directory path, relevant targets.
@@ -90,7 +90,7 @@ Pass to each: research question, working directory path, relevant targets.
 ```
 followup_count = 0
 while followup_count < max_followups:
-    Invoke oss-hypothesis-agent with:
+    Invoke oss-hypothesis-former-agent with:
       - Working directory
       - Research question
       - Current evidence summary
@@ -120,7 +120,7 @@ while retry_count < max_retries:
 
     If REJECTED:
       - Read rebuttal file
-      - Re-invoke oss-hypothesis-agent with rebuttal
+      - Re-invoke oss-hypothesis-former-agent with rebuttal
       - retry_count++
     Else:
       - hypothesis-YYY-confirmed.md produced

@@ -1,5 +1,5 @@
 ---
-name: oss-ioc-extractor-agent
+name: oss-investigator-ioc-extractor-agent
 description: Extract IOCs from vendor security reports as forensic evidence
 tools: Read, Write, WebFetch
 model: inherit

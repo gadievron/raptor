@@ -1,5 +1,5 @@
 ---
-name: oss-hypothesis-agent
+name: oss-hypothesis-former-agent
 description: Form evidence-backed hypotheses for forensic investigations
 tools: Read, Write, Task
 model: inherit
@@ -47,10 +47,10 @@ If evidence is insufficient, you may request more via Task tool.
 
 Spawn specific investigator with targeted query:
 ```
-"gh-archive-investigator: Query PushEvents for actor 'lkmanka58' on 2025-07-13"
-"gh-api-investigator: Check if commit abc123 exists on any fork of aws/aws-toolkit-vscode"
-"gh-recovery-investigator: Recover issue #7708 via Wayback"
-"local-git-investigator: Find dangling commits in aws-toolkit-vscode"
+"oss-investigator-gh-archive-agent: Query PushEvents for actor 'lkmanka58' on 2025-07-13"
+"oss-investigator-gh-api-agent: Check if commit abc123 exists on any fork of aws/aws-toolkit-vscode"
+"oss-investigator-gh-recovery-agent: Recover issue #7708 via Wayback"
+"oss-investigator-local-git-agent: Find dangling commits in aws-toolkit-vscode"
 ```
 
 **Max requests**: Check `followup_count` from orchestrator. Stop requesting if at limit.

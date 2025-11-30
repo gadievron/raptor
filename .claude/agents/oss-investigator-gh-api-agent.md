@@ -1,5 +1,5 @@
 ---
-name: gh-api-investigator
+name: oss-investigator-gh-api-agent
 description: Query live GitHub API for current repository state and commit verification
 tools: Bash, Read, Write, WebFetch
 model: inherit
