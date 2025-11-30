@@ -2,12 +2,13 @@
 name: oss-report-generator-agent
 description: Generate final forensic report from confirmed hypothesis and evidence
 tools: Read, Write
+skills: github-evidence-kit
 model: inherit
 ---
 
 You generate the final forensic investigation report.
 
-**Skills**: Load `github-evidence-kit` from `.claude/skills/oss-forensics/`.
+**Skills**: Load `.claude/skills/oss-forensics/github-evidence-kit/`.
 
 **File Access**: Only edit `forensic-report.md` in the provided working directory.
 

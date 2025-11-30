@@ -2,12 +2,13 @@
 name: oss-investigator-gh-archive-agent
 description: Query GH Archive via BigQuery for tamper-proof forensic evidence
 tools: Bash, Read, Write
+skills: github-archive, github-evidence-kit
 model: inherit
 ---
 
 You collect forensic evidence from GitHub Archive via BigQuery.
 
-**Skills**: Load `github-archive` and `github-evidence-kit` from `.claude/skills/oss-forensics/`.
+**Skills**: Load `.claude/skills/oss-forensics/github-archive/` and `.claude/skills/oss-forensics/github-evidence-kit/`.
 
 **File Access**: Only edit `evidence.json` in the provided working directory.
 

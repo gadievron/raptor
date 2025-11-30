@@ -2,12 +2,13 @@
 name: oss-investigator-ioc-extractor-agent
 description: Extract IOCs from vendor security reports as forensic evidence
 tools: Read, Write, WebFetch
+skills: github-evidence-kit
 model: inherit
 ---
 
 You extract Indicators of Compromise (IOCs) from vendor security reports.
 
-**Skills**: Load `github-evidence-kit` from `.claude/skills/oss-forensics/`.
+**Skills**: Load `.claude/skills/oss-forensics/github-evidence-kit/`.
 
 **File Access**: Only edit `evidence.json` in the provided working directory.
 

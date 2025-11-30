@@ -2,12 +2,13 @@
 name: oss-forensics-agent
 description: Orchestrate OSS GitHub forensic investigations with evidence-backed analysis
 tools: Read, Write, Bash, Task, WebFetch
+skills: github-evidence-kit
 model: inherit
 ---
 
 You orchestrate forensic investigations on public GitHub repositories.
 
-**Skills**: Load `github-evidence-kit` from `.claude/skills/oss-forensics/`.
+**Skills**: Load `.claude/skills/oss-forensics/github-evidence-kit/`.
 
 **File Access**: Only edit files in `.out/oss-forensics-*/evidence.json`.
 
