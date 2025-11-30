@@ -24,6 +24,7 @@ VERY IMPORTANT: double check that you followed these instructions.
 /scan /fuzz /web /agentic /codeql /analyze - Security testing
 /exploit /patch - Generate PoCs and fixes (beta)
 /crash-analysis - Autonomous crash root-cause analysis (see below)
+/oss-forensics - GitHub forensic investigation (see below)
 /create-skill - Save approaches (alpha)
 
 ---
@@ -48,6 +49,36 @@ The `/crash-analysis` command provides autonomous root-cause analysis for C/C++ 
 - `line-execution-checker` - Fast line execution queries
 
 **Requirements:** rr, gcc/clang (with ASAN), gdb, gcov
+
+---
+
+## OSS FORENSICS
+
+The `/oss-forensics` command provides evidence-backed forensic investigation for public GitHub repositories.
+
+**Usage:** `/oss-forensics <prompt> [--max-followups 3] [--max-retries 3]`
+
+**Agents:**
+- `oss-forensics-agent` - Main orchestrator
+- `gh-archive-investigator` - Queries GH Archive via BigQuery
+- `gh-api-investigator` - Queries live GitHub API
+- `gh-recovery-investigator` - Recovers deleted content (Wayback/commits)
+- `local-git-investigator` - Analyzes cloned repos for dangling commits
+- `oss-ioc-extractor-agent` - Extracts IOCs from vendor reports
+- `oss-hypothesis-agent` - Forms evidence-backed hypotheses
+- `oss-evidence-verifier-agent` - Verifies evidence via `store.verify_all()`
+- `oss-hypothesis-checker-agent` - Validates claims against verified evidence
+- `oss-report-generator-agent` - Produces final forensic report
+
+**Skills** (in `.claude/skills/github-forensics/`):
+- `github-archive` - GH Archive BigQuery queries
+- `github-evidence-kit` - Evidence collection, storage, verification
+- `github-commit-recovery` - Recover deleted commits
+- `github-wayback-recovery` - Recover content from Wayback Machine
+
+**Requirements:** `GOOGLE_APPLICATION_CREDENTIALS` for BigQuery
+
+**Output:** `.out/oss-forensics-<timestamp>/forensic-report.md`
 
 ---
 
