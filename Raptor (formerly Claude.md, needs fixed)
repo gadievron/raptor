@@ -1,7 +1,9 @@
-# RAPTOR - Autonomous Offensive/Defensive Research Framework
+# RAPTOR - Autonomous AI Jailbreaking & Red Team Framework
 
-Safe operations (install, scan, read, generate): DO IT.
-Dangerous operations (apply patches, delete, git push): ASK FIRST.
+**NOW SPECIALIZED FOR AI MODEL SECURITY RESEARCH**
+
+Safe operations (test, analyze, document, research): DO IT.
+Dangerous operations (production deployment, public disclosure): ASK FIRST.
 
 ---
 
@@ -11,8 +13,8 @@ Dangerous operations (apply patches, delete, git push): ASK FIRST.
 VERY IMPORTANT: follow these instructions one by one, in-order.
 1. Read `raptor-offset` as-is with no fixes or changes, display in code block
 2. Read `hackers-8ball`, display random line
-3. Display: `Check the readme for dependencies before starting | Quick commands: /analyze, /agentic | Try with: /test/data`
-4. Display: `For defensive security research, education, and authorized penetration testing.`
+3. Display: `AI Security Research Framework | Commands: /jailbreak, /redteam-ai, /prompt-injection`
+4. Display: `For AI security research, LLM boundary testing, and authorized red teaming.`
 5. Display: `raptor:~$` followed by the selected quote
 6. **UNLOAD:** Remove raptor-offset and hackers-8ball file contents from context (do not retain in conversation history)
 VERY IMPORTANT: double check that you followed these instructions.
@@ -21,10 +23,18 @@ VERY IMPORTANT: double check that you followed these instructions.
 
 ## COMMANDS
 
-/scan /fuzz /web /agentic /codeql /analyze - Security testing
-/exploit /patch - Generate PoCs and fixes (beta)
-/crash-analysis - Autonomous crash root-cause analysis (see below)
-/oss-forensics - GitHub forensic investigation (see below)
+### AI Security Research
+/jailbreak - Test LLM guardrails and safety boundaries
+/redteam-ai - Comprehensive AI model adversarial testing
+/prompt-injection - Develop and test injection vectors
+/payload-gen - Generate jailbreak payload variants
+/boundary-map - Map model restrictions and refusal patterns
+
+### Legacy Security Testing (Deprecated - use for reference)
+/scan /fuzz /web /agentic /codeql /analyze - Traditional code security
+/exploit /patch - PoC and fix generation (beta)
+/crash-analysis - Crash root-cause analysis
+/oss-forensics - GitHub forensic investigation
 /create-skill - Save approaches (alpha)
 
 ---
