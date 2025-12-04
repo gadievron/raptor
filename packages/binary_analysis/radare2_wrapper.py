@@ -195,6 +195,36 @@ class Radare2Wrapper:
             logger.error(f"radare2 command failed: {e}")
             return {"error": str(e), "raw_output": ""}
 
+    def _sanitize_address(self, address: str) -> str:
+        """
+        Sanitize address input to prevent command injection.
+
+        Removes radare2 command separators that could be used for command injection:
+        - ';' : Command separator
+        - '|' : Pipe to shell command
+        - '!' : Execute shell command
+
+        Args:
+            address: Address string (hex or symbol name)
+
+        Returns:
+            Sanitized address with dangerous characters removed
+
+        Security:
+            Prevents attacks like: "0x1000; ! rm -rf /"
+            Result after sanitization: "0x1000  rm -rf "
+        """
+        if not address:
+            return address
+
+        # Remove radare2 command separators
+        sanitized = address.replace(';', '').replace('|', '').replace('!', '')
+
+        if sanitized != address:
+            logger.warning(f"Address contained command separators (sanitized): {address} -> {sanitized}")
+
+        return sanitized
+
     def analyze(self) -> bool:
         """
         Run initial binary analysis (idempotent).
@@ -333,6 +363,9 @@ class Radare2Wrapper:
         Returns:
             Function disassembly with: name, addr, size, ops (instructions), vars, etc.
         """
+        # Sanitize address to prevent command injection
+        address = self._sanitize_address(address)
+
         # Run analysis with pdfj to ensure analysis state is available
         # (each _execute_command spawns new radare2 process, so we need to re-analyze)
         if self.analysis_depth and self.analysis_depth != "":
@@ -359,6 +392,9 @@ class Radare2Wrapper:
         Returns:
             List of Radare2DisasmInstruction objects
         """
+        # Sanitize address to prevent command injection
+        address = self._sanitize_address(address)
+
         # Build command with backward support
         if backward > 0:
             # Disassemble backward and forward from address
@@ -403,6 +439,9 @@ class Radare2Wrapper:
         Returns:
             Pseudo-C code as string, or error message
         """
+        # Sanitize address to prevent command injection
+        address = self._sanitize_address(address)
+
         result = self._execute_command(f"pdd @ {address}", json_output=False)
 
         if "error" in result:
@@ -420,6 +459,9 @@ class Radare2Wrapper:
         Returns:
             List of xref dicts with: from, type (call, data, string, etc.)
         """
+        # Sanitize address to prevent command injection
+        address = self._sanitize_address(address)
+
         # Run analysis with axtj to ensure analysis state is available
         if self.analysis_depth and self.analysis_depth != "":
             command = f"{self.analysis_depth}; axtj @ {address}"
@@ -446,6 +488,9 @@ class Radare2Wrapper:
         Returns:
             List of xref dicts with: to, type (call, data, string, etc.)
         """
+        # Sanitize address to prevent command injection
+        address = self._sanitize_address(address)
+
         # Run analysis with axfj to ensure analysis state is available
         if self.analysis_depth and self.analysis_depth != "":
             command = f"{self.analysis_depth}; axfj @ {address}"
@@ -530,6 +575,9 @@ class Radare2Wrapper:
         Returns:
             Call graph with function call relationships
         """
+        # Sanitize address to prevent command injection
+        address = self._sanitize_address(address)
+
         # Run analysis with agcj to ensure analysis state is available
         if self.analysis_depth and self.analysis_depth != "":
             command = f"{self.analysis_depth}; agcj @ {address}"
