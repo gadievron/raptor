@@ -1,0 +1,108 @@
+---
+description: Common code patterns, function templates, and implementation examples
+alwaysApply: false
+---
+
+# Code Patterns and Examples
+
+## Standard Function Pattern
+
+```python
+def function_name(param: str, repo_path: Path) -> tuple[int, str]:
+    """
+    Brief description of function.
+    
+    Args:
+        param: Description of parameter
+        repo_path: Path to repository
+        
+    Returns:
+        Tuple of (exit_code, output_message)
+        
+    Raises:
+        ValueError: If validation fails
+        RuntimeError: If operation fails
+    """
+    logger = get_logger()
+    logger.info(f"Starting operation: {param}")
+    
+    try:
+        # Implementation
+        result = do_work(param, repo_path)
+        logger.info(f"Operation completed successfully")
+        return 0, result
+    except Exception as e:
+        logger.error(f"Operation failed: {e}")
+        return 1, str(e)
+```
+
+## Subprocess Pattern
+
+```python
+def run_command(cmd: list, description: str) -> tuple[int, str, str]:
+    """Run a command and return results."""
+    logger = get_logger()
+    logger.info(f"Running: {description}")
+    print(f"\n[*] {description}...")
+    
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=RaptorConfig.DEFAULT_TIMEOUT,
+            env=RaptorConfig.get_safe_env()
+        )
+        return result.returncode, result.stdout, result.stderr
+    except subprocess.TimeoutExpired:
+        logger.error(f"Command timed out: {description}")
+        return -1, "", "Timeout"
+    except Exception as e:
+        logger.error(f"Command failed: {e}")
+        return -1, "", str(e)
+```
+
+## Path Handling Pattern
+
+```python
+from pathlib import Path
+from core.config import RaptorConfig
+
+# Get output directory
+out_dir = RaptorConfig.get_out_dir()
+output_file = out_dir / "results.sarif"
+
+# Ensure directory exists
+output_file.parent.mkdir(parents=True, exist_ok=True)
+
+# Read file
+if output_file.exists():
+    with open(output_file, "r") as f:
+        content = f.read()
+```
+
+## Error Handling Pattern
+
+```python
+from core.logging import get_logger
+
+logger = get_logger()
+
+try:
+    # Operation that might fail
+    result = risky_operation()
+    logger.info("Operation succeeded")
+    return 0, result
+except ValueError as e:
+    logger.error(f"Validation error: {e}")
+    return 1, f"Invalid input: {e}"
+except RuntimeError as e:
+    logger.error(f"Runtime error: {e}")
+    return 1, f"Operation failed: {e}"
+except KeyboardInterrupt:
+    logger.warning("Operation interrupted by user")
+    return 130, "Interrupted"
+except Exception as e:
+    logger.error(f"Unexpected error: {e}", exc_info=True)
+    return 1, f"Unexpected error: {e}"
+```

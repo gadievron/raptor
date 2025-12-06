@@ -1,0 +1,507 @@
+---
+description: RAPTOR command usage patterns, arguments, and workflows
+globs:
+  - "raptor.py"
+  - "raptor_*.py"
+  - "packages/**/scanner.py"
+  - ".claude/commands/**/*.md"
+alwaysApply: false
+---
+
+# Command Usage and Patterns
+
+RAPTOR provides 15 commands organized into core security testing, exploit/patch generation, specialized workflows, and utilities. All commands route through `raptor.py` which delegates to specific scripts.
+
+## Command-to-Script Mapping
+
+| Command | Python Script | Mode Handler |
+|---------|--------------|--------------|
+| `/agentic` | `raptor_agentic.py` | `mode_agentic()` |
+| `/scan` / `/raptor-scan` | `packages/static-analysis/scanner.py` | `mode_scan()` |
+| `/fuzz` / `/raptor-fuzz` | `raptor_fuzzing.py` | `mode_fuzz()` |
+| `/web` / `/raptor-web` | `packages/web/scanner.py` | `mode_web()` |
+| `/codeql` | `raptor_codeql.py` | `mode_codeql()` |
+| `/analyze` | `packages/llm_analysis/agent.py` | `mode_llm_analysis()` |
+| `/crash-analysis` | Agent workflow (see `crash-analysis-workflow.mdc`) | N/A |
+| `/oss-forensics` | Agent workflow (see `oss-forensics-workflow.mdc`) | N/A |
+| `/exploit` | `raptor_agentic.py` (with `--no-patches`) | `mode_agentic()` |
+| `/patch` | `raptor_agentic.py` (with `--no-exploits`) | `mode_agentic()` |
+| `/create-skill` | Manual process (see command doc) | N/A |
+| `/raptor` | General assistant (no direct script) | N/A |
+| `/test-workflows` | `test/test_workflows.sh` | N/A |
+
+## Core Security Testing Commands
+
+### `/agentic` - Full Autonomous Workflow
+
+**Purpose**: Complete end-to-end security testing with Semgrep, CodeQL, LLM analysis, exploit generation, and patch creation.
+
+**Command Syntax**:
+```bash
+python3 raptor.py agentic --repo <path> [options]
+```
+
+**Common Arguments**:
+- `--repo <path>`: Repository path (required)
+- `--max-findings <N>`: Limit findings processed (default: 5)
+- `--codeql`: Enable CodeQL analysis (default: enabled)
+- `--no-codeql`: Disable CodeQL analysis
+- `--codeql-only`: Run only CodeQL (skip Semgrep)
+- `--policy-groups <groups>`: Semgrep policy groups (comma-separated)
+- `--languages <langs>`: CodeQL languages (comma-separated)
+- `--no-exploits`: Skip exploit generation
+- `--no-patches`: Skip patch generation
+
+**Workflow**:
+1. Run Semgrep scan (unless `--codeql-only`)
+2. Run CodeQL analysis (unless `--no-codeql`)
+3. Parse and deduplicate SARIF findings
+4. For each finding (up to `--max-findings`):
+   - Create `VulnerabilityContext`
+   - Read vulnerable code
+   - LLM analysis for context
+   - Generate exploit PoC (unless `--no-exploits`)
+   - Generate secure patch (unless `--no-patches`)
+5. Generate comprehensive report
+
+**Output Location**: `out/agentic_<repo>_<timestamp>/`
+- `findings.sarif` - All findings
+- `exploits/` - Generated exploit PoCs
+- `patches/` - Generated patches
+- `analysis/` - LLM analysis reports
+
+**Prerequisites**: Semgrep CLI, CodeQL CLI (if enabled), LLM API key
+
+**Examples**:
+```bash
+# Full workflow
+python3 raptor.py agentic --repo /path/to/code
+
+# Limit to 10 findings
+python3 raptor.py agentic --repo /path/to/code --max-findings 10
+
+# CodeQL only
+python3 raptor.py agentic --repo /path/to/code --codeql-only
+
+# No CodeQL
+python3 raptor.py agentic --repo /path/to/code --no-codeql
+```
+
+### `/scan` / `/raptor-scan` - Quick Semgrep Scan
+
+**Purpose**: Fast static code analysis using Semgrep only.
+
+**Command Syntax**:
+```bash
+python3 raptor.py scan --repo <path> [options]
+```
+
+**Common Arguments**:
+- `--repo <path>`: Repository path (required)
+- `--policy-groups <groups>`: Policy groups (e.g., `secrets,owasp`)
+- `--config <path>`: Custom Semgrep config file
+- `--output <path>`: Output SARIF file path
+
+**Workflow**:
+1. Detect languages in repository
+2. Run Semgrep with specified policy groups
+3. Generate SARIF output
+4. Parse and deduplicate findings
+
+**Output Location**: `out/scan_<repo>_<timestamp>/`
+- `findings.sarif` - Semgrep findings
+
+**Prerequisites**: Semgrep CLI
+
+**Examples**:
+```bash
+# Basic scan
+python3 raptor.py scan --repo /path/to/code
+
+# Scan with specific policies
+python3 raptor.py scan --repo /path/to/code --policy-groups secrets,owasp
+
+# Custom config
+python3 raptor.py scan --repo /path/to/code --config custom-rules.yaml
+```
+
+### `/fuzz` / `/raptor-fuzz` - Binary Fuzzing
+
+**Purpose**: Fuzz binary executables with AFL++ to find crashes and generate exploits.
+
+**Command Syntax**:
+```bash
+python3 raptor.py fuzz --binary <path> [options]
+```
+
+**Common Arguments**:
+- `--binary <path>`: Binary path (required)
+- `--duration <seconds>`: Fuzzing duration (default: 6600 = 110 minutes)
+- `--corpus <path>`: Seed corpus directory
+- `--max-crashes <N>`: Stop after N crashes
+- `--input-mode <stdin|file>`: Input mode (default: stdin)
+
+**Workflow**:
+1. Check binary exists and is executable
+2. Verify AFL++ configuration (shared memory on macOS)
+3. Run AFL++ fuzzing for specified duration
+4. Collect crashes from `afl_output/main/crashes/`
+5. Analyze crashes and generate exploits
+6. Generate crash analysis reports
+
+**Output Location**: `out/fuzz_<binary>_<timestamp>/`
+- `afl_output/` - AFL++ output directory
+- `crashes/` - Crash files
+- `exploits/` - Generated exploit PoCs
+- `reports/` - Crash analysis reports
+
+**Prerequisites**: AFL++, binary compiled with AFL instrumentation (optional but recommended)
+
+**Examples**:
+```bash
+# Basic fuzzing (110 minutes)
+python3 raptor.py fuzz --binary /path/to/binary
+
+# Quick test (10 minutes)
+python3 raptor.py fuzz --binary /path/to/binary --duration 600
+
+# With seed corpus
+python3 raptor.py fuzz --binary /path/to/binary --corpus /path/to/seeds
+```
+
+**macOS Setup**:
+```bash
+# Fix shared memory limits
+sudo afl-system-config
+```
+
+### `/web` / `/raptor-web` - Web Application Scanning
+
+**Purpose**: Scan web applications for OWASP Top 10 vulnerabilities.
+
+**Command Syntax**:
+```bash
+python3 raptor.py web --url <url> [options]
+```
+
+**Common Arguments**:
+- `--url <url>`: Target URL (required)
+- `--auth-token <token>`: Authentication token
+- `--depth <N>`: Crawl depth (default: 3)
+- `--max-pages <N>`: Maximum pages to scan
+
+**Workflow**:
+1. Crawl web application
+2. Test for OWASP Top 10 vulnerabilities:
+   - SQL Injection
+   - XSS (Cross-Site Scripting)
+   - CSRF (Cross-Site Request Forgery)
+   - Authentication bypass
+   - And more
+3. Generate vulnerability report
+
+**Output Location**: `out/web_scan_<timestamp>/`
+- `findings.sarif` - Vulnerability findings
+- `reports/` - Detailed analysis reports
+
+**Prerequisites**: Playwright, internet access
+
+**Examples**:
+```bash
+# Basic scan
+python3 raptor.py web --url https://example.com
+
+# With authentication
+python3 raptor.py web --url https://example.com --auth-token "Bearer xyz"
+```
+
+### `/codeql` - CodeQL-Only Analysis
+
+**Purpose**: Deep static analysis using CodeQL only (no Semgrep).
+
+**Command Syntax**:
+```bash
+python3 raptor.py codeql --repo <path> [options]
+```
+
+**Common Arguments**:
+- `--repo <path>`: Repository path (required)
+- `--languages <langs>`: Languages to analyze (comma-separated)
+- `--suite <suite>`: CodeQL suite to run
+- `--extended`: Use extended query suite
+- `--force-db`: Force database recreation
+
+**Workflow**:
+1. Detect languages in repository
+2. Detect build systems
+3. Create CodeQL databases (with caching)
+4. Run CodeQL security analysis suites
+5. Generate SARIF output
+
+**Output Location**: `out/codeql_<repo>_<timestamp>/`
+- `findings.sarif` - CodeQL findings
+- `databases/` - CodeQL databases (cached)
+
+**Prerequisites**: CodeQL CLI
+
+**Examples**:
+```bash
+# Basic CodeQL analysis
+python3 raptor.py codeql --repo /path/to/code
+
+# Specific languages
+python3 raptor.py codeql --repo /path/to/code --languages java,python
+
+# Extended suite
+python3 raptor.py codeql --repo /path/to/code --extended
+```
+
+### `/analyze` - LLM Analysis of SARIF Files
+
+**Purpose**: Analyze existing SARIF files with LLM (for findings from previous scans).
+
+**Command Syntax**:
+```bash
+python3 raptor.py analyze --repo <path> --sarif <sarif-file> [options]
+```
+
+**Common Arguments**:
+- `--repo <path>`: Repository path (required)
+- `--sarif <path>`: SARIF file path (required)
+- `--max-findings <N>`: Limit findings analyzed (default: 5)
+- `--no-exploits`: Skip exploit generation
+- `--no-patches`: Skip patch generation
+
+**Workflow**:
+1. Load SARIF file
+2. Parse and deduplicate findings
+3. For each finding (up to `--max-findings`):
+   - Create `VulnerabilityContext`
+   - Read vulnerable code
+   - LLM analysis
+   - Generate exploit (unless `--no-exploits`)
+   - Generate patch (unless `--no-patches`)
+
+**Output Location**: `out/analyze_<repo>_<timestamp>/`
+- `exploits/` - Generated exploit PoCs
+- `patches/` - Generated patches
+- `analysis/` - LLM analysis reports
+
+**Prerequisites**: LLM API key, existing SARIF file
+
+**Examples**:
+```bash
+# Analyze existing SARIF
+python3 raptor.py analyze --repo /path/to/code --sarif findings.sarif
+
+# Analyze with limit
+python3 raptor.py analyze --repo /path/to/code --sarif findings.sarif --max-findings 10
+```
+
+## Exploit/Patch Generation Commands (Beta)
+
+### `/exploit` - Generate Exploit PoCs
+
+**Purpose**: Generate working exploit proof-of-concepts for vulnerabilities.
+
+**Command Syntax**:
+```bash
+python3 raptor.py agentic --repo <path> --sarif <sarif-file> --no-patches --max-findings <N>
+```
+
+**Requirements**: SARIF file from previous `/scan`
+
+**Workflow**: Same as `/agentic` but skips patch generation
+
+**Output Location**: `out/agentic_<repo>_<timestamp>/exploits/`
+
+**Examples**:
+```bash
+# First scan
+python3 raptor.py scan --repo /path/to/code
+
+# Then generate exploits
+python3 raptor.py agentic --repo /path/to/code --sarif out/scan_*/findings.sarif --no-patches --max-findings 5
+```
+
+### `/patch` - Generate Secure Patches
+
+**Purpose**: Generate secure patches to fix vulnerabilities.
+
+**Command Syntax**:
+```bash
+python3 raptor.py agentic --repo <path> --sarif <sarif-file> --no-exploits --max-findings <N>
+```
+
+**Requirements**: SARIF file from previous `/scan`
+
+**Workflow**: Same as `/agentic` but skips exploit generation
+
+**Output Location**: `out/agentic_<repo>_<timestamp>/patches/`
+
+**Examples**:
+```bash
+# First scan
+python3 raptor.py scan --repo /path/to/code
+
+# Then generate patches
+python3 raptor.py agentic --repo /path/to/code --sarif out/scan_*/findings.sarif --no-exploits --max-findings 5
+```
+
+## Specialized Workflow Commands
+
+### `/crash-analysis` - Crash Root-Cause Analysis
+
+**Purpose**: Autonomous root-cause analysis for C/C++ crashes from bug tracker reports.
+
+**Command Syntax**:
+```
+/crash-analysis <bug-tracker-url> <git-repo-url>
+```
+
+**Workflow**: See `crash-analysis-workflow.mdc` for complete documentation.
+
+**Output Location**: `./crash-analysis-<timestamp>/`
+
+**Prerequisites**: rr, gcc/clang (with ASAN), gdb, gcov
+
+### `/oss-forensics` - OSS GitHub Forensics
+
+**Purpose**: Evidence-backed investigations of security incidents on public GitHub repositories.
+
+**Command Syntax**:
+```
+/oss-forensics <prompt> [--max-followups N] [--max-retries N]
+```
+
+**Workflow**: See `oss-forensics-workflow.mdc` for complete documentation.
+
+**Output Location**: `.out/oss-forensics-<timestamp>/`
+
+**Prerequisites**: GOOGLE_APPLICATION_CREDENTIALS for BigQuery
+
+## Utility Commands
+
+### `/create-skill` - Save Custom Approach as Skill
+
+**Purpose**: Save successful custom security testing approaches as reusable specialist skills.
+
+**Process**:
+1. Capture successful approach patterns
+2. Define skill parameters (name, keywords, domain)
+3. Extract reusable patterns (remove target-specific details)
+4. Validate token budget (<500 tokens)
+5. Create skill file in `tiers/specialists/custom/`
+6. Test auto-loading
+
+**Output Location**: `tiers/specialists/custom/<skill-name>.md`
+
+**Token Budget**: Maximum 500 tokens per skill
+
+### `/raptor` - General RAPTOR Assistant
+
+**Purpose**: General help command that assists users in choosing appropriate RAPTOR modes.
+
+**Usage**: Interactive assistant that:
+- Understands user intent
+- Recommends appropriate commands
+- Helps run commands
+- Explains results
+- Offers to apply patches or fix issues
+
+### `/test-workflows` - Test Suite Runner
+
+**Purpose**: Run automated workflow tests to validate all commands.
+
+**Command Syntax**:
+```bash
+bash test/test_workflows.sh
+```
+
+**What it tests**:
+1. Basic scan (findings only)
+2. Full agentic workflow (scan + exploit + patch)
+3. Binary fuzzing
+4. Manual crash validation
+5. Tool routing sanity checks
+
+**Output**: PASS/FAIL/SKIP for each test, summary counts
+
+## Common Argument Patterns
+
+### Repository Arguments
+- `--repo <path>`: Repository path (Path object or Git URL)
+- Always use absolute paths when possible
+- Supports both local paths and Git URLs
+
+### Policy/Configuration Arguments
+- `--policy-groups <groups>`: Comma-separated Semgrep policy groups
+- `--config <path>`: Custom configuration file
+- `--suite <suite>`: CodeQL suite name
+
+### Output Arguments
+- `--output <path>`: Custom output file path
+- Default: `out/<mode>_<repo>_<timestamp>/`
+
+### Analysis Control Arguments
+- `--max-findings <N>`: Limit findings processed
+- `--languages <langs>`: Comma-separated language list
+- `--no-exploits`: Skip exploit generation
+- `--no-patches`: Skip patch generation
+
+### CodeQL Arguments
+- `--codeql`: Enable CodeQL (default in agentic mode)
+- `--no-codeql`: Disable CodeQL
+- `--codeql-only`: Run only CodeQL (skip Semgrep)
+- `--extended`: Use extended query suite
+- `--force-db`: Force database recreation
+
+## Output Directory Conventions
+
+All commands write to `out/` directory with pattern:
+```
+out/<mode>_<identifier>_<timestamp>/
+```
+
+**Examples**:
+- `out/agentic_myrepo_20250101_120000/`
+- `out/scan_myrepo_20250101_120000/`
+- `out/fuzz_mybinary_20250101_120000/`
+- `out/web_scan_20250101_120000/`
+- `out/codeql_myrepo_20250101_120000/`
+
+**Common Subdirectories**:
+- `exploits/` - Generated exploit PoCs
+- `patches/` - Generated patches
+- `analysis/` - LLM analysis reports
+- `reports/` - Detailed reports
+- `databases/` - CodeQL databases (cached)
+
+## Error Handling Patterns
+
+### Missing Prerequisites
+- Check for required tools before running
+- Provide clear error messages with setup instructions
+- Exit with appropriate error codes
+
+### Invalid Arguments
+- Validate arguments early
+- Show helpful error messages
+- Suggest correct usage
+
+### Tool Failures
+- Log errors with context
+- Continue with other tools when possible
+- Report partial results
+
+### Timeouts
+- Use `RaptorConfig.DEFAULT_TIMEOUT` for subprocess timeouts
+- Handle `subprocess.TimeoutExpired` exceptions
+- Report timeout to user
+
+## Related Documentation
+
+- `project-overview.mdc` - Entry points and mode routing
+- `crash-analysis-workflow.mdc` - Crash analysis command workflow
+- `oss-forensics-workflow.mdc` - OSS forensics command workflow
+- `code-style.mdc` - CLI argument parsing patterns

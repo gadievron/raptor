@@ -1,0 +1,115 @@
+---
+description: Python code style, conventions, and documentation standards
+alwaysApply: true
+---
+
+# Code Style & Conventions
+
+## Python Standards
+
+- **Python 3** with type hints for all function parameters and return types
+- Use `pathlib.Path` for all file paths, never raw strings
+- Use `#!/usr/bin/env python3` shebang for executable scripts
+- Follow PEP 8 with exceptions for line length (security code can be verbose)
+
+## Imports
+
+- Group imports: stdlib, third-party, local
+- Use absolute imports from project root: `from core.config import RaptorConfig`
+- Add parent directory to path when needed: `sys.path.insert(0, str(Path(__file__).parent.parent))`
+
+## Documentation
+
+- All functions must have docstrings with Args, Returns, Raises sections
+- Module-level docstrings explain purpose and usage
+- Use triple-quoted strings for docstrings
+
+## Error Handling
+
+- Always use try/except blocks for external operations (subprocess, file I/O, network)
+- Log errors with appropriate level: `logger.error()`, `logger.warning()`
+- Return exit codes: 0 for success, 1 for failure, 130 for KeyboardInterrupt
+- Use `RaptorConfig.DEFAULT_TIMEOUT` for subprocess timeouts
+
+## File Operations
+
+- Use `Path` objects, not strings: `file_path = Path(__file__).parent / "file.txt"`
+- Check existence: `if path.exists():`
+- Create directories: `path.mkdir(parents=True, exist_ok=True)`
+- Use context managers: `with open(path, "r") as f:`
+- Handle file encoding explicitly when needed
+
+## Subprocess Execution
+
+- Use `subprocess.run()` for simple commands with `capture_output=True, text=True`
+- Use `subprocess.Popen()` for streaming output with threading
+- Always set timeouts: `timeout=RaptorConfig.DEFAULT_TIMEOUT` (or specific timeout)
+- Use `RaptorConfig.get_safe_env()` for environment
+- Handle `subprocess.TimeoutExpired` exceptions
+- Return tuple: `(returncode, stdout, stderr)`
+
+## Progress Reporting
+
+- Use `HackerProgress` from `core.progress` for progress bars
+- Show user-friendly messages: `print(f"\n[*] {description}...")`
+- Stream long-running command output in real-time when possible
+
+## Error Messages
+
+- Use clear, actionable error messages
+- Include context: what operation failed, why it might have failed
+- Suggest fixes when possible
+- Use `✗` prefix for errors: `print(f"✗ Error: {message}")`
+- Use `[*]` prefix for info: `print(f"\n[*] {message}...")`
+
+## Command-Line Interface
+
+RAPTOR provides 15 commands accessible via slash commands or Python CLI. See `command-usage.mdc` for complete command documentation, including:
+- Command-to-script mapping
+- All command arguments and flags
+- Usage examples
+- Output locations
+- Prerequisites
+
+### Argument Parsing
+- Use `argparse` with `argparse.RawDescriptionHelpFormatter`
+- Include examples in `epilog` parameter
+- Support `--help` for all modes
+- Use `--repo` for repository paths (Path or Git URL)
+- Use `--policy-groups` for Semgrep policy selection (comma-separated)
+- Use `--languages` for CodeQL language selection
+- Use `--codeql`, `--no-codeql`, `--codeql-only` flags appropriately
+
+### Mode Routing
+- Main launcher routes to mode handlers: `mode_scan()`, `mode_fuzz()`, etc.
+- Mode handlers delegate to package scripts
+- Pass remaining arguments to package scripts: `run_script(script_path, remaining_args)`
+
+### Common Command Arguments
+- `--repo <path>`: Repository path (required for most commands)
+- `--max-findings <N>`: Limit findings processed
+- `--policy-groups <groups>`: Comma-separated Semgrep policy groups
+- `--languages <langs>`: Comma-separated CodeQL languages
+- `--no-exploits`: Skip exploit generation
+- `--no-patches`: Skip patch generation
+
+See `command-usage.mdc` for complete argument reference and command examples.
+
+## Performance Considerations
+
+- Run independent operations in parallel using `ThreadPoolExecutor`
+- Use streaming output for long-running commands
+- Cache CodeQL databases: `RaptorConfig.CODEQL_DB_DIR` with `CODEQL_DB_CACHE_DAYS`
+- Limit parallel workers based on `RaptorConfig.MAX_*_WORKERS` constants
+
+## Testing & Validation
+
+### SARIF Validation
+- Always validate SARIF output: `validate_sarif()` from `core.sarif.parser`
+- Deduplicate findings: `deduplicate_findings()` from `core.sarif.parser`
+- Parse findings: `parse_sarif_findings()` from `core.sarif.parser`
+
+### Command Execution
+- Test commands in isolated environments when possible
+- Use temporary directories for test repositories
+- Clean up temporary files and directories

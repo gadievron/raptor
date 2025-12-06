@@ -1,0 +1,396 @@
+---
+description: OSS GitHub forensic investigation agent pipeline with evidence-backed analysis
+globs:
+  - ".claude/agents/oss-*.md"
+  - ".claude/skills/oss-forensics/**/*"
+alwaysApply: false
+---
+
+# OSS Forensics Workflow
+
+The OSS forensics workflow uses 10 specialized agents to conduct evidence-backed investigations of security incidents on public GitHub repositories. The workflow orchestrates evidence collection, hypothesis formation, validation, and report generation.
+
+## Workflow Overview
+
+```
+oss-forensics-agent (orchestrator)
+  ├─→ Parallel Evidence Collection:
+  │   ├─→ oss-investigator-gh-archive-agent
+  │   ├─→ oss-investigator-gh-api-agent
+  │   ├─→ oss-investigator-gh-recovery-agent
+  │   ├─→ oss-investigator-local-git-agent
+  │   └─→ oss-investigator-ioc-extractor-agent (if vendor report)
+  │
+  ├─→ Hypothesis Formation Loop:
+  │   └─→ oss-hypothesis-former-agent (with followup requests)
+  │
+  ├─→ Evidence Verification:
+  │   └─→ oss-evidence-verifier-agent
+  │
+  ├─→ Validation Loop:
+  │   └─→ oss-hypothesis-checker-agent (with retry)
+  │
+  └─→ Report Generation:
+      └─→ oss-report-generator-agent
+```
+
+## Agent Responsibilities
+
+### 1. oss-forensics-agent (Orchestrator)
+
+**Input**: Research question, optional `--max-followups N`, `--max-retries N`
+
+**Workflow**:
+1. Check prerequisites (GOOGLE_APPLICATION_CREDENTIALS for BigQuery)
+2. Parse prompt for repos, actors, dates, vendor URLs
+3. Form research question (must support Timeline, Attribution, Intent, Impact)
+4. Create working directory: `.out/oss-forensics-YYYYMMDD_HHMMSS/`
+5. Initialize empty `evidence.json`
+6. Launch parallel evidence collection agents
+7. Hypothesis formation loop (with followup requests)
+8. Verify all evidence
+9. Validation loop (with retry on rejection)
+10. Generate final report
+
+**Output**: Complete investigation in working directory
+
+### 2. Evidence Collection Agents (Parallel)
+
+#### oss-investigator-gh-archive-agent
+
+**Purpose**: Query GH Archive via BigQuery for tamper-proof event history
+
+**Skills**: `.claude/skills/oss-forensics/github-archive/`, `.claude/skills/oss-forensics/github-evidence-kit/`
+
+**Process**:
+1. Construct BigQuery queries for event types:
+   - `PushEvent` - commits pushed
+   - `PullRequestEvent` - PRs opened/closed/merged
+   - `IssuesEvent` - issues opened/closed
+   - `CreateEvent` / `DeleteEvent` - branches/tags
+   - `WorkflowRunEvent` - GitHub Actions runs
+2. Execute queries using BigQuery Python client
+3. Create evidence using `GHArchiveCollector`
+4. Add to `evidence.json`
+
+**Key Patterns**:
+- Force push recovery: Query for PushEvents with `size=0`
+- Workflow vs Direct API: Check for WorkflowRunEvent near PushEvent
+- Deleted tags/branches: Both CreateEvent and DeleteEvent persist
+
+**Output**: Events added to `evidence.json`
+
+#### oss-investigator-gh-api-agent
+
+**Purpose**: Query live GitHub API for current repository state
+
+**Skills**: `.claude/skills/oss-forensics/github-evidence-kit/`
+
+**Process**:
+1. Use `GitHubAPICollector` for current state
+2. Collect commits, PRs, issues, forks
+3. Verify commit existence (even "deleted" commits if repo/fork exists)
+4. Add to `evidence.json`
+
+**Key Use Case**: Check if "deleted" commit still exists:
+```bash
+curl -s -o /dev/null -w "%{http_code}" \
+  https://api.github.com/repos/owner/repo/commits/SHA
+```
+
+**Rate Limits**: 60 requests/hour unauthenticated
+
+**Output**: Current state evidence added to `evidence.json`
+
+#### oss-investigator-gh-recovery-agent
+
+**Purpose**: Recover deleted content via Wayback Machine and commit fetching
+
+**Skills**: `.claude/skills/oss-forensics/github-commit-recovery/`, `.claude/skills/oss-forensics/github-wayback-recovery/`, `.claude/skills/oss-forensics/github-evidence-kit/`
+
+**Process**:
+1. **Preferred**: Fetch commits via GitHub API/web (faster, more reliable)
+   ```bash
+   curl -L https://github.com/owner/repo/commit/SHA.patch
+   ```
+2. **Fallback**: Use Wayback Machine for deleted repos/issues/PRs
+   - Search CDX API for archived URLs
+   - Retrieve content from specific timestamps
+3. Add recovered content to `evidence.json`
+
+**Output**: Recovered content added to `evidence.json`
+
+#### oss-investigator-local-git-agent
+
+**Purpose**: Analyze cloned repositories for dangling commits and git forensics
+
+**Skills**: `.claude/skills/oss-forensics/github-evidence-kit/`
+
+**Process**:
+1. Clone repository with `--mirror` to get all refs
+2. Find dangling commits (forensic gold - reveal force-pushed/deleted history):
+   ```bash
+   git fsck --unreachable --no-reflogs | grep commit
+   ```
+3. Analyze reflog for recent activity
+4. Examine commits for author/committer mismatches (detect forgery)
+5. Use `LocalGitCollector` to create evidence
+6. Add to `evidence.json`
+
+**Output**: Dangling commits and git forensics added to `evidence.json`
+
+#### oss-investigator-ioc-extractor-agent
+
+**Purpose**: Extract IOCs from vendor security reports
+
+**Skills**: `.claude/skills/oss-forensics/github-evidence-kit/`
+
+**When to Run**: Only when vendor report URL provided
+
+**Process**:
+1. Fetch vendor report via WebFetch
+2. Extract IOCs:
+   - `COMMIT_SHA` - 40-char hex
+   - `REPOSITORY` - owner/repo format
+   - `USERNAME` - GitHub usernames
+   - `EMAIL` - Email addresses
+   - `FILE_PATH` - File paths
+   - `TAG_NAME` - Git tags
+   - `BRANCH_NAME` - Branch names
+   - `URL` - GitHub/external URLs
+   - `IP_ADDRESS` - IPv4/IPv6
+   - `DOMAIN` - Domain names
+3. Create `IOC` evidence objects
+4. Add to `evidence.json`
+
+**Output**: IOCs added to `evidence.json`
+
+### 3. oss-hypothesis-former-agent
+
+**Purpose**: Form evidence-backed hypotheses
+
+**Input**: Working directory, research question, optional previous rebuttal
+
+**Skills**: `.claude/skills/oss-forensics/github-evidence-kit/`
+
+**Process**:
+1. Load evidence from `evidence.json`
+2. Assess evidence sufficiency (Timeline, Attribution, Intent, Impact)
+3. Request more evidence if needed (via Task tool, max followups)
+4. Form hypothesis with required sections:
+   - Research Question
+   - Summary
+   - Timeline (with evidence citations)
+   - Attribution (with confidence levels)
+   - Intent Analysis
+   - Impact Assessment
+   - Evidence Citations table
+
+**Citation Requirements**:
+- EVERY claim must cite evidence by ID: `[EVD-XXX]`
+- Bad: "The attacker created a tag on July 13."
+- Good: "The attacker created a tag on July 13 at 19:41:44 UTC [EVD-001]."
+
+**Output**: `hypothesis-YYY.md`
+
+### 4. oss-evidence-verifier-agent
+
+**Purpose**: Verify all collected evidence against original sources
+
+**Input**: Working directory
+
+**Skills**: `.claude/skills/oss-forensics/github-evidence-kit/`
+
+**Process**:
+1. Load evidence from `evidence.json`
+2. Call `store.verify_all()` which:
+   - Re-fetches GH Archive evidence via BigQuery
+   - Re-queries GitHub API for API-sourced evidence
+   - Confirms Wayback snapshots still exist
+   - Validates local git commits exist
+   - Checks vendor IOCs against source URLs
+3. Write verification report
+
+**Output**: `evidence-verification-report.md` with verification status for each evidence item
+
+### 5. oss-hypothesis-checker-agent
+
+**Purpose**: Validate hypothesis claims against verified evidence
+
+**Input**: Working directory, hypothesis file
+
+**Skills**: `.claude/skills/oss-forensics/github-evidence-kit/`
+
+**Validation Checks**:
+1. **Mechanical Format**:
+   - All claims have `[EVD-XXX]` citations
+   - All citations exist in `evidence.json`
+   - No citations to UNVERIFIED evidence
+2. **Content Validation**:
+   - Timeline consistency (chronological, no contradictions)
+   - Attribution sufficiency (enough evidence for confidence levels)
+   - Logical soundness (reasoning follows from evidence)
+
+**Decision**:
+- **REJECT** if: missing citations, invalid citations, unverified citations, inconsistencies, unsupported claims
+- **ACCEPT** if: all checks pass
+
+**Output**:
+- If REJECTED: `hypothesis-YYY-rebuttal.md` with specific issues
+- If ACCEPTED: `hypothesis-YYY-confirmed.md`
+
+### 6. oss-report-generator-agent
+
+**Purpose**: Generate final forensic report
+
+**Input**: Working directory
+
+**Skills**: `.claude/skills/oss-forensics/github-evidence-kit/`
+
+**Process**:
+1. Load confirmed hypothesis, evidence, verification report
+2. Generate comprehensive report with:
+   - Executive Summary (non-technical)
+   - Timeline (all events with citations)
+   - Attribution (all actors with confidence)
+   - Intent Analysis
+   - Impact Assessment
+   - Confidence Levels table
+   - Indicators of Compromise (IOCs)
+   - Appendix: Raw Evidence summary
+   - Methodology
+
+**Output**: `forensic-report.md`
+
+## Evidence Store Pattern
+
+All agents use shared `evidence.json`:
+
+```python
+from src import EvidenceStore
+
+# Load existing evidence
+store = EvidenceStore.load(f"{workdir}/evidence.json")
+
+# Add evidence
+store.add(evidence_item)
+store.add_all([item1, item2, item3])
+
+# Save
+store.save(f"{workdir}/evidence.json")
+```
+
+## Hypothesis Formation Loop
+
+```python
+max_followups = 3
+followup_count = 0
+
+while followup_count < max_followups:
+    Task("oss-hypothesis-former-agent: Form hypothesis from current evidence")
+    
+    if agent_requests_more_evidence:
+        # Spawn targeted investigator
+        Task(f"oss-investigator-{type}-agent: {specific_query}")
+        followup_count += 1
+    else:
+        # Hypothesis complete
+        break
+```
+
+## Validation Loop
+
+```python
+max_retries = 3
+retry_count = 0
+
+while retry_count < max_retries:
+    Task("oss-hypothesis-checker-agent: Validate hypothesis-YYY.md")
+    
+    if ACCEPTED:
+        write("hypothesis-YYY-confirmed.md")
+        break
+    else:
+        # Read rebuttal
+        rebuttal = read("hypothesis-YYY-rebuttal.md")
+        # Re-invoke hypothesis former with rebuttal
+        Task("oss-hypothesis-former-agent: Revise hypothesis with rebuttal feedback")
+        retry_count += 1
+```
+
+## Working Directory Structure
+
+```
+.out/oss-forensics-20250101_120000/
+├── repos/
+│   └── owner-repo.git/ (mirror clone)
+├── evidence.json (EvidenceStore with all evidence)
+├── hypothesis-001.md
+├── hypothesis-001-rebuttal.md (if rejected)
+├── hypothesis-001-confirmed.md (if accepted)
+├── evidence-verification-report.md
+└── forensic-report.md (final report)
+```
+
+## Evidence Types
+
+Evidence in `evidence.json` includes:
+- **GHArchiveObservation**: Events from GH Archive (PushEvent, PullRequestEvent, etc.)
+- **CommitObservation**: Commits from GitHub API or local git
+- **SnapshotObservation**: Wayback Machine snapshots
+- **IOC**: Indicators of Compromise (commit SHAs, usernames, repos, etc.)
+
+Each evidence item has:
+- `evidence_id`: Unique identifier (EVD-XXX)
+- `observed_when`: Timestamp
+- `observed_by`: Source (GH_ARCHIVE, GITHUB_API, WAYBACK, LOCAL_GIT, SECURITY_VENDOR)
+- `observed_what`: Description
+- `verification`: Verification status and source URL
+
+## Citation Format
+
+All claims in hypotheses must cite evidence:
+
+```markdown
+| Time (UTC) | Actor | Action | Evidence |
+|------------|-------|--------|----------|
+| 2025-07-13 19:41:44 | lkmanka58 | Created tag 'stability' | [EVD-001] |
+```
+
+## Prerequisites
+
+### BigQuery Credentials
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
+```
+
+Required for GH Archive queries.
+
+## Error Handling
+
+### Missing Prerequisites
+- If BigQuery credentials missing: STOP and show setup instructions
+- If GitHub API rate limited: Continue with other sources, note limitation
+
+### Evidence Collection Failures
+- If repo clone fails: Note in evidence, continue investigation
+- If Wayback snapshot missing: Mark as UNVERIFIED in verification report
+
+### Validation Failures
+- If max retries exceeded: Produce report with current hypothesis, note uncertainty
+- Rebuttal provides specific issues to address
+
+## Best Practices
+
+1. **Evidence Citations**: Every claim must cite evidence
+2. **Verification**: Only cite VERIFIED evidence in final report
+3. **Confidence Levels**: Use HIGH/MEDIUM/LOW appropriately based on evidence strength
+4. **Timeline Accuracy**: Ensure chronological order, verify timestamps
+5. **Attribution Care**: Only attribute actions when evidence is sufficient
+6. **IOC Extraction**: Extract all relevant IOCs for threat intelligence
+
+## Related Documentation
+
+- `agent-workflows.mdc` - General agent orchestration patterns
+- `.claude/agents/oss-forensics-agent.md` - Full orchestrator specification
+- `.claude/skills/oss-forensics/github-evidence-kit/` - Evidence collection tools

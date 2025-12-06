@@ -1,0 +1,44 @@
+---
+description: Configuration management with RaptorConfig and logging patterns with get_logger
+globs:
+  - "**/core/config.py"
+  - "**/core/logging.py"
+  - "**/*config*.py"
+  - "**/*logger*.py"
+alwaysApply: false
+---
+
+# Configuration and Logging Patterns
+
+## Configuration
+
+- **Always use `RaptorConfig`** for configuration values (paths, timeouts, limits)
+- Never hardcode paths - use `RaptorConfig.REPO_ROOT`, `RaptorConfig.get_out_dir()`
+- Never hardcode timeouts - use `RaptorConfig.DEFAULT_TIMEOUT`, `RaptorConfig.SEMGREP_TIMEOUT`, etc.
+- Use `RaptorConfig.get_safe_env()` for subprocess environment (strips proxy vars)
+- Use `RaptorConfig.get_git_env()` for git operations
+
+## Logging
+
+- **Always use `get_logger()`** from `core.logging` for logging
+- Use appropriate log levels: `debug()`, `info()`, `warning()`, `error()`, `critical()`
+- Log security events: `logger.log_security_event(event_type, message, **kwargs)`
+- Log job lifecycle: `logger.log_job_start()`, `logger.log_job_complete()`
+- Console output uses `print()` for user-facing messages with `[*]` prefix
+
+## Example Usage
+
+```python
+from core.config import RaptorConfig
+from core.logging import get_logger
+
+logger = get_logger()
+
+# Get configuration values
+out_dir = RaptorConfig.get_out_dir()
+timeout = RaptorConfig.DEFAULT_TIMEOUT
+
+# Logging
+logger.info("Starting operation")
+logger.error(f"Operation failed: {error}")
+```

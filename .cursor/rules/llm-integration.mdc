@@ -1,0 +1,74 @@
+---
+description: LLM integration patterns, multi-provider support, and autonomous analysis workflows
+globs:
+  - "packages/llm_analysis/**/*.py"
+  - "packages/autonomous/**/*.py"
+  - "**/*llm*.py"
+  - "**/*agent*.py"
+alwaysApply: false
+---
+
+# LLM Integration Patterns
+
+## Multi-Provider Support
+
+- Use `LLMClient` from `packages/llm_analysis/llm/client.py`
+- Support Anthropic Claude, OpenAI GPT-4, Ollama (local models)
+- Automatic fallback and cost optimization
+- Configuration via `LLMConfig` from `packages/llm_analysis/llm/config.py`
+
+## Autonomous Analysis
+
+- Create `VulnerabilityContext` objects for each finding
+- Read vulnerable code with `read_vulnerable_code()` method
+- Use LLM for context-aware analysis, exploit generation, patch creation
+- Store analysis results in context objects
+
+## Agent Patterns
+
+- Agents are autonomous classes that orchestrate workflows
+- Agents use LLM clients for reasoning and code generation
+- Agents validate outputs (exploits, patches) before returning
+
+### Agent Workflows
+
+RAPTOR includes 15 specialized agents organized into two main workflows:
+
+**Crash Analysis Workflow (5 agents)**:
+- Orchestrates C/C++ crash analysis with instrumentation, tracing, and root-cause analysis
+- See `crash-analysis-workflow.mdc` for complete pipeline documentation
+
+**OSS Forensics Workflow (10 agents)**:
+- Conducts evidence-backed investigations of GitHub security incidents
+- See `oss-forensics-workflow.mdc` for complete pipeline documentation
+
+**Agent Orchestration**:
+- Agents invoke each other using Task tool
+- Multi-agent workflows use parallel evidence collection and sequential validation loops
+- See `agent-workflows.mdc` for orchestration patterns, working directory conventions, and skill loading
+
+### Agent-Specific LLM Usage
+
+**Crash Analysis Agents**:
+- Use LLM for root-cause analysis of memory corruption bugs
+- Generate detailed causal chains with empirical verification (rr output, traces, coverage)
+- Validate hypotheses through checker agents with retry loops
+
+**OSS Forensics Agents**:
+- Use LLM for hypothesis formation from collected evidence
+- Generate evidence-backed timelines and attribution analysis
+- Validate hypotheses against verified evidence sources
+
+## Example Usage
+
+```python
+from packages.llm_analysis.llm.client import LLMClient
+from packages.llm_analysis.llm.config import LLMConfig
+
+# Initialize LLM client
+llm_config = LLMConfig()
+llm_client = LLMClient(llm_config)
+
+# Use for analysis
+response = llm_client.generate(prompt, context)
+```

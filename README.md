@@ -43,7 +43,7 @@
 ## What is RAPTOR?
 
 RAPTOR is an **autonomous offensive/defensive security research framework**, based on
-**Claude Code**. It empowers security research with agentic workflows and automation.
+**Claude Code** and **Cursor IDE**. It empowers security research with agentic workflows and automation.
 
 RAPTOR stands for Recursive Autonomous Penetration Testing and Observation Robot.
 (We really wanted to name it RAPTOR)
@@ -76,7 +76,7 @@ without asking, check dependencies.txt first.
 ## What's unique about RAPTOR?
 
 Beyond RAPTOR's potential for autonomous security research and community collaboration, it
-demonstrates how Claude Code can be adapted for **any purpose**, with RAPTOR packages.
+demonstrates how Claude Code and Cursor IDE can be adapted for **any purpose**, with RAPTOR packages.
 
 ---
 
@@ -119,9 +119,9 @@ RAPTOR now includes comprehensive GitHub forensics capabilities via the `/oss-fo
 ## Quick Start
 
 ```bash
-You have two options, install on your own, or deploy the devcontainer.
+You have two options: install locally, or use the devcontainer.
 
-**Install**
+**Option 1: Local Install (Claude Code)**
 # 1. Install Claude Code
 # Download from: https://claude.ai/download
 
@@ -135,7 +135,22 @@ claude
 "Install semgrep"
 "Set my ANTHROPIC_API_KEY to [your-key]"
 
-**devcontainer**
+**Option 1b: Local Install (Cursor IDE)**
+# 1. Install Cursor IDE
+# Download from: https://cursor.sh
+
+# 2. Clone and open RAPTOR
+git clone https://github.com/gadievron/raptor.git
+cd raptor
+cursor .
+
+# 3. Cursor will automatically load .cursor/rules/ and AGENTS.md
+# 4. Install dependencies and configure
+python3 -m venv venv
+source venv/bin/activate  # or `venv\Scripts\activate` on Windows
+pip install -r requirements.txt
+
+**Option 2: DevContainer**
 # 4. Get the devcontainer
 A devcontainer with all prerequisites pre-installed is available. Open in VS Code or any of
 its forks with command Dev Container: Open Folder in Container, or build with docker:
@@ -152,7 +167,9 @@ Just say "hi" to get started
 Try /analyze on one of our tests in /tests/data
 ```
 
-**See:** `docs/CLAUDE_CODE_USAGE.md` for complete guide
+**See:** `docs/CLAUDE_CODE_USAGE.md` for complete Claude Code guide
+**See:** `.cursor/rules/` for Cursor IDE documentation
+**See:** `AGENTS.md` for Cursor session instructions
 
 ## DevContainer and Dockerfile for easy onboarding
 
@@ -253,6 +270,12 @@ Usage: "Use [persona name]"
 - Tier2 (9 expert personas) → Load on explicit request
 - Alpha (custom skills) → User-created
 
+**Cursor IDE Decision System:**
+- Bootstrap (AGENTS.md) → Always loaded (project root)
+- Project Rules (.cursor/rules/*.mdc) → Code patterns and architecture documentation
+- Agent workflows → Documented in .cursor/rules/agent-workflows.mdc
+- Command usage → Documented in .cursor/rules/command-usage.mdc
+
 **Python Execution Layer:**
 - raptor.py → Unified launcher
 - packages/ → 9 security capabilities
@@ -263,9 +286,11 @@ Usage: "Use [persona name]"
 - **Adversarial thinking:** Prioritizes findings by Impact × Exploitability / Detection Time
 - **Decision templates:** 5 options after each scan
 - **Progressive disclosure:** 360t → 925t → up to 2,500t with personas
-- **Dual interface:** Claude Code (interactive) or Python CLI (scripting)
+- **Dual interface:** Claude Code (interactive) or Cursor IDE (with rules) or Python CLI (scripting)
+- **Comprehensive documentation:** Full coverage of agents, commands, and workflows in .cursor/rules/
 
 **See:** `docs/ARCHITECTURE.md` for detailed technical documentation
+**See:** `.cursor/rules/` for Cursor IDE documentation
 
 ---
 
@@ -303,8 +328,23 @@ python3 raptor.py fuzz --binary /path/to/binary --duration 3600
 
 ## Documentation
 
+**User Guides:**
 - **CLAUDE_CODE_USAGE.md** - Complete Claude Code usage guide
 - **PYTHON_CLI.md** - Python command-line reference
+- **AGENTS.md** - Cursor IDE session instructions (project root)
+
+**Cursor IDE Documentation:**
+- **.cursor/rules/** - Comprehensive Cursor Rules for code patterns and architecture
+  - `project-overview.mdc` - Project architecture and structure
+  - `command-usage.mdc` - All 15 commands with usage patterns
+  - `agent-workflows.mdc` - Agent orchestration patterns
+  - `crash-analysis-workflow.mdc` - Crash analysis pipeline
+  - `oss-forensics-workflow.mdc` - OSS forensics pipeline
+  - `code-style.mdc` - Python code style and conventions
+  - `code-patterns.mdc` - Common code patterns and templates
+  - Additional rules for package structure, configuration, logging, security, and LLM integration
+
+**Technical Documentation:**
 - **ARCHITECTURE.md** - Technical architecture details
 - **EXTENDING_LAUNCHER.md** - How to add new capabilities
 - **FUZZING_QUICKSTART.md** - Binary fuzzing guide
@@ -324,8 +364,8 @@ RAPTOR is in alpha, and we welcome contributions from anyone, on anything.
 
 Submit pull requests.
 
-A better web exploitation module? YARA signatures generation? Maybe a port into Cursor,
-Windsurf, Copilot, or Codex? Devin? Cline? Antigravity?
+A better web exploitation module? YARA signatures generation? We are working on Cursor support now! 
+Maybe a port into Windsurf, Copilot, or Codex? Devin? Cline? Antigravity?
 
 Hacker poetry? :)
 

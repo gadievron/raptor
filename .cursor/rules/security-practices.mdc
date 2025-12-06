@@ -1,0 +1,28 @@
+---
+description: Security practices, input validation, and safe operation guidelines
+alwaysApply: true
+---
+
+# Security Practices
+
+## Safe vs Dangerous Operations
+
+- **Safe operations** (install, scan, read, generate): DO IT automatically
+- **Dangerous operations** (apply patches, delete files, git push): ASK FIRST
+- Always validate repository URLs before cloning: `validate_repo_url()`
+- Strip proxy environment variables: `RaptorConfig.get_safe_env()`
+- Never expose secrets in logs or output
+
+## Input Validation
+
+- Validate repository URLs against allowed patterns before cloning
+- Validate file paths to prevent directory traversal
+- Sanitize user input before passing to subprocess
+- Use `RaptorConfig.get_git_env()` for git operations (disables prompts)
+
+## Resource Limits
+
+- Respect `RaptorConfig.RESOURCE_READ_LIMIT` (5 MiB) for file reads
+- Use `RaptorConfig.MAX_TAIL_BYTES` (2000) for stdout/stderr truncation
+- Set appropriate timeouts for all external operations
+- Limit parallel workers: `RaptorConfig.MAX_SEMGREP_WORKERS`, `RaptorConfig.MAX_CODEQL_WORKERS`

@@ -1,0 +1,297 @@
+---
+description: Crash analysis agent pipeline for C/C++ security bug investigation
+globs:
+  - ".claude/agents/crash-*.md"
+  - ".claude/agents/coverage-*.md"
+  - ".claude/agents/function-trace-*.md"
+  - "packages/**/crash*.py"
+alwaysApply: false
+---
+
+# Crash Analysis Workflow
+
+The crash analysis workflow uses 5 specialized agents to perform comprehensive root-cause analysis of C/C++ security bugs. The workflow orchestrates instrumentation, data collection, analysis, and validation.
+
+## Workflow Overview
+
+```
+crash-analysis-agent (orchestrator)
+  ├─→ function-trace-generator-agent (parallel)
+  ├─→ coverage-analysis-generator-agent (parallel)
+  ├─→ rr recording (direct)
+  └─→ crash-analyzer-agent (after data collection)
+       └─→ crash-analyzer-checker-agent (validation loop)
+```
+
+## Agent Responsibilities
+
+### 1. crash-analysis-agent (Orchestrator)
+
+**Input**: Bug tracker URL, git repository URL
+
+**Workflow**:
+1. Fetch bug report from URL
+2. Clone repository to `./repo-<project-name>`
+3. Create working directory: `./crash-analysis-YYYYMMDD_HHMMSS/`
+4. Understand build system (autotools, CMake, Makefile, meson)
+5. Rebuild with AddressSanitizer instrumentation
+6. Reproduce the crash
+7. Launch parallel data collection agents
+8. Create rr recording
+9. Invoke root-cause analysis
+10. Validate hypothesis (with retry loop)
+11. Wait for human review before patch generation
+
+**Output**: Complete analysis in working directory
+
+### 2. function-trace-generator-agent
+
+**Input**: Repository path, working directory, crashing program, build instructions
+
+**Purpose**: Generate function-level execution traces
+
+**Process**:
+1. Build instrumentation library from `.claude/skills/crash-analysis/function-tracing/`
+2. Rebuild target with `-finstrument-functions -g`
+3. Link against `libtrace.so`
+4. Run crashing program (creates `trace_*.log` files)
+5. Convert to Perfetto format (optional)
+6. Move traces to `traces/` subdirectory
+
+**Output**: `traces/trace_*.log` files with function entry/exit events
+
+**Validation**:
+- Check trace files exist
+- Verify main function appears in trace
+- Confirm function entry/exit events present
+
+### 3. coverage-analysis-generator-agent
+
+**Input**: Repository path, working directory, crashing program, build instructions
+
+**Purpose**: Generate gcov coverage data
+
+**Process**:
+1. Rebuild with coverage flags: `--coverage -g` (or `-fprofile-arcs -ftest-coverage`)
+2. Run crashing program (creates `.gcda` files)
+3. Generate `.gcov` files:
+   ```bash
+   find . -name "*.gcda" -exec dirname {} \; | sort -u | while read dir; do
+     (cd "$dir" && gcov *.gcda)
+   done
+   ```
+4. Copy `.gcov` files to `gcov/` subdirectory
+
+**Output**: `gcov/*.gcov` files with line execution counts
+
+**Validation**:
+- Check `.gcda` files created
+- Verify `.gcov` files generated
+- Confirm entry point shows as executed
+
+### 4. crash-analyzer-agent
+
+**Input**: Repository path, working directory, traces, coverage, rr recording, bug report
+
+**Purpose**: Perform root-cause analysis
+
+**Requirements**:
+- Must trace pointer from allocation to crash
+- Must include actual rr output (not expected output)
+- Must show actual memory addresses (0x...)
+- Must verify every step against empirical data
+
+**Analysis Steps**:
+1. Examine out-of-bounds memory access causes
+2. Identify memory allocation location
+3. Track pointers from allocation to invalid access
+4. Identify missing/incorrect bounds checks
+5. Build complete causal chain
+
+**Verification Requirements**:
+- Every function in chain must appear in function trace
+- Every line of code must show in coverage data
+- Every pointer value must be verified with rr recording
+- Must include at least 3 instances of actual rr output
+- Must show at least 5 distinct memory addresses
+
+**Output Format**: `root-cause-hypothesis-YYY.md` with:
+
+```markdown
+### Step N: [Description]
+**Location:** `file.c:line`
+
+**Code:**
+```c
+relevant_code_here();
+```
+
+**RR Verification:**
+```bash
+rr replay rr-trace/program-0
+break file.c:123
+commands
+  printf "variable=%p\n", variable
+  continue
+end
+run
+```
+
+**Actual RR Output:**
+```
+Breakpoint 1, function_name (...) at file.c:123
+variable=0x60e000000100
+```
+```
+
+**Mandatory Sections**:
+- Clear explanation of what goes wrong and why
+- Actual verbatim rr output (not "expected output")
+- Pointer chain from allocation to crash
+- Code intent (what code is trying to do)
+- Violated assumption (what assumption breaks)
+
+### 5. crash-analyzer-checker-agent
+
+**Input**: Repository path, working directory, hypothesis file, all data sources
+
+**Purpose**: Validate root-cause analysis
+
+**Mechanical Format Checks** (MUST PASS ALL):
+1. Count "Actual RR Output:" sections (must be >= 3)
+2. Count distinct memory addresses (must be >= 5)
+3. Check for red flag phrases ("expected output", "should show", "likely", "probably")
+4. Verify complete step format (Code + RR Commands + Actual Output)
+
+**Content Validation**:
+- Verify every function in chain appears in function trace
+- Verify every line appears in coverage data
+- Verify pointer values match rr recording
+- Check source code and assembly at crash site
+- Validate pointer chain continuity (no missing modifications)
+
+**Output**:
+- If REJECTED: `root-cause-hypothesis-YYY-rebuttal.md` with specific deficiencies
+- If ACCEPTED: `root-cause-hypothesis-YYY-confirmed.md`
+
+## Build System Patterns
+
+### Autotools
+```bash
+./configure CC=clang CFLAGS="-fsanitize=address -g -O1" LDFLAGS="-fsanitize=address"
+make
+```
+
+### CMake
+```bash
+cmake -DCMAKE_C_FLAGS="-fsanitize=address -g" -DCMAKE_BUILD_TYPE=Debug ..
+make
+```
+
+### Makefile
+```bash
+make CC=clang CFLAGS="-fsanitize=address -g -O1"
+```
+
+## Instrumentation Flags
+
+### AddressSanitizer (for crash reproduction)
+- CFLAGS: `-fsanitize=address -g -O1`
+- LDFLAGS: `-fsanitize=address`
+
+### Function Tracing
+- CFLAGS: `-finstrument-functions -g`
+- LDFLAGS: `-L<path-to-libtrace> -ltrace -ldl -lpthread`
+
+### Coverage
+- CFLAGS: `--coverage -g` (or `-fprofile-arcs -ftest-coverage`)
+- LDFLAGS: `--coverage`
+
+## RR Recording
+
+```bash
+# Record crashing execution
+rr record <crashing-command>
+
+# Pack trace for analysis
+rr pack <working-dir>/rr-trace
+```
+
+RR provides deterministic replay for debugging.
+
+## Validation Loop
+
+```python
+max_retries = 3
+retry_count = 0
+
+while retry_count < max_retries:
+    # Generate hypothesis
+    Task("crash-analyzer-agent: Analyze with all collected data")
+    
+    # Validate
+    Task("crash-analyzer-checker-agent: Validate root-cause-hypothesis-YYY.md")
+    
+    if hypothesis_confirmed:
+        write("root-cause-hypothesis-YYY-confirmed.md")
+        break
+    else:
+        # Read rebuttal
+        rebuttal = read("root-cause-hypothesis-YYY-rebuttal.md")
+        # Re-invoke analyzer with feedback
+        retry_count += 1
+```
+
+## Working Directory Structure
+
+```
+crash-analysis-20250101_120000/
+├── traces/
+│   ├── trace_0.log
+│   └── trace.json (Perfetto format, optional)
+├── gcov/
+│   ├── file1.c.gcov
+│   └── file2.c.gcov
+├── rr-trace/
+│   └── program-0/ (rr recording)
+├── root-cause-hypothesis-001.md
+├── root-cause-hypothesis-001-rebuttal.md (if rejected)
+└── root-cause-hypothesis-001-confirmed.md (if accepted)
+```
+
+## Error Handling
+
+### Build Failures
+- Try alternative compiler flags
+- Check for missing dependencies
+- Report specific error to user
+
+### Crash Reproduction Failures
+- Document what was tried
+- Ask user for additional information
+- Check if bug report attachments are available
+
+### RR Recording Failures
+- Kernel restrictions may prevent rr
+- Document limitation and continue with other data sources
+- Note in analysis that rr data unavailable
+
+### Validation Failures
+- Rebuttal provides specific deficiencies
+- Re-invoke analyzer with rebuttal feedback
+- Maximum 3 retry attempts
+
+## Best Practices
+
+1. **Always verify empirically**: Every claim must be backed by actual data (rr output, traces, coverage)
+2. **Show actual values**: Use real memory addresses (0x...), not variable names
+3. **Complete chains**: Trace pointer from allocation through all modifications to crash
+4. **Code intent**: Explain what the code is trying to do
+5. **Assumptions**: Clearly state what assumption is violated
+6. **Validation**: Use checker agent before finalizing analysis
+
+## Related Documentation
+
+- `agent-workflows.mdc` - General agent orchestration patterns
+- `.claude/agents/crash-analysis-agent.md` - Full orchestrator specification
+- `.claude/agents/crash-analyzer-agent.md` - Root-cause analysis requirements

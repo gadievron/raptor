@@ -1,0 +1,51 @@
+---
+description: Package architecture, module organization, and import patterns
+globs:
+  - "packages/**/*.py"
+  - "**/__init__.py"
+alwaysApply: false
+---
+
+# Package Structure and Organization
+
+## Package Architecture
+
+- Each package is self-contained with its own `__init__.py`
+- Packages can be imported: `from packages.static_analysis import Scanner`
+- Main scripts delegate to package modules, not the reverse
+- Each package has a main entry script (e.g., `packages/static-analysis/scanner.py`)
+- Packages expose classes/functions via `__init__.py`
+- Packages are independent and can be used standalone
+
+## Package Locations
+
+- `packages/static-analysis/`: Static analysis scanners (Semgrep, CodeQL)
+- `packages/fuzzing/`: Binary fuzzing with AFL++
+- `packages/web/`: Web scanning and crawling
+- `packages/llm_analysis/`: LLM-powered vulnerability analysis
+- `packages/codeql/`: CodeQL-specific analysis tools
+- `packages/autonomous/`: Autonomous agent components
+- `packages/binary_analysis/`: Binary analysis and crash analysis
+- `packages/recon/`: Reconnaissance tools
+- `packages/sca/`: Software composition analysis
+
+## Import Patterns
+
+```python
+# Absolute imports from project root
+from core.config import RaptorConfig
+from core.logging import get_logger
+from packages.static_analysis import Scanner
+from packages.llm_analysis.llm.client import LLMClient
+```
+
+## Package Structure Example
+
+```
+packages/
+  package_name/
+    __init__.py          # Exports public API
+    main_script.py       # Entry point for package
+    module1.py           # Package modules
+    module2.py
+```

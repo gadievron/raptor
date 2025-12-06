@@ -1,0 +1,157 @@
+---
+description: RAPTOR project architecture, structure, and key principles
+alwaysApply: true
+---
+
+# RAPTOR Project Overview
+
+RAPTOR is an autonomous security research framework that combines static analysis (Semgrep, CodeQL), binary fuzzing (AFL++), web scanning, and LLM-powered vulnerability analysis. The codebase follows a modular, package-based architecture with progressive disclosure patterns.
+
+## Architecture Principles
+
+### Multi-Layered System
+- **Entry Point**: `raptor.py` - Unified launcher routing to specific modes
+- **Packages**: Modular capabilities in `packages/` directory (static-analysis, fuzzing, web, llm_analysis, codeql, etc.)
+- **Core**: Shared utilities in `core/` (config, logging, progress, sarif parsing)
+- **Engine**: Rules and queries in `engine/` (semgrep rules, codeql suites)
+- **Tiers**: Progressive loading system in `tiers/` (analysis-guidance, recovery, expert personas)
+
+### Package Structure
+- Each package is self-contained with its own `__init__.py`
+- Packages can be imported: `from packages.static_analysis import Scanner`
+- Main scripts delegate to package modules, not the reverse
+
+### Progressive Disclosure
+- Bootstrap (CLAUDE.md) → Always loaded
+- Tier1 (analysis-guidance, recovery) → Auto-loads when relevant
+- Tier2 (9 expert personas) → Load on explicit request
+- Alpha (custom skills) → User-created
+
+## Code Organization
+
+### Entry Points
+- `raptor.py`: Main unified launcher with mode routing (scan, fuzz, web, agentic, codeql, analyze)
+- `raptor_agentic.py`: Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
+- `raptor_codeql.py`: CodeQL-only analysis
+- `raptor_fuzzing.py`: Binary fuzzing workflow
+
+### Commands
+
+RAPTOR provides 15 commands accessible via slash commands in Claude Code or directly via Python CLI:
+
+**Core Security Testing**:
+- `/agentic` - Full autonomous workflow (Semgrep + CodeQL + LLM + exploits + patches)
+- `/scan` / `/raptor-scan` - Quick Semgrep scan
+- `/fuzz` / `/raptor-fuzz` - Binary fuzzing with AFL++
+- `/web` / `/raptor-web` - Web application scanning
+- `/codeql` - CodeQL-only analysis
+- `/analyze` - LLM analysis of existing SARIF files
+
+**Exploit/Patch Generation** (beta):
+- `/exploit` - Generate exploit PoCs
+- `/patch` - Generate secure patches
+
+**Specialized Workflows**:
+- `/crash-analysis` - Crash root-cause analysis (see `crash-analysis-workflow.mdc`)
+- `/oss-forensics` - OSS GitHub forensics (see `oss-forensics-workflow.mdc`)
+
+**Utilities**:
+- `/create-skill` - Save custom approaches as reusable skills
+- `/raptor` - General RAPTOR assistant
+- `/test-workflows` - Test suite runner
+
+All commands route through `raptor.py` which delegates to specific scripts. Command definitions are in `.claude/commands/` directory.
+
+See `command-usage.mdc` for complete command documentation, arguments, workflows, and examples.
+
+### Package Modules
+- Each package has a main entry script (e.g., `packages/static-analysis/scanner.py`)
+- Packages expose classes/functions via `__init__.py`
+- Packages are independent and can be used standalone
+
+### Core Utilities
+- `core/config.py`: `RaptorConfig` class with all configuration constants
+- `core/logging.py`: `get_logger()` function returning `RaptorLogger` singleton
+- `core/progress.py`: `HackerProgress` for progress bars
+- `core/sarif/parser.py`: SARIF parsing and deduplication utilities
+
+### Output Format
+- **SARIF** (Static Analysis Results Interchange Format) for all scan results
+- Store outputs in `RaptorConfig.get_out_dir()` or `RaptorConfig.get_job_out_dir(job_id)`
+- Use structured JSON for logs and audit trails
+- Generate metrics: `generate_scan_metrics()` from `core.sarif.parser`
+
+## File Naming Conventions
+
+- Main scripts: `raptor_*.py` (e.g., `raptor_agentic.py`, `raptor_codeql.py`)
+- Package scripts: `packages/<package-name>/<script>.py`
+- Core modules: `core/<module>.py`
+- Engine rules: `engine/semgrep/rules/<category>/<rule>.yaml`
+- Engine queries: `engine/codeql/queries/<language>/<query>.ql`
+
+## Dependencies
+
+### Core Dependencies
+- `requests>=2.31.0` for HTTP operations
+- `anthropic>=0.39.0` for Claude API (or `openai>=1.0.0` for GPT-4)
+- `tabulate>=0.9.0` for table formatting
+
+### External Tools (not Python packages)
+- Semgrep CLI
+- CodeQL CLI
+- AFL++ (for fuzzing)
+- rr debugger (for deterministic debugging)
+- Playwright (for web scanning)
+
+## Agent Workflows
+
+RAPTOR includes 15 specialized LLM-powered agents organized into two main workflows:
+
+### Crash Analysis Workflow (5 agents)
+Autonomous root-cause analysis of C/C++ security bugs:
+- Instrumentation and data collection (function traces, coverage, rr recordings)
+- Root-cause analysis with empirical verification
+- Hypothesis validation with retry loops
+
+See `crash-analysis-workflow.mdc` for complete pipeline documentation.
+
+### OSS Forensics Workflow (10 agents)
+Evidence-backed investigations of GitHub security incidents:
+- Parallel evidence collection (GH Archive, GitHub API, Wayback, local git)
+- Hypothesis formation with evidence citations
+- Evidence verification and validation loops
+- Comprehensive forensic report generation
+
+See `oss-forensics-workflow.mdc` for complete pipeline documentation.
+
+### Agent Orchestration
+- Agents invoke each other using Task tool
+- Multi-agent workflows coordinate parallel and sequential operations
+- Working directory conventions for agent outputs
+- Skill loading from `.claude/skills/` directory
+
+See `agent-workflows.mdc` for orchestration patterns and best practices.
+
+Agent definitions are in `.claude/agents/` directory.
+
+## Key Principles
+
+1. **Modularity**: Each package is independent and reusable
+2. **Progressive Disclosure**: Load complexity only when needed
+3. **Security First**: Validate inputs, sanitize outputs, ask before dangerous operations
+4. **User Experience**: Clear progress, helpful errors, actionable output
+5. **Extensibility**: Easy to add new packages, rules, queries, personas
+6. **Autonomy**: LLM-powered analysis and code generation where appropriate
+7. **Standards**: SARIF for output, type hints for code, docstrings for docs
+
+## When Adding New Features
+
+1. **Determine location**: Package, core utility, or new package?
+2. **Follow patterns**: Use existing code as template
+3. **Add configuration**: Extend `RaptorConfig` if needed
+4. **Add logging**: Use `get_logger()` throughout
+5. **Add documentation**: Docstrings and README updates
+6. **Handle errors**: Try/except with appropriate logging
+7. **Test**: Validate with test data in `test/data/`
+8. **Update launcher**: Add mode handler in `raptor.py` if needed
+9. **Update command docs**: Add command documentation in `command-usage.mdc` if adding new command

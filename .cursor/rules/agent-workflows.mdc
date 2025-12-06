@@ -1,0 +1,225 @@
+---
+description: Agent orchestration patterns, invocation, and workflow coordination
+globs:
+  - ".claude/agents/**/*.md"
+  - "**/*agent*.py"
+alwaysApply: false
+---
+
+# Agent Workflows and Orchestration
+
+RAPTOR includes 15 specialized agents organized into two main workflows: crash analysis and OSS forensics. Agents are autonomous LLM-powered components that orchestrate complex multi-step investigations.
+
+## Agent Types
+
+### Crash Analysis Agents (5 agents)
+- `crash-analysis-agent` - Orchestrator for crash analysis workflow
+- `crash-analyzer-agent` - Root-cause analysis using rr, traces, coverage
+- `crash-analyzer-checker-agent` - Validates crash analysis hypotheses
+- `coverage-analysis-generator-agent` - Generates gcov coverage data
+- `function-trace-generator-agent` - Generates function-level execution traces
+
+### OSS Forensics Agents (10 agents)
+- `oss-forensics-agent` - Orchestrator for forensic investigations
+- `oss-hypothesis-former-agent` - Forms evidence-backed hypotheses
+- `oss-hypothesis-checker-agent` - Validates hypotheses against evidence
+- `oss-evidence-verifier-agent` - Verifies evidence against original sources
+- `oss-report-generator-agent` - Generates final forensic reports
+- `oss-investigator-gh-api-agent` - Queries GitHub API for current state
+- `oss-investigator-gh-archive-agent` - Queries GH Archive via BigQuery
+- `oss-investigator-gh-recovery-agent` - Recovers deleted content via Wayback
+- `oss-investigator-ioc-extractor-agent` - Extracts IOCs from vendor reports
+- `oss-investigator-local-git-agent` - Analyzes local git repositories
+
+## Agent Invocation Patterns
+
+### Using Task Tool
+
+Agents invoke other agents using the Task tool:
+
+```python
+# Invoke agent with specific parameters
+Task("agent-name: description of task with parameters")
+
+# Examples:
+Task("function-trace-generator: Generate traces for repo ./repo, workdir ./crash-analysis-20250101_120000, build command: make")
+Task("oss-investigator-gh-api-agent: Query GitHub API for commit abc123 in owner/repo, workdir .out/oss-forensics-20250101_120000")
+```
+
+### Agent Chaining
+
+Agents can chain together in workflows:
+
+1. **Sequential**: Agent A → Agent B → Agent C (each waits for previous)
+2. **Parallel**: Multiple investigators run simultaneously
+3. **Validation Loop**: Hypothesis → Checker → Rebuttal → Revision (repeat until confirmed)
+
+## Working Directory Conventions
+
+### Crash Analysis
+- Pattern: `./crash-analysis-YYYYMMDD_HHMMSS/`
+- Subdirectories:
+  - `traces/` - Function execution traces
+  - `gcov/` - Coverage data files
+  - `rr-trace/` - rr debugger recordings
+  - Output files: `root-cause-hypothesis-YYY.md`, `root-cause-hypothesis-YYY-rebuttal.md`, `root-cause-hypothesis-YYY-confirmed.md`
+
+### OSS Forensics
+- Pattern: `.out/oss-forensics-YYYYMMDD_HHMMSS/`
+- Subdirectories:
+  - `repos/` - Cloned git repositories
+- Files:
+  - `evidence.json` - EvidenceStore with all collected evidence
+  - `hypothesis-YYY.md` - Hypothesis documents
+  - `hypothesis-YYY-rebuttal.md` - Rebuttal feedback
+  - `hypothesis-YYY-confirmed.md` - Confirmed hypothesis
+  - `evidence-verification-report.md` - Evidence verification status
+  - `forensic-report.md` - Final investigation report
+
+## Skill Loading Patterns
+
+Agents load skills from `.claude/skills/` directory:
+
+```markdown
+**Skills**: Load `.claude/skills/oss-forensics/github-evidence-kit/`.
+```
+
+Skills provide:
+- Python modules for evidence collection
+- API clients (BigQuery, GitHub API, Wayback)
+- Data structures (EvidenceStore, IOC types)
+- Utility functions
+
+## Multi-Agent Orchestration
+
+### Parallel Evidence Collection
+
+Orchestrator spawns multiple investigators in parallel:
+
+```python
+# OSS Forensics: Launch parallel investigators
+Task("oss-investigator-gh-archive-agent: Query events for repo owner/repo on 2025-07-13")
+Task("oss-investigator-gh-api-agent: Check if commit abc123 exists")
+Task("oss-investigator-gh-recovery-agent: Recover issue #123 via Wayback")
+Task("oss-investigator-local-git-agent: Find dangling commits in owner/repo")
+```
+
+All investigators write to the same `evidence.json` file.
+
+### Sequential Validation Loops
+
+Validation workflows use retry loops:
+
+```python
+# Crash Analysis Validation Loop
+max_retries = 3
+retry_count = 0
+while retry_count < max_retries:
+    # Generate hypothesis
+    Task("crash-analyzer-agent: Analyze crash with all collected data")
+    
+    # Validate hypothesis
+    Task("crash-analyzer-checker-agent: Validate root-cause-hypothesis-001.md")
+    
+    if hypothesis_confirmed:
+        break
+    else:
+        # Read rebuttal and retry
+        read_rebuttal("root-cause-hypothesis-001-rebuttal.md")
+        retry_count += 1
+```
+
+### Hypothesis Formation Loop
+
+OSS Forensics uses followup loops:
+
+```python
+# OSS Forensics Hypothesis Loop
+max_followups = 3
+followup_count = 0
+while followup_count < max_followups:
+    Task("oss-hypothesis-former-agent: Form hypothesis from current evidence")
+    
+    if agent_requests_more_evidence:
+        # Spawn targeted investigator
+        Task(f"oss-investigator-{type}-agent: {specific_query}")
+        followup_count += 1
+    else:
+        # Hypothesis complete
+        break
+```
+
+## Agent Communication Patterns
+
+### File-Based Communication
+
+Agents communicate via files in working directories:
+- Input: Read files created by previous agents
+- Output: Write files for next agents to read
+- Validation: Checker agents read hypothesis files, write rebuttal/confirmation
+
+### Evidence Store Pattern
+
+OSS Forensics agents use shared `evidence.json`:
+
+```python
+from src import EvidenceStore
+
+# Load existing evidence
+store = EvidenceStore.load(f"{workdir}/evidence.json")
+
+# Add new evidence
+store.add(evidence_item)
+store.add_all([item1, item2, item3])
+
+# Save updated store
+store.save(f"{workdir}/evidence.json")
+```
+
+### Status Reporting
+
+Agents return status to orchestrator:
+- Success: "Analysis complete, hypothesis written to root-cause-hypothesis-001.md"
+- Failure: "Build failed: missing dependency X"
+- Request: "Need more evidence: query GH Archive for PushEvents on 2025-07-14"
+
+## Error Handling
+
+### Agent Failures
+
+If an agent fails:
+- Log error with context
+- Report to orchestrator
+- Orchestrator decides: retry, skip, or abort workflow
+
+### Missing Prerequisites
+
+Agents check prerequisites before starting:
+```python
+# OSS Forensics: Check BigQuery credentials
+if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
+    print("ERROR: GOOGLE_APPLICATION_CREDENTIALS not set")
+    exit(1)
+```
+
+### Rate Limiting
+
+Agents handle API rate limits:
+- Space requests appropriately
+- Note limitations in findings
+- Continue with other evidence sources
+
+## Best Practices
+
+1. **Isolation**: Each agent operates in its designated working directory
+2. **Idempotency**: Agents can be re-run safely (check for existing outputs)
+3. **Validation**: Always validate inputs before processing
+4. **Documentation**: Agents document their outputs clearly
+5. **Error Messages**: Provide actionable error messages with context
+6. **Progress Reporting**: Report progress to orchestrator and user
+
+## Related Documentation
+
+- `crash-analysis-workflow.mdc` - Complete crash analysis pipeline
+- `oss-forensics-workflow.mdc` - Complete OSS forensics pipeline
+- `llm-integration.mdc` - LLM usage in agents
