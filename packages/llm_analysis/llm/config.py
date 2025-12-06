@@ -10,22 +10,51 @@ Handles configuration for multiple LLM providers with support for:
 """
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 import json
 import requests
 
+# Add parent directories to path for core imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
+
+from core.config import RaptorConfig
+from core.logging import get_logger
+
+logger = get_logger()
+
+
+def _validate_ollama_url(url: str) -> str:
+    """
+    Validate and normalize Ollama URL.
+
+    Args:
+        url: Ollama server URL
+
+    Returns:
+        Normalized URL
+
+    Raises:
+        ValueError: If URL format is invalid
+    """
+    url = url.rstrip('/')
+    if not url.startswith(('http://', 'https://')):
+        raise ValueError(f"Invalid Ollama URL (must start with http:// or https://): {url}")
+    return url
+
 
 def _get_available_ollama_models() -> List[str]:
     """Get list of available Ollama models."""
     try:
-        response = requests.get("http://localhost:11434/api/tags", timeout=2)
+        ollama_url = _validate_ollama_url(RaptorConfig.OLLAMA_HOST)
+        response = requests.get(f"{ollama_url}/api/tags", timeout=2)
         if response.status_code == 200:
             data = response.json()
             return [model['name'] for model in data.get('models', [])]
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Could not connect to Ollama at {RaptorConfig.OLLAMA_HOST}: {e}")
     return []
 
 
@@ -70,7 +99,7 @@ def _get_default_primary_model() -> 'ModelConfig':
         return ModelConfig(
             provider="ollama",
             model_name=selected_model,
-            api_base="http://localhost:11434",
+            api_base=RaptorConfig.OLLAMA_HOST,
             max_tokens=4096,
             temperature=0.7,
             cost_per_1k_tokens=0.0,
@@ -108,7 +137,7 @@ def _get_default_fallback_models() -> List['ModelConfig']:
         fallbacks.append(ModelConfig(
             provider="ollama",
             model_name=model,
-            api_base="http://localhost:11434",
+            api_base=RaptorConfig.OLLAMA_HOST,
             max_tokens=4096,
             temperature=0.7,
             cost_per_1k_tokens=0.0,
@@ -148,7 +177,8 @@ class LLMConfig:
     # Global settings
     enable_fallback: bool = True
     max_retries: int = 3
-    retry_delay: float = 2.0
+    retry_delay: float = 2.0  # Default for local servers
+    retry_delay_remote: float = 5.0  # Longer delay for remote servers
     enable_caching: bool = True
     cache_dir: Path = Path("out/llm_cache")
     enable_cost_tracking: bool = True
@@ -189,6 +219,20 @@ class LLMConfig:
         if self.enable_fallback:
             models.extend(self.fallback_models)
         return [m for m in models if m.enabled]
+
+    def get_retry_delay(self, api_base: Optional[str] = None) -> float:
+        """
+        Get appropriate retry delay based on server location.
+
+        Args:
+            api_base: API base URL to check if remote
+
+        Returns:
+            Retry delay in seconds
+        """
+        if api_base and ("localhost" not in api_base and "127.0.0.1" not in api_base):
+            return self.retry_delay_remote
+        return self.retry_delay
 
 
 # Default configuration

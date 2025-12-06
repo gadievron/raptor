@@ -184,8 +184,9 @@ class LLMClient:
                                  f"{model.provider}/{model.model_name}: {e}")
 
                     if attempt < self.config.max_retries - 1:
-                        delay = self.config.retry_delay * (2 ** attempt)  # Exponential backoff
-                        logger.debug(f"Retrying in {delay}s...")
+                        base_delay = self.config.get_retry_delay(model.api_base)
+                        delay = base_delay * (2 ** attempt)  # Exponential backoff
+                        logger.debug(f"Retrying in {delay}s (base: {base_delay}s)...")
                         time.sleep(delay)
 
             logger.warning(f"All attempts failed for {model.provider}/{model.model_name}, trying next model...")
@@ -262,7 +263,9 @@ class LLMClient:
                     logger.warning(f"Structured generation attempt {attempt + 1} failed: {e}")
 
                     if attempt < self.config.max_retries - 1:
-                        time.sleep(self.config.retry_delay)
+                        delay = self.config.get_retry_delay(model.api_base)
+                        logger.debug(f"Retrying structured generation in {delay}s...")
+                        time.sleep(delay)
 
         # All models failed
         error_msg = f"Structured generation failed for all providers. Last error: {last_error}"
