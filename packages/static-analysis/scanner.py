@@ -91,6 +91,10 @@ def run_single_semgrep(
     """
     Run a single Semgrep scan.
 
+    Note: Uses --no-git-ignore to work around Semgrep's git path resolution
+    bug when scanning subdirectories. Files are still filtered by .semgrepignore.
+    See SEMGREP_DIRECTORY_SCAN_BUG_SUMMARY.md for details.
+
     Returns:
         Tuple of (sarif_path, success)
     """
@@ -118,6 +122,7 @@ def run_single_semgrep(
         "--metrics", "off",
         "--error",
         "--sarif",
+        "--no-git-ignore",  # Fix: /scan returns 0 findings when scanning directories (Semgrep bug from test/ submodule conversion)
         "--timeout", str(RaptorConfig.SEMGREP_RULE_TIMEOUT),
         str(repo_path),
     ]

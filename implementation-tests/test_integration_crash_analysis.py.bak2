@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+"""
+Integration test: RAPTOR crash analysis workflow with radare2
+
+Tests the complete flow of how r2 integrates into RAPTOR's crash analysis.
+This validates end-to-end functionality, not just unit behavior.
+"""
+
+import pytest
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from packages.binary_analysis.r2_wrapper import R2Wrapper, is_r2_available, format_disassembly_text
+
+
+@pytest.fixture(scope="module")
+def test_binary():
+    """Use r2 binary itself as test subject."""
+    # Try to find r2 binary
+    import shutil
+    r2_path = shutil.which("r2") or shutil.which("radare2")
+    if not r2_path:
+        pytest.skip("r2 binary not available")
+    return Path(r2_path)
+
+
+@pytest.fixture(scope="module")
+def r2_wrapper(test_binary):
+    """Create R2Wrapper directly (simulates what CrashAnalyser does)."""
+    if not is_r2_available():
+        pytest.skip("radare2 not available")
+
+    # This is exactly how CrashAnalyser initializes r2
+    wrapper = R2Wrapper(test_binary)
+    wrapper.analyze()  # Pre-analyze for tests
+
+    return wrapper
+
+
+class TestCrashAnalysisIntegration:
+    """Integration tests for full crash analysis workflow."""
+
+    def test_r2_wrapper_initialization(self, r2_wrapper):
+        """
+        INTEGRATION: Verify R2Wrapper initializes properly.
+
+        Tests:
+        - R2Wrapper.__init__() completes successfully
+        - R2Wrapper is configured with proper defaults
+        - Binary is loaded successfully
+        """
+        assert r2_wrapper is not None
+        assert r2_wrapper.binary.exists()
+        print(f"\n✓ R2Wrapper initialized with binary: {r2_wrapper.binary}")
+
+    def test_r2_analysis_runs_successfully(self, r2_wrapper):
+        """
+        INTEGRATION: Test that r2 analysis runs without errors.
+
+        Tests:
+        - analyze() executes successfully
+        - Functions are discovered
+        - No errors or timeouts
+        """
+        # Should find functions (analysis done in fixture)
+        functions = r2_wrapper.list_functions()
+        assert len(functions) > 0, "Should discover functions"
+
+        print(f"\n✓ Analysis found {len(functions)} functions")
+
+    def test_disassembly_at_address_flow(self, r2_wrapper):
+        """
+        INTEGRATION: Test disassembly flow used in crash analysis.
+
+        This is the exact flow used when analyzing crash addresses:
+        1. Get functions from binary
+        2. Pick a function address
+        3. Disassemble at that address
+        4. Verify output is usable
+        """
+        # Get a function (simulating crash address)
+        functions = r2_wrapper.list_functions()
+        assert len(functions) > 0
+
+        test_address = functions[0].offset
+        print(f"\n✓ Testing disassembly at: {test_address}")
+
+        # This is how CrashAnalyser._get_disassembly_r2() works
+        instructions = r2_wrapper.disassemble_at_address(test_address, count=10)
+
+        assert isinstance(instructions, list)
+        assert len(instructions) > 0, "Should get disassembly"
+
+        # Verify instructions have expected structure
+        first_insn = instructions[0]
+        assert hasattr(first_insn, 'offset')
+        assert hasattr(first_insn, 'opcode')
+        assert hasattr(first_insn, 'disasm')
+
+        print(f"✓ Got {len(instructions)} instructions")
+        print(f"✓ First instruction: {first_insn.disasm}")
+
+    def test_decompilation_flow(self, crash_analyser):
+        """
+        INTEGRATION: Test decompilation flow used in crash analysis.
+
+        This is the exact flow used when analyzing crash addresses:
+        1. Get function address
+        2. Attempt decompilation
+        3. Handle both success and failure gracefully
+        """
+        functions = r2_wrapper.list_functions()
+        assert len(functions) > 0
+
+        test_address = functions[0].offset
+
+        # This is how CrashAnalyser._get_disassembly_r2() tries decompilation
+        try:
+            decompiled = r2_wrapper.decompile_function(test_address)
+
+            # Decompilation may not always work (depends on r2-ghidra)
+            if decompiled and "error" not in decompiled.lower():
+                print(f"\n✓ Decompilation succeeded")
+                print(f"First 100 chars: {decompiled[:100]}")
+                assert len(decompiled) > 0
+            else:
+                print(f"\n✓ Decompilation unavailable (expected, depends on r2-ghidra)")
+        except Exception as e:
+            # This is expected if r2-ghidra not installed
+            print(f"\n✓ Decompilation not available: {e}")
+
+    def test_imports_for_canary_detection(self, crash_analyser):
+        """
+        INTEGRATION: Test import analysis for stack canary detection.
+
+        This is used in CrashAnalyser._detect_stack_canaries():
+        1. Get imports from binary
+        2. Check for canary-related functions
+        3. Determine if stack protection is enabled
+        """
+        imports = r2_wrapper.get_imports()
+
+        assert isinstance(imports, list)
+        print(f"\n✓ Found {len(imports)} imports")
+
+        # Check for stack canary functions (like r2 binary likely has)
+        canary_funcs = ["__stack_chk_fail", "__stack_chk_guard"]
+        found_canary = any(
+            any(canary in imp.get("name", "") for canary in canary_funcs)
+            for imp in imports
+        )
+
+        if found_canary:
+            print("✓ Detected stack canary imports (binary has stack protection)")
+        else:
+            print("✓ No stack canary imports (binary may not have stack protection)")
+
+    def test_security_info_analysis(self, crash_analyser):
+        """
+        INTEGRATION: Test security mitigations analysis.
+
+        This provides quick security context useful for crash analysis:
+        - Stack canaries
+        - NX (DEP)
+        - PIE/ASLR
+        - Stripped symbols
+        - Static linking
+        - Crypto usage
+        """
+        security = r2_wrapper.get_security_info()
+
+        assert isinstance(security, dict)
+        assert 'canary' in security
+        assert 'nx' in security
+        assert 'pie' in security
+
+        print(f"\n✓ Security mitigations:")
+        for key, value in security.items():
+            print(f"  {key}: {value}")
+
+    def test_cross_references_analysis(self, crash_analyser):
+        """
+        INTEGRATION: Test xrefs analysis for understanding crash context.
+
+        When analyzing a crash, xrefs help understand:
+        - What calls the crashing function
+        - What the crashing function calls
+        - Control flow around the crash
+        """
+        functions = r2_wrapper.list_functions()
+        assert len(functions) > 0
+
+        # Find a function with likely references (larger functions more likely)
+        test_func = max(functions, key=lambda f: f.size)
+
+        # Get references TO this function (who calls it)
+        xrefs_to = r2_wrapper.get_xrefs_to(test_func.offset)
+        print(f"\n✓ Function {test_func.name}:")
+        print(f"  Called by: {len(xrefs_to)} locations")
+
+        # Get references FROM this function (what it calls)
+        xrefs_from = r2_wrapper.get_xrefs_from(test_func.offset)
+        print(f"  Calls: {len(xrefs_from)} locations")
+
+    def test_call_graph_for_crash_context(self, crash_analyser):
+        """
+        INTEGRATION: Test call graph for understanding crash context.
+
+        Call graphs help understand:
+        - Function call relationships
+        - Potential call chains leading to crash
+        - Complexity of crashing function
+        """
+        functions = r2_wrapper.list_functions()
+        assert len(functions) > 0
+
+        test_func = functions[0]
+        call_graph = r2_wrapper.get_call_graph(test_func.offset)
+
+        # Can be dict or list depending on r2 version
+        assert isinstance(call_graph, (dict, list))
+        print(f"\n✓ Call graph for {test_func.name}: {type(call_graph).__name__}")
+
+    def test_full_workflow_simulation(self, crash_analyser):
+        """
+        INTEGRATION: Simulate complete crash analysis workflow.
+
+        This simulates what happens when analyzing a real crash:
+        1. Binary is loaded
+        2. Analysis is performed
+        3. Crash address is identified
+        4. Context is gathered (disasm, xrefs, security)
+        5. Results are formatted for LLM analysis
+        """
+        print("\n" + "="*60)
+        print("SIMULATING CRASH ANALYSIS WORKFLOW")
+        print("="*60)
+
+        # Step 1: Binary loaded (done in fixture)
+        print(f"\n1. Binary: {crash_analyser.binary}")
+
+        # Step 2: Analysis performed
+        print("\n2. Running analysis...")
+        assert r2_wrapper.analyze()
+        functions = r2_wrapper.list_functions()
+        print(f"   Found {len(functions)} functions")
+
+        # Step 3: Identify "crash address" (simulate with first function)
+        crash_addr = functions[0].offset
+        crash_func = functions[0].name
+        print(f"\n3. Crash address: {crash_addr} ({crash_func})")
+
+        # Step 4: Gather context
+        print("\n4. Gathering context...")
+
+        # Security info
+        security = r2_wrapper.get_security_info()
+        print(f"   Security: canary={security['canary']}, nx={security['nx']}, pie={security['pie']}")
+
+        # Disassembly
+        instructions = r2_wrapper.disassemble_at_address(crash_addr, count=5)
+        print(f"   Disassembly: {len(instructions)} instructions")
+
+        # Xrefs
+        xrefs_to = r2_wrapper.get_xrefs_to(crash_addr)
+        print(f"   Cross-refs: {len(xrefs_to)} callers")
+
+        # Call graph
+        call_graph = r2_wrapper.get_call_graph(crash_addr)
+        print(f"   Call graph: {type(call_graph).__name__}")
+
+        # Step 5: Format for analysis (simplified)
+        print("\n5. Analysis context assembled:")
+        print(f"   - Binary: {crash_analyser.binary.name}")
+        print(f"   - Crash at: {crash_addr}")
+        print(f"   - Function: {crash_func}")
+        print(f"   - Instructions: {len(instructions)}")
+        print(f"   - Callers: {len(xrefs_to)}")
+        print(f"   - Security: {list(security.keys())}")
+
+        print("\n✓ Complete workflow succeeded")
+        print("="*60)
+
+
+class TestPerformanceIntegration:
+    """Integration tests for performance characteristics."""
+
+    def test_analysis_completes_within_timeout(self, crash_analyser):
+        """
+        INTEGRATION: Verify analysis completes within auto-scaled timeout.
+
+        This tests the size-based timeout scaling feature works in practice.
+        """
+        import time
+
+        start = time.time()
+        result = r2_wrapper.analyze()
+        elapsed = time.time() - start
+
+        assert result is True
+        assert elapsed < r2_wrapper.timeout
+
+        print(f"\n✓ Analysis completed in {elapsed:.2f}s (timeout: {r2_wrapper.timeout}s)")
+
+    def test_multiple_operations_work_together(self, crash_analyser):
+        """
+        INTEGRATION: Test that multiple r2 operations work correctly together.
+
+        Each operation spawns new r2 process, so we need to verify:
+        - Analysis state persists correctly (via inline analysis pattern)
+        - Multiple operations don't interfere
+        - Results are consistent
+        """
+        # Operation 1: Get functions
+        functions1 = r2_wrapper.list_functions()
+        assert len(functions1) > 0
+
+        # Operation 2: Get security info (different r2 process)
+        security = r2_wrapper.get_security_info()
+        assert isinstance(security, dict)
+
+        # Operation 3: Get functions again (should be consistent)
+        functions2 = r2_wrapper.list_functions()
+        assert len(functions1) == len(functions2), "Function count should be consistent"
+
+        # Operation 4: Disassemble
+        if len(functions1) > 0:
+            disasm = r2_wrapper.disassemble_at_address(functions1[0].offset, count=5)
+            assert len(disasm) > 0
+
+        print(f"\n✓ Multiple operations executed successfully")
+        print(f"   Functions: {len(functions1)}")
+        print(f"   Security checks: {len(security)}")
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v", "-s"])

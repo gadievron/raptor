@@ -83,6 +83,23 @@ For example CodeQL does not allow commerical use.
 - Usage: RAPTOR detects ASAN builds for enhanced crash diagnostics
 - Note: Compile-time instrumentation, enabled via compiler flag
 
+**radare2** (Binary analysis framework)
+- Install: `brew install radare2` or `apt install radare2`
+- License: LGPL-3.0
+- Source: https://github.com/radareorg/radare2
+- Usage: RAPTOR uses for enhanced binary analysis in /crash-analysis command
+- Features: Disassembly, decompilation, cross-references, security analysis
+- Note: User installs separately, optional (falls back to objdump if unavailable)
+
+**Google Cloud BigQuery** (Data warehouse - for OSS forensics)
+- Setup: Requires `GOOGLE_APPLICATION_CREDENTIALS` environment variable
+- License: Google Cloud Terms of Service
+- Source: https://cloud.google.com/bigquery
+- Usage: RAPTOR uses for GitHub Archive queries in /oss-forensics command
+- Features: Query immutable GitHub event data for forensic investigations
+- Note: User sets up separately, optional (required only for /oss-forensics)
+- Documentation: See `.claude/skills/oss-forensics/github-archive/SKILL.md`
+
 ### System Tools (Pre-installed on Most Systems)
 
 **LLDB** (Debugger)
