@@ -104,8 +104,20 @@ def make_repo(owner: str, name: str) -> GitHubRepository:
 
 
 def make_repo_from_full_name(full_name: str) -> GitHubRepository:
-    """Create GitHubRepository from full name (owner/repo format)."""
+    """Create GitHubRepository from full name (owner/repo format).
+
+    Raises:
+        ValueError: If full_name is not in 'owner/repo' format or contains invalid values.
+    """
+    if not full_name or full_name in ("unknown/unknown", "/", "unknown"):
+        raise ValueError(f"Invalid repository full_name: '{full_name}' - must be 'owner/repo' format")
+
     parts = full_name.split("/", 1)
-    if len(parts) == 2:
-        return GitHubRepository(owner=parts[0], name=parts[1], full_name=full_name)
-    return GitHubRepository(owner="unknown", name=full_name, full_name=full_name)
+    if len(parts) != 2:
+        raise ValueError(f"Invalid repository full_name: '{full_name}' - must be 'owner/repo' format")
+
+    owner, name = parts
+    if not owner or not name or owner == "unknown" or name == "unknown":
+        raise ValueError(f"Invalid repository full_name: '{full_name}' - owner and name must be valid")
+
+    return GitHubRepository(owner=owner, name=name, full_name=full_name)

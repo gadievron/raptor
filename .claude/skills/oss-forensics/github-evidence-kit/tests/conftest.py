@@ -82,7 +82,7 @@ def sample_push_event_data() -> dict:
         },
         "verification": {
             "source": "gharchive",
-            "bigquery_table": "githubarchive.day.*",
+            "bigquery_table": "githubarchive.day.20250713",
         },
         "ref": "refs/heads/master",
         "before_sha": "d1959b996841883b3c14eadc5bc195fe8f65a63b",
@@ -167,7 +167,7 @@ def sample_issue_event_data() -> dict:
         },
         "verification": {
             "source": "gharchive",
-            "bigquery_table": "githubarchive.day.*",
+            "bigquery_table": "githubarchive.day.20250713",
         },
         "action": "opened",
         "issue_number": 7651,

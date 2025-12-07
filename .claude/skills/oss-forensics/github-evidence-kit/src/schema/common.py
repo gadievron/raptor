@@ -7,7 +7,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, model_validator
 
 
 # =============================================================================
@@ -115,6 +115,22 @@ class VerificationInfo(BaseModel):
     url: HttpUrl | None = None
     bigquery_table: str | None = None
     query: str | None = None
+
+    @model_validator(mode='after')
+    def validate_gharchive_table(self):
+        """Ensure GHARCHIVE sources have a specific BigQuery table, not a wildcard."""
+        if self.source == EvidenceSource.GHARCHIVE:
+            if not self.bigquery_table:
+                raise ValueError(
+                    "GHARCHIVE evidence must specify bigquery_table. "
+                    "Use format 'githubarchive.year.YYYY' or 'githubarchive.month.YYYYMM'"
+                )
+            if self.bigquery_table.endswith('.*'):
+                raise ValueError(
+                    f"GHARCHIVE evidence must specify exact table, not wildcard: {self.bigquery_table}. "
+                    "Use format 'githubarchive.year.YYYY' or 'githubarchive.month.YYYYMM'"
+                )
+        return self
 
 
 class VerificationResult(BaseModel):

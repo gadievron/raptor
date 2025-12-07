@@ -49,10 +49,8 @@ class GHArchiveCollector:
 
         events = []
         for row in rows:
-            try:
-                events.append(parse_gharchive_event(row))
-            except (KeyError, ValueError):
-                continue
+            # Raise error on malformed rows instead of silently skipping
+            events.append(parse_gharchive_event(row))
 
         return events
 

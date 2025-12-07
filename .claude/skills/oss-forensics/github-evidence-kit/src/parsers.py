@@ -47,15 +47,44 @@ class _RowContext:
 
     __slots__ = ("row", "payload", "when", "who", "repository", "verification")
 
-    def __init__(self, row: dict[str, Any]):
+    def __init__(self, row: dict[str, Any], table: str | None = None):
         self.row = row
         self.payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
         self.when = parse_datetime_lenient(row.get("created_at"))
         self.who = make_actor(row.get("actor_login", "unknown"), row.get("actor_id"))
-        self.repository = make_repo_from_full_name(row.get("repo_name", "unknown/unknown"))
+
+        # Extract repository name from row - try multiple locations
+        repo_name = row.get("repo_name") or row.get("repo", {}).get("name")
+        if not repo_name:
+            # Try extracting from payload as last resort
+            repo_obj = self.payload.get("repository") or row.get("repo", {})
+            owner = repo_obj.get("owner", {}).get("login") if isinstance(repo_obj.get("owner"), dict) else repo_obj.get("owner")
+            name = repo_obj.get("name")
+            if owner and name:
+                repo_name = f"{owner}/{name}"
+
+        # Raise error if we still couldn't extract valid repo name
+        if not repo_name:
+            raise ValueError(
+                f"Cannot extract repository name from GH Archive row. "
+                f"Row ID: {row.get('id', 'unknown')}, Event Type: {row.get('type', 'unknown')}. "
+                f"Available keys: {list(row.keys())}"
+            )
+
+        self.repository = make_repo_from_full_name(repo_name)
+
+        # Determine table from timestamp if not provided
+        if not table and self.when:
+            year = self.when.year
+            if year < 2025:
+                table = f"githubarchive.year.{year}"
+            else:
+                month = self.when.strftime("%Y%m")
+                table = f"githubarchive.month.{month}"
+
         self.verification = VerificationInfo(
             source=EvidenceSource.GHARCHIVE,
-            bigquery_table="githubarchive.day.*",
+            bigquery_table=table,
         )
 
 
@@ -64,9 +93,9 @@ class _RowContext:
 # =============================================================================
 
 
-def parse_push_event(row: dict[str, Any]) -> PushEvent:
+def parse_push_event(row: dict[str, Any], table: str | None = None) -> PushEvent:
     """Parse GH Archive PushEvent into PushEvent evidence."""
-    ctx = _RowContext(row)
+    ctx = _RowContext(row, table)
     payload = ctx.payload
 
     commits = []
@@ -93,11 +122,7 @@ def parse_push_event(row: dict[str, Any]) -> PushEvent:
         who=ctx.who,
         what=f"Pushed {size} commit(s) to {ref}",
         repository=ctx.repository,
-        verification=VerificationInfo(
-            source=EvidenceSource.GHARCHIVE,
-            bigquery_table="githubarchive.day.*",
-            query=f"actor.login='{ctx.who.login}' AND repo.name='{ctx.repository.full_name}'",
-        ),
+        verification=ctx.verification,
         ref=ref,
         before_sha=before_sha,
         after_sha=after_sha,
@@ -107,9 +132,9 @@ def parse_push_event(row: dict[str, Any]) -> PushEvent:
     )
 
 
-def parse_issue_event(row: dict[str, Any]) -> IssueEvent:
+def parse_issue_event(row: dict[str, Any], table: str | None = None) -> IssueEvent:
     """Parse GH Archive IssuesEvent into IssueEvent evidence."""
-    ctx = _RowContext(row)
+    ctx = _RowContext(row, table)
     issue = ctx.payload.get("issue", {})
 
     action_str = ctx.payload.get("action", "opened")
@@ -136,9 +161,9 @@ def parse_issue_event(row: dict[str, Any]) -> IssueEvent:
     )
 
 
-def parse_create_event(row: dict[str, Any]) -> CreateEvent:
+def parse_create_event(row: dict[str, Any], table: str | None = None) -> CreateEvent:
     """Parse GH Archive CreateEvent into CreateEvent evidence."""
-    ctx = _RowContext(row)
+    ctx = _RowContext(row, table)
 
     ref_type_str = ctx.payload.get("ref_type", "branch")
     ref_type_map = {"branch": RefType.BRANCH, "tag": RefType.TAG, "repository": RefType.REPOSITORY}
@@ -157,9 +182,9 @@ def parse_create_event(row: dict[str, Any]) -> CreateEvent:
     )
 
 
-def parse_pull_request_event(row: dict[str, Any]) -> PullRequestEvent:
+def parse_pull_request_event(row: dict[str, Any], table: str | None = None) -> PullRequestEvent:
     """Parse GH Archive PullRequestEvent into PullRequestEvent evidence."""
-    ctx = _RowContext(row)
+    ctx = _RowContext(row, table)
     pr = ctx.payload.get("pull_request", {})
 
     action_str = ctx.payload.get("action", "opened")
@@ -186,9 +211,9 @@ def parse_pull_request_event(row: dict[str, Any]) -> PullRequestEvent:
     )
 
 
-def parse_issue_comment_event(row: dict[str, Any]) -> IssueCommentEvent:
+def parse_issue_comment_event(row: dict[str, Any], table: str | None = None) -> IssueCommentEvent:
     """Parse GH Archive IssueCommentEvent into IssueCommentEvent evidence."""
-    ctx = _RowContext(row)
+    ctx = _RowContext(row, table)
     issue = ctx.payload.get("issue", {})
     comment = ctx.payload.get("comment", {})
     comment_id = comment.get("id", 0)
@@ -207,9 +232,9 @@ def parse_issue_comment_event(row: dict[str, Any]) -> IssueCommentEvent:
     )
 
 
-def parse_watch_event(row: dict[str, Any]) -> WatchEvent:
+def parse_watch_event(row: dict[str, Any], table: str | None = None) -> WatchEvent:
     """Parse GH Archive WatchEvent into WatchEvent evidence."""
-    ctx = _RowContext(row)
+    ctx = _RowContext(row, table)
 
     return WatchEvent(
         evidence_id=generate_evidence_id("watch", ctx.repository.full_name, ctx.who.login),
@@ -221,9 +246,9 @@ def parse_watch_event(row: dict[str, Any]) -> WatchEvent:
     )
 
 
-def parse_fork_event(row: dict[str, Any]) -> ForkEvent:
+def parse_fork_event(row: dict[str, Any], table: str | None = None) -> ForkEvent:
     """Parse GH Archive ForkEvent into ForkEvent evidence."""
-    ctx = _RowContext(row)
+    ctx = _RowContext(row, table)
     forkee = ctx.payload.get("forkee", {})
     fork_full_name = forkee.get("full_name", f"{ctx.who.login}/{ctx.repository.name}")
 
@@ -238,9 +263,9 @@ def parse_fork_event(row: dict[str, Any]) -> ForkEvent:
     )
 
 
-def parse_delete_event(row: dict[str, Any]) -> DeleteEvent:
+def parse_delete_event(row: dict[str, Any], table: str | None = None) -> DeleteEvent:
     """Parse GH Archive DeleteEvent into DeleteEvent evidence."""
-    ctx = _RowContext(row)
+    ctx = _RowContext(row, table)
 
     ref_type_str = ctx.payload.get("ref_type", "branch")
     ref_type_map = {"branch": RefType.BRANCH, "tag": RefType.TAG}
@@ -259,9 +284,9 @@ def parse_delete_event(row: dict[str, Any]) -> DeleteEvent:
     )
 
 
-def parse_member_event(row: dict[str, Any]) -> MemberEvent:
+def parse_member_event(row: dict[str, Any], table: str | None = None) -> MemberEvent:
     """Parse GH Archive MemberEvent into MemberEvent evidence."""
-    ctx = _RowContext(row)
+    ctx = _RowContext(row, table)
     member = ctx.payload.get("member", {})
     action = ctx.payload.get("action", "added")
 
@@ -281,9 +306,9 @@ def parse_member_event(row: dict[str, Any]) -> MemberEvent:
     )
 
 
-def parse_public_event(row: dict[str, Any]) -> PublicEvent:
+def parse_public_event(row: dict[str, Any], table: str | None = None) -> PublicEvent:
     """Parse GH Archive PublicEvent into PublicEvent evidence."""
-    ctx = _RowContext(row)
+    ctx = _RowContext(row, table)
 
     return PublicEvent(
         evidence_id=generate_evidence_id("public", ctx.repository.full_name, str(ctx.when.timestamp())),
@@ -295,9 +320,9 @@ def parse_public_event(row: dict[str, Any]) -> PublicEvent:
     )
 
 
-def parse_release_event(row: dict[str, Any]) -> ReleaseEvent:
+def parse_release_event(row: dict[str, Any], table: str | None = None) -> ReleaseEvent:
     """Parse GH Archive ReleaseEvent into ReleaseEvent evidence."""
-    ctx = _RowContext(row)
+    ctx = _RowContext(row, table)
     release = ctx.payload.get("release", {})
     action = ctx.payload.get("action", "published")
     tag_name = release.get("tag_name", "")
@@ -320,9 +345,9 @@ def parse_release_event(row: dict[str, Any]) -> ReleaseEvent:
     )
 
 
-def parse_workflow_run_event(row: dict[str, Any]) -> WorkflowRunEvent:
+def parse_workflow_run_event(row: dict[str, Any], table: str | None = None) -> WorkflowRunEvent:
     """Parse GH Archive WorkflowRunEvent into WorkflowRunEvent evidence."""
-    ctx = _RowContext(row)
+    ctx = _RowContext(row, table)
     workflow_run = ctx.payload.get("workflow_run", {})
     action = ctx.payload.get("action", "requested")
 
@@ -374,11 +399,17 @@ _PARSERS = {
 }
 
 
-def parse_gharchive_event(row: dict[str, Any]) -> Any:
-    """Parse any GH Archive event by dispatching to appropriate parser."""
+def parse_gharchive_event(row: dict[str, Any], table: str | None = None) -> Any:
+    """Parse any GH Archive event by dispatching to appropriate parser.
+
+    Args:
+        row: GH Archive BigQuery row data
+        table: Optional BigQuery table name (e.g., 'githubarchive.year.2024').
+               If not provided, will be inferred from the event timestamp.
+    """
     event_type = row.get("type", "")
     parser = _PARSERS.get(event_type)
     if parser is None:
         supported = ", ".join(_PARSERS.keys())
         raise ValueError(f"Unsupported GH Archive event type: {event_type}. Supported: {supported}")
-    return parser(row)
+    return parser(row, table)

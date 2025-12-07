@@ -201,11 +201,9 @@ class TestMakeRepoFromFullName:
         assert repo.full_name == "aws/aws-toolkit-vscode"
 
     def test_handles_no_slash(self):
-        """Handles repo name without slash."""
-        repo = make_repo_from_full_name("single-name")
-        assert repo.owner == "unknown"
-        assert repo.name == "single-name"
-        assert repo.full_name == "single-name"
+        """Raises error for repo name without slash."""
+        with pytest.raises(ValueError, match="must be 'owner/repo' format"):
+            make_repo_from_full_name("single-name")
 
     def test_handles_multiple_slashes(self):
         """Handles repo name with multiple slashes (takes first as owner)."""
