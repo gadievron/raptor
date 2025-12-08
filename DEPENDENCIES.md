@@ -53,6 +53,15 @@ For example CodeQL does not allow commerical use.
 - Usage: RAPTOR calls `codeql` command for deep analysis
 - Note: User installs separately
 
+**Ollama** (Local or remote model server)
+- Install locally: Download from https://ollama.ai
+- Configure remote: Set `OLLAMA_HOST` environment variable
+- Default: `http://localhost:11434`
+- License: MIT
+- Source: https://github.com/ollama/ollama
+- Usage: RAPTOR connects to Ollama server for local model inference
+- Note: User installs separately, supports both local and remote servers
+
 **rr** (Record-replay debugger)
 - Install: `apt install rr` (Linux) or build from https://github.com/rr-debugger/rr
 - License: MIT

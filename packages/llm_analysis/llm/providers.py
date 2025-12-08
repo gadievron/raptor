@@ -227,9 +227,15 @@ class OllamaProvider(LLMProvider):
 
     def __init__(self, config: ModelConfig):
         super().__init__(config)
-        self.api_base = config.api_base or "http://localhost:11434"
+        if not config.api_base:
+            raise ValueError("Ollama api_base must be configured in ModelConfig")
+        self.api_base = config.api_base
         self.session = requests.Session()
         self.available_models = []
+
+        # Log initialization
+        logger.info(f"Initializing Ollama provider: {self.api_base}")
+        logger.debug(f"Ollama configuration: model={config.model_name}, timeout={config.timeout}s")
 
         # Verify Ollama is available and check models
         try:
@@ -247,8 +253,12 @@ class OllamaProvider(LLMProvider):
                 logger.warning(f"Ollama server returned {response.status_code} at {self.api_base}")
                 raise RuntimeError(f"Ollama not available: {response.status_code}")
         except requests.exceptions.RequestException as e:
-            logger.error(f"Cannot connect to Ollama at {self.api_base}: {e}")
-            logger.error("Make sure Ollama is running: ollama serve")
+            logger.error(f"Cannot connect to Ollama server at {self.api_base}: {e}")
+            if "localhost" in self.api_base or "127.0.0.1" in self.api_base:
+                logger.error("Make sure Ollama is running locally: ollama serve")
+            else:
+                logger.error(f"Check remote Ollama server is accessible: {self.api_base}")
+                logger.error("Verify network connectivity and firewall settings")
             raise RuntimeError(f"Ollama connection failed: {e}")
 
     def generate(self, prompt: str, system_prompt: Optional[str] = None,
@@ -281,7 +291,7 @@ class OllamaProvider(LLMProvider):
                 logger.debug("Using Ollama format parameter for structured output")
 
             logger.debug(f"Sending request to Ollama: {self.api_base}/api/generate")
-            logger.debug(f"Model: {self.config.model_name}")
+            logger.debug(f"Model: {self.config.model_name}, timeout: {self.config.timeout}s")
 
             response = self.session.post(
                 f"{self.api_base}/api/generate",
@@ -327,10 +337,17 @@ class OllamaProvider(LLMProvider):
 
         except requests.exceptions.Timeout:
             logger.error(f"Ollama request timed out after {self.config.timeout}s")
+            if "localhost" not in self.api_base and "127.0.0.1" not in self.api_base:
+                logger.error(f"Remote server {self.api_base} may be slow or overloaded")
+                logger.error("Consider increasing timeout in ModelConfig")
             raise
         except requests.exceptions.ConnectionError as e:
             logger.error(f"Cannot connect to Ollama at {self.api_base}")
-            logger.error("Make sure Ollama is running: ollama serve")
+            if "localhost" in self.api_base or "127.0.0.1" in self.api_base:
+                logger.error("Make sure Ollama is running locally: ollama serve")
+            else:
+                logger.error(f"Check remote Ollama server is accessible: {self.api_base}")
+                logger.error("Verify network connectivity and firewall settings")
             raise RuntimeError(f"Ollama connection failed: {e}")
         except Exception as e:
             logger.error(f"Ollama API error: {e}")

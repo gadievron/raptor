@@ -310,6 +310,34 @@ Model selection and API use is handled through Claude Code natively.
 **Note:** Exploit generation requires frontier models (Claude, GPT, or Gemini). Local
 models work for analysis but may produce non-compilable exploit code.
 
+### Environment Variables
+
+**LLM Configuration:**
+- `ANTHROPIC_API_KEY` - Anthropic Claude API key
+- `OPENAI_API_KEY` - OpenAI API key
+- `OLLAMA_HOST` - Ollama server URL (default: `http://localhost:11434`)
+
+**Ollama Examples:**
+```bash
+# Local Ollama (default)
+export OLLAMA_HOST=http://localhost:11434
+
+# Remote Ollama server
+export OLLAMA_HOST=https://ollama.example.com:11434
+
+# Remote with custom port
+export OLLAMA_HOST=http://192.168.1.100:8080
+```
+
+**Performance Tuning:**
+
+Remote Ollama servers automatically use longer retry delays (5 seconds vs 2 seconds for local) to account for network latency and processing time, reducing JSON parsing errors.
+
+| Server Type | Base Delay | Retry 1 | Retry 2 | Retry 3 |
+|-------------|------------|---------|---------|---------|
+| **Local** | 2.0s | 2s | 4s | 8s |
+| **Remote** | 5.0s | 5s | 10s | 20s |
+
 ---
 
 ## Python CLI (Alternative)

@@ -416,11 +416,13 @@ Examples:
         # Check if Ollama is running
         try:
             import requests
-            response = requests.get("http://localhost:11434/api/tags", timeout=2)
+            response = requests.get(f"{RaptorConfig.OLLAMA_HOST}/api/tags", timeout=2)
             if response.status_code == 200:
                 llm_available = True
-                logger.info("Ollama server detected")
-        except Exception:
+                logger.info(f"Ollama server detected at {RaptorConfig.OLLAMA_HOST}")
+                logger.debug(f"Ollama available at {RaptorConfig.OLLAMA_HOST}")
+        except Exception as e:
+            logger.debug(f"Ollama not available at {RaptorConfig.OLLAMA_HOST}: {e}")
             pass
 
     analysis = {}

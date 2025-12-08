@@ -98,6 +98,9 @@ class RaptorConfig:
     ENV_JOB_ID = "RAPTOR_JOB_ID"
     ENV_LLM_CMD = "RAPTOR_LLM_CMD"
 
+    # LLM Provider Configuration
+    OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+
     # Proxy variables to strip for security
     PROXY_ENV_VARS = [
         "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
