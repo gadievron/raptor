@@ -9,31 +9,15 @@ This is so much of a WIP, it's not even funny. However, you can see what we are 
 import subprocess
 import os
 import hashlib
-import shutil
 import tempfile
-import threading
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional
 import platform
 
 from core.logging import get_logger
-from core.config import RaptorConfig
-from packages.binary_analysis.radare2_wrapper import Radare2Wrapper, format_disassembly_text, is_radare2_available
-from core.sarif.crash_converter import crash_context_to_sarif, save_crashes_as_sarif
 
 logger = get_logger()
-
-
-# Installation error messages (constants to avoid duplication)
-class InstallError:
-    """Error messages for radare2 installation."""
-    CANCELLED = "Cancelled by user"
-    NO_BREW = "Homebrew not found on macOS"
-    NO_PACKAGE_MANAGER = "No supported package manager found"
-    COMMAND_FAILED = "Installation command failed"
-    PLATFORM_UNSUPPORTED = "Platform {platform} not supported"
 
 
 @dataclass
@@ -70,84 +54,18 @@ class CrashContext:
 
 
 class CrashAnalyser:
-    """
-    Analyses crashes using debugger and LLM.
+    """Analyses crashes using debugger and LLM."""
 
-    The CrashAnalyser automatically attempts to install radare2 if not found
-    and use_radare2 is True. Installation can be disabled by setting the
-    RAPTOR_NO_AUTO_INSTALL environment variable to "1".
-
-    In CI/CD environments, automatic installation is skipped if sudo is
-    required. Install radare2 manually in your CI setup:
-        - macOS: brew install radare2
-        - Linux: apt install radare2 (or dnf/pacman)
-
-    Args:
-        binary_path: Path to the binary to analyze
-        use_radare2: Enable radare2 integration (default: True)
-                     If True and radare2 is not available, attempts
-                     automatic installation unless RAPTOR_NO_AUTO_INSTALL=1
-
-    Environment Variables:
-        RAPTOR_NO_AUTO_INSTALL: Set to "1" to disable automatic radare2 installation
-        CI, GITHUB_ACTIONS, GITLAB_CI, etc.: Automatically detected to skip sudo prompts
-    """
-
-    def __init__(self, binary_path: Path, use_radare2: bool = True):
+    def __init__(self, binary_path: Path):
         self.binary = Path(binary_path).resolve()
         if not self.binary.exists():
             raise FileNotFoundError(f"Binary not found: {binary_path}")
 
         logger.info(f"Crash analyser initialized for: {self.binary}")
-
+        
         # Check tool availability first
         self._available_tools = self._check_tool_availability()
-
-        # Initialize radare2 wrapper if available and requested
-        self.radare2 = None
-        self._install_lock = threading.Lock()  # Protects installation state access
-        self._install_in_progress = False
-        self._install_success = None      # None=not started, True=success, False=failed
-        self._install_error = None        # Error message if failed
-        self._install_timestamp = None    # When installation started (Unix timestamp)
-        self._install_duration = None     # How long installation took (seconds)
-        self._install_thread = None       # Thread reference for control
-        self._install_cancelled = False   # Cancellation flag
-
-        if use_radare2 and RaptorConfig.RADARE2_ENABLE and self._available_tools.get("radare2", False):
-            try:
-                self.radare2 = Radare2Wrapper(
-                    self.binary,
-                    radare2_path=RaptorConfig.RADARE2_PATH,
-                    analysis_depth=RaptorConfig.RADARE2_ANALYSIS_DEPTH,
-                    timeout=RaptorConfig.RADARE2_TIMEOUT
-                )
-                logger.info("Radare2 initialized successfully (enhanced binary analysis enabled)")
-            except Exception as e:
-                logger.warning(f"Failed to initialize radare2 wrapper: {e}")
-                if self._available_tools.get("objdump", False):
-                    logger.warning("Using objdump temporarily while troubleshooting radare2")
-                self.radare2 = None
-        elif use_radare2 and RaptorConfig.RADARE2_ENABLE:
-            # radare2 requested but not available - check if auto-install is enabled
-            auto_install_disabled = os.getenv("RAPTOR_NO_AUTO_INSTALL") == "1"
-
-            if auto_install_disabled:
-                logger.info("radare2 not found (auto-install disabled via RAPTOR_NO_AUTO_INSTALL)")
-                logger.info("Install manually: brew install radare2 (macOS) or apt install radare2 (Linux)")
-            else:
-                logger.warning("radare2 not found, attempting automatic installation")
-
-                if self._available_tools.get("objdump", False):
-                    logger.info("Using objdump temporarily while radare2 installs in background")
-                else:
-                    logger.info("objdump also not available, installing radare2 for enhanced features")
-
-                # Attempt automatic installation
-                self._install_in_progress = True
-                self._install_timestamp = time.time()
-                self._install_radare2_background()
-
+        
         # Cache symbol information for better performance
         self._symbol_cache = self._load_symbol_table()
         self._debugger = self._detect_debugger()
@@ -192,338 +110,39 @@ class CrashAnalyser:
             
         raise RuntimeError("No suitable debugger found (gdb or lldb)")
 
-    def _detect_ci_environment(self) -> bool:
-        """Detect if running in CI/CD environment."""
-        ci_env_vars = [
-            "CI", "CONTINUOUS_INTEGRATION",
-            "GITHUB_ACTIONS", "GITLAB_CI", "CIRCLECI",
-            "TRAVIS", "JENKINS_HOME", "TEAMCITY_VERSION"
-        ]
-        return any(os.getenv(var) for var in ci_env_vars)
-
-    def _install_package(self, package_manager: str, package: str, requires_sudo: bool = False) -> bool:
-        """
-        Install a package using the specified package manager.
-
-        Args:
-            package_manager: Name of the package manager (brew, apt, dnf, pacman)
-            package: Name of the package to install
-            requires_sudo: Whether the command requires sudo privileges
-
-        Returns:
-            True if installation succeeded, False otherwise
-        """
-        commands = {
-            "brew": ["brew", "install", package],
-            "apt": ["sudo", "apt", "install", "-y", package] if requires_sudo else ["apt", "install", "-y", package],
-            "dnf": ["sudo", "dnf", "install", "-y", package] if requires_sudo else ["dnf", "install", "-y", package],
-            "pacman": ["sudo", "pacman", "-S", "--noconfirm", package] if requires_sudo else ["pacman", "-S", "--noconfirm", package],
-        }
-
-        cmd = commands.get(package_manager)
-        if not cmd:
-            logger.error(f"Unknown package manager: {package_manager}")
-            return False
-
-        # Detect CI environment and warn about sudo
-        if requires_sudo and self._detect_ci_environment():
-            logger.warning(f"CI environment detected, skipping installation requiring sudo")
-            logger.info(f"Install {package} in your CI setup before running tests")
-            return False
-
-        logger.info(f"Installing {package} via {package_manager}")
-        logger.info(f"Command: {' '.join(cmd)}")
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=300  # 5 minutes
-            )
-
-            if result.returncode == 0:
-                logger.info(f"{package} installed successfully via {package_manager}")
-                return True
-            else:
-                logger.error(f"Failed to install {package}: {result.stderr}")
-                return False
-
-        except subprocess.TimeoutExpired:
-            logger.error(f"Installation timed out after 5 minutes")
-            return False
-        except Exception as e:
-            logger.error(f"Installation failed: {e}")
-            return False
-
-    def _verify_radare2_installation(self) -> bool:
-        """Verify that radare2 was installed successfully and works."""
-        try:
-            result = subprocess.run(
-                ["r2", "-v"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            if result.returncode == 0 and "radare2" in result.stdout.lower():
-                logger.info("radare2 installation verified successfully")
-                return True
-            else:
-                logger.warning("radare2 binary exists but may not be working correctly")
-                return False
-        except Exception as e:
-            logger.warning(f"Could not verify radare2 installation: {e}")
-            return False
-
-    def _install_radare2_background(self):
-        """
-        Automatically install radare2 based on detected platform.
-
-        Runs in background if objdump is available, otherwise foreground.
-        Shows clear progress messages throughout.
-        """
-        def install():
-            try:
-                system = platform.system().lower()
-                success = False
-
-                # Check if cancelled before starting
-                if self._install_cancelled:
-                    logger.info("Installation cancelled before execution")
-                    self._install_success = False
-                    self._install_error = InstallError.CANCELLED
-                    self._install_in_progress = False
-                    if self._install_timestamp:
-                        self._install_duration = time.time() - self._install_timestamp
-                    return
-
-                if system == "darwin":
-                    # macOS - use Homebrew (no sudo needed)
-                    if shutil.which("brew"):
-                        if self._install_cancelled:
-                            self._install_success = False
-                            self._install_error = InstallError.CANCELLED
-                            self._install_in_progress = False
-                            if self._install_timestamp:
-                                self._install_duration = time.time() - self._install_timestamp
-                            return
-                        success = self._install_package("brew", "radare2", requires_sudo=False)
-                    else:
-                        logger.error("Homebrew not found on macOS")
-                        logger.info("Install Homebrew: https://brew.sh")
-                        self._install_error = InstallError.NO_BREW
-
-                elif system == "linux":
-                    # Linux - detect package manager
-                    if shutil.which("apt"):
-                        if self._install_cancelled:
-                            self._install_success = False
-                            self._install_error = InstallError.CANCELLED
-                            self._install_in_progress = False
-                            if self._install_timestamp:
-                                self._install_duration = time.time() - self._install_timestamp
-                            return
-                        success = self._install_package("apt", "radare2", requires_sudo=True)
-                    elif shutil.which("dnf"):
-                        if self._install_cancelled:
-                            self._install_success = False
-                            self._install_error = InstallError.CANCELLED
-                            self._install_in_progress = False
-                            if self._install_timestamp:
-                                self._install_duration = time.time() - self._install_timestamp
-                            return
-                        success = self._install_package("dnf", "radare2", requires_sudo=True)
-                    elif shutil.which("pacman"):
-                        if self._install_cancelled:
-                            self._install_success = False
-                            self._install_error = InstallError.CANCELLED
-                            self._install_in_progress = False
-                            if self._install_timestamp:
-                                self._install_duration = time.time() - self._install_timestamp
-                            return
-                        success = self._install_package("pacman", "radare2", requires_sudo=True)
-                    else:
-                        logger.error("No supported package manager found (apt, dnf, pacman)")
-                        logger.info("Manual installation: https://github.com/radareorg/radare2")
-                        self._install_error = InstallError.NO_PACKAGE_MANAGER
-
-                else:
-                    logger.error(f"Automatic installation not supported on {system}")
-                    logger.info("Manual installation: https://github.com/radareorg/radare2")
-                    self._install_error = InstallError.PLATFORM_UNSUPPORTED.format(platform=system)
-
-                # Track result
-                if not self._install_cancelled:
-                    if success:
-                        self._verify_radare2_installation()
-                        self._install_success = True
-                    else:
-                        self._install_success = False
-                        if not self._install_error:
-                            self._install_error = InstallError.COMMAND_FAILED
-                else:
-                    self._install_success = False
-                    if not self._install_error:
-                        self._install_error = InstallError.CANCELLED
-
-                self._install_in_progress = False
-                if self._install_timestamp:
-                    self._install_duration = time.time() - self._install_timestamp
-
-            except Exception as e:
-                logger.error(f"Installation process failed: {e}")
-                self._install_success = False
-                self._install_error = str(e)
-                self._install_in_progress = False
-                if self._install_timestamp:
-                    self._install_duration = time.time() - self._install_timestamp
-
-        # Run in background if objdump available, otherwise foreground
-        if self._available_tools.get("objdump", False):
-            # Background installation - don't block crash analysis
-            self._install_thread = threading.Thread(target=install, daemon=True, name="radare2-installer")
-            self._install_thread.start()
-            logger.info("Installation running in background (crash analysis continues with objdump)")
-        else:
-            # Foreground installation - need radare2 to proceed
-            logger.info("Installing radare2 now (no fallback available, this may take a few minutes)")
-            install()
-
-    def is_radare2_ready(self) -> bool:
-        """
-        Check if radare2 is available and initialized.
-
-        Returns:
-            True if radare2 wrapper is initialized and ready to use
-        """
-        return self.radare2 is not None
-
-    def reload_radare2(self) -> bool:
-        """
-        Attempt to initialize radare2 if it became available after background installation.
-
-        This is useful when radare2 was installed in the background and you want to
-        start using enhanced features.
-
-        Returns:
-            True if radare2 was successfully initialized, False otherwise
-        """
-        if self.radare2 is not None:
-            logger.debug("radare2 already initialized")
-            return True
-
-        if not is_radare2_available():
-            logger.debug("radare2 still not available")
-            return False
-
-        try:
-            self.radare2 = Radare2Wrapper(
-                self.binary,
-                radare2_path=RaptorConfig.RADARE2_PATH,
-                analysis_depth=RaptorConfig.RADARE2_ANALYSIS_DEPTH,
-                timeout=RaptorConfig.RADARE2_TIMEOUT
-            )
-            logger.info("radare2 initialized successfully after background installation")
-            return True
-        except Exception as e:
-            logger.warning(f"Failed to initialize radare2 after installation: {e}")
-            return False
-
-    def get_install_status(self) -> dict:
-        """
-        Get detailed installation status.
-
-        Returns:
-            dict with keys:
-                - in_progress (bool): Installation currently running
-                - success (bool|None): True if succeeded, False if failed, None if not attempted
-                - error (str|None): Error message if failed
-                - timestamp (float|None): When installation started (Unix timestamp)
-                - duration (float|None): How long installation took/is taking (seconds)
-        """
-        with self._install_lock:
-            status = {
-                "in_progress": self._install_in_progress,
-                "success": self._install_success,
-                "error": self._install_error,
-                "timestamp": self._install_timestamp,
-                "duration": None
-            }
-
-            if self._install_timestamp:
-                if self._install_in_progress:
-                    # Still running - calculate current duration
-                    status["duration"] = time.time() - self._install_timestamp
-                elif self._install_duration is not None:
-                    # Completed - use tracked duration
-                    status["duration"] = self._install_duration
-                else:
-                    # Started but no duration tracked (shouldn't happen, but safe fallback)
-                    status["duration"] = time.time() - self._install_timestamp
-
-            return status
-
-    def cancel_install(self) -> bool:
-        """
-        Cancel background installation if running.
-
-        Returns:
-            True if cancellation was initiated, False if nothing to cancel
-        """
-        with self._install_lock:
-            if not self._install_in_progress:
-                logger.debug("No installation in progress to cancel")
-                return False
-
-            if self._install_thread and self._install_thread.is_alive():
-                logger.info("Cancelling radare2 installation")
-                self._install_cancelled = True
-                # Thread will check flag and exit gracefully
-                return True
-
-            logger.debug("Installation thread not running")
-            return False
-
     def _check_tool_availability(self) -> Dict[str, bool]:
         """Check which reverse engineering tools are available on the system. There are many more but this is a start."""
         tools = {
             "nm": "symbol table extraction",
-            "addr2line": "address to source resolution",
+            "addr2line": "address to source resolution", 
             "objdump": "disassembly",
             "readelf": "ELF header analysis",
             "file": "file type identification",
             "strings": "string extraction",
-            "radare2": "radare2 - enhanced binary analysis",
         }
-
+        
         available = {}
         for tool, description in tools.items():
             try:
-                # Special check for radare2 using the wrapper's check function
-                if tool == "radare2":
-                    # Check both 'r2' and 'radare2' command names
-                    # (different package managers use different names)
-                    available[tool] = is_radare2_available("r2") or is_radare2_available("radare2")
-                else:
-                    result = subprocess.run(
-                        [tool, "--version"],
-                        capture_output=True,
-                        text=True,
-                        timeout=2
-                    )
-                    available[tool] = result.returncode == 0
+                result = subprocess.run(
+                    [tool, "--version"], 
+                    capture_output=True, 
+                    text=True, 
+                    timeout=2
+                )
+                available[tool] = result.returncode == 0
             except:
                 available[tool] = False
-
+                
         # Log availability
         available_tools = [tool for tool, avail in available.items() if avail]
         missing_tools = [tool for tool, avail in available.items() if not avail]
-
+        
         if available_tools:
             logger.info(f"Available reverse engineering tools: {', '.join(available_tools)}")
         if missing_tools:
             logger.warning(f"Missing reverse engineering tools: {', '.join(missing_tools)}")
-
+            
         return available
 
     def _load_symbol_table(self) -> Dict[str, str]:
@@ -1241,63 +860,12 @@ class CrashAnalyser:
                 func_part = first_frame.split("@")[0].strip()
                 context.function_name = func_part
 
-    def _get_disassembly_radare2(self, address: str, num_instructions: int = 20) -> str:
-        """
-        Get disassembly around crash address using radare2.
-
-        Provides enhanced disassembly with:
-        - JSON-based structured output (no text parsing)
-        - Instruction type information
-        - ESIL representation
-        - Cross-references
-
-        Args:
-            address: Crash address (hex string)
-            num_instructions: Number of instructions to disassemble
-
-        Returns:
-            Formatted disassembly string with enhanced information
-        """
-        if not self.radare2:
-            return "Radare2 not available"
-
-        if not address or address in ("unknown", ""):
-            return "No crash address available for disassembly"
-
-        try:
-            # Ensure analysis is performed (idempotent)
-            if not self.radare2.analyze():
-                return "Radare2 analysis failed"
-
-            # Get disassembly at address
-            instructions = self.radare2.disassemble_at_address(address, count=num_instructions)
-
-            if not instructions:
-                return "No disassembly instructions found"
-
-            # Format as readable text
-            disasm_text = format_disassembly_text(instructions)
-
-            # Add decompilation if this is a function
-            try:
-                decompiled = self.radare2.decompile_function(address)
-                if decompiled and "error" not in decompiled.lower():
-                    disasm_text += f"\n\n--- Decompiled (pseudo-C) ---\n{decompiled}"
-            except Exception as e:
-                logger.debug(f"Decompilation not available: {e}")
-
-            return disasm_text
-
-        except Exception as e:
-            logger.debug(f"Radare2 disassembly failed: {e}")
-            return f"Radare2 disassembly unavailable: {e}"
-
-    def _get_disassembly_objdump(self, address: str, num_instructions: int = 20) -> str:
-        """Get disassembly around crash address using objdump (fallback)."""
+    def _get_disassembly(self, address: str, num_instructions: int = 20) -> str:
+        """Get disassembly around crash address using objdump."""
         if not self._available_tools.get("objdump", False):
             logger.debug("objdump not available - skipping disassembly")
             return "Disassembly unavailable: objdump tool not found"
-
+            
         if not address or address in ("unknown", ""):
             return "No crash address available for disassembly"
 
@@ -1317,7 +885,7 @@ class CrashAnalyser:
             # Take first N instructions, but skip header lines
             disasm_lines = []
             in_disassembly = False
-
+            
             for line in lines:
                 if "<" in line and ">" in line:  # Function start marker
                     in_disassembly = True
@@ -1326,7 +894,7 @@ class CrashAnalyser:
                     disasm_lines.append(line.strip())
                     if len(disasm_lines) >= num_instructions:
                         break
-
+                        
             if disasm_lines:
                 return "\n".join(disasm_lines)
             else:
@@ -1335,32 +903,6 @@ class CrashAnalyser:
         except Exception as e:
             logger.debug(f"Disassembly failed: {e}")
             return f"Disassembly unavailable: {e}"
-
-    def _get_disassembly(self, address: str, num_instructions: int = 20) -> str:
-        """
-        Get disassembly around crash address.
-
-        Prefers radare2 if available (enhanced analysis with decompilation),
-        falls back to objdump (basic disassembly).
-
-        Args:
-            address: Crash address (hex string)
-            num_instructions: Number of instructions to disassemble
-
-        Returns:
-            Formatted disassembly string
-        """
-        # Prefer radare2 for enhanced analysis
-        if self.radare2:
-            result = self._get_disassembly_radare2(address, num_instructions)
-            if "unavailable" not in result.lower() and "error" not in result.lower():
-                return result
-            logger.warning("⚠ Radare2 disassembly failed, falling back to objdump")
-
-        # Fallback to objdump
-        if not self.radare2:
-            logger.info("Using objdump for disassembly (install radare2 for enhanced features)")
-        return self._get_disassembly_objdump(address, num_instructions)
 
     def _get_binary_info(self) -> Dict[str, str]:
         """Get basic information about the binary."""
@@ -1432,33 +974,19 @@ class CrashAnalyser:
             info["aslr_enabled"] = "unknown"
             
         # Check if binary has stack canaries
-        # Prefer radare2 for structured analysis (check imports)
-        if self.radare2:
-            try:
-                imports = self.radare2.get_imports()
-                canary_detected = any(
-                    "__stack_chk_fail" in imp.get("name", "") or "__chk_fail" in imp.get("name", "")
-                    for imp in imports
-                )
-                info["stack_canaries"] = "enabled" if canary_detected else "not_detected"
-            except Exception as e:
-                logger.debug(f"Radare2 import check failed: {e}")
-                info["stack_canaries"] = "unknown"
-        else:
-            # Fallback to objdump (text search in disassembly)
-            try:
-                result = subprocess.run(
-                    ["objdump", "-d", str(self.binary)],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                if "__stack_chk_fail" in result.stdout or "__chk_fail" in result.stdout:
-                    info["stack_canaries"] = "enabled"
-                else:
-                    info["stack_canaries"] = "not_detected"
-            except:
-                info["stack_canaries"] = "unknown"
+        try:
+            result = subprocess.run(
+                ["objdump", "-d", str(self.binary)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if "__stack_chk_fail" in result.stdout or "__chk_fail" in result.stdout:
+                info["stack_canaries"] = "enabled"
+            else:
+                info["stack_canaries"] = "not_detected"
+        except:
+            info["stack_canaries"] = "unknown"
             
         # Check for NX/DEP
         try:
@@ -1795,86 +1323,3 @@ class CrashAnalyser:
                 return "heap_issue"
 
         return "unknown_crash_type"
-
-    def export_crashes_to_sarif(
-        self,
-        crash_contexts: list,
-        output_path: Path,
-        tool_name: str = "RAPTOR-Fuzzer",
-        tool_version: str = "3.0.0"
-    ) -> None:
-        """
-        Export crash analysis results to SARIF 2.1.0 format.
-
-        Enables unified reporting with static analysis (Semgrep/CodeQL)
-        and integration with SARIF-aware tools.
-
-        Args:
-            crash_contexts: List of CrashContext objects from analyse_crash()
-            output_path: Path to save SARIF file (e.g., crashes.sarif)
-            tool_name: Name of analysis tool (default: "RAPTOR-Fuzzer")
-            tool_version: Version of tool (default: "3.0.0")
-
-        Example:
-            analyser = CrashAnalyser("/path/to/binary")
-            crashes = []
-            for crash_input in crash_inputs:
-                ctx = analyser.analyse_crash(crash_id, crash_input, signal)
-                crashes.append(ctx)
-
-            # Export to SARIF for unified reporting
-            analyser.export_crashes_to_sarif(
-                crashes,
-                output_path=Path("out/crashes.sarif")
-            )
-
-            # SARIF can then be consumed by LLM analysis:
-            # python3 raptor.py analyze --sarif out/crashes.sarif
-        """
-        save_crashes_as_sarif(
-            crash_contexts=crash_contexts,
-            output_path=output_path,
-            tool_name=tool_name,
-            tool_version=tool_version,
-            binary_path=self.binary
-        )
-        logger.info(f"Exported {len(crash_contexts)} crashes to SARIF: {output_path}")
-
-    def crashes_to_sarif_dict(
-        self,
-        crash_contexts: list,
-        tool_name: str = "RAPTOR-Fuzzer",
-        tool_version: str = "3.0.0"
-    ) -> Dict:
-        """
-        Convert crash analysis results to SARIF 2.1.0 dictionary.
-
-        Returns SARIF as dict for further processing (e.g., merging with
-        other SARIF documents, modification, or programmatic analysis).
-
-        Args:
-            crash_contexts: List of CrashContext objects
-            tool_name: Name of analysis tool
-            tool_version: Version of tool
-
-        Returns:
-            SARIF 2.1.0 document as dictionary
-
-        Example:
-            crashes = [analyser.analyse_crash(...)]
-            sarif_dict = analyser.crashes_to_sarif_dict(crashes)
-
-            # Merge with static analysis SARIF
-            combined = merge_sarif_documents([sarif_dict, semgrep_sarif])
-
-            # Or modify before saving
-            sarif_dict["runs"][0]["tool"]["driver"]["name"] = "Custom-Tool"
-            with open("crashes.sarif", "w") as f:
-                json.dump(sarif_dict, f, indent=2)
-        """
-        return crash_context_to_sarif(
-            crash_contexts=crash_contexts,
-            tool_name=tool_name,
-            tool_version=tool_version,
-            binary_path=self.binary
-        )
