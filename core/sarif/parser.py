@@ -137,16 +137,25 @@ def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
         print(f"[SARIF Parser] Run {run_idx + 1}: {len(results)} result(s)")
         
         for result in results:
-            finding_id = (
-                result.get("fingerprints", {}).get("matchBasedId/v1")
-                or result.get("ruleId")
-                or str(hash(json.dumps(result)))
-            )
-
+            # Extract location info first (needed for unique finding_id)
             loc = (result.get("locations") or [{}])[0].get("physicalLocation", {})
             artifact = loc.get("artifactLocation", {})
             region = loc.get("region", {})
             snippet = region.get("snippet", {}).get("text", "")
+
+            # Generate unique finding_id
+            # Priority: 1) SARIF fingerprint, 2) file+line+rule (unique), 3) hash of full result
+            fingerprint = result.get("fingerprints", {}).get("matchBasedId/v1")
+            if fingerprint:
+                finding_id = fingerprint
+            else:
+                # Create unique ID from file, line, and rule to prevent collisions
+                file_uri = artifact.get("uri", "unknown")
+                line_num = region.get("startLine", 0)
+                rule_id = result.get("ruleId", "unknown")
+                # Sanitize file path for use in filenames (replace slashes with underscores)
+                file_safe = file_uri.replace("/", "_").replace("\\", "_")
+                finding_id = f"{rule_id}_{file_safe}_L{line_num}"
 
             # Extract dataflow path if present
             code_flows = result.get("codeFlows", [])
