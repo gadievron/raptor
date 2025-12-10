@@ -12,7 +12,7 @@ from enum import Enum
 from typing import List, Optional, Dict, Any
 
 from core.logging import get_logger
-from packages.llm_analysis.llm.client import LLMClient
+from packages.llm_analysis.llm.providers import LLMProvider
 
 logger = get_logger()
 
@@ -58,7 +58,7 @@ class MultiTurnAnalyser:
     5. Validates results and requests corrections if needed
     """
 
-    def __init__(self, llm_client: LLMClient, memory=None):
+    def __init__(self, llm_client: LLMProvider, memory=None):
         """
         Initialise the multi-turn analyser.
 
@@ -117,7 +117,7 @@ class MultiTurnAnalyser:
         initial_prompt = self._build_initial_crash_prompt(crash_context)
         messages.append(Message(role="user", content=initial_prompt))
 
-        llm_response = self.llm.generate(initial_prompt, task_type="crash_analysis")
+        llm_response = self.llm.generate(initial_prompt)
         response = llm_response.content
         messages.append(Message(role="assistant", content=response))
         analysis_result["reasoning_steps"].append({
@@ -136,7 +136,7 @@ class MultiTurnAnalyser:
             clarification = self._build_clarification_prompt(initial_analysis, crash_context)
             messages.append(Message(role="user", content=clarification))
 
-            llm_response = self.llm.generate(clarification, task_type="crash_analysis")
+            llm_response = self.llm.generate(clarification)
             response = llm_response.content
             messages.append(Message(role="assistant", content=response))
             analysis_result["reasoning_steps"].append({
@@ -211,7 +211,7 @@ class MultiTurnAnalyser:
             messages.append(Message(role="user", content=refinement_prompt))
 
             # Get refined code
-            llm_response = self.llm.generate(refinement_prompt, task_type="exploit_generation")
+            llm_response = self.llm.generate(refinement_prompt)
             response = llm_response.content
             messages.append(Message(role="assistant", content=response))
 
@@ -275,7 +275,7 @@ class MultiTurnAnalyser:
 
 **Response:**"""
 
-        llm_response = self.llm.generate(prompt, task_type="strategic_planning")
+        llm_response = self.llm.generate(prompt)
         response = llm_response.content
         logger.info(f"LLM recommendation: {response[:200]}...")
 

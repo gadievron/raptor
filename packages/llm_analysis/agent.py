@@ -26,7 +26,7 @@ from core.config import RaptorConfig
 from core.logging import get_logger
 from core.progress import HackerProgress
 from core.sarif.parser import parse_sarif_findings, deduplicate_findings
-from llm.client import LLMClient
+from llm.providers import create_provider
 from llm.config import LLMConfig
 
 logger = get_logger()
@@ -258,23 +258,24 @@ class AutonomousSecurityAgentV2:
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize LLM client with multi-model support
-        self.llm = LLMClient(llm_config or LLMConfig())
+        # Initialize LLM provider with multi-model support
+        self.llm_config = llm_config or LLMConfig()
+        self.llm = create_provider(self.llm_config.primary_model)
 
         logger.info("RAPTOR Autonomous Security Agent initialised")
         logger.info(f"Repository: {repo_path}")
         logger.info(f"Output: {out_dir}")
-        logger.info(f"LLM: {self.llm.config.primary_model.provider}/{self.llm.config.primary_model.model_name}")
+        logger.info(f"LLM: {self.llm_config.primary_model.provider}/{self.llm_config.primary_model.model_name}")
 
         # Also print to console so user can see
-        print(f"\n🤖 Using LLM: {self.llm.config.primary_model.provider}/{self.llm.config.primary_model.model_name}")
-        if self.llm.config.primary_model.cost_per_1k_tokens > 0:
-            print(f"💰 Cost: ${self.llm.config.primary_model.cost_per_1k_tokens:.4f} per 1K tokens")
+        print(f"\n🤖 Using LLM: {self.llm_config.primary_model.provider}/{self.llm_config.primary_model.model_name}")
+        if self.llm_config.primary_model.cost_per_1k_tokens > 0:
+            print(f"💰 Cost: ${self.llm_config.primary_model.cost_per_1k_tokens:.4f} per 1K tokens")
         else:
             print(f"💰 Cost: FREE (local model)")
 
         # Warn about local model limitations for exploit generation
-        if "ollama" in self.llm.config.primary_model.provider.lower():
+        if "ollama" in self.llm_config.primary_model.provider.lower():
             print()
             print("IMPORTANT: You are using a local Ollama model.")
             print("   • Vulnerability analysis and patching: Works well with local models")
@@ -472,8 +473,7 @@ Do NOT:
             validation, _response = self.llm.generate_structured(
                 prompt=validation_prompt,
                 schema=validation_schema,
-                system_prompt=system_prompt,
-                task_type="code_analysis"
+                system_prompt=system_prompt
             )
 
             logger.info("✓ Dataflow validation complete:")
@@ -679,8 +679,7 @@ Provide honest, technical assessments. Don't overstate severity, but don't downp
             analysis, _full_response = self.llm.generate_structured(
                 prompt=prompt,
                 schema=analysis_schema,
-                system_prompt=system_prompt,
-                task_type="code_analysis",
+                system_prompt=system_prompt
             )
 
             vuln.exploitable = analysis.get("is_exploitable", False)
@@ -821,8 +820,7 @@ Make exploits safe for authorised testing only and not sold to russians. coz tha
             response = self.llm.generate(
                 prompt=prompt,
                 system_prompt=system_prompt,
-                task_type="exploit_generation",
-                temperature=0.8,  # Higher creativity for exploit generation. YMMV
+                temperature=0.8  # Higher creativity for exploit generation. YMMV
             )
 
             # Extract code from response
@@ -914,8 +912,7 @@ Balance security with usability and performance."""
             response = self.llm.generate(
                 prompt=prompt,
                 system_prompt=system_prompt,
-                task_type="patch_generation",
-                temperature=0.3,  # Lower temperature for safer patches
+                temperature=0.3  # Lower temperature for safer patches
             )
 
             patch_content = response.content
@@ -1054,12 +1051,9 @@ Balance security with usability and performance."""
                         if self.generate_exploit(vuln):
                             exploits_generated += 1
 
-                    # 3. Generate patch using LLM (skip for non-exploitable findings)
-                    if vuln.exploitable:
-                        if self.generate_patch(vuln):
-                            patches_generated += 1
-                    else:
-                        logger.debug(f"⊘ Skipping patch generation (not exploitable)")
+                    # 3. Generate patch using LLM
+                    if self.generate_patch(vuln):
+                        patches_generated += 1
 
                     results.append(vuln.to_dict())
 
@@ -1073,8 +1067,17 @@ Balance security with usability and performance."""
 
         execution_time = time.time() - start_time
 
-        # Get LLM stats
-        llm_stats = self.llm.get_stats()
+        # Get LLM stats from provider
+        llm_stats = {
+            "total_requests": analyzed,  # Approximate (one request per analyzed vuln)
+            "total_cost": self.llm.total_cost,
+            "providers": {
+                f"{self.llm_config.primary_model.provider}/{self.llm_config.primary_model.model_name}": {
+                    "total_tokens": self.llm.total_tokens,
+                    "total_cost": self.llm.total_cost,
+                }
+            }
+        }
 
         report = {
             "processed": len(unique_findings),

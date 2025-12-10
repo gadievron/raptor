@@ -14,7 +14,7 @@ from typing import Dict, Any
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from core.logging import get_logger
-from packages.llm_analysis.llm.client import LLMClient
+from packages.llm_analysis.llm.providers import LLMProvider
 from packages.web.client import WebClient
 from packages.web.crawler import WebCrawler
 from packages.web.fuzzer import WebFuzzer
@@ -25,7 +25,7 @@ logger = get_logger()
 class WebScanner:
     """Fully autonomous web application security scanner."""
 
-    def __init__(self, base_url: str, llm: LLMClient, out_dir: Path):
+    def __init__(self, base_url: str, llm: LLMProvider, out_dir: Path):
         self.base_url = base_url
         self.llm = llm
         self.out_dir = out_dir
@@ -143,7 +143,11 @@ Examples:
 
     # Initialize LLM
     try:
-        llm = LLMClient()
+        from packages.llm_analysis.llm.providers import create_provider
+        from packages.llm_analysis.llm.config import LLMConfig
+
+        llm_config = LLMConfig()
+        llm = create_provider(llm_config.primary_model)
         logger.info("LLM client initialized")
     except Exception as e:
         print(f"\n⚠️  Warning: Could not initialize LLM client: {e}")

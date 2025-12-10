@@ -81,11 +81,21 @@ def _get_default_primary_model() -> 'ModelConfig':
             cost_per_1k_tokens=0.01,
         )
 
+    if os.getenv("GEMINI_API_KEY"):
+        return ModelConfig(
+            provider="gemini",
+            model_name="gemini-2.0-flash-exp",
+            api_key=os.getenv("GEMINI_API_KEY"),
+            max_tokens=8192,
+            temperature=0.7,
+            cost_per_1k_tokens=0.0005,
+        )
+
     # Otherwise use Ollama with first available model
     ollama_models = _get_available_ollama_models()
     if ollama_models:
-        # Prefer coding models
-        preferred = ['deepseek-coder', 'qwen', 'codellama', 'deepseek', 'gemma', 'llama']
+        # Prefer general reasoning models for security analysis
+        preferred = ['mistral', 'qwen', 'codellama', 'llama', 'gemma', 'deepseek-coder', 'deepseek']
         selected_model = ollama_models[0]  # Default to first
 
         for pref in preferred:
@@ -165,10 +175,10 @@ class LLMConfig:
     """Main LLM configuration for RAPTOR."""
 
     # Primary model (fastest/most capable)
-    primary_model: ModelConfig = field(default_factory=lambda: _get_default_primary_model())
+    primary_model: ModelConfig = field(default_factory=_get_default_primary_model)
 
     # Fallback models (in priority order)
-    fallback_models: List[ModelConfig] = field(default_factory=lambda: _get_default_fallback_models())
+    fallback_models: List[ModelConfig] = field(default_factory=_get_default_fallback_models)
 
     # Analysis-specific models (for different task types)
     # Will be auto-populated if not set
@@ -183,14 +193,6 @@ class LLMConfig:
     cache_dir: Path = Path("out/llm_cache")
     enable_cost_tracking: bool = True
     max_cost_per_scan: float = 10.0  # USD
-
-    @classmethod
-    def from_file(cls, config_path: Path) -> 'LLMConfig':
-        """Load configuration from JSON file."""
-        with open(config_path) as f:
-            data = json.load(f)
-        # TODO: Implement proper deserialization
-        return cls()
 
     def to_file(self, config_path: Path) -> None:
         """Save configuration to JSON file."""

@@ -12,10 +12,11 @@ Manages multiple LLM providers with:
 
 import hashlib
 import json
+import re
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, Optional, Any, Tuple
 
 # Add parent directories to path for core imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
@@ -27,6 +28,14 @@ from .providers import LLMProvider, LLMResponse, create_provider
 logger = get_logger()
 
 
+def _sanitize_log_message(msg: str) -> str:
+    """Minimal sanitization for application logs only (LiteLLM handles its own logs)."""
+    # Redact common API key patterns
+    msg = re.sub(r'sk-[a-zA-Z0-9-_]{20,}', '[REDACTED-API-KEY]', msg)
+    msg = re.sub(r'pk-[a-zA-Z0-9-_]{20,}', '[REDACTED-API-KEY]', msg)
+    return msg
+
+
 class LLMClient:
     """Unified LLM client with multi-provider support and fallback."""
 
@@ -35,6 +44,10 @@ class LLMClient:
         self.providers: Dict[str, LLMProvider] = {}
         self.total_cost = 0.0
         self.request_count = 0
+
+        # SECURITY: Enable API key sanitization
+        import litellm
+        litellm.redact_message_input_output_from_logging = True
 
         # Initialize cache
         if self.config.enable_caching:
@@ -181,18 +194,17 @@ class LLMClient:
                 except Exception as e:
                     last_error = e
                     logger.warning(f"Attempt {attempt + 1}/{self.config.max_retries} failed for "
-                                 f"{model.provider}/{model.model_name}: {e}")
+                                 f"{model.provider}/{model.model_name}: {_sanitize_log_message(str(e))}")
 
                     if attempt < self.config.max_retries - 1:
-                        base_delay = self.config.get_retry_delay(model.api_base)
-                        delay = base_delay * (2 ** attempt)  # Exponential backoff
-                        logger.debug(f"Retrying in {delay}s (base: {base_delay}s)...")
+                        delay = self.config.retry_delay * (2 ** attempt)  # Exponential backoff
+                        logger.debug(f"Retrying in {delay}s...")
                         time.sleep(delay)
 
             logger.warning(f"All attempts failed for {model.provider}/{model.model_name}, trying next model...")
 
         # All models failed
-        error_msg = f"All LLM providers failed. Last error: {last_error}"
+        error_msg = f"All LLM providers failed. Last error: {_sanitize_log_message(str(last_error))}"
         logger.error(error_msg)
         raise RuntimeError(error_msg)
 
@@ -260,15 +272,13 @@ class LLMClient:
 
                 except Exception as e:
                     last_error = e
-                    logger.warning(f"Structured generation attempt {attempt + 1} failed: {e}")
+                    logger.warning(f"Structured generation attempt {attempt + 1} failed: {str(e)}")
 
                     if attempt < self.config.max_retries - 1:
-                        delay = self.config.get_retry_delay(model.api_base)
-                        logger.debug(f"Retrying structured generation in {delay}s...")
-                        time.sleep(delay)
+                        time.sleep(self.config.retry_delay)
 
         # All models failed
-        error_msg = f"Structured generation failed for all providers. Last error: {last_error}"
+        error_msg = f"Structured generation failed for all providers. Last error: {str(last_error)}"
         logger.error(error_msg)
         raise RuntimeError(error_msg)
 

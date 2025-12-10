@@ -3,13 +3,12 @@
 
 # Core dependencies
 requests>=2.31.0
+litellm>=1.0.0
+instructor>=1.0.0
+pydantic>=2.9.2
 
-# LLM Providers (at least one required for Phase II)
-# Option 1: Anthropic Claude
-anthropic>=0.39.0
-
-# Option 2: OpenAI GPT-4
-# openai>=1.0.0
+# LLM Providers - handled by LiteLLM
+# Set environment variables: ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.
 
 # Option 3: Google Gemini (future support)
 # google-generativeai>=0.3.0

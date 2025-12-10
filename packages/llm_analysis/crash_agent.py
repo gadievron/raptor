@@ -13,7 +13,7 @@ from typing import Any, Dict, List
 from core.logging import get_logger
 from packages.binary_analysis import CrashContext
 from packages.fuzzing import Crash
-from .llm.client import LLMClient
+from .llm.providers import create_provider
 from .llm.config import LLMConfig
 
 logger = get_logger()
@@ -28,22 +28,23 @@ class CrashAnalysisAgent:
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize LLM client
-        self.llm = LLMClient(llm_config or LLMConfig())
+        self.llm_config = llm_config or LLMConfig()
+        self.llm = create_provider(self.llm_config.primary_model)
 
         logger.info("RAPTOR Crash Analysis Agent initialized")
         logger.info(f"Binary: {binary_path}")
         logger.info(f"Output: {out_dir}")
-        logger.info(f"LLM: {self.llm.config.primary_model.provider}/{self.llm.config.primary_model.model_name}")
+        logger.info(f"LLM: {self.llm_config.primary_model.provider}/{self.llm_config.primary_model.model_name}")
 
         # Also print to console
-        print(f"\n Using LLM: {self.llm.config.primary_model.provider}/{self.llm.config.primary_model.model_name}")
-        if self.llm.config.primary_model.cost_per_1k_tokens > 0:
-            print(f"Cost: ${self.llm.config.primary_model.cost_per_1k_tokens:.4f} per 1K tokens")
+        print(f"\n Using LLM: {self.llm_config.primary_model.provider}/{self.llm_config.primary_model.model_name}")
+        if self.llm_config.primary_model.cost_per_1k_tokens > 0:
+            print(f"Cost: ${self.llm_config.primary_model.cost_per_1k_tokens:.4f} per 1K tokens")
         else:
             print(f"Cost: FREE (local model)")
 
         # Warn about local model limitations for exploit generation
-        if "ollama" in self.llm.config.primary_model.provider.lower():
+        if "ollama" in self.llm_config.primary_model.provider.lower():
             print()
             print("⚠️  IMPORTANT: You are using a local Ollama model.")
             print("   • Crash analysis and triage: Works well with local models")
@@ -193,7 +194,6 @@ Be honest about exploitability - not every crash is exploitable."""
                 prompt=prompt,
                 schema=analysis_schema,
                 system_prompt=system_prompt,
-                task_type="crash_analysis",
             )
 
             # Update crash context
@@ -281,7 +281,7 @@ Be honest about exploitability - not every crash is exploitable."""
         logger.info(f"   Target: {crash_context.binary_path.name}")
 
         # Warn if using local model
-        if "ollama" in self.llm.config.primary_model.provider.lower():
+        if "ollama" in self.llm_config.primary_model.provider.lower():
             logger.warning("⚠️  Using local Ollama model - exploit code may not compile correctly")
             logger.warning("   For production exploits, use Anthropic Claude or OpenAI GPT-4")
 
@@ -364,7 +364,6 @@ The "reasoning" field can contain explanations and analysis."""
                 prompt=prompt,
                 schema=exploit_schema,
                 system_prompt=system_prompt,
-                task_type="exploit_generation",
             )
 
             # Extract code from structured response
