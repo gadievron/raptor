@@ -1051,9 +1051,11 @@ Balance security with usability and performance."""
                         if self.generate_exploit(vuln):
                             exploits_generated += 1
 
-                    # 3. Generate patch using LLM
-                    if self.generate_patch(vuln):
-                        patches_generated += 1
+                        # 3. Generate patch using LLM (only for exploitable)
+                        if self.generate_patch(vuln):
+                            patches_generated += 1
+                    else:
+                        logger.debug(f"⊘ Skipping patch generation (not exploitable)")
 
                     results.append(vuln.to_dict())
 

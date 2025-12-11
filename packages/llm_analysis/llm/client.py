@@ -29,10 +29,23 @@ logger = get_logger()
 
 
 def _sanitize_log_message(msg: str) -> str:
-    """Minimal sanitization for application logs only (LiteLLM handles its own logs)."""
-    # Redact common API key patterns
+    """
+    SECURITY: API Key Sanitization for Application Logs
+
+    Defense-in-depth protection against API key leakage in error messages.
+
+    Why needed:
+    - LiteLLM sanitizes ITS internal logs (via redact_message_input_output_from_logging)
+    - WE sanitize OUR application logs (when we log exceptions with our logger)
+    - Exception messages from LiteLLM MAY contain API keys in edge cases
+
+    Searchable tags: #SECURITY #API_KEY_PROTECTION #LOG_SANITIZATION
+    Related: Cursor Bot Bug #2, PR #32, defense-in-depth best practice
+    """
+    # Redact OpenAI-style API keys (sk-*, pk-*)
     msg = re.sub(r'sk-[a-zA-Z0-9-_]{20,}', '[REDACTED-API-KEY]', msg)
     msg = re.sub(r'pk-[a-zA-Z0-9-_]{20,}', '[REDACTED-API-KEY]', msg)
+    # TODO: Add patterns for other providers if needed (Anthropic, Google, etc.)
     return msg
 
 
@@ -272,13 +285,15 @@ class LLMClient:
 
                 except Exception as e:
                     last_error = e
-                    logger.warning(f"Structured generation attempt {attempt + 1} failed: {str(e)}")
+                    # SECURITY: Sanitize exception message to prevent API key leakage (Cursor Bot Bug #2)
+                    logger.warning(self._sanitize_log_message(f"Structured generation attempt {attempt + 1} failed: {str(e)}"))
 
                     if attempt < self.config.max_retries - 1:
                         time.sleep(self.config.retry_delay)
 
         # All models failed
-        error_msg = f"Structured generation failed for all providers. Last error: {str(last_error)}"
+        # SECURITY: Sanitize final error message to prevent API key leakage (Cursor Bot Bug #2)
+        error_msg = self._sanitize_log_message(f"Structured generation failed for all providers. Last error: {str(last_error)}")
         logger.error(error_msg)
         raise RuntimeError(error_msg)
 

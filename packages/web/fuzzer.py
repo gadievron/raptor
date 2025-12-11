@@ -102,11 +102,11 @@ Generate {count} intelligent, context-aware payloads to test for {vuln_type} vul
 Respond with a JSON array of payload strings."""
 
         schema = {
-            "payloads": ["list of payload strings"]
+            "payloads": "array - list of payload strings"
         }
 
         try:
-            result = self.llm.generate_structured(
+            result, _ = self.llm.generate_structured(
                 prompt=prompt,
                 schema=schema,
             )

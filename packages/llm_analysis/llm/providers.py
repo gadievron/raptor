@@ -232,6 +232,10 @@ class LiteLLMProvider(LLMProvider):
             "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
         }
 
+        # Add api_base if configured (e.g., for custom Ollama hosts)
+        if self.config.api_base:
+            litellm_params["api_base"] = self.config.api_base
+
         # Handle Ollama-specific format parameter (CRITICAL for GBNF)
         if "format" in kwargs and self.config.provider.lower() == "ollama":
             litellm_params["format"] = kwargs["format"]
