@@ -289,7 +289,9 @@ class LLMClient:
                     logger.warning(_sanitize_log_message(f"Structured generation attempt {attempt + 1} failed: {str(e)}"))
 
                     if attempt < self.config.max_retries - 1:
-                        time.sleep(self.config.retry_delay)
+                        delay = self.config.retry_delay * (2 ** attempt)  # Exponential backoff
+                        logger.debug(f"Retrying in {delay}s...")
+                        time.sleep(delay)
 
         # All models failed
         # SECURITY: Sanitize final error message to prevent API key leakage (Cursor Bot Bug #2)

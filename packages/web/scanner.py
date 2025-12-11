@@ -141,13 +141,13 @@ Examples:
     logger.info(f"Target: {args.url}")
     logger.info(f"Output: {out_dir}")
 
-    # Initialize LLM
+    # Initialize LLM client with multi-model support, fallback, and retry
     try:
-        from packages.llm_analysis.llm.providers import create_provider
+        from packages.llm_analysis.llm.client import LLMClient
         from packages.llm_analysis.llm.config import LLMConfig
 
         llm_config = LLMConfig()
-        llm = create_provider(llm_config.primary_model)
+        llm = LLMClient(llm_config)
         logger.info("LLM client initialized")
     except Exception as e:
         print(f"\n⚠️  Warning: Could not initialize LLM client: {e}")

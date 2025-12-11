@@ -246,7 +246,7 @@ class LiteLLMProvider(LLMProvider):
 
             # Extract response data
             content = response.choices[0].message.content
-            tokens_used = response.usage.total_tokens if hasattr(response, 'usage') else 0
+            tokens_used = response.usage.total_tokens if (hasattr(response, 'usage') and response.usage is not None) else 0
 
             # Calculate cost (LiteLLM may provide this, or we calculate)
             cost = 0.0

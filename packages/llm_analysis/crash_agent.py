@@ -13,7 +13,7 @@ from typing import Any, Dict, List
 from core.logging import get_logger
 from packages.binary_analysis import CrashContext
 from packages.fuzzing import Crash
-from .llm.providers import create_provider
+from .llm.client import LLMClient
 from .llm.config import LLMConfig
 
 logger = get_logger()
@@ -27,9 +27,9 @@ class CrashAnalysisAgent:
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize LLM client
+        # Initialize LLM client with multi-model support, fallback, and retry
         self.llm_config = llm_config or LLMConfig()
-        self.llm = create_provider(self.llm_config.primary_model)
+        self.llm = LLMClient(self.llm_config)
 
         logger.info("RAPTOR Crash Analysis Agent initialized")
         logger.info(f"Binary: {binary_path}")

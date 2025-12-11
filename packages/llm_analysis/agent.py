@@ -26,7 +26,7 @@ from core.config import RaptorConfig
 from core.logging import get_logger
 from core.progress import HackerProgress
 from core.sarif.parser import parse_sarif_findings, deduplicate_findings
-from llm.providers import create_provider
+from llm.client import LLMClient
 from llm.config import LLMConfig
 
 logger = get_logger()
@@ -258,9 +258,9 @@ class AutonomousSecurityAgentV2:
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize LLM provider with multi-model support
+        # Initialize LLM client with multi-model support, fallback, and retry
         self.llm_config = llm_config or LLMConfig()
-        self.llm = create_provider(self.llm_config.primary_model)
+        self.llm = LLMClient(self.llm_config)
 
         logger.info("RAPTOR Autonomous Security Agent initialised")
         logger.info(f"Repository: {repo_path}")
