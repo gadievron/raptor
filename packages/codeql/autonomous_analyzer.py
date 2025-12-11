@@ -290,13 +290,13 @@ Respond in JSON format:
                 )
             else:
                 # Single-shot analysis
-                response = self.llm.generate_structured(
+                response_dict, _ = self.llm.generate_structured(
                     prompt=prompt,
                     schema=VulnerabilityAnalysis,
                     system_prompt="You are Mark Dowd, an expert security researcher."
                 )
 
-            analysis = VulnerabilityAnalysis(**response)
+            analysis = VulnerabilityAnalysis(**response_dict)
 
             self.logger.info(
                 f"Analysis complete: exploitable={analysis.is_exploitable}, "

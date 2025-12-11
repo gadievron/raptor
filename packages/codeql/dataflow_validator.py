@@ -261,14 +261,14 @@ Respond in JSON format:
 
         try:
             # Use LLM to analyze
-            response = self.llm.generate_structured(
+            response_dict, _ = self.llm.generate_structured(
                 prompt=prompt,
                 schema=DataflowValidation,
                 system_prompt="You are an expert security researcher analyzing dataflow vulnerabilities."
             )
 
             # Parse response
-            validation = DataflowValidation(**response)
+            validation = DataflowValidation(**response_dict)
 
             self.logger.info(
                 f"Dataflow validation: exploitable={validation.is_exploitable}, "

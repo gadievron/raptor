@@ -236,6 +236,10 @@ class LiteLLMProvider(LLMProvider):
         if self.config.api_base:
             litellm_params["api_base"] = self.config.api_base
 
+        # Add api_key if configured (Bug #13 fix)
+        if self.config.api_key:
+            litellm_params["api_key"] = self.config.api_key
+
         # Handle Ollama-specific format parameter (CRITICAL for GBNF)
         if "format" in kwargs and self.config.provider.lower() == "ollama":
             litellm_params["format"] = kwargs["format"]
@@ -326,6 +330,10 @@ class LiteLLMProvider(LLMProvider):
             # Add api_base if configured (e.g., for custom Ollama hosts)
             if self.config.api_base:
                 create_kwargs["api_base"] = self.config.api_base
+
+            # Add api_key if configured (Bug #13 fix)
+            if self.config.api_key:
+                create_kwargs["api_key"] = self.config.api_key
 
             response = client.chat.completions.create(**create_kwargs)
 
