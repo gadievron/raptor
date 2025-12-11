@@ -280,21 +280,12 @@ Respond in JSON format:
 """
 
         try:
-            # Use LLM for analysis
-            if self.multi_turn:
-                # Use multi-turn dialogue for deeper analysis
-                response = self.multi_turn.analyze_vulnerability_deeply(
-                    finding=finding,
-                    code_context=vulnerable_code,
-                    max_turns=5
-                )
-            else:
-                # Single-shot analysis
-                response_dict, _ = self.llm.generate_structured(
-                    prompt=prompt,
-                    schema=VulnerabilityAnalysis,
-                    system_prompt="You are Mark Dowd, an expert security researcher."
-                )
+            # Use LLM for analysis (Bug #15: multi_turn path removed - analyze_vulnerability_deeply() doesn't exist)
+            response_dict, _ = self.llm.generate_structured(
+                prompt=prompt,
+                schema=VulnerabilityAnalysis,
+                system_prompt="You are Mark Dowd, an expert security researcher."
+            )
 
             analysis = VulnerabilityAnalysis(**response_dict)
 
