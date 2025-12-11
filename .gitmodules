@@ -1,0 +1,3 @@
+[submodule ".claude/skills/SecOpsAgentKit"]
+	path = .claude/skills/SecOpsAgentKit
+	url = https://github.com/AgentSecOps/SecOpsAgentKit.git
