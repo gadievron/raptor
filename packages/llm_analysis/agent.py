@@ -1069,17 +1069,8 @@ Balance security with usability and performance."""
 
         execution_time = time.time() - start_time
 
-        # Get LLM stats from provider
-        llm_stats = {
-            "total_requests": analyzed,  # Approximate (one request per analyzed vuln)
-            "total_cost": self.llm.total_cost,
-            "providers": {
-                f"{self.llm_config.primary_model.provider}/{self.llm_config.primary_model.model_name}": {
-                    "total_tokens": self.llm.total_tokens,
-                    "total_cost": self.llm.total_cost,
-                }
-            }
-        }
+        # Get LLM stats from client (aggregates all provider stats)
+        llm_stats = self.llm.get_stats()
 
         report = {
             "processed": len(unique_findings),
