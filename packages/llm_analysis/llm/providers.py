@@ -314,13 +314,20 @@ class LiteLLMProvider(LLMProvider):
                 client = self.instructor.from_litellm(litellm_completion)
 
             # Make structured API call
-            response = client.chat.completions.create(
-                model=self.model_id,
-                response_model=pydantic_model,
-                messages=messages,
-                temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens,
-            )
+            # Build kwargs for the call
+            create_kwargs = {
+                "model": self.model_id,
+                "response_model": pydantic_model,
+                "messages": messages,
+                "temperature": self.config.temperature,
+                "max_tokens": self.config.max_tokens,
+            }
+
+            # Add api_base if configured (e.g., for custom Ollama hosts)
+            if self.config.api_base:
+                create_kwargs["api_base"] = self.config.api_base
+
+            response = client.chat.completions.create(**create_kwargs)
 
             # Convert Pydantic model to dict
             result_dict = response.model_dump()

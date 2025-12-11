@@ -286,14 +286,14 @@ class LLMClient:
                 except Exception as e:
                     last_error = e
                     # SECURITY: Sanitize exception message to prevent API key leakage (Cursor Bot Bug #2)
-                    logger.warning(self._sanitize_log_message(f"Structured generation attempt {attempt + 1} failed: {str(e)}"))
+                    logger.warning(_sanitize_log_message(f"Structured generation attempt {attempt + 1} failed: {str(e)}"))
 
                     if attempt < self.config.max_retries - 1:
                         time.sleep(self.config.retry_delay)
 
         # All models failed
         # SECURITY: Sanitize final error message to prevent API key leakage (Cursor Bot Bug #2)
-        error_msg = self._sanitize_log_message(f"Structured generation failed for all providers. Last error: {str(last_error)}")
+        error_msg = _sanitize_log_message(f"Structured generation failed for all providers. Last error: {str(last_error)}")
         logger.error(error_msg)
         raise RuntimeError(error_msg)
 
