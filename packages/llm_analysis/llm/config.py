@@ -54,7 +54,9 @@ def _get_available_ollama_models() -> List[str]:
             data = response.json()
             return [model['name'] for model in data.get('models', [])]
     except Exception as e:
-        logger.debug(f"Could not connect to Ollama at {RaptorConfig.OLLAMA_HOST}: {e}")
+        # Mask remote Ollama URLs for privacy
+        ollama_display = RaptorConfig.OLLAMA_HOST if 'localhost' in RaptorConfig.OLLAMA_HOST or '127.0.0.1' in RaptorConfig.OLLAMA_HOST else '[REMOTE-OLLAMA]'
+        logger.debug(f"Could not connect to Ollama at {ollama_display}: {e}")
     return []
 
 

@@ -147,8 +147,8 @@ class AgenticOrchestrator:
             # Note: the agent processes all findings; limiting behaviour is enforced
             # in the agent implementation.
 
-        # Process findings autonomously, passing SARIF paths
-        results = agent.process_findings(sarif_paths)
+        # Process findings autonomously, passing SARIF paths and max_findings
+        results = agent.process_findings(sarif_paths, max_findings=max_findings)
 
         # Generate orchestration report from agent results
         report: Dict[str, Any] = {

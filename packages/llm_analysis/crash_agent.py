@@ -41,15 +41,15 @@ class CrashAnalysisAgent:
         if self.llm_config.primary_model.cost_per_1k_tokens > 0:
             print(f"Cost: ${self.llm_config.primary_model.cost_per_1k_tokens:.4f} per 1K tokens")
         else:
-            print(f"Cost: FREE (local model)")
+            print(f"Cost: FREE (self-hosted model)")
 
-        # Warn about local model limitations for exploit generation
+        # Warn about Ollama model limitations for exploit generation
         if "ollama" in self.llm_config.primary_model.provider.lower():
             print()
-            print("⚠️  IMPORTANT: You are using a local Ollama model.")
-            print("   • Crash analysis and triage: Works well with local models")
+            print("⚠️  IMPORTANT: You are using an Ollama model.")
+            print("   • Crash analysis and triage: Works well with Ollama models")
             print("   • Exploit generation: Requires frontier models (Anthropic Claude / OpenAI GPT-4)")
-            print("   • Local models may generate invalid/non-compilable exploit code")
+            print("   • Ollama models may generate invalid/non-compilable exploit code")
             print()
             print("   For production-quality exploits, use:")
             print("     export ANTHROPIC_API_KEY=your_key  (recommended)")
@@ -280,9 +280,9 @@ Be honest about exploitability - not every crash is exploitable."""
         logger.info(f" Generating exploit PoC for {crash_context.crash_type}")
         logger.info(f"   Target: {crash_context.binary_path.name}")
 
-        # Warn if using local model
+        # Warn if using Ollama model
         if "ollama" in self.llm_config.primary_model.provider.lower():
-            logger.warning("⚠️  Using local Ollama model - exploit code may not compile correctly")
+            logger.warning("⚠️  Using Ollama model - exploit code may not compile correctly")
             logger.warning("   For production exploits, use Anthropic Claude or OpenAI GPT-4")
 
         # Read the input file content for the prompt

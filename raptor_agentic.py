@@ -419,10 +419,13 @@ Examples:
             response = requests.get(f"{RaptorConfig.OLLAMA_HOST}/api/tags", timeout=2)
             if response.status_code == 200:
                 llm_available = True
-                logger.info(f"Ollama server detected at {RaptorConfig.OLLAMA_HOST}")
-                logger.debug(f"Ollama available at {RaptorConfig.OLLAMA_HOST}")
+                # Mask remote Ollama URLs for privacy
+                ollama_display = RaptorConfig.OLLAMA_HOST if 'localhost' in RaptorConfig.OLLAMA_HOST or '127.0.0.1' in RaptorConfig.OLLAMA_HOST else '[REMOTE-OLLAMA]'
+                logger.info(f"Ollama server detected at {ollama_display}")
+                logger.debug(f"Ollama available at {ollama_display}")
         except Exception as e:
-            logger.debug(f"Ollama not available at {RaptorConfig.OLLAMA_HOST}: {e}")
+            ollama_display = RaptorConfig.OLLAMA_HOST if 'localhost' in RaptorConfig.OLLAMA_HOST or '127.0.0.1' in RaptorConfig.OLLAMA_HOST else '[REMOTE-OLLAMA]'
+            logger.debug(f"Ollama not available at {ollama_display}: {e}")
             pass
 
     analysis = {}
@@ -444,7 +447,10 @@ Examples:
         elif os.environ.get("OPENAI_API_KEY"):
             print("🤖 LLM: OpenAI GPT-4 Turbo")
         else:
-            print("🤖 LLM: Ollama (local)")
+            # Check if Ollama is local or remote
+            is_local_ollama = 'localhost' in RaptorConfig.OLLAMA_HOST or '127.0.0.1' in RaptorConfig.OLLAMA_HOST
+            ollama_location = "local" if is_local_ollama else "remote"
+            print(f"🤖 LLM: Ollama ({ollama_location})")
         print()
         autonomous_out = out_dir / "autonomous"
         autonomous_out.mkdir(exist_ok=True)
