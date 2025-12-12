@@ -332,24 +332,6 @@ python3 raptor.py fuzz --binary /path/to/binary --duration 3600
 - **DEPENDENCIES.md** - External tools and licenses
 - **tiers/personas/README.md** - All 9 expert personas
 
-### AI Assistant Guides (Lessons from Radare2 Integration)
-- **WORK_ORCHESTRATION_GUIDE.md** (928 lines) - Systematic approach for new projects and features
-- **REFACTORING_SUCCESS_GUIDE.md** (1,249 lines) - Safe refactoring without breaking functionality
-- **AI_ASSISTANT_QUICK_REFERENCE.md** (200 lines) - Fast lookup and decision guide
-- **FAILURES_AND_FIXES_CATALOG_WITH_EXAMPLES.md** (53KB) - 50+ examples of failures and fixes
-- **LESSONS_LEARNED_RADARE2.md** - Analysis of radare2 integration failure (what went wrong)
-- **ANALYSIS_COMPARISON.md** - Historical validation of lessons learned
-
-**Purpose:** These guides encode lessons from the radare2 integration/removal project (4 days + full revert). They provide systematic approaches to avoid common failures: tight coupling, command injection, no test-first development, mixed commits, and lack of rollback plans.
-
-**When to use:**
-- Starting new project → WORK_ORCHESTRATION_GUIDE.md
-- Restructuring code → REFACTORING_SUCCESS_GUIDE.md
-- Quick decisions → AI_ASSISTANT_QUICK_REFERENCE.md
-
-**Key principles:** Plan → Verify → Incremental → Validate → Document
-
----
 
 ## Contribute
 
