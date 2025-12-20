@@ -57,8 +57,8 @@ class LLMProvider(ABC):
     def track_usage(self, tokens: int, cost: float) -> None:
         """Track token usage and cost."""
         self.total_tokens += tokens
-        self.total_cost += cost
-        logger.debug(f"LLM usage: {tokens} tokens, ${cost:.4f} (total: {self.total_tokens} tokens, ${self.total_cost:.4f})")
+        self.total_cost += (cost or 0.0)  # Handle None costs from Ollama
+        logger.debug(f"LLM usage: {tokens} tokens, ${(cost or 0.0):.4f} (total: {self.total_tokens} tokens, ${self.total_cost:.4f})")
 
 
 def _dict_schema_to_pydantic(schema: Dict[str, Any]):
@@ -237,8 +237,11 @@ class LiteLLMProvider(LLMProvider):
             litellm_params["api_base"] = self.config.api_base
 
         # Add api_key if configured (Bug #13 fix)
+        # For Ollama, we use "ollama" as a placeholder to avoid LiteLLM None handling issues
         if self.config.api_key:
             litellm_params["api_key"] = self.config.api_key
+        elif self.config.provider.lower() == "ollama":
+            litellm_params["api_key"] = "ollama"
 
         # Handle Ollama-specific format parameter (CRITICAL for GBNF)
         if "format" in kwargs and self.config.provider.lower() == "ollama":
@@ -255,7 +258,7 @@ class LiteLLMProvider(LLMProvider):
             # Calculate cost (LiteLLM may provide this, or we calculate)
             cost = 0.0
             if hasattr(response, '_hidden_params') and 'response_cost' in response._hidden_params:
-                cost = response._hidden_params['response_cost']
+                cost = response._hidden_params['response_cost'] or 0.0  # Handle None from Ollama
             else:
                 # Fallback: use config cost
                 cost = (tokens_used / 1000) * self.config.cost_per_1k_tokens
@@ -332,8 +335,11 @@ class LiteLLMProvider(LLMProvider):
                 create_kwargs["api_base"] = self.config.api_base
 
             # Add api_key if configured (Bug #13 fix)
+            # For Ollama, we use "ollama" as a placeholder to avoid LiteLLM None handling issues
             if self.config.api_key:
                 create_kwargs["api_key"] = self.config.api_key
+            elif self.config.provider.lower() == "ollama":
+                create_kwargs["api_key"] = "ollama"
 
             response = client.chat.completions.create(**create_kwargs)
 
@@ -346,7 +352,7 @@ class LiteLLMProvider(LLMProvider):
             # Track usage (estimate based on prompt+response length)
             # Note: Instructor doesn't always expose token counts
             estimated_tokens = (len(prompt) + len(full_response)) // 4  # Rough estimate
-            estimated_cost = (estimated_tokens / 1000) * self.config.cost_per_1k_tokens
+            estimated_cost = (estimated_tokens / 1000) * (self.config.cost_per_1k_tokens or 0.0)
             self.track_usage(estimated_tokens, estimated_cost)
 
             return result_dict, full_response

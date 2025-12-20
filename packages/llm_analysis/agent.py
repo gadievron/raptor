@@ -272,15 +272,15 @@ class AutonomousSecurityAgentV2:
         if self.llm_config.primary_model.cost_per_1k_tokens > 0:
             print(f"💰 Cost: ${self.llm_config.primary_model.cost_per_1k_tokens:.4f} per 1K tokens")
         else:
-            print(f"💰 Cost: FREE (local model)")
+            print(f"💰 Cost: FREE (self-hosted model)")
 
-        # Warn about local model limitations for exploit generation
+        # Warn about Ollama model limitations for exploit generation
         if "ollama" in self.llm_config.primary_model.provider.lower():
             print()
-            print("IMPORTANT: You are using a local Ollama model.")
-            print("   • Vulnerability analysis and patching: Works well with local models")
+            print("IMPORTANT: You are using an Ollama model.")
+            print("   • Vulnerability analysis and patching: Works well with Ollama models")
             print("   • Exploit generation: Requires frontier models (Anthropic Claude / OpenAI GPT-4)")
-            print("   • Local models may generate invalid/non-compilable exploit code")
+            print("   • Ollama models may generate invalid/non-compilable exploit code")
             print()
             print("   For production-quality exploits, use:")
             print("     export ANTHROPIC_API_KEY=your_key  (recommended)")

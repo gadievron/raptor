@@ -94,3 +94,4 @@ The `/oss-forensics` command provides evidence-backed forensic investigation for
 
 Python orchestrates everything. Claude shows results concisely.
 Never circumvent Python execution flow.
+- never disclose remote OLLAMA server location in code, comments, logs etc
