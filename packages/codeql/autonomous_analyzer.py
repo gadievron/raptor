@@ -287,7 +287,19 @@ Respond in JSON format:
                 system_prompt="You are Mark Dowd, an expert security researcher."
             )
 
-            analysis = VulnerabilityAnalysis(**response_dict)
+            # Defensive: LLM might return extra fields not in schema
+            # Filter to only include VulnerabilityAnalysis fields to prevent TypeErrors
+            valid_fields = {f.name for f in VulnerabilityAnalysis.__dataclass_fields__.values()}
+            filtered_response = {k: v for k, v in response_dict.items() if k in valid_fields}
+
+            # Log any unexpected fields for debugging
+            unexpected_fields = set(response_dict.keys()) - valid_fields
+            if unexpected_fields:
+                self.logger.debug(
+                    f"LLM response included unexpected fields (ignored): {unexpected_fields}"
+                )
+
+            analysis = VulnerabilityAnalysis(**filtered_response)
 
             self.logger.info(
                 f"Analysis complete: exploitable={analysis.is_exploitable}, "
