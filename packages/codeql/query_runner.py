@@ -88,6 +88,46 @@ class QueryRunner:
             raise RuntimeError("CodeQL CLI not found")
 
         logger.info(f"Query runner initialized with CodeQL: {self.codeql_cli}")
+        self._downloaded_packs = set()  # Track downloaded packs to avoid re-downloading
+
+    def _ensure_pack_downloaded(self, pack_name: str) -> bool:
+        """
+        Ensure a CodeQL query pack is downloaded.
+
+        Args:
+            pack_name: Pack name like "codeql/javascript-queries"
+
+        Returns:
+            True if pack is available, False otherwise
+        """
+        if pack_name in self._downloaded_packs:
+            return True
+
+        try:
+            logger.info(f"Ensuring query pack is available: {pack_name}")
+            result = subprocess.run(
+                [self.codeql_cli, "pack", "download", pack_name],
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minute timeout for download
+            )
+            if result.returncode == 0:
+                self._downloaded_packs.add(pack_name)
+                logger.info(f"✓ Query pack ready: {pack_name}")
+                return True
+            else:
+                # Pack might already be installed, try to continue
+                if "already" in result.stderr.lower() or "up to date" in result.stderr.lower():
+                    self._downloaded_packs.add(pack_name)
+                    return True
+                logger.warning(f"Pack download returned non-zero: {result.stderr[:200]}")
+                return True  # Try to continue anyway
+        except subprocess.TimeoutExpired:
+            logger.warning(f"Pack download timed out: {pack_name}")
+            return False
+        except Exception as e:
+            logger.warning(f"Pack download failed: {pack_name} - {e}")
+            return False
 
     def run_suite(
         self,
@@ -142,6 +182,11 @@ class QueryRunner:
 
             suite_type = "security-extended" if use_extended else "security-and-quality"
             logger.info(f"Using {suite_type} suite: {suite_name}")
+
+        # Ensure query pack is downloaded (extract pack name from suite reference)
+        if ":" in suite_name:
+            pack_name = suite_name.split(":")[0]
+            self._ensure_pack_downloaded(pack_name)
 
         # Prepare output path
         out_dir.mkdir(parents=True, exist_ok=True)
