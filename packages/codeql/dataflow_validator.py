@@ -210,7 +210,7 @@ class DataflowValidator:
             path_summary.append(f"STEP {i}: {step.label}")
             path_summary.append(f"  {step.file_path}:{step.line}")
 
-        path_summary.append(f"SINK: {sink.label}")
+        path_summary.append(f"SINK: {dataflow.sink.label}")
         path_summary.append(f"  {dataflow.sink.file_path}:{dataflow.sink.line}")
 
         # Create validation prompt
