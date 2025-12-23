@@ -163,8 +163,10 @@ class RaptorLLMLogger:
                 if hasattr(usage, "total_tokens"):
                     tokens_used = usage.total_tokens
 
-            # Calculate duration
+            # Calculate duration (handle both float and datetime types)
             duration = end_time - start_time
+            if hasattr(duration, 'total_seconds'):
+                duration = duration.total_seconds()
 
             logger.debug(
                 f"[LiteLLM] Success: model={model}, tokens={tokens_used}, duration={duration:.2f}s"
@@ -191,8 +193,10 @@ class RaptorLLMLogger:
             # Extract error message (sanitize for API keys)
             error_msg = _sanitize_log_message(str(response_obj))
 
-            # Calculate duration
+            # Calculate duration (handle both float and datetime types)
             duration = end_time - start_time
+            if hasattr(duration, 'total_seconds'):
+                duration = duration.total_seconds()
 
             logger.debug(
                 f"[LiteLLM] Failure: model={model}, error={error_msg}, duration={duration:.2f}s"
@@ -224,8 +228,30 @@ class LLMClient:
         self.total_cost = 0.0
         self.request_count = 0
 
+        # HEALTH CHECK: Verify LiteLLM library is available
+        try:
+            import litellm
+        except ImportError:
+            raise RuntimeError(
+                "LiteLLM library not installed. "
+                "Install with: pip install litellm"
+            )
+
+        # HEALTH CHECK: Warn if no API keys configured
+        import os
+        has_cloud_keys = any([
+            os.getenv("ANTHROPIC_API_KEY"),
+            os.getenv("OPENAI_API_KEY"),
+            os.getenv("GEMINI_API_KEY"),
+        ])
+        if not has_cloud_keys and self.config.primary_model.provider != "ollama":
+            logger.warning(
+                "No cloud LLM API keys found (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY). "
+                "RAPTOR will use Ollama if available, or fail. "
+                "For production use, configure at least one cloud provider API key."
+            )
+
         # SECURITY: Enable API key sanitization
-        import litellm
         litellm.redact_message_input_output_from_logging = True
 
         # Register LiteLLM callback for visibility (singleton pattern)
@@ -251,7 +277,7 @@ class LLMClient:
             logger.info(f"Fallback models: {len(self.config.fallback_models)}")
 
         # Warn if using Ollama for exploit generation
-        if self.config.primary_model.provider == "ollama":
+        if self.config.primary_model.provider.lower() == "ollama":
             logger.warning(
                 "Using local Ollama model for security analysis. "
                 "Local models may generate unreliable exploit PoCs. "
@@ -381,9 +407,12 @@ class LLMClient:
                         models_to_try.append(fallback)
 
         last_error = None
+        attempts_count = 0  # Track actual attempts, not just models in list
         for model_idx, model in enumerate(models_to_try):
             if not model.enabled:
                 continue
+
+            attempts_count += 1  # Count this as an actual attempt
 
             # Show which model we're using (visible to user)
             if model_idx == 0:
@@ -437,16 +466,19 @@ class LLMClient:
 
         # All models in tier failed
         tier = "local (Ollama)" if model_config.provider.lower() == "ollama" else "cloud"
-        error_msg = f"All {tier} models failed (tried {len(models_to_try)} models)."
+        error_msg = f"All {tier} models failed (tried {attempts_count} model(s))."
 
         # Check if last error was quota-related
         if last_error and _is_quota_error(last_error):
             # Show detection message + actual provider error (with light sanitization)
             error_msg += _get_quota_guidance(model_config.model_name, model_config.provider)
             error_msg += f"\nProvider message: {_sanitize_log_message(str(last_error))}"
-        else:
+        elif last_error:
             # Generic error with sanitized last error
             error_msg += f"\nLast error: {_sanitize_log_message(str(last_error))}"
+        else:
+            # No attempts were made (e.g., primary model disabled and no same-tier fallbacks)
+            error_msg += "\nNo enabled models available in this tier."
             if tier == "local (Ollama)":
                 error_msg += "\n→ Check Ollama server: http://localhost:11434/api/tags"
             else:
@@ -501,9 +533,12 @@ class LLMClient:
                         models_to_try.append(fallback)
 
         last_error = None
+        attempts_count = 0  # Track actual attempts, not just models in list
         for model_idx, model in enumerate(models_to_try):
             if not model.enabled:
                 continue
+
+            attempts_count += 1  # Count this as an actual attempt
 
             # Show which model we're using (visible to user)
             if model_idx == 0:
@@ -558,16 +593,23 @@ class LLMClient:
 
         # All models in tier failed
         tier = "local (Ollama)" if model_config.provider.lower() == "ollama" else "cloud"
-        error_msg = f"Structured generation failed for all {tier} models (tried {len(models_to_try)} models)."
+        error_msg = f"Structured generation failed for all {tier} models (tried {attempts_count} model(s))."
 
         # Check if last error was quota-related
         if last_error and _is_quota_error(last_error):
             # Show detection message + actual provider error (with light sanitization)
             error_msg += _get_quota_guidance(model_config.model_name, model_config.provider)
             error_msg += f"\nProvider message: {_sanitize_log_message(str(last_error))}"
-        else:
+        elif last_error:
             # Generic error with sanitized last error
             error_msg += f"\nLast error: {_sanitize_log_message(str(last_error))}"
+            if tier == "local (Ollama)":
+                error_msg += "\n→ Check Ollama server: http://localhost:11434/api/tags"
+            else:
+                error_msg += "\n→ Check API keys and network connectivity"
+        else:
+            # No attempts were made (e.g., primary model disabled and no same-tier fallbacks)
+            error_msg += "\nNo enabled models available in this tier."
             if tier == "local (Ollama)":
                 error_msg += "\n→ Check Ollama server: http://localhost:11434/api/tags"
             else:
