@@ -25,6 +25,13 @@ from core.logging import get_logger
 from .config import LLMConfig, ModelConfig
 from .providers import LLMProvider, LLMResponse, create_provider
 
+# Import for type-based quota detection
+try:
+    import litellm
+    LITELLM_AVAILABLE = True
+except ImportError:
+    LITELLM_AVAILABLE = False
+
 logger = get_logger()
 
 
@@ -49,6 +56,165 @@ def _sanitize_log_message(msg: str) -> str:
     return msg
 
 
+def _is_quota_error(error: Exception) -> bool:
+    """
+    Detect quota/rate limit errors using type-based + string-based detection.
+
+    Strategy:
+    1. Check exception type first (robust, version-safe)
+    2. Fall back to string matching (handles edge cases like LiteLLM bug #16189)
+
+    Args:
+        error: Exception from LiteLLM/provider
+
+    Returns:
+        True if error appears to be quota/rate limit related
+
+    Related: Gemini quota exhaustion issue (Dec 2025)
+    """
+    # Type-based detection (preferred - robust against message format changes)
+    if LITELLM_AVAILABLE:
+        try:
+            if isinstance(error, litellm.RateLimitError):
+                return True
+        except AttributeError:
+            # RateLimitError doesn't exist in this LiteLLM version
+            pass
+
+    # String-based detection (fallback - handles bugs like #16189 where status code is wrong)
+    error_str = str(error).lower()
+    return any([
+        "429" in error_str,  # HTTP 429 (Rate Limit)
+        "quota exceeded" in error_str,
+        "quota" in error_str and "exceeded" in error_str,
+        "rate limit" in error_str,
+        "generate_content_free_tier" in error_str,  # Gemini-specific
+    ])
+
+
+def _get_quota_guidance(model_name: str, provider: str) -> str:
+    """
+    Get simple, clear detection message for quota/rate limit errors.
+
+    Shows LiteLLM's actual error message (which contains provider-specific details)
+    rather than maintaining our own provider-specific guidance.
+
+    Args:
+        model_name: Model that hit quota limit (for display only)
+        provider: Provider name (anthropic, openai, gemini, google, ollama, etc.)
+
+    Returns:
+        Simple detection message indicating quota/rate limit error
+
+    Related: Gemini quota exhaustion issue (Dec 2025)
+    """
+    provider_lower = provider.lower()
+
+    # Simple provider-specific detection messages
+    if provider_lower in ("gemini", "google"):
+        return "\n→ Google Gemini quota/rate limit exceeded"
+    elif provider_lower == "openai":
+        return "\n→ OpenAI rate limit exceeded"
+    elif provider_lower == "anthropic":
+        return "\n→ Anthropic rate limit exceeded"
+    elif provider_lower == "ollama":
+        return "\n→ Ollama server limit exceeded"
+    else:
+        return f"\n→ {provider.title()} rate limit exceeded"
+
+
+class RaptorLLMLogger:
+    """
+    LiteLLM callback logger for RAPTOR visibility.
+
+    Provides atomic logging of:
+    - Model used (provider/name)
+    - Tokens consumed (from LiteLLM's perspective)
+    - Duration (from LiteLLM's timing)
+    - Errors (sanitized for API key protection)
+
+    Complements manual logging (which provides retry/fallback context).
+    """
+
+    def __init__(self):
+        """Initialize callback logger."""
+        self.call_count = 0
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        """
+        Log successful LLM call.
+
+        Args:
+            kwargs: Call arguments (contains model, messages, etc.)
+            response_obj: LiteLLM response object
+            start_time: Call start timestamp
+            end_time: Call end timestamp
+        """
+        try:
+            self.call_count += 1
+
+            # Extract model info
+            model = kwargs.get("model", "unknown")
+
+            # Extract token usage
+            tokens_used = 0
+            if hasattr(response_obj, "usage"):
+                usage = response_obj.usage
+                if hasattr(usage, "total_tokens"):
+                    tokens_used = usage.total_tokens
+
+            # Calculate duration
+            duration = end_time - start_time
+
+            logger.debug(
+                f"[LiteLLM] Success: model={model}, tokens={tokens_used}, duration={duration:.2f}s"
+            )
+
+        except Exception as e:
+            # Never break LLM calls with callback errors
+            logger.debug(f"[LiteLLM] Callback error (non-fatal): {_sanitize_log_message(str(e))}")
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        """
+        Log failed LLM call.
+
+        Args:
+            kwargs: Call arguments
+            response_obj: Exception or error response
+            start_time: Call start timestamp
+            end_time: Call end timestamp
+        """
+        try:
+            # Extract model info
+            model = kwargs.get("model", "unknown")
+
+            # Extract error message (sanitize for API keys)
+            error_msg = _sanitize_log_message(str(response_obj))
+
+            # Calculate duration
+            duration = end_time - start_time
+
+            logger.debug(
+                f"[LiteLLM] Failure: model={model}, error={error_msg}, duration={duration:.2f}s"
+            )
+
+        except Exception as e:
+            # Never break LLM calls with callback errors
+            logger.debug(f"[LiteLLM] Callback error (non-fatal): {_sanitize_log_message(str(e))}")
+
+
+# Singleton instance of callback logger
+_raptor_llm_logger_instance = None
+
+
+def _get_raptor_llm_logger():
+    """Get or create singleton RaptorLLMLogger instance."""
+    global _raptor_llm_logger_instance
+    if _raptor_llm_logger_instance is None:
+        _raptor_llm_logger_instance = RaptorLLMLogger()
+    return _raptor_llm_logger_instance
+
+
 class LLMClient:
     """Unified LLM client with multi-provider support and fallback."""
 
@@ -62,6 +228,19 @@ class LLMClient:
         import litellm
         litellm.redact_message_input_output_from_logging = True
 
+        # Register LiteLLM callback for visibility (singleton pattern)
+        # DUAL LOGGING DESIGN:
+        # - Manual logs (logger.info/warning in generate/generate_structured):
+        #   Provide RAPTOR-level context (retry #, fallback #, cache hits)
+        # - Callback logs (logger.debug in RaptorLLMLogger):
+        #   Provide LiteLLM-level metrics (model, tokens, duration from LiteLLM's perspective)
+        # Both are necessary and non-redundant:
+        #   - Manual: User/operator visibility into RAPTOR's decision-making
+        #   - Callback: Developer/debugger access to atomic LiteLLM metrics
+        callback = _get_raptor_llm_logger()
+        if callback not in litellm.callbacks:
+            litellm.callbacks.append(callback)
+
         # Initialize cache
         if self.config.enable_caching:
             self.config.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -70,6 +249,16 @@ class LLMClient:
         logger.info(f"Primary model: {self.config.primary_model.provider}/{self.config.primary_model.model_name}")
         if self.config.enable_fallback:
             logger.info(f"Fallback models: {len(self.config.fallback_models)}")
+
+        # Warn if using Ollama for exploit generation
+        if self.config.primary_model.provider == "ollama":
+            logger.warning(
+                "Using local Ollama model for security analysis. "
+                "Local models may generate unreliable exploit PoCs. "
+                "For production security research, consider using cloud models "
+                "(Anthropic Claude, OpenAI GPT, Google Gemini) which have better "
+                "code generation and security analysis capabilities."
+            )
 
     def _get_provider(self, model_config: ModelConfig) -> LLMProvider:
         """Get or create provider for model config."""
@@ -165,6 +354,7 @@ class LLMClient:
         cache_key = self._get_cache_key(prompt, system_prompt, model_config.model_name)
         cached_content = self._get_cached_response(cache_key)
         if cached_content:
+            print(f"► Using cached response for {model_config.provider}/{model_config.model_name}")
             self.request_count += 1
             return LLMResponse(
                 content=cached_content,
@@ -175,20 +365,43 @@ class LLMClient:
                 finish_reason="cached",
             )
 
-        # Try models in order with fallback
+        # Try models in order with fallback (same tier only: local→local, cloud→cloud)
         models_to_try = [model_config]
         if self.config.enable_fallback:
-            models_to_try.extend(self.config.get_available_models())
+            # Filter fallbacks to same tier as primary
+            is_local_primary = model_config.provider.lower() == "ollama"
+            for fallback in self.config.fallback_models:
+                if not fallback.enabled:
+                    continue
+                # Skip if different tier (don't mix local and cloud)
+                is_local_fallback = fallback.provider.lower() == "ollama"
+                if is_local_primary == is_local_fallback:
+                    # Skip if same as primary (already trying it)
+                    if fallback.model_name != model_config.model_name:
+                        models_to_try.append(fallback)
 
         last_error = None
-        for model in models_to_try:
+        for model_idx, model in enumerate(models_to_try):
             if not model.enabled:
                 continue
+
+            # Show which model we're using (visible to user)
+            if model_idx == 0:
+                print(f"► Using model: {model.provider}/{model.model_name}")
+                if model.provider.lower() == "ollama":
+                    print(f"  ⚠️  Local model - exploit PoCs may be unreliable")
+            else:
+                print(f"► Falling back to: {model.provider}/{model.model_name}")
+                if model.provider.lower() == "ollama":
+                    print(f"  ⚠️  Local model - exploit PoCs may be unreliable")
 
             logger.debug(f"Trying model: {model.provider}/{model.model_name}")
 
             for attempt in range(self.config.max_retries):
                 try:
+                    if attempt > 0:
+                        print(f"  ↻ Retrying... (attempt {attempt + 1}/{self.config.max_retries})")
+
                     provider = self._get_provider(model)
                     response = provider.generate(prompt, system_prompt, **kwargs)
 
@@ -206,6 +419,12 @@ class LLMClient:
 
                 except Exception as e:
                     last_error = e
+
+                    # Check if quota/rate limit error and log specific guidance
+                    if _is_quota_error(e):
+                        quota_guidance = _get_quota_guidance(model.model_name, model.provider)
+                        logger.warning(f"Quota error for {model.provider}/{model.model_name}:{quota_guidance}")
+
                     logger.warning(f"Attempt {attempt + 1}/{self.config.max_retries} failed for "
                                  f"{model.provider}/{model.model_name}: {_sanitize_log_message(str(e))}")
 
@@ -216,8 +435,23 @@ class LLMClient:
 
             logger.warning(f"All attempts failed for {model.provider}/{model.model_name}, trying next model...")
 
-        # All models failed
-        error_msg = f"All LLM providers failed. Last error: {_sanitize_log_message(str(last_error))}"
+        # All models in tier failed
+        tier = "local (Ollama)" if model_config.provider.lower() == "ollama" else "cloud"
+        error_msg = f"All {tier} models failed (tried {len(models_to_try)} models)."
+
+        # Check if last error was quota-related
+        if last_error and _is_quota_error(last_error):
+            # Show detection message + actual provider error (with light sanitization)
+            error_msg += _get_quota_guidance(model_config.model_name, model_config.provider)
+            error_msg += f"\nProvider message: {_sanitize_log_message(str(last_error))}"
+        else:
+            # Generic error with sanitized last error
+            error_msg += f"\nLast error: {_sanitize_log_message(str(last_error))}"
+            if tier == "local (Ollama)":
+                error_msg += "\n→ Check Ollama server: http://localhost:11434/api/tags"
+            else:
+                error_msg += "\n→ Check API keys and network connectivity"
+
         logger.error(error_msg)
         raise RuntimeError(error_msg)
 
@@ -251,18 +485,41 @@ class LLMClient:
         else:
             model_config = self.config.primary_model
 
-        # Try models in order
+        # Try models in order (same tier only: local→local, cloud→cloud)
         models_to_try = [model_config]
         if self.config.enable_fallback:
-            models_to_try.extend(self.config.get_available_models())
+            # Filter fallbacks to same tier as primary
+            is_local_primary = model_config.provider.lower() == "ollama"
+            for fallback in self.config.fallback_models:
+                if not fallback.enabled:
+                    continue
+                # Skip if different tier (don't mix local and cloud)
+                is_local_fallback = fallback.provider.lower() == "ollama"
+                if is_local_primary == is_local_fallback:
+                    # Skip if same as primary (already trying it)
+                    if fallback.model_name != model_config.model_name:
+                        models_to_try.append(fallback)
 
         last_error = None
-        for model in models_to_try:
+        for model_idx, model in enumerate(models_to_try):
             if not model.enabled:
                 continue
 
+            # Show which model we're using (visible to user)
+            if model_idx == 0:
+                print(f"► Using model: {model.provider}/{model.model_name} (structured)")
+                if model.provider.lower() == "ollama":
+                    print(f"  ⚠️  Local model - exploit PoCs may be unreliable")
+            else:
+                print(f"► Falling back to: {model.provider}/{model.model_name} (structured)")
+                if model.provider.lower() == "ollama":
+                    print(f"  ⚠️  Local model - exploit PoCs may be unreliable")
+
             for attempt in range(self.config.max_retries):
                 try:
+                    if attempt > 0:
+                        print(f"  ↻ Retrying... (attempt {attempt + 1}/{self.config.max_retries})")
+
                     provider = self._get_provider(model)
 
                     # Capture cost before call
@@ -285,6 +542,12 @@ class LLMClient:
 
                 except Exception as e:
                     last_error = e
+
+                    # Check if quota/rate limit error and log specific guidance
+                    if _is_quota_error(e):
+                        quota_guidance = _get_quota_guidance(model.model_name, model.provider)
+                        logger.warning(f"Quota error for {model.provider}/{model.model_name}:{quota_guidance}")
+
                     # SECURITY: Sanitize exception message to prevent API key leakage (Cursor Bot Bug #2)
                     logger.warning(_sanitize_log_message(f"Structured generation attempt {attempt + 1} failed: {str(e)}"))
 
@@ -293,9 +556,23 @@ class LLMClient:
                         logger.debug(f"Retrying in {delay}s...")
                         time.sleep(delay)
 
-        # All models failed
-        # SECURITY: Sanitize final error message to prevent API key leakage (Cursor Bot Bug #2)
-        error_msg = _sanitize_log_message(f"Structured generation failed for all providers. Last error: {str(last_error)}")
+        # All models in tier failed
+        tier = "local (Ollama)" if model_config.provider.lower() == "ollama" else "cloud"
+        error_msg = f"Structured generation failed for all {tier} models (tried {len(models_to_try)} models)."
+
+        # Check if last error was quota-related
+        if last_error and _is_quota_error(last_error):
+            # Show detection message + actual provider error (with light sanitization)
+            error_msg += _get_quota_guidance(model_config.model_name, model_config.provider)
+            error_msg += f"\nProvider message: {_sanitize_log_message(str(last_error))}"
+        else:
+            # Generic error with sanitized last error
+            error_msg += f"\nLast error: {_sanitize_log_message(str(last_error))}"
+            if tier == "local (Ollama)":
+                error_msg += "\n→ Check Ollama server: http://localhost:11434/api/tags"
+            else:
+                error_msg += "\n→ Check API keys and network connectivity"
+
         logger.error(error_msg)
         raise RuntimeError(error_msg)
 
