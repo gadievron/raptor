@@ -33,12 +33,41 @@ def _get_litellm_models() -> List[Dict]:
 
     Returns list of model configurations with capabilities.
     Falls back to empty list if config not found.
+
+    Config path resolution:
+    1. LITELLM_CONFIG_PATH environment variable
+    2. ~/.config/litellm/config.yaml (XDG standard)
+    3. ~/Documents/ClaudeCode/litellm/config.yaml (dev default)
+    4. /etc/litellm/config.yaml (Linux/macOS only)
+
+    Note: Windows compatibility - /etc path will be skipped on Windows systems.
     """
     try:
-        litellm_config_path = Path.home() / "Documents/ClaudeCode/litellm/config.yaml"
-        if not litellm_config_path.exists():
-            logger.debug(f"LiteLLM config not found at {litellm_config_path}")
-            return []
+        # Try environment variable first
+        litellm_config_path = os.getenv('LITELLM_CONFIG_PATH')
+        if litellm_config_path:
+            # Resolve to absolute path to prevent path traversal attacks
+            litellm_config_path = Path(litellm_config_path).resolve()
+            if not litellm_config_path.exists():
+                logger.debug(f"LITELLM_CONFIG_PATH set but file not found: {litellm_config_path}")
+                return []
+        else:
+            # Try standard locations
+            possible_paths = [
+                Path.home() / ".config/litellm/config.yaml",              # XDG standard (Linux/macOS)
+                Path.home() / "Documents/ClaudeCode/litellm/config.yaml", # Dev default
+                Path("/etc/litellm/config.yaml"),                         # System-wide (Linux/macOS only)
+            ]
+            litellm_config_path = None
+            for path in possible_paths:
+                if path.exists():
+                    litellm_config_path = path
+                    logger.debug(f"Found LiteLLM config at: {litellm_config_path}")
+                    break
+
+            if not litellm_config_path:
+                logger.debug("LiteLLM config not found in standard locations")
+                return []
 
         with open(litellm_config_path) as f:
             config = yaml.safe_load(f)
@@ -54,7 +83,7 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
     Automatically select the best thinking/reasoning model from LiteLLM config.
 
     Priority:
-    1. Models with explicit reasoning support (o1, gemini-3-deep-think)
+    1. Models with explicit reasoning support (gpt-5.2-thinking, gemini-3-deep-think)
     2. Most capable models (Opus > Sonnet > others)
     3. Latest versions
 
@@ -65,21 +94,21 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
         return None
 
     # Define priority order for thinking models (best first)
-    # Format: (provider_prefix, model_name_pattern, priority_score)
+    # Format: (exact_underlying_model, model_alias, base_priority_score)
     # Note: Models with supports_reasoning=true get +10 bonus
     thinking_model_patterns = [
         # Tier 1: Most capable models (Opus is preferred for deep reasoning)
-        ("anthropic/claude-opus-4-5", "claude-opus-4.5", 110),          # Most capable overall (preferred)
-        ("openai/gpt-5.2", "gpt-5.2-thinking", 95),                     # GPT-5.2 with thinking (gets +10 = 105 total)
-        ("gemini/gemini-3", "gemini-3-deep-think", 90),                 # Gemini reasoning (gets +10 = 100 total)
+        ("anthropic/claude-opus-4.5", "claude-opus-4.5", 110),          # Most capable overall (preferred)
+        ("openai/gpt-5.2-thinking", "gpt-5.2-thinking", 95),            # GPT-5.2 with thinking (gets +10 = 105 total)
+        ("gemini/gemini-3-deep-think", "gemini-3-deep-think", 90),      # Gemini reasoning (gets +10 = 100 total)
 
         # Tier 2: Strong models
         ("anthropic/claude-opus-4", "claude-opus-4", 85),               # Previous Opus
-        ("openai/gpt-5.2", "gpt-5.2", 80),                              # Latest GPT
+        ("openai/gpt-5.2", "gpt-5.2", 80),                              # Latest GPT (exact match only)
 
         # Tier 3: Latest capable models (fallback)
-        ("anthropic/claude-sonnet-4-5", "claude-sonnet-4.5", 70),      # Latest Sonnet
-        ("gemini/gemini-3.0-pro", "gemini-3-pro", 65),                 # Latest Gemini
+        ("anthropic/claude-sonnet-4.5", "claude-sonnet-4.5", 70),       # Latest Sonnet
+        ("gemini/gemini-3-pro", "gemini-3-pro", 65),                    # Latest Gemini
     ]
 
     # Find best matching model
@@ -87,42 +116,52 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
     best_score = -1
 
     for model_entry in models:
-        model_name = model_entry.get('model_name', '')
-        litellm_params = model_entry.get('litellm_params', {})
-        underlying_model = litellm_params.get('model', '')
-        model_info = model_entry.get('model_info', {})
+        # SAFETY: Validate model_entry is a dict (Issue #3: malformed YAML entries)
+        if not isinstance(model_entry, dict):
+            logger.debug(f"Skipping malformed model entry (not a dict): {type(model_entry)}")
+            continue
 
-        # Check if model has reasoning support OR matches our thinking patterns
-        has_reasoning = model_info.get('supports_reasoning', False)
+        try:
+            model_name = model_entry.get('model_name', '')
+            litellm_params = model_entry.get('litellm_params', {})
+            underlying_model = litellm_params.get('model', '')
+            model_info = model_entry.get('model_info', {})
 
-        # Score this model
-        for pattern_prefix, pattern_name, score in thinking_model_patterns:
-            if underlying_model.startswith(pattern_prefix) or pattern_name in model_name:
-                # Boost score if has explicit reasoning flag
-                if has_reasoning:
-                    score += 10
+            # Check if model has reasoning support OR matches our thinking patterns
+            has_reasoning = model_info.get('supports_reasoning', False)
 
-                if score > best_score:
-                    best_score = score
+            # Score this model (Issue #1: Use exact match instead of startswith to prevent overlap)
+            for exact_model, pattern_name, score in thinking_model_patterns:
+                if underlying_model == exact_model or pattern_name in model_name:
+                    # Boost score if has explicit reasoning flag
+                    if has_reasoning:
+                        score += 10
 
-                    # Extract provider and API key env var
-                    provider = underlying_model.split('/')[0] if '/' in underlying_model else 'unknown'
-                    api_key_env = litellm_params.get('api_key', '').replace('os.environ/', '')
-                    api_key = os.getenv(api_key_env) if api_key_env else None
+                    if score > best_score:
+                        best_score = score
 
-                    # Use the underlying model name for direct API calls
-                    # Extract actual model ID from "provider/model-id" format
-                    actual_model_name = underlying_model.split('/')[-1] if '/' in underlying_model else model_name
+                        # Extract provider and API key env var
+                        provider = underlying_model.split('/')[0] if '/' in underlying_model else 'unknown'
+                        api_key_env = litellm_params.get('api_key', '').replace('os.environ/', '')
+                        api_key = os.getenv(api_key_env) if api_key_env else None
 
-                    best_model = ModelConfig(
-                        provider=provider,
-                        model_name=actual_model_name,  # Use actual API model name
-                        api_key=api_key,
-                        max_tokens=model_info.get('max_output_tokens', 64000),
-                        temperature=0.7,
-                        cost_per_1k_tokens=0.015 if 'opus' in model_name else 0.005,
-                    )
-                break
+                        # Use the underlying model name for direct API calls
+                        # Extract actual model ID from "provider/model-id" format
+                        actual_model_name = underlying_model.split('/')[-1] if '/' in underlying_model else model_name
+
+                        best_model = ModelConfig(
+                            provider=provider,
+                            model_name=actual_model_name,  # Use actual API model name
+                            api_key=api_key,
+                            max_tokens=model_info.get('max_output_tokens', 64000),
+                            temperature=0.7,
+                            cost_per_1k_tokens=0.015 if 'opus' in model_name else 0.005,
+                        )
+                    break
+
+        except Exception as e:
+            logger.debug(f"Error processing model entry {model_entry.get('model_name', 'unknown')}: {e}")
+            continue
 
     if best_model:
         logger.info(f"Auto-selected thinking model: {best_model.provider}/{best_model.model_name} (score: {best_score})")
