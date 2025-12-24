@@ -158,7 +158,11 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
                         provider = underlying_model.split('/')[0] if '/' in underlying_model else 'unknown'
 
                         # Handle both os.environ/VAR format and literal API keys
+                        # Handle explicit null: dict.get() returns None, not default, if key exists with null value
                         api_key_value = litellm_params.get('api_key', '')
+                        if api_key_value is None:
+                            api_key_value = ''
+
                         if api_key_value.startswith('os.environ/'):
                             # Extract env var name and get value from environment
                             api_key_env = api_key_value.replace('os.environ/', '')
@@ -173,13 +177,17 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
                         # Extract actual model ID from "provider/model-id" format
                         actual_model_name = underlying_model.split('/')[-1] if '/' in underlying_model else model_name
 
+                        # Determine cost based on actual model tier (use underlying_model, not alias)
+                        is_opus = 'opus' in underlying_model.lower()
+                        cost_per_1k = 0.015 if is_opus else 0.005
+
                         best_model = ModelConfig(
                             provider=provider,
                             model_name=actual_model_name,  # Use actual API model name
                             api_key=api_key,
                             max_tokens=model_info.get('max_output_tokens', 64000),
                             temperature=0.7,
-                            cost_per_1k_tokens=0.015 if 'opus' in model_name else 0.005,
+                            cost_per_1k_tokens=cost_per_1k,
                         )
                     break
 
