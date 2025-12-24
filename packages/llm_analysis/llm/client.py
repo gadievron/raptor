@@ -476,6 +476,11 @@ class LLMClient:
         elif last_error:
             # Generic error with sanitized last error
             error_msg += f"\nLast error: {_sanitize_log_message(str(last_error))}"
+            # Add troubleshooting tips (consistent with generate_structured)
+            if tier == "local (Ollama)":
+                error_msg += "\n→ Check Ollama server: http://localhost:11434/api/tags"
+            else:
+                error_msg += "\n→ Check API keys and network connectivity"
         else:
             # No attempts were made (e.g., primary model disabled and no same-tier fallbacks)
             error_msg += "\nNo enabled models available in this tier."
