@@ -72,7 +72,13 @@ def _get_litellm_models() -> List[Dict]:
         with open(litellm_config_path) as f:
             config = yaml.safe_load(f)
 
-        return config.get('model_list', [])
+        # Validate model_list is actually a list (not int, bool, string, etc.)
+        model_list = config.get('model_list', [])
+        if not isinstance(model_list, list):
+            logger.debug(f"LiteLLM config has non-list model_list (type: {type(model_list).__name__})")
+            return []
+
+        return model_list
     except Exception as e:
         logger.debug(f"Could not read LiteLLM config: {e}")
         return []
