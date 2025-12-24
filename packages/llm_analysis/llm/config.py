@@ -128,14 +128,18 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
             continue
 
         try:
-            model_name = model_entry.get('model_name', '')
-
             # Handle explicit null values (Issue: dict.get() default only used for missing keys, not null)
+            model_name = model_entry.get('model_name', '')
+            if model_name is None:
+                model_name = ''
+
             litellm_params = model_entry.get('litellm_params', {})
             if litellm_params is None:
                 litellm_params = {}
 
             underlying_model = litellm_params.get('model', '')
+            if underlying_model is None:
+                underlying_model = ''
 
             model_info = model_entry.get('model_info', {})
             if model_info is None:
