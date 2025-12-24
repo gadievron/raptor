@@ -123,9 +123,17 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
 
         try:
             model_name = model_entry.get('model_name', '')
+
+            # Handle explicit null values (Issue: dict.get() default only used for missing keys, not null)
             litellm_params = model_entry.get('litellm_params', {})
+            if litellm_params is None:
+                litellm_params = {}
+
             underlying_model = litellm_params.get('model', '')
+
             model_info = model_entry.get('model_info', {})
+            if model_info is None:
+                model_info = {}
 
             # Check if model has reasoning support OR matches our thinking patterns
             has_reasoning = model_info.get('supports_reasoning', False)
@@ -140,10 +148,20 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
                     if score > best_score:
                         best_score = score
 
-                        # Extract provider and API key env var
+                        # Extract provider and API key
                         provider = underlying_model.split('/')[0] if '/' in underlying_model else 'unknown'
-                        api_key_env = litellm_params.get('api_key', '').replace('os.environ/', '')
-                        api_key = os.getenv(api_key_env) if api_key_env else None
+
+                        # Handle both os.environ/VAR format and literal API keys
+                        api_key_value = litellm_params.get('api_key', '')
+                        if api_key_value.startswith('os.environ/'):
+                            # Extract env var name and get value from environment
+                            api_key_env = api_key_value.replace('os.environ/', '')
+                            api_key = os.getenv(api_key_env)
+                        elif api_key_value:
+                            # Use literal API key from config
+                            api_key = api_key_value
+                        else:
+                            api_key = None
 
                         # Use the underlying model name for direct API calls
                         # Extract actual model ID from "provider/model-id" format
