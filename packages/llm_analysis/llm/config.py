@@ -154,8 +154,12 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
                     if score > best_score:
                         best_score = score
 
+                        # Determine which model string to use for provider/cost extraction
+                        # If underlying_model is empty or invalid, fall back to pattern's exact_model
+                        model_for_metadata = underlying_model if underlying_model and '/' in underlying_model else exact_model
+
                         # Extract provider and API key
-                        provider = underlying_model.split('/')[0] if '/' in underlying_model else 'unknown'
+                        provider = model_for_metadata.split('/')[0] if '/' in model_for_metadata else 'unknown'
 
                         # Handle both os.environ/VAR format and literal API keys
                         # Handle explicit null: dict.get() returns None, not default, if key exists with null value
@@ -177,8 +181,9 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
                         # Extract actual model ID from "provider/model-id" format
                         actual_model_name = underlying_model.split('/')[-1] if '/' in underlying_model else model_name
 
-                        # Determine cost based on actual model tier (use underlying_model, not alias)
-                        is_opus = 'opus' in underlying_model.lower()
+                        # Determine cost based on actual model tier
+                        # Use model_for_metadata (not alias) to ensure correct cost even when matched by alias
+                        is_opus = 'opus' in model_for_metadata.lower()
                         cost_per_1k = 0.015 if is_opus else 0.005
 
                         best_model = ModelConfig(
