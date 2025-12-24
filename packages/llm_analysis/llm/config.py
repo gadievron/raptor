@@ -276,7 +276,7 @@ def _get_default_primary_model() -> 'ModelConfig':
     # Fallback to Claude (will fail if no API key, but that's expected)
     return ModelConfig(
         provider="anthropic",
-        model_name="claude-opus-4-5-20251101",
+        model_name="claude-opus-4.5",  # Use LiteLLM alias (consistent with other models)
         api_key=os.getenv("ANTHROPIC_API_KEY", ""),
         max_tokens=8192,
         temperature=0.7,
