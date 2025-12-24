@@ -17,14 +17,20 @@ from typing import Dict, List, Optional
 import json
 import requests
 import yaml
+from pydantic import ValidationError
 
 # Add parent directories to path for core imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from core.config import RaptorConfig
 from core.logging import get_logger
+from .yaml_schema import LiteLLMConfigSchema
 
 logger = get_logger()
+
+# Cost constants (per 1K tokens)
+COST_OPUS_PER_1K = 0.015  # Opus models are more expensive
+COST_DEFAULT_PER_1K = 0.005  # All other models
 
 
 def _get_litellm_models() -> List[Dict]:
@@ -77,13 +83,21 @@ def _get_litellm_models() -> List[Dict]:
             logger.debug("LiteLLM config file is empty or contains only comments")
             return []
 
-        # Validate model_list is actually a list (not int, bool, string, etc.)
-        model_list = config.get('model_list', [])
-        if not isinstance(model_list, list):
-            logger.debug(f"LiteLLM config has non-list model_list (type: {type(model_list).__name__})")
-            return []
+        # Validate config with Pydantic schema
+        try:
+            validated = LiteLLMConfigSchema.model_validate(config)
 
-        return model_list
+            # Convert validated models back to dicts for backward compatibility
+            model_list = [m.model_dump() for m in validated.model_list]
+
+            if not model_list:
+                logger.debug("LiteLLM config has empty model_list")
+
+            return model_list
+
+        except ValidationError as e:
+            logger.error(f"LiteLLM config validation failed: {e}")
+            return []
     except Exception as e:
         logger.debug(f"Could not read LiteLLM config: {e}")
         return []
@@ -193,7 +207,7 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
                         # Determine cost based on actual model tier
                         # Use model_for_metadata (not alias) to ensure correct cost even when matched by alias
                         is_opus = 'opus' in model_for_metadata.lower()
-                        cost_per_1k = 0.015 if is_opus else 0.005
+                        cost_per_1k = COST_OPUS_PER_1K if is_opus else COST_DEFAULT_PER_1K
 
                         best_model = ModelConfig(
                             provider=provider,
@@ -282,7 +296,7 @@ def _get_default_primary_model() -> 'ModelConfig':
             api_key=os.getenv("OPENAI_API_KEY"),
             max_tokens=128000,
             temperature=0.7,
-            cost_per_1k_tokens=0.005,
+            cost_per_1k_tokens=COST_DEFAULT_PER_1K,
         )
 
     if os.getenv("GEMINI_API_KEY"):
@@ -326,7 +340,7 @@ def _get_default_primary_model() -> 'ModelConfig':
         api_key=os.getenv("ANTHROPIC_API_KEY", ""),
         max_tokens=8192,
         temperature=0.7,
-        cost_per_1k_tokens=0.015,  # Opus is more expensive than Sonnet
+        cost_per_1k_tokens=COST_OPUS_PER_1K,  # Opus is more expensive than Sonnet
     )
 
 
@@ -353,7 +367,7 @@ def _get_default_fallback_models() -> List['ModelConfig']:
             api_key=os.getenv("ANTHROPIC_API_KEY"),
             max_tokens=64000,
             temperature=0.7,
-            cost_per_1k_tokens=0.015,  # Opus is more expensive
+            cost_per_1k_tokens=COST_OPUS_PER_1K,  # Opus is more expensive
         ))
         fallbacks.append(ModelConfig(
             provider="anthropic",
@@ -372,7 +386,7 @@ def _get_default_fallback_models() -> List['ModelConfig']:
             api_key=os.getenv("OPENAI_API_KEY"),
             max_tokens=128000,
             temperature=0.7,
-            cost_per_1k_tokens=0.005,
+            cost_per_1k_tokens=COST_DEFAULT_PER_1K,
         ))
         fallbacks.append(ModelConfig(
             provider="openai",
