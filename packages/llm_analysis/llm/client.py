@@ -357,6 +357,7 @@ class LLMClient:
             system_prompt: System prompt
             task_type: Task type for model selection ("code_analysis", "exploit_generation", etc.)
             **kwargs: Additional generation parameters
+                model_config: Optional ModelConfig to override default model selection
 
         Returns:
             LLMResponse with generated content
@@ -370,11 +371,13 @@ class LLMClient:
                 f"Increase budget with: LLMConfig(max_cost_per_scan={self.config.max_cost_per_scan * 2:.1f})"
             )
 
-        # Get appropriate model for task
-        if task_type:
-            model_config = self.config.get_model_for_task(task_type)
-        else:
-            model_config = self.config.primary_model
+        # Get appropriate model for task (priority: explicit model_config > task_type > primary)
+        model_config = kwargs.pop('model_config', None)
+        if not model_config:
+            if task_type:
+                model_config = self.config.get_model_for_task(task_type)
+            else:
+                model_config = self.config.primary_model
 
         # Check cache
         cache_key = self._get_cache_key(prompt, system_prompt, model_config.model_name)
@@ -494,7 +497,7 @@ class LLMClient:
 
     def generate_structured(self, prompt: str, schema: Dict[str, Any],
                            system_prompt: Optional[str] = None,
-                           task_type: Optional[str] = None) -> Tuple[Dict[str, Any], str]:
+                           task_type: Optional[str] = None, **kwargs) -> Tuple[Dict[str, Any], str]:
         """
         Generate structured JSON output with automatic fallback.
 
@@ -503,6 +506,8 @@ class LLMClient:
             schema: JSON schema for expected output
             system_prompt: System prompt
             task_type: Task type for model selection
+            **kwargs: Additional generation parameters
+                model_config: Optional ModelConfig to override default model selection
 
         Returns:
             Tuple of (parsed JSON object matching schema, full response content)
@@ -516,11 +521,13 @@ class LLMClient:
                 f"Increase budget with: LLMConfig(max_cost_per_scan={self.config.max_cost_per_scan * 2:.1f})"
             )
 
-        # Get appropriate model
-        if task_type:
-            model_config = self.config.get_model_for_task(task_type)
-        else:
-            model_config = self.config.primary_model
+        # Get appropriate model (priority: explicit model_config > task_type > primary)
+        model_config = kwargs.pop('model_config', None)
+        if not model_config:
+            if task_type:
+                model_config = self.config.get_model_for_task(task_type)
+            else:
+                model_config = self.config.primary_model
 
         # Try models in order (same tier only: local→local, cloud→cloud)
         models_to_try = [model_config]
