@@ -357,6 +357,7 @@ models work for analysis but may produce non-compilable exploit code.
 - `ANTHROPIC_API_KEY` - Anthropic Claude API key
 - `OPENAI_API_KEY` - OpenAI API key
 - `OLLAMA_HOST` - Ollama server URL (default: `http://localhost:11434`)
+- `LITELLM_CONFIG_PATH` - Path to LiteLLM YAML configuration file (optional)
 
 **Ollama Examples:**
 ```bash
@@ -401,6 +402,7 @@ python3 raptor.py fuzz --binary /path/to/binary --duration 3600
 - **CLAUDE_CODE_USAGE.md** - Complete Claude Code usage guide
 - **PYTHON_CLI.md** - Python command-line reference
 - **FUZZING_QUICKSTART.md** - Binary fuzzing guide
+- **litellm-model-configuration-guide.md** - LiteLLM configuration and model selection
 - **.claude/commands/oss-forensics.md** - OSS forensics investigation guide
 - **TESTING.md** - Test suite documentation and user stories
 
