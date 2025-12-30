@@ -32,6 +32,15 @@ from llm.config import LLMConfig
 logger = get_logger()
 
 
+def get_vuln_type(rule_id: str) -> Optional[str]:
+    """Map SARIF rule_id to vulnerability type for mitigation checks."""
+    try:
+        from packages.exploit_feasibility import get_vuln_type_for_rule
+        return get_vuln_type_for_rule(rule_id)
+    except ImportError:
+        return None
+
+
 class VulnerabilityContext:
     """Represents a vulnerability with full context for autonomous analysis."""
 

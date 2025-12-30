@@ -509,7 +509,15 @@ Provide ONLY the complete, working exploit code. Include a header comment explai
                 total_duration_seconds=time.time() - start_time
             )
 
-        # Stage 5: Generate PoC exploit
+        # Stage 5: Check mitigations before exploit generation
+        if self.validator:
+            vuln_type = finding.rule_id  # Use CodeQL rule ID
+            viable, reason = self.validator.check_mitigations(vuln_type=vuln_type)
+            if not viable:
+                self.logger.warning(f"Mitigation check: {reason}")
+                self.logger.warning("Exploit generation may fail - proceeding anyway")
+
+        # Stage 6: Generate PoC exploit
         self.logger.info("🔨 Generating PoC exploit...")
         exploit_code = self.generate_exploit(finding, analysis, vulnerable_code)
 
@@ -527,7 +535,7 @@ Provide ONLY the complete, working exploit code. Include a header comment explai
                 total_duration_seconds=time.time() - start_time
             )
 
-        # Stage 6: Validate and refine exploit
+        # Stage 7: Validate and refine exploit
         exploit_compiled = False
         validation_result = None
         refinement_count = 0
