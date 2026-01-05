@@ -1,0 +1,7 @@
+#!/bin/bash
+# RAPTOR CLI wrapper - automatically uses the virtual environment
+
+RAPTOR_HOME="$HOME/Projects/security/tools/raptor"
+cd "$RAPTOR_HOME"
+source .venv/bin/activate
+exec python3 raptor.py "$@"
