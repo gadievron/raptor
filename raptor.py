@@ -180,6 +180,19 @@ def mode_frida_auto(args: list) -> int:
     return run_script(frida_auto_script, args)
 
 
+def mode_meta(args: list) -> int:
+    """Run meta-orchestrator for intelligent multi-tool coordination."""
+    script_root = Path(__file__).parent
+    meta_script = script_root / "raptor_meta_orchestrator.py"
+
+    if not meta_script.exists():
+        print(f"✗ Meta-orchestrator script not found: {meta_script}")
+        return 1
+
+    print("\n[*] Starting meta-orchestrator (intelligent tool coordination)...\n")
+    return run_script(meta_script, args)
+
+
 def show_mode_help(mode: str) -> None:
     """Show detailed help for a specific mode."""
     script_root = Path(__file__).parent
@@ -224,6 +237,7 @@ Available Modes:
   analyze     - LLM-powered vulnerability analysis (requires SARIF input)
   frida       - Dynamic instrumentation with Frida
   frida-auto  - Autonomous Frida analysis (LLM-guided)
+  meta        - Meta-orchestrator (intelligent multi-tool coordination)
 
 Examples:
   # Full autonomous workflow
@@ -250,6 +264,9 @@ Examples:
 
   # Autonomous Frida (LLM-guided)
   python3 raptor.py frida-auto --target /path/to/binary --goal "Find auth bypass"
+
+  # Meta-orchestrator (intelligent tool coordination)
+  python3 raptor.py meta --target /path/to/project --goal "Find all security vulnerabilities"
 
   # Get help for a specific mode
   python3 raptor.py help scan
@@ -281,6 +298,7 @@ Available Modes:
   analyze     - LLM-powered vulnerability analysis (requires SARIF input)
   frida       - Dynamic instrumentation with Frida
   frida-auto  - Autonomous Frida analysis (LLM-guided)
+  meta        - Meta-orchestrator (intelligent multi-tool coordination)
 
 Examples:
   # Full autonomous workflow
@@ -307,6 +325,9 @@ Examples:
 
   # Autonomous Frida (LLM-guided)
   python3 raptor.py frida-auto --target /path/to/binary --goal "Find auth bypass"
+
+  # Meta-orchestrator (intelligent tool coordination)
+  python3 raptor.py meta --target /path/to/project --goal "Find all security vulnerabilities"
 
   # Get help for a specific mode
   python3 raptor.py help scan
@@ -338,6 +359,7 @@ For more information, visit: https://github.com/gadievron/raptor
         'analyze': mode_llm_analysis,
         'frida': mode_frida,
         'frida-auto': mode_frida_auto,
+        'meta': mode_meta,
     }
     
     if mode not in mode_handlers:
