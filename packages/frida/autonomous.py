@@ -39,16 +39,19 @@ class AutonomousFridaAnalyzer:
     Autonomous Frida analyzer that uses LLM to guide instrumentation.
     """
 
-    def __init__(self, target: str, goal: str = "Find security vulnerabilities"):
+    def __init__(self, target: str, goal: str = "Find security vulnerabilities",
+                 target_args: List[str] = None):
         """
         Initialize autonomous analyzer.
 
         Args:
             target: Binary path, process name, or PID
             goal: Security testing goal (guides LLM decisions)
+            target_args: Arguments to pass to spawned binary
         """
         self.target = target
         self.goal = goal
+        self.target_args = target_args or []
         self.llm_client = LLMClient() if LLMClient else None
         self.frida_scanner = FridaScanner()
         self.iteration = 0
@@ -102,18 +105,9 @@ class AutonomousFridaAnalyzer:
             logger.warning("LLM not available, using default hooks")
             return {
                 "strategy": "default",
-                "hooks": ["api-trace"],
+                "hooks": [{"function": "write", "extract": "buffer contents"}],
                 "reasoning": "LLM unavailable, using basic API tracing"
             }
-
-        # Prepare context for LLM
-        context = {
-            "goal": self.goal,
-            "target": self.target,
-            "static_analysis": static_info,
-            "previous_findings": previous_findings,
-            "iteration": self.iteration
-        }
 
         prompt = f"""
 You are a security researcher using Frida for dynamic instrumentation.
@@ -126,27 +120,49 @@ STATIC ANALYSIS:
 {json.dumps(static_info, indent=2)}
 
 PREVIOUS FINDINGS:
-{json.dumps(previous_findings, indent=2) if previous_findings else "None yet"}
+{json.dumps(previous_findings[-10:], indent=2) if previous_findings else "None yet"}
 
-Based on the goal and current information, decide:
-1. Which APIs/functions should be hooked with Frida?
-2. What runtime behavior are we looking for?
-3. What would be the most valuable data to collect?
+Based on the goal, decide which functions to hook and WHAT DATA TO EXTRACT.
+Don't just log "function called" - extract the actual security-relevant data.
 
-Respond with a JSON object:
+Examples of useful extractions:
+- write(): capture buffer contents, look for credentials/tokens
+- connect(): extract IP address and port from sockaddr struct
+- open(): capture file paths being accessed
+- SSL_write(): capture pre-encryption plaintext
+- recv()/read(): capture incoming data
+
+Respond with JSON:
 {{
-    "strategy": "brief description of approach",
-    "priority_hooks": ["function1", "function2", ...],
-    "reasoning": "why these hooks will help achieve the goal",
-    "expected_findings": "what we expect to discover"
+    "strategy": "brief description",
+    "hooks": [
+        {{
+            "function": "write",
+            "module": "libsystem_kernel.dylib",
+            "extract": "buffer contents as string, flag if contains auth/password/token",
+            "security_focus": "credential leakage, sensitive data exposure"
+        }},
+        {{
+            "function": "connect",
+            "module": "libsystem_kernel.dylib",
+            "extract": "parse sockaddr to get IP:port",
+            "security_focus": "network connections, C2 communication"
+        }}
+    ],
+    "reasoning": "why these hooks achieve the goal"
 }}
         """
 
         try:
-            response = self.llm_client.chat(prompt)
-            # Parse JSON from response
-            # This is simplified - real implementation would use structured output
-            decision = json.loads(response)
+            response = self.llm_client.generate(prompt)
+            content = response.content
+            start = content.find('{')
+            end = content.rfind('}') + 1
+            if start != -1 and end > start:
+                json_str = content[start:end]
+                decision = json.loads(json_str)
+            else:
+                raise ValueError("No JSON object found in response")
             logger.info(f"LLM Strategy: {decision.get('strategy')}")
             return decision
 
@@ -154,70 +170,225 @@ Respond with a JSON object:
             logger.error(f"LLM decision failed: {e}")
             return {
                 "strategy": "fallback",
-                "hooks": ["api-trace"],
+                "hooks": [{"function": "write", "extract": "buffer contents"}],
                 "reasoning": f"LLM error: {e}"
             }
 
     def generate_frida_script(self, hook_decision: Dict) -> str:
         """
-        Generate custom Frida script based on LLM decision.
+        Generate custom Frida script with LLM-generated hook implementations.
 
         Args:
-            hook_decision: Hook strategy from LLM
+            hook_decision: Hook strategy from LLM including extraction requirements
 
         Returns:
             JavaScript source code for Frida
         """
-        priority_hooks = hook_decision.get('priority_hooks', [])
+        hooks = hook_decision.get('hooks', [])
 
-        # Generate targeted hooks
+        # Handle old format (list of strings) vs new format (list of dicts)
+        if hooks and isinstance(hooks[0], str):
+            hooks = [{"function": h, "extract": "basic call logging"} for h in hooks]
+
+        # Ask LLM to generate actual hook implementations
+        hook_code = self._llm_generate_hook_code(hooks)
+
+        # Get cross-platform boilerplate
+        try:
+            from packages.frida.platform import get_full_platform_boilerplate_js
+            platform_js = get_full_platform_boilerplate_js()
+        except ImportError:
+            platform_js = self._fallback_platform_js()
+
+        # Build complete script with boilerplate + LLM-generated hooks
         script_parts = [
             "// Auto-generated by RAPTOR Autonomous Frida",
             f"// Strategy: {hook_decision.get('strategy')}",
             f"// Goal: {self.goal}",
             "",
+            "// === UTILITIES ===",
             "function log(msg, level) {",
             "    send({ level: level || 'info', message: msg });",
             "}",
             "",
-            "function sendFinding(title, severity, details) {",
+            "function sendFinding(title, severity, details, data) {",
             "    send({",
             "        type: 'finding',",
             "        level: severity,",
             "        title: title,",
             "        details: details,",
+            "        data: data || null,",
             "        timestamp: Date.now()",
             "    });",
             "}",
             "",
-            "log('Autonomous Frida script loaded', 'info');",
-            ""
+            "// === CROSS-PLATFORM SUPPORT ===",
+            platform_js,
+            "",
+            "log('RAPTOR Autonomous Frida loaded', 'info');",
+            "",
+            "// === LLM-GENERATED HOOKS ===",
+            hook_code
         ]
 
-        # Add hooks for priority functions
-        for func_name in priority_hooks:
-            script_parts.extend([
-                f"// Hook: {func_name}",
-                f"const {func_name}_ptr = Module.findExportByName(null, '{func_name}');",
-                f"if ({func_name}_ptr) {{",
-                f"    Interceptor.attach({func_name}_ptr, {{",
-                "        onEnter: function(args) {",
-                f"            log('{func_name}() called', 'info');",
-                "            sendFinding(",
-                f"                '{func_name} Invoked',",
-                "                'info',",
-                f"                '{func_name} was called at runtime'",
-                "            );",
-                "        }",
-                "    });",
-                f"    log('{func_name} hooked', 'info');",
-                "} else {",
-                f"    log('{func_name} not found', 'warning');",
-                "}",
-                ""
-            ])
-
         return "\n".join(script_parts)
+
+    def _llm_generate_hook_code(self, hooks: List[Dict]) -> str:
+        """
+        Use LLM to generate actual JavaScript hook implementations.
+        Uses methodology-driven prompts for exploitation-focused analysis.
+
+        Args:
+            hooks: List of hook specifications with extraction requirements
+
+        Returns:
+            JavaScript code implementing the hooks
+        """
+        if not self.llm_client:
+            return self._fallback_hook_code(hooks)
+
+        # Import methodology engine
+        try:
+            from packages.frida.methodology import generate_methodology_prompt
+            prompt = generate_methodology_prompt(self.goal, "binary")
+        except ImportError:
+            # Fallback to basic prompt if methodology module not available
+            prompt = self._basic_hook_prompt(hooks)
+
+        # Append hook specifications
+        hooks_desc = json.dumps(hooks, indent=2)
+        prompt += f"""
+
+ADDITIONAL HOOK SPECIFICATIONS FROM STRATEGY:
+{hooks_desc}
+
+REFERENCE - Function argument extraction:
+- write(fd, buf, len): args[0]=fd, args[1]=buf, args[2]=len
+- connect(sockfd, addr, len): args[1]=sockaddr struct
+- open(path, flags): args[0]=path string
+- malloc(size): args[0]=size, retval=pointer
+- free(ptr): args[0]=pointer to free
+
+Generate ONLY JavaScript code. No markdown, no explanation.
+"""
+
+        try:
+            response = self.llm_client.generate(prompt)
+            content = response.content
+
+            # Extract code from response (remove markdown if present)
+            if '```javascript' in content:
+                start = content.find('```javascript') + 13
+                end = content.find('```', start)
+                code = content[start:end].strip()
+            elif '```js' in content:
+                start = content.find('```js') + 5
+                end = content.find('```', start)
+                code = content[start:end].strip()
+            elif '```' in content:
+                start = content.find('```') + 3
+                end = content.find('```', start)
+                code = content[start:end].strip()
+            else:
+                code = content.strip()
+
+            logger.info(f"LLM generated {len(code)} bytes of hook code")
+            return code
+
+        except Exception as e:
+            logger.error(f"LLM hook generation failed: {e}")
+            return self._fallback_hook_code(hooks)
+
+    def _fallback_hook_code(self, hooks: List[Dict]) -> str:
+        """Generate basic hook code when LLM is unavailable."""
+        parts = []
+        for idx, hook in enumerate(hooks):
+            func = hook.get('function', 'unknown') if isinstance(hook, dict) else hook
+            module = hook.get('module', '') if isinstance(hook, dict) else ''
+            parts.append(f"""
+// Fallback hook: {func}
+try {{
+    var ptr_{idx} = findSymbol('{func}', '{module}');
+    if (ptr_{idx}) {{
+        Interceptor.attach(ptr_{idx}, {{
+            onEnter: function(args) {{
+                log('{func}() called', 'info');
+            }}
+        }});
+        log('{func} hooked', 'info');
+    }}
+}} catch(e) {{ log('Error: ' + e.message, 'error'); }}
+""")
+        return "\n".join(parts)
+
+    def _fallback_platform_js(self) -> str:
+        """Fallback cross-platform JS when platform module unavailable."""
+        return """
+// Platform detection
+var PLATFORM = (function() {
+    var p = Process.platform;
+    if (p === 'darwin') return 'macos';
+    if (p === 'linux') return 'linux';
+    if (p === 'windows') return 'windows';
+    return 'unknown';
+})();
+
+// Cross-platform library list
+var PLATFORM_LIBS = {
+    'linux': ['libc.so.6', 'libpthread.so.0', 'libdl.so.2'],
+    'macos': ['libsystem_kernel.dylib', 'libsystem_c.dylib', 'libSystem.B.dylib'],
+    'ios': ['libsystem_kernel.dylib', 'libsystem_c.dylib', 'libSystem.B.dylib'],
+    'windows': ['ntdll.dll', 'kernel32.dll', 'ws2_32.dll', 'msvcrt.dll'],
+    'android': ['libc.so', 'libdl.so']
+};
+
+function getExport(modName, funcName) {
+    try { return Process.getModuleByName(modName).getExportByName(funcName); }
+    catch(e) { return null; }
+}
+
+function findSymbol(name, preferredModule) {
+    if (preferredModule) {
+        var ptr = getExport(preferredModule, name);
+        if (ptr) return ptr;
+    }
+    var libs = PLATFORM_LIBS[PLATFORM] || PLATFORM_LIBS['linux'];
+    for (var i = 0; i < libs.length; i++) {
+        var ptr = getExport(libs[i], name);
+        if (ptr) return ptr;
+    }
+    try {
+        return Module.findExportByName(null, name);
+    } catch(e) { return null; }
+}
+
+function findFunction(name) { return findSymbol(name, null); }
+"""
+
+    def _basic_hook_prompt(self, hooks: List[Dict]) -> str:
+        """Basic hook generation prompt when methodology module unavailable."""
+        return f"""
+Generate Frida JavaScript hooks for exploitation-focused security analysis.
+
+GOAL: {self.goal}
+
+EXPLOITATION MINDSET:
+- What can be stolen? (credentials, keys, sensitive data)
+- What can be corrupted? (memory, files, state)
+- What can be controlled? (execution flow, data)
+- What can be bypassed? (auth, validation, checks)
+
+REQUIREMENTS:
+1. Hook functions that handle security-relevant operations
+2. Extract ACTUAL DATA that could be weaponized
+3. Rate findings by exploitability: critical/high/medium/low/info
+4. No app-specific assumptions - work on ANY target
+
+Use these helpers (already defined):
+- findSymbol(name, preferredModule) - resolve function
+- sendFinding(title, severity, details, data) - report finding
+- log(msg, level) - debug logging
+"""
 
     def llm_analyze_findings(self, findings: List[Dict]) -> Dict[str, Any]:
         """
@@ -261,8 +432,16 @@ Respond with JSON:
         """
 
         try:
-            response = self.llm_client.chat(prompt)
-            analysis = json.loads(response)
+            response = self.llm_client.generate(prompt)
+            # Extract JSON from response (may contain text before/after JSON)
+            content = response.content
+            start = content.find('{')
+            end = content.rfind('}') + 1
+            if start != -1 and end > start:
+                json_str = content[start:end]
+                analysis = json.loads(json_str)
+            else:
+                raise ValueError("No JSON object found in response")
             logger.info(f"LLM Analysis: {analysis.get('goal_progress')}% complete")
             return analysis
 
@@ -308,7 +487,7 @@ Respond with JSON:
 
             # Step 4: Run instrumentation
             try:
-                self.frida_scanner.spawn_process(self.target)
+                self.frida_scanner.spawn_process(self.target, self.target_args)
                 self.frida_scanner.load_script(frida_script, f"auto_iteration_{self.iteration}")
                 self.frida_scanner.resume_process()
 
@@ -360,10 +539,12 @@ def main():
                        help='Maximum analysis iterations')
     parser.add_argument('--duration', type=int, default=30,
                        help='Duration per iteration (seconds)')
+    parser.add_argument('target_args', nargs='*', default=[],
+                       help='Arguments to pass to target (after --)')
 
     args = parser.parse_args()
 
-    analyzer = AutonomousFridaAnalyzer(args.target, args.goal)
+    analyzer = AutonomousFridaAnalyzer(args.target, args.goal, args.target_args)
     analyzer.max_iterations = args.max_iterations
     findings = analyzer.run_autonomous(args.duration)
 

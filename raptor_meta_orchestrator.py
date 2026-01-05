@@ -70,6 +70,90 @@ class RAPTORMetaOrchestrator:
         self.iteration = 0
         self.max_iterations = 10
 
+        # Frida resilience: track strategies tried and failures
+        self.frida_strategies = {
+            'spawn': {'tried': False, 'success': False, 'error': None},
+            'attach': {'tried': False, 'success': False, 'error': None},
+            'spawn-suspended': {'tried': False, 'success': False, 'error': None},
+            'sudo-spawn': {'tried': False, 'success': False, 'error': None},
+        }
+        self.frida_fully_exhausted = False
+
+        # Resolve actual binary for .app bundles
+        self.resolved_binary = self._resolve_binary_target()
+
+    def _resolve_binary_target(self) -> str:
+        """
+        Resolve the actual binary path for the target.
+        For .app bundles, finds the executable inside Contents/MacOS/.
+        """
+        if not self.target.endswith('.app'):
+            return self.target
+
+        app_path = Path(self.target)
+        if not app_path.exists():
+            return self.target
+
+        # Look for executable in Contents/MacOS/
+        macos_dir = app_path / 'Contents' / 'MacOS'
+        if macos_dir.exists():
+            executables = list(macos_dir.iterdir())
+            if executables:
+                # Usually the main executable has the same name as the app
+                app_name = app_path.stem  # e.g., "ZAP" from "ZAP.app"
+                for exe in executables:
+                    if exe.name == app_name or exe.name.lower() == app_name.lower():
+                        logger.info(f"Resolved .app bundle to binary: {exe}")
+                        return str(exe)
+                # Otherwise return the first executable
+                logger.info(f"Resolved .app bundle to binary: {executables[0]}")
+                return str(executables[0])
+
+        return self.target
+
+    def _detect_target_type(self) -> str:
+        """
+        Detect whether target is a binary, source code, or web target.
+        This determines which tools are appropriate.
+        """
+        target = self.target.lower()
+
+        # Web targets
+        if target.startswith(('http://', 'https://', 'www.')):
+            return "WEB_APPLICATION"
+
+        # Check if it's a file path
+        target_path = Path(self.target)
+
+        # macOS app bundle detection (BEFORE directory check)
+        if self.target.endswith('.app') or '/.app/' in self.target:
+            return "MACOS_APP_BUNDLE"
+
+        # Binary detection
+        if target_path.exists():
+            # Check for executable
+            if target_path.is_file():
+                # Common binary locations
+                if '/bin/' in self.target or '/sbin/' in self.target or '/opt/' in self.target:
+                    return "BINARY_EXECUTABLE"
+                # Check file extension
+                suffix = target_path.suffix.lower()
+                if suffix in ('', '.exe', '.so', '.dylib', '.dll', '.bin'):
+                    return "BINARY_EXECUTABLE"
+                # Source code extensions
+                if suffix in ('.py', '.js', '.ts', '.java', '.c', '.cpp', '.go', '.rs', '.rb'):
+                    return "SOURCE_CODE"
+
+            # Directory - likely source code repo
+            if target_path.is_dir():
+                return "SOURCE_CODE_REPOSITORY"
+
+        # Default: assume binary if path looks like executable
+        if '/bin/' in self.target or self.target.endswith(('.exe', '.so', '.dylib')):
+            return "BINARY_EXECUTABLE"
+
+        return "UNKNOWN (treat as binary)"
+
     def _define_tool_ecosystem(self) -> Dict[str, ToolCapability]:
         """Define the complete RAPTOR tool ecosystem."""
         return {
@@ -123,18 +207,23 @@ class RAPTORMetaOrchestrator:
                     'Runtime instrumentation',
                     'API hooking',
                     'Memory inspection',
-                    'Behavior observation'
+                    'Behavior observation',
+                    'Binary analysis without source code',
+                    'Function tracing and interception',
+                    'Security bypass detection'
                 ],
                 best_for=[
-                    'Verifying static analysis findings',
+                    'BINARY ANALYSIS (PRIMARY TOOL for compiled executables)',
+                    'Analyzing closed-source binaries',
+                    'Runtime vulnerability discovery',
                     'Understanding runtime behavior',
                     'Bypassing protections',
-                    'Finding runtime-only bugs'
+                    'Finding runtime-only bugs',
+                    'API abuse detection'
                 ],
                 limitations=[
                     'Needs running process',
-                    'May miss code paths',
-                    'Target-dependent'
+                    'May miss code paths without fuzzing'
                 ],
                 integrates_with=['semgrep', 'codeql', 'afl', 'llm-analysis']
             ),
@@ -228,15 +317,36 @@ class RAPTORMetaOrchestrator:
                 'already_used': tool_name in self.executed_tools
             }
 
+        # Detect target type
+        target_type = self._detect_target_type()
+
+        # Build Frida strategy status
+        frida_status = {
+            'strategies_tried': [k for k, v in self.frida_strategies.items() if v['tried']],
+            'strategies_remaining': [k for k, v in self.frida_strategies.items() if not v['tried']],
+            'successful_strategies': [k for k, v in self.frida_strategies.items() if v['success']],
+            'failed_strategies': {k: v['error'] for k, v in self.frida_strategies.items() if v['error']},
+            'fully_exhausted': self.frida_fully_exhausted
+        }
+
+        # Include resolved binary info if different from target
+        resolved_info = ""
+        if self.resolved_binary != self.target:
+            resolved_info = f"\nRESOLVED BINARY: {self.resolved_binary} (actual executable inside bundle)"
+
         prompt = f"""
 You are the RAPTOR Meta-Orchestrator. Your job is to intelligently coordinate security tools to achieve the user's goal.
 
 GOAL: {self.goal}
 TARGET: {self.target}
+TARGET TYPE: {target_type}{resolved_info}
 ITERATION: {self.iteration + 1}/{self.max_iterations}
 
 AVAILABLE TOOLS:
 {json.dumps(tool_descriptions, indent=2)}
+
+FRIDA STRATEGY STATUS:
+{json.dumps(frida_status, indent=2)}
 
 PREVIOUS FINDINGS:
 {json.dumps(self.all_findings, indent=2) if self.all_findings else "None yet"}
@@ -244,33 +354,45 @@ PREVIOUS FINDINGS:
 TOOLS ALREADY EXECUTED:
 {json.dumps(self.executed_tools) if self.executed_tools else "None"}
 
-Based on the goal, target, and current state, decide:
+CRITICAL TOOL SELECTION RULES:
+- For BINARY targets: Frida is the PRIMARY tool. Semgrep/CodeQL require source code and are NOT useful for binaries.
+- For MACOS_APP_BUNDLE targets: Treat as BINARY. The actual executable inside the bundle will be targeted. Use Frida as PRIMARY tool.
+- For SOURCE CODE targets: Start with Semgrep/CodeQL, then use Frida to verify findings at runtime.
+- For WEB targets: Use web-scanner as primary, Frida for client-side analysis.
+- FRIDA RESILIENCE: If Frida failed, check strategies_remaining. If strategies remain, select "frida" again to try the next strategy.
+- NEVER abandon Frida until ALL strategies are exhausted (fully_exhausted=true).
+- Only move to AFL/other tools AFTER Frida has succeeded OR all Frida strategies are exhausted.
+
+Based on the goal, target type, and current state, decide:
 1. Which tool(s) should run next?
 2. Why is this the best choice?
 3. How should tools work together?
 4. What findings would indicate we've achieved the goal?
 5. Should we continue after this, or are we done?
 
-Respond with JSON:
+Respond with JSON only:
 {{
-    "next_tools": ["tool1", "tool2"],  // Tools to run next (can be parallel)
-    "reasoning": "why these tools are optimal",
+    "next_tools": ["tool1", "tool2"],
+    "reasoning": "why these tools are optimal for this target type",
     "integration_strategy": "how tools will work together",
     "success_criteria": "what findings mean we achieved the goal",
     "continue_after": true/false,
     "estimated_progress": "0-100% toward goal"
 }}
-
-IMPORTANT: Consider tool synergies:
-- Static analysis (semgrep/codeql) finds suspicious code → Frida verifies at runtime
-- Frida finds interesting behavior → CodeQL tracks dataflow to confirm
-- Fuzzing (afl) finds crashes → Frida + CodeQL analyze root cause
-- LLM analyzes all findings → Guides next tool selection
         """
 
         try:
-            response = self.llm_client.chat(prompt)
-            strategy = json.loads(response)
+            response = self.llm_client.generate(prompt)
+            # Extract JSON from response (may contain text before/after JSON)
+            content = response.content
+            # Find JSON object in response
+            start = content.find('{')
+            end = content.rfind('}') + 1
+            if start != -1 and end > start:
+                json_str = content[start:end]
+                strategy = json.loads(json_str)
+            else:
+                raise ValueError("No JSON object found in response")
             logger.info(f"LLM Strategy: {strategy.get('reasoning')}")
             return strategy
 
@@ -279,16 +401,167 @@ IMPORTANT: Consider tool synergies:
             return self._fallback_strategy()
 
     def _fallback_strategy(self) -> Dict[str, Any]:
-        """Fallback strategy if LLM unavailable."""
-        # Default: comprehensive scan
-        return {
-            "next_tools": ["semgrep", "frida"],
-            "reasoning": "LLM unavailable, using default comprehensive scan",
-            "integration_strategy": "Static analysis first, then dynamic verification",
-            "success_criteria": "Any security findings",
-            "continue_after": True,
-            "estimated_progress": "50%"
+        """Fallback strategy if LLM unavailable - target-type aware."""
+        target_type = self._detect_target_type()
+
+        if "BINARY" in target_type or "MACOS_APP" in target_type:
+            # For binaries and .app bundles: Frida is PRIMARY, AFL for fuzzing
+            return {
+                "next_tools": ["frida", "afl"],
+                "reasoning": f"LLM unavailable. Target is {target_type} - using Frida (primary) + AFL for binary analysis",
+                "integration_strategy": "Frida for runtime instrumentation, AFL for crash discovery",
+                "success_criteria": "Runtime vulnerabilities, crashes, or security bypasses found",
+                "continue_after": True,
+                "estimated_progress": "50%"
+            }
+        elif "SOURCE" in target_type:
+            # For source code: static analysis + Frida verification
+            return {
+                "next_tools": ["semgrep", "codeql", "frida"],
+                "reasoning": f"LLM unavailable. Target is {target_type} - using static analysis + Frida verification",
+                "integration_strategy": "Static analysis finds candidates, Frida verifies at runtime",
+                "success_criteria": "Confirmed vulnerabilities with static + dynamic evidence",
+                "continue_after": True,
+                "estimated_progress": "50%"
+            }
+        elif "WEB" in target_type:
+            return {
+                "next_tools": ["web-scanner", "frida"],
+                "reasoning": f"LLM unavailable. Target is {target_type} - using web scanner + Frida",
+                "integration_strategy": "Web scanner for OWASP testing, Frida for client-side analysis",
+                "success_criteria": "Web vulnerabilities discovered",
+                "continue_after": True,
+                "estimated_progress": "50%"
+            }
+        else:
+            # Unknown: use Frida as safe default for any executable
+            return {
+                "next_tools": ["frida"],
+                "reasoning": f"LLM unavailable. Unknown target type - defaulting to Frida for runtime analysis",
+                "integration_strategy": "Frida instrumentation to understand target behavior",
+                "success_criteria": "Any security findings",
+                "continue_after": True,
+                "estimated_progress": "30%"
+            }
+
+    def _get_next_frida_strategy(self) -> Optional[str]:
+        """Get the next untried Frida strategy."""
+        for strategy, state in self.frida_strategies.items():
+            if not state['tried']:
+                return strategy
+        return None
+
+    def _detect_frida_failure(self, output: str, stderr: str) -> Optional[str]:
+        """Detect why Frida failed and suggest recovery."""
+        combined = (output + stderr).lower()
+
+        if 'permission denied' in combined or 'operation not permitted' in combined:
+            return 'permission_denied'
+        elif 'unable to find executable' in combined or 'no such file' in combined:
+            return 'target_not_found'
+        elif 'failed to spawn' in combined:
+            return 'spawn_failed'
+        elif 'failed to attach' in combined:
+            return 'attach_failed'
+        elif 'process crashed' in combined or 'terminated' in combined:
+            return 'process_crashed'
+        elif 'timeout' in combined:
+            return 'timeout'
+        elif 'no vulnerabilities' in combined or 'findings: 0' in combined:
+            return 'no_findings_yet'  # Not a failure, but may need different approach
+        return None
+
+    def _execute_frida_with_fallback(self) -> Dict[str, Any]:
+        """
+        Execute Frida with multiple fallback strategies.
+        Tries different approaches until one succeeds or all are exhausted.
+        """
+        import subprocess
+
+        strategy = self._get_next_frida_strategy()
+        if not strategy:
+            self.frida_fully_exhausted = True
+            return {
+                'status': 'exhausted',
+                'message': 'All Frida strategies attempted',
+                'strategies_tried': list(self.frida_strategies.keys()),
+                'errors': {k: v['error'] for k, v in self.frida_strategies.items() if v['error']}
+            }
+
+        # Use resolved binary (handles .app bundles)
+        frida_target = self.resolved_binary
+        logger.info(f"Trying Frida strategy: {strategy} on {frida_target}")
+
+        # Build command based on strategy
+        if strategy == 'spawn':
+            cmd = [sys.executable, 'raptor.py', 'frida-auto', '--target', frida_target, '--goal', self.goal]
+        elif strategy == 'attach':
+            cmd = [sys.executable, 'raptor.py', 'frida-auto', '--target', frida_target, '--goal', self.goal, '--attach']
+        elif strategy == 'spawn-suspended':
+            cmd = [sys.executable, 'raptor.py', 'frida-auto', '--target', frida_target, '--goal', self.goal, '--suspended']
+        elif strategy == 'sudo-spawn':
+            cmd = ['sudo', sys.executable, 'raptor.py', 'frida-auto', '--target', frida_target, '--goal', self.goal]
+        else:
+            cmd = [sys.executable, 'raptor.py', 'frida-auto', '--target', frida_target, '--goal', self.goal]
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            self.frida_strategies[strategy]['tried'] = True
+
+            # Detect failure type
+            failure_type = self._detect_frida_failure(result.stdout, result.stderr)
+
+            if failure_type and failure_type not in ('no_findings_yet',):
+                self.frida_strategies[strategy]['success'] = False
+                self.frida_strategies[strategy]['error'] = failure_type
+                logger.warning(f"Frida strategy '{strategy}' failed: {failure_type}")
+
+                return {
+                    'status': 'failed',
+                    'strategy': strategy,
+                    'failure_type': failure_type,
+                    'output': result.stdout,
+                    'stderr': result.stderr,
+                    'strategies_remaining': [k for k, v in self.frida_strategies.items() if not v['tried']],
+                    'recommendation': self._get_frida_recovery_recommendation(failure_type)
+                }
+            else:
+                self.frida_strategies[strategy]['success'] = True
+                return {
+                    'status': 'completed',
+                    'strategy': strategy,
+                    'output': result.stdout
+                }
+
+        except subprocess.TimeoutExpired:
+            self.frida_strategies[strategy]['tried'] = True
+            self.frida_strategies[strategy]['error'] = 'timeout'
+            return {
+                'status': 'timeout',
+                'strategy': strategy,
+                'strategies_remaining': [k for k, v in self.frida_strategies.items() if not v['tried']]
+            }
+        except Exception as e:
+            self.frida_strategies[strategy]['tried'] = True
+            self.frida_strategies[strategy]['error'] = str(e)
+            return {
+                'status': 'error',
+                'strategy': strategy,
+                'error': str(e),
+                'strategies_remaining': [k for k, v in self.frida_strategies.items() if not v['tried']]
+            }
+
+    def _get_frida_recovery_recommendation(self, failure_type: str) -> str:
+        """Get recovery recommendation for a Frida failure type."""
+        recommendations = {
+            'permission_denied': 'Try sudo-spawn strategy or check SIP/entitlements',
+            'target_not_found': 'Verify target path exists and is executable',
+            'spawn_failed': 'Try attach strategy (start process manually first)',
+            'attach_failed': 'Try spawn strategy or check if process is running',
+            'process_crashed': 'Binary may have anti-instrumentation; try spawn-suspended',
+            'timeout': 'Increase timeout or try simpler hooking scripts',
         }
+        return recommendations.get(failure_type, 'Try next Frida strategy')
 
     def execute_tool(self, tool_name: str) -> Dict[str, Any]:
         """
@@ -328,15 +601,8 @@ IMPORTANT: Consider tool synergies:
                 tool_findings = {'status': 'completed', 'output': result.stdout}
 
             elif tool_name == 'frida':
-                # Run Frida autonomous mode with goal
-                import subprocess
-                result = subprocess.run(
-                    [sys.executable, 'raptor.py', 'frida-auto', '--target', self.target, '--goal', self.goal],
-                    capture_output=True,
-                    text=True,
-                    timeout=300
-                )
-                tool_findings = {'status': 'completed', 'output': result.stdout}
+                # Run Frida with resilient multi-strategy approach
+                tool_findings = self._execute_frida_with_fallback()
 
             elif tool_name == 'afl':
                 # Run AFL fuzzing

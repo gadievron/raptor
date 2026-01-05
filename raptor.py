@@ -180,6 +180,19 @@ def mode_frida_auto(args: list) -> int:
     return run_script(frida_auto_script, args)
 
 
+def mode_frida_interactive(args: list) -> int:
+    """Run interactive Frida session for manual app exploration."""
+    script_root = Path(__file__).parent
+    interactive_script = script_root / "packages/frida/interactive.py"
+
+    if not interactive_script.exists():
+        print(f"✗ Interactive Frida script not found: {interactive_script}")
+        return 1
+
+    print("\n[*] Starting interactive Frida session...\n")
+    return run_script(interactive_script, args)
+
+
 def mode_meta(args: list) -> int:
     """Run meta-orchestrator for intelligent multi-tool coordination."""
     script_root = Path(__file__).parent
@@ -374,6 +387,7 @@ For more information, visit: https://github.com/gadievron/raptor
         'analyze': mode_llm_analysis,
         'frida': mode_frida,
         'frida-auto': mode_frida_auto,
+        'frida-interactive': mode_frida_interactive,
         'meta': mode_meta,
         'doctor': mode_doctor,
     }
