@@ -193,6 +193,19 @@ def mode_meta(args: list) -> int:
     return run_script(meta_script, args)
 
 
+def mode_doctor(args: list) -> int:
+    """Run dependency checker and health diagnostics."""
+    script_root = Path(__file__).parent
+    doctor_script = script_root / "raptor_doctor.py"
+
+    if not doctor_script.exists():
+        print(f"✗ Doctor script not found: {doctor_script}")
+        return 1
+
+    print("\n[*] Running RAPTOR health check...\n")
+    return run_script(doctor_script, args)
+
+
 def show_mode_help(mode: str) -> None:
     """Show detailed help for a specific mode."""
     script_root = Path(__file__).parent
@@ -238,6 +251,7 @@ Available Modes:
   frida       - Dynamic instrumentation with Frida
   frida-auto  - Autonomous Frida analysis (LLM-guided)
   meta        - Meta-orchestrator (intelligent multi-tool coordination)
+  doctor      - Check dependencies and system health
 
 Examples:
   # Full autonomous workflow
@@ -299,6 +313,7 @@ Available Modes:
   frida       - Dynamic instrumentation with Frida
   frida-auto  - Autonomous Frida analysis (LLM-guided)
   meta        - Meta-orchestrator (intelligent multi-tool coordination)
+  doctor      - Check dependencies and system health
 
 Examples:
   # Full autonomous workflow
@@ -360,6 +375,7 @@ For more information, visit: https://github.com/gadievron/raptor
         'frida': mode_frida,
         'frida-auto': mode_frida_auto,
         'meta': mode_meta,
+        'doctor': mode_doctor,
     }
     
     if mode not in mode_handlers:
