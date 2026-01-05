@@ -63,22 +63,43 @@ class RAPTORDoctor:
     def _define_dependencies(self):
         """Define all RAPTOR dependencies."""
 
-        # Python packages
+        # Python packages - use sys.executable to check in same Python environment
+        python_exe = sys.executable
+
+        # Version check script that handles packages without __version__
+        version_check = '''
+import sys
+try:
+    import {module}
+    # Try __version__ first
+    if hasattr({module}, "__version__"):
+        print({module}.__version__)
+    else:
+        # Fall back to importlib.metadata
+        try:
+            from importlib.metadata import version
+            print(version("{package}"))
+        except:
+            print("installed")
+except ImportError:
+    sys.exit(1)
+'''
+
         python_packages = [
-            ('requests', ['python3', '-c', 'import requests; print(requests.__version__)'],
-             ['pip', 'install', 'requests'], True),
-            ('litellm', ['python3', '-c', 'import litellm; print(litellm.__version__)'],
-             ['pip', 'install', 'litellm'], True),
-            ('instructor', ['python3', '-c', 'import instructor; print(instructor.__version__)'],
-             ['pip', 'install', 'instructor'], True),
-            ('pydantic', ['python3', '-c', 'import pydantic; print(pydantic.__version__)'],
-             ['pip', 'install', 'pydantic'], True),
-            ('frida-tools', ['python3', '-c', 'import frida; print(frida.__version__)'],
-             ['pip', 'install', 'frida-tools'], True),
-            ('beautifulsoup4', ['python3', '-c', 'import bs4; print(bs4.__version__)'],
-             ['pip', 'install', 'beautifulsoup4'], False),
-            ('playwright', ['python3', '-c', 'import playwright; print(playwright.__version__)'],
-             ['pip', 'install', 'playwright'], False),
+            ('requests', [python_exe, '-c', version_check.format(module='requests', package='requests')],
+             [python_exe, '-m', 'pip', 'install', 'requests'], True),
+            ('litellm', [python_exe, '-c', version_check.format(module='litellm', package='litellm')],
+             [python_exe, '-m', 'pip', 'install', 'litellm'], True),
+            ('instructor', [python_exe, '-c', version_check.format(module='instructor', package='instructor')],
+             [python_exe, '-m', 'pip', 'install', 'instructor'], True),
+            ('pydantic', [python_exe, '-c', version_check.format(module='pydantic', package='pydantic')],
+             [python_exe, '-m', 'pip', 'install', 'pydantic'], True),
+            ('frida-tools', [python_exe, '-c', version_check.format(module='frida', package='frida-tools')],
+             [python_exe, '-m', 'pip', 'install', 'frida-tools'], True),
+            ('beautifulsoup4', [python_exe, '-c', version_check.format(module='bs4', package='beautifulsoup4')],
+             [python_exe, '-m', 'pip', 'install', 'beautifulsoup4'], False),
+            ('playwright', [python_exe, '-c', version_check.format(module='playwright', package='playwright')],
+             [python_exe, '-m', 'pip', 'install', 'playwright'], False),
         ]
 
         for pkg_name, check_cmd, install_cmd, required in python_packages:
