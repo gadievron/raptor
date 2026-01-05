@@ -145,13 +145,39 @@ def mode_llm_analysis(args: list) -> int:
     """Run LLM-powered vulnerability analysis on existing SARIF files."""
     script_root = Path(__file__).parent
     llm_script = script_root / "packages/llm_analysis/agent.py"
-    
+
     if not llm_script.exists():
         print(f"✗ LLM analysis script not found: {llm_script}")
         return 1
-    
+
     print("\n[*] Running LLM-powered vulnerability analysis...\n")
     return run_script(llm_script, args)
+
+
+def mode_frida(args: list) -> int:
+    """Run Frida dynamic instrumentation."""
+    script_root = Path(__file__).parent
+    frida_script = script_root / "packages/frida/scanner.py"
+
+    if not frida_script.exists():
+        print(f"✗ Frida scanner not found: {frida_script}")
+        return 1
+
+    print("\n[*] Starting Frida dynamic instrumentation...\n")
+    return run_script(frida_script, args)
+
+
+def mode_frida_auto(args: list) -> int:
+    """Run autonomous Frida analysis with LLM guidance."""
+    script_root = Path(__file__).parent
+    frida_auto_script = script_root / "packages/frida/autonomous.py"
+
+    if not frida_auto_script.exists():
+        print(f"✗ Autonomous Frida script not found: {frida_auto_script}")
+        return 1
+
+    print("\n[*] Starting autonomous Frida analysis (LLM-guided)...\n")
+    return run_script(frida_auto_script, args)
 
 
 def show_mode_help(mode: str) -> None:
@@ -196,6 +222,8 @@ Available Modes:
   agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
   codeql      - CodeQL-only analysis
   analyze     - LLM-powered vulnerability analysis (requires SARIF input)
+  frida       - Dynamic instrumentation with Frida
+  frida-auto  - Autonomous Frida analysis (LLM-guided)
 
 Examples:
   # Full autonomous workflow
@@ -215,6 +243,13 @@ Examples:
 
   # LLM analysis of existing SARIF
   python3 raptor.py analyze --repo /path/to/code --sarif findings.sarif
+
+  # Frida dynamic instrumentation
+  python3 raptor.py frida --attach 1234 --template ssl-unpin
+  python3 raptor.py frida --spawn /usr/local/bin/myapp --template api-trace
+
+  # Autonomous Frida (LLM-guided)
+  python3 raptor.py frida-auto --target /path/to/binary --goal "Find auth bypass"
 
   # Get help for a specific mode
   python3 raptor.py help scan
@@ -244,6 +279,8 @@ Available Modes:
   agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
   codeql      - CodeQL-only analysis
   analyze     - LLM-powered vulnerability analysis (requires SARIF input)
+  frida       - Dynamic instrumentation with Frida
+  frida-auto  - Autonomous Frida analysis (LLM-guided)
 
 Examples:
   # Full autonomous workflow
@@ -263,6 +300,13 @@ Examples:
 
   # LLM analysis of existing SARIF
   python3 raptor.py analyze --repo /path/to/code --sarif findings.sarif
+
+  # Frida dynamic instrumentation
+  python3 raptor.py frida --attach 1234 --template ssl-unpin
+  python3 raptor.py frida --spawn /usr/local/bin/myapp --template api-trace
+
+  # Autonomous Frida (LLM-guided)
+  python3 raptor.py frida-auto --target /path/to/binary --goal "Find auth bypass"
 
   # Get help for a specific mode
   python3 raptor.py help scan
@@ -292,6 +336,8 @@ For more information, visit: https://github.com/gadievron/raptor
         'agentic': mode_agentic,
         'codeql': mode_codeql,
         'analyze': mode_llm_analysis,
+        'frida': mode_frida,
+        'frida-auto': mode_frida_auto,
     }
     
     if mode not in mode_handlers:
