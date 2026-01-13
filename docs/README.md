@@ -73,6 +73,11 @@ RAPTOR-daniel-modular/
 │   │   ├── agent.py        # Source code analysis with dataflow validation
 │   │   ├── crash_agent.py  # Binary crash analysis
 │   │   └── llm/            # LLM provider abstraction
+│   ├── exploit_feasibility/ # Exploitation constraint analysis
+│   │   ├── analyzer.py      # Feasibility analysis orchestration
+│   │   ├── api.py           # Public API (analyze_binary, etc.)
+│   │   ├── context.py       # Binary/libc/ROP dataclasses
+│   │   └── constraints.py   # Input handler constraint analysis
 │   ├── fuzzing/            # AFL++ fuzzing orchestration
 │   │   ├── afl_runner.py   # Fuzzing campaign management
 │   │   ├── crash_collector.py  # Crash triage and ranking
@@ -152,7 +157,36 @@ STEP 2: Transformation - buildQuery(input)
 SINK: executeQuery(query)
 ```
 
-### 4. Binary Fuzzing
+### 4. Exploit Feasibility Analysis
+
+**Package**: `packages/exploit_feasibility/`
+**Purpose**: Determine what's actually exploitable before wasting time on impossible approaches
+
+**Problem Solved**: Traditional tools (checksec, readelf) show what protections exist but not what's actually possible. This package answers:
+- Can I write to that GOT entry? (Full RELRO blocks both GOT AND .fini_array)
+- Will my ROP chain work? (strcpy null bytes break x86_64 addresses)
+- Does %n work? (glibc 2.38+ may block it - tested empirically)
+
+**Key Features**:
+- Empirical verification (actually tests %n, doesn't just check version)
+- Input handler constraint analysis (strcpy, fgets, scanf bad bytes)
+- ROP gadget filtering by bad bytes
+- Honest verdicts (Likely exploitable, Difficult, Unlikely)
+- Context persistence for long sessions
+
+**Usage**:
+```python
+from packages.exploit_feasibility import analyze_binary, format_analysis_summary
+
+result = analyze_binary('/path/to/binary')
+print(format_analysis_summary(result, verbose=True))
+```
+
+**Integration**: Run after finding vulnerabilities, before attempting exploitation. Saves hours by identifying blocked techniques upfront.
+
+See [exploit-feasibility.md](exploit-feasibility.md) for detailed guide.
+
+### 5. Binary Fuzzing
 
 **Tool**: AFL++
 **Purpose**: Coverage-guided fuzzing to discover crashes
@@ -172,7 +206,7 @@ Instead of requiring manual seed inputs, RAPTOR can:
 - Create goal-directed seeds for specific vulnerabilities (stack overflow, heap corruption, etc.)
 - Detect command-based inputs and wrap seeds appropriately
 
-### 5. Binary Analysis
+### 6. Binary Analysis
 
 **Tool**: GDB
 **Purpose**: Crash debugging and context extraction
@@ -192,7 +226,7 @@ When binaries are compiled with ASan (`-fsanitize=address`), RAPTOR automaticall
 - Provides source-level stack traces with line numbers
 - Uses ASan diagnostics instead of debugger output for better accuracy
 
-### 6. LLM Provider Abstraction
+### 7. LLM Provider Abstraction
 
 **Location**: `packages/llm_analysis/llm/`
 **Purpose**: Unified interface for multiple LLM providers
@@ -780,6 +814,7 @@ RAPTOR is open source and welcomes contributions. Areas where help is needed:
 - **[FUZZING_QUICKSTART.md](FUZZING_QUICKSTART.md)**: Binary fuzzing mode guide with autonomous corpus generation
 - **[DATAFLOW_VALIDATION_SUMMARY.md](DATAFLOW_VALIDATION_SUMMARY.md)**: Deep dive into dataflow validation (Phase 4)
 - **[crash-analysis.md](crash-analysis.md)**: Autonomous crash root-cause analysis guide
+- **[exploit-feasibility.md](exploit-feasibility.md)**: Exploit feasibility analysis guide
 - **Test Script**: `test_dataflow_analysis.py` - Demonstrates dataflow-aware analysis
 
 

@@ -94,7 +94,7 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
     Automatically select the best thinking/reasoning model from LiteLLM config.
 
     Priority:
-    1. Models with explicit reasoning support (gpt-5.2-thinking, gemini-3-pro-preview)
+    1. Models with explicit reasoning support (gpt-5.2-thinking, gemini-3-deep-think)
     2. Most capable models (Opus > Sonnet > others)
     3. Latest versions
 
@@ -111,7 +111,7 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
         # Tier 1: Most capable models (Opus is preferred for deep reasoning)
         ("anthropic/claude-opus-4.5", "claude-opus-4.5", 110),          # Most capable overall (preferred)
         ("openai/gpt-5.2-thinking", "gpt-5.2-thinking", 95),            # GPT-5.2 with thinking (gets +10 = 105 total)
-        ("gemini/gemini-3-pro-preview", "gemini-3-pro-preview", 90),    # Gemini 3 Pro (thinking built-in)
+        ("gemini/gemini-3-deep-think", "gemini-3-deep-think", 90),      # Gemini reasoning (gets +10 = 100 total)
 
         # Tier 2: Strong models
         ("anthropic/claude-opus-4", "claude-opus-4", 85),               # Previous Opus
@@ -119,7 +119,7 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
 
         # Tier 3: Latest capable models (fallback)
         ("anthropic/claude-sonnet-4.5", "claude-sonnet-4.5", 70),       # Latest Sonnet
-        ("gemini/gemini-3-flash-preview", "gemini-3-flash-preview", 65), # Gemini 3 Flash
+        ("gemini/gemini-3-pro", "gemini-3-pro", 65),                    # Latest Gemini
     ]
 
     # Find best matching model
@@ -288,7 +288,7 @@ def _get_default_primary_model() -> 'ModelConfig':
     if os.getenv("GEMINI_API_KEY"):
         return ModelConfig(
             provider="gemini",
-            model_name="gemini-3-pro-preview",  # Gemini 3 Pro with thinking
+            model_name="gemini-3-pro",  # Use LiteLLM alias (not gemini-3.0-pro-latest!)
             api_key=os.getenv("GEMINI_API_KEY"),
             max_tokens=65536,
             temperature=0.7,
@@ -384,22 +384,22 @@ def _get_default_fallback_models() -> List['ModelConfig']:
         ))
 
     if os.getenv("GEMINI_API_KEY"):
-        # Gemini 3 models (thinking built-in)
+        # Add reasoning model + latest Gemini
         fallbacks.append(ModelConfig(
             provider="gemini",
-            model_name="gemini-3-pro-preview",  # Gemini 3 Pro with thinking
+            model_name="gemini-3-deep-think",  # LiteLLM alias for reasoning
             api_key=os.getenv("GEMINI_API_KEY"),
-            max_tokens=65536,
+            max_tokens=8192,
             temperature=0.7,
-            cost_per_1k_tokens=0.0001,
+            cost_per_1k_tokens=0.0002,
         ))
         fallbacks.append(ModelConfig(
             provider="gemini",
-            model_name="gemini-3-flash-preview",  # Gemini 3 Flash with thinking
+            model_name="gemini-3-pro",  # LiteLLM alias (NOT gemini-3.0-pro-latest!)
             api_key=os.getenv("GEMINI_API_KEY"),
-            max_tokens=65536,
+            max_tokens=8192,
             temperature=0.7,
-            cost_per_1k_tokens=0.00005,
+            cost_per_1k_tokens=0.0001,
         ))
 
     # Add all available local models

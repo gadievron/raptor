@@ -309,6 +309,15 @@ def main() -> None:
             if crash_context.exploitability == "exploitable":
                 exploitable += 1
 
+                # Check mitigations before attempting exploit generation
+                if exploit_validator:
+                    vuln_type = getattr(crash_context, 'vulnerability_type', None) or \
+                                getattr(crash_context, 'crash_type', None)
+                    viable, reason = exploit_validator.check_mitigations(binary_path, vuln_type)
+                    if not viable:
+                        logger.warning(f"Mitigation check: {reason}")
+                        logger.warning("Exploit generation may fail - proceeding anyway")
+
                 # Generate exploit
                 if llm_agent.generate_exploit(crash_context):
                     exploits_generated += 1

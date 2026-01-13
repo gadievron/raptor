@@ -44,9 +44,15 @@ class CodeQLWorkflowResult:
     errors: List[str]
 
     def to_dict(self):
-        """Convert to dictionary for JSON serialization."""
+        """
+        Convert to dictionary for JSON serialization.
+
+        Important: When adding new fields with non-serializable types (Path, datetime, etc.),
+        you MUST add manual conversion here. Otherwise JSON serialization will fail.
+        """
         data = asdict(self)
-        # Convert LanguageInfo objects
+
+        # Convert LanguageInfo objects (existing - unchanged)
         data['languages_detected'] = {
             lang: {
                 'confidence': info.confidence,
@@ -56,6 +62,40 @@ class CodeQLWorkflowResult:
             }
             for lang, info in self.languages_detected.items()
         }
+
+        # Convert DatabaseResult objects (database_path: Path → str)
+        data['databases_created'] = {
+            lang: {
+                'success': result.success,
+                'language': result.language,
+                'database_path': str(result.database_path) if result.database_path else None,
+                'metadata': result.metadata.to_dict() if result.metadata else None,
+                'errors': result.errors,
+                'duration_seconds': result.duration_seconds,
+                'cached': result.cached,
+            }
+            for lang, result in self.databases_created.items()
+        }
+
+        # Convert QueryResult objects (database_path and sarif_path: Path → str)
+        data['analyses_completed'] = {
+            lang: {
+                'success': result.success,
+                'language': result.language,
+                'database_path': str(result.database_path),
+                'sarif_path': str(result.sarif_path) if result.sarif_path else None,
+                'findings_count': result.findings_count,
+                'duration_seconds': result.duration_seconds,
+                'errors': result.errors,
+                'suite_name': result.suite_name,
+                'queries_executed': result.queries_executed,
+            }
+            for lang, result in self.analyses_completed.items()
+        }
+
+        # CRITICAL: Convert sarif_files (type annotation says List[str], but agent.py:485 creates List[Path])
+        data['sarif_files'] = [str(p) if isinstance(p, Path) else p for p in self.sarif_files]
+
         return data
 
 

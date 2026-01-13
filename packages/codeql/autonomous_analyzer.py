@@ -287,7 +287,19 @@ Respond in JSON format:
                 system_prompt="You are Mark Dowd, an expert security researcher."
             )
 
-            analysis = VulnerabilityAnalysis(**response_dict)
+            # Defensive: LLM might return extra fields not in schema
+            # Filter to only include VulnerabilityAnalysis fields to prevent TypeErrors
+            valid_fields = {f.name for f in VulnerabilityAnalysis.__dataclass_fields__.values()}
+            filtered_response = {k: v for k, v in response_dict.items() if k in valid_fields}
+
+            # Log any unexpected fields for debugging
+            unexpected_fields = set(response_dict.keys()) - valid_fields
+            if unexpected_fields:
+                self.logger.debug(
+                    f"LLM response included unexpected fields (ignored): {unexpected_fields}"
+                )
+
+            analysis = VulnerabilityAnalysis(**filtered_response)
 
             self.logger.info(
                 f"Analysis complete: exploitable={analysis.is_exploitable}, "
@@ -497,7 +509,15 @@ Provide ONLY the complete, working exploit code. Include a header comment explai
                 total_duration_seconds=time.time() - start_time
             )
 
-        # Stage 5: Generate PoC exploit
+        # Stage 5: Check mitigations before exploit generation
+        if self.validator:
+            vuln_type = finding.rule_id  # Use CodeQL rule ID
+            viable, reason = self.validator.check_mitigations(vuln_type=vuln_type)
+            if not viable:
+                self.logger.warning(f"Mitigation check: {reason}")
+                self.logger.warning("Exploit generation may fail - proceeding anyway")
+
+        # Stage 6: Generate PoC exploit
         self.logger.info("🔨 Generating PoC exploit...")
         exploit_code = self.generate_exploit(finding, analysis, vulnerable_code)
 
@@ -515,7 +535,7 @@ Provide ONLY the complete, working exploit code. Include a header comment explai
                 total_duration_seconds=time.time() - start_time
             )
 
-        # Stage 6: Validate and refine exploit
+        # Stage 7: Validate and refine exploit
         exploit_compiled = False
         validation_result = None
         refinement_count = 0

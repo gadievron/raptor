@@ -176,6 +176,13 @@ Examples:
     parser.add_argument("--codeql-cli", help="Path to CodeQL CLI (auto-detected if not specified)")
     parser.add_argument("--no-visualizations", action="store_true", help="Disable dataflow visualizations for CodeQL findings")
 
+    # Mitigation analysis options (NEW)
+    parser.add_argument("--binary", help="Target binary for mitigation analysis (enables pre-exploit checks)")
+    parser.add_argument("--check-mitigations", action="store_true",
+                       help="Run mitigation analysis before scanning (for binary exploit targets)")
+    parser.add_argument("--skip-mitigation-checks", action="store_true",
+                       help="Skip per-vulnerability mitigation checks during exploit generation")
+
     args = parser.parse_args()
 
     # Resolve paths
@@ -261,8 +268,53 @@ Examples:
     logger.info(f"Policy groups: {args.policy_groups}")
     logger.info(f"Max findings: {args.max_findings}")
     logger.info(f"Mode: {args.mode}")
+    if args.binary:
+        logger.info(f"Target binary: {args.binary}")
 
     workflow_start = time.time()
+
+    # ========================================================================
+    # PHASE 0: PRE-EXPLOIT MITIGATION ANALYSIS (Optional but recommended)
+    # ========================================================================
+    mitigation_result = None
+    if args.check_mitigations or args.binary:
+        print("\n" + "=" * 70)
+        print("PHASE 0: PRE-EXPLOIT MITIGATION ANALYSIS")
+        print("=" * 70)
+        print("\nChecking system and binary mitigations BEFORE scanning...")
+        print("This prevents wasted effort on impossible exploits.\n")
+
+        try:
+            from packages.exploit_feasibility import analyze_binary, format_analysis_summary
+
+            binary_path = str(Path(args.binary)) if args.binary else None
+            mitigation_result = analyze_binary(binary_path, output_dir=str(out_dir))
+
+            # Display formatted summary
+            print(format_analysis_summary(mitigation_result, verbose=True))
+
+            verdict = mitigation_result.get('verdict', 'unknown')
+            if verdict == 'unlikely':
+                print("\n" + "=" * 70)
+                print("NOTE: EXPLOITATION UNLIKELY WITH CURRENT MITIGATIONS")
+                print("=" * 70)
+                print("\nContinuing scan anyway (for vulnerability discovery)...")
+
+            elif verdict == 'difficult':
+                print("\n" + "=" * 70)
+                print("NOTE: EXPLOITATION DIFFICULT - REVIEW CONSTRAINTS ABOVE")
+                print("=" * 70)
+
+            else:
+                print("\nMitigation check passed - exploitation may be feasible")
+
+            logger.info(f"Mitigation analysis complete: {verdict}")
+
+        except ImportError:
+            print("Mitigation analysis module not available")
+        except Exception as e:
+            print(f"Mitigation check failed: {e}")
+            logger.error(f"Mitigation check error: {e}")
 
     # ========================================================================
     # PHASE 1: CODE SCANNING (Semgrep + CodeQL)
@@ -554,6 +606,7 @@ Examples:
             "autonomous_report": str(analysis_report) if 'analysis_report' in locals() and analysis_report.exists() else None,
             "exploits_directory": str(autonomous_out / "exploits") if 'autonomous_out' in locals() else None,
             "patches_directory": str(autonomous_out / "patches") if 'autonomous_out' in locals() else None,
+            "exploit_feasibility": str(out_dir / "exploit_feasibility.txt") if mitigation_result else None,
         }
     }
 
@@ -576,6 +629,8 @@ Examples:
 
     print(f"\n📁 Outputs:")
     print(f"   Main report: {report_file}")
+    if mitigation_result:
+        print(f"   Exploit feasibility: {out_dir / 'exploit_feasibility.txt'}")
     if 'analysis_report' in locals() and analysis_report.exists():
         print(f"   Analysis: {analysis_report}")
     if 'autonomous_out' in locals():

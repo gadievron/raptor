@@ -98,12 +98,15 @@ def mode_web(args: list) -> int:
     """Run web application security testing."""
     script_root = Path(__file__).parent
     web_script = script_root / "packages/web/scanner.py"
-    
+
     if not web_script.exists():
         print(f"✗ Web scanner not found: {web_script}")
         return 1
-    
-    print("\n[*] Running web application scanner...\n")
+
+    # Display alpha warning
+    print("\nWARNING: /web is a STUB and should not be relied upon. Consider a placeholder/in alpha.\n")
+
+    print("[*] Running web application scanner...\n")
     return run_script(web_script, args)
 
 

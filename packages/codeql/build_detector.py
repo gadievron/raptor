@@ -11,6 +11,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from shlex import quote
 from typing import Dict, List, Optional
 import xml.etree.ElementTree as ET
 

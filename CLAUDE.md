@@ -85,8 +85,59 @@ The `/oss-forensics` command provides evidence-backed forensic investigation for
 ## PROGRESSIVE LOADING
 
 **When scan completes:** Load `tiers/analysis-guidance.md` (adversarial thinking)
+**When developing exploits:** Load `tiers/exploit-guidance.md` (constraints, techniques)
 **When errors occur:** Load `tiers/recovery.md` (recovery protocol)
 **When requested:** Load `tiers/personas/[name].md` (expert personas)
+
+---
+
+## BINARY ANALYSIS
+
+**Flow: Find vulnerabilities FIRST, then check exploitability.**
+
+1. **Analyze the binary** - Find vulnerabilities (buffer overflows, format strings, etc.)
+2. **If vulnerabilities found** - Run exploit feasibility analysis (MANDATORY)
+
+```python
+from packages.exploit_feasibility.api import analyze_binary, format_analysis_summary
+
+# MANDATORY: Run this after finding vulnerabilities
+result = analyze_binary('/path/to/binary')
+print(format_analysis_summary(result, verbose=True))
+```
+
+**DO NOT use checksec or readelf instead** - they miss critical constraints like:
+- Empirical %n verification (glibc may block it)
+- Null byte constraints from strcpy (can't write 64-bit addresses)
+- ROP gadget quality (0 usable gadgets = no ROP chain)
+- Input handler bad bytes
+- Full RELRO blocks .fini_array too (not just GOT)
+
+**The `exploitation_paths` section tells you if code execution is actually possible** given the system's mitigations (glibc version, RELRO, etc.).
+
+---
+
+## EXPLOIT DEVELOPMENT
+
+**Verify constraints BEFORE attempting any technique.** Many hours are wasted on architecturally impossible approaches.
+
+**MANDATORY: Check `exploitation_paths` verdict first:**
+- Unlikely = no known path, suggest environment changes
+- Difficult = primitives exist but hard to chain, be honest about challenges
+- Likely exploitable = good chance, proceed with suggested techniques
+
+**Follow the chain_breaks** - these tell you exactly what WON'T work.
+**Follow the what_would_help** - these tell you what MIGHT work.
+
+**ALWAYS offer next steps, even for Difficult/Unlikely verdicts:**
+- Try alternative targets (if available)
+- Focus on info leaks only
+- Run in older environment (Docker)
+- Move on to other targets
+
+**Never just stop** - let the user decide how to proceed.
+
+See `tiers/exploit-guidance.md` for detailed constraint tables and technique alternatives.
 
 ---
 

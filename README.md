@@ -61,8 +61,10 @@ RAPTOR stands for Recursive Autonomous Penetration Testing and Observation Robot
 6. **FFmpeg-specific** patching for Google's recent disclosure
    (https://news.ycombinator.com/item?id=45891016)
 7. **OSS Forensics** for evidence-backed GitHub repository investigations
-8. **Agentic Skills Engine** for security reserach & operations ([SecOpsAgentKit](https://github.com/AgentSecOps/SecOpsAgentKit)) 
-9. **Reports** everything in structured formats
+8. **Agentic Skills Engine** for security research & operations ([SecOpsAgentKit](https://github.com/AgentSecOps/SecOpsAgentKit))
+9. **Offensive Security Testing** via autonomous specialist agent with SecOpsAgentKit
+10. **Cost Management** with budget enforcement, real-time tracking, and quota detection
+11. **Reports** everything in structured formats
 
 RAPTOR combines traditional security tools with agentic automation and analysis, deeply
 understands your code, proves exploitability, and proposes patches.
@@ -83,6 +85,12 @@ without asking, check dependencies.txt first.
 
 Beyond RAPTOR's potential for autonomous security research and community collaboration, it
 demonstrates how Claude Code can be adapted for **any purpose**, with RAPTOR packages.
+
+**Recent improvements:**
+- **LiteLLM Integration:** Unified LLM interface with Pydantic validation, smart model selection, and cost tracking
+- **SecOpsAgentKit:** Offensive security specialist agent with comprehensive penetration testing capabilities
+- **Cost Management:** Budget enforcement, real-time callbacks, and intelligent quota detection
+- **Enhanced Reliability:** Multiple bug fixes improving robustness across CodeQL, static analysis, and LLM providers
 
 ---
 
@@ -143,6 +151,70 @@ Try /analyze on one of our tests in /tests/data
 
 **See:** `docs/CLAUDE_CODE_USAGE.md` for complete guide
 
+---
+
+## LLM Configuration & Cost Management
+
+RAPTOR uses LiteLLM for unified LLM provider integration with automatic fallback, cost tracking, and budget enforcement.
+
+**Key Features:**
+- **Pydantic Validation:** YAML configs validated at load time with clear error messages
+- **Smart Model Selection:** Auto-selects best reasoning/thinking model from config
+- **Real-time Visibility:** Callbacks log model usage, tokens, duration for every call
+- **Budget Enforcement:** Prevents exceeding cost limits with detailed error messages
+- **Quota Detection:** Intelligent rate limit detection with provider-specific guidance
+- **Cost Tracking:** Tracks costs across all LLM calls with per-request breakdown
+
+**Configuration:**
+```yaml
+# litellm_config.yaml example
+model_list:
+  - model_name: claude-opus-4.5
+    litellm_params:
+      model: anthropic/claude-opus-4.5
+      api_key: ${ANTHROPIC_API_KEY}
+  - model_name: gpt-5.2-thinking
+    litellm_params:
+      model: openai/gpt-5.2-thinking
+      api_key: ${OPENAI_API_KEY}
+```
+
+**Budget Control:**
+```python
+from packages.llm_analysis.llm.config import LLMConfig
+
+config = LLMConfig(
+    max_cost_per_scan=1.0  # Prevent exceeding $1 per scan
+)
+```
+
+**See:** `docs/litellm-model-configuration-guide.md` for complete configuration guide
+
+---
+
+## Offensive Security Agent (SecOpsAgentKit)
+
+RAPTOR includes an autonomous offensive security specialist agent with specialized skills from SecOpsAgentKit.
+
+**Capabilities:**
+- Web application security testing (SQLi, XSS, CSRF, auth bypass)
+- Network penetration testing and enumeration
+- Binary exploitation and reverse engineering
+- Fuzzing and vulnerability discovery
+- Exploit development and PoC generation
+- Security code review with adversarial mindset
+
+**Usage:**
+```
+Tell Claude: "Use the offensive security specialist agent to test this application"
+```
+
+**Safety:** Safe operations auto-execute; dangerous operations require explicit user confirmation.
+
+**See:** `.claude/agents/offsec-specialist.md` and `.claude/skills/SecOpsAgentKit/` for details
+
+---
+
 ## DevContainer and Dockerfile for easy onboarding
 
 Pre-installed security tools:
@@ -159,7 +231,7 @@ gcc, g++, clang-format, make, cmake, autotools
 gdb, gdb-multiarch, binutils
 ```
 
-Web testing:
+Web testing - STUB, treat as alpha:
 ```
 Playwright browser automation (Chromium, Firefox, Webkit browsers)
 ```
@@ -195,7 +267,7 @@ docker build -f .devcontainer/Dockerfile -t raptor-devcontainer:latest .
 ```
 /scan     - Static code analysis (Semgrep + CodeQL)
 /fuzz     - Binary fuzzing with AFL++
-/web      - Web application security testing
+/web      - Web application security testing (STUB - treat as alpha)
 /agentic  - Full autonomous workflow (analysis + exploit/patch generation)
 /codeql   - CodeQL-only deep analysis with dataflow
 /analyze  - LLM analysis only (no exploit/patch generation - 50% faster & cheaper)
@@ -285,6 +357,7 @@ models work for analysis but may produce non-compilable exploit code.
 - `ANTHROPIC_API_KEY` - Anthropic Claude API key
 - `OPENAI_API_KEY` - OpenAI API key
 - `OLLAMA_HOST` - Ollama server URL (default: `http://localhost:11434`)
+- `LITELLM_CONFIG_PATH` - Path to LiteLLM YAML configuration file (optional)
 
 **Ollama Examples:**
 ```bash
@@ -329,6 +402,7 @@ python3 raptor.py fuzz --binary /path/to/binary --duration 3600
 - **CLAUDE_CODE_USAGE.md** - Complete Claude Code usage guide
 - **PYTHON_CLI.md** - Python command-line reference
 - **FUZZING_QUICKSTART.md** - Binary fuzzing guide
+- **litellm-model-configuration-guide.md** - LiteLLM configuration and model selection
 - **.claude/commands/oss-forensics.md** - OSS forensics investigation guide
 - **TESTING.md** - Test suite documentation and user stories
 

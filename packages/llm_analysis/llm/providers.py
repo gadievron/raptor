@@ -9,7 +9,8 @@ Replaces individual provider implementations with a single LiteLLMProvider.
 import json
 import sys
 from abc import ABC, abstractmethod
-from typing import Dict, Optional, Any, Tuple
+from inspect import isclass
+from typing import Dict, Optional, Any, Tuple, Type, Union
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -61,11 +62,15 @@ class LLMProvider(ABC):
         logger.debug(f"LLM usage: {tokens} tokens, ${(cost or 0.0):.4f} (total: {self.total_tokens} tokens, ${self.total_cost:.4f})")
 
 
-def _dict_schema_to_pydantic(schema: Dict[str, Any]):
+def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']]):
     """
-    Convert JSON Schema dict OR simple dict to Pydantic model.
+    Convert dict schema or Pydantic model to Pydantic model class.
 
-    Supports TWO formats:
+    Supports hybrid approach:
+    - If already Pydantic model class: return as-is
+    - If dict: convert to dynamic Pydantic model
+
+    Supports TWO dict formats:
     1. Simple format: {"field_name": "type description"}
        Example: {"is_exploitable": "boolean", "score": "float (0.0-1.0)"}
 
@@ -73,7 +78,7 @@ def _dict_schema_to_pydantic(schema: Dict[str, Any]):
        Example: {"properties": {"is_exploitable": {"type": "boolean"}}, "required": ["is_exploitable"]}
 
     Args:
-        schema: Either simple dict or JSON Schema dictionary
+        schema: Either simple dict, JSON Schema dictionary, or Pydantic BaseModel class
 
     Returns:
         Pydantic BaseModel class
@@ -83,6 +88,17 @@ def _dict_schema_to_pydantic(schema: Dict[str, Any]):
     """
     from pydantic import BaseModel, Field, create_model
     from typing import get_type_hints
+
+    # Check if already a Pydantic model class
+    if isclass(schema) and issubclass(schema, BaseModel):
+        return schema  # Already Pydantic, return as-is
+
+    # Validate it's a dict if not Pydantic
+    if not isinstance(schema, dict):
+        raise ValueError(
+            f"Schema must be dict or Pydantic BaseModel class, "
+            f"got {type(schema).__name__}"
+        )
 
     # AUTO-WRAP: Convert simple format to JSON Schema if needed
     if "properties" not in schema:

@@ -1,8 +1,8 @@
 # RAPTOR Web Application Scanner
 
-You are helping the user scan a web application for security vulnerabilities.
+WARNING: /web is a STUB and should not be relied upon. Consider a placeholder/in alpha.
 
-## Your Task
+You are helping the user scan a web application for security vulnerabilities.
 
 1. **Understand the target**: Get the web application URL
    - Full URL (e.g., https://example.com)
