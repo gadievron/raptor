@@ -65,7 +65,7 @@ jobs:
       - name: Run unit tests
         run: |
           source $VENV_PATH/bin/activate
-          pytest packages/exploit_feasibility/tests
+          pytest packages/*/tests
 
   test-workflows:
     needs: deps
