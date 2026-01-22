@@ -30,11 +30,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
+      - name: Verify venv exists
+        run: |
+          ls -la
+          test -d "$VENV_PATH" || (echo "venv missing at $VENV_PATH" && exit 1)
+
       - name: Upload venv for this run
         uses: actions/upload-artifact@v4
         with:
           name: venv-${{ github.run_id }}
-          path: ${{ env.VENV_PATH }}
+          path: ${{ env.VENV_PATH }}/
           if-no-files-found: error
 
   unit:
@@ -55,6 +60,7 @@ jobs:
         with:
           name: venv-${{ github.run_id }}
           path: .
+          if-no-files-found: error
 
       - name: Run unit tests
         run: |
@@ -79,6 +85,7 @@ jobs:
         with:
           name: venv-${{ github.run_id }}
           path: .
+          if-no-files-found: error
 
       - name: Make test scripts executable
         run: chmod +x test/*.sh
@@ -108,6 +115,7 @@ jobs:
         with:
           name: venv-${{ github.run_id }}
           path: .
+          if-no-files-found: error
 
       - name: Make test scripts executable
         run: chmod +x test/*.sh
