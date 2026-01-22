@@ -40,6 +40,7 @@ jobs:
         with:
           name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}/
+          include-hidden-files: true
           if-no-files-found: error
 
   unit:
