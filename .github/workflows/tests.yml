@@ -31,9 +31,7 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Verify venv exists
-        run: |
-          ls -la
-          test -d "$VENV_PATH" || (echo "venv missing at $VENV_PATH" && exit 1)
+        run: test -d "$VENV_PATH" || (echo "venv missing at $VENV_PATH" && exit 1)
 
       - name: Upload venv for this run
         uses: actions/upload-artifact@v4
@@ -59,65 +57,44 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: venv-${{ github.run_id }}
-          path: .
+          path: ${{ env.VENV_PATH }}
 
       - name: Run unit tests
         run: |
           source $VENV_PATH/bin/activate
           pytest packages/exploit_feasibility/tests
 
-  cli_fast:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+  test-workflows:
     needs: deps
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    uses: ./.github/workflows/run-test.yml
+    with:
+      test_script: test_workflows.sh
+      venv_artifact_name: venv-${{ github.run_id }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Download venv artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: venv-${{ github.run_id }}
-          path: .
-
-      - name: Make test scripts executable
-        run: chmod +x test/*.sh
-
-      - name: Run fast CLI suites
-        run: |
-          set -euo pipefail
-          source $VENV_PATH/bin/activate
-          bash test/test_workflows.sh
-          bash test/real_tests_fast.sh
-
-  cli_real:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+  test-fast:
     needs: deps
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    uses: ./.github/workflows/run-test.yml
+    with:
+      test_script: real_tests_fast.sh
+      venv_artifact_name: venv-${{ github.run_id }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
+  test-real:
+    needs: deps
+    uses: ./.github/workflows/run-test.yml
+    with:
+      test_script: real_tests.sh
+      venv_artifact_name: venv-${{ github.run_id }}
 
-      - name: Download venv artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: venv-${{ github.run_id }}
-          path: .
+  test-comprehensive:
+    needs: deps
+    uses: ./.github/workflows/run-test.yml
+    with:
+      test_script: comprehensive_test.sh
+      venv_artifact_name: venv-${{ github.run_id }}
 
-      - name: Make test scripts executable
-        run: chmod +x test/*.sh
-
-      - name: Run deeper functional suite
-        run: |
-          source $VENV_PATH/bin/activate
-          bash test/real_tests.sh
+  test-integration:
+    needs: deps
+    uses: ./.github/workflows/run-test.yml
+    with:
+      test_script: integration_tests.sh
+      venv_artifact_name: venv-${{ github.run_id }}
