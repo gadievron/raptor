@@ -39,9 +39,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: venv-${{ github.run_id }}
-          path: ${{ env.VENV_PATH }}/
+          path: ${{ env.VENV_PATH }}
           include-hidden-files: true
-          if-no-files-found: error
 
   unit:
     runs-on: ubuntu-latest
@@ -61,7 +60,6 @@ jobs:
         with:
           name: venv-${{ github.run_id }}
           path: .
-          if-no-files-found: error
 
       - name: Run unit tests
         run: |
@@ -86,7 +84,6 @@ jobs:
         with:
           name: venv-${{ github.run_id }}
           path: .
-          if-no-files-found: error
 
       - name: Make test scripts executable
         run: chmod +x test/*.sh
@@ -116,7 +113,6 @@ jobs:
         with:
           name: venv-${{ github.run_id }}
           path: .
-          if-no-files-found: error
 
       - name: Make test scripts executable
         run: chmod +x test/*.sh
