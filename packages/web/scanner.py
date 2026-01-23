@@ -25,18 +25,18 @@ logger = get_logger()
 class WebScanner:
     """Fully autonomous web application security scanner."""
 
-    def __init__(self, base_url: str, llm: LLMProvider, out_dir: Path):
+    def __init__(self, base_url: str, llm: LLMProvider, out_dir: Path, verify_ssl: bool = True):
         self.base_url = base_url
         self.llm = llm
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize components
-        self.client = WebClient(base_url)
+        self.client = WebClient(base_url, verify_ssl=verify_ssl)
         self.crawler = WebCrawler(self.client)
         self.fuzzer = WebFuzzer(self.client, llm)
 
-        logger.info(f"Web scanner initialized for {base_url}")
+        logger.info(f"Web scanner initialized for {base_url} (verify_ssl={verify_ssl})")
 
     def scan(self) -> Dict[str, Any]:
         """
@@ -114,6 +114,7 @@ Examples:
     parser.add_argument("--out", help="Output directory for results")
     parser.add_argument("--max-depth", type=int, default=3, help="Maximum crawl depth (default: 3)")
     parser.add_argument("--max-pages", type=int, default=50, help="Maximum pages to crawl (default: 50)")
+    parser.add_argument("--insecure", action="store_true", help="Skip SSL/TLS certificate verification (INSECURE but you know what you are doing, right?)")
 
     args = parser.parse_args()
 
@@ -157,7 +158,8 @@ Examples:
         llm = None
 
     # Run scan
-    scanner = WebScanner(args.url, llm, out_dir)
+    verify_ssl = not args.insecure
+    scanner = WebScanner(args.url, llm, out_dir, verify_ssl=verify_ssl)
 
     try:
         results = scanner.scan()
