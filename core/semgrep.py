@@ -3,7 +3,6 @@
 
 import os
 import shutil
-import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
@@ -11,21 +10,9 @@ from typing import Callable, List, Optional, Tuple
 from core.config import RaptorConfig
 from core.logging import get_logger
 from core.sarif.parser import validate_sarif
+from core.exec import run
 
 logger = get_logger()
-
-
-def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None):
-    """Execute a command and return results."""
-    p = subprocess.run(
-        cmd,
-        cwd=cwd,
-        env=env or os.environ.copy(),
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-    )
-    return p.returncode, p.stdout, p.stderr
 
 
 def get_semgrep_version() -> Optional[str]:

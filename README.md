@@ -181,7 +181,7 @@ model_list:
 
 **Budget Control:**
 ```python
-from packages.llm_analysis.llm.config import LLMConfig
+from core.llm.config import LLMConfig
 
 config = LLMConfig(
     max_cost_per_scan=1.0  # Prevent exceeding $1 per scan

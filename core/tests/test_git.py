@@ -15,8 +15,8 @@ from core.git import (
     clone_repository,
     get_safe_git_env,
     get_repository_metadata,
-    run,
 )
+from core.exec import run
 
 
 class TestValidateRepoUrl:
@@ -112,7 +112,7 @@ class TestCloneRepository:
         with pytest.raises(ValueError, match="Invalid or untrusted repository URL"):
             clone_repository("https://evil.com/owner/repo", tmp_path / "target")
 
-    @patch('core.git.run')
+    @patch('core.exec.run')
     def test_clone_failure_raises_runtime_error(self, mock_run, tmp_path):
         """Test that clone failure raises RuntimeError."""
         mock_run.return_value = (1, "", "fatal: repository not found")

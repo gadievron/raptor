@@ -563,6 +563,70 @@ test_package_modules_import() {
     fi
 }
 
+test_core_exec_import() {
+    local test_name="core.exec module can be imported"
+
+    if python3 -c "import sys; sys.path.insert(0, '$PROJECT_ROOT'); from core.exec import run, run_streaming; print('OK')" 2>/dev/null | grep -q "OK"; then
+        test_result "$test_name" "PASS"
+    else
+        test_result "$test_name" "FAIL" "core.exec import failed"
+    fi
+}
+
+test_core_hash_import() {
+    local test_name="core.hash module can be imported"
+
+    if python3 -c "import sys; sys.path.insert(0, '$PROJECT_ROOT'); from core.hash import sha256_tree; print('OK')" 2>/dev/null | grep -q "OK"; then
+        test_result "$test_name" "PASS"
+    else
+        test_result "$test_name" "FAIL" "core.hash import failed"
+    fi
+}
+
+test_core_git_import() {
+    local test_name="core.git module can be imported"
+
+    if python3 -c "import sys; sys.path.insert(0, '$PROJECT_ROOT'); from core.git import validate_repository, clone_repository, get_repository_metadata; print('OK')" 2>/dev/null | grep -q "OK"; then
+        test_result "$test_name" "PASS"
+    else
+        test_result "$test_name" "FAIL" "core.git import failed"
+    fi
+}
+
+test_core_semgrep_import() {
+    local test_name="core.semgrep module can be imported"
+
+    if python3 -c "import sys; sys.path.insert(0, '$PROJECT_ROOT'); from core.semgrep import run_semgrep, semgrep_scan_parallel, semgrep_scan_sequential; print('OK')" 2>/dev/null | grep -q "OK"; then
+        test_result "$test_name" "PASS"
+    else
+        test_result "$test_name" "FAIL" "core.semgrep import failed"
+    fi
+}
+
+test_packages_use_consolidated_utilities() {
+    local test_name="Packages can use consolidated core utilities"
+
+    # Test that packages can import and use core utilities
+    local test_script="
+import sys
+sys.path.insert(0, '$PROJECT_ROOT')
+try:
+    from core.exec import run
+    from core.hash import sha256_tree
+    from core.git import clone_repository
+    from core.semgrep import semgrep_scan_parallel
+    print('OK')
+except ImportError as e:
+    print(f'FAIL: {e}')
+    sys.exit(1)
+"
+    if python3 -c "$test_script" 2>/dev/null | grep -q "OK"; then
+        test_result "$test_name" "PASS"
+    else
+        test_result "$test_name" "FAIL" "Packages cannot import consolidated utilities"
+    fi
+}
+
 # ============================================================================
 # UTILITY FUNCTIONS
 # ============================================================================
@@ -640,6 +704,11 @@ main() {
 
     test_module_syntax
     test_package_modules_import
+    test_core_exec_import
+    test_core_hash_import
+    test_core_git_import
+    test_core_semgrep_import
+    test_packages_use_consolidated_utilities
 
     # Summary
     echo ""

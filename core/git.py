@@ -3,26 +3,14 @@
 
 import os
 import re
-import subprocess
 from pathlib import Path
 from typing import Dict, Any, Optional
 
 from core.config import RaptorConfig
 from core.logging import get_logger
+from core.exec import run
 
 logger = get_logger()
-
-def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None):
-    """Execute a command and return results."""
-    p = subprocess.run(
-        cmd,
-        cwd=cwd,
-        env=env or os.environ.copy(),
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-    )
-    return p.returncode, p.stdout, p.stderr
 
 
 def validate_repository(repo_path: Path) -> bool:

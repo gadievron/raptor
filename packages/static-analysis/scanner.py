@@ -9,7 +9,6 @@
 - The output of this could be consumed by RAPTOR or other tools for further analysis for finding bugs/security issues
 """
 import argparse
-import hashlib
 import json
 import shutil
 import sys
@@ -21,10 +20,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from core.config import RaptorConfig
 from core.logging import get_logger
-from core.sarif.parser import generate_scan_metrics, validate_sarif
-from core.git import validate_repo_url, clone_repository, run
+from core.sarif.parser import generate_scan_metrics
+from core.git import clone_repository
+from core.exec import run
+from core.hash import sha256_tree
 from core.semgrep import (
-    run_single_semgrep,
     semgrep_scan_parallel,
     semgrep_scan_sequential,
 )
@@ -69,29 +69,6 @@ def run_codeql(repo_path: Path, out_dir: Path, languages):
     return sarif_paths
 
 
-def sha256_tree(root: Path) -> str:
-    """Hash directory tree with size limits and consistent chunk size."""
-    import hashlib
-    h = hashlib.sha256()
-    skipped_files = []
-
-    for p in sorted(root.rglob("*")):
-        if p.is_file():
-            stat = p.stat()
-            # Skip very large files
-            if stat.st_size > RaptorConfig.MAX_FILE_SIZE_FOR_HASH:
-                skipped_files.append(str(p.relative_to(root)))
-                continue
-
-            h.update(p.relative_to(root).as_posix().encode())
-            with p.open("rb") as f:
-                for chunk in iter(lambda: f.read(RaptorConfig.HASH_CHUNK_SIZE), b""):
-                    h.update(chunk)
-
-    if skipped_files:
-        logger.debug(f"Skipped {len(skipped_files)} large files during hashing")
-
-    return h.hexdigest()
 
 def main():
     ap = argparse.ArgumentParser(description="RAPTOR Automated Code Security Agent with parallel scanning")
