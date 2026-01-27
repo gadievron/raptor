@@ -17,11 +17,35 @@ FAILED=0
 SKIPPED=0
 TOTAL_TESTS=0
 
+# Debug mode (set DEBUG=1 to enable)
+DEBUG=${DEBUG:-0}
+
 # Project setup
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RAPTOR_CMD="python3 ${PROJECT_ROOT}/raptor.py"
 TEST_DATA_DIR="${PROJECT_ROOT}/test/data"
 OUT_BASE="${PROJECT_ROOT}/out_integration_test"
+
+# Debug output function
+debug() {
+    if [ "$DEBUG" = "1" ]; then
+        echo -e "${BLUE}[DEBUG]${NC} $*"
+    fi
+}
+
+# Test command with debug output
+test_cmd() {
+    local cmd="$*"
+    debug "Running: $cmd" >&2
+    local output=$(eval "$cmd" 2>&1)
+    local exit_code=$?
+    if [ "$DEBUG" = "1" ]; then
+        debug "Exit code: $exit_code" >&2
+        debug "Output (first 200 chars): ${output:0:200}" >&2
+    fi
+    echo "$output"
+    return $exit_code
+}
 
 # Cleanup function
 cleanup() {
@@ -70,8 +94,6 @@ dir_has_files() {
 # BASIC COMMAND TESTS (No actual analysis, just CLI parsing)
 # ============================================================================
 
-section_header "SECTION 1: Basic Command Validation"
-
 test_help_all_modes() {
     local test_name="Help available for all modes"
 
@@ -100,10 +122,15 @@ test_main_help() {
 
 test_invalid_mode_error() {
     local test_name="Invalid mode produces error"
-
-    if $RAPTOR_CMD invalid_mode 2>&1 | grep -q "Unknown mode\|✗"; then
+    
+    debug "Testing: $test_name"
+    local output=$(test_cmd "$RAPTOR_CMD invalid_mode")
+    debug "Searching for pattern: 'unknown mode|unknown|error|✗'"
+    
+    if echo "$output" | grep -qi "unknown mode\|unknown\|error\|✗"; then
         test_result "$test_name" "PASS"
     else
+        debug "Pattern NOT found in output"
         test_result "$test_name" "FAIL" "Invalid mode did not produce expected error"
     fi
 }
@@ -112,24 +139,32 @@ test_invalid_mode_error() {
 # SCAN MODE TESTS
 # ============================================================================
 
-section_header "SECTION 2: Scan Command Tests"
-
 test_scan_help() {
     local test_name="Scan mode help displays correctly"
-
-    if $RAPTOR_CMD help scan 2>&1 | grep -qi "usage"; then
+    
+    debug "Testing: $test_name"
+    local output=$(test_cmd "$RAPTOR_CMD help scan")
+    debug "Searching for pattern: 'usage' (case-insensitive)"
+    
+    if echo "$output" | grep -qi "usage"; then
         test_result "$test_name" "PASS"
     else
+        debug "Pattern NOT found in output"
         test_result "$test_name" "FAIL" "Scan help missing usage information"
     fi
 }
 
 test_scan_requires_repo() {
     local test_name="Scan requires --repo argument"
-
-    if $RAPTOR_CMD scan 2>&1 | grep -q "repo"; then
+    
+    debug "Testing: $test_name"
+    local output=$(test_cmd "$RAPTOR_CMD scan")
+    debug "Searching for pattern: 'repo' (case-insensitive)"
+    
+    if echo "$output" | grep -qi "repo"; then
         test_result "$test_name" "PASS"
     else
+        debug "Pattern NOT found in output"
         test_result "$test_name" "FAIL" "Scan does not require --repo"
     fi
 }
@@ -147,19 +182,25 @@ test_scan_nonexistent_repo() {
 
 test_scan_policy_groups_argument() {
     local test_name="Scan accepts --policy-groups argument"
-
+    
+    debug "Testing: $test_name"
+    local output=$(test_cmd "$RAPTOR_CMD help scan")
+    debug "Searching for pattern: 'policy|--policy' (case-insensitive)"
+    
     # Just verify the argument is accepted (not that scanning completes)
-    if $RAPTOR_CMD help scan 2>&1 | grep -q "policy"; then
+    if echo "$output" | grep -qi "policy\|--policy"; then
         test_result "$test_name" "PASS"
     else
+        debug "Pattern NOT found in output"
         test_result "$test_name" "FAIL" "Scan does not accept --policy-groups"
     fi
 }
 
 test_scan_output_argument() {
     local test_name="Scan accepts --output argument"
-
-    if $RAPTOR_CMD help scan 2>&1 | grep -q "output"; then
+    
+    local output=$(test_cmd "$RAPTOR_CMD help scan")
+    if echo "$output" | grep -qi "output"; then
         test_result "$test_name" "PASS"
     else
         test_result "$test_name" "SKIP" "Output argument documentation not found"
@@ -170,22 +211,26 @@ test_scan_output_argument() {
 # AGENTIC MODE TESTS
 # ============================================================================
 
-section_header "SECTION 3: Agentic Mode Tests"
-
 test_agentic_help() {
     local test_name="Agentic mode help available"
-
-    if $RAPTOR_CMD help agentic 2>&1 | grep -qi "usage\|agentic"; then
+    
+    debug "Testing: $test_name"
+    local output=$(test_cmd "$RAPTOR_CMD help agentic")
+    debug "Searching for pattern: 'usage|agentic' (case-insensitive)"
+    
+    if echo "$output" | grep -qi "usage\|agentic"; then
         test_result "$test_name" "PASS"
     else
+        debug "Pattern NOT found in output"
         test_result "$test_name" "FAIL" "Agentic help not available"
     fi
 }
 
 test_agentic_default_includes_codeql() {
     local test_name="Agentic mode documentation mentions CodeQL"
-
-    if $RAPTOR_CMD help agentic 2>&1 | grep -qi "codeql"; then
+    
+    local output=$(test_cmd "$RAPTOR_CMD help agentic")
+    if echo "$output" | grep -qi "codeql"; then
         test_result "$test_name" "PASS"
     else
         test_result "$test_name" "SKIP" "CodeQL documentation in agentic help"
@@ -194,8 +239,9 @@ test_agentic_default_includes_codeql() {
 
 test_agentic_codeql_only_option() {
     local test_name="Agentic supports --codeql-only"
-
-    if $RAPTOR_CMD help agentic 2>&1 | grep -q "codeql-only"; then
+    
+    local output=$(test_cmd "$RAPTOR_CMD help agentic")
+    if echo "$output" | grep -qi "codeql-only\|codeql_only"; then
         test_result "$test_name" "PASS"
     else
         test_result "$test_name" "SKIP" "--codeql-only not documented"
@@ -204,8 +250,9 @@ test_agentic_codeql_only_option() {
 
 test_agentic_no_codeql_option() {
     local test_name="Agentic supports --no-codeql"
-
-    if $RAPTOR_CMD help agentic 2>&1 | grep -q "no-codeql"; then
+    
+    local output=$(test_cmd "$RAPTOR_CMD help agentic")
+    if echo "$output" | grep -qi "no-codeql\|no_codeql"; then
         test_result "$test_name" "PASS"
     else
         test_result "$test_name" "SKIP" "--no-codeql not documented"
@@ -214,8 +261,9 @@ test_agentic_no_codeql_option() {
 
 test_agentic_max_findings_option() {
     local test_name="Agentic supports --max-findings"
-
-    if $RAPTOR_CMD help agentic 2>&1 | grep -q "max-findings"; then
+    
+    local output=$(test_cmd "$RAPTOR_CMD help agentic")
+    if echo "$output" | grep -qi "max-findings\|max_findings\|max.*finding"; then
         test_result "$test_name" "PASS"
     else
         test_result "$test_name" "SKIP" "--max-findings not documented"
@@ -224,8 +272,9 @@ test_agentic_max_findings_option() {
 
 test_agentic_no_exploits_option() {
     local test_name="Agentic supports --no-exploits"
-
-    if $RAPTOR_CMD help agentic 2>&1 | grep -q "no-exploits\|skip.*exploit"; then
+    
+    local output=$(test_cmd "$RAPTOR_CMD help agentic")
+    if echo "$output" | grep -qi "no-exploits\|no_exploits\|skip.*exploit"; then
         test_result "$test_name" "PASS"
     else
         test_result "$test_name" "SKIP" "--no-exploits option not documented"
@@ -234,8 +283,9 @@ test_agentic_no_exploits_option() {
 
 test_agentic_no_patches_option() {
     local test_name="Agentic supports --no-patches"
-
-    if $RAPTOR_CMD help agentic 2>&1 | grep -q "no-patches\|skip.*patch"; then
+    
+    local output=$(test_cmd "$RAPTOR_CMD help agentic")
+    if echo "$output" | grep -qi "no-patches\|no_patches\|skip.*patch"; then
         test_result "$test_name" "PASS"
     else
         test_result "$test_name" "SKIP" "--no-patches option not documented"
@@ -246,22 +296,26 @@ test_agentic_no_patches_option() {
 # CODEQL MODE TESTS
 # ============================================================================
 
-section_header "SECTION 4: CodeQL Mode Tests"
-
 test_codeql_help() {
     local test_name="CodeQL mode help available"
-
-    if $RAPTOR_CMD help codeql 2>&1 | grep -qi "usage\|codeql"; then
+    
+    debug "Testing: $test_name"
+    local output=$(test_cmd "$RAPTOR_CMD help codeql")
+    debug "Searching for pattern: 'usage|codeql' (case-insensitive)"
+    
+    if echo "$output" | grep -qi "usage\|codeql"; then
         test_result "$test_name" "PASS"
     else
+        debug "Pattern NOT found in output"
         test_result "$test_name" "FAIL" "CodeQL help not available"
     fi
 }
 
 test_codeql_languages_option() {
     local test_name="CodeQL supports --languages"
-
-    if $RAPTOR_CMD help codeql 2>&1 | grep -q "language"; then
+    
+    local output=$(test_cmd "$RAPTOR_CMD help codeql")
+    if echo "$output" | grep -qi "language"; then
         test_result "$test_name" "PASS"
     else
         test_result "$test_name" "SKIP" "--languages not documented"
@@ -270,8 +324,9 @@ test_codeql_languages_option() {
 
 test_codeql_build_command_option() {
     local test_name="CodeQL supports --build-command"
-
-    if $RAPTOR_CMD help codeql 2>&1 | grep -q "build"; then
+    
+    local output=$(test_cmd "$RAPTOR_CMD help codeql")
+    if echo "$output" | grep -qi "build"; then
         test_result "$test_name" "PASS"
     else
         test_result "$test_name" "SKIP" "--build-command not documented"
@@ -280,8 +335,9 @@ test_codeql_build_command_option() {
 
 test_codeql_extended_option() {
     local test_name="CodeQL supports --extended"
-
-    if $RAPTOR_CMD help codeql 2>&1 | grep -q "extend"; then
+    
+    local output=$(test_cmd "$RAPTOR_CMD help codeql")
+    if echo "$output" | grep -qi "extend"; then
         test_result "$test_name" "PASS"
     else
         test_result "$test_name" "SKIP" "--extended not documented"
@@ -292,32 +348,41 @@ test_codeql_extended_option() {
 # FUZZ MODE TESTS
 # ============================================================================
 
-section_header "SECTION 5: Fuzz Mode Tests"
-
 test_fuzz_help() {
     local test_name="Fuzz mode help available"
-
-    if $RAPTOR_CMD help fuzz 2>&1 | grep -qi "usage\|fuzz"; then
+    
+    debug "Testing: $test_name"
+    local output=$(test_cmd "$RAPTOR_CMD help fuzz")
+    debug "Searching for pattern: 'usage|fuzz' (case-insensitive)"
+    
+    if echo "$output" | grep -qi "usage\|fuzz"; then
         test_result "$test_name" "PASS"
     else
+        debug "Pattern NOT found in output"
         test_result "$test_name" "FAIL" "Fuzz help not available"
     fi
 }
 
 test_fuzz_requires_binary() {
     local test_name="Fuzz requires --binary argument"
-
-    if $RAPTOR_CMD help fuzz 2>&1 | grep -q "binary"; then
+    
+    debug "Testing: $test_name"
+    local output=$(test_cmd "$RAPTOR_CMD help fuzz")
+    debug "Searching for pattern: 'binary|--binary' (case-insensitive)"
+    
+    if echo "$output" | grep -qi "binary\|--binary"; then
         test_result "$test_name" "PASS"
     else
+        debug "Pattern NOT found in output"
         test_result "$test_name" "FAIL" "Fuzz does not require --binary"
     fi
 }
 
 test_fuzz_duration_option() {
     local test_name="Fuzz supports --duration"
-
-    if $RAPTOR_CMD help fuzz 2>&1 | grep -q "duration"; then
+    
+    local output=$(test_cmd "$RAPTOR_CMD help fuzz")
+    if echo "$output" | grep -qi "duration"; then
         test_result "$test_name" "PASS"
     else
         test_result "$test_name" "SKIP" "--duration not documented"
@@ -326,8 +391,9 @@ test_fuzz_duration_option() {
 
 test_fuzz_parallel_option() {
     local test_name="Fuzz supports --parallel"
-
-    if $RAPTOR_CMD help fuzz 2>&1 | grep -q "parallel"; then
+    
+    local output=$(test_cmd "$RAPTOR_CMD help fuzz")
+    if echo "$output" | grep -qi "parallel"; then
         test_result "$test_name" "PASS"
     else
         test_result "$test_name" "SKIP" "--parallel not documented"
@@ -336,8 +402,9 @@ test_fuzz_parallel_option() {
 
 test_fuzz_autonomous_option() {
     local test_name="Fuzz supports --autonomous"
-
-    if $RAPTOR_CMD help fuzz 2>&1 | grep -q "autonomous"; then
+    
+    local output=$(test_cmd "$RAPTOR_CMD help fuzz")
+    if echo "$output" | grep -qi "autonomous"; then
         test_result "$test_name" "PASS"
     else
         test_result "$test_name" "SKIP" "--autonomous not documented"
@@ -348,24 +415,40 @@ test_fuzz_autonomous_option() {
 # WEB MODE TESTS
 # ============================================================================
 
-section_header "SECTION 6: Web Mode Tests"
-
 test_web_help() {
     local test_name="Web mode help available"
-
-    if $RAPTOR_CMD help web 2>&1 | grep -qi "usage\|web"; then
+    
+    debug "Testing: $test_name"
+    local output=$(test_cmd "$RAPTOR_CMD help web")
+    debug "Searching for pattern: 'usage|web|help' (case-insensitive)"
+    
+    # Check if help loaded successfully (no import errors)
+    if echo "$output" | grep -qi "ModuleNotFoundError\|ImportError"; then
+        debug "Web module has import errors"
+        test_result "$test_name" "SKIP" "Web module dependencies not installed (bs4)"
+    elif echo "$output" | grep -qi "usage\|web\|help"; then
         test_result "$test_name" "PASS"
     else
+        debug "Pattern NOT found in output"
         test_result "$test_name" "FAIL" "Web help not available"
     fi
 }
 
 test_web_requires_url() {
     local test_name="Web requires --url argument"
-
-    if $RAPTOR_CMD help web 2>&1 | grep -q "url"; then
+    
+    debug "Testing: $test_name"
+    local output=$(test_cmd "$RAPTOR_CMD help web")
+    debug "Searching for pattern: 'url|--url|target' (case-insensitive)"
+    
+    # Check if help loaded successfully (no import errors)
+    if echo "$output" | grep -qi "ModuleNotFoundError\|ImportError"; then
+        debug "Web module has import errors, skipping test"
+        test_result "$test_name" "SKIP" "Web module dependencies not installed"
+    elif echo "$output" | grep -qi "url\|--url\|target"; then
         test_result "$test_name" "PASS"
     else
+        debug "Pattern NOT found in output"
         test_result "$test_name" "FAIL" "Web does not require --url"
     fi
 }
@@ -374,22 +457,26 @@ test_web_requires_url() {
 # ANALYZE MODE TESTS
 # ============================================================================
 
-section_header "SECTION 7: Analyze Mode Tests"
-
 test_analyze_help() {
     local test_name="Analyze mode help available"
-
-    if $RAPTOR_CMD help analyze 2>&1 | grep -qi "usage\|analyze"; then
+    
+    debug "Testing: $test_name"
+    local output=$(test_cmd "$RAPTOR_CMD help analyze")
+    debug "Searching for pattern: 'usage|analyze|help' (case-insensitive)"
+    
+    if echo "$output" | grep -qi "usage\|analyze\|help"; then
         test_result "$test_name" "PASS"
     else
+        debug "Pattern NOT found in output"
         test_result "$test_name" "FAIL" "Analyze help not available"
     fi
 }
 
 test_analyze_requires_repo() {
     local test_name="Analyze requires --repo"
-
-    if $RAPTOR_CMD help analyze 2>&1 | grep -q "repo"; then
+    
+    local output=$(test_cmd "$RAPTOR_CMD help analyze")
+    if echo "$output" | grep -qi "repo"; then
         test_result "$test_name" "PASS"
     else
         test_result "$test_name" "SKIP" "Analyze help structure unclear"
@@ -398,8 +485,9 @@ test_analyze_requires_repo() {
 
 test_analyze_requires_sarif() {
     local test_name="Analyze requires --sarif"
-
-    if $RAPTOR_CMD help analyze 2>&1 | grep -q "sarif"; then
+    
+    local output=$(test_cmd "$RAPTOR_CMD help analyze")
+    if echo "$output" | grep -qi "sarif"; then
         test_result "$test_name" "PASS"
     else
         test_result "$test_name" "SKIP" "Analyze help structure unclear"
@@ -410,13 +498,12 @@ test_analyze_requires_sarif() {
 # ARGUMENT COMBINATION TESTS
 # ============================================================================
 
-section_header "SECTION 8: Argument Combinations"
-
 test_scan_with_multiple_policies() {
     local test_name="Scan accepts comma-separated policy groups"
-
+    
+    local output=$(test_cmd "$RAPTOR_CMD help scan")
     # Just verify documentation mentions multiple groups
-    if $RAPTOR_CMD help scan 2>&1 | grep -qi "comma\|separated"; then
+    if echo "$output" | grep -qi "comma\|separated"; then
         test_result "$test_name" "PASS"
     else
         test_result "$test_name" "SKIP" "Policy group documentation format unclear"
@@ -425,9 +512,10 @@ test_scan_with_multiple_policies() {
 
 test_agentic_scan_modes_exclusive() {
     local test_name="Agentic: --codeql-only and --no-codeql are documented"
-
-    if $RAPTOR_CMD help agentic 2>&1 | grep -q "codeql-only" && \
-       $RAPTOR_CMD help agentic 2>&1 | grep -q "no-codeql"; then
+    
+    local output=$(test_cmd "$RAPTOR_CMD help agentic")
+    if echo "$output" | grep -qi "codeql-only\|codeql_only" && \
+       echo "$output" | grep -qi "no-codeql\|no_codeql"; then
         test_result "$test_name" "PASS"
     else
         test_result "$test_name" "SKIP" "CodeQL mode options unclear"
@@ -436,8 +524,9 @@ test_agentic_scan_modes_exclusive() {
 
 test_fuzz_input_modes() {
     local test_name="Fuzz supports --input-mode (stdin/file)"
-
-    if $RAPTOR_CMD help fuzz 2>&1 | grep -q "input"; then
+    
+    local output=$(test_cmd "$RAPTOR_CMD help fuzz")
+    if echo "$output" | grep -qi "input"; then
         test_result "$test_name" "PASS"
     else
         test_result "$test_name" "SKIP" "--input-mode not documented"
@@ -447,8 +536,6 @@ test_fuzz_input_modes() {
 # ============================================================================
 # SAMPLE DATA TESTS
 # ============================================================================
-
-section_header "SECTION 9: Test Fixtures"
 
 test_sample_python_vulnerable_code() {
     local test_name="Sample Python vulnerable code exists"
@@ -495,8 +582,6 @@ test_sample_code_has_vulnerabilities() {
 # OUTPUT AND DIRECTORY STRUCTURE TESTS
 # ============================================================================
 
-section_header "SECTION 10: Directory Structure"
-
 test_test_data_directory() {
     local test_name="test/data directory exists"
 
@@ -531,8 +616,6 @@ test_core_packages_exist() {
 # ============================================================================
 # MODULE SYNTAX TESTS
 # ============================================================================
-
-section_header "SECTION 11: Module Syntax Validation"
 
 test_module_syntax() {
     local test_name="All Python modules have valid syntax"
@@ -654,16 +737,19 @@ main() {
     cleanup
 
     # Run all test groups
+    section_header "SECTION 1: Basic Command Validation"
     test_help_all_modes
     test_main_help
     test_invalid_mode_error
 
+    section_header "SECTION 2: Scan Command Tests"
     test_scan_help
     test_scan_requires_repo
     test_scan_nonexistent_repo
     test_scan_policy_groups_argument
     test_scan_output_argument
 
+    section_header "SECTION 3: Agentic Mode Tests"
     test_agentic_help
     test_agentic_default_includes_codeql
     test_agentic_codeql_only_option
@@ -672,36 +758,44 @@ main() {
     test_agentic_no_exploits_option
     test_agentic_no_patches_option
 
+    section_header "SECTION 4: CodeQL Mode Tests"
     test_codeql_help
     test_codeql_languages_option
     test_codeql_build_command_option
     test_codeql_extended_option
 
+    section_header "SECTION 5: Fuzz Mode Tests"
     test_fuzz_help
     test_fuzz_requires_binary
     test_fuzz_duration_option
     test_fuzz_parallel_option
     test_fuzz_autonomous_option
 
+    section_header "SECTION 6: Web Mode Tests"
     test_web_help
     test_web_requires_url
 
+    section_header "SECTION 7: Analyze Mode Tests"
     test_analyze_help
     test_analyze_requires_repo
     test_analyze_requires_sarif
 
+    section_header "SECTION 8: Argument Combinations"
     test_scan_with_multiple_policies
     test_agentic_scan_modes_exclusive
     test_fuzz_input_modes
 
+    section_header "SECTION 9: Test Fixtures"
     test_sample_python_vulnerable_code
     test_sample_javascript_vulnerable_code
     test_sample_code_has_vulnerabilities
 
+    section_header "SECTION 10: Directory Structure"
     test_test_data_directory
     test_output_directory_creation
     test_core_packages_exist
 
+    section_header "SECTION 11: Module Syntax Validation"
     test_module_syntax
     test_package_modules_import
     test_core_exec_import

@@ -1,0 +1,109 @@
+name: Test Suite
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.12'
+  VENV_PATH: .venv
+
+jobs:
+  deps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Create venv and install deps
+        run: |
+          python -m venv $VENV_PATH
+          source $VENV_PATH/bin/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Verify venv exists
+        run: test -d "$VENV_PATH" || (echo "venv missing at $VENV_PATH" && exit 1)
+
+      - name: Upload venv for this run
+        uses: actions/upload-artifact@v4
+        with:
+          name: venv-${{ github.run_id }}
+          path: ${{ env.VENV_PATH }}
+          include-hidden-files: true
+          retention-days: 1
+
+  python-unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: deps
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Download venv artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: venv-${{ github.run_id }}
+          path: ${{ env.VENV_PATH }}
+
+      - name: Restore venv permissions
+        run: chmod +x $VENV_PATH/bin/*
+
+      - name: Run unit tests
+        run: |
+          source $VENV_PATH/bin/activate
+          pytest packages/*/tests
+
+  test-workflows:
+    needs: deps
+    uses: ./.github/workflows/bash-test.yml
+    with:
+      test_script: test_workflows.sh
+      venv_artifact_name: venv-${{ github.run_id }}
+
+  test-fast:
+    needs: deps
+    uses: ./.github/workflows/bash-test.yml
+    with:
+      test_script: real_tests_fast.sh
+      venv_artifact_name: venv-${{ github.run_id }}
+
+  test-real:
+    needs: deps
+    uses: ./.github/workflows/bash-test.yml
+    with:
+      test_script: real_tests.sh
+      venv_artifact_name: venv-${{ github.run_id }}
+
+  test-comprehensive:
+    needs: deps
+    uses: ./.github/workflows/bash-test.yml
+    with:
+      test_script: comprehensive_test.sh
+      venv_artifact_name: venv-${{ github.run_id }}
+
+  test-integration:
+    needs: deps
+    uses: ./.github/workflows/bash-test.yml
+    with:
+      test_script: integration_tests.sh
+      venv_artifact_name: venv-${{ github.run_id }}

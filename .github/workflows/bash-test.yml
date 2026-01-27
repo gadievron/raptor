@@ -1,0 +1,43 @@
+name: Run Test
+
+on:
+  workflow_call:
+    inputs:
+      test_script:
+        description: 'Test script to run (e.g., test_workflows.sh, real_tests_fast.sh)'
+        required: true
+        type: string
+      venv_artifact_name:
+        description: 'Name of the venv artifact to download'
+        required: true
+        type: string
+
+jobs:
+  bash-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download venv artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.venv_artifact_name }}
+          path: .venv
+
+      - name: Restore venv permissions
+        run: chmod +x .venv/bin/*
+
+      - name: Make test scripts executable
+        run: chmod +x test/*.sh
+
+      - name: Run ${{ inputs.test_script }}
+        run: |
+          source .venv/bin/activate
+          bash test/${{ inputs.test_script }}

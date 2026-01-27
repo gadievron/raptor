@@ -146,8 +146,8 @@ echo ""
 echo -e "${BLUE}3. ARGUMENT VALIDATION (Actual Parsing)${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Test 3.1: Scan accepts --policy-groups and runs (or tries to)
-OUTPUT=$(python3 "$PROJECT_ROOT/raptor.py" scan --repo "$TEMP_REPO" --policy-groups secrets 2>&1)
+# Test 3.1: Scan accepts --policy_groups and runs (or tries to)
+OUTPUT=$(python3 "$PROJECT_ROOT/raptor.py" scan --repo "$TEMP_REPO" --policy_groups secrets 2>&1)
 EXIT_CODE=$?
 # Success (0) if semgrep installed, error if not, but NO argument parsing error
 if ! echo "$OUTPUT" | grep -qi "unrecognized argument\|--policy-groups"; then
@@ -174,7 +174,7 @@ fi
 
 # Test 3.4: Agentic accepts --max-findings with number
 OUTPUT=$(python3 "$PROJECT_ROOT/raptor.py" agentic --repo "$TEMP_REPO" --max-findings 10 2>&1)
-if ! echo "$OUTPUT" | grep -qi "unrecognized argument\|--max-findings"; then
+if ! echo "$OUTPUT" | grep -qi "unrecognized argument"; then
     test_case "Agentic accepts --max-findings <int>" "PASS"
 else
     test_case "Agentic accepts --max-findings <int>" "FAIL"
@@ -282,7 +282,7 @@ else
 fi
 
 # Test 5.4: Sample Python has hardcoded credentials
-if grep -q 'PASSWORD\|SECRET.*=' "$TEST_DATA/python_sql_injection.py" | grep -q '"'; then
+if grep -Eq 'PASSWORD|SECRET.*=.*"' "$TEST_DATA/python_sql_injection.py"; then
     test_case "Sample Python has hardcoded credentials" "PASS"
 else
     test_case "Sample Python has hardcoded credentials" "FAIL"

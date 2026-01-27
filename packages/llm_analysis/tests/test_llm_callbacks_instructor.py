@@ -2,6 +2,7 @@
 
 import pytest
 import sys
+import os
 import litellm
 from pathlib import Path
 from pydantic import BaseModel
@@ -24,6 +25,10 @@ class TestInstructorCompatibility:
 
     def test_instructor_fires_callbacks(self):
         """Test if Instructor calls trigger LiteLLM callbacks."""
+        # Skip if no API key
+        if not os.getenv("ANTHROPIC_API_KEY"):
+            pytest.skip("No ANTHROPIC_API_KEY - skipping Anthropic callback test")
+
         # This is the CRITICAL test that may fail
         # Instructor wraps litellm.completion - callbacks may not propagate
 
@@ -76,6 +81,10 @@ class TestInstructorCompatibility:
 
     def test_instructor_exception_safety(self):
         """Verify Instructor calls don't break even if callback throws."""
+        # Skip if no API key
+        if not os.getenv("ANTHROPIC_API_KEY"):
+            pytest.skip("No ANTHROPIC_API_KEY - skipping Anthropic callback test")
+
         client = LLMClient()
 
         if len(litellm.callbacks) > 0:

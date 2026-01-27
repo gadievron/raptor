@@ -3,6 +3,7 @@
 import pytest
 import time
 import sys
+import os
 import litellm
 from io import StringIO
 from unittest.mock import patch, MagicMock
@@ -57,6 +58,10 @@ class TestCallbackSuccessEvent:
 
     def test_success_event_logs_correctly(self, capsys):
         """Test callback logs success with model, tokens, duration."""
+        # Skip if no API key
+        if not os.getenv("OPENAI_API_KEY"):
+            pytest.skip("No OPENAI_API_KEY - skipping OpenAI callback test")
+
         # This test will use REAL API call as per user request
         # Using cheap model to minimize costs
         client = LLMClient()
@@ -112,6 +117,10 @@ class TestCallbackExceptionHandling:
 
     def test_callback_exception_doesnt_break_llm_call(self):
         """Verify LLM call succeeds even if callback throws exception."""
+        # Skip if no API key
+        if not os.getenv("OPENAI_API_KEY"):
+            pytest.skip("No OPENAI_API_KEY - skipping OpenAI callback test")
+
         # This test requires mocking the callback to force an exception
         # Will implement after RaptorLLMLogger exists
 
@@ -152,6 +161,10 @@ class TestCacheHitPath:
 
     def test_cache_hit_no_callback_invocation(self):
         """Test callback doesn't fire for cached responses."""
+        # Skip if no API key
+        if not os.getenv("OPENAI_API_KEY"):
+            pytest.skip("No OPENAI_API_KEY - skipping OpenAI callback test")
+
         # Enable caching
         config = LLMConfig()
         config.enable_caching = True
@@ -222,6 +235,10 @@ class TestPerformanceOverhead:
 
     def test_callback_overhead_acceptable(self):
         """Verify callback overhead is <10ms per call."""
+        # Skip if no API key
+        if not os.getenv("OPENAI_API_KEY"):
+            pytest.skip("No OPENAI_API_KEY - skipping OpenAI callback test")
+
         client = LLMClient()
 
         # Make 3 calls and measure average time
