@@ -16,63 +16,17 @@ from core.logging import get_logger
 logger = get_logger()
 
 
-def run(
-    cmd,
-    cwd=None,
-    timeout: Optional[int] = None,
-    env: Optional[dict] = None,
-    description: Optional[str] = None
-) -> Tuple[int, str, str]:
-    """
-    Execute a command and return results.
+def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None):
+    """Execute a command and return results."""
+    # Convert Path objects to strings for compatibility
+    cwd_str = str(cwd) if isinstance(cwd, Path) else cwd
     
-    Args:
-        cmd: Command and arguments as a list (never use shell=True)
-        cwd: Working directory for command execution (Path or str)
-        timeout: Command timeout in seconds (default from config)
-        env: Environment variables dict (merged with os.environ)
-        description: Optional description for logging
-        
-    Returns:
-        Tuple of (returncode, stdout, stderr)
-        
-    Raises:
-        subprocess.TimeoutExpired: If command exceeds timeout
-        Exception: For other execution errors
-        
-    Security:
-        - Always uses list-based arguments (prevents shell injection)
-        - Never uses shell=True
-        - Environment variables are explicitly controlled
-    """
-    if timeout is None:
-        timeout = RaptorConfig.DEFAULT_TIMEOUT
-    
-    if description:
-        logger.info(f"Running: {description}")
-    
-    # Merge environment variables
-    exec_env = os.environ.copy()
-    if env:
-        exec_env.update(env)
-    
-    # Convert cwd to string if Path object
-    cwd_str = str(cwd) if cwd else None
-    
-    try:
-        result = subprocess.run(
-            cmd,
-            cwd=cwd_str,
-            env=exec_env,
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-        )
-        return result.returncode, result.stdout, result.stderr
-        
-    except subprocess.TimeoutExpired as e:
-        logger.error(f"Command timed out after {timeout}s: {' '.join(cmd)}")
-        raise
-    except Exception as e:
-        logger.error(f"Command execution failed: {e}")
-        raise
+    p = subprocess.run(
+        cmd,
+        cwd=cwd_str,
+        env=env or os.environ.copy(),
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+    )
+    return p.returncode, p.stdout, p.stderr
