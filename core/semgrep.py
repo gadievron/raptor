@@ -15,18 +15,6 @@ from core.exec import run
 logger = get_logger()
 
 
-def get_semgrep_version() -> Optional[str]:
-    """Get installed Semgrep version."""
-    semgrep_cmd = shutil.which("semgrep") or "/opt/homebrew/bin/semgrep"
-    try:
-        rc, so, se = run([semgrep_cmd, "--version"], timeout=10)
-        if rc == 0:
-            return so.strip()
-    except Exception as e:
-        logger.debug(f"Could not get Semgrep version: {e}")
-    return None
-
-
 def run_semgrep(
     config: str,
     target: Path,

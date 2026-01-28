@@ -12,34 +12,9 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from core.semgrep import (
-    get_semgrep_version,
     run_semgrep,
     run_single_semgrep,
 )
-
-
-class TestGetSemgrepVersion:
-    """Tests for get_semgrep_version function."""
-
-    @patch('shutil.which')
-    @patch('core.exec.run')
-    def test_returns_version_when_available(self, mock_run, mock_which):
-        """Test version is returned when semgrep is installed."""
-        mock_which.return_value = "/usr/bin/semgrep"
-        mock_run.return_value = (0, "1.50.0", "")
-
-        version = get_semgrep_version()
-        assert version == "1.50.0"
-
-    @patch('shutil.which')
-    @patch('core.exec.run')
-    def test_returns_none_when_unavailable(self, mock_run, mock_which):
-        """Test None is returned when semgrep is not installed."""
-        mock_which.return_value = None
-        mock_run.side_effect = FileNotFoundError()
-
-        version = get_semgrep_version()
-        assert version is None
 
 
 class TestRunSemgrep:
@@ -185,12 +160,6 @@ SEMGREP_AVAILABLE = shutil.which("semgrep") is not None
 @pytest.mark.skipif(not SEMGREP_AVAILABLE, reason="semgrep not installed")
 class TestSemgrepIntegration:
     """Integration tests that run actual semgrep commands."""
-
-    def test_get_semgrep_version_real(self):
-        """Test getting real semgrep version."""
-        version = get_semgrep_version()
-        assert version is not None
-        assert "semgrep" in version.lower() or version[0].isdigit()
 
     def test_run_semgrep_finds_vulnerability(self, tmp_path):
         """Test that semgrep actually finds vulnerabilities in test code."""
