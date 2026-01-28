@@ -649,7 +649,7 @@ test_package_modules_import() {
 test_core_exec_import() {
     local test_name="core.exec module can be imported"
 
-    if python3 -c "import sys; sys.path.insert(0, '$PROJECT_ROOT'); from core.exec import run, run_streaming; print('OK')" 2>/dev/null | grep -q "OK"; then
+    if python3 -c "import sys; sys.path.insert(0, '$PROJECT_ROOT'); from core.exec import run; print('OK')" 2>/dev/null | grep -q "OK"; then
         test_result "$test_name" "PASS"
     else
         test_result "$test_name" "FAIL" "core.exec import failed"

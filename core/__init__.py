@@ -28,7 +28,7 @@ from core.semgrep import run_semgrep
 from core.llm import LLMClient, LLMConfig
 
 # Execution utilities (consolidated in refactoring)
-from core.exec import run, run_streaming
+from core.exec import run
 
 # Hash utilities (consolidated in refactoring)
 from core.hash import sha256_tree
@@ -52,7 +52,6 @@ __all__ = [
     "LLMConfig",
     # Execution utilities
     "run",
-    "run_streaming",
     # Hash utilities
     "sha256_tree",
 ]
