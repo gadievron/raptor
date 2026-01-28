@@ -10,11 +10,9 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from core.git import (
-    validate_repository,
     validate_repo_url,
     clone_repository,
     get_safe_git_env,
-    get_repository_metadata,
 )
 from core.exec import run
 
@@ -55,29 +53,6 @@ class TestValidateRepoUrl:
         assert validate_repo_url("https://github.com/owner/repo|cat /etc/passwd") is False
 
 
-class TestValidateRepository:
-    """Tests for validate_repository function."""
-
-    def test_valid_git_repository(self, tmp_path):
-        """Test detection of valid git repository."""
-        # Create .git directory
-        git_dir = tmp_path / ".git"
-        git_dir.mkdir()
-
-        assert validate_repository(tmp_path) is True
-
-    def test_invalid_git_repository(self, tmp_path):
-        """Test detection fails for non-git directory."""
-        assert validate_repository(tmp_path) is False
-
-    def test_git_file_not_dir(self, tmp_path):
-        """Test that .git as file (submodule) is rejected."""
-        git_file = tmp_path / ".git"
-        git_file.write_text("gitdir: ../somewhere")
-
-        assert validate_repository(tmp_path) is False
-
-
 class TestGetSafeGitEnv:
     """Tests for get_safe_git_env function."""
 
@@ -90,18 +65,6 @@ class TestGetSafeGitEnv:
         """Test GIT_TERMINAL_PROMPT is disabled."""
         env = get_safe_git_env()
         assert env.get("GIT_TERMINAL_PROMPT") == "0"
-
-
-class TestGetRepositoryMetadata:
-    """Tests for get_repository_metadata function."""
-
-    def test_non_git_directory(self, tmp_path):
-        """Test metadata extraction from non-git directory returns empty values."""
-        metadata = get_repository_metadata(tmp_path)
-
-        assert metadata["commit_hash"] is None
-        assert metadata["branch"] is None
-        assert metadata["remote_url"] is None
 
 
 class TestCloneRepository:

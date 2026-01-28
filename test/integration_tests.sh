@@ -669,7 +669,7 @@ test_core_hash_import() {
 test_core_git_import() {
     local test_name="core.git module can be imported"
 
-    if python3 -c "import sys; sys.path.insert(0, '$PROJECT_ROOT'); from core.git import validate_repository, clone_repository, get_repository_metadata; print('OK')" 2>/dev/null | grep -q "OK"; then
+    if python3 -c "import sys; sys.path.insert(0, '$PROJECT_ROOT'); from core.git import clone_repository; print('OK')" 2>/dev/null | grep -q "OK"; then
         test_result "$test_name" "PASS"
     else
         test_result "$test_name" "FAIL" "core.git import failed"

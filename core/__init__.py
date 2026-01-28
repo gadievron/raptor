@@ -16,9 +16,7 @@ from core.sarif.parser import (
 
 # Git utilities (extracted in refactoring)
 from core.git import (
-    validate_repository,
     clone_repository,
-    get_repository_metadata,
 )
 
 # Semgrep utilities (extracted in refactoring)
@@ -42,9 +40,7 @@ __all__ = [
     "generate_scan_metrics",
     "sanitize_finding_for_display",
     # Git utilities
-    "validate_repository",
     "clone_repository",
-    "get_repository_metadata",
     # Semgrep utilities
     "run_semgrep",
     # LLM utilities

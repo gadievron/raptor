@@ -13,12 +13,6 @@ from core.exec import run
 logger = get_logger()
 
 
-def validate_repository(repo_path: Path) -> bool:
-    """Check if path is a valid git repository."""
-    git_dir = repo_path / ".git"
-    return git_dir.exists() and git_dir.is_dir()
-
-
 def get_safe_git_env() -> Dict[str, str]:
     """Return environment variables for safe git operations."""
     return RaptorConfig.get_git_env()
@@ -78,48 +72,3 @@ def clone_repository(url: str, target: Path, depth: Optional[int] = 1) -> bool:
 
     logger.info(f"Repository cloned successfully to {target}")
     return True
-
-
-def get_repository_metadata(repo_path: Path) -> Dict[str, Any]:
-    """
-    Extract git metadata (commit hash, branch, remote URL).
-
-    Args:
-        repo_path: Path to git repository
-
-    Returns:
-        Dictionary with git metadata
-    """
-    metadata = {
-        "commit_hash": None,
-        "branch": None,
-        "remote_url": None,
-        "is_dirty": None,
-    }
-
-    if not validate_repository(repo_path):
-        return metadata
-
-    env = get_safe_git_env()
-
-    # Get current commit hash
-    rc, so, se = run(["git", "rev-parse", "HEAD"], cwd=repo_path, env=env, timeout=10)
-    if rc == 0:
-        metadata["commit_hash"] = so.strip()
-
-    # Get current branch
-    rc, so, se = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path, env=env, timeout=10)
-    if rc == 0:
-        metadata["branch"] = so.strip()
-
-    # Get remote URL
-    rc, so, se = run(["git", "remote", "get-url", "origin"], cwd=repo_path, env=env, timeout=10)
-    if rc == 0:
-        metadata["remote_url"] = so.strip()
-
-    # Check if working tree is dirty
-    rc, so, se = run(["git", "status", "--porcelain"], cwd=repo_path, env=env, timeout=10)
-    if rc == 0:
-        metadata["is_dirty"] = bool(so.strip())
-
-    return metadata
