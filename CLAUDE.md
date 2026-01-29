@@ -23,9 +23,26 @@ VERY IMPORTANT: double check that you followed these instructions.
 
 /scan /fuzz /web /agentic /codeql /analyze - Security testing
 /exploit /patch - Generate PoCs and fixes (beta)
+/validate - Exploitability validation pipeline (see below)
+
+**Note:** `/agentic` now automatically runs exploitability validation (Phase 2) between scanning and analysis. Use `--skip-validation` to bypass.
 /crash-analysis - Autonomous crash root-cause analysis (see below)
 /oss-forensics - GitHub forensic investigation (see below)
 /create-skill - Save approaches (alpha)
+
+---
+
+## OUTPUT STYLE
+
+**Human-readable status values (no underscores, no ALL_CAPS):**
+- `Exploitable` not `EXPLOITABLE`
+- `Confirmed` not `CONFIRMED`
+- `Ruled Out` not `RULED_OUT`
+- `Proven` / `Disproven` not `PROVEN` / `DISPROVEN`
+
+**No red/green status indicators:**
+- Do not use 🔴/🟢 - perspective-dependent (bad for defenders ≠ bad for researchers)
+- Other emojis are fine (⚠️, ✓, etc.)
 
 ---
 
@@ -82,9 +99,27 @@ The `/oss-forensics` command provides evidence-backed forensic investigation for
 
 ---
 
+## EXPLOITABILITY VALIDATION
+
+The `/validate` command validates that vulnerability findings are real, reachable, and exploitable.
+
+**Usage:** `/validate <target_path> [--vuln-type <type>] [--findings <file>]`
+
+**Stages:** 0 (Inventory) → A (One-Shot) → B (Process) → C (Sanity) → D (Ruling) → E (Feasibility)
+
+**Skills** (in `.claude/skills/exploitability-validation/`):
+- `SKILL.md` - Shared context, gates, execution rules
+- `stage-0-inventory.md` through `stage-e-feasibility.md` - Stage instructions
+
+**Output:** `.out/exploitability-validation-<timestamp>/validation-report.md`
+
+---
+
 ## PROGRESSIVE LOADING
 
 **When scan completes:** Load `tiers/analysis-guidance.md` (adversarial thinking)
+**When validating exploitability:** Load `.claude/skills/exploitability-validation/SKILL.md` (gates, methodology)
+**When validation errors occur:** Load `tiers/validation-recovery.md` (stage-specific recovery)
 **When developing exploits:** Load `tiers/exploit-guidance.md` (constraints, techniques)
 **When errors occur:** Load `tiers/recovery.md` (recovery protocol)
 **When requested:** Load `tiers/personas/[name].md` (expert personas)

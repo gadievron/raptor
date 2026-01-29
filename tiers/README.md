@@ -14,10 +14,22 @@ Organize knowledge and capabilities with progressive disclosure:
 
 ```
 tiers/
+├── analysis-guidance.md     # Loaded after scan completes
+├── exploit-guidance.md      # Loaded when developing exploits
+├── recovery.md              # Loaded on errors
+├── validation-recovery.md   # Loaded on validation errors
+│
 ├── personas/                # Expert methodologies (AVAILABLE, not auto-loaded)
 │   ├── security_researcher.md   (~500t, load on request)
 │   ├── exploit_developer.md     (~400t, load on request)
 │   ├── crash_analyst.md         (~450t, load on request)
+│   ├── binary_exploitation_specialist.md
+│   ├── codeql_analyst.md
+│   ├── codeql_finding_analyst.md
+│   ├── fuzzing_strategist.md
+│   ├── offensive_security_researcher.md
+│   ├── patch_engineer.md
+│   ├── penetration_tester.md
 │   └── README.md
 │
 ├── specialists/             # Sub-agents (RESERVED for future)
@@ -27,9 +39,19 @@ tiers/
     └── (empty - add when needed)
 ```
 
+**Note:** Claude Code skills live separately in `.claude/skills/` (not here).
+
 ---
 
 ## Usage Pattern
+
+### Guidance Files (Auto-loaded)
+
+**Loaded by CLAUDE.md PROGRESSIVE LOADING rules:**
+- `analysis-guidance.md` - After scan completes (adversarial thinking)
+- `exploit-guidance.md` - When developing exploits (constraints, techniques)
+- `recovery.md` - On general errors
+- `validation-recovery.md` - On validation stage errors
 
 ### Personas (Available Now)
 
@@ -67,14 +89,16 @@ tiers/
 
 **Current usage:**
 - Core (CLAUDE.md): ~800 tokens (always loaded)
+- Guidance files: 0 tokens (loaded progressively when needed)
 - Personas: 0 tokens (load on explicit request only)
 - Specialists: 0 tokens (Python handles, or future custom)
 - Reference: 0 tokens (empty, reserved)
 
 **Typical session:** 800 tokens (core only)
+**After scan:** 800 + 500 = 1,300 tokens (analysis-guidance loaded)
 **With persona:** 800 + 500 = 1,300 tokens (when requested)
 
-**Capacity remaining:** ~2,700 tokens for future expansion
+**Capacity remaining:** ~2,200 tokens for future expansion
 
 ---
 

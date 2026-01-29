@@ -3,14 +3,14 @@
 RAPTOR Truly Agentic Workflow
 
 Complete end-to-end autonomous security testing:
+0. Pre-exploit mitigation analysis (optional)
 1. Scan code with Semgrep AND CodeQL (parallel execution)
-2. Autonomously analyse findings (read code, understand context)
-3. Autonomously validate dataflow paths (CodeQL-specific)
-4. Autonomously generate exploits (write working PoC code)
-5. Autonomously create patches (write secure fixes)
-6. Report everything
-
-Phase 3 Integration Complete!
+2. Validate exploitability (filter hallucinations and unreachable code)
+3. Autonomously analyse findings (read code, understand context)
+4. Autonomously validate dataflow paths (CodeQL-specific)
+5. Autonomously generate exploits (write working PoC code)
+6. Autonomously create patches (write secure fixes)
+7. Report everything
 """
 
 import argparse
@@ -154,6 +154,12 @@ Examples:
 
   # Skip exploit generation (analysis + patches only)
   python3 raptor.py agentic --repo /path/to/code --no-exploits
+
+  # Skip exploitability validation (faster, but may include false positives)
+  python3 raptor.py agentic --repo /path/to/code --skip-validation
+
+  # Focus validation on specific vulnerability type
+  python3 raptor.py agentic --repo /path/to/code --vuln-type sql_injection
         """
     )
 
@@ -182,6 +188,11 @@ Examples:
                        help="Run mitigation analysis before scanning (for binary exploit targets)")
     parser.add_argument("--skip-mitigation-checks", action="store_true",
                        help="Skip per-vulnerability mitigation checks during exploit generation")
+
+    # Exploitability validation options
+    parser.add_argument("--skip-validation", action="store_true",
+                       help="Skip exploitability validation (proceed directly to analysis)")
+    parser.add_argument("--vuln-type", help="Vulnerability type to focus on (e.g., command_injection, sql_injection)")
 
     args = parser.parse_args()
 
@@ -453,10 +464,40 @@ Examples:
     print(f"SARIF files: {len(sarif_files)}")
 
     # ========================================================================
-    # PHASE 2: AUTONOMOUS ANALYSIS
+    # PHASE 2: EXPLOITABILITY VALIDATION
+    # ========================================================================
+    # Check if LLM is available for full validation
+    llm_available = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY"))
+    if not llm_available:
+        # Also check for Ollama
+        try:
+            import requests
+            response = requests.get(f"{RaptorConfig.OLLAMA_HOST}/api/tags", timeout=2)
+            if response.status_code == 200:
+                llm_available = True
+        except Exception:
+            pass
+
+    # Run validation phase (handles all modes: skip, dedup-only, full validation)
+    from packages.exploitability_validation import run_validation_phase
+
+    validation_result, validated_findings = run_validation_phase(
+        repo_path=str(repo_path),
+        out_dir=out_dir,
+        sarif_files=sarif_files,
+        total_findings=total_findings,
+        vuln_type=args.vuln_type,
+        binary_path=args.binary,
+        skip_validation=args.skip_validation,
+        skip_feasibility=not (args.binary or args.check_mitigations),
+        llm_available=llm_available,
+    )
+
+    # ========================================================================
+    # PHASE 3: AUTONOMOUS ANALYSIS
     # ========================================================================
     print("\n" + "=" * 70)
-    print("PHASE 2: AUTONOMOUS VULNERABILITY ANALYSIS")
+    print("PHASE 3: AUTONOMOUS VULNERABILITY ANALYSIS")
     print("=" * 70)
 
     # Check if LLM is available
@@ -490,7 +531,7 @@ Examples:
         print("\n    Example:")
         print("      export ANTHROPIC_API_KEY='your-api-key'")
         print("      python3 raptor_agentic.py --repo /path/to/code")
-        logger.warning("Phase 2 skipped - No LLM provider configured")
+        logger.warning("Phase 3 skipped - No LLM provider configured")
     else:
         # Show which LLM will be used
         print()
@@ -538,14 +579,14 @@ Examples:
             print(f"⚠️  Analysis failed or produced no output")
             if stderr:
                 print(f"    Error: {stderr[:500]}")
-            logger.warning(f"Phase 2 failed - rc={rc}, stderr={stderr[:200]}")
+            logger.warning(f"Phase 3 failed - rc={rc}, stderr={stderr[:200]}")
             analysis = {}
 
     # ========================================================================
-    # PHASE 3: AGENTIC ORCHESTRATION (Optional - requires Claude Code)
+    # PHASE 4: AGENTIC ORCHESTRATION (Optional - requires Claude Code)
     # ========================================================================
     print("\n" + "=" * 70)
-    print("PHASE 3: AGENTIC ORCHESTRATION")
+    print("PHASE 4: AGENTIC ORCHESTRATION")
     print("=" * 70)
     print("\n💡 To enable FULL agentic capabilities:")
     print("   1. Install Claude Code: npm install -g @anthropic-ai/claude-code")
@@ -592,6 +633,13 @@ Examples:
                     "languages": list(codeql_metrics.get('languages_detected', {}).keys()) if codeql_metrics else [],
                 },
             },
+            "exploitability_validation": {
+                "completed": bool(validation_result),
+                "skipped": args.skip_validation,
+                "original_findings": total_findings,
+                "validated_findings": validated_findings,
+                "noise_reduction_percent": ((total_findings - validated_findings) / total_findings * 100) if total_findings > 0 else 0,
+            },
             "autonomous_analysis": {
                 "completed": bool(analysis),
                 "skipped": not llm_available,
@@ -603,6 +651,7 @@ Examples:
         },
         "outputs": {
             "sarif_files": [str(f) for f in sarif_files],
+            "validation_report": str(out_dir / "validation" / "findings.json") if validation_result else None,
             "autonomous_report": str(analysis_report) if 'analysis_report' in locals() and analysis_report.exists() else None,
             "exploits_directory": str(autonomous_out / "exploits") if 'autonomous_out' in locals() else None,
             "patches_directory": str(autonomous_out / "patches") if 'autonomous_out' in locals() else None,
@@ -620,6 +669,11 @@ Examples:
         print(f"     Semgrep: {semgrep_metrics.get('total_findings', 0)}")
     if codeql_metrics:
         print(f"     CodeQL: {codeql_metrics.get('total_findings', 0)}")
+    if validation_result:
+        print(f"   Validated findings: {validated_findings}")
+        if total_findings > 0:
+            reduction = ((total_findings - validated_findings) / total_findings) * 100
+            print(f"   Noise reduction: {reduction:.1f}%")
     print(f"   Exploitable: {analysis.get('exploitable', 0)}")
     print(f"   Exploits generated: {analysis.get('exploits_generated', 0)}")
     print(f"   Patches generated: {analysis.get('patches_generated', 0)}")
@@ -631,6 +685,8 @@ Examples:
     print(f"   Main report: {report_file}")
     if mitigation_result:
         print(f"   Exploit feasibility: {out_dir / 'exploit_feasibility.txt'}")
+    if validation_result:
+        print(f"   Validation: {out_dir / 'validation'}/")
     if 'analysis_report' in locals() and analysis_report.exists():
         print(f"   Analysis: {analysis_report}")
     if 'autonomous_out' in locals():
@@ -644,6 +700,8 @@ Examples:
     if args.codeql or args.codeql_only:
         print("   ✓ Scanned with CodeQL")
         print("   ✓ Validated dataflow paths")
+    if validation_result:
+        print("   ✓ Validated exploitability (filtered noise)")
     print("   ✓ Analysed vulnerabilities")
     print("   ✓ Generated exploits")
     print("   ✓ Created patches")
