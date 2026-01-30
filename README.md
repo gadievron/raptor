@@ -9,10 +9,12 @@
 ║             ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝        ╚═╝    ╚═════╝ ╚═╝  ╚═╝            ║ 
 ║                                                                           ║ 
 ║             Autonomous Offensive/Defensive Research Framework             ║
-║             Based on Claude Code - v1.0-alpha                             ║
+║             Based on Claude Code - v1.0-beta                              ║
 ║                                                                           ║ 
 ║             By Gadi Evron, Daniel Cuthbert                                ║
-║                Thomas Dullien (Halvar Flake) & Michael Bargury            ║ 
+║                Thomas Dullien (Halvar Flake)                              ║
+║                Michael Bargury                                            ║ 
+║                John Cartwright                                            ║ 
 ║                                                                           ║ 
 ╚═══════════════════════════════════════════════════════════════════════════╝ 
 
@@ -33,8 +35,8 @@
 [![CodeQL](https://github.com/gadievron/raptor/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/gadievron/raptor/actions/workflows/github-code-scanning/codeql)
 
 
-**Authors:** Gadi Evron, Daniel Cuthbert, Thomas Dullien (Halvar Flake), and Michael Bargury
-(@gadievron, @danielcuthbert, @thomasdullien, @mbrg)
+**Authors:** Gadi Evron, Daniel Cuthbert, Thomas Dullien (Halvar Flake), Michael Bargury & John Cartwright
+(@gadievron, @danielcuthbert, @thomasdullien, @mbrg & @grokjc)
 
 **License:** MIT (see LICENSE file)
 
