@@ -228,7 +228,7 @@ When binaries are compiled with ASan (`-fsanitize=address`), RAPTOR automaticall
 
 ### 7. LLM Provider Abstraction
 
-**Location**: `packages/llm_analysis/llm/`
+**Location**: `core/llm/`
 **Purpose**: Unified interface for multiple LLM providers
 
 **Supported Providers**:

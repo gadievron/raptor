@@ -35,7 +35,7 @@ logger = get_logger()
 def get_llm_client():
     """Initialize LLM client from existing RAPTOR system."""
     try:
-        from packages.llm_analysis.llm.client import LLMClient
+        from core.llm.client import LLMClient
         return LLMClient()
     except Exception as e:
         logger.warning(f"LLM client not available: {e}")

@@ -459,7 +459,7 @@ llm/
 **Dependencies**:
 - `core.config` (paths)
 - `core.logging` (logging)
-- `packages.llm_analysis.llm` (LLM client)
+- `core.llm` (LLM client)
 
 **Design Rationale**: Provides higher-level autonomous capabilities that can be composed across different security testing workflows (fuzzing, exploitation, analysis).
 

@@ -71,7 +71,7 @@ class DataflowValidator:
         Initialize dataflow validator.
 
         Args:
-            llm_client: LLM client from packages/llm_analysis/llm/client.py
+            llm_client: LLM client from core.llm.client
         """
         self.llm = llm_client
         self.logger = get_logger()

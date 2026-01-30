@@ -13,8 +13,8 @@ from typing import Any, Dict, List
 from core.logging import get_logger
 from packages.binary_analysis import CrashContext
 from packages.fuzzing import Crash
-from .llm.client import LLMClient
-from .llm.config import LLMConfig
+from core.llm.client import LLMClient
+from core.llm.config import LLMConfig
 
 logger = get_logger()
 
