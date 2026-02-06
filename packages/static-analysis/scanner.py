@@ -10,302 +10,33 @@
 """
 import argparse
 import json
-import os
-import re
 import shutil
-import subprocess
 import sys
 import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from core.config import RaptorConfig
 from core.logging import get_logger
-from core.sarif.parser import generate_scan_metrics, validate_sarif
+from core.sarif.parser import generate_scan_metrics
+from core.git import clone_repository
+from core.exec import run
+from core.hash import sha256_tree
+from core.semgrep import (
+    semgrep_scan_parallel,
+    semgrep_scan_sequential,
+)
 
 logger = get_logger()
 
 
-def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None):
-    """Execute a command and return results."""
-    p = subprocess.run(
-        cmd,
-        cwd=cwd,
-        env=env or os.environ.copy(),
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-    )
-    return p.returncode, p.stdout, p.stderr
-
-
-def validate_repo_url(url: str) -> bool:
-    """Validate repository URL against allowed patterns."""
-    allowed_patterns = [
-        r'^https://github\.com/[\w\-]+/[\w.\-]+/?$',
-        r'^https://gitlab\.com/[\w\-]+/[\w.\-]+/?$',
-        r'^git@github\.com:[\w\-]+/[\w.\-]+\.git$',
-        r'^git@gitlab\.com:[\w\-]+/[\w.\-]+\.git$',
-    ]
-
-    return any(re.match(pattern, url) for pattern in allowed_patterns)
-
-
 def safe_clone(url: str, workdir: Path) -> Path:
     """Clone a git repository safely with URL validation."""
-    # Validate URL
-    if not validate_repo_url(url):
-        logger.log_security_event(
-            "invalid_repo_url",
-            f"Rejected potentially unsafe repository URL: {url}"
-        )
-        raise ValueError(f"Invalid or untrusted repository URL: {url}")
-
     repo_dir = workdir / "repo"
-    env = RaptorConfig.get_git_env()
-
-    logger.info(f"Cloning repository: {url}")
-    rc, so, se = run(
-        ["git", "clone", "--depth", "1", "--no-tags", url, str(repo_dir)],
-        timeout=RaptorConfig.GIT_CLONE_TIMEOUT,
-        env=env,
-    )
-    if rc != 0:
-        raise RuntimeError(f"git clone failed: {se.strip() or so.strip()}")
-
-    logger.info(f"Repository cloned successfully to {repo_dir}")
+    clone_repository(url, repo_dir, depth=1)
     return repo_dir
-
-def run_single_semgrep(
-    name: str,
-    config: str,
-    repo_path: Path,
-    out_dir: Path,
-    timeout: int,
-    progress_callback: Optional[Callable] = None
-) -> Tuple[str, bool]:
-    """
-    Run a single Semgrep scan.
-
-    Returns:
-        Tuple of (sarif_path, success)
-    """
-    def sanitize_name(name: str) -> str:
-        return name.replace("/", "_").replace(":", "_")
-
-    suffix = sanitize_name(name)
-    sarif = out_dir / f"semgrep_{suffix}.sarif"
-    stderr_log = out_dir / f"semgrep_{suffix}.stderr.log"
-    exit_file = out_dir / f"semgrep_{suffix}.exit"
-
-    logger.debug(f"Starting Semgrep scan: {name}")
-
-    if progress_callback:
-        progress_callback(f"Scanning with {name}")
-
-    # Use full path to semgrep to avoid broken venv installations
-    semgrep_cmd = shutil.which("semgrep") or "/opt/homebrew/bin/semgrep"
-
-    cmd = [
-        semgrep_cmd,
-        "scan",
-        "--config", config,
-        "--quiet",
-        "--metrics", "off",
-        "--error",
-        "--sarif",
-        "--timeout", str(RaptorConfig.SEMGREP_RULE_TIMEOUT),
-        str(repo_path),
-    ]
-
-    # Create clean environment without venv contamination
-    clean_env = os.environ.copy()
-    clean_env.pop('VIRTUAL_ENV', None)
-    clean_env.pop('PYTHONPATH', None)
-    # Remove venv from PATH
-    if 'PATH' in clean_env:
-        path_parts = clean_env['PATH'].split(':')
-        path_parts = [p for p in path_parts if 'venv' not in p.lower() and '/bin/pysemgrep' not in p]
-        clean_env['PATH'] = ':'.join(path_parts)
-
-    try:
-        rc, so, se = run(cmd, timeout=timeout, env=clean_env)
-
-        # Validate output
-        if not so or not so.strip():
-            logger.warning(f"Semgrep scan '{name}' produced empty output")
-            so = '{"runs": []}'
-
-        sarif.write_text(so)
-        stderr_log.write_text(se or "")
-        exit_file.write_text(str(rc))
-
-        # Validate SARIF
-        is_valid = validate_sarif(sarif)
-        if not is_valid:
-            logger.warning(f"Semgrep scan '{name}' produced invalid SARIF")
-
-        success = rc in (0, 1) and is_valid
-        logger.debug(f"Completed Semgrep scan: {name} (exit={rc}, valid={is_valid})")
-
-        return str(sarif), success
-
-    except Exception as e:
-        logger.error(f"Semgrep scan '{name}' failed: {e}")
-        # Write empty SARIF on error
-        sarif.write_text('{"runs": []}')
-        stderr_log.write_text(str(e))
-        exit_file.write_text("-1")
-        return str(sarif), False
-
-
-def semgrep_scan_parallel(
-    repo_path: Path,
-    rules_dirs: List[str],
-    out_dir: Path,
-    timeout: int = RaptorConfig.SEMGREP_TIMEOUT,
-    progress_callback: Optional[Callable] = None
-) -> List[str]:
-    """
-    Run Semgrep scans in parallel for improved performance.
-
-    Args:
-        repo_path: Path to repository to scan
-        rules_dirs: List of rule directory paths
-        out_dir: Output directory for results
-        timeout: Timeout per scan
-        progress_callback: Optional callback for progress updates
-
-    Returns:
-        List of SARIF file paths
-    """
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # Build config list with BOTH local rules AND standard packs for each category
-    configs: List[Tuple[str, str]] = []
-    added_packs = set()  # Track which standard packs we've added to avoid duplicates
-
-    # Add local rules + corresponding standard packs for each specified category
-    for rd in rules_dirs:
-        rd_path = Path(rd)
-        if rd_path.exists():
-            category_name = rd_path.name
-
-            # Add local rules for this category
-            configs.append((f"category_{category_name}", str(rd_path)))
-
-            # Add corresponding standard pack if available
-            if category_name in RaptorConfig.POLICY_GROUP_TO_SEMGREP_PACK:
-                pack_name, pack_id = RaptorConfig.POLICY_GROUP_TO_SEMGREP_PACK[category_name]
-                if pack_id not in added_packs:
-                    configs.append((pack_name, pack_id))
-                    added_packs.add(pack_id)
-                    logger.debug(f"Added standard pack for {category_name}: {pack_id}")
-        else:
-            logger.warning(f"Rule directory not found: {rd_path}")
-
-    # Add baseline packs (unless already added)
-    for pack_name, pack_identifier in RaptorConfig.BASELINE_SEMGREP_PACKS:
-        if pack_identifier not in added_packs:
-            configs.append((pack_name, pack_identifier))
-            added_packs.add(pack_identifier)
-
-    logger.info(f"Starting {len(configs)} Semgrep scans in parallel (max {RaptorConfig.MAX_SEMGREP_WORKERS} workers)")
-    logger.info(f"  - Local rule directories: {len([c for c in configs if c[0].startswith('category_')])}")
-    logger.info(f"  - Standard/baseline packs: {len([c for c in configs if not c[0].startswith('category_')])}")
-
-    # Run scans in parallel
-    sarif_paths: List[str] = []
-    failed_scans: List[str] = []
-
-    with ThreadPoolExecutor(max_workers=RaptorConfig.MAX_SEMGREP_WORKERS) as executor:
-        future_to_config = {
-            executor.submit(
-                run_single_semgrep,
-                name,
-                config,
-                repo_path,
-                out_dir,
-                timeout,
-                progress_callback
-            ): (name, config)
-            for name, config in configs
-        }
-
-        completed = 0
-        total = len(future_to_config)
-
-        for future in as_completed(future_to_config):
-            name, config = future_to_config[future]
-            completed += 1
-
-            try:
-                sarif_path, success = future.result()
-                sarif_paths.append(sarif_path)
-
-                if not success:
-                    failed_scans.append(name)
-
-                if progress_callback:
-                    progress_callback(f"Completed {completed}/{total} scans")
-
-            except Exception as exc:
-                logger.error(f"Semgrep scan '{name}' raised exception: {exc}")
-                failed_scans.append(name)
-
-    if failed_scans:
-        logger.warning(f"Failed scans: {', '.join(failed_scans)}")
-
-    logger.info(f"Completed {len(sarif_paths)} scans ({len(failed_scans)} failed)")
-    return sarif_paths
-
-
-def semgrep_scan_sequential(
-    repo_path: Path,
-    rules_dirs: List[str],
-    out_dir: Path,
-    timeout: int = RaptorConfig.SEMGREP_TIMEOUT
-) -> List[str]:
-    """Sequential scanning fallback for debugging."""
-    out_dir.mkdir(parents=True, exist_ok=True)
-    sarif_paths: List[str] = []
-
-    # Build config list with BOTH local rules AND standard packs for each category
-    configs: List[Tuple[str, str]] = []
-    added_packs = set()  # Track which standard packs we've added to avoid duplicates
-
-    # Add local rules + corresponding standard packs for each specified category
-    for rd in rules_dirs:
-        rd_path = Path(rd)
-        if rd_path.exists():
-            category_name = rd_path.name
-
-            # Add local rules for this category
-            configs.append((f"category_{category_name}", str(rd_path)))
-
-            # Add corresponding standard pack if available
-            if category_name in RaptorConfig.POLICY_GROUP_TO_SEMGREP_PACK:
-                pack_name, pack_id = RaptorConfig.POLICY_GROUP_TO_SEMGREP_PACK[category_name]
-                if pack_id not in added_packs:
-                    configs.append((pack_name, pack_id))
-                    added_packs.add(pack_id)
-
-    # Add baseline packs (unless already added)
-    for pack_name, pack_identifier in RaptorConfig.BASELINE_SEMGREP_PACKS:
-        if pack_identifier not in added_packs:
-            configs.append((pack_name, pack_identifier))
-            added_packs.add(pack_identifier)
-
-    for idx, (name, config) in enumerate(configs, 1):
-        logger.info(f"Running scan {idx}/{len(configs)}: {name}")
-        sarif_path, success = run_single_semgrep(name, config, repo_path, out_dir, timeout)
-        sarif_paths.append(sarif_path)
-
-    return sarif_paths
 
 
 # This is a WIP CodeQL runner; assumes codeql CLI is installed and query packs are available
@@ -338,29 +69,6 @@ def run_codeql(repo_path: Path, out_dir: Path, languages):
     return sarif_paths
 
 
-def sha256_tree(root: Path) -> str:
-    """Hash directory tree with size limits and consistent chunk size."""
-    import hashlib
-    h = hashlib.sha256()
-    skipped_files = []
-
-    for p in sorted(root.rglob("*")):
-        if p.is_file():
-            stat = p.stat()
-            # Skip very large files
-            if stat.st_size > RaptorConfig.MAX_FILE_SIZE_FOR_HASH:
-                skipped_files.append(str(p.relative_to(root)))
-                continue
-
-            h.update(p.relative_to(root).as_posix().encode())
-            with p.open("rb") as f:
-                for chunk in iter(lambda: f.read(RaptorConfig.HASH_CHUNK_SIZE), b""):
-                    h.update(chunk)
-
-    if skipped_files:
-        logger.debug(f"Skipped {len(skipped_files)} large files during hashing")
-
-    return h.hexdigest()
 
 def main():
     ap = argparse.ArgumentParser(description="RAPTOR Automated Code Security Agent with parallel scanning")

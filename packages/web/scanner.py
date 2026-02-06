@@ -14,7 +14,7 @@ from typing import Dict, Any
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from core.logging import get_logger
-from packages.llm_analysis.llm.providers import LLMProvider
+from core.llm.providers import LLMProvider
 from packages.web.client import WebClient
 from packages.web.crawler import WebCrawler
 from packages.web.fuzzer import WebFuzzer
@@ -144,8 +144,8 @@ Examples:
 
     # Initialize LLM client with multi-model support, fallback, and retry
     try:
-        from packages.llm_analysis.llm.client import LLMClient
-        from packages.llm_analysis.llm.config import LLMConfig
+        from core.llm.client import LLMClient
+        from core.llm.config import LLMConfig
 
         llm_config = LLMConfig()
         llm = LLMClient(llm_config)

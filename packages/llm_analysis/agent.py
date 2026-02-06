@@ -26,8 +26,8 @@ from core.config import RaptorConfig
 from core.logging import get_logger
 from core.progress import HackerProgress
 from core.sarif.parser import parse_sarif_findings, deduplicate_findings
-from llm.client import LLMClient
-from llm.config import LLMConfig
+from core.llm.client import LLMClient
+from core.llm.config import LLMConfig
 
 logger = get_logger()
 

@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from core.logging import get_logger
-from packages.llm_analysis.llm.providers import LLMProvider
+from core.llm.providers import LLMProvider
 from packages.web.client import WebClient
 
 logger = get_logger()

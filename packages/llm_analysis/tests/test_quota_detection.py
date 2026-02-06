@@ -6,7 +6,7 @@ Related: Gemini quota exhaustion issue (Dec 2025)
 """
 
 import pytest
-from packages.llm_analysis.llm.client import _is_quota_error, _get_quota_guidance
+from core.llm.client import _is_quota_error, _get_quota_guidance
 
 
 class TestQuotaErrorDetection:

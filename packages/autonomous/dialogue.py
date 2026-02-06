@@ -12,7 +12,7 @@ from enum import Enum
 from typing import List, Optional, Dict, Any
 
 from core.logging import get_logger
-from packages.llm_analysis.llm.providers import LLMProvider
+from core.llm.providers import LLMProvider
 
 logger = get_logger()
 
