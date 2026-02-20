@@ -328,7 +328,11 @@ class LiteLLMProvider(LLMProvider):
             # Using explicit Mode.JSON ensures arrays return as [...] not {"items": [...]}
             # This prevents Pydantic validation errors even though Instructor 1.13.0
             # auto-detection works correctly (defense-in-depth: explicit > implicit)
-            if self.config.provider.lower() == "ollama":
+            # Force JSON mode for providers that return multiple tool calls
+            # (which Instructor doesn't support). Ollama has array wrapping bugs,
+            # Mistral returns parallel tool calls - both are solved by JSON mode.
+            provider_lower = self.config.provider.lower()
+            if provider_lower in ("ollama", "mistral"):
                 client = self.instructor.from_litellm(
                     litellm_completion,
                     mode=self.instructor.Mode.JSON

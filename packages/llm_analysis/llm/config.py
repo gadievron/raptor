@@ -116,6 +116,7 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
         # Tier 2: Strong models
         ("anthropic/claude-opus-4", "claude-opus-4", 85),               # Previous Opus
         ("openai/gpt-5.2", "gpt-5.2", 80),                              # Latest GPT (exact match only)
+        ("mistral/mistral-large-latest", "mistral-large", 75),          # Mistral Large
 
         # Tier 3: Latest capable models (fallback)
         ("anthropic/claude-sonnet-4.5", "claude-sonnet-4.5", 70),       # Latest Sonnet
@@ -295,6 +296,16 @@ def _get_default_primary_model() -> 'ModelConfig':
             cost_per_1k_tokens=0.0001,
         )
 
+    if os.getenv("MISTRAL_API_KEY"):
+        return ModelConfig(
+            provider="mistral",
+            model_name="mistral-large-latest",
+            api_key=os.getenv("MISTRAL_API_KEY"),
+            max_tokens=128000,
+            temperature=0.7,
+            cost_per_1k_tokens=0.002,
+        )
+
     # Otherwise use Ollama with first available model
     ollama_models = _get_available_ollama_models()
     if ollama_models:
@@ -402,6 +413,16 @@ def _get_default_fallback_models() -> List['ModelConfig']:
             cost_per_1k_tokens=0.0001,
         ))
 
+    if os.getenv("MISTRAL_API_KEY"):
+        fallbacks.append(ModelConfig(
+            provider="mistral",
+            model_name="mistral-large-latest",
+            api_key=os.getenv("MISTRAL_API_KEY"),
+            max_tokens=128000,
+            temperature=0.7,
+            cost_per_1k_tokens=0.002,
+        ))
+
     # Add all available local models
     ollama_models = _get_available_ollama_models()
     for model in ollama_models[:3]:  # Add first 3 local models
@@ -420,7 +441,7 @@ def _get_default_fallback_models() -> List['ModelConfig']:
 @dataclass
 class ModelConfig:
     """Configuration for a specific model."""
-    provider: str  # "anthropic", "openai", "ollama", "google"
+    provider: str  # "anthropic", "openai", "mistral", "ollama", "google"
     model_name: str  # "claude-sonnet-4", "gpt-4", "llama3:70b", etc.
     api_key: Optional[str] = None
     api_base: Optional[str] = None  # For Ollama: http://localhost:11434
