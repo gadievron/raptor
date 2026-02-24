@@ -1,0 +1,18 @@
+#!/bin/bash
+# RAPTOR CLI wrapper - automatically uses the virtual environment
+
+RAPTOR_HOME="$HOME/Projects/security/tools/raptor"
+cd "$RAPTOR_HOME"
+
+# Load environment variables from .env file
+if [ -f .env ]; then
+    set -a  # automatically export all variables
+    source .env
+    set +a
+fi
+
+# Add Homebrew paths for tools like afl-fuzz, nmap, etc.
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
+
+source .venv/bin/activate
+exec python3 raptor.py "$@"
