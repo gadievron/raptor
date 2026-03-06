@@ -138,7 +138,8 @@ claude
 # 4. Get the devcontainer
 A devcontainer with all prerequisites pre-installed is available. Open in VS Code or any of
 its forks with command Dev Container: Open Folder in Container, or build with docker:
-docker build -f .devcontainer/Dockerfile -t raptor-devcontainer:latest ..
+
+docker build -f .devcontainer/Dockerfile -t raptor-devcontainer:latest .
 
 Runs with --privileged flag for rr.
 
