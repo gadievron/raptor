@@ -65,8 +65,9 @@ class VulnerabilityContext:
         self.sanitizers_found: List[str] = []
 
         # Feasibility data from validation pipeline (if available)
-        self.feasibility: Optional[Dict[str, Any]] = finding.get("feasibility")
-        self.attack_path_ref: Optional[str] = self.feasibility.get("attack_path_ref") if isinstance(self.feasibility, dict) else None
+        from packages.exploitability_validation.models import Feasibility
+        self.feasibility: Dict[str, Any] = Feasibility.from_dict(finding.get("feasibility")).to_dict()
+        self.attack_path_ref: Optional[str] = self.feasibility.get("attack_path_ref")
 
         # Will be populated by LLM analysis
         self.full_code: Optional[str] = None
@@ -249,8 +250,8 @@ class VulnerabilityContext:
             "has_patch": self.patch_code is not None,
         }
 
-        # Add feasibility data if present
-        if self.feasibility:
+        # Add feasibility data if present (always a dict, check for non-default)
+        if self.feasibility.get("status", "pending") != "pending" or self.feasibility.get("verdict"):
             result["feasibility"] = self.feasibility
 
         # Add dataflow information if present
@@ -275,36 +276,39 @@ def convert_validated_to_agent_format(data: dict) -> List[Dict[str, Any]]:
     Skips ruled_out, confirmed_blocked, and unlikely-verdict findings.
     Normalizes status fields in-place before filtering (idempotent).
     """
+    from packages.exploitability_validation.models import Finding
+
     try:
         from packages.exploitability_validation import normalize_findings
         normalize_findings(data)
     except ImportError:
         pass
     converted = []
-    for finding in data.get("findings", []):
+    for raw in data.get("findings", []):
+        f = Finding.from_dict(raw)
         # Check both status and final_status for exclusion
-        if finding.get("status") in ("ruled_out", "disproven"):
+        if f.status in ("ruled_out", "disproven"):
             continue
-        if finding.get("final_status") in ("ruled_out", "confirmed_blocked"):
+        if f.final_status in ("ruled_out", "confirmed_blocked"):
             continue
-        feasibility = finding.get("feasibility") or {}
-        if feasibility.get("verdict") == "unlikely":
+        if f.feasibility.verdict == "unlikely":
             continue
 
+        feasibility_d = f.feasibility.to_dict()
         converted.append({
-            "finding_id": finding.get("id"),
-            "rule_id": finding.get("rule_id") or finding.get("vuln_type"),
-            "file": finding.get("file"),
-            "startLine": finding.get("line"),
-            "endLine": finding.get("line"),
-            "snippet": (finding.get("proof") or {}).get("vulnerable_code", "") if isinstance(finding.get("proof"), dict) else "",
-            "message": finding.get("candidate_reasoning", "") or f"{finding.get('vuln_type')} in {finding.get('function', 'unknown')}",
-            "level": "error" if finding.get("final_status") in ("exploitable", "likely_exploitable", "confirmed_constrained") else "warning",
-            "has_dataflow": bool((finding.get("proof") or {}).get("flow")) if isinstance(finding.get("proof"), dict) else False,
-            "feasibility": feasibility,
-            "attack_path_ref": feasibility.get("attack_path_ref"),
-            "ruling": finding.get("ruling"),
-            "final_status": finding.get("final_status") or "pending",
+            "finding_id": f.id,
+            "rule_id": f.rule_id or f.vuln_type,
+            "file": f.file,
+            "startLine": f.line,
+            "endLine": f.line,
+            "snippet": f.proof.vulnerable_code,
+            "message": f.candidate_reasoning or f"{f.vuln_type} in {f.function or 'unknown'}",
+            "level": "error" if f.final_status in ("exploitable", "likely_exploitable", "confirmed_constrained") else "warning",
+            "has_dataflow": bool(f.proof.flow),
+            "feasibility": feasibility_d,
+            "attack_path_ref": f.feasibility.attack_path_ref,
+            "ruling": f.ruling.to_dict(),
+            "final_status": f.final_status or "pending",
         })
     return converted
 

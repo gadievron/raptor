@@ -91,16 +91,18 @@ class TestFeasibilityPassthrough:
         }
         data = _make_findings(_confirmed_finding(feasibility=feas))
         result = convert_validated_to_agent_format(data)
-        assert result[0]["feasibility"] == feas
+        # Dataclass expansion adds default fields; check the input fields are preserved
+        for key, val in feas.items():
+            assert result[0]["feasibility"][key] == val
         assert result[0]["attack_path_ref"] == "attack-paths.json#PATH-001"
 
 
 class TestProofAsString:
     def test_proof_as_string(self):
-        """proof field as string (from SARIF conversion) produces empty snippet."""
+        """proof field as string (from SARIF conversion) extracts into vulnerable_code."""
         data = _make_findings(_confirmed_finding(proof="some raw text"))
         result = convert_validated_to_agent_format(data)
-        assert result[0]["snippet"] == ""
+        assert result[0]["snippet"] == "some raw text"
 
 
 class TestMissingOptionalFields:
@@ -117,8 +119,9 @@ class TestMissingOptionalFields:
         result = convert_validated_to_agent_format(data)
         assert len(result) == 1
         assert result[0]["finding_id"] == "FIND-BARE"
-        assert result[0]["feasibility"] == {}
-        assert result[0]["ruling"] is None
+        # Dataclass defaults: feasibility is a full dict with default fields, ruling likewise
+        assert result[0]["feasibility"]["status"] == "pending"
+        assert result[0]["ruling"]["status"] == ""
         assert result[0]["final_status"] == "pending"  # None defaults to "pending"
 
 

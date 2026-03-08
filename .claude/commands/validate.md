@@ -196,10 +196,10 @@ Runs a 6-stage validation pipeline:
 
 ## Output
 
-Results saved to `.out/exploitability-validation-<timestamp>/`:
+Results saved to `out/exploitability-validation-<timestamp>/` (or `$RAPTOR_OUT_DIR`):
 
 ```
-.out/exploitability-validation-20260122-143022/
+out/exploitability-validation-20260122-143022/
 ├── checklist.json           # All functions to check
 ├── findings.json            # Final validated findings
 ├── attack-tree.json         # Attack knowledge graph
