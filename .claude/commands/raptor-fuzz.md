@@ -1,4 +1,4 @@
-# RAPTOR Binary Fuzzer
+# /raptor-fuzz - RAPTOR Binary Fuzzer
 
 You are helping the user fuzz a binary executable with RAPTOR's AFL++ integration.
 

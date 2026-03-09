@@ -1,4 +1,4 @@
-# RAPTOR Security Scanner
+# /raptor-scan - RAPTOR Security Scanner
 
 You are helping the user run RAPTOR's autonomous security scanning on a code repository.
 
