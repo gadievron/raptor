@@ -1,0 +1,80 @@
+rules:
+  - id: raptor.firmware.dangerous.gets
+    message: >
+      gets() writes to a buffer with no length limit — guaranteed stack smash if
+      the attacker controls stdin. Replace with fgets(buf, sizeof(buf), stdin).
+    languages: [c, cpp]
+    severity: CRITICAL
+    pattern: gets($BUF)
+    metadata:
+      cwe: ["CWE-121", "CWE-242"]
+      tags: ["security", "firmware", "embedded", "stack-overflow"]
+
+  - id: raptor.firmware.dangerous.scanf-unbounded
+    message: >
+      scanf/fscanf with "%s" reads an unbounded string into a fixed buffer.
+      Use a width specifier (e.g. "%63s") or fgets().
+    languages: [c, cpp]
+    severity: HIGH
+    pattern-either:
+      - pattern: scanf("%s", $BUF)
+      - pattern: scanf("%s %s", $BUF, $BUF2)
+      - pattern: fscanf($STREAM, "%s", $BUF)
+    metadata:
+      cwe: ["CWE-121"]
+      tags: ["security", "firmware", "embedded", "stack-overflow"]
+
+  - id: raptor.firmware.dangerous.sprintf-unchecked
+    message: >
+      sprintf() does not check destination buffer size.
+      Use snprintf(buf, sizeof(buf), ...) instead.
+    languages: [c, cpp]
+    severity: HIGH
+    pattern: sprintf($BUF, ...)
+    metadata:
+      cwe: ["CWE-121", "CWE-134"]
+      tags: ["security", "firmware", "embedded", "stack-overflow", "format-string"]
+
+  - id: raptor.firmware.dangerous.strcpy
+    message: >
+      strcpy() copies without bounds checking. Use strlcpy(dst, src, sizeof(dst))
+      or strncpy with an explicit limit and null-termination.
+    languages: [c, cpp]
+    severity: HIGH
+    pattern: strcpy($DST, $SRC)
+    metadata:
+      cwe: ["CWE-121"]
+      tags: ["security", "firmware", "embedded", "stack-overflow"]
+
+  - id: raptor.firmware.dangerous.strcat
+    message: >
+      strcat() does not check that dst has room for src. Use strlcat() or
+      strncat with the remaining capacity of the destination buffer.
+    languages: [c, cpp]
+    severity: HIGH
+    pattern: strcat($DST, $SRC)
+    metadata:
+      cwe: ["CWE-121"]
+      tags: ["security", "firmware", "embedded", "stack-overflow"]
+
+  - id: raptor.firmware.dangerous.system-call
+    message: >
+      system() forks a shell and is easily exploited via command injection if any
+      part of the string is attacker-controlled. Use execve() with a fixed argv[].
+    languages: [c, cpp]
+    severity: HIGH
+    pattern: system($CMD)
+    metadata:
+      cwe: ["CWE-78"]
+      tags: ["security", "firmware", "embedded", "command-injection"]
+
+  - id: raptor.firmware.dangerous.popen-call
+    message: >
+      popen() passes its argument to /bin/sh. If any portion is user-controlled
+      the attacker can inject arbitrary commands. Use execve() with pipes instead.
+    languages: [c, cpp]
+    severity: HIGH
+    pattern: popen($CMD, $MODE)
+    metadata:
+      cwe: ["CWE-78"]
+      tags: ["security", "firmware", "embedded", "command-injection"]
