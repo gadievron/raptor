@@ -1,0 +1,84 @@
+rules:
+  # -----------------------------------------------------------------------
+  # CGI environment variables → shell execution (taint)
+  # The most common embedded web vuln: QUERY_STRING/POST_DATA → system()
+  # -----------------------------------------------------------------------
+  - id: raptor.firmware.cgi.query-string-to-system
+    message: >
+      CGI input (QUERY_STRING / HTTP_* env var) flows into system() or popen().
+      An attacker can inject shell metacharacters. Sanitise or use execve().
+    languages: [c, cpp]
+    severity: CRITICAL
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: getenv("QUERY_STRING")
+          - pattern: getenv("HTTP_REFERER")
+          - pattern: getenv("HTTP_HOST")
+          - pattern: getenv("HTTP_USER_AGENT")
+          - pattern: getenv("PATH_INFO")
+          - pattern: getenv("REQUEST_URI")
+          - pattern: getenv("CONTENT_TYPE")
+          - pattern: getenv("REMOTE_ADDR")
+    pattern-sinks:
+      - pattern-either:
+          - pattern: system($CMD)
+          - pattern: popen($CMD, ...)
+          - pattern: execl($PATH, ...)
+          - pattern: execv($PATH, ...)
+          - pattern: execle($PATH, ...)
+          - pattern: execve($PATH, ...)
+          - pattern: execlp($FILE, ...)
+          - pattern: execvp($FILE, ...)
+    metadata:
+      cwe: ["CWE-78"]
+      owasp_top_10: ["A03:2021-Injection"]
+      tags: ["security", "firmware", "embedded", "cgi", "command-injection", "taint"]
+
+  - id: raptor.firmware.cgi.query-string-to-sprintf
+    message: >
+      CGI input flows into sprintf() building a shell command string.
+      Any unsanitised metacharacter leads to command injection.
+      Use snprintf + strict input validation, or execve() with separate args.
+    languages: [c, cpp]
+    severity: HIGH
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: getenv("QUERY_STRING")
+          - pattern: getenv("HTTP_REFERER")
+          - pattern: getenv("HTTP_HOST")
+          - pattern: getenv("HTTP_USER_AGENT")
+          - pattern: getenv("PATH_INFO")
+          - pattern: getenv("REQUEST_URI")
+    pattern-sinks:
+      - pattern-either:
+          - pattern: sprintf($BUF, $FMT, ..., $X, ...)
+          - pattern: snprintf($BUF, $SZ, $FMT, ..., $X, ...)
+    metadata:
+      cwe: ["CWE-78", "CWE-134"]
+      owasp_top_10: ["A03:2021-Injection"]
+      tags: ["security", "firmware", "embedded", "cgi", "command-injection", "taint"]
+
+  - id: raptor.firmware.cgi.query-string-to-strcpy
+    message: >
+      CGI input is copied directly into a stack buffer via strcpy/strncpy.
+      Without bounds checking this is a stack-based buffer overflow.
+    languages: [c, cpp]
+    severity: HIGH
+    mode: taint
+    pattern-sources:
+      - pattern-either:
+          - pattern: getenv("QUERY_STRING")
+          - pattern: getenv("HTTP_HOST")
+          - pattern: getenv("HTTP_USER_AGENT")
+          - pattern: getenv("PATH_INFO")
+          - pattern: getenv("REQUEST_URI")
+    pattern-sinks:
+      - pattern-either:
+          - pattern: strcpy($DST, $SRC)
+          - pattern: strcat($DST, $SRC)
+    metadata:
+      cwe: ["CWE-121"]
+      owasp_top_10: ["A03:2021-Injection"]
+      tags: ["security", "firmware", "embedded", "cgi", "stack-overflow", "taint"]
