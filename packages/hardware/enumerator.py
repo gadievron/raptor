@@ -2,20 +2,23 @@
 """
 RAPTOR Hardware Security Enumerator
 
-Automated interface discovery for unknown wired targets using Glasgow.
+Automated interface discovery for unknown wired targets using Glasgow. This is still very much a WIP by me (danielcuthbert) but has proven to be useful.
 
 Stages:
   0. Glasgow device check
   1. Passive logic capture (10s) — user power-cycles target
   2. I2C scan (adjacent pin pairs, safe ACK probing)
-  3. SPI flash detection (4-pin groups, JEDEC identify)
-  4. UART detection (active pins × common baud rates)
-  5. JTAG brute-force (opt-in via --jtag, 5-10 min)
+  3. UART detection (active pins × common baud rates)
+  4. JTAG brute-force (opt-in via --jtag, 5-10 min)
 
 Output: hardware-report.json written to the output directory.
 
 Glasgow installation: https://glasgow-embedded.org/latest/install.html
-Note: 'pip install glasgow' installs a placeholder (0.0.0) — install from source.
+Note: 'pip install glasgow' installs a placeholder (0.0.0) — install from source. We should help users with this error message if we detect the placeholder version and also help the project too.
+
+Note: SPI flash detection and Vsense checks are intentionally excluded from automated
+enumeration. SPI requires manual pin assignment to avoid false positives; Vsense
+probing on incorrect wiring risks damaging the target on a one-shot opportunity.
 """
 
 import argparse
@@ -35,7 +38,6 @@ from packages.hardware.protocols.passive import (
     filter_pins_by_noise_floor,
 )
 from packages.hardware.protocols.i2c import detect_i2c
-from packages.hardware.protocols.spi import detect_spi
 from packages.hardware.protocols.uart import detect_uart
 from packages.hardware.protocols.jtag import detect_jtag
 
@@ -65,23 +67,7 @@ def _make_recommendations(findings: list, not_detected: list) -> list:
     for f in findings:
         proto = f.get("protocol", "")
 
-        if proto == "spi_flash":
-            chip = f.get("chip", "SPI flash")
-            p = f.get("pins", {})
-            pin_args = (
-                f"--pins-cs {p.get('cs', 0)} "
-                f"--pins-sck {p.get('sck', 1)} "
-                f"--pins-mosi {p.get('mosi', 2)} "
-                f"--pins-miso {p.get('miso', 3)}"
-            )
-            cap = f.get("capacity_mb")
-            cap_str = f" ({cap}MB)" if cap else ""
-            recs.append(
-                f"{chip}{cap_str} confirmed — extract with: "
-                f"glasgow run memory-25x -V3.3 {pin_args} read flash.bin"
-            )
-
-        elif proto == "uart":
+        if proto == "uart":
             baud = f.get("baud_rate", "?")
             pin = f.get("pins", {}).get("rx", "?")
             notes = f.get("notes", "")
@@ -132,7 +118,6 @@ class HardwareEnumerator:
         run_baseline: bool = False,
         noise_floor_file: Optional[str] = None,
         snr_threshold: float = 10.0,
-        vsense_check: bool = False,
     ):
         self.pins = pins
         self.voltage = voltage
@@ -142,7 +127,6 @@ class HardwareEnumerator:
         self.run_baseline = run_baseline
         self.noise_floor_file = noise_floor_file
         self.snr_threshold = snr_threshold
-        self.vsense_check = vsense_check
         self.glasgow = GlasgowRunner()
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -170,9 +154,6 @@ class HardwareEnumerator:
 
         # Validation state accumulated across stages
         validation = {
-            "vsense_check": self.vsense_check,
-            "vsense_v": None,
-            "target_powered": None,
             "baseline_captured": False,
             "snr_threshold": self.snr_threshold,
             "noise_filtered_pins": [],
@@ -195,24 +176,6 @@ class HardwareEnumerator:
         print(f"  Glasgow: {glasgow_info.get('version', 'detected')}")
         if glasgow_info.get("serial"):
             print(f"  Serial:  {glasgow_info['serial']}")
-
-        # Stage 0.1: Vsense check (opt-in)
-        if self.vsense_check:
-            print("\n[Stage 0.1] Vsense check...")
-            vsense = self.glasgow.vsense(port='A')
-            validation["vsense_v"] = vsense["vsense_v"]
-            validation["target_powered"] = vsense["powered"]
-            if not vsense["powered"]:
-                print(
-                    f"  WARNING: Vsense={vsense['vsense_v']}V — target may be off "
-                    f"or Vsense unconnected"
-                )
-                print(
-                    f"  Continuing, but results may be noise. "
-                    f"Use --baseline to establish a noise floor."
-                )
-            else:
-                print(f"  Target Vsense: {vsense['vsense_v']}V — powered")
 
         # Stage 0.5: Noise baseline (opt-in)
         noise_counts: dict = {}
@@ -270,21 +233,8 @@ class HardwareEnumerator:
         else:
             print("  No I2C devices detected")
 
-        # Stage 3: SPI flash detection
-        print("\n[Stage 3] SPI flash detection...")
-        spi_findings = detect_spi(self.glasgow, active_pins, self.out_dir, self.voltage)
-        if spi_findings:
-            for f in spi_findings:
-                p = f["pins"]
-                print(
-                    f"  {f.get('chip', 'SPI flash')} "
-                    f"[CS={p['cs']} SCK={p['sck']} MOSI={p['mosi']} MISO={p['miso']}]"
-                )
-        else:
-            print("  No SPI flash detected")
-
-        # Stage 4: UART detection
-        print("\n[Stage 4] UART detection...")
+        # Stage 3: UART detection
+        print("\n[Stage 3] UART detection...")
         uart_findings = detect_uart(self.glasgow, active_pins, self.out_dir, self.voltage)
         if uart_findings:
             for f in uart_findings:
@@ -296,10 +246,10 @@ class HardwareEnumerator:
         else:
             print("  No UART activity detected")
 
-        # Stage 5: JTAG (opt-in)
+        # Stage 4: JTAG (opt-in)
         jtag_findings = []
         if self.run_jtag:
-            print("\n[Stage 5] JTAG brute-force scan (this may take several minutes)...")
+            print("\n[Stage 4] JTAG brute-force scan (this may take several minutes)...")
             jtag_findings = detect_jtag(
                 self.glasgow, active_pins, self.out_dir, self.voltage
             )
@@ -309,14 +259,14 @@ class HardwareEnumerator:
             else:
                 print("  No JTAG chain detected")
         else:
-            print("\n[Stage 5] JTAG scan skipped (use --jtag to enable)")
+            print("\n[Stage 4] JTAG scan skipped (use --jtag to enable)")
 
         # Compile report
-        all_findings = i2c_findings + spi_findings + uart_findings + jtag_findings
+        all_findings = i2c_findings + uart_findings + jtag_findings
         detected_protos = {f["protocol"] for f in all_findings}
 
         not_detected = [
-            p for p in ["i2c", "spi_flash", "uart"]
+            p for p in ["i2c", "uart"]
             if p not in detected_protos
         ]
         if self.run_jtag and "jtag" not in detected_protos:
@@ -377,13 +327,14 @@ def main():
         epilog=f"""
 Stages:
   0.   Glasgow device check
-  0.1  Vsense check (--vsense-check): warn if target reads 0V
   0.5  Noise baseline (--baseline): capture with target OFF to establish noise floor
   1.   Passive logic capture (power-cycle target during this window)
   2.   I2C bus scan
-  3.   SPI flash JEDEC identify
-  4.   UART baud-rate detection
-  5.   JTAG brute-force (opt-in via --jtag)
+  3.   UART baud-rate detection
+  4.   JTAG brute-force (opt-in via --jtag)
+
+Note: SPI flash detection is not automated — identify pins manually then use:
+  glasgow run memory-25x -V3.3 --pins-cs <CS> --pins-sck <SCK> --pins-mosi <MOSI> --pins-miso <MISO> read flash.bin
 
 Glasgow installation note:
   'pip install glasgow' installs a placeholder (0.0.0).
@@ -393,8 +344,8 @@ Examples:
   # Default: probe pins 0-7 at 3.3V
   python3 raptor.py hardware --voltage 3.3 --pins 0-7
 
-  # Focus on known pin range at 1.8V with noise validation
-  python3 raptor.py hardware --voltage 1.8 --pins 0-7 --baseline --vsense-check
+  # Focus on known pin range at 1.8V with noise baseline
+  python3 raptor.py hardware --voltage 1.8 --pins 0-7 --baseline
 
   # Reuse a previously captured baseline
   python3 raptor.py hardware --voltage 1.8 --pins 0-7 --noise-floor .out/hardware-xyz/noise-baseline.json
@@ -449,12 +400,6 @@ Examples:
         metavar="N",
         help="Minimum signal-to-noise ratio to treat a pin as active (default: 10)",
     )
-    parser.add_argument(
-        "--vsense-check",
-        action="store_true",
-        help="Warn if target Vsense reads 0V before capturing (Vsense must be wired)",
-    )
-
     args = parser.parse_args()
 
     if args.out:
@@ -474,7 +419,6 @@ Examples:
         run_baseline=args.baseline,
         noise_floor_file=args.noise_floor,
         snr_threshold=args.snr_threshold,
-        vsense_check=args.vsense_check,
     )
 
     try:

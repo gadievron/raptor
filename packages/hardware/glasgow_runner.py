@@ -2,7 +2,9 @@
 """
 Glasgow Interface Explorer subprocess wrapper.
 
-Wraps the glasgow CLI for use in the hardware enumeration pipeline.
+Wraps the glasgow CLI for use in the hardware enumeration pipeline. There might be better ways to do this but for now it works ok. 
+
+by Daniel Cuthbert (@danielcuthbert) 
 
 Installation note: The 'glasgow' pip package (version 0.0.0) is a placeholder.
 Install the real Glasgow software from source:
