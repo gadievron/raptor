@@ -1,0 +1,57 @@
+rules:
+  - id: raptor.firmware.creds.strcmp-hardcoded-password
+    message: >
+      Password is compared against a hardcoded string literal with strcmp/strncmp.
+      The credential is recoverable by strings(1) or decompilation.
+      Use a proper hashed credential store.
+    languages: [c, cpp]
+    severity: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: strcmp($INPUT, "...")
+          - pattern: strcmp("...", $INPUT)
+          - pattern: strncmp($INPUT, "...", $N)
+          - pattern: strncmp("...", $INPUT, $N)
+      - metavariable-regex:
+          metavariable: $INPUT
+          regex: (?i)(pass(word|wd)?|passwd|secret|pin|auth|cred|token|key)
+    metadata:
+      cwe: ["CWE-259", "CWE-798"]
+      tags: ["security", "firmware", "embedded", "hardcoded-credentials"]
+
+  - id: raptor.firmware.creds.hardcoded-password-assignment
+    message: >
+      A password/secret variable is assigned a hardcoded string literal.
+      Hardcoded credentials are recoverable from the binary image.
+    languages: [c, cpp]
+    severity: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: char $VAR[] = "..."
+          - pattern: char *$VAR = "..."
+          - pattern: const char *$VAR = "..."
+          - pattern: const char $VAR[] = "..."
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i)(pass(word|wd)?|passwd|secret|pin|auth_key|api_key|admin_pass|default_pass)
+    metadata:
+      cwe: ["CWE-259", "CWE-798"]
+      tags: ["security", "firmware", "embedded", "hardcoded-credentials"]
+
+  - id: raptor.firmware.creds.default-admin-credential
+    message: >
+      Hardcoded default admin/root credential detected. Even if intended as a
+      default, these are routinely catalogued in vulnerability databases and
+      exploited at scale against embedded devices.
+    languages: [c, cpp]
+    severity: CRITICAL
+    pattern-either:
+      - pattern: strcmp($X, "admin")
+      - pattern: strcmp($X, "password")
+      - pattern: strcmp($X, "12345")
+      - pattern: strcmp($X, "1234")
+      - pattern: strcmp($X, "root")
+      - pattern: strcmp($X, "")
+    metadata:
+      cwe: ["CWE-1392", "CWE-798"]
+      tags: ["security", "firmware", "embedded", "default-credentials"]
