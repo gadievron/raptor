@@ -22,7 +22,7 @@ MAX_PERMUTATIONS = 2000
 
 def _parse_jtag_output(stdout: str) -> list:
     """
-    Parse glasgow jtag-probe scan-ir output for devices in the chain.
+    Parse glasgow jtag-probe scan output for devices in the chain.
 
     Looks for IDCODE values in the output.
     Returns list of device dicts.
@@ -74,12 +74,12 @@ def detect_jtag(
         result = glasgow.run(
             [
                 "run", "jtag-probe",
-                f"-V{voltage}",
-                "--pins-tck", str(tck),
-                "--pins-tdi", str(tdi),
-                "--pins-tdo", str(tdo),
-                "--pins-tms", str(tms),
-                "scan-ir",
+                "--voltage", str(voltage),
+                "--tck", f"A{tck}",
+                "--tdi", f"A{tdi}",
+                "--tdo", f"A{tdo}",
+                "--tms", f"A{tms}",
+                "scan",
             ],
             timeout=8,
         )

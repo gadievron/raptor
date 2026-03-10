@@ -71,10 +71,10 @@ def detect_i2c(
 
             result = glasgow.run(
                 [
-                    "run", "i2c-initiator",
-                    f"-V{voltage}",
-                    "--pins-scl", str(scl),
-                    "--pins-sda", str(sda),
+                    "run", "i2c-controller",
+                    "--voltage", str(voltage),
+                    "--scl", f"A{scl}",
+                    "--sda", f"A{sda}",
                     "scan",
                 ],
                 timeout=8,

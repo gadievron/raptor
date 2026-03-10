@@ -338,6 +338,99 @@ def run_codeql(repo_path: Path, out_dir: Path, languages):
     return sarif_paths
 
 
+# ELF e_machine values → architecture name
+_ELF_ARCH = {
+    0x03: "x86",
+    0x08: "mips",
+    0x28: "arm",
+    0x3E: "x86_64",
+    0xB7: "aarch64",
+    0xF3: "riscv",
+}
+
+# Filename substrings that indicate high-value targets in firmware
+_HIGH_VALUE_NAMES = (
+    "httpd", "lighttpd", "uhttpd", "nginx", "apache",
+    "cgi", "telnetd", "sshd", "dropbear", "busybox",
+    "upnpd", "miniupnpd", "boa", "goahead",
+    "nvram", "cfgd", "ated", "wpa_supplicant",
+)
+
+
+def _elf_arch(path: Path) -> Optional[str]:
+    """Return architecture string from ELF e_machine field, or None if not ELF."""
+    try:
+        header = path.read_bytes()[:20]
+    except Exception:
+        return None
+    if header[:4] != b'\x7fELF':
+        return None
+    # e_machine is bytes 18-19, little-endian for LE targets, big-endian for BE
+    # Try LE first; MIPS BE will still be identified by value
+    e_machine = int.from_bytes(header[18:20], "little")
+    arch = _ELF_ARCH.get(e_machine)
+    if arch is None:
+        # Try big-endian (MIPS EB, some MIPS variants)
+        e_machine_be = int.from_bytes(header[18:20], "big")
+        arch = _ELF_ARCH.get(e_machine_be, f"unknown(0x{e_machine:04x})")
+    return arch
+
+
+def _interest_score(name: str) -> int:
+    """Score a binary filename by security interest (higher = more interesting)."""
+    name_lower = name.lower()
+    for substr in _HIGH_VALUE_NAMES:
+        if substr in name_lower:
+            return 10
+    if name_lower.endswith(".cgi"):
+        return 10
+    if any(x in name_lower for x in ("web", "http", "net", "wan", "lan")):
+        return 5
+    return 1
+
+
+def inventory_firmware(firmware_root: Path) -> dict:
+    """
+    Walk an extracted firmware root, find all ELF binaries, and return an
+    inventory sorted by interest score then size.
+
+    Returns a dict with:
+      - binaries: list of {path, size_bytes, arch, interest_score}
+      - detected_arch: most common architecture across all ELFs (or "unknown")
+      - total_elfs: count
+      - high_value_targets: subset with interest_score >= 10
+    """
+    binaries = []
+    arch_counts: dict = {}
+
+    for p in sorted(firmware_root.rglob("*")):
+        if not p.is_file():
+            continue
+        arch = _elf_arch(p)
+        if arch is None:
+            continue
+        size = p.stat().st_size
+        score = _interest_score(p.name)
+        binaries.append({
+            "path": str(p.relative_to(firmware_root)),
+            "size_bytes": size,
+            "arch": arch,
+            "interest_score": score,
+        })
+        arch_counts[arch] = arch_counts.get(arch, 0) + 1
+
+    binaries.sort(key=lambda x: (-x["interest_score"], -x["size_bytes"]))
+
+    detected_arch = max(arch_counts, key=arch_counts.get) if arch_counts else "unknown"
+
+    return {
+        "binaries": binaries,
+        "detected_arch": detected_arch,
+        "total_elfs": len(binaries),
+        "high_value_targets": [b for b in binaries if b["interest_score"] >= 10],
+    }
+
+
 def sha256_tree(root: Path) -> str:
     """Hash directory tree with size limits and consistent chunk size."""
     import hashlib
@@ -364,30 +457,67 @@ def sha256_tree(root: Path) -> str:
 
 def main():
     ap = argparse.ArgumentParser(description="RAPTOR Automated Code Security Agent with parallel scanning")
-    ap.add_argument("--repo", required=True, help="Path or Git URL")
+
+    # Source — one of --repo or --firmware-root is required
+    source_group = ap.add_mutually_exclusive_group(required=True)
+    source_group.add_argument("--repo", help="Source code path or Git URL")
+    source_group.add_argument(
+        "--firmware-root",
+        metavar="PATH",
+        help="Extracted firmware filesystem root (enables firmware scan mode)",
+    )
+
     ap.add_argument("--policy_version", default=RaptorConfig.DEFAULT_POLICY_VERSION)
     ap.add_argument(
         "--policy_groups",
-        default=RaptorConfig.DEFAULT_POLICY_GROUPS,
-        help="Comma-separated list of rule group names (e.g. crypto,secrets,injection,auth,all)",
+        default=None,
+        help=(
+            "Comma-separated rule groups (e.g. crypto,secrets,injection,all). "
+            "Defaults to 'firmware,injection,secrets' in firmware mode, "
+            f"'{RaptorConfig.DEFAULT_POLICY_GROUPS}' otherwise."
+        ),
     )
     ap.add_argument("--codeql", action="store_true", help="Run CodeQL stage if available")
     ap.add_argument("--keep", action="store_true", help="Keep temp working directory")
     ap.add_argument("--sequential", action="store_true", help="Disable parallel scanning (for debugging)")
+    ap.add_argument("--output", metavar="PATH", help="Explicit output directory (auto-generated if omitted)")
+
+    # Firmware-mode options
+    ap.add_argument(
+        "--arch",
+        default="auto",
+        choices=["auto", "arm", "aarch64", "mips", "mipseb", "mipsel", "x86", "x86_64", "riscv"],
+        help="Target architecture (auto = detect from ELF headers)",
+    )
+    ap.add_argument("--kernel-version", metavar="VERSION", help="Kernel version string (recorded in manifest)")
+
     args = ap.parse_args()
+
+    firmware_mode = args.firmware_root is not None
+
+    # Apply default policy groups based on mode
+    if args.policy_groups is None:
+        args.policy_groups = "firmware,injection,secrets" if firmware_mode else RaptorConfig.DEFAULT_POLICY_GROUPS
 
     start_time = time.time()
     tmp = Path(tempfile.mkdtemp(prefix="raptor_auto_"))
     repo_path = None
 
     logger.info(f"Starting automated code security scan")
-    logger.info(f"Repository: {args.repo}")
+    if firmware_mode:
+        logger.info(f"Mode: firmware  root={args.firmware_root}")
+        logger.info(f"Arch: {args.arch}  kernel: {args.kernel_version or 'unspecified'}")
+    else:
+        logger.info(f"Repository: {args.repo}")
     logger.info(f"Policy version: {args.policy_version}")
     logger.info(f"Policy groups: {args.policy_groups}")
 
     try:
-        # Acquire repository
-        if args.repo.startswith(("http://", "https://", "git@")):
+        if firmware_mode:
+            repo_path = Path(args.firmware_root).resolve()
+            if not repo_path.exists():
+                raise RuntimeError(f"firmware-root does not exist: {repo_path}")
+        elif args.repo.startswith(("http://", "https://", "git@")):
             repo_path = safe_clone(args.repo, tmp)
         else:
             repo_path = Path(args.repo).resolve()
@@ -404,11 +534,34 @@ def main():
 
         logger.info(f"Using {len(rules_dirs)} rule directories")
 
-        # Generate output directory with repository name and timestamp
-        repo_name = repo_path.name
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        out_dir = RaptorConfig.get_out_dir() / f"scan_{repo_name}_{timestamp}"
+        # Generate output directory
+        if args.output:
+            out_dir = Path(args.output).resolve()
+        else:
+            label = "firmware" if firmware_mode else repo_path.name
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            out_dir = RaptorConfig.get_out_dir() / f"scan_{label}_{timestamp}"
         out_dir.mkdir(parents=True, exist_ok=True)
+
+        # Firmware inventory (firmware mode only)
+        firmware_inventory = None
+        detected_arch = args.arch
+        if firmware_mode:
+            logger.info("Inventorying ELF binaries in firmware root...")
+            firmware_inventory = inventory_firmware(repo_path)
+            (out_dir / "firmware-inventory.json").write_text(
+                json.dumps(firmware_inventory, indent=2)
+            )
+            if args.arch == "auto":
+                detected_arch = firmware_inventory["detected_arch"]
+                logger.info(f"Detected architecture: {detected_arch}")
+            hvt = firmware_inventory["high_value_targets"]
+            logger.info(
+                f"Found {firmware_inventory['total_elfs']} ELFs, "
+                f"{len(hvt)} high-value targets"
+            )
+            for t in hvt[:5]:
+                logger.info(f"  {t['path']}  ({t['arch']}, {t['size_bytes']} bytes)")
 
         # Manifest
         logger.info("Computing repository hash...")
@@ -416,14 +569,18 @@ def main():
 
         manifest = {
             "agent": "auto_codesec",
-            "version": "2.0.0",  # Updated version with parallel scanning
+            "version": "2.1.0",
             "repo_path": str(repo_path),
             "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "input_hash": repo_hash,
             "policy_version": args.policy_version,
             "policy_groups": groups,
             "parallel_scanning": not args.sequential,
+            "firmware_mode": firmware_mode,
         }
+        if firmware_mode:
+            manifest["arch"] = detected_arch
+            manifest["kernel_version"] = args.kernel_version or ""
         (out_dir / "scan-manifest.json").write_text(json.dumps(manifest, indent=2))
 
         # Semgrep stage - Use parallel scanning by default
@@ -481,6 +638,12 @@ def main():
             "metrics": metrics,
             "duration": duration,
         }
+        if firmware_inventory is not None:
+            result["firmware_inventory"] = {
+                "total_elfs": firmware_inventory["total_elfs"],
+                "detected_arch": firmware_inventory["detected_arch"],
+                "high_value_targets": firmware_inventory["high_value_targets"],
+            }
         print(json.dumps(result, indent=2))
         sys.exit(0)
     finally:

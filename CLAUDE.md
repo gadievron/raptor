@@ -104,14 +104,15 @@ The `/oss-forensics` command provides evidence-backed forensic investigation for
 
 The `/hardware` command provides guided hardware security research from physical reconnaissance through firmware extraction and analysis.
 
-**Usage:** `/hardware [--target <description>] [--firmware <path>] [--interface uart|spi|jtag|i2c]`
+**Usage:** `/hardware [--target <description>] [--firmware <path>] [--interface uart|spi|jtag|swd|i2c]`
 
 **Workflow:** Recon → Interface Enumeration → Extraction → Firmware Analysis
 
 **Skills** (in `.claude/skills/hardware-research/`):
 - `hardware-recon` - PCB inspection, chip ID, test point mapping, target map creation
 - `glasgow-interaction` - Glasgow Python API patterns, applet usage, scripted workflows
-- `jtag-exploitation` - JTAG/SWD chain enumeration, debug access, memory extraction, RDP bypass
+- `jtag-exploitation` - JTAG chain enumeration, boundary scan, debug access, chain ID
+- `swd-exploitation` - ARM SWD: DAP/AP traversal, CoreSight, memory extraction, STM32 RDP/nRF52 APPROTECT/LPC CRP bypass
 - `uart-exploitation` - UART discovery, baud detection, U-Boot exploitation, shell escape
 - `spi-flash-extraction` - SPI NOR flash ID, in-circuit/out-of-circuit read, verify, patch, write-back
 - `i2c-enumeration` - I2C bus scan, EEPROM read/write, secure element interaction
@@ -154,6 +155,7 @@ The `/validate` command validates that vulnerability findings are real, reachabl
 **When errors occur:** Load `tiers/recovery.md` (recovery protocol)
 **When requested:** Load `tiers/personas/[name].md` (expert personas)
 **When doing hardware security:** Load `tiers/personas/hardware_security_researcher.md` + `.claude/skills/hardware-research/SKILL.md`
+**When targeting ARM SWD:** Load `.claude/skills/hardware-research/swd-exploitation/SKILL.md`
 
 ---
 
