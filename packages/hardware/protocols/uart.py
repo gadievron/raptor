@@ -71,15 +71,18 @@ def detect_uart(
             result = glasgow.run(
                 [
                     "run", "uart",
-                    f"-V{voltage}",
+                    "--voltage", str(voltage),
                     "--baud", str(baud),
-                    "--pins-rx", str(pin),
-                    "record", str(capture_file),
+                    "--rx", f"A{pin}",
+                    "tty", "--stream",
                 ],
                 timeout=CAPTURE_DURATION + 5,
             )
 
-            sample = _read_sample(capture_file)
+            # Capture from stdout (tty --stream outputs raw UART data until timeout)
+            raw_stdout = result.get("stdout", "")
+            sample = raw_stdout.encode("latin-1", errors="replace")[:128]
+            capture_file.write_bytes(sample) if sample else None
             if not sample:
                 continue
 

@@ -28,7 +28,8 @@ This mirrors the methodology used by Joe Grand (hardware reverse engineering) an
 |-------|---------|-------------------|
 | `hardware-recon` | PCB photography, chip ID, test point mapping | Joe Grand |
 | `glasgow-interaction` | Glasgow Python API patterns and applet usage | Glasgow project |
-| `jtag-exploitation` | JTAG/SWD enumeration, boundary scan, debug access | Joe Grand, Joe FitzPatrick |
+| `jtag-exploitation` | JTAG enumeration, boundary scan, chain identification | Joe Grand, Joe FitzPatrick |
+| `swd-exploitation` | ARM SWD — DAP/AP traversal, CoreSight, memory extraction, vendor protections (STM32 RDP, nRF52 APPROTECT, LPC CRP), bypass techniques | Joe Grand, Joe FitzPatrick |
 | `uart-exploitation` | UART discovery, baud detection, console exploitation | Joe FitzPatrick |
 | `spi-flash-extraction` | SPI/QSPI flash dump, verify, and diff workflows | Joe FitzPatrick |
 | `i2c-enumeration` | I2C bus scan, EEPROM read/write, device attacks | Joe FitzPatrick |
@@ -40,7 +41,8 @@ This mirrors the methodology used by Joe Grand (hardware reverse engineering) an
 
 ```
 Target in hand, unknown board       → load hardware-recon
-Have JTAG/SWD pinout                → load jtag-exploitation
+Have JTAG pinout (4-wire)            → load jtag-exploitation
+Have SWD pinout (2-wire, ARM)        → load swd-exploitation
 UART shell or bootloader visible    → load uart-exploitation
 SPI flash identified on board       → load spi-flash-extraction
 I2C devices visible on bus          → load i2c-enumeration

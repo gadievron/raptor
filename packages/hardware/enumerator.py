@@ -72,28 +72,31 @@ def _make_recommendations(findings: list, not_detected: list) -> list:
             pin = f.get("pins", {}).get("rx", "?")
             notes = f.get("notes", "")
             recs.append(
-                f"UART at {baud} baud on pin {pin}"
+                f"UART at {baud} baud on pin A{pin}"
                 + (f" [{notes}]" if notes else "")
-                + f" — connect with: glasgow run uart -V3.3 --baud {baud} "
-                f"--pins-rx {pin} --pins-tx <TX_PIN> console"
+                + f" — connect with: glasgow run uart --voltage 3.3 --baud {baud} "
+                f"--rx A{pin} --tx <TX_PIN> tty"
             )
 
         elif proto == "i2c":
             p = f.get("pins", {})
             devices = f.get("devices", [])
             recs.append(
-                f"I2C bus SCL={p.get('scl','?')} SDA={p.get('sda','?')}, "
+                f"I2C bus SCL=A{p.get('scl','?')} SDA=A{p.get('sda','?')}, "
                 f"devices: {', '.join(devices)} — "
-                f"read with: glasgow run i2c-initiator -V3.3 "
-                f"--pins-scl {p.get('scl','?')} --pins-sda {p.get('sda','?')} read <ADDR> <LEN>"
+                f"scan with: glasgow run i2c-controller --voltage 3.3 "
+                f"--scl A{p.get('scl','?')} --sda A{p.get('sda','?')} scan"
             )
 
         elif proto == "jtag":
             p = f.get("pins", {})
             recs.append(
-                f"JTAG chain: TCK={p.get('tck','?')} TDI={p.get('tdi','?')} "
-                f"TDO={p.get('tdo','?')} TMS={p.get('tms','?')} — "
-                f"load jtag-exploitation skill for debug access and memory extraction"
+                f"JTAG chain: TCK=A{p.get('tck','?')} TDI=A{p.get('tdi','?')} "
+                f"TDO=A{p.get('tdo','?')} TMS=A{p.get('tms','?')} — "
+                f"enumerate with: glasgow run jtag-probe --voltage 3.3 "
+                f"--tck A{p.get('tck','?')} --tdi A{p.get('tdi','?')} "
+                f"--tdo A{p.get('tdo','?')} --tms A{p.get('tms','?')} scan — "
+                f"then load jtag-exploitation skill"
             )
 
     if any("jtag" in s for s in not_detected):

@@ -46,7 +46,7 @@ class GlasgowRunner:
 
     def identify(self) -> dict:
         """
-        Run 'glasgow identify' to detect a connected device.
+        Detect a connected Glasgow device using 'glasgow list'.
 
         Returns:
             dict with keys: found (bool), version (str), serial (str), raw (str)
@@ -63,25 +63,26 @@ class GlasgowRunner:
                 ),
             }
 
-        result = self.run(["identify"], timeout=10)
-        if result["returncode"] != 0 or not result["stdout"].strip():
+        result = self.run(["list"], timeout=10)
+        raw = result["stdout"].strip()
+
+        if result["returncode"] != 0 or not raw:
             return {
                 "found": False,
                 "version": "",
                 "serial": "",
-                "raw": result["stdout"] + result["stderr"],
-                "error": result["stderr"].strip() or "No device responded",
+                "raw": raw,
+                "error": result["stderr"].strip() or "No device found",
             }
 
-        raw = result["stdout"]
+        # 'glasgow list' outputs one serial per line, e.g. "C3-20240527T113341Z"
+        # Parse revision from serial prefix (C3 = revC3, etc.)
+        serials = [line.strip() for line in raw.splitlines() if line.strip()]
+        serial = serials[0] if serials else ""
         version = ""
-        serial = ""
-        for line in raw.splitlines():
-            line_lower = line.lower()
-            if "version" in line_lower or "rev" in line_lower:
-                version = line.strip()
-            if "serial" in line_lower:
-                serial = line.strip()
+        if serial and "-" in serial:
+            rev_part = serial.split("-")[0]   # e.g. "C3"
+            version = f"rev{rev_part}"
 
         return {
             "found": True,
