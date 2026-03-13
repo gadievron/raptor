@@ -8,6 +8,7 @@ validation, and cleanup.
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -110,6 +111,104 @@ class DatabaseManager:
             return cli_path
 
         return None
+
+    def _run_build_commands(
+        self,
+        cmd_string: str,
+        cwd: Path,
+        env: Dict[str, str],
+        timeout: int,
+    ) -> bool:
+        """
+        Run build commands safely without shell=True.
+
+        Parses && and || operators and executes commands sequentially in Python.
+        - && (AND): Run next command only if previous succeeded
+        - || (OR): Run next command only if previous failed
+
+        Args:
+            cmd_string: Build command string (e.g., "npm install && npm run build")
+            cwd: Working directory
+            env: Environment variables
+            timeout: Timeout in seconds
+
+        Returns:
+            True if build succeeded, False otherwise
+        """
+        import shlex
+
+        def run_single_command(cmd: str) -> bool:
+            """Run a single command and return success status."""
+            cmd = cmd.strip()
+            if not cmd:
+                return True
+
+            try:
+                # Use shlex.split to safely tokenize the command
+                args = shlex.split(cmd)
+                if not args:
+                    return True
+
+                logger.debug(f"Running: {args}")
+                result = subprocess.run(
+                    args,
+                    cwd=cwd,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+                if result.returncode != 0:
+                    logger.debug(f"Command failed (exit {result.returncode}): {result.stderr[:200]}")
+                    return False
+                return True
+            except subprocess.TimeoutExpired:
+                logger.warning(f"Command timed out: {cmd}")
+                return False
+            except Exception as e:
+                logger.warning(f"Command failed: {cmd} - {e}")
+                return False
+
+        # Parse the command string for && and || operators
+        # We handle them left-to-right with proper precedence
+        # Split on || first (lower precedence), then && within each part
+
+        try:
+            # Handle || (OR) - split and try alternatives
+            or_parts = cmd_string.split("||")
+
+            for or_part in or_parts:
+                or_part = or_part.strip()
+                if not or_part:
+                    continue
+
+                # Handle && (AND) within this OR branch
+                and_parts = or_part.split("&&")
+                all_and_succeeded = True
+
+                for and_part in and_parts:
+                    and_part = and_part.strip()
+                    if not and_part:
+                        continue
+
+                    success = run_single_command(and_part)
+                    if not success:
+                        all_and_succeeded = False
+                        break  # Stop this && chain
+
+                if all_and_succeeded:
+                    # This OR branch succeeded, we're done
+                    logger.info("Build command completed successfully")
+                    return True
+                # Otherwise try next || alternative
+
+            # All OR alternatives failed
+            logger.warning("Build command failed, continuing with analysis")
+            return False
+
+        except Exception as e:
+            logger.warning(f"Build command failed: {e}, continuing with analysis")
+            return False
 
     def get_codeql_version(self) -> Optional[str]:
         """Get CodeQL version."""
@@ -330,10 +429,38 @@ class DatabaseManager:
             f"--source-root={repo_path}",
         ]
 
-        # Add build command if provided
+        # Handle build command based on language type
+        # Interpreted languages (JS/TS/Python/Ruby): Run build separately, then analyze
+        # Compiled languages (C/C++/Java/Go/C#): Pass to CodeQL for build tracing
+        interpreted_languages = {"javascript", "typescript", "python", "ruby"}
+
         if build_system and build_system.command:
-            cmd.append(f"--command={build_system.command}")
-            logger.info(f"Build command: {build_system.command}")
+            build_cmd = build_system.command
+
+            if language in interpreted_languages:
+                # For interpreted languages, run build separately before CodeQL
+                # CodeQL doesn't need to trace the build - it just needs source files
+                logger.info(f"Running build command separately (interpreted language): {build_cmd}")
+                logger.info(f"Working directory: {build_system.working_dir}")
+
+                build_env = RaptorConfig.get_safe_env()
+                if build_system.env_vars:
+                    build_env.update(build_system.env_vars)
+
+                # Run build commands safely without shell=True
+                # Parse && and || operators and execute in Python
+                self._run_build_commands(
+                    build_cmd,
+                    cwd=build_system.working_dir,
+                    env=build_env,
+                    timeout=RaptorConfig.CODEQL_TIMEOUT // 2,
+                )
+            else:
+                # For compiled languages, pass command to CodeQL for build tracing
+                # CodeQL needs to intercept compiler calls
+                cmd.extend(["--command", build_cmd])
+                logger.info(f"Build command (for CodeQL tracing): {build_cmd}")
+
             logger.info(f"Working directory: {build_system.working_dir}")
         else:
             logger.info("No build command (interpreted language or no-build mode)")
