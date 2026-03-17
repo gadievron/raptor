@@ -26,7 +26,7 @@ from core.config import RaptorConfig
 from core.logging import get_logger
 from core.progress import HackerProgress
 from core.sarif.parser import parse_sarif_findings, deduplicate_findings
-from llm.client import LLMClient
+from llm.client import LLMClient, _is_auth_error
 from llm.config import LLMConfig, detect_llm_availability
 from llm.providers import ClaudeCodeProvider
 
@@ -870,7 +870,10 @@ Provide honest, technical assessments. Don't overstate severity, but don't downp
 
         except Exception as e:
             logger.error(f"✗ LLM analysis failed: {e}")
-            logger.warning("  Using fallback heuristic analysis")
+            if _is_auth_error(e):
+                print("⚠️  LLM authentication failed — check your API key. Falling back to heuristic analysis.")
+            else:
+                logger.warning("  Using fallback heuristic analysis")
             # Fallback to marking as potentially exploitable
             vuln.exploitable = vuln.level == "error"
             vuln.exploitability_score = 0.5
@@ -982,6 +985,8 @@ Make exploits safe for authorised testing only and not sold to russians. coz tha
 
         except Exception as e:
             logger.error(f"   ✗ Exploit generation failed: {e}")
+            if _is_auth_error(e):
+                print("⚠️  LLM authentication failed — check your API key.")
             return False
 
     def generate_patch(self, vuln: VulnerabilityContext) -> bool:
@@ -1109,6 +1114,8 @@ Balance security with usability and performance."""
 
         except Exception as e:
             logger.error(f"   ✗ Patch generation failed: {e}")
+            if _is_auth_error(e):
+                print("⚠️  LLM authentication failed — check your API key.")
             return False
 
     def _extract_code(self, content: str) -> Optional[str]:

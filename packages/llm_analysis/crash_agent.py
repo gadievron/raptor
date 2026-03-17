@@ -13,7 +13,7 @@ from typing import Any, Dict, List
 from core.logging import get_logger
 from packages.binary_analysis import CrashContext
 from packages.fuzzing import Crash
-from .llm.client import LLMClient
+from .llm.client import LLMClient, _is_auth_error
 from .llm.config import LLMConfig, detect_llm_availability
 from .llm.providers import ClaudeCodeProvider
 
@@ -287,6 +287,8 @@ Be honest about exploitability - not every crash is exploitable."""
 
         except Exception as e:
             logger.error(f"✗ LLM analysis failed: {e}")
+            if _is_auth_error(e):
+                print("⚠️  LLM authentication failed — check your API key.")
             return False
 
     def generate_exploit(self, crash_context: CrashContext) -> bool:
@@ -454,6 +456,8 @@ FULL LLM RESPONSE:
 
         except Exception as e:
             logger.error(f"   ✗ Exploit generation failed: {e}")
+            if _is_auth_error(e):
+                print("⚠️  LLM authentication failed — check your API key.")
             return False
 
     def _signal_name(self, signal: str) -> str:

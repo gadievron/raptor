@@ -56,6 +56,34 @@ def _sanitize_log_message(msg: str) -> str:
     return msg
 
 
+def _is_auth_error(error: Exception) -> bool:
+    """
+    Detect authentication/authorization errors from LLM providers.
+
+    Used to surface a clear console message when API keys are invalid,
+    rather than leaving the user to parse retry logs.
+
+    Args:
+        error: Exception from LiteLLM/provider
+
+    Returns:
+        True if error appears to be an auth/key error
+    """
+    if LITELLM_AVAILABLE:
+        try:
+            if isinstance(error, litellm.AuthenticationError):
+                return True
+        except AttributeError:
+            pass
+
+    error_str = str(error).lower()
+    return any(indicator in error_str for indicator in [
+        "401", "403", "authentication", "unauthorized", "invalid api key",
+        "invalid x-api-key", "api key not valid", "incorrect api key",
+        "permission denied", "access denied",
+    ])
+
+
 def _is_quota_error(error: Exception) -> bool:
     """
     Detect quota/rate limit errors using type-based + string-based detection.
