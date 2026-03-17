@@ -10,15 +10,18 @@ Provides unified interface for multiple LLM providers:
 This enables true agentic behaviour with intelligent, context-aware analysis.
 """
 
-from .providers import LLMProvider, ClaudeProvider, OpenAIProvider, OllamaProvider
+from .providers import LLMProvider, ClaudeProvider, OpenAIProvider, OllamaProvider, ClaudeCodeProvider
 from .client import LLMClient
-from .config import LLMConfig
+from .config import LLMConfig, LLMAvailability, detect_llm_availability
 
 __all__ = [
     'LLMProvider',
     'ClaudeProvider',
     'OpenAIProvider',
     'OllamaProvider',
+    'ClaudeCodeProvider',
     'LLMClient',
     'LLMConfig',
+    'LLMAvailability',
+    'detect_llm_availability',
 ]

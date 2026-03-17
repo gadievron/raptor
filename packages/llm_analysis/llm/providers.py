@@ -382,6 +382,44 @@ class LiteLLMProvider(LLMProvider):
             raise
 
 
+class ClaudeCodeProvider:
+    """
+    LLM provider that signals 'Claude Code will handle this.'
+
+    Returns None from all generation methods. When the agentic pipeline
+    runs inside Claude Code with no external LLM configured, this provider
+    is used instead of LLMClient. The Python pipeline does mechanical prep
+    work (SARIF parsing, code extraction, dataflow analysis) and returns
+    structured findings for Claude Code to reason over.
+
+    Callers handle None returns gracefully — the same code path used when
+    an external LLM call fails.
+    """
+
+    def __init__(self):
+        self.total_tokens = 0
+        self.total_cost = 0.0
+
+    def generate(self, prompt: str, system_prompt: Optional[str] = None,
+                 **kwargs):
+        """Returns None — Claude Code will do the reasoning."""
+        return None
+
+    def generate_structured(self, prompt: str, schema: Dict[str, Any],
+                           system_prompt: Optional[str] = None):
+        """Returns (None, None) — Claude Code will do the reasoning."""
+        return None, None
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Return zero stats."""
+        return {
+            "total_requests": 0,
+            "total_cost": 0.0,
+            "budget_remaining": 0.0,
+            "providers": {},
+        }
+
+
 def create_provider(config: ModelConfig) -> LLMProvider:
     """
     Factory function to create appropriate provider.

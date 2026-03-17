@@ -10,6 +10,7 @@ Handles configuration for multiple LLM providers with support for:
 """
 
 import os
+import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -89,9 +90,14 @@ def _get_litellm_models() -> List[Dict]:
         return []
 
 
+_cached_thinking_model: Optional['ModelConfig'] = None
+_thinking_model_checked: bool = False
+
+
 def _get_best_thinking_model() -> Optional['ModelConfig']:
     """
     Automatically select the best thinking/reasoning model from LiteLLM config.
+    Cached per-process.
 
     Priority:
     1. Models with explicit reasoning support (gpt-5.2-thinking, gemini-3-deep-think)
@@ -100,8 +106,15 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
 
     Returns ModelConfig for best available thinking model, or None if none found.
     """
+    global _cached_thinking_model, _thinking_model_checked
+    if _thinking_model_checked:
+        return _cached_thinking_model
+
+    _thinking_model_checked = True
+
     models = _get_litellm_models()
     if not models:
+        _cached_thinking_model = None
         return None
 
     # Define priority order for thinking models (best first)
@@ -213,6 +226,7 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
     if best_model:
         logger.info(f"Auto-selected thinking model: {best_model.provider}/{best_model.model_name} (score: {best_score})")
 
+    _cached_thinking_model = best_model
     return best_model
 
 
@@ -235,30 +249,122 @@ def _validate_ollama_url(url: str) -> str:
     return url
 
 
+_cached_ollama_models: Optional[List[str]] = None
+_ollama_checked: bool = False
+
+
 def _get_available_ollama_models() -> List[str]:
-    """Get list of available Ollama models."""
+    """Get list of available Ollama models. Cached per-process to avoid repeated HTTP checks."""
+    global _cached_ollama_models, _ollama_checked
+    if _ollama_checked:
+        return _cached_ollama_models or []
+
+    _ollama_checked = True
     try:
         ollama_url = _validate_ollama_url(RaptorConfig.OLLAMA_HOST)
         response = requests.get(f"{ollama_url}/api/tags", timeout=2)
         if response.status_code == 200:
             data = response.json()
-            return [model['name'] for model in data.get('models', [])]
+            _cached_ollama_models = [model['name'] for model in data.get('models', [])]
+            return _cached_ollama_models
     except Exception as e:
         # Mask remote Ollama URLs for privacy
         ollama_display = RaptorConfig.OLLAMA_HOST if 'localhost' in RaptorConfig.OLLAMA_HOST or '127.0.0.1' in RaptorConfig.OLLAMA_HOST else '[REMOTE-OLLAMA]'
         logger.debug(f"Could not connect to Ollama at {ollama_display}: {e}")
+    _cached_ollama_models = []
     return []
 
 
-def _get_default_primary_model() -> 'ModelConfig':
+@dataclass
+class LLMAvailability:
+    """Result of LLM availability detection.
+
+    Single source of truth — no caller should check env vars,
+    PATH, or Ollama endpoints directly.
+    """
+    external_llm: bool  # An LLM reachable via LiteLLM (cloud keys, Ollama, LiteLLM config)
+    claude_code: bool   # Claude Code is available (running inside it, or installed on PATH)
+    llm_available: bool  # Someone will do the reasoning work (external_llm or claude_code)
+
+
+_cached_llm_availability: Optional[LLMAvailability] = None
+
+
+def detect_llm_availability() -> LLMAvailability:
+    """
+    Single source of truth for LLM availability.
+
+    Checks all possible LLM sources once and returns cached flags that
+    all callers should use instead of ad-hoc env var checks.
+    Result is cached per-process to avoid repeated Ollama HTTP checks.
+
+    Returns:
+        LLMAvailability with three flags: external_llm, claude_code, llm_available
+    """
+    global _cached_llm_availability
+    if _cached_llm_availability is not None:
+        return _cached_llm_availability
+
+    # Check cloud API keys
+    has_cloud_keys = bool(
+        os.getenv("ANTHROPIC_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+        or os.getenv("GEMINI_API_KEY")
+        or os.getenv("MISTRAL_API_KEY")
+    )
+
+    # Check LiteLLM config for models with valid keys
+    has_litellm_config = False
+    if not has_cloud_keys:
+        thinking_model = _get_best_thinking_model()
+        if thinking_model and thinking_model.api_key:
+            has_litellm_config = True
+
+    # Check Ollama reachability
+    has_ollama = bool(_get_available_ollama_models())
+
+    # Check Claude Code environment
+    in_claude_code = bool(os.getenv("CLAUDECODE"))
+    claude_on_path = shutil.which("claude") is not None
+    claude_code = in_claude_code or claude_on_path
+
+    external_llm = has_cloud_keys or has_litellm_config or has_ollama
+
+    availability = LLMAvailability(
+        external_llm=external_llm,
+        claude_code=claude_code,
+        llm_available=external_llm or claude_code,
+    )
+
+    logger.info(
+        f"LLM availability: external_llm={availability.external_llm}, "
+        f"claude_code={availability.claude_code}, "
+        f"llm_available={availability.llm_available}"
+    )
+
+    _cached_llm_availability = availability
+    return availability
+
+
+def _get_default_primary_model() -> Optional['ModelConfig']:
     """
     Get default primary model based on available providers.
 
+    Uses detect_llm_availability() as a fast gate to avoid redundant checks.
+
     Strategy:
-    1. Try automatic thinking model selection (reads LiteLLM config)
-    2. Fall back to API key detection with manual config
-    3. Fall back to Ollama if no cloud providers available
+    1. Check if any external LLM is available (cached detection)
+    2. Try automatic thinking model selection (reads LiteLLM config)
+    3. Fall back to API key detection with manual config
+    4. Fall back to Ollama if no cloud providers available
     """
+    # Fast gate: if no external LLM is available, return None immediately.
+    # This uses the cached detection result, avoiding redundant HTTP checks.
+    availability = detect_llm_availability()
+    if not availability.external_llm:
+        return None
+
+    # External LLM is available — select the best model.
     # Try automatic thinking model selection first
     thinking_model = _get_best_thinking_model()
     if thinking_model and thinking_model.api_key:
@@ -306,8 +412,8 @@ def _get_default_primary_model() -> 'ModelConfig':
             cost_per_1k_tokens=0.002,
         )
 
-    # Otherwise use Ollama with first available model
-    ollama_models = _get_available_ollama_models()
+    # Ollama — already confirmed available by detect_llm_availability()
+    ollama_models = _get_available_ollama_models()  # cached, no HTTP call
     if ollama_models:
         # Prefer general reasoning models for security analysis
         preferred = ['mistral', 'qwen', 'codellama', 'llama', 'gemma', 'deepseek-coder', 'deepseek']
@@ -330,15 +436,9 @@ def _get_default_primary_model() -> 'ModelConfig':
             cost_per_1k_tokens=0.0,
         )
 
-    # Fallback to Claude (will fail if no API key, but that's expected)
-    return ModelConfig(
-        provider="anthropic",
-        model_name="claude-opus-4.5",  # Use LiteLLM alias (consistent with other models)
-        api_key=os.getenv("ANTHROPIC_API_KEY", ""),
-        max_tokens=8192,
-        temperature=0.7,
-        cost_per_1k_tokens=0.015,  # Opus is more expensive than Sonnet
-    )
+    # Should not reach here if detect_llm_availability() said external_llm=True,
+    # but guard against race conditions or edge cases.
+    return None
 
 
 def _get_default_fallback_models() -> List['ModelConfig']:
@@ -353,6 +453,11 @@ def _get_default_fallback_models() -> List['ModelConfig']:
 
     Uses LiteLLM aliases (not underlying model IDs) to ensure compatibility.
     """
+    # No external LLM available — no fallbacks to configure
+    availability = detect_llm_availability()  # cached, no cost
+    if not availability.external_llm:
+        return []
+
     fallbacks = []
 
     # Add all available cloud models using LiteLLM aliases
@@ -456,8 +561,8 @@ class ModelConfig:
 class LLMConfig:
     """Main LLM configuration for RAPTOR."""
 
-    # Primary model (fastest/most capable)
-    primary_model: ModelConfig = field(default_factory=_get_default_primary_model)
+    # Primary model (fastest/most capable). None when no provider is available.
+    primary_model: Optional[ModelConfig] = field(default_factory=_get_default_primary_model)
 
     # Fallback models (in priority order)
     fallback_models: List[ModelConfig] = field(default_factory=_get_default_fallback_models)
@@ -480,12 +585,15 @@ class LLMConfig:
         """Save configuration to JSON file."""
         config_path.parent.mkdir(parents=True, exist_ok=True)
         # TODO: Implement proper serialization
+        primary = None
+        if self.primary_model:
+            primary = {
+                "provider": self.primary_model.provider,
+                "model_name": self.primary_model.model_name,
+            }
         with open(config_path, 'w') as f:
             json.dump({
-                "primary_model": {
-                    "provider": self.primary_model.provider,
-                    "model_name": self.primary_model.model_name,
-                },
+                "primary_model": primary,
                 "fallback_enabled": self.enable_fallback,
             }, f, indent=2)
 
@@ -499,7 +607,7 @@ class LLMConfig:
 
     def get_available_models(self) -> List[ModelConfig]:
         """Get list of all available models (primary + fallbacks)."""
-        models = [self.primary_model]
+        models = [self.primary_model] if self.primary_model else []
         if self.enable_fallback:
             models.extend(self.fallback_models)
         return [m for m in models if m.enabled]
@@ -519,5 +627,6 @@ class LLMConfig:
         return self.retry_delay
 
 
-# Default configuration
-DEFAULT_LLM_CONFIG = LLMConfig()
+# Note: DEFAULT_LLM_CONFIG removed — it was never imported anywhere and
+# caused redundant detection calls at module load time. Construct LLMConfig()
+# explicitly where needed.

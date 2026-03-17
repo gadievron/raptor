@@ -238,17 +238,13 @@ class LLMClient:
             )
 
         # HEALTH CHECK: Warn if no API keys configured
-        import os
-        has_cloud_keys = any([
-            os.getenv("ANTHROPIC_API_KEY"),
-            os.getenv("OPENAI_API_KEY"),
-            os.getenv("GEMINI_API_KEY"),
-        ])
-        if not has_cloud_keys and self.config.primary_model.provider != "ollama":
+        from .config import detect_llm_availability
+        availability = detect_llm_availability()
+        if not availability.external_llm:
             logger.warning(
-                "No cloud LLM API keys found (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY). "
-                "RAPTOR will use Ollama if available, or fail. "
-                "For production use, configure at least one cloud provider API key."
+                "No external LLM available (no API keys, no LiteLLM config, no Ollama). "
+                "LLMClient constructed but calls will likely fail. "
+                "For production use, configure at least one LLM provider."
             )
 
         # SECURITY: Enable API key sanitization
@@ -272,12 +268,15 @@ class LLMClient:
             self.config.cache_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info("LLM Client initialized")
-        logger.info(f"Primary model: {self.config.primary_model.provider}/{self.config.primary_model.model_name}")
+        if self.config.primary_model:
+            logger.info(f"Primary model: {self.config.primary_model.provider}/{self.config.primary_model.model_name}")
+        else:
+            logger.warning("LLM Client initialized with no primary model — all calls will fail")
         if self.config.enable_fallback:
             logger.info(f"Fallback models: {len(self.config.fallback_models)}")
 
         # Warn if using Ollama for exploit generation
-        if self.config.primary_model.provider.lower() == "ollama":
+        if self.config.primary_model and self.config.primary_model.provider.lower() == "ollama":
             logger.warning(
                 "Using local Ollama model for security analysis. "
                 "Local models may generate unreliable exploit PoCs. "

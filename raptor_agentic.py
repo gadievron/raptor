@@ -466,17 +466,9 @@ Examples:
     # ========================================================================
     # PHASE 2: EXPLOITABILITY VALIDATION
     # ========================================================================
-    # Check if LLM is available for full validation
-    llm_available = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY"))
-    if not llm_available:
-        # Also check for Ollama
-        try:
-            import requests
-            response = requests.get(f"{RaptorConfig.OLLAMA_HOST}/api/tags", timeout=2)
-            if response.status_code == 200:
-                llm_available = True
-        except Exception:
-            pass
+    # Detect LLM availability once — single source of truth
+    from packages.llm_analysis.llm.config import detect_llm_availability
+    llm_env = detect_llm_availability()
 
     # Run validation phase (handles all modes: skip, dedup-only, full validation)
     from packages.exploitability_validation import run_validation_phase
@@ -490,7 +482,7 @@ Examples:
         binary_path=args.binary,
         skip_validation=args.skip_validation,
         skip_feasibility=not (args.binary or args.check_mitigations),
-        llm_available=llm_available,
+        external_llm=llm_env.external_llm,
     )
 
     # ========================================================================
@@ -500,53 +492,18 @@ Examples:
     print("PHASE 3: AUTONOMOUS VULNERABILITY ANALYSIS")
     print("=" * 70)
 
-    # Check if LLM is available
-    llm_available = False
-    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY"):
-        llm_available = True
-        logger.info("LLM API key detected")
-    else:
-        # Check if Ollama is running
-        try:
-            import requests
-            response = requests.get(f"{RaptorConfig.OLLAMA_HOST}/api/tags", timeout=2)
-            if response.status_code == 200:
-                llm_available = True
-                # Mask remote Ollama URLs for privacy
-                ollama_display = RaptorConfig.OLLAMA_HOST if 'localhost' in RaptorConfig.OLLAMA_HOST or '127.0.0.1' in RaptorConfig.OLLAMA_HOST else '[REMOTE-OLLAMA]'
-                logger.info(f"Ollama server detected at {ollama_display}")
-                logger.debug(f"Ollama available at {ollama_display}")
-        except Exception as e:
-            ollama_display = RaptorConfig.OLLAMA_HOST if 'localhost' in RaptorConfig.OLLAMA_HOST or '127.0.0.1' in RaptorConfig.OLLAMA_HOST else '[REMOTE-OLLAMA]'
-            logger.debug(f"Ollama not available at {ollama_display}: {e}")
-            pass
-
     analysis = {}
     autonomous_out = None
     analysis_report = None
-    if not llm_available:
-        print("\n⚠️  Phase 2 skipped - No LLM provider available")
+    if not llm_env.llm_available:
+        print("\n⚠️  Phase 3 skipped - No LLM provider available")
         print("    To enable autonomous analysis, either:")
         print("    1. Set ANTHROPIC_API_KEY environment variable, OR")
-        print("    2. Set OPENAI_API_KEY environment variable, OR")
-        print("    3. Run Ollama locally (https://ollama.ai)")
-        print("\n    Example:")
-        print("      export ANTHROPIC_API_KEY='your-api-key'")
-        print("      python3 raptor_agentic.py --repo /path/to/code")
+        print("    2. Set OPENAI_API_KEY / GEMINI_API_KEY / MISTRAL_API_KEY, OR")
+        print("    3. Run Ollama locally (https://ollama.ai), OR")
+        print("    4. Run inside Claude Code (claude)")
         logger.warning("Phase 3 skipped - No LLM provider configured")
     else:
-        # Show which LLM will be used
-        print()
-        if os.environ.get("ANTHROPIC_API_KEY"):
-            print("🤖 LLM: Anthropic Claude Sonnet 4")
-        elif os.environ.get("OPENAI_API_KEY"):
-            print("🤖 LLM: OpenAI GPT-4 Turbo")
-        else:
-            # Check if Ollama is local or remote
-            is_local_ollama = 'localhost' in RaptorConfig.OLLAMA_HOST or '127.0.0.1' in RaptorConfig.OLLAMA_HOST
-            ollama_location = "local" if is_local_ollama else "remote"
-            print(f"🤖 LLM: Ollama ({ollama_location})")
-        print()
         autonomous_out = out_dir / "autonomous"
         autonomous_out.mkdir(exist_ok=True)
 
@@ -657,7 +614,7 @@ Examples:
             },
             "autonomous_analysis": {
                 "completed": bool(analysis),
-                "skipped": not llm_available,
+                "skipped": not llm_env.llm_available,
                 "exploitable": analysis.get('exploitable', 0),
                 "exploits_generated": analysis.get('exploits_generated', 0),
                 "patches_generated": analysis.get('patches_generated', 0),
