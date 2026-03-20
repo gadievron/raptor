@@ -13,6 +13,19 @@ from packages.llm_analysis.llm.client import LLMClient
 from packages.llm_analysis.llm.config import ModelConfig
 
 
+GEMINI_TEST_MODEL = os.getenv("GEMINI_TEST_MODEL", "gemini-2.0-flash")
+
+
+def _is_missing_gemini_model_error(exc: Exception) -> bool:
+    """Best-effort detection for model-name deprecations/availability mismatches."""
+    message = str(exc).lower()
+    return (
+        "gemini" in message
+        and "not found" in message
+        and ("model" in message or "models/" in message)
+    )
+
+
 class TestMultiProviderCallbacks:
     """Test 9: Verify callbacks fire consistently across providers."""
 
@@ -125,15 +138,23 @@ class TestMultiProviderCallbacks:
             callback.log_success_event = tracking_success
 
             try:
-                response = client.generate(
-                    prompt="Say 'hello'",
-                    model_config=ModelConfig(
-                        provider="gemini",
-                        model_name="gemini-2.0-flash-exp",
-                        temperature=0.0,
-                        max_tokens=10
+                try:
+                    response = client.generate(
+                        prompt="Say 'hello'",
+                        model_config=ModelConfig(
+                            provider="gemini",
+                            model_name=GEMINI_TEST_MODEL,
+                            temperature=0.0,
+                            max_tokens=10
+                        )
                     )
-                )
+                except RuntimeError as exc:
+                    if _is_missing_gemini_model_error(exc):
+                        pytest.skip(
+                            f"Gemini model '{GEMINI_TEST_MODEL}' unavailable for current API key; "
+                            "set GEMINI_TEST_MODEL to a supported model."
+                        )
+                    raise
 
                 assert response is not None
                 assert callback_fired, "Callback should fire for Gemini"
@@ -161,7 +182,7 @@ class TestMultiProviderCallbacks:
         if os.getenv("OPENAI_API_KEY"):
             providers_to_test.append(("openai", "gpt-4o-mini"))
         if os.getenv("GEMINI_API_KEY"):
-            providers_to_test.append(("gemini", "gemini-2.0-flash-exp"))
+            providers_to_test.append(("gemini", GEMINI_TEST_MODEL))
 
         # Check Ollama availability
         try:
