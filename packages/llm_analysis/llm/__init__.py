@@ -11,7 +11,7 @@ This enables true agentic behaviour with intelligent, context-aware analysis.
 """
 
 from .providers import LLMProvider, ClaudeProvider, OpenAIProvider, OllamaProvider, ClaudeCodeProvider
-from .client import LLMClient
+from .client import LLMClient, check_dependency_integrity
 from .config import LLMConfig, LLMAvailability, detect_llm_availability
 
 __all__ = [
@@ -24,4 +24,5 @@ __all__ = [
     'LLMConfig',
     'LLMAvailability',
     'detect_llm_availability',
+    'check_dependency_integrity',
 ]

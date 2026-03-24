@@ -34,6 +34,64 @@ except ImportError:
 
 logger = get_logger()
 
+# Versions of dependencies known to contain malicious code, published via
+# compromised PyPI maintainer accounts.  Checked at runtime because pip
+# constraints only help at install time — users may already have a bad
+# version installed.
+#
+# litellm 1.82.7 / 1.82.8 — Malicious code exfiltrates environment
+# variables, API keys, SSH keys, cloud credentials, and other secrets
+# to an attacker-controlled domain.  Published via a compromised PyPI
+# account; the official GitHub releases stop at v1.82.6.
+# Ref: https://github.com/BerriAI/litellm/issues/24518
+COMPROMISED_VERSIONS = {
+    "litellm": {"1.82.7", "1.82.8"},
+}
+
+
+def check_dependency_integrity() -> None:
+    """
+    Check installed dependencies against known compromised versions.
+
+    Raises RuntimeError if a compromised version is detected.
+
+    NOTE: litellm 1.82.8 installs a .pth file that runs malicious code
+    on ANY Python startup, before any imports.  By the time this check
+    runs the damage is already done for that version.  This check still
+    serves to: (a) block further RAPTOR operations, (b) alert the user
+    to rotate credentials, (c) catch 1.82.7 which only triggers on
+    proxy module import.
+
+    For pre-Python detection, see scripts/check_litellm.sh.
+    """
+    from importlib.metadata import version as pkg_version, PackageNotFoundError
+
+    for package, bad_versions in COMPROMISED_VERSIONS.items():
+        try:
+            installed = pkg_version(package)
+        except PackageNotFoundError:
+            continue
+
+        if installed in bad_versions:
+            raise RuntimeError(
+                f"SECURITY: {package}=={installed} contains malicious code that "
+                f"exfiltrates API keys, SSH keys, and cloud credentials to an "
+                f"attacker-controlled server. This version was published via a "
+                f"compromised PyPI maintainer account.\n"
+                f"\n"
+                f"VERSION 1.82.8 RUNS ON PYTHON STARTUP — if you have this\n"
+                f"version installed, credentials may already be compromised.\n"
+                f"Rotate all API keys, SSH keys, and cloud credentials.\n"
+                f"\n"
+                f"Do NOT use pip to fix this — pip invokes Python, which\n"
+                f"triggers the payload again. Remove the package manually:\n"
+                f"  ./scripts/check_litellm.sh        # confirm version\n"
+                f"  rm -rf $(find /usr -path '*/litellm*' -name '*.pth') # remove .pth\n"
+                f"  pip install \"{package}!={installed}\"  # now safe to pip\n"
+                f"\n"
+                f"Ref: https://github.com/BerriAI/litellm/issues/24518"
+            )
+
 
 def _sanitize_log_message(msg: str) -> str:
     """
@@ -264,6 +322,9 @@ class LLMClient:
                 "LiteLLM library not installed. "
                 "Install with: pip install litellm"
             )
+
+        # SECURITY CHECK: Block known compromised dependency versions
+        check_dependency_integrity()
 
         # HEALTH CHECK: Warn if no API keys configured
         from .config import detect_llm_availability

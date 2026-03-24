@@ -212,6 +212,10 @@ class LiteLLMProvider(LLMProvider):
                 "Run: pip install litellm instructor pydantic"
             )
 
+        # SECURITY: Block known compromised versions before any API calls
+        from .client import check_dependency_integrity
+        check_dependency_integrity()
+
         # Build model identifier for LiteLLM
         # Format: provider/model-name (e.g., "openai/gpt-4o-mini", "ollama/deepseek-coder:latest")
         if config.provider.lower() == "ollama":
