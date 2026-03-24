@@ -84,7 +84,7 @@ def check_dependency_integrity() -> None:
                 f"\n"
                 f"Do NOT use pip to fix this — pip invokes Python, which\n"
                 f"triggers the payload again. Remove the .pth file first:\n"
-                f"  find /usr -path '*/litellm*' -name '*.pth' -delete\n"
+                f"  find / -path '*/litellm*' -name '*.pth' -delete 2>/dev/null\n" 
                 f"Then: pip install \"{package}!={installed}\"\n"
                 f"\n"
                 f"Ref: https://github.com/BerriAI/litellm/issues/24518"
