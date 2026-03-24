@@ -62,7 +62,6 @@ def check_dependency_integrity() -> None:
     to rotate credentials, (c) catch 1.82.7 which only triggers on
     proxy module import.
 
-    For pre-Python detection, see scripts/check_litellm.sh.
     """
     from importlib.metadata import version as pkg_version, PackageNotFoundError
 
