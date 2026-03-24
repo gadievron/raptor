@@ -83,10 +83,9 @@ def check_dependency_integrity() -> None:
                 f"Rotate all API keys, SSH keys, and cloud credentials.\n"
                 f"\n"
                 f"Do NOT use pip to fix this — pip invokes Python, which\n"
-                f"triggers the payload again. Remove the package manually:\n"
-                f"  ./scripts/check_litellm.sh        # confirm version\n"
-                f"  rm -rf $(find /usr -path '*/litellm*' -name '*.pth') # remove .pth\n"
-                f"  pip install \"{package}!={installed}\"  # now safe to pip\n"
+                f"triggers the payload again. Remove the .pth file first:\n"
+                f"  find /usr -path '*/litellm*' -name '*.pth' -delete\n"
+                f"Then: pip install \"{package}!={installed}\"\n"
                 f"\n"
                 f"Ref: https://github.com/BerriAI/litellm/issues/24518"
             )
