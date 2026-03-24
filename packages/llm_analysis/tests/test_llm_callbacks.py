@@ -92,6 +92,10 @@ class TestCallbackFailureEvent:
         """Test callback sanitizes API keys in error messages."""
         client = LLMClient()
 
+        # Skip if no primary model configured (no external LLM available)
+        if not client.config.primary_model:
+            pytest.skip("No external LLM configured - cannot test failure path")
+
         # Skip if using Ollama (local models don't validate API keys)
         if client.config.primary_model.provider.lower() == "ollama":
             pytest.skip("Ollama doesn't validate API keys - cannot test failure path")

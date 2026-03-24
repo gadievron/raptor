@@ -34,11 +34,10 @@ VERY IMPORTANT: double check that you followed these instructions.
 
 ## OUTPUT STYLE
 
-**Human-readable status values (no underscores, no ALL_CAPS):**
-- `Exploitable` not `EXPLOITABLE`
-- `Confirmed` not `CONFIRMED`
-- `Ruled Out` not `RULED_OUT`
-- `Proven` / `Disproven` not `PROVEN` / `DISPROVEN`
+**Status values:**
+- In JSON: snake_case (`exploitable`, `confirmed`, `ruled_out`, `disproven`)
+- In human-readable output (reports, terminal): Title Case (`Exploitable`, `Confirmed`, `Ruled Out`)
+- Never ALL_CAPS (`EXPLOITABLE`, `CONFIRMED`, `RULED_OUT`)
 
 **No red/green status indicators:**
 - Do not use 🔴/🟢 - perspective-dependent (bad for defenders ≠ bad for researchers)
@@ -105,13 +104,13 @@ The `/validate` command validates that vulnerability findings are real, reachabl
 
 **Usage:** `/validate <target_path> [--vuln-type <type>] [--findings <file>]`
 
-**Stages:** 0 (Inventory) → A (One-Shot) → B (Process) → C (Sanity) → D (Ruling) → E (Feasibility)
+**Stages:** 0 (Inventory) → A (One-Shot) → B (Process) → C (Sanity) → D (Ruling) → E (Feasibility) → F (Review)
 
 **Skills** (in `.claude/skills/exploitability-validation/`):
 - `SKILL.md` - Shared context, gates, execution rules
-- `stage-0-inventory.md` through `stage-e-feasibility.md` - Stage instructions
+- `stage-0-inventory.md` through `stage-f-review.md` - Stage instructions
 
-**Output:** `.out/exploitability-validation-<timestamp>/validation-report.md`
+**Output:** `out/exploitability-validation-<timestamp>/validation-report.md`
 
 ---
 

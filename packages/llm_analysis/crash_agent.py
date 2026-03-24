@@ -13,8 +13,9 @@ from typing import Any, Dict, List
 from core.logging import get_logger
 from packages.binary_analysis import CrashContext
 from packages.fuzzing import Crash
-from .llm.client import LLMClient
-from .llm.config import LLMConfig
+from .llm.client import LLMClient, _is_auth_error
+from .llm.config import LLMConfig, detect_llm_availability
+from .llm.providers import ClaudeCodeProvider
 
 logger = get_logger()
 
@@ -27,34 +28,48 @@ class CrashAnalysisAgent:
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize LLM client with multi-model support, fallback, and retry
-        self.llm_config = llm_config or LLMConfig()
-        self.llm = LLMClient(self.llm_config)
+        # Detect LLM availability and choose provider
+        availability = detect_llm_availability()
 
-        logger.info("RAPTOR Crash Analysis Agent initialized")
-        logger.info(f"Binary: {binary_path}")
-        logger.info(f"Output: {out_dir}")
-        logger.info(f"LLM: {self.llm_config.primary_model.provider}/{self.llm_config.primary_model.model_name}")
+        if availability.external_llm:
+            self.llm_config = llm_config or LLMConfig()
+            self.llm = LLMClient(self.llm_config)
 
-        # Also print to console
-        print(f"\n Using LLM: {self.llm_config.primary_model.provider}/{self.llm_config.primary_model.model_name}")
-        if self.llm_config.primary_model.cost_per_1k_tokens > 0:
-            print(f"Cost: ${self.llm_config.primary_model.cost_per_1k_tokens:.4f} per 1K tokens")
+            logger.info("RAPTOR Crash Analysis Agent initialized")
+            logger.info(f"Binary: {binary_path}")
+            logger.info(f"Output: {out_dir}")
+            logger.info(f"LLM: {self.llm_config.primary_model.provider}/{self.llm_config.primary_model.model_name}")
+
+            print(f"\n Using LLM: {self.llm_config.primary_model.provider}/{self.llm_config.primary_model.model_name}")
+            if self.llm_config.primary_model.cost_per_1k_tokens > 0:
+                print(f"Cost: ${self.llm_config.primary_model.cost_per_1k_tokens:.4f} per 1K tokens")
+            else:
+                print(f"Cost: FREE (self-hosted model)")
+
+            if "ollama" in self.llm_config.primary_model.provider.lower():
+                print()
+                print("IMPORTANT: You are using an Ollama model.")
+                print("   • Crash analysis and triage: Works well with Ollama models")
+                print("   • Exploit generation: Requires frontier models (Anthropic Claude / OpenAI GPT-4)")
+                print("   • Ollama models may generate invalid/non-compilable exploit code")
+                print()
+                print("   For production-quality exploits, use:")
+                print("     export ANTHROPIC_API_KEY=your_key  (recommended)")
+                print("     export OPENAI_API_KEY=your_key")
+            print()
         else:
-            print(f"Cost: FREE (self-hosted model)")
+            self.llm_config = None
+            self.llm = ClaudeCodeProvider()
 
-        # Warn about Ollama model limitations for exploit generation
-        if "ollama" in self.llm_config.primary_model.provider.lower():
+            logger.info("RAPTOR Crash Analysis Agent initialized (prep-only mode)")
+            logger.info(f"Binary: {binary_path}")
+            logger.info(f"Output: {out_dir}")
+
+            if availability.claude_code:
+                print("\n🤖 No external LLM configured — Claude Code will handle analysis")
+            else:
+                print("\n⚠️  No LLM available — producing structured findings for manual review")
             print()
-            print("⚠️  IMPORTANT: You are using an Ollama model.")
-            print("   • Crash analysis and triage: Works well with Ollama models")
-            print("   • Exploit generation: Requires frontier models (Anthropic Claude / OpenAI GPT-4)")
-            print("   • Ollama models may generate invalid/non-compilable exploit code")
-            print()
-            print("   For production-quality exploits, use:")
-            print("     export ANTHROPIC_API_KEY=your_key  (recommended)")
-            print("     export OPENAI_API_KEY=your_key")
-        print()
 
     def analyse_crash(self, crash_context: CrashContext) -> bool:
         """
@@ -196,6 +211,10 @@ Be honest about exploitability - not every crash is exploitable."""
                 system_prompt=system_prompt,
             )
 
+            if analysis is None:
+                logger.info("No external LLM available — skipping crash analysis")
+                return False
+
             # Update crash context
             crash_context.exploitability = "exploitable" if analysis.get("is_exploitable") else "not_exploitable"
             crash_context.crash_type = analysis.get("crash_type", "unknown")
@@ -268,6 +287,8 @@ Be honest about exploitability - not every crash is exploitable."""
 
         except Exception as e:
             logger.error(f"✗ LLM analysis failed: {e}")
+            if _is_auth_error(e):
+                print("⚠️  LLM authentication failed — check your API key.")
             return False
 
     def generate_exploit(self, crash_context: CrashContext) -> bool:
@@ -281,7 +302,7 @@ Be honest about exploitability - not every crash is exploitable."""
         logger.info(f"   Target: {crash_context.binary_path.name}")
 
         # Warn if using Ollama model
-        if "ollama" in self.llm_config.primary_model.provider.lower():
+        if self.llm_config and self.llm_config.primary_model and "ollama" in self.llm_config.primary_model.provider.lower():
             logger.warning("⚠️  Using Ollama model - exploit code may not compile correctly")
             logger.warning("   For production exploits, use Anthropic Claude or OpenAI GPT-4")
 
@@ -366,6 +387,10 @@ The "reasoning" field can contain explanations and analysis."""
                 system_prompt=system_prompt,
             )
 
+            if exploit_data is None:
+                logger.info("No external LLM available — skipping exploit generation")
+                return False
+
             # Extract code from structured response
             logger.debug(f"Exploit data type: {type(exploit_data)}")
             logger.debug(f"Exploit data content: {exploit_data}")
@@ -431,6 +456,8 @@ FULL LLM RESPONSE:
 
         except Exception as e:
             logger.error(f"   ✗ Exploit generation failed: {e}")
+            if _is_auth_error(e):
+                print("⚠️  LLM authentication failed — check your API key.")
             return False
 
     def _signal_name(self, signal: str) -> str:

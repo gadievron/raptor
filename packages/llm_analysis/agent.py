@@ -26,8 +26,9 @@ from core.config import RaptorConfig
 from core.logging import get_logger
 from core.progress import HackerProgress
 from core.sarif.parser import parse_sarif_findings, deduplicate_findings
-from llm.client import LLMClient
-from llm.config import LLMConfig
+from llm.client import LLMClient, _is_auth_error
+from llm.config import LLMConfig, detect_llm_availability
+from llm.providers import ClaudeCodeProvider
 
 logger = get_logger()
 
@@ -65,8 +66,9 @@ class VulnerabilityContext:
         self.sanitizers_found: List[str] = []
 
         # Feasibility data from validation pipeline (if available)
-        self.feasibility: Optional[Dict[str, Any]] = finding.get("feasibility")
-        self.attack_path_ref: Optional[str] = self.feasibility.get("attack_path_ref") if isinstance(self.feasibility, dict) else None
+        from packages.exploitability_validation.models import Feasibility
+        self.feasibility: Dict[str, Any] = Feasibility.from_dict(finding.get("feasibility")).to_dict()
+        self.attack_path_ref: Optional[str] = self.feasibility.get("attack_path_ref")
 
         # Will be populated by LLM analysis
         self.full_code: Optional[str] = None
@@ -249,8 +251,14 @@ class VulnerabilityContext:
             "has_patch": self.patch_code is not None,
         }
 
-        # Add feasibility data if present
-        if self.feasibility:
+        # Add code context if available (populated by read_vulnerable_code)
+        if self.full_code:
+            result["code"] = self.full_code
+        if self.surrounding_context:
+            result["surrounding_context"] = self.surrounding_context
+
+        # Add feasibility data if present (always a dict, check for non-default)
+        if self.feasibility.get("status", "pending") != "pending" or self.feasibility.get("verdict"):
             result["feasibility"] = self.feasibility
 
         # Add dataflow information if present
@@ -275,36 +283,39 @@ def convert_validated_to_agent_format(data: dict) -> List[Dict[str, Any]]:
     Skips ruled_out, confirmed_blocked, and unlikely-verdict findings.
     Normalizes status fields in-place before filtering (idempotent).
     """
+    from packages.exploitability_validation.models import Finding
+
     try:
         from packages.exploitability_validation import normalize_findings
         normalize_findings(data)
     except ImportError:
         pass
     converted = []
-    for finding in data.get("findings", []):
+    for raw in data.get("findings", []):
+        f = Finding.from_dict(raw)
         # Check both status and final_status for exclusion
-        if finding.get("status") in ("ruled_out", "disproven"):
+        if f.status in ("ruled_out", "disproven"):
             continue
-        if finding.get("final_status") in ("ruled_out", "confirmed_blocked"):
+        if f.final_status in ("ruled_out", "confirmed_blocked"):
             continue
-        feasibility = finding.get("feasibility") or {}
-        if feasibility.get("verdict") == "unlikely":
+        if f.feasibility.verdict == "unlikely":
             continue
 
+        feasibility_d = f.feasibility.to_dict()
         converted.append({
-            "finding_id": finding.get("id"),
-            "rule_id": finding.get("rule_id") or finding.get("vuln_type"),
-            "file": finding.get("file"),
-            "startLine": finding.get("line"),
-            "endLine": finding.get("line"),
-            "snippet": (finding.get("proof") or {}).get("vulnerable_code", "") if isinstance(finding.get("proof"), dict) else "",
-            "message": finding.get("candidate_reasoning", "") or f"{finding.get('vuln_type')} in {finding.get('function', 'unknown')}",
-            "level": "error" if finding.get("final_status") in ("exploitable", "likely_exploitable", "confirmed_constrained") else "warning",
-            "has_dataflow": bool((finding.get("proof") or {}).get("flow")) if isinstance(finding.get("proof"), dict) else False,
-            "feasibility": feasibility,
-            "attack_path_ref": feasibility.get("attack_path_ref"),
-            "ruling": finding.get("ruling"),
-            "final_status": finding.get("final_status") or "pending",
+            "finding_id": f.id,
+            "rule_id": f.rule_id or f.vuln_type,
+            "file": f.file,
+            "startLine": f.line,
+            "endLine": f.line,
+            "snippet": f.proof.vulnerable_code,
+            "message": f.candidate_reasoning or f"{f.vuln_type} in {f.function or 'unknown'}",
+            "level": "error" if f.final_status in ("exploitable", "likely_exploitable", "confirmed_constrained") else "warning",
+            "has_dataflow": bool(f.proof.flow),
+            "feasibility": feasibility_d,
+            "attack_path_ref": f.feasibility.attack_path_ref,
+            "ruling": f.ruling.to_dict(),
+            "final_status": f.final_status or "pending",
         })
     return converted
 
@@ -315,34 +326,52 @@ class AutonomousSecurityAgentV2:
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Initialize LLM client with multi-model support, fallback, and retry
-        self.llm_config = llm_config or LLMConfig()
-        self.llm = LLMClient(self.llm_config)
+        # Detect LLM availability and choose provider
+        availability = detect_llm_availability()
 
-        logger.info("RAPTOR Autonomous Security Agent initialised")
-        logger.info(f"Repository: {repo_path}")
-        logger.info(f"Output: {out_dir}")
-        logger.info(f"LLM: {self.llm_config.primary_model.provider}/{self.llm_config.primary_model.model_name}")
+        if availability.external_llm:
+            # External LLM configured — use LLMClient with LiteLLM
+            self.llm_config = llm_config or LLMConfig()
+            self.llm = LLMClient(self.llm_config)
 
-        # Also print to console so user can see
-        print(f"\n🤖 Using LLM: {self.llm_config.primary_model.provider}/{self.llm_config.primary_model.model_name}")
-        if self.llm_config.primary_model.cost_per_1k_tokens > 0:
-            print(f"💰 Cost: ${self.llm_config.primary_model.cost_per_1k_tokens:.4f} per 1K tokens")
+            logger.info("RAPTOR Autonomous Security Agent initialised")
+            logger.info(f"Repository: {repo_path}")
+            logger.info(f"Output: {out_dir}")
+            logger.info(f"LLM: {self.llm_config.primary_model.provider}/{self.llm_config.primary_model.model_name}")
+
+            # Also print to console so user can see
+            print(f"\n🤖 Using LLM: {self.llm_config.primary_model.provider}/{self.llm_config.primary_model.model_name}")
+            if self.llm_config.primary_model.cost_per_1k_tokens > 0:
+                print(f"💰 Cost: ${self.llm_config.primary_model.cost_per_1k_tokens:.4f} per 1K tokens")
+            else:
+                print(f"💰 Cost: FREE (self-hosted model)")
+
+            # Warn about Ollama model limitations for exploit generation
+            if "ollama" in self.llm_config.primary_model.provider.lower():
+                print()
+                print("IMPORTANT: You are using an Ollama model.")
+                print("   • Vulnerability analysis and patching: Works well with Ollama models")
+                print("   • Exploit generation: Requires frontier models (Anthropic Claude / OpenAI GPT-4)")
+                print("   • Ollama models may generate invalid/non-compilable exploit code")
+                print()
+                print("   For production-quality exploits, use:")
+                print("     export ANTHROPIC_API_KEY=your_key  (recommended)")
+                print("     export OPENAI_API_KEY=your_key")
+            print()
         else:
-            print(f"💰 Cost: FREE (self-hosted model)")
+            # No external LLM — use ClaudeCodeProvider
+            self.llm_config = None
+            self.llm = ClaudeCodeProvider()
 
-        # Warn about Ollama model limitations for exploit generation
-        if "ollama" in self.llm_config.primary_model.provider.lower():
+            logger.info("RAPTOR Autonomous Security Agent initialised (prep-only mode)")
+            logger.info(f"Repository: {repo_path}")
+            logger.info(f"Output: {out_dir}")
+
+            if availability.claude_code:
+                print("\n🤖 No external LLM configured — Claude Code will handle analysis")
+            else:
+                print("\n⚠️  No LLM available — producing structured findings for manual review")
             print()
-            print("IMPORTANT: You are using an Ollama model.")
-            print("   • Vulnerability analysis and patching: Works well with Ollama models")
-            print("   • Exploit generation: Requires frontier models (Anthropic Claude / OpenAI GPT-4)")
-            print("   • Ollama models may generate invalid/non-compilable exploit code")
-            print()
-            print("   For production-quality exploits, use:")
-            print("     export ANTHROPIC_API_KEY=your_key  (recommended)")
-            print("     export OPENAI_API_KEY=your_key")
-        print()
 
     def _load_attack_path(self, ref: str) -> Optional[Dict[str, Any]]:
         """Load attack path from a ref like 'attack-paths.json#PATH-001'."""
@@ -556,6 +585,10 @@ Do NOT:
                 system_prompt=system_prompt
             )
 
+            if validation is None:
+                logger.info("No external LLM available — skipping dataflow validation")
+                return {}
+
             logger.info("✓ Dataflow validation complete:")
             logger.info(f"  Source attacker-controlled: {validation.get('source_attacker_controlled')}")
             logger.info(f"  Sanitizers effective: {validation.get('sanitizers_effective')}")
@@ -762,6 +795,10 @@ Provide honest, technical assessments. Don't overstate severity, but don't downp
                 system_prompt=system_prompt
             )
 
+            if analysis is None:
+                logger.info("No external LLM available — skipping analysis (prep-only mode)")
+                return False
+
             vuln.exploitable = analysis.get("is_exploitable", False)
             vuln.exploitability_score = analysis.get("exploitability_score", 0.0)
             vuln.analysis = analysis
@@ -833,7 +870,10 @@ Provide honest, technical assessments. Don't overstate severity, but don't downp
 
         except Exception as e:
             logger.error(f"✗ LLM analysis failed: {e}")
-            logger.warning("  Using fallback heuristic analysis")
+            if _is_auth_error(e):
+                print("⚠️  LLM authentication failed — check your API key. Falling back to heuristic analysis.")
+            else:
+                logger.warning("  Using fallback heuristic analysis")
             # Fallback to marking as potentially exploitable
             vuln.exploitable = vuln.level == "error"
             vuln.exploitability_score = 0.5
@@ -921,6 +961,10 @@ Make exploits safe for authorised testing only and not sold to russians. coz tha
                 temperature=0.8  # Higher creativity for exploit generation. YMMV
             )
 
+            if response is None:
+                logger.info("No external LLM available — skipping exploit generation")
+                return False
+
             # Extract code from response
             exploit_code = self._extract_code(response.content)
 
@@ -941,6 +985,8 @@ Make exploits safe for authorised testing only and not sold to russians. coz tha
 
         except Exception as e:
             logger.error(f"   ✗ Exploit generation failed: {e}")
+            if _is_auth_error(e):
+                print("⚠️  LLM authentication failed — check your API key.")
             return False
 
     def generate_patch(self, vuln: VulnerabilityContext) -> bool:
@@ -1031,6 +1077,10 @@ Balance security with usability and performance."""
                 temperature=0.3  # Lower temperature for safer patches
             )
 
+            if response is None:
+                logger.info("   No external LLM available — skipping patch generation")
+                return False
+
             patch_content = response.content
 
             # Save patch
@@ -1064,6 +1114,8 @@ Balance security with usability and performance."""
 
         except Exception as e:
             logger.error(f"   ✗ Patch generation failed: {e}")
+            if _is_auth_error(e):
+                print("⚠️  LLM authentication failed — check your API key.")
             return False
 
     def _extract_code(self, content: str) -> Optional[str]:
@@ -1169,7 +1221,7 @@ Balance security with usability and performance."""
 
                 vuln = VulnerabilityContext(finding, self.repo_path)
 
-                # 1. Autonomous analysis (LLM-powered)
+                # 1. Autonomous analysis (LLM-powered, or prep-only)
                 if self.analyze_vulnerability(vuln):
                     analyzed += 1
 
@@ -1193,7 +1245,8 @@ Balance security with usability and performance."""
                     else:
                         logger.debug(f"⊘ Skipping patch generation (not exploitable)")
 
-                    results.append(vuln.to_dict())
+                # Always include finding in results (with or without LLM analysis)
+                results.append(vuln.to_dict())
 
             # Show progress
             logger.info("")
@@ -1208,8 +1261,14 @@ Balance security with usability and performance."""
         # Get LLM stats from client (aggregates all provider stats)
         llm_stats = self.llm.get_stats()
 
+        # Determine mode: full (external LLM did analysis) or prep_only (mechanical prep,
+        # Claude Code or manual review handles reasoning)
+        is_prep_only = isinstance(self.llm, ClaudeCodeProvider)
+
         report = {
+            "mode": "prep_only" if is_prep_only else "full",
             "processed": len(unique_findings),
+            "prepped": len(results),
             "analyzed": analyzed,
             "exploitable": exploitable,
             "exploits_generated": exploits_generated,

@@ -3,7 +3,7 @@
 
 # Core dependencies
 requests>=2.31.0
-litellm>=1.0.0
+litellm>=1.0.0,!=1.82.7,!=1.82.8
 instructor>=1.0.0
 pydantic>=2.9.2
 

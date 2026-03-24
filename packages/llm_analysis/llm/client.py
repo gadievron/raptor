@@ -34,6 +34,62 @@ except ImportError:
 
 logger = get_logger()
 
+# Versions of dependencies known to contain malicious code, published via
+# compromised PyPI maintainer accounts.  Checked at runtime because pip
+# constraints only help at install time — users may already have a bad
+# version installed.
+#
+# litellm 1.82.7 / 1.82.8 — Malicious code exfiltrates environment
+# variables, API keys, SSH keys, cloud credentials, and other secrets
+# to an attacker-controlled domain.  Published via a compromised PyPI
+# account; the official GitHub releases stop at v1.82.6.
+# Ref: https://github.com/BerriAI/litellm/issues/24518
+COMPROMISED_VERSIONS = {
+    "litellm": {"1.82.7", "1.82.8"},
+}
+
+
+def check_dependency_integrity() -> None:
+    """
+    Check installed dependencies against known compromised versions.
+
+    Raises RuntimeError if a compromised version is detected.
+
+    NOTE: litellm 1.82.8 installs a .pth file that runs malicious code
+    on ANY Python startup, before any imports.  By the time this check
+    runs the damage is already done for that version.  This check still
+    serves to: (a) block further RAPTOR operations, (b) alert the user
+    to rotate credentials, (c) catch 1.82.7 which only triggers on
+    proxy module import.
+
+    """
+    from importlib.metadata import version as pkg_version, PackageNotFoundError
+
+    for package, bad_versions in COMPROMISED_VERSIONS.items():
+        try:
+            installed = pkg_version(package)
+        except PackageNotFoundError:
+            continue
+
+        if installed in bad_versions:
+            raise RuntimeError(
+                f"SECURITY: {package}=={installed} contains malicious code that "
+                f"exfiltrates API keys, SSH keys, and cloud credentials to an "
+                f"attacker-controlled server. This version was published via a "
+                f"compromised PyPI maintainer account.\n"
+                f"\n"
+                f"VERSION 1.82.8 RUNS ON PYTHON STARTUP — if you have this\n"
+                f"version installed, credentials may already be compromised.\n"
+                f"Rotate all API keys, SSH keys, and cloud credentials.\n"
+                f"\n"
+                f"Do NOT use pip to fix this — pip invokes Python, which\n"
+                f"triggers the payload again. Remove the .pth file first:\n"
+                f"  find / -path '*/litellm*' -name '*.pth' -delete 2>/dev/null\n" 
+                f"Then: pip install \"{package}!={installed}\"\n"
+                f"\n"
+                f"Ref: https://github.com/BerriAI/litellm/issues/24518"
+            )
+
 
 def _sanitize_log_message(msg: str) -> str:
     """
@@ -54,6 +110,34 @@ def _sanitize_log_message(msg: str) -> str:
     msg = re.sub(r'pk-[a-zA-Z0-9-_]{20,}', '[REDACTED-API-KEY]', msg)
     # TODO: Add patterns for other providers if needed (Anthropic, Google, etc.)
     return msg
+
+
+def _is_auth_error(error: Exception) -> bool:
+    """
+    Detect authentication/authorization errors from LLM providers.
+
+    Used to surface a clear console message when API keys are invalid,
+    rather than leaving the user to parse retry logs.
+
+    Args:
+        error: Exception from LiteLLM/provider
+
+    Returns:
+        True if error appears to be an auth/key error
+    """
+    if LITELLM_AVAILABLE:
+        try:
+            if isinstance(error, litellm.AuthenticationError):
+                return True
+        except AttributeError:
+            pass
+
+    error_str = str(error).lower()
+    return any(indicator in error_str for indicator in [
+        "401", "403", "authentication", "unauthorized", "invalid api key",
+        "invalid x-api-key", "api key not valid", "incorrect api key",
+        "permission denied", "access denied",
+    ])
 
 
 def _is_quota_error(error: Exception) -> bool:
@@ -237,18 +321,17 @@ class LLMClient:
                 "Install with: pip install litellm"
             )
 
+        # SECURITY CHECK: Block known compromised dependency versions
+        check_dependency_integrity()
+
         # HEALTH CHECK: Warn if no API keys configured
-        import os
-        has_cloud_keys = any([
-            os.getenv("ANTHROPIC_API_KEY"),
-            os.getenv("OPENAI_API_KEY"),
-            os.getenv("GEMINI_API_KEY"),
-        ])
-        if not has_cloud_keys and self.config.primary_model.provider != "ollama":
+        from .config import detect_llm_availability
+        availability = detect_llm_availability()
+        if not availability.external_llm:
             logger.warning(
-                "No cloud LLM API keys found (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY). "
-                "RAPTOR will use Ollama if available, or fail. "
-                "For production use, configure at least one cloud provider API key."
+                "No external LLM available (no API keys, no LiteLLM config, no Ollama). "
+                "LLMClient constructed but calls will likely fail. "
+                "For production use, configure at least one LLM provider."
             )
 
         # SECURITY: Enable API key sanitization
@@ -272,12 +355,15 @@ class LLMClient:
             self.config.cache_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info("LLM Client initialized")
-        logger.info(f"Primary model: {self.config.primary_model.provider}/{self.config.primary_model.model_name}")
+        if self.config.primary_model:
+            logger.info(f"Primary model: {self.config.primary_model.provider}/{self.config.primary_model.model_name}")
+        else:
+            logger.warning("LLM Client initialized with no primary model — all calls will fail")
         if self.config.enable_fallback:
             logger.info(f"Fallback models: {len(self.config.fallback_models)}")
 
         # Warn if using Ollama for exploit generation
-        if self.config.primary_model.provider.lower() == "ollama":
+        if self.config.primary_model and self.config.primary_model.provider.lower() == "ollama":
             logger.warning(
                 "Using local Ollama model for security analysis. "
                 "Local models may generate unreliable exploit PoCs. "
