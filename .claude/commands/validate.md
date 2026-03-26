@@ -8,7 +8,7 @@ Validates that vulnerability findings are real, reachable, and exploitable befor
 
 ### Step-by-Step Execution
 
-**All stages are mandatory. Execute in sequence: 0 → A → B → C → D → E**
+**All stages are mandatory. Execute in sequence: 0 → A → B → C → D → E → F**
 
 1. **Stage 0 (Python):** Run `build_checklist()` to get inventory
    ```python
@@ -61,6 +61,14 @@ Validates that vulnerability findings are real, reachable, and exploitable befor
    ```
    Output: `exploit-context.json` (if binary provided)
 
+7. **Stage F (Claude):** Self-review - catch mistakes before finalizing
+   - Run schema validators against findings.json
+   - Verify Stage E verdicts mapped correctly to final_status
+   - Check proximity score consistency across same bug class
+   - Verify all preconditions cite evidence (line numbers, grep results)
+   - Ask: "What did I get wrong?" — look for misclassifications, missed instances, weak evidence
+   - Fix any issues found, document in validation-report.md under "## Stage F Review"
+
 ### Write Results Back
 
 After your analysis, save findings for Stage E:
@@ -96,11 +104,12 @@ When user runs `/validate <path>`:
 5. Stage C: Verify findings against actual code
 6. Stage D: Make rulings based on Stage B evidence
 7. Run Stage E via Python if binary provided
+8. Stage F: Self-review — catch misclassifications, fix schema errors
 
 ```
 User: /validate /tmp/vuln
        ↓
-Claude: Stage 0 → Stage A → Stage B → Stage C → Stage D → Stage E
+Claude: Stage 0 → Stage A → Stage B → Stage C → Stage D → Stage E → Stage F
               ↓
         Output: checklist.json, findings.json, attack-surface.json,
                 attack-tree.json, hypotheses.json, disproven.json,
@@ -162,7 +171,7 @@ Semgrep → SARIF (21 findings) → Dedupe (15 unique) → [LLM validation if AP
 
 ## What This Does
 
-Runs a 6-stage validation pipeline:
+Runs a 7-stage validation pipeline:
 
 | Stage | Purpose | Output |
 |-------|---------|--------|
@@ -172,8 +181,9 @@ Runs a 6-stage validation pipeline:
 | **C: Sanity** | Verify against actual code (catch hallucinations) | validated findings |
 | **D: Ruling** | Filter test code, preconditions, hedging | confirmed findings |
 | **E: Feasibility** | Binary constraint analysis (memory corruption only) | final findings |
+| **F: Review** | Self-review — catch misclassifications, schema errors | updated outputs |
 
-**Note:** Stage E only runs for memory corruption vulnerabilities (buffer_overflow, format_string, use_after_free, etc.). Web vulnerabilities skip directly to final output after Stage D.
+**Note:** Stage E only runs for memory corruption vulnerabilities (buffer_overflow, format_string, use_after_free, etc.). Web vulnerabilities skip E and proceed directly to F.
 
 ## Examples
 
