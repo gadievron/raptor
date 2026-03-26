@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-LLM Provider Implementations with LiteLLM
+LLM Provider Implementations — OpenAI SDK + Anthropic SDK + Instructor
 
-Unified interface using LiteLLM for multi-provider support.
-Replaces individual provider implementations with a single LiteLLMProvider.
+Dual-SDK approach: uses the OpenAI SDK for OpenAI-compatible providers
+(OpenAI, Ollama, vLLM, etc.) and the Anthropic SDK for Anthropic models.
+Instructor is used for structured output when available, with a universal
+JSON-in-prompt fallback for providers that lack native structured support.
 """
 
 import json
 import sys
+import time
 from abc import ABC, abstractmethod
 from inspect import isclass
 from typing import Dict, Optional, Any, Tuple, Type, Union
@@ -22,6 +25,21 @@ from .config import ModelConfig
 
 logger = get_logger()
 
+# SDK availability flags (canonical source is detection.py)
+from .detection import OPENAI_SDK_AVAILABLE, ANTHROPIC_SDK_AVAILABLE
+
+# Re-import the actual modules where available (config.py only sets flags)
+if OPENAI_SDK_AVAILABLE:
+    from openai import OpenAI
+if ANTHROPIC_SDK_AVAILABLE:
+    import anthropic
+
+try:
+    import instructor
+    INSTRUCTOR_AVAILABLE = True
+except ImportError:
+    INSTRUCTOR_AVAILABLE = False
+
 
 @dataclass
 class LLMResponse:
@@ -32,7 +50,9 @@ class LLMResponse:
     tokens_used: int
     cost: float
     finish_reason: str
-    raw_response: Optional[Dict[str, Any]] = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    duration: float = 0.0
 
 
 class LLMProvider(ABC):
@@ -41,7 +61,11 @@ class LLMProvider(ABC):
     def __init__(self, config: ModelConfig):
         self.config = config
         self.total_tokens = 0
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
         self.total_cost = 0.0
+        self.call_count = 0
+        self.total_duration = 0.0
 
     @abstractmethod
     def generate(self, prompt: str, system_prompt: Optional[str] = None,
@@ -55,11 +79,62 @@ class LLMProvider(ABC):
         """Generate structured output matching the provided schema."""
         pass
 
-    def track_usage(self, tokens: int, cost: float) -> None:
-        """Track token usage and cost."""
+    def track_usage(self, tokens: int, cost: float,
+                    input_tokens: int = 0, output_tokens: int = 0,
+                    duration: float = 0.0) -> None:
+        """Track token usage, cost, and call duration."""
         self.total_tokens += tokens
-        self.total_cost += (cost or 0.0)  # Handle None costs from Ollama
+        self.total_input_tokens += input_tokens
+        self.total_output_tokens += output_tokens
+        self.total_cost += (cost or 0.0)
+        self.call_count += 1
+        self.total_duration += duration
         logger.debug(f"LLM usage: {tokens} tokens, ${(cost or 0.0):.4f} (total: {self.total_tokens} tokens, ${self.total_cost:.4f})")
+
+    def _calculate_cost_split(self, input_tokens: int, output_tokens: int) -> float:
+        """Calculate cost using split input/output pricing."""
+        from .model_data import MODEL_COSTS
+        rates = MODEL_COSTS.get(self.config.model_name)
+        if not rates:
+            rate = self.config.cost_per_1k_tokens or 0.0
+            return ((input_tokens + output_tokens) / 1000) * rate
+        return (
+            (input_tokens / 1000) * rates["input"]
+            + (output_tokens / 1000) * rates["output"]
+        )
+
+    def _structured_fallback(self, prompt: str, schema: Dict[str, Any],
+                             pydantic_model, system_prompt: Optional[str] = None
+                             ) -> Tuple[Dict[str, Any], str]:
+        """
+        Universal fallback: ask for JSON in the prompt, validate
+        with Pydantic. Works with any LLM that can produce JSON.
+        Usage is tracked by self.generate() — no double counting.
+        """
+        schema_json = json.dumps(schema, indent=2)
+        augmented_prompt = (
+            f"{prompt}\n\n"
+            f"Respond with JSON matching this schema:\n"
+            f"```json\n{schema_json}\n```\n"
+            f"Return ONLY valid JSON, no other text."
+        )
+        response = self.generate(augmented_prompt, system_prompt)
+        try:
+            content = response.content.strip()
+            # Strip markdown fences: ```json\n...\n``` or ```\n...\n```
+            if content.startswith("```") and content.endswith("```"):
+                content = content.split("\n", 1)[1] if "\n" in content else content[3:]
+                content = content.rsplit("```", 1)[0]
+            elif content.startswith("```"):
+                content = content.split("\n", 1)[1] if "\n" in content else content[3:]
+            content = content.strip()
+            parsed = json.loads(content)
+            validated = pydantic_model.model_validate(parsed)
+            result_dict = validated.model_dump()
+            return result_dict, json.dumps(result_dict, indent=2)
+        except Exception as e:
+            logger.error(f"Structured fallback failed (JSON parse or validation): {e}")
+            raise
 
 
 def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']]):
@@ -191,204 +266,271 @@ def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']]):
     return model
 
 
-class LiteLLMProvider(LLMProvider):
+class OpenAICompatibleProvider(LLMProvider):
     """
-    Unified LLM provider using LiteLLM.
+    LLM provider using the OpenAI SDK.
 
-    Supports multiple providers (OpenAI, Anthropic, Gemini, Ollama, etc.)
-    through a single interface using LiteLLM + Instructor.
+    Works with any OpenAI-compatible API: OpenAI, Ollama, vLLM, LM Studio,
+    Gemini (via OpenAI compat), Mistral, etc.
     """
 
     def __init__(self, config: ModelConfig):
         super().__init__(config)
-        try:
-            import litellm
-            import instructor
-            self.litellm = litellm
-            self.instructor = instructor
-        except ImportError as e:
+        if not OPENAI_SDK_AVAILABLE:
             raise ImportError(
-                f"Required packages not installed: {e}. "
-                "Run: pip install litellm instructor pydantic"
+                "OpenAI SDK not installed. Run: pip install openai"
             )
 
-        # SECURITY: Block known compromised versions before any API calls
-        from .client import check_dependency_integrity
-        check_dependency_integrity()
+        self.client = OpenAI(
+            api_key=config.api_key or "unused",
+            base_url=config.api_base,
+            timeout=config.timeout,
+        )
 
-        # Build model identifier for LiteLLM
-        # Format: provider/model-name (e.g., "openai/gpt-4o-mini", "ollama/deepseek-coder:latest")
-        if config.provider.lower() == "ollama":
-            self.model_id = f"{config.provider.lower()}/{config.model_name}"
+        self.instructor_client = None
+        if INSTRUCTOR_AVAILABLE:
+            self.instructor_client = instructor.from_openai(self.client)
         else:
-            self.model_id = f"{config.provider.lower()}/{config.model_name}"
+            logger.warning(
+                "Instructor not installed — structured output will use JSON-in-prompt fallback. "
+                "For more reliable structured output: pip install instructor"
+            )
 
-        logger.debug(f"Initialized LiteLLMProvider: {self.model_id}")
+        logger.debug(f"Initialized OpenAICompatibleProvider: {config.model_name} (base_url={config.api_base})")
 
     def generate(self, prompt: str, system_prompt: Optional[str] = None,
                  **kwargs) -> LLMResponse:
-        """
-        Generate completion using LiteLLM.
-
-        Args:
-            prompt: User prompt
-            system_prompt: System prompt (optional)
-            **kwargs: Additional parameters (temperature, max_tokens, format, etc.)
-
-        Returns:
-            LLMResponse object
-        """
-        # Build messages
+        """Generate completion using the OpenAI SDK."""
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        # Prepare litellm parameters
-        litellm_params = {
-            "model": self.model_id,
-            "messages": messages,
-            "temperature": kwargs.get("temperature", self.config.temperature),
-            "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
-        }
-
-        # Add api_base if configured (e.g., for custom Ollama hosts)
-        if self.config.api_base:
-            litellm_params["api_base"] = self.config.api_base
-
-        # Add api_key if configured (Bug #13 fix)
-        # For Ollama, we use "ollama" as a placeholder to avoid LiteLLM None handling issues
-        if self.config.api_key:
-            litellm_params["api_key"] = self.config.api_key
-        elif self.config.provider.lower() == "ollama":
-            litellm_params["api_key"] = "ollama"
-
-        # Handle Ollama-specific format parameter (CRITICAL for GBNF)
-        if "format" in kwargs and self.config.provider.lower() == "ollama":
-            litellm_params["format"] = kwargs["format"]
-
-        # Make API call
         try:
-            response = self.litellm.completion(**litellm_params)
+            t_start = time.monotonic()
+            response = self.client.chat.completions.create(
+                model=self.config.model_name,
+                messages=messages,
+                temperature=kwargs.get("temperature", self.config.temperature),
+                max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
+            )
+            duration = time.monotonic() - t_start
 
-            # Extract response data
-            content = response.choices[0].message.content
-            tokens_used = response.usage.total_tokens if (hasattr(response, 'usage') and response.usage is not None) else 0
+            if not response.choices:
+                raise RuntimeError("OpenAI returned empty choices")
+            content = response.choices[0].message.content or ""
+            finish_reason = response.choices[0].finish_reason or "complete"
 
-            # Calculate cost (LiteLLM may provide this, or we calculate)
-            cost = 0.0
-            if hasattr(response, '_hidden_params') and 'response_cost' in response._hidden_params:
-                cost = response._hidden_params['response_cost'] or 0.0  # Handle None from Ollama
-            else:
-                # Fallback: use config cost
-                cost = (tokens_used / 1000) * self.config.cost_per_1k_tokens
+            input_tokens = 0
+            output_tokens = 0
+            if response.usage:
+                input_tokens = response.usage.prompt_tokens or 0
+                output_tokens = response.usage.completion_tokens or 0
 
-            # Track usage
-            self.track_usage(tokens_used, cost)
+            tokens_used = input_tokens + output_tokens
+            cost = self._calculate_cost_split(input_tokens, output_tokens)
 
-            # Build response
+            self.track_usage(tokens_used, cost, input_tokens, output_tokens, duration)
+            logger.debug(f"[OpenAI] model={self.config.model_name}, tokens={tokens_used}, cost=${cost:.4f}, duration={duration:.2f}s")
+
             return LLMResponse(
                 content=content,
                 model=self.config.model_name,
                 provider=self.config.provider.lower(),
                 tokens_used=tokens_used,
                 cost=cost,
-                finish_reason=response.choices[0].finish_reason if hasattr(response.choices[0], 'finish_reason') else "complete",
-                raw_response=response.dict() if hasattr(response, 'dict') else None
+                finish_reason=finish_reason,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                duration=duration,
             )
 
         except Exception as e:
-            logger.error(f"LiteLLM completion failed: {e}")
+            logger.error(f"OpenAI completion failed: {e}")
             raise
 
     def generate_structured(self, prompt: str, schema: Dict[str, Any],
                            system_prompt: Optional[str] = None) -> Tuple[Dict[str, Any], str]:
-        """
-        Generate structured output using Instructor + Pydantic.
-
-        Args:
-            prompt: User prompt
-            schema: JSON Schema dictionary
-            system_prompt: System prompt (optional)
-
-        Returns:
-            Tuple of (parsed dict, full response content)
-        """
-        # Convert dict schema to Pydantic model
+        """Generate structured output using Instructor (or JSON fallback)."""
         pydantic_model = _dict_schema_to_pydantic(schema)
 
-        # Build messages
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
+        # Try Instructor first (skip for Anthropic via OpenAI-compat — response_format is ignored)
+        is_anthropic_compat = self.config.provider.lower() == "anthropic"
+        if self.instructor_client is not None and not is_anthropic_compat:
+            try:
+                messages = []
+                if system_prompt:
+                    messages.append({"role": "system", "content": system_prompt})
+                messages.append({"role": "user", "content": prompt})
 
-        # Create Instructor client from LiteLLM
-        try:
-            from litellm import completion as litellm_completion
-
-            # CRITICAL: Force JSON mode for Ollama to prevent array wrapping issues
-            # Ollama has known bugs with structured outputs (ollama/ollama#8000, #8063)
-            # Using explicit Mode.JSON ensures arrays return as [...] not {"items": [...]}
-            # This prevents Pydantic validation errors even though Instructor 1.13.0
-            # auto-detection works correctly (defense-in-depth: explicit > implicit)
-            # Force JSON mode for providers that return multiple tool calls
-            # (which Instructor doesn't support). Ollama has array wrapping bugs,
-            # Mistral returns parallel tool calls - both are solved by JSON mode.
-            provider_lower = self.config.provider.lower()
-            if provider_lower in ("ollama", "mistral"):
-                client = self.instructor.from_litellm(
-                    litellm_completion,
-                    mode=self.instructor.Mode.JSON
+                t_start = time.monotonic()
+                result, completion = self.instructor_client.chat.completions.create_with_completion(
+                    model=self.config.model_name,
+                    response_model=pydantic_model,
+                    messages=messages,
+                    temperature=self.config.temperature,
+                    max_tokens=self.config.max_tokens,
                 )
-            else:
-                client = self.instructor.from_litellm(litellm_completion)
+                duration = time.monotonic() - t_start
 
-            # Make structured API call
-            # Build kwargs for the call
-            create_kwargs = {
-                "model": self.model_id,
-                "response_model": pydantic_model,
-                "messages": messages,
-                "temperature": self.config.temperature,
-                "max_tokens": self.config.max_tokens,
-            }
+                result_dict = result.model_dump()
+                full_response = json.dumps(result_dict, indent=2)
 
-            # Add api_base if configured (e.g., for custom Ollama hosts)
-            if self.config.api_base:
-                create_kwargs["api_base"] = self.config.api_base
+                input_tokens = 0
+                output_tokens = 0
+                if completion.usage:
+                    input_tokens = completion.usage.prompt_tokens or 0
+                    output_tokens = completion.usage.completion_tokens or 0
 
-            # Add api_key if configured (Bug #13 fix)
-            # For Ollama, we use "ollama" as a placeholder to avoid LiteLLM None handling issues
-            if self.config.api_key:
-                create_kwargs["api_key"] = self.config.api_key
-            elif self.config.provider.lower() == "ollama":
-                create_kwargs["api_key"] = "ollama"
+                tokens_used = input_tokens + output_tokens
+                cost = self._calculate_cost_split(input_tokens, output_tokens)
+                self.track_usage(tokens_used, cost, input_tokens, output_tokens, duration)
 
-            response = client.chat.completions.create(**create_kwargs)
+                return result_dict, full_response
 
-            # Convert Pydantic model to dict
-            result_dict = response.model_dump()
+            except Exception as e:
+                logger.warning(f"Instructor structured generation failed, falling back to JSON prompt: {e}")
 
-            # Generate full response content (JSON string)
-            full_response = json.dumps(result_dict, indent=2)
+        # Fallback: JSON-in-prompt
+        return self._structured_fallback(prompt, schema, pydantic_model, system_prompt)
 
-            # Track usage (estimate based on prompt+response length)
-            # Note: Instructor doesn't always expose token counts
-            estimated_tokens = (len(prompt) + len(full_response)) // 4  # Rough estimate
-            estimated_cost = (estimated_tokens / 1000) * (self.config.cost_per_1k_tokens or 0.0)
-            self.track_usage(estimated_tokens, estimated_cost)
 
-            return result_dict, full_response
+class AnthropicProvider(LLMProvider):
+    """
+    LLM provider using the Anthropic SDK.
+
+    Native support for Claude models with proper system message handling
+    and token counting.
+    """
+
+    def __init__(self, config: ModelConfig):
+        super().__init__(config)
+        if not ANTHROPIC_SDK_AVAILABLE:
+            raise ImportError(
+                "Anthropic SDK not installed. Run: pip install anthropic"
+            )
+
+        self.client = anthropic.Anthropic(
+            api_key=config.api_key,
+            timeout=config.timeout,
+        )
+
+        self.instructor_client = None
+        if INSTRUCTOR_AVAILABLE:
+            self.instructor_client = instructor.from_anthropic(self.client)
+        else:
+            logger.warning(
+                "Instructor not installed — structured output will use JSON-in-prompt fallback. "
+                "For more reliable structured output: pip install instructor"
+            )
+
+        logger.debug(f"Initialized AnthropicProvider: {config.model_name}")
+
+    def generate(self, prompt: str, system_prompt: Optional[str] = None,
+                 **kwargs) -> LLMResponse:
+        """Generate completion using the Anthropic SDK."""
+        messages = [{"role": "user", "content": prompt}]
+
+        create_kwargs = {
+            "model": self.config.model_name,
+            "messages": messages,
+            "temperature": kwargs.get("temperature", self.config.temperature),
+            "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
+        }
+        if system_prompt:
+            create_kwargs["system"] = system_prompt
+
+        try:
+            t_start = time.monotonic()
+            response = self.client.messages.create(**create_kwargs)
+            duration = time.monotonic() - t_start
+
+            # Extract text from response (guard against empty/non-text content)
+            if not response.content:
+                raise RuntimeError("Anthropic returned empty content")
+            first_block = response.content[0]
+            if not hasattr(first_block, 'text'):
+                raise RuntimeError(f"Anthropic returned non-text content block: {first_block.type}")
+            content = first_block.text
+            finish_reason = response.stop_reason or "complete"
+
+            input_tokens = 0
+            output_tokens = 0
+            if response.usage:
+                input_tokens = response.usage.input_tokens or 0
+                output_tokens = response.usage.output_tokens or 0
+            tokens_used = input_tokens + output_tokens
+            cost = self._calculate_cost_split(input_tokens, output_tokens)
+
+            self.track_usage(tokens_used, cost, input_tokens, output_tokens, duration)
+            logger.debug(f"[Anthropic] model={self.config.model_name}, tokens={tokens_used}, cost=${cost:.4f}, duration={duration:.2f}s")
+
+            return LLMResponse(
+                content=content,
+                model=self.config.model_name,
+                provider=self.config.provider.lower(),
+                tokens_used=tokens_used,
+                cost=cost,
+                finish_reason=finish_reason,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                duration=duration,
+            )
 
         except Exception as e:
-            logger.error(f"Structured generation failed: {e}")
+            logger.error(f"Anthropic completion failed: {e}")
             raise
+
+    def generate_structured(self, prompt: str, schema: Dict[str, Any],
+                           system_prompt: Optional[str] = None) -> Tuple[Dict[str, Any], str]:
+        """Generate structured output using Instructor (or JSON fallback)."""
+        pydantic_model = _dict_schema_to_pydantic(schema)
+
+        # Try Instructor first
+        if self.instructor_client is not None:
+            try:
+                messages = [{"role": "user", "content": prompt}]
+
+                create_kwargs = {
+                    "model": self.config.model_name,
+                    "response_model": pydantic_model,
+                    "messages": messages,
+                    "temperature": self.config.temperature,
+                    "max_tokens": self.config.max_tokens,
+                }
+                if system_prompt:
+                    create_kwargs["system"] = system_prompt
+
+                t_start = time.monotonic()
+                result, completion = self.instructor_client.messages.create_with_completion(
+                    **create_kwargs,
+                )
+                duration = time.monotonic() - t_start
+
+                result_dict = result.model_dump()
+                full_response = json.dumps(result_dict, indent=2)
+
+                input_tokens = 0
+                output_tokens = 0
+                if completion.usage:
+                    input_tokens = completion.usage.input_tokens or 0
+                    output_tokens = completion.usage.output_tokens or 0
+                tokens_used = input_tokens + output_tokens
+                cost = self._calculate_cost_split(input_tokens, output_tokens)
+                self.track_usage(tokens_used, cost, input_tokens, output_tokens, duration)
+
+                return result_dict, full_response
+
+            except Exception as e:
+                logger.warning(f"Instructor structured generation failed, falling back to JSON prompt: {e}")
+
+        # Fallback: JSON-in-prompt
+        return self._structured_fallback(prompt, schema, pydantic_model, system_prompt)
 
 
 class ClaudeCodeProvider:
     """
-    LLM provider that signals 'Claude Code will handle this.'
+    LLM provider stub that signals 'Claude Code will handle this.'
 
     Returns None from all generation methods. When the agentic pipeline
     runs inside Claude Code with no external LLM configured, this provider
@@ -398,11 +540,21 @@ class ClaudeCodeProvider:
 
     Callers handle None returns gracefully — the same code path used when
     an external LLM call fails.
+
+    Not a subclass of LLMProvider (returns None instead of LLMResponse),
+    but provides the same tracking attributes for stats compatibility.
+    Use `is_stub_provider()` to distinguish from real providers.
     """
+
+    is_stub = True  # Distinguishes from real providers
 
     def __init__(self):
         self.total_tokens = 0
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
         self.total_cost = 0.0
+        self.call_count = 0
+        self.total_duration = 0.0
 
     def generate(self, prompt: str, system_prompt: Optional[str] = None,
                  **kwargs):
@@ -428,19 +580,40 @@ def create_provider(config: ModelConfig) -> LLMProvider:
     """
     Factory function to create appropriate provider.
 
-    Now uses LiteLLMProvider for all providers (unified interface).
+    Uses AnthropicProvider for Anthropic models and OpenAICompatibleProvider
+    for everything else (OpenAI, Ollama, vLLM, Gemini, Mistral, etc.).
 
     Args:
         config: ModelConfig specifying provider and model
 
     Returns:
-        LiteLLMProvider instance
+        LLMProvider instance
     """
-    # All providers now use LiteLLMProvider (unified via LiteLLM)
-    return LiteLLMProvider(config)
+    provider = config.provider.lower()
+    if provider == "anthropic":
+        if ANTHROPIC_SDK_AVAILABLE:
+            return AnthropicProvider(config)
+        elif OPENAI_SDK_AVAILABLE:
+            logger.warning(
+                "Anthropic SDK not installed — using OpenAI-compatible endpoint. "
+                "Structured output will use Pydantic fallback (response_format is ignored by Anthropic). "
+                "For best results: pip install anthropic"
+            )
+            from dataclasses import replace
+            compat_config = replace(config, api_base="https://api.anthropic.com/v1")
+            return OpenAICompatibleProvider(compat_config)
+        else:
+            raise RuntimeError(
+                "Anthropic provider requires: pip install anthropic (or) pip install openai"
+            )
+    if OPENAI_SDK_AVAILABLE:
+        return OpenAICompatibleProvider(config)
+    raise RuntimeError(
+        f"Provider '{provider}' requires: pip install openai"
+    )
 
 
-# Backward compatibility aliases
-ClaudeProvider = LiteLLMProvider
-OpenAIProvider = LiteLLMProvider
-OllamaProvider = LiteLLMProvider
+# Backward compatibility
+ClaudeProvider = AnthropicProvider if ANTHROPIC_SDK_AVAILABLE else type('ClaudeProvider', (), {})
+OpenAIProvider = OpenAICompatibleProvider if OPENAI_SDK_AVAILABLE else type('OpenAIProvider', (), {})
+OllamaProvider = OpenAICompatibleProvider if OPENAI_SDK_AVAILABLE else type('OllamaProvider', (), {})

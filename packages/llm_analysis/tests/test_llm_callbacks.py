@@ -1,272 +1,278 @@
-"""Tests for LiteLLM callback functionality in LLMClient."""
+"""Tests for LLMClient initialization, error detection, and log sanitization.
+
+Replaces the old LiteLLM callback tests. Now tests the provider-based
+architecture (OpenAI SDK + Anthropic SDK) without any LiteLLM dependency.
+"""
 
 import pytest
-import time
 import sys
-import os
-import litellm
-from io import StringIO
-from unittest.mock import patch, MagicMock
 from pathlib import Path
+from unittest.mock import patch, MagicMock
 
 # Add parent directories to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
-from packages.llm_analysis.llm.client import LLMClient
+from packages.llm_analysis.llm.client import (
+    LLMClient,
+    _is_auth_error,
+    _is_quota_error,
+    _sanitize_log_message,
+)
 from packages.llm_analysis.llm.config import LLMConfig, ModelConfig
 
 
-class TestCallbackRegistration:
-    """Test 1: Verify RaptorLLMLogger is registered after LLMClient init."""
+class TestLLMClientInit:
+    """Verify LLMClient initializes correctly without litellm."""
 
-    def test_callback_registered_after_init(self):
-        """Verify RaptorLLMLogger is in litellm.callbacks after client creation."""
-        # Clear any existing callbacks
-        litellm.callbacks = []
-
-        # Create client
-        client = LLMClient()
-
-        # Verify callback is registered
-        assert len(litellm.callbacks) > 0, "No callbacks registered"
-
-        # Verify it's a RaptorLLMLogger (will fail until implemented)
-        callback = litellm.callbacks[0]
-        assert callback.__class__.__name__ == "RaptorLLMLogger", \
-            f"Expected RaptorLLMLogger, got {callback.__class__.__name__}"
-
-    def test_callback_singleton_pattern(self):
-        """Verify only one RaptorLLMLogger instance exists even with multiple clients."""
-        # Clear callbacks
-        litellm.callbacks = []
-
-        # Create first client
-        client1 = LLMClient()
-        callback_count_1 = len(litellm.callbacks)
-
-        # Create second client
-        client2 = LLMClient()
-        callback_count_2 = len(litellm.callbacks)
-
-        # Should still have only one callback
-        assert callback_count_1 == callback_count_2, \
-            f"Callbacks increased from {callback_count_1} to {callback_count_2}"
-
-
-class TestCallbackSuccessEvent:
-    """Test 2: Verify log_success_event fires with correct args."""
-
-    def test_success_event_logs_correctly(self, capsys):
-        """Test callback logs success with model, tokens, duration."""
-        # Skip if no API key
-        if not os.getenv("OPENAI_API_KEY"):
-            pytest.skip("No OPENAI_API_KEY - skipping OpenAI callback test")
-
-        # This test will use REAL API call as per user request
-        # Using cheap model to minimize costs
-        client = LLMClient()
-
-        # Make a simple call
-        response = client.generate(
-            prompt="Say 'hello'",
-            system_prompt="You are a helpful assistant.",
-            model_config=ModelConfig(
+    @patch("packages.llm_analysis.llm.config.detect_llm_availability")
+    def test_init_works_without_litellm(self, mock_detect):
+        """LLMClient should initialize without importing litellm."""
+        mock_detect.return_value = MagicMock(
+            external_llm=True, claude_code=False, llm_available=True
+        )
+        config = LLMConfig(
+            primary_model=ModelConfig(
                 provider="openai",
-                model_name="gpt-4o-mini",
-                temperature=0.0,
-                max_tokens=10
-            )
+                model_name="gpt-5.2",
+                api_key="sk-test",
+            ),
+            fallback_models=[],
         )
 
-        # Capture logs
-        # Note: callbacks log to logger.debug, check if logs contain callback markers
-        # This test verifies callback ran without throwing
-        assert response is not None
-        assert response.content is not None
+        # Ensure litellm is NOT required
+        with patch.dict(sys.modules, {"litellm": None}):
+            client = LLMClient(config)
 
+        assert client is not None
+        assert client.total_cost == 0.0
+        assert client.request_count == 0
 
-class TestCallbackFailureEvent:
-    """Test 3: Verify log_failure_event fires and sanitizes errors."""
-
-    def test_failure_event_sanitizes_api_keys(self):
-        """Test callback sanitizes API keys in error messages."""
-        client = LLMClient()
-
-        # Skip if no primary model configured (no external LLM available)
-        if not client.config.primary_model:
-            pytest.skip("No external LLM configured - cannot test failure path")
-
-        # Skip if using Ollama (local models don't validate API keys)
-        if client.config.primary_model.provider.lower() == "ollama":
-            pytest.skip("Ollama doesn't validate API keys - cannot test failure path")
-
-        # Use invalid API key to trigger failure
-        with pytest.raises(Exception):  # Will raise after all retries exhausted
-            client.generate(
-                prompt="test",
-                model_config=ModelConfig(
-                    provider="openai",
-                    model_name="gpt-4o-mini",
-                    api_key="sk-invalid-test-key-12345",  # Invalid key
-                    temperature=0.0,
-                    max_tokens=10
-                )
-            )
-
-        # Test passes if exception is raised (callback doesn't break error flow)
-
-
-class TestCallbackExceptionHandling:
-    """Test 4: Force callback to throw exception, verify LLM call still succeeds."""
-
-    def test_callback_exception_doesnt_break_llm_call(self):
-        """Verify LLM call succeeds even if callback throws exception."""
-        # Skip if no API key
-        if not os.getenv("OPENAI_API_KEY"):
-            pytest.skip("No OPENAI_API_KEY - skipping OpenAI callback test")
-
-        # This test requires mocking the callback to force an exception
-        # Will implement after RaptorLLMLogger exists
-
-        client = LLMClient()
-
-        # Patch the callback's log_success_event to raise exception
-        if len(litellm.callbacks) > 0:
-            callback = litellm.callbacks[0]
-            original_method = callback.log_success_event
-
-            def failing_callback(*args, **kwargs):
-                raise RuntimeError("Intentional test exception in callback")
-
-            callback.log_success_event = failing_callback
-
-            try:
-                # Make LLM call - should succeed despite callback failure
-                response = client.generate(
-                    prompt="Say 'hello'",
-                    model_config=ModelConfig(
-                        provider="openai",
-                        model_name="gpt-4o-mini",
-                        temperature=0.0,
-                        max_tokens=10
-                    )
-                )
-
-                # Verify response is returned successfully
-                assert response is not None
-                assert response.content is not None
-            finally:
-                # Restore original callback
-                callback.log_success_event = original_method
-
-
-class TestCacheHitPath:
-    """Test 6: Verify callback does NOT fire on cache hit."""
-
-    def test_cache_hit_no_callback_invocation(self):
-        """Test callback doesn't fire for cached responses."""
-        # Skip if no API key
-        if not os.getenv("OPENAI_API_KEY"):
-            pytest.skip("No OPENAI_API_KEY - skipping OpenAI callback test")
-
-        # Enable caching
-        config = LLMConfig()
-        config.enable_caching = True
-        client = LLMClient(config)
-
-        # Make first call (cache miss - callback fires)
-        prompt1 = "What is 2+2? Answer with just the number."
-        response1 = client.generate(
-            prompt=prompt1,
-            system_prompt="You are a calculator.",
-            model_config=ModelConfig(
-                provider="openai",
-                model_name="gpt-4o-mini",
-                temperature=0.0,
-                max_tokens=5
-            )
+    @patch("packages.llm_analysis.llm.config.detect_llm_availability")
+    def test_init_warns_when_no_llm_available(self, mock_detect):
+        """LLMClient warns when no external LLM is available."""
+        mock_detect.return_value = MagicMock(
+            external_llm=False, claude_code=False, llm_available=False
+        )
+        config = LLMConfig(
+            primary_model=None,
+            fallback_models=[],
         )
 
-        # Make identical call (cache hit - callback should NOT fire)
-        response2 = client.generate(
-            prompt=prompt1,
-            system_prompt="You are a calculator.",
-            model_config=ModelConfig(
-                provider="openai",
-                model_name="gpt-4o-mini",
-                temperature=0.0,
-                max_tokens=5
-            )
+        # Capture warning calls from the logger
+        warning_messages = []
+        with patch("packages.llm_analysis.llm.client.logger") as mock_logger:
+            mock_logger.warning = lambda msg, *a, **kw: warning_messages.append(msg)
+            mock_logger.info = MagicMock()
+            mock_logger.debug = MagicMock()
+            client = LLMClient(config)
+
+        assert any("No external LLM available" in msg or "no primary model" in msg.lower()
+                    for msg in warning_messages), (
+            f"Expected warning about no LLM. Got: {warning_messages}"
         )
 
-        # Both responses should be identical (cached)
-        assert response1.content == response2.content
 
-        # Test passes if no errors (callback behavior verified manually via logs)
+class TestIsAuthError:
+    """Verify _is_auth_error detects auth errors from both SDKs."""
 
-
-class TestRetryBehavior:
-    """Test 7: Document how many times callback fires during retries."""
-
-    def test_retry_callback_invocations(self):
-        """Document callback behavior during retries (exploratory test)."""
-        # This test documents behavior rather than asserting specific counts
-        # It will help us understand if callbacks fire per-attempt or final-only
-
-        client = LLMClient()
-
-        # Use invalid key to trigger retries
+    def test_detects_openai_authentication_error(self):
+        """Detect openai.AuthenticationError by type."""
         try:
-            client.generate(
-                prompt="test",
-                model_config=ModelConfig(
-                    provider="openai",
-                    model_name="gpt-4o-mini",
-                    api_key="sk-invalid",
-                    temperature=0.0,
-                    max_tokens=5
-                )
+            import openai
+            # Create a mock AuthenticationError
+            mock_response = MagicMock()
+            mock_response.status_code = 401
+            mock_response.headers = {}
+            error = openai.AuthenticationError(
+                message="Invalid API key",
+                response=mock_response,
+                body=None,
             )
-        except Exception:
-            pass  # Expected to fail
+            assert _is_auth_error(error) is True
+        except ImportError:
+            pytest.skip("openai SDK not installed")
 
-        # Test documents behavior - passes regardless of callback count
-        assert True
-
-
-class TestPerformanceOverhead:
-    """Test 8: Benchmark callback overhead."""
-
-    def test_callback_overhead_acceptable(self):
-        """Verify callback overhead is <10ms per call."""
-        # Skip if no API key
-        if not os.getenv("OPENAI_API_KEY"):
-            pytest.skip("No OPENAI_API_KEY - skipping OpenAI callback test")
-
-        client = LLMClient()
-
-        # Make 3 calls and measure average time
-        # (Using small number due to real API calls)
-        times = []
-        for i in range(3):
-            start = time.time()
-            response = client.generate(
-                prompt=f"Count: {i}",
-                model_config=ModelConfig(
-                    provider="openai",
-                    model_name="gpt-4o-mini",
-                    temperature=0.0,
-                    max_tokens=5
-                )
+    def test_detects_anthropic_authentication_error(self):
+        """Detect anthropic.AuthenticationError by type."""
+        try:
+            import anthropic
+            mock_response = MagicMock()
+            mock_response.status_code = 401
+            mock_response.headers = {}
+            error = anthropic.AuthenticationError(
+                message="Invalid API key",
+                response=mock_response,
+                body=None,
             )
-            end = time.time()
-            times.append(end - start)
+            assert _is_auth_error(error) is True
+        except (ImportError, TypeError):
+            pytest.skip("anthropic SDK not installed or constructor incompatible")
 
-        avg_time = sum(times) / len(times)
+    def test_detects_string_based_401(self):
+        """Detect auth errors from string indicators."""
+        assert _is_auth_error(Exception("HTTP 401 Unauthorized")) is True
 
-        # Most time is network latency, but test passes if calls complete
-        # Actual overhead measurement would require mocking
-        assert avg_time > 0, "Calls should take some time"
+    def test_detects_string_based_invalid_api_key(self):
+        """Detect 'invalid api key' in error message."""
+        assert _is_auth_error(Exception("Error: invalid api key provided")) is True
 
-        # Test passes - callback doesn't cause timeouts or hangs
-        assert True
+    def test_detects_string_based_permission_denied(self):
+        """Detect 'permission denied' in error message."""
+        assert _is_auth_error(Exception("permission denied for resource")) is True
+
+    def test_non_auth_error_returns_false(self):
+        """Non-auth errors should return False."""
+        assert _is_auth_error(Exception("Connection timeout")) is False
+        assert _is_auth_error(ValueError("bad value")) is False
+
+
+class TestIsQuotaError:
+    """Verify _is_quota_error detects rate limit errors from both SDKs."""
+
+    def test_detects_openai_rate_limit_error(self):
+        """Detect openai.RateLimitError by type."""
+        try:
+            import openai
+            mock_response = MagicMock()
+            mock_response.status_code = 429
+            mock_response.headers = {}
+            error = openai.RateLimitError(
+                message="Rate limit exceeded",
+                response=mock_response,
+                body=None,
+            )
+            assert _is_quota_error(error) is True
+        except ImportError:
+            pytest.skip("openai SDK not installed")
+
+    def test_detects_anthropic_rate_limit_error(self):
+        """Detect anthropic.RateLimitError by type."""
+        try:
+            import anthropic
+            mock_response = MagicMock()
+            mock_response.status_code = 429
+            mock_response.headers = {}
+            error = anthropic.RateLimitError(
+                message="Rate limit exceeded",
+                response=mock_response,
+                body=None,
+            )
+            assert _is_quota_error(error) is True
+        except (ImportError, TypeError):
+            pytest.skip("anthropic SDK not installed or constructor incompatible")
+
+    def test_detects_string_based_429(self):
+        """Detect 429 status code in error message."""
+        assert _is_quota_error(Exception("Error 429: Too Many Requests")) is True
+
+    def test_detects_string_based_quota_exceeded(self):
+        """Detect 'quota exceeded' in error message."""
+        assert _is_quota_error(Exception("quota exceeded for this billing period")) is True
+
+    def test_detects_string_based_rate_limit(self):
+        """Detect 'rate limit' in error message."""
+        assert _is_quota_error(Exception("rate limit reached, try again later")) is True
+
+    def test_detects_gemini_free_tier(self):
+        """Detect Gemini-specific free tier quota error."""
+        assert _is_quota_error(Exception("generate_content_free_tier limit hit")) is True
+
+    def test_non_quota_error_returns_false(self):
+        """Non-quota errors should return False."""
+        assert _is_quota_error(Exception("Connection timeout")) is False
+        assert _is_quota_error(ValueError("bad value")) is False
+
+
+class TestSanitizeLogMessage:
+    """Verify _sanitize_log_message redacts API keys."""
+
+    def test_redacts_openai_api_key(self):
+        """OpenAI-style sk-* keys are redacted."""
+        msg = "Error with key sk-abcdefghijklmnopqrstuvwxyz1234567890"
+        result = _sanitize_log_message(msg)
+        assert "sk-abcdefghijklmnopqrstuvwxyz" not in result
+        assert "[REDACTED-API-KEY]" in result
+
+    def test_redacts_anthropic_api_key(self):
+        """Anthropic-style sk-ant-* keys are redacted."""
+        msg = "Auth failed: sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234567890"
+        result = _sanitize_log_message(msg)
+        assert "sk-ant-api03" not in result
+        assert "[REDACTED-API-KEY]" in result
+
+    def test_redacts_google_api_key(self):
+        """Google-style AIza* keys are redacted."""
+        msg = "Invalid key: AIzaSyA1234567890abcdefghijklmnopqrstuvwxyz"
+        result = _sanitize_log_message(msg)
+        assert "AIzaSyA1234567890" not in result
+        assert "[REDACTED-API-KEY]" in result
+
+    def test_preserves_non_key_content(self):
+        """Non-key content should be preserved."""
+        msg = "Connection timeout after 30s to api.openai.com"
+        result = _sanitize_log_message(msg)
+        assert result == msg
+
+    def test_redacts_multiple_keys(self):
+        """Multiple keys in one message are all redacted."""
+        msg = "Tried sk-abcdefghijklmnopqrstuvwxyz then AIzaSyA1234567890abcdefghijklmnopqrstuvwxyz"
+        result = _sanitize_log_message(msg)
+        assert result.count("[REDACTED-API-KEY]") == 2
+
+
+class TestBudgetChecking:
+    """Verify budget checking works in LLMClient."""
+
+    @patch("packages.llm_analysis.llm.config.detect_llm_availability")
+    def test_check_budget_passes_under_limit(self, mock_detect):
+        """Budget check passes when under limit."""
+        mock_detect.return_value = MagicMock(
+            external_llm=True, claude_code=False, llm_available=True
+        )
+        config = LLMConfig(
+            primary_model=ModelConfig(
+                provider="openai", model_name="gpt-5.2", api_key="sk-test"
+            ),
+            fallback_models=[],
+            max_cost_per_scan=10.0,
+            enable_cost_tracking=True,
+        )
+        client = LLMClient(config)
+        client.total_cost = 5.0
+        assert client._check_budget(estimated_cost=1.0) is True
+
+    @patch("packages.llm_analysis.llm.config.detect_llm_availability")
+    def test_check_budget_fails_over_limit(self, mock_detect):
+        """Budget check fails when over limit."""
+        mock_detect.return_value = MagicMock(
+            external_llm=True, claude_code=False, llm_available=True
+        )
+        config = LLMConfig(
+            primary_model=ModelConfig(
+                provider="openai", model_name="gpt-5.2", api_key="sk-test"
+            ),
+            fallback_models=[],
+            max_cost_per_scan=10.0,
+            enable_cost_tracking=True,
+        )
+        client = LLMClient(config)
+        client.total_cost = 9.5
+        assert client._check_budget(estimated_cost=1.0) is False
+
+    @patch("packages.llm_analysis.llm.config.detect_llm_availability")
+    def test_check_budget_passes_when_tracking_disabled(self, mock_detect):
+        """Budget check always passes when cost tracking is disabled."""
+        mock_detect.return_value = MagicMock(
+            external_llm=True, claude_code=False, llm_available=True
+        )
+        config = LLMConfig(
+            primary_model=ModelConfig(
+                provider="openai", model_name="gpt-5.2", api_key="sk-test"
+            ),
+            fallback_models=[],
+            max_cost_per_scan=1.0,
+            enable_cost_tracking=False,
+        )
+        client = LLMClient(config)
+        client.total_cost = 999.0
+        assert client._check_budget(estimated_cost=100.0) is True

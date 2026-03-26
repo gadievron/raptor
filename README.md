@@ -89,7 +89,7 @@ Beyond RAPTOR's potential for autonomous security research and community collabo
 demonstrates how Claude Code can be adapted for **any purpose**, with RAPTOR packages.
 
 **Recent improvements:**
-- **LiteLLM Integration:** Unified LLM interface with Pydantic validation, smart model selection, and cost tracking
+- **Direct SDK Integration:** OpenAI + Anthropic SDKs with Pydantic validation, smart model selection, and cost tracking
 - **SecOpsAgentKit:** Offensive security specialist agent with comprehensive penetration testing capabilities
 - **Cost Management:** Budget enforcement, real-time callbacks, and intelligent quota detection
 - **Enhanced Reliability:** Multiple bug fixes improving robustness across CodeQL, static analysis, and LLM providers
@@ -158,29 +158,28 @@ Try /analyze on one of our tests in /tests/data
 
 ## LLM Configuration & Cost Management
 
-RAPTOR uses LiteLLM for unified LLM provider integration with automatic fallback, cost tracking, and budget enforcement.
+RAPTOR uses the OpenAI and Anthropic SDKs directly for LLM provider integration with automatic fallback, cost tracking, and budget enforcement. Both SDKs are optional — RAPTOR works with just Claude Code installed.
 
 **Key Features:**
-- **Pydantic Validation:** YAML configs validated at load time with clear error messages
-- **Smart Model Selection:** Auto-selects best reasoning/thinking model from config
-- **Real-time Visibility:** Callbacks log model usage, tokens, duration for every call
+- **Direct SDK Integration:** OpenAI SDK for OpenAI/Gemini/Mistral/Ollama, Anthropic SDK for Claude
+- **Smart Model Selection:** Auto-selects best reasoning model from config or environment
+- **Structured Output:** Instructor + Pydantic fallback for reliable JSON responses
 - **Budget Enforcement:** Prevents exceeding cost limits with detailed error messages
 - **Quota Detection:** Intelligent rate limit detection with provider-specific guidance
-- **Cost Tracking:** Tracks costs across all LLM calls with per-request breakdown
+- **Cost Tracking:** Split input/output pricing with per-request breakdown
 
-**Configuration:**
-```yaml
-# litellm_config.yaml example
-model_list:
-  - model_name: claude-opus-4.5
-    litellm_params:
-      model: anthropic/claude-opus-4.5
-      api_key: ${ANTHROPIC_API_KEY}
-  - model_name: gpt-5.2-thinking
-    litellm_params:
-      model: openai/gpt-5.2-thinking
-      api_key: ${OPENAI_API_KEY}
+**Configuration (optional):**
+```json
+// ~/.config/raptor/models.json
+{
+  "models": [
+    {"provider": "anthropic", "model": "claude-opus-4-6", "api_key": "sk-ant-..."},
+    {"provider": "ollama", "model": "llama3:70b"}
+  ]
+}
 ```
+
+Or use environment variables: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY`
 
 **Budget Control:**
 ```python
@@ -190,8 +189,6 @@ config = LLMConfig(
     max_cost_per_scan=1.0  # Prevent exceeding $1 per scan
 )
 ```
-
-**See:** `docs/litellm-model-configuration-guide.md` for complete configuration guide
 
 ---
 
@@ -360,7 +357,7 @@ models work for analysis but may produce non-compilable exploit code.
 - `ANTHROPIC_API_KEY` - Anthropic Claude API key
 - `OPENAI_API_KEY` - OpenAI API key
 - `OLLAMA_HOST` - Ollama server URL (default: `http://localhost:11434`)
-- `LITELLM_CONFIG_PATH` - Path to LiteLLM YAML configuration file (optional)
+- `RAPTOR_CONFIG` - Path to RAPTOR models JSON configuration file (optional)
 
 **Ollama Examples:**
 ```bash
@@ -405,7 +402,7 @@ python3 raptor.py fuzz --binary /path/to/binary --duration 3600
 - **CLAUDE_CODE_USAGE.md** - Complete Claude Code usage guide
 - **PYTHON_CLI.md** - Python command-line reference
 - **FUZZING_QUICKSTART.md** - Binary fuzzing guide
-- **litellm-model-configuration-guide.md** - LiteLLM configuration and model selection
+- **litellm-model-configuration-guide.md** - Model configuration and selection
 - **.claude/commands/oss-forensics.md** - OSS forensics investigation guide
 - **TESTING.md** - Test suite documentation and user stories
 

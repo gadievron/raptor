@@ -330,7 +330,7 @@ class AutonomousSecurityAgentV2:
         availability = detect_llm_availability()
 
         if availability.external_llm:
-            # External LLM configured — use LLMClient with LiteLLM
+            # External LLM configured — use LLMClient
             self.llm_config = llm_config or LLMConfig()
             self.llm = LLMClient(self.llm_config)
 

@@ -25,70 +25,20 @@ from core.logging import get_logger
 from .config import LLMConfig, ModelConfig
 from .providers import LLMProvider, LLMResponse, create_provider
 
-# Import for type-based quota detection
+# Import for type-based error detection (optional SDKs)
 try:
-    import litellm
-    LITELLM_AVAILABLE = True
+    import openai as _openai_module
+    _OPENAI_AVAILABLE = True
 except ImportError:
-    LITELLM_AVAILABLE = False
+    _OPENAI_AVAILABLE = False
+
+try:
+    import anthropic as _anthropic_module
+    _ANTHROPIC_AVAILABLE = True
+except ImportError:
+    _ANTHROPIC_AVAILABLE = False
 
 logger = get_logger()
-
-# Versions of dependencies known to contain malicious code, published via
-# compromised PyPI maintainer accounts.  Checked at runtime because pip
-# constraints only help at install time — users may already have a bad
-# version installed.
-#
-# litellm 1.82.7 / 1.82.8 — Malicious code exfiltrates environment
-# variables, API keys, SSH keys, cloud credentials, and other secrets
-# to an attacker-controlled domain.  Published via a compromised PyPI
-# account; the official GitHub releases stop at v1.82.6.
-# Ref: https://github.com/BerriAI/litellm/issues/24518
-COMPROMISED_VERSIONS = {
-    "litellm": {"1.82.7", "1.82.8"},
-}
-
-
-def check_dependency_integrity() -> None:
-    """
-    Check installed dependencies against known compromised versions.
-
-    Raises RuntimeError if a compromised version is detected.
-
-    NOTE: litellm 1.82.8 installs a .pth file that runs malicious code
-    on ANY Python startup, before any imports.  By the time this check
-    runs the damage is already done for that version.  This check still
-    serves to: (a) block further RAPTOR operations, (b) alert the user
-    to rotate credentials, (c) catch 1.82.7 which only triggers on
-    proxy module import.
-
-    """
-    from importlib.metadata import version as pkg_version, PackageNotFoundError
-
-    for package, bad_versions in COMPROMISED_VERSIONS.items():
-        try:
-            installed = pkg_version(package)
-        except PackageNotFoundError:
-            continue
-
-        if installed in bad_versions:
-            raise RuntimeError(
-                f"SECURITY: {package}=={installed} contains malicious code that "
-                f"exfiltrates API keys, SSH keys, and cloud credentials to an "
-                f"attacker-controlled server. This version was published via a "
-                f"compromised PyPI maintainer account.\n"
-                f"\n"
-                f"VERSION 1.82.8 RUNS ON PYTHON STARTUP — if you have this\n"
-                f"version installed, credentials may already be compromised.\n"
-                f"Rotate all API keys, SSH keys, and cloud credentials.\n"
-                f"\n"
-                f"Do NOT use pip to fix this — pip invokes Python, which\n"
-                f"triggers the payload again. Remove the .pth file first:\n"
-                f"  find / -path '*/litellm*' -name '*.pth' -delete 2>/dev/null\n" 
-                f"Then: pip install \"{package}!={installed}\"\n"
-                f"\n"
-                f"Ref: https://github.com/BerriAI/litellm/issues/24518"
-            )
 
 
 def _sanitize_log_message(msg: str) -> str:
@@ -97,18 +47,19 @@ def _sanitize_log_message(msg: str) -> str:
 
     Defense-in-depth protection against API key leakage in error messages.
 
-    Why needed:
-    - LiteLLM sanitizes ITS internal logs (via redact_message_input_output_from_logging)
-    - WE sanitize OUR application logs (when we log exceptions with our logger)
-    - Exception messages from LiteLLM MAY contain API keys in edge cases
-
     Searchable tags: #SECURITY #API_KEY_PROTECTION #LOG_SANITIZATION
     Related: Cursor Bot Bug #2, PR #32, defense-in-depth best practice
     """
+    # Redact Anthropic API keys first (sk-ant-*) before general sk-* pattern
+    msg = re.sub(r'sk-ant-[a-zA-Z0-9-_]{20,}', '[REDACTED-API-KEY]', msg)
     # Redact OpenAI-style API keys (sk-*, pk-*)
     msg = re.sub(r'sk-[a-zA-Z0-9-_]{20,}', '[REDACTED-API-KEY]', msg)
     msg = re.sub(r'pk-[a-zA-Z0-9-_]{20,}', '[REDACTED-API-KEY]', msg)
-    # TODO: Add patterns for other providers if needed (Anthropic, Google, etc.)
+    # Redact Google API keys (AIza*)
+    msg = re.sub(r'AIza[a-zA-Z0-9-_]{30,}', '[REDACTED-API-KEY]', msg)
+    # Redact Bearer tokens (Mistral and others in error messages)
+    msg = re.sub(r'Bearer [a-zA-Z0-9-_]{20,}', 'Bearer [REDACTED]', msg)
+    # TODO: Add patterns for other providers as needed (new key formats, etc.)
     return msg
 
 
@@ -116,18 +67,25 @@ def _is_auth_error(error: Exception) -> bool:
     """
     Detect authentication/authorization errors from LLM providers.
 
-    Used to surface a clear console message when API keys are invalid,
-    rather than leaving the user to parse retry logs.
+    Checks both OpenAI and Anthropic SDK exception types, with
+    string-based fallback for edge cases.
 
     Args:
-        error: Exception from LiteLLM/provider
+        error: Exception from provider SDK
 
     Returns:
         True if error appears to be an auth/key error
     """
-    if LITELLM_AVAILABLE:
+    if _OPENAI_AVAILABLE:
         try:
-            if isinstance(error, litellm.AuthenticationError):
+            if isinstance(error, _openai_module.AuthenticationError):
+                return True
+        except AttributeError:
+            pass
+
+    if _ANTHROPIC_AVAILABLE:
+        try:
+            if isinstance(error, _anthropic_module.AuthenticationError):
                 return True
         except AttributeError:
             pass
@@ -144,31 +102,31 @@ def _is_quota_error(error: Exception) -> bool:
     """
     Detect quota/rate limit errors using type-based + string-based detection.
 
-    Strategy:
-    1. Check exception type first (robust, version-safe)
-    2. Fall back to string matching (handles edge cases like LiteLLM bug #16189)
+    Checks both OpenAI and Anthropic SDK exception types.
 
     Args:
-        error: Exception from LiteLLM/provider
+        error: Exception from provider SDK
 
     Returns:
         True if error appears to be quota/rate limit related
-
-    Related: Gemini quota exhaustion issue (Dec 2025)
     """
-    # Type-based detection (preferred - robust against message format changes)
-    if LITELLM_AVAILABLE:
+    if _OPENAI_AVAILABLE:
         try:
-            if isinstance(error, litellm.RateLimitError):
+            if isinstance(error, _openai_module.RateLimitError):
                 return True
         except AttributeError:
-            # RateLimitError doesn't exist in this LiteLLM version
             pass
 
-    # String-based detection (fallback - handles bugs like #16189 where status code is wrong)
+    if _ANTHROPIC_AVAILABLE:
+        try:
+            if isinstance(error, _anthropic_module.RateLimitError):
+                return True
+        except AttributeError:
+            pass
+
     error_str = str(error).lower()
     return any([
-        "429" in error_str,  # HTTP 429 (Rate Limit)
+        "429" in error_str,
         "quota exceeded" in error_str,
         "quota" in error_str and "exceeded" in error_str,
         "rate limit" in error_str,
@@ -180,21 +138,15 @@ def _get_quota_guidance(model_name: str, provider: str) -> str:
     """
     Get simple, clear detection message for quota/rate limit errors.
 
-    Shows LiteLLM's actual error message (which contains provider-specific details)
-    rather than maintaining our own provider-specific guidance.
-
     Args:
         model_name: Model that hit quota limit (for display only)
         provider: Provider name (anthropic, openai, gemini, google, ollama, etc.)
 
     Returns:
         Simple detection message indicating quota/rate limit error
-
-    Related: Gemini quota exhaustion issue (Dec 2025)
     """
     provider_lower = provider.lower()
 
-    # Simple provider-specific detection messages
     if provider_lower in ("gemini", "google"):
         return "\n→ Google Gemini quota/rate limit exceeded"
     elif provider_lower == "openai":
@@ -207,102 +159,6 @@ def _get_quota_guidance(model_name: str, provider: str) -> str:
         return f"\n→ {provider.title()} rate limit exceeded"
 
 
-class RaptorLLMLogger:
-    """
-    LiteLLM callback logger for RAPTOR visibility.
-
-    Provides atomic logging of:
-    - Model used (provider/name)
-    - Tokens consumed (from LiteLLM's perspective)
-    - Duration (from LiteLLM's timing)
-    - Errors (sanitized for API key protection)
-
-    Complements manual logging (which provides retry/fallback context).
-    """
-
-    def __init__(self):
-        """Initialize callback logger."""
-        self.call_count = 0
-
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
-        """
-        Log successful LLM call.
-
-        Args:
-            kwargs: Call arguments (contains model, messages, etc.)
-            response_obj: LiteLLM response object
-            start_time: Call start timestamp
-            end_time: Call end timestamp
-        """
-        try:
-            self.call_count += 1
-
-            # Extract model info
-            model = kwargs.get("model", "unknown")
-
-            # Extract token usage
-            tokens_used = 0
-            if hasattr(response_obj, "usage"):
-                usage = response_obj.usage
-                if hasattr(usage, "total_tokens"):
-                    tokens_used = usage.total_tokens
-
-            # Calculate duration (handle both float and datetime types)
-            duration = end_time - start_time
-            if hasattr(duration, 'total_seconds'):
-                duration = duration.total_seconds()
-
-            logger.debug(
-                f"[LiteLLM] Success: model={model}, tokens={tokens_used}, duration={duration:.2f}s"
-            )
-
-        except Exception as e:
-            # Never break LLM calls with callback errors
-            logger.debug(f"[LiteLLM] Callback error (non-fatal): {_sanitize_log_message(str(e))}")
-
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        """
-        Log failed LLM call.
-
-        Args:
-            kwargs: Call arguments
-            response_obj: Exception or error response
-            start_time: Call start timestamp
-            end_time: Call end timestamp
-        """
-        try:
-            # Extract model info
-            model = kwargs.get("model", "unknown")
-
-            # Extract error message (sanitize for API keys)
-            error_msg = _sanitize_log_message(str(response_obj))
-
-            # Calculate duration (handle both float and datetime types)
-            duration = end_time - start_time
-            if hasattr(duration, 'total_seconds'):
-                duration = duration.total_seconds()
-
-            logger.debug(
-                f"[LiteLLM] Failure: model={model}, error={error_msg}, duration={duration:.2f}s"
-            )
-
-        except Exception as e:
-            # Never break LLM calls with callback errors
-            logger.debug(f"[LiteLLM] Callback error (non-fatal): {_sanitize_log_message(str(e))}")
-
-
-# Singleton instance of callback logger
-_raptor_llm_logger_instance = None
-
-
-def _get_raptor_llm_logger():
-    """Get or create singleton RaptorLLMLogger instance."""
-    global _raptor_llm_logger_instance
-    if _raptor_llm_logger_instance is None:
-        _raptor_llm_logger_instance = RaptorLLMLogger()
-    return _raptor_llm_logger_instance
-
-
 class LLMClient:
     """Unified LLM client with multi-provider support and fallback."""
 
@@ -311,44 +167,17 @@ class LLMClient:
         self.providers: Dict[str, LLMProvider] = {}
         self.total_cost = 0.0
         self.request_count = 0
-
-        # HEALTH CHECK: Verify LiteLLM library is available
-        try:
-            import litellm
-        except ImportError:
-            raise RuntimeError(
-                "LiteLLM library not installed. "
-                "Install with: pip install litellm"
-            )
-
-        # SECURITY CHECK: Block known compromised dependency versions
-        check_dependency_integrity()
+        self.task_type_costs: Dict[str, float] = {}  # task_type → cumulative cost
 
         # HEALTH CHECK: Warn if no API keys configured
-        from .config import detect_llm_availability
+        from .detection import detect_llm_availability
         availability = detect_llm_availability()
         if not availability.external_llm:
             logger.warning(
-                "No external LLM available (no API keys, no LiteLLM config, no Ollama). "
+                "No external LLM available (no API keys, no config file, no Ollama). "
                 "LLMClient constructed but calls will likely fail. "
                 "For production use, configure at least one LLM provider."
             )
-
-        # SECURITY: Enable API key sanitization
-        litellm.redact_message_input_output_from_logging = True
-
-        # Register LiteLLM callback for visibility (singleton pattern)
-        # DUAL LOGGING DESIGN:
-        # - Manual logs (logger.info/warning in generate/generate_structured):
-        #   Provide RAPTOR-level context (retry #, fallback #, cache hits)
-        # - Callback logs (logger.debug in RaptorLLMLogger):
-        #   Provide LiteLLM-level metrics (model, tokens, duration from LiteLLM's perspective)
-        # Both are necessary and non-redundant:
-        #   - Manual: User/operator visibility into RAPTOR's decision-making
-        #   - Callback: Developer/debugger access to atomic LiteLLM metrics
-        callback = _get_raptor_llm_logger()
-        if callback not in litellm.callbacks:
-            litellm.callbacks.append(callback)
 
         # Initialize cache
         if self.config.enable_caching:
@@ -441,7 +270,7 @@ class LLMClient:
         Args:
             prompt: User prompt
             system_prompt: System prompt
-            task_type: Task type for model selection ("code_analysis", "exploit_generation", etc.)
+            task_type: Task type for model selection
             **kwargs: Additional generation parameters
                 model_config: Optional ModelConfig to override default model selection
 
@@ -496,12 +325,12 @@ class LLMClient:
                         models_to_try.append(fallback)
 
         last_error = None
-        attempts_count = 0  # Track actual attempts, not just models in list
+        attempts_count = 0
         for model_idx, model in enumerate(models_to_try):
             if not model.enabled:
                 continue
 
-            attempts_count += 1  # Count this as an actual attempt
+            attempts_count += 1
 
             # Show which model we're using (visible to user)
             if model_idx == 0:
@@ -521,17 +350,22 @@ class LLMClient:
                         print(f"  ↻ Retrying... (attempt {attempt + 1}/{self.config.max_retries})")
 
                     provider = self._get_provider(model)
+                    t_start = time.time()
                     response = provider.generate(prompt, system_prompt, **kwargs)
+                    duration = time.time() - t_start
 
                     # Track cost
                     self.total_cost += response.cost
                     self.request_count += 1
+                    if task_type:
+                        self.task_type_costs[task_type] = self.task_type_costs.get(task_type, 0.0) + response.cost
 
                     # Cache response
                     self._save_to_cache(cache_key, response)
 
                     logger.info(f"Generation successful: {model.provider}/{model.model_name} "
-                               f"(tokens: {response.tokens_used}, cost: ${response.cost:.4f})")
+                               f"(tokens: {response.tokens_used}, cost: ${response.cost:.4f}, "
+                               f"duration: {duration:.1f}s)")
 
                     return response
 
@@ -559,19 +393,15 @@ class LLMClient:
 
         # Check if last error was quota-related
         if last_error and _is_quota_error(last_error):
-            # Show detection message + actual provider error (with light sanitization)
             error_msg += _get_quota_guidance(model_config.model_name, model_config.provider)
             error_msg += f"\nProvider message: {_sanitize_log_message(str(last_error))}"
         elif last_error:
-            # Generic error with sanitized last error
             error_msg += f"\nLast error: {_sanitize_log_message(str(last_error))}"
-            # Add troubleshooting tips (consistent with generate_structured)
             if tier == "local (Ollama)":
                 error_msg += "\n→ Check Ollama server: http://localhost:11434/api/tags"
             else:
                 error_msg += "\n→ Check API keys and network connectivity"
         else:
-            # No attempts were made (e.g., primary model disabled and no same-tier fallbacks)
             error_msg += "\nNo enabled models available in this tier."
             if tier == "local (Ollama)":
                 error_msg += "\n→ Check Ollama server: http://localhost:11434/api/tags"
@@ -618,25 +448,22 @@ class LLMClient:
         # Try models in order (same tier only: local→local, cloud→cloud)
         models_to_try = [model_config]
         if self.config.enable_fallback:
-            # Filter fallbacks to same tier as primary
             is_local_primary = model_config.provider.lower() == "ollama"
             for fallback in self.config.fallback_models:
                 if not fallback.enabled:
                     continue
-                # Skip if different tier (don't mix local and cloud)
                 is_local_fallback = fallback.provider.lower() == "ollama"
                 if is_local_primary == is_local_fallback:
-                    # Skip if same as primary (already trying it)
                     if fallback.model_name != model_config.model_name:
                         models_to_try.append(fallback)
 
         last_error = None
-        attempts_count = 0  # Track actual attempts, not just models in list
+        attempts_count = 0
         for model_idx, model in enumerate(models_to_try):
             if not model.enabled:
                 continue
 
-            attempts_count += 1  # Count this as an actual attempt
+            attempts_count += 1
 
             # Show which model we're using (visible to user)
             if model_idx == 0:
@@ -659,7 +486,9 @@ class LLMClient:
                     cost_before = provider.total_cost
                     tokens_before = provider.total_tokens
 
+                    t_start = time.time()
                     result = provider.generate_structured(prompt, schema, system_prompt)
+                    duration = time.time() - t_start
 
                     # Calculate cost delta
                     cost_delta = provider.total_cost - cost_before
@@ -668,24 +497,26 @@ class LLMClient:
                     # Track at client level
                     self.total_cost += cost_delta
                     self.request_count += 1
+                    if task_type:
+                        self.task_type_costs[task_type] = self.task_type_costs.get(task_type, 0.0) + cost_delta
 
                     logger.info(f"Structured generation successful: {model.provider}/{model.model_name} "
-                               f"(tokens: {tokens_delta}, cost: ${cost_delta:.4f})")
+                               f"(tokens: {tokens_delta}, cost: ${cost_delta:.4f}, "
+                               f"duration: {duration:.1f}s)")
                     return result
 
                 except Exception as e:
                     last_error = e
 
-                    # Check if quota/rate limit error and log specific guidance
                     if _is_quota_error(e):
                         quota_guidance = _get_quota_guidance(model.model_name, model.provider)
                         logger.warning(f"Quota error for {model.provider}/{model.model_name}:{quota_guidance}")
 
-                    # SECURITY: Sanitize exception message to prevent API key leakage (Cursor Bot Bug #2)
+                    # SECURITY: Sanitize exception message to prevent API key leakage
                     logger.warning(_sanitize_log_message(f"Structured generation attempt {attempt + 1} failed: {str(e)}"))
 
                     if attempt < self.config.max_retries - 1:
-                        delay = self.config.retry_delay * (2 ** attempt)  # Exponential backoff
+                        delay = self.config.retry_delay * (2 ** attempt)
                         logger.debug(f"Retrying in {delay}s...")
                         time.sleep(delay)
 
@@ -693,20 +524,16 @@ class LLMClient:
         tier = "local (Ollama)" if model_config.provider.lower() == "ollama" else "cloud"
         error_msg = f"Structured generation failed for all {tier} models (tried {attempts_count} model(s))."
 
-        # Check if last error was quota-related
         if last_error and _is_quota_error(last_error):
-            # Show detection message + actual provider error (with light sanitization)
             error_msg += _get_quota_guidance(model_config.model_name, model_config.provider)
             error_msg += f"\nProvider message: {_sanitize_log_message(str(last_error))}"
         elif last_error:
-            # Generic error with sanitized last error
             error_msg += f"\nLast error: {_sanitize_log_message(str(last_error))}"
             if tier == "local (Ollama)":
                 error_msg += "\n→ Check Ollama server: http://localhost:11434/api/tags"
             else:
                 error_msg += "\n→ Check API keys and network connectivity"
         else:
-            # No attempts were made (e.g., primary model disabled and no same-tier fallbacks)
             error_msg += "\nNo enabled models available in this tier."
             if tier == "local (Ollama)":
                 error_msg += "\n→ Check Ollama server: http://localhost:11434/api/tags"
@@ -717,12 +544,19 @@ class LLMClient:
         raise RuntimeError(error_msg)
 
     def get_stats(self) -> Dict[str, Any]:
-        """Get usage statistics."""
+        """Get usage statistics with per-provider, per-task-type, and token split breakdowns."""
         provider_stats = {}
         for key, provider in self.providers.items():
+            avg_duration = (provider.total_duration / provider.call_count
+                           if provider.call_count > 0 else 0.0)
             provider_stats[key] = {
+                "call_count": provider.call_count,
                 "total_tokens": provider.total_tokens,
+                "input_tokens": provider.total_input_tokens,
+                "output_tokens": provider.total_output_tokens,
                 "total_cost": provider.total_cost,
+                "total_duration": round(provider.total_duration, 2),
+                "avg_duration": round(avg_duration, 2),
             }
 
         return {
@@ -730,12 +564,18 @@ class LLMClient:
             "total_cost": self.total_cost,
             "budget_remaining": self.config.max_cost_per_scan - self.total_cost,
             "providers": provider_stats,
+            "task_type_costs": dict(self.task_type_costs),
         }
 
     def reset_stats(self) -> None:
         """Reset usage statistics."""
         self.total_cost = 0.0
         self.request_count = 0
+        self.task_type_costs.clear()
         for provider in self.providers.values():
             provider.total_tokens = 0
+            provider.total_input_tokens = 0
+            provider.total_output_tokens = 0
             provider.total_cost = 0.0
+            provider.call_count = 0
+            provider.total_duration = 0.0
