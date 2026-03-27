@@ -13,14 +13,27 @@ from unittest.mock import patch, MagicMock
 # Add parent directories to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
-from packages.llm_analysis.llm.config import ModelConfig, MODEL_COSTS
+from packages.llm_analysis.llm.config import ModelConfig
+from packages.llm_analysis.llm.model_data import MODEL_COSTS
+import packages.llm_analysis.llm.providers as _providers_module
 
-# Ensure check_dependency_integrity is available in client module.
-# providers.py imports it via `from .client import check_dependency_integrity`.
-# If it doesn't exist yet, inject a no-op so provider construction works in tests.
-import packages.llm_analysis.llm.client as _client_module
-if not hasattr(_client_module, "check_dependency_integrity"):
-    _client_module.check_dependency_integrity = lambda: None
+
+def _ensure_mock_sdk(module, attr_name):
+    """Ensure a mock is set on the module for a conditionally imported SDK.
+
+    Returns (mock, cleanup_fn). Call cleanup_fn after the test to restore state.
+    """
+    original = getattr(module, attr_name, None)
+    mock = MagicMock()
+    setattr(module, attr_name, mock)
+
+    def cleanup():
+        if original is not None:
+            setattr(module, attr_name, original)
+        elif hasattr(module, attr_name):
+            delattr(module, attr_name)
+
+    return mock, cleanup
 
 
 class TestCreateProviderAnthropicRoute:
@@ -28,90 +41,60 @@ class TestCreateProviderAnthropicRoute:
 
     @patch("packages.llm_analysis.llm.providers.ANTHROPIC_SDK_AVAILABLE", True)
     @patch("packages.llm_analysis.llm.providers.INSTRUCTOR_AVAILABLE", False)
-    @patch("packages.llm_analysis.llm.providers.anthropic")
-    def test_returns_anthropic_provider(self, mock_anthropic):
+    def test_returns_anthropic_provider(self):
         """create_provider('anthropic') returns AnthropicProvider."""
-        from packages.llm_analysis.llm.providers import create_provider, AnthropicProvider
-
-        config = ModelConfig(
-            provider="anthropic",
-            model_name="claude-sonnet-4-6",
-            api_key="sk-ant-test-key",
-        )
-
-        provider = create_provider(config)
-        assert isinstance(provider, AnthropicProvider)
+        mock_anthropic, cleanup = _ensure_mock_sdk(_providers_module, 'anthropic')
+        try:
+            from packages.llm_analysis.llm.providers import create_provider, AnthropicProvider
+            config = ModelConfig(
+                provider="anthropic",
+                model_name="claude-sonnet-4-6",
+                api_key="sk-ant-test-key",
+            )
+            provider = create_provider(config)
+            assert isinstance(provider, AnthropicProvider)
+        finally:
+            cleanup()
 
 
 class TestCreateProviderOpenAIRoute:
     """Verify create_provider returns OpenAICompatibleProvider for OpenAI-compatible providers."""
 
-    @patch("packages.llm_analysis.llm.providers.OPENAI_SDK_AVAILABLE", True)
-    @patch("packages.llm_analysis.llm.providers.INSTRUCTOR_AVAILABLE", False)
-    @patch("packages.llm_analysis.llm.providers.OpenAI")
-    def test_returns_openai_provider_for_openai(self, mock_openai_cls):
+    def _make_provider(self, provider_name, model_name, api_key=None, api_base=None):
+        """Helper to create a provider with mocked OpenAI SDK."""
+        mock_openai, cleanup = _ensure_mock_sdk(_providers_module, 'OpenAI')
+        try:
+            with patch("packages.llm_analysis.llm.providers.OPENAI_SDK_AVAILABLE", True), \
+                 patch("packages.llm_analysis.llm.providers.INSTRUCTOR_AVAILABLE", False):
+                from packages.llm_analysis.llm.providers import create_provider, OpenAICompatibleProvider
+                config = ModelConfig(
+                    provider=provider_name,
+                    model_name=model_name,
+                    api_key=api_key,
+                    api_base=api_base,
+                )
+                provider = create_provider(config)
+                assert isinstance(provider, OpenAICompatibleProvider)
+        finally:
+            cleanup()
+
+    def test_returns_openai_provider_for_openai(self):
         """create_provider('openai') returns OpenAICompatibleProvider."""
-        from packages.llm_analysis.llm.providers import create_provider, OpenAICompatibleProvider
+        self._make_provider("openai", "gpt-5.2", "sk-test", "https://api.openai.com/v1")
 
-        config = ModelConfig(
-            provider="openai",
-            model_name="gpt-5.2",
-            api_key="sk-test-key",
-            api_base="https://api.openai.com/v1",
-        )
-
-        provider = create_provider(config)
-        assert isinstance(provider, OpenAICompatibleProvider)
-
-    @patch("packages.llm_analysis.llm.providers.OPENAI_SDK_AVAILABLE", True)
-    @patch("packages.llm_analysis.llm.providers.INSTRUCTOR_AVAILABLE", False)
-    @patch("packages.llm_analysis.llm.providers.OpenAI")
-    def test_returns_openai_provider_for_gemini(self, mock_openai_cls):
+    def test_returns_openai_provider_for_gemini(self):
         """create_provider('gemini') returns OpenAICompatibleProvider."""
-        from packages.llm_analysis.llm.providers import create_provider, OpenAICompatibleProvider
+        self._make_provider("gemini", "gemini-2.5-pro", "AIza-test",
+                           "https://generativelanguage.googleapis.com/v1beta/openai")
 
-        config = ModelConfig(
-            provider="gemini",
-            model_name="gemini-2.5-pro",
-            api_key="AIza-test",
-            api_base="https://generativelanguage.googleapis.com/v1beta/openai",
-        )
-
-        provider = create_provider(config)
-        assert isinstance(provider, OpenAICompatibleProvider)
-
-    @patch("packages.llm_analysis.llm.providers.OPENAI_SDK_AVAILABLE", True)
-    @patch("packages.llm_analysis.llm.providers.INSTRUCTOR_AVAILABLE", False)
-    @patch("packages.llm_analysis.llm.providers.OpenAI")
-    def test_returns_openai_provider_for_mistral(self, mock_openai_cls):
+    def test_returns_openai_provider_for_mistral(self):
         """create_provider('mistral') returns OpenAICompatibleProvider."""
-        from packages.llm_analysis.llm.providers import create_provider, OpenAICompatibleProvider
+        self._make_provider("mistral", "mistral-large-latest", "test-key",
+                           "https://api.mistral.ai/v1")
 
-        config = ModelConfig(
-            provider="mistral",
-            model_name="mistral-large-latest",
-            api_key="test-key",
-            api_base="https://api.mistral.ai/v1",
-        )
-
-        provider = create_provider(config)
-        assert isinstance(provider, OpenAICompatibleProvider)
-
-    @patch("packages.llm_analysis.llm.providers.OPENAI_SDK_AVAILABLE", True)
-    @patch("packages.llm_analysis.llm.providers.INSTRUCTOR_AVAILABLE", False)
-    @patch("packages.llm_analysis.llm.providers.OpenAI")
-    def test_returns_openai_provider_for_ollama(self, mock_openai_cls):
+    def test_returns_openai_provider_for_ollama(self):
         """create_provider('ollama') returns OpenAICompatibleProvider."""
-        from packages.llm_analysis.llm.providers import create_provider, OpenAICompatibleProvider
-
-        config = ModelConfig(
-            provider="ollama",
-            model_name="mistral",
-            api_base="http://localhost:11434/v1",
-        )
-
-        provider = create_provider(config)
-        assert isinstance(provider, OpenAICompatibleProvider)
+        self._make_provider("ollama", "mistral", api_base="http://localhost:11434/v1")
 
 
 class TestCreateProviderSDKUnavailable:
