@@ -139,13 +139,10 @@ class TestModelDefaulting:
             {"provider": "anthropic", "api_key": "sk-ant-test"}
         ]))
         with patch.dict(os.environ, {"RAPTOR_CONFIG": str(config)}):
-            # Reset cache
             import packages.llm_analysis.llm.config as cfg
             cfg._thinking_model_checked = False
             cfg._cached_thinking_model = None
-
             result = _get_best_thinking_model()
-
         assert result is not None
         assert result.model_name == "claude-opus-4-6"
         assert result.api_key == "sk-ant-test"
@@ -159,9 +156,7 @@ class TestModelDefaulting:
             import packages.llm_analysis.llm.config as cfg
             cfg._thinking_model_checked = False
             cfg._cached_thinking_model = None
-
             result = _get_best_thinking_model()
-
         assert result is not None
         assert result.model_name == "gpt-5.2-thinking"
 
@@ -178,9 +173,7 @@ class TestModelDefaulting:
             import packages.llm_analysis.llm.config as cfg
             cfg._thinking_model_checked = False
             cfg._cached_thinking_model = None
-
             result = _get_best_thinking_model()
-
         assert result is not None
         assert result.api_key == "sk-ant-from-env"
 
@@ -198,9 +191,7 @@ class TestTimeoutFromConfig:
             import packages.llm_analysis.llm.config as cfg
             cfg._thinking_model_checked = False
             cfg._cached_thinking_model = None
-
             result = _get_best_thinking_model()
-
         assert result is not None
         assert result.timeout == 300
 
@@ -214,9 +205,7 @@ class TestTimeoutFromConfig:
             import packages.llm_analysis.llm.config as cfg
             cfg._thinking_model_checked = False
             cfg._cached_thinking_model = None
-
             result = _get_best_thinking_model()
-
         assert result is not None
         assert result.timeout == 120
 
@@ -264,27 +253,385 @@ class TestMigrationDetection:
         assert captured.out == ""
 
 
+class TestAutoMigration:
+    """Test auto-migration from LiteLLM YAML to RAPTOR JSON."""
+
+    def _make_litellm_config(self, tmp_path, yaml_content):
+        old = tmp_path / ".config" / "litellm" / "config.yaml"
+        new = tmp_path / ".config" / "raptor" / "models.json"
+        old.parent.mkdir(parents=True)
+        old.write_text(yaml_content)
+        return old, new
+
+    def test_migrates_basic_config(self, tmp_path):
+        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        old, new = self._make_litellm_config(tmp_path, """
+model_list:
+  - model_name: my-claude
+    litellm_params:
+      model: anthropic/claude-opus-4-6
+      api_key: sk-ant-real-key
+""")
+        result = _try_auto_migrate(old, new)
+        assert result is True
+        assert new.exists()
+        data = json.loads(new.read_text())
+        assert len(data["models"]) == 1
+        assert data["models"][0]["provider"] == "anthropic"
+        assert data["models"][0]["model"] == "claude-opus-4-6"
+        assert data["models"][0]["api_key"] == "sk-ant-real-key"
+
+    def test_preserves_literal_api_keys(self, tmp_path):
+        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        old, new = self._make_litellm_config(tmp_path, """
+model_list:
+  - model_name: gpt
+    litellm_params:
+      model: openai/gpt-5.2
+      api_key: sk-literal-key-value
+""")
+        _try_auto_migrate(old, new)
+        data = json.loads(new.read_text())
+        assert data["models"][0]["api_key"] == "sk-literal-key-value"
+
+    def test_env_var_keys_become_placeholders(self, tmp_path):
+        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        old, new = self._make_litellm_config(tmp_path, """
+model_list:
+  - model_name: claude
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+""")
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            _try_auto_migrate(old, new)
+        data = json.loads(new.read_text())
+        assert data["models"][0]["api_key"] == "${ANTHROPIC_API_KEY}"
+
+    def test_env_var_keys_omitted_when_set(self, tmp_path):
+        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        old, new = self._make_litellm_config(tmp_path, """
+model_list:
+  - model_name: claude
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+""")
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-real"}):
+            _try_auto_migrate(old, new)
+        data = json.loads(new.read_text())
+        assert "api_key" not in data["models"][0]
+
+    def test_multiple_models_migrated(self, tmp_path):
+        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        old, new = self._make_litellm_config(tmp_path, """
+model_list:
+  - model_name: claude
+    litellm_params:
+      model: anthropic/claude-opus-4-6
+      api_key: key1
+  - model_name: gpt
+    litellm_params:
+      model: openai/gpt-5.2
+      api_key: key2
+  - model_name: gemini
+    litellm_params:
+      model: gemini/gemini-2.5-pro
+      api_key: key3
+""")
+        _try_auto_migrate(old, new)
+        data = json.loads(new.read_text())
+        assert len(data["models"]) == 3
+        providers = [m["provider"] for m in data["models"]]
+        assert "anthropic" in providers
+        assert "openai" in providers
+        assert "gemini" in providers
+
+    def test_sets_chmod_600(self, tmp_path):
+        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        old, new = self._make_litellm_config(tmp_path, """
+model_list:
+  - model_name: claude
+    litellm_params:
+      model: anthropic/claude-opus-4-6
+      api_key: secret
+""")
+        _try_auto_migrate(old, new)
+        mode = oct(new.stat().st_mode)[-3:]
+        assert mode == "600"
+
+    def test_does_not_modify_old_config(self, tmp_path):
+        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        original_content = """
+model_list:
+  - model_name: claude
+    litellm_params:
+      model: anthropic/claude-opus-4-6
+      api_key: key
+"""
+        old, new = self._make_litellm_config(tmp_path, original_content)
+        old_mtime = old.stat().st_mtime
+        _try_auto_migrate(old, new)
+        assert old.read_text() == original_content
+        assert old.stat().st_mtime == old_mtime
+
+    def test_returns_false_without_pyyaml(self, tmp_path):
+        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        old, new = self._make_litellm_config(tmp_path, "model_list: []")
+        with patch.dict(sys.modules, {"yaml": None}):
+            result = _try_auto_migrate(old, new)
+        assert result is False
+        assert not new.exists()
+
+    def test_returns_false_for_empty_model_list(self, tmp_path):
+        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        old, new = self._make_litellm_config(tmp_path, "model_list: []")
+        result = _try_auto_migrate(old, new)
+        assert result is False
+
+    def test_skips_entries_without_model(self, tmp_path):
+        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        old, new = self._make_litellm_config(tmp_path, """
+model_list:
+  - model_name: broken
+    litellm_params:
+      api_key: key
+  - model_name: valid
+    litellm_params:
+      model: anthropic/claude-opus-4-6
+      api_key: key2
+""")
+        _try_auto_migrate(old, new)
+        data = json.loads(new.read_text())
+        assert len(data["models"]) == 1
+        assert data["models"][0]["model"] == "claude-opus-4-6"
+
+    def test_prints_needs_keys_warning(self, tmp_path, capsys):
+        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        old, new = self._make_litellm_config(tmp_path, """
+model_list:
+  - model_name: claude
+    litellm_params:
+      model: anthropic/claude-opus-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+""")
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            _try_auto_migrate(old, new)
+        captured = capsys.readouterr()
+        assert "API keys" in captured.out
+
+
+class TestGenerateSampleConfig:
+    """Test sample config generation."""
+
+    def test_includes_all_default_providers(self):
+        from packages.llm_analysis.llm.detection import generate_sample_config
+        sample = generate_sample_config()
+        for provider in PROVIDER_DEFAULT_MODELS:
+            assert f'"provider": "{provider}"' in sample
+
+    def test_uses_default_model_names(self):
+        from packages.llm_analysis.llm.detection import generate_sample_config
+        sample = generate_sample_config()
+        for model in PROVIDER_DEFAULT_MODELS.values():
+            assert f'"model": "{model}"' in sample
+
+    def test_no_api_key_in_json_body(self):
+        from packages.llm_analysis.llm.detection import generate_sample_config
+        sample = generate_sample_config()
+        lines = [l for l in sample.splitlines() if not l.strip().startswith("//")]
+        data = json.loads("\n".join(lines))
+        for model in data["models"]:
+            assert "api_key" not in model
+
+    def test_includes_commented_key_example(self):
+        from packages.llm_analysis.llm.detection import generate_sample_config
+        sample = generate_sample_config()
+        assert "// " in sample
+        assert "api_key" in sample
+
+
+class TestCompromisedLitellmDetection:
+    """Test litellm compromise detection and hard stop."""
+
+    @patch("packages.llm_analysis.llm.detection.Path.home")
+    def test_182_8_causes_system_exit(self, mock_home, tmp_path):
+        mock_home.return_value = tmp_path
+        from packages.llm_analysis.llm.detection import _check_litellm_installed
+        with patch("importlib.metadata.version", return_value="1.82.8"):
+            with pytest.raises(SystemExit) as exc_info:
+                _check_litellm_installed()
+            assert "1.82.8" in str(exc_info.value)
+            assert "24518" in str(exc_info.value)
+
+    @patch("packages.llm_analysis.llm.detection.Path.home")
+    def test_182_7_causes_system_exit(self, mock_home, tmp_path):
+        mock_home.return_value = tmp_path
+        from packages.llm_analysis.llm.detection import _check_litellm_installed
+        with patch("importlib.metadata.version", return_value="1.82.7"):
+            with pytest.raises(SystemExit) as exc_info:
+                _check_litellm_installed()
+            assert "1.82.7" in str(exc_info.value)
+
+    @patch("packages.llm_analysis.llm.detection.Path.home")
+    def test_safe_version_no_exit(self, mock_home, tmp_path, capsys):
+        mock_home.return_value = tmp_path
+        from packages.llm_analysis.llm.detection import _check_litellm_installed
+        with patch("importlib.metadata.version", return_value="1.55.0"):
+            _check_litellm_installed()
+        captured = capsys.readouterr()
+        assert "malicious" not in captured.out
+
+    @patch("packages.llm_analysis.llm.detection.Path.home")
+    def test_182_8_shows_shell_removal(self, mock_home, tmp_path, capsys):
+        mock_home.return_value = tmp_path
+        from packages.llm_analysis.llm.detection import _check_litellm_installed
+        with patch("importlib.metadata.version", return_value="1.82.8"):
+            with pytest.raises(SystemExit):
+                _check_litellm_installed()
+        captured = capsys.readouterr()
+        assert "Do NOT use pip" in captured.out
+        assert "find /" in captured.out
+
+    @patch("packages.llm_analysis.llm.detection.Path.home")
+    def test_182_7_shows_pip_removal(self, mock_home, tmp_path, capsys):
+        mock_home.return_value = tmp_path
+        from packages.llm_analysis.llm.detection import _check_litellm_installed
+        with patch("importlib.metadata.version", return_value="1.82.7"):
+            with pytest.raises(SystemExit):
+                _check_litellm_installed()
+        captured = capsys.readouterr()
+        assert "pip uninstall litellm" in captured.out
+
+
+class TestPreemptiveAutoMigration:
+    """Test that litellm being installed triggers auto-migration."""
+
+    def test_auto_migrates_when_litellm_installed(self, tmp_path, capsys):
+        old_config = tmp_path / ".config" / "litellm" / "config.yaml"
+        old_config.parent.mkdir(parents=True)
+        old_config.write_text("""
+model_list:
+  - model_name: claude
+    litellm_params:
+      model: anthropic/claude-opus-4-6
+      api_key: sk-ant-test
+""")
+        new_config = tmp_path / ".config" / "raptor" / "models.json"
+
+        from packages.llm_analysis.llm.detection import _check_litellm_installed
+        with patch("packages.llm_analysis.llm.detection.Path.home", return_value=tmp_path), \
+             patch("importlib.metadata.version", return_value="1.55.0"):
+            _check_litellm_installed()
+
+        assert new_config.exists()
+        data = json.loads(new_config.read_text())
+        assert data["models"][0]["provider"] == "anthropic"
+
+    def test_no_migration_when_new_config_exists(self, tmp_path):
+        old_config = tmp_path / ".config" / "litellm" / "config.yaml"
+        old_config.parent.mkdir(parents=True)
+        old_config.write_text("model_list: [{model_name: x, litellm_params: {model: openai/gpt-5.2, api_key: k}}]")
+
+        new_config = tmp_path / ".config" / "raptor" / "models.json"
+        new_config.parent.mkdir(parents=True)
+        new_config.write_text('{"models": []}')
+
+        from packages.llm_analysis.llm.detection import _check_litellm_installed
+        with patch("packages.llm_analysis.llm.detection.Path.home", return_value=tmp_path), \
+             patch("importlib.metadata.version", return_value="1.55.0"):
+            _check_litellm_installed()
+
+        assert json.loads(new_config.read_text()) == {"models": []}
+
+
+class TestConfigHasKeyedModelsSDKGating:
+    """Test that _config_has_keyed_models checks SDK availability."""
+
+    def test_returns_false_when_no_sdk(self, tmp_path):
+        config = tmp_path / "models.json"
+        config.write_text(json.dumps({"models": [
+            {"provider": "anthropic", "model": "claude-opus-4-6", "api_key": "sk-ant-test"}
+        ]}))
+        from packages.llm_analysis.llm.detection import _config_has_keyed_models
+        with patch.dict(os.environ, {"RAPTOR_CONFIG": str(config)}), \
+             patch("packages.llm_analysis.llm.detection.ANTHROPIC_SDK_AVAILABLE", False), \
+             patch("packages.llm_analysis.llm.detection.OPENAI_SDK_AVAILABLE", False):
+            assert _config_has_keyed_models() is False
+
+    def test_returns_true_when_sdk_available(self, tmp_path):
+        config = tmp_path / "models.json"
+        config.write_text(json.dumps({"models": [
+            {"provider": "anthropic", "model": "claude-opus-4-6", "api_key": "sk-ant-test"}
+        ]}))
+        from packages.llm_analysis.llm.detection import _config_has_keyed_models
+        with patch.dict(os.environ, {"RAPTOR_CONFIG": str(config)}), \
+             patch("packages.llm_analysis.llm.detection.ANTHROPIC_SDK_AVAILABLE", True):
+            assert _config_has_keyed_models() is True
+
+    def test_ollama_requires_openai_sdk(self, tmp_path):
+        config = tmp_path / "models.json"
+        config.write_text(json.dumps({"models": [
+            {"provider": "ollama", "model": "llama3", "api_key": "unused"}
+        ]}))
+        from packages.llm_analysis.llm.detection import _config_has_keyed_models
+        with patch.dict(os.environ, {"RAPTOR_CONFIG": str(config)}), \
+             patch("packages.llm_analysis.llm.detection.OPENAI_SDK_AVAILABLE", False), \
+             patch("packages.llm_analysis.llm.detection.ANTHROPIC_SDK_AVAILABLE", False):
+            assert _config_has_keyed_models() is False
+
+
+class TestWarnUnusableKeys:
+    """Test warning when API keys are set but SDK is missing."""
+
+    def test_warns_when_key_set_no_sdk(self):
+        from packages.llm_analysis.llm.detection import _warn_unusable_keys
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}), \
+             patch("packages.llm_analysis.llm.detection.ANTHROPIC_SDK_AVAILABLE", False), \
+             patch("packages.llm_analysis.llm.detection.OPENAI_SDK_AVAILABLE", False), \
+             patch("packages.llm_analysis.llm.detection.logger") as mock_logger:
+            _warn_unusable_keys()
+        mock_logger.warning.assert_called()
+        warn_msg = mock_logger.warning.call_args[0][0]
+        assert "ANTHROPIC_API_KEY" in warn_msg
+
+    def test_no_warning_when_sdk_available(self):
+        from packages.llm_analysis.llm.detection import _warn_unusable_keys
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}), \
+             patch("packages.llm_analysis.llm.detection.ANTHROPIC_SDK_AVAILABLE", True), \
+             patch("packages.llm_analysis.llm.detection.logger") as mock_logger:
+            _warn_unusable_keys()
+        mock_logger.warning.assert_not_called()
+
+    def test_no_warning_when_no_key(self):
+        from packages.llm_analysis.llm.detection import _warn_unusable_keys
+        with patch.dict(os.environ, {}, clear=False), \
+             patch("packages.llm_analysis.llm.detection.OPENAI_SDK_AVAILABLE", False), \
+             patch("packages.llm_analysis.llm.detection.logger") as mock_logger:
+            os.environ.pop("OPENAI_API_KEY", None)
+            _warn_unusable_keys()
+        mock_logger.warning.assert_not_called()
+
+
 class TestModelDataConsistency:
     """Verify model data tables are internally consistent."""
 
     def test_all_cost_models_have_limits(self):
-        """Every model in MODEL_COSTS should have MODEL_LIMITS."""
         for model in MODEL_COSTS:
             assert model in MODEL_LIMITS, f"'{model}' in MODEL_COSTS but not MODEL_LIMITS"
 
     def test_all_limit_models_have_costs(self):
-        """Every model in MODEL_LIMITS should have MODEL_COSTS."""
         for model in MODEL_LIMITS:
             assert model in MODEL_COSTS, f"'{model}' in MODEL_LIMITS but not MODEL_COSTS"
 
     def test_all_costs_have_input_and_output(self):
-        """Every cost entry must have both input and output."""
         for model, costs in MODEL_COSTS.items():
             assert "input" in costs, f"'{model}' missing 'input' cost"
             assert "output" in costs, f"'{model}' missing 'output' cost"
 
     def test_all_limits_have_context_and_output(self):
-        """Every limit entry must have both max_context and max_output."""
         for model, limits in MODEL_LIMITS.items():
             assert "max_context" in limits, f"'{model}' missing 'max_context'"
             assert "max_output" in limits, f"'{model}' missing 'max_output'"

@@ -85,23 +85,156 @@ def _get_available_ollama_models() -> List[str]:
     return []
 
 
-def _check_litellm_installed():
-    """Warn if compromised litellm versions are still installed."""
+def _check_litellm_installed() -> bool:
+    """Check for litellm: auto-migrate config if present, stop if compromised.
+
+    Returns True if litellm was found (migration handled here), False otherwise.
+    """
     try:
         from importlib.metadata import version as pkg_version, PackageNotFoundError
         try:
             installed = pkg_version("litellm")
+
+            # litellm is installed — PyYAML is guaranteed (transitive dep).
+            # Pre-emptively migrate config before any other checks.
+            try:
+                old_config = Path.home() / ".config/litellm/config.yaml"
+                new_config = Path.home() / ".config/raptor/models.json"
+                if old_config.exists() and not new_config.exists():
+                    _try_auto_migrate(old_config, new_config)
+            except Exception:
+                pass  # Migration is best-effort
+
             if installed in ("1.82.7", "1.82.8"):
-                print(
+                msg = (
                     f"\n  ⚠️  WARNING: litellm=={installed} is installed and contains malicious code.\n"
+                    f"  It exfiltrates API keys, SSH keys, and cloud credentials.\n"
                     f"  RAPTOR no longer uses litellm, but the package can still harm your system.\n"
-                    f"  Remove it: pip uninstall litellm\n"
+                    f"\n"
+                )
+                if installed == "1.82.8":
+                    msg += (
+                        f"  Version 1.82.8 runs on ANY Python startup via a .pth file.\n"
+                        f"  Do NOT use pip to remove it — pip invokes Python, triggering the payload.\n"
+                        f"\n"
+                        f"  Safe removal (no Python invoked):\n"
+                        f"    find / -path '*/litellm*' -name '*.pth' -delete 2>/dev/null\n"
+                        f"    find / -path '*/site-packages/litellm*' -exec rm -rf {{}} + 2>/dev/null\n"
+                        f"\n"
+                        f"  Then rotate all API keys, SSH keys, and cloud credentials.\n"
+                    )
+                else:
+                    msg += (
+                        f"  Remove it: pip uninstall litellm\n"
+                    )
+                msg += (
+                    f"\n"
                     f"  Ref: https://github.com/BerriAI/litellm/issues/24518\n"
                 )
+                print(msg)
+                raise SystemExit(
+                    f"RAPTOR cannot run with litellm {installed} installed. "
+                    f"Remove it using the instructions above, then try again. "
+                    f"Ref: https://github.com/BerriAI/litellm/issues/24518"
+                )
+
+            return True  # litellm found, migration handled
         except PackageNotFoundError:
-            pass
+            return False  # litellm not installed
     except ImportError:
-        pass
+        return False  # importlib.metadata not available
+
+
+def _try_auto_migrate(old_config: Path, new_config: Path) -> bool:
+    """Attempt to auto-migrate LiteLLM YAML config to RAPTOR JSON.
+
+    Only runs if PyYAML is installed (e.g. as a transitive dependency).
+    Does not require or import litellm.
+
+    Returns True if migration succeeded, False if it couldn't run.
+    """
+    try:
+        import yaml
+    except ImportError:
+        return False
+
+    import json
+    from .model_data import PROVIDER_ENV_KEYS
+
+    try:
+        with open(old_config) as f:
+            data = yaml.safe_load(f)
+
+        if not data or not isinstance(data.get('model_list'), list):
+            return False
+
+        models = []
+        for entry in data['model_list']:
+            if not isinstance(entry, dict):
+                continue
+
+            params = entry.get('litellm_params', {}) or {}
+            underlying = params.get('model', '')
+            if not underlying or '/' not in underlying:
+                continue
+
+            provider = underlying.split('/')[0]
+            model_name = underlying.split('/', 1)[1]
+
+            model_entry = {"provider": provider, "model": model_name}
+
+            # Resolve API key
+            api_key_val = params.get('api_key', '')
+            if api_key_val and isinstance(api_key_val, str):
+                if api_key_val.startswith('os.environ/'):
+                    env_var = api_key_val.replace('os.environ/', '')
+                    key = os.getenv(env_var)
+                    if key:
+                        # Don't store resolved keys — env var takes precedence
+                        pass
+                    else:
+                        # Env var not set, store a placeholder
+                        model_entry["api_key"] = f"${{{env_var}}}"
+                else:
+                    model_entry["api_key"] = api_key_val
+
+            models.append(model_entry)
+
+        if not models:
+            return False
+
+        # Write new config
+        new_config.parent.mkdir(parents=True, exist_ok=True)
+        with open(new_config, 'w') as f:
+            json.dump({"models": models}, f, indent=2)
+        os.chmod(new_config, 0o600)
+
+        # Check if any keys need attention
+        needs_keys = any(
+            e.get("api_key", "").startswith("${") or "api_key" not in e
+            for e in models
+        )
+        key_msg = ""
+        if needs_keys:
+            key_msg = (
+                f"\n"
+                f"  ⚠️  Some models need API keys. Either:\n"
+                f"    - Set env vars (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.), or\n"
+                f"    - Replace placeholders in the JSON with actual keys\n"
+            )
+
+        print(
+            f"\n  [raptor] Auto-migrated LiteLLM config → {new_config}\n"
+            f"  Converted {len(models)} model(s) from {old_config}\n"
+            f"{key_msg}"
+            f"\n"
+            f"  Your old config at {old_config} was not modified.\n"
+        )
+        return True
+
+    except Exception as e:
+        logger.debug(f"Auto-migration failed: {e}")
+        return False
 
 
 def _check_litellm_migration():
@@ -114,20 +247,57 @@ def _check_litellm_migration():
         return
 
     if old_config.exists() and not new_config.exists():
+        # Try auto-migration if PyYAML happens to be installed
+        if _try_auto_migrate(old_config, new_config):
+            return
+
+        # Manual migration guidance
+        sample = generate_sample_config()
+        sample_indented = "\n".join("    " + line for line in sample.splitlines())
         print(
-            "\n  [raptor] Found ~/.config/litellm/config.yaml but no ~/.config/raptor/models.json\n"
-            "  LiteLLM is no longer used. Migrate your models to the new JSON format:\n"
+            "\n  [raptor] LiteLLM is no longer used. Your config needs migrating.\n"
+            "\n"
+            "  Found:    ~/.config/litellm/config.yaml\n"
+            "  Expected: ~/.config/raptor/models.json\n"
+            "\n"
+            "  Create the new config:\n"
             "\n"
             "    mkdir -p ~/.config/raptor\n"
             "    cat > ~/.config/raptor/models.json << 'EOF'\n"
-            "    [\n"
-            '      {"provider": "anthropic", "model": "claude-sonnet-4-6"},\n'
-            '      {"provider": "openai",    "model": "gpt-5.2", "api_key": "sk-..."}\n'
-            "    ]\n"
+            f"{sample_indented}\n"
             "    EOF\n"
+            "    chmod 600 ~/.config/raptor/models.json\n"
             "\n"
-            "  API keys can be set via env vars (ANTHROPIC_API_KEY, etc.) or in the JSON.\n"
+            "  Copy your API keys from the old config into the new one, or\n"
+            "  set them as env vars (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.).\n"
+            "\n"
+            "  Your old config at ~/.config/litellm/config.yaml is not modified.\n"
+            "  Delete it when you're done migrating (if no other tools use it).\n"
         )
+
+
+def generate_sample_config() -> str:
+    """Generate a sample models.json config from current defaults.
+
+    Uses PROVIDER_DEFAULT_MODELS so the example stays in sync with
+    the actual defaults. Includes a commented example showing the
+    api_key field format. Called by migration guidance and CLI help.
+    """
+    from .model_data import PROVIDER_DEFAULT_MODELS
+    import json
+
+    models = []
+    for provider, model in PROVIDER_DEFAULT_MODELS.items():
+        models.append({"provider": provider, "model": model})
+
+    raw = json.dumps({"models": models}, indent=2)
+
+    # Add a commented example showing how to add an API key.
+    # Our JSON parser strips // comments, so this is safe to copy-paste.
+    raw += "\n// To add API keys inline (alternative to env vars):\n"
+    raw += '// {"provider": "anthropic", "model": "claude-opus-4-6", "api_key": "sk-ant-..."}\n'
+
+    return raw
 
 
 def _read_config_models() -> list:
@@ -167,19 +337,36 @@ def _read_config_models() -> list:
 
 
 def _config_has_keyed_models() -> bool:
-    """Check if the RAPTOR config file has any model with an API key.
+    """Check if the RAPTOR config file has any usable model.
 
-    Uses _read_config_models() for parsing, then checks for api_key
-    fields or matching env vars. Doesn't depend on config.py.
+    A model is usable if it has an API key (inline or via env var)
+    AND the required SDK is installed to talk to its provider.
     """
     from .model_data import PROVIDER_ENV_KEYS
 
     for entry in _read_config_models():
         if not isinstance(entry, dict):
             continue
+
+        provider = entry.get("provider", "")
+
+        # Check SDK availability for this provider
+        if provider == "anthropic":
+            if not (ANTHROPIC_SDK_AVAILABLE or OPENAI_SDK_AVAILABLE):
+                continue
+        elif provider == "ollama":
+            if not OPENAI_SDK_AVAILABLE:
+                continue
+        elif provider in ("openai", "gemini", "mistral"):
+            if not OPENAI_SDK_AVAILABLE:
+                continue
+        else:
+            if not OPENAI_SDK_AVAILABLE:
+                continue
+
+        # Check if model has a key
         if entry.get("api_key"):
             return True
-        provider = entry.get("provider", "")
         env_key = PROVIDER_ENV_KEYS.get(provider)
         if env_key and os.getenv(env_key):
             return True
@@ -205,8 +392,11 @@ def detect_llm_availability() -> LLMAvailability:
     if _cached_llm_availability is not None:
         return _cached_llm_availability
 
-    _check_litellm_installed()
-    _check_litellm_migration()
+    litellm_found = _check_litellm_installed()
+    if not litellm_found:
+        # Only check for old config if litellm isn't installed
+        # (if it is, _check_litellm_installed already handled migration)
+        _check_litellm_migration()
 
     # Check cloud API keys, gated on SDK availability
     has_anthropic = bool(os.getenv("ANTHROPIC_API_KEY")) and (ANTHROPIC_SDK_AVAILABLE or OPENAI_SDK_AVAILABLE)
@@ -245,5 +435,29 @@ def detect_llm_availability() -> LLMAvailability:
         f"llm_available={availability.llm_available}"
     )
 
+    # Warn about specific misconfigurations
+    _warn_unusable_keys()
+
     _cached_llm_availability = availability
     return availability
+
+
+def _warn_unusable_keys():
+    """Warn if API keys are set but the required SDK is missing."""
+    from .model_data import PROVIDER_ENV_KEYS
+
+    sdk_requirements = {
+        "anthropic": ("anthropic or openai", ANTHROPIC_SDK_AVAILABLE or OPENAI_SDK_AVAILABLE),
+        "openai": ("openai", OPENAI_SDK_AVAILABLE),
+        "gemini": ("openai", OPENAI_SDK_AVAILABLE),
+        "mistral": ("openai", OPENAI_SDK_AVAILABLE),
+    }
+
+    for provider, env_var in PROVIDER_ENV_KEYS.items():
+        if os.getenv(env_var):
+            sdk_name, available = sdk_requirements.get(provider, ("openai", OPENAI_SDK_AVAILABLE))
+            if not available:
+                logger.warning(
+                    f"{env_var} is set but the {sdk_name} SDK is not installed. "
+                    f"Install with: pip install {sdk_name.split(' or ')[0]}"
+                )
