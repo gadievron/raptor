@@ -253,6 +253,14 @@ class TestMigrationDetection:
         assert captured.out == ""
 
 
+try:
+    import yaml
+    HAS_PYYAML = True
+except ImportError:
+    HAS_PYYAML = False
+
+
+@pytest.mark.skipif(not HAS_PYYAML, reason="PyYAML not installed")
 class TestAutoMigration:
     """Test auto-migration from LiteLLM YAML to RAPTOR JSON."""
 
@@ -506,6 +514,7 @@ class TestCompromisedLitellmDetection:
         assert "pip uninstall litellm" in captured.out
 
 
+@pytest.mark.skipif(not HAS_PYYAML, reason="PyYAML not installed")
 class TestPreemptiveAutoMigration:
     """Test that litellm being installed triggers auto-migration."""
 
