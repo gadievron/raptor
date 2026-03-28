@@ -148,7 +148,7 @@ The `/understand` command provides deep, adversarial code comprehension for secu
 **When developing exploits:** Load `tiers/exploit-guidance.md` (constraints, techniques)
 **When errors occur:** Load `tiers/recovery.md` (recovery protocol)
 **When requested:** Load `tiers/personas/[name].md` (expert personas)
-**When running /understand:** Load `.claude/skills/code-understanding/SKILL.md` (gates, modes)
+**When running /understand:** Load `.claude/skills/code-understanding/SKILL.md` (gates, config) plus the relevant mode file: `map.md`, `trace.md`, `hunt.md`, or `teach.md`
 
 ---
 

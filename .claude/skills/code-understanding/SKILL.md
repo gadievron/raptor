@@ -1,6 +1,6 @@
 # Code Understanding Skill
 
-You are a deep thinker. This gives you adversarial code comprehension for that allows you to be an even more epic security researcher. This helps you map architecture, traces those imoportant data flows, and hunts for vulnerability variants before or alongside static analysis.
+You are a deep thinker. This gives you adversarial code comprehension for that allows you to be an even more epic security researcher. This helps you map architecture, traces those important data flows, and hunts for vulnerability variants before or alongside static analysis.
 
 ## Purpose
 
@@ -85,7 +85,7 @@ Code understanding output feeds directly into exploitability validation:
 | Understanding Output | Validation Input |
 |---------------------|-----------------|
 | `context-map.json` (sources, sinks, trust boundaries) | Pre-populates `attack-surface.json` for Stage B |
-| `flow-trace.json` (confirmed data flow) | Confirms reachability for Stage C sanity check |
+| `flow-trace-<id>.json` (confirmed data flow) | Confirms reachability for Stage C sanity check |
 | `variants.json` (pattern matches) | Expands `checklist.json` scope for Stage 0 |
 
 When running `/understand` before `/validate`, pass `--out <workdir>` to write JSON outputs where the validator can consume them.
@@ -97,9 +97,9 @@ When running `/understand` before `/validate`, pass `--out <workdir>` to write J
 | Stage | Mode | Gate(s) | Output |
 |-------|------|---------|--------|
 | **Map** | `--map` | U1, U2 | `context-map.json` |
-| **Trace** | `--trace` | U1, U2, U3, U5 | `flow-trace.json` |
+| **Trace** | `--trace` | U1, U2, U3, U5 | `flow-trace-<id>.json` |
 | **Hunt** | `--hunt` | U1, U4, U5 | `variants.json` |
-| **Teach** | `--teach` | U1, U5 | inline explanation |
+| **Teach** | `--teach` | U1, U5 | none --- inline output |
 
 See stage-specific files for detailed instructions.
 

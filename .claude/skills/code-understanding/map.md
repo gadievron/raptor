@@ -61,8 +61,28 @@ Produce a brief summary covering:
 
 ## Output Format
 
+`context-map.json` is a superset of `attack-surface.json`. The top-level `sources`, `sinks`, and `trust_boundaries` keys use the same required fields as Stage B's `attack-surface.json` — so `cp context-map.json attack-surface.json` works. Context-map-specific fields (`meta`, `entry_points`, `unchecked_flows`) sit alongside as extra keys.
+
 ```json
 {
+  "sources": [
+    {
+      "type": "http_route",
+      "entry": "POST /api/v2/query @ src/routes/query.py:34"
+    }
+  ],
+  "sinks": [
+    {
+      "type": "db_query",
+      "location": "src/db/query.py:89"
+    }
+  ],
+  "trust_boundaries": [
+    {
+      "boundary": "JWT auth middleware",
+      "check": "src/middleware/auth.py:12"
+    }
+  ],
   "meta": {
     "target": "path/to/target",
     "timestamp": "ISO timestamp",
@@ -84,29 +104,6 @@ Produce a brief summary covering:
       "notes": "Auth check at line 38, but only validates token format, not permissions"
     }
   ],
-  "trust_boundaries": [
-    {
-      "id": "TB-001",
-      "type": "auth_check|authz_check|input_validation|privilege_drop",
-      "file": "src/middleware/auth.py",
-      "line": 12,
-      "covers": ["EP-001", "EP-002"],
-      "gaps": "EP-003 bypasses this middleware via direct import at src/admin/bulk.py:67"
-    }
-  ],
-  "sinks": [
-    {
-      "id": "SINK-001",
-      "type": "db_query|shell_exec|file_write|file_read|deserialize|network|template|crypto",
-      "operation": "cursor.execute(raw_sql)",
-      "file": "src/db/query.py",
-      "line": 89,
-      "reaches_from": ["EP-001"],
-      "trust_boundaries_crossed": ["TB-001"],
-      "parameterized": false,
-      "notes": "Query string built via f-string at line 87"
-    }
-  ],
   "unchecked_flows": [
     {
       "entry_point": "EP-003",
@@ -121,7 +118,7 @@ Produce a brief summary covering:
 
 GATES APPLY: U1 [READ-FIRST], U2 [ATTACKER-LENS], U5 [EVIDENCE-ONLY]
 
-Do not populate `entry_points` or `sinks` from file names or common patterns alone — read the code and verify.
+Do not populate `sources`, `sinks`, or `entry_points` from file names or common patterns alone — read the code and verify.
 
 ## Output
 

@@ -10,6 +10,8 @@ One of:
 - A sink type (`--hunt sink:shell_exec`)
 - A file/function from a completed trace (`--hunt EP-001`)
 
+**Disambiguation:** `FIND-*` or `EP-*` → ID lookup in findings.json / context-map.json. `sink:` prefix → filter by sink type. Everything else → treat as a freeform pattern description.
+
 ## Purpose
 
 Answer: *"Is this the only place this happens, or did the same mistake get made everywhere?"*
@@ -72,6 +74,7 @@ Rank variants by exploitability:
 3. `likely_tainted` with public entry point
 4. `likely_tainted` with authenticated entry point
 5. `unlikely_tainted` — document, low priority
+6. `false_positive` — discard, record why so the same match isn't re-investigated
 
 ## Output Format
 
@@ -91,7 +94,16 @@ Rank variants by exploitability:
     {
       "id": "VAR-001",
       "file": "src/services/query_service.py",
+      "function": "run_query",
       "line": 31,
+      "vuln_type": "sqli",
+      "status": "not_disproven",
+      "confidence": "high",
+      "proof": {
+        "vulnerable_code": "cursor.execute(f'SELECT * FROM {table} WHERE id = {user_id}')",
+        "source": "request.json['user_id'] at src/routes/user.py:22",
+        "sink": "psycopg2.cursor.execute() at src/services/query_service.py:31"
+      },
       "matched_code": "cursor.execute(f'SELECT * FROM {table} WHERE id = {user_id}')",
       "taint_status": "confirmed_tainted",
       "taint_source": "request.json['user_id'] at src/routes/user.py:22",
@@ -133,6 +145,6 @@ If `confirmed_tainted` variants exist, prompt: *"Found N confirmed variants. Run
 
 ## Gates
 
-GATES APPLY: U1 [READ-FIRST], U4 [VARIANT-COMPLETE], U5 [EVIDENCE-ONLY]
+GATES APPLY: U1 [READ-FIRST], U2 [ATTACKER-LENS], U4 [VARIANT-COMPLETE], U5 [EVIDENCE-ONLY]
 
 **GATE-U4 reminder:** Search the full codebase. If the grep returns many results, process all of them — do not sample. Document any files excluded from the hunt (e.g., test harnesses, generated code) and why.

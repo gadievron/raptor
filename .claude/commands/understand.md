@@ -10,6 +10,8 @@ It is a work in progress, remember that.
 /understand <target> [--map] [--trace <entry>] [--hunt <pattern>] [--teach <subject>] [--out <dir>]
 ```
 
+If no mode flag is given, default to `--map`.
+
 ## Modes
 
 | Flag | What it does |
@@ -19,7 +21,7 @@ It is a work in progress, remember that.
 | `--hunt <pattern>` | Find all variants of a pattern across the codebase |
 | `--teach <subject>` | Explain a framework, library, or code pattern in depth |
 
-Modes combine. Running `--map --trace EP-001` first maps, then traces the specified entry point.
+Modes combine and run in order: map → trace → hunt → teach. This matches the natural attack progression, so build context first, then trace a specific flow, then hunt for variants. Running `--map --trace EP-001` first maps, then traces the specified entry point.
 
 ## Examples
 
@@ -75,3 +77,4 @@ All JSON outputs write to `$WORKDIR` (`.out/code-understanding-<timestamp>/` by 
 | `context-map.json` | `--map` | Entry points, trust boundaries, sinks |
 | `flow-trace-<id>.json` | `--trace` | Step-by-step data flow with attacker control assessment |
 | `variants.json` | `--hunt` | All pattern matches, taint status, root-cause groups |
+| *(none)* | `--teach` | Inline explanation — no file written |

@@ -7,11 +7,13 @@ Follow a single data flow from untrusted input to a dangerous operation. Show ev
 - An entry point: HTTP route path, function name, or `EP-xxx` ID from context-map.json
 - Optionally: a target sink type (`--to db|shell|file|deserialize|network`)
 
+**Disambiguation:** `EP-xxx` → look up by ID in context-map.json. String starting with an HTTP method (e.g. `"POST /api/v2/query"`) → match against route entry points. Anything else → treat as a function name and search the codebase.
+
 ## Purpose
 
 Answer: *"Can I control what reaches this sink, and is anything stopping me?"*
 
-The goal is a complete, step-by-step walkthrough of the code — not a summary, but an actual trace showing the function call and its definition at each hop. This is what distinguishes understanding from guessing.
+The goal is a complete, step-by-step walkthrough of the supplied code, not a summary, but an actual trace showing the function call and its definition at each hop. This is what distinguishes understanding from guessing.
 
 ## Task
 
@@ -56,20 +58,23 @@ At each sink, record:
 
 Summarize what the attacker controls:
 - Input they provide directly (high control)
-- Input filtered by previous checks (partial control — assess bypass potential)
+- Input filtered by previous checks (partial control. assess bypass potential)
 - Input not under attacker control (discard from threat model)
 
 ## Output Format
 
 ```json
 {
+  "id": "TRACE-001",
+  "name": "POST /api/v2/query → db_query",
+  "finding": "FIND-001",
   "meta": {
     "entry_point": "POST /api/v2/query",
     "entry_file": "src/routes/query.py:34",
     "target_sink": "db_query",
     "timestamp": "ISO timestamp"
   },
-  "flow": [
+  "steps": [
     {
       "step": 1,
       "type": "entry",
@@ -104,6 +109,8 @@ Summarize what the attacker controls:
       "injectable": true
     }
   ],
+  "proximity": 9,
+  "blockers": [],
   "branches": [
     {
       "branch_point": "src/routes/query.py:44",
@@ -128,11 +135,13 @@ Summarize what the attacker controls:
 }
 ```
 
+**Schema note:** `steps[]`, `proximity` (0–10 score: 10 = at the sink, 0 = no viable path), and `blockers[]` are shared with `attack-paths.json` from the validation pipeline. What this means is that a flow-trace can be consumed directly by Stage B. `branches`, `attacker_control`, and `summary` are trace-specific extensions.
+
 ## Teach Mode Integration
 
-If you encounter an unfamiliar framework, library, or pattern while tracing — say so explicitly. Switch to [TEACH] mode to understand the mechanism, then return to the trace.
+If you encounter an unfamiliar framework, library, or pattern while tracing, say so explicitly!. Switch to [TEACH] mode to understand the mechanism, then return to the trace.
 
-Example: *"Step 4 uses SQLAlchemy's `text()` construct — loading teach mode to understand whether this is parameterized."*
+Example: *"Step 4 uses SQLAlchemy's `text()` construct, so loading teach mode to understand whether this is parameterised."*
 
 This prevents false confidence from tracing through code you don't fully understand.
 
@@ -140,7 +149,7 @@ This prevents false confidence from tracing through code you don't fully underst
 
 OUTPUT: `$WORKDIR/flow-trace-<entry-id>.json` (one file per traced flow)
 
-Display the flow to the user as a narrative walkthrough after writing — not just the JSON. Show each step as: `[step N] file:line — what happens — what attacker controls`.
+Display the flow to the user as a narrative walkthrough after writing, not just the JSON. Show each step as: `[step N] file:line — what happens — what attacker controls`.
 
 ## Gates
 

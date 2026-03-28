@@ -55,7 +55,7 @@ RAPTOR stands for Recursive Autonomous Penetration Testing and Observation Robot
 (We really wanted to name it RAPTOR)
 
 **RAPTOR autonomously**:
-1. **Code Understanding** with adversarial code comprehension, allows you to map attack surface, trace those vital data flows & hunt for vulnerability variants
+1. **Code Understanding:** with adversarial code comprehension, allows you to map attack surface, trace those vital data flows & hunt for vulnerability variants
 2. **Scans** your code with Semgrep and CodeQL and tries dataflow validation
 3. **Fuzzes** your binaries with American Fuzzy Lop (AFL)
 4. **Analyses** vulnerabilities using advanced LLM reasoning
