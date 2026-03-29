@@ -47,8 +47,11 @@ Modes combine and run in order: map → trace → hunt → teach. This matches t
 
 ## Integration with Validation Pipeline
 
+**Shared inventory:** `--map` runs `build_inventory.py` first (MAP-0 step) to produce `checklist.json` with SHA-256 checksums. This is the same inventory used by `/validate` Stage 0. Coverage tracking is cumulative across both skills.
+
 Understanding output feeds into Gadi & JC's epic exploitability validation:
 
+- `checklist.json` → shared source inventory with coverage tracking
 - `context-map.json` → pre-populates `attack-surface.json` for Stage B
 - `flow-trace-*.json` → confirms reachability for Stage C
 - `variants.json` → expands `checklist.json` scope for Stage 0

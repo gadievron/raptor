@@ -71,9 +71,17 @@ raptor/
 │   ├── config.py                   # RaptorConfig (paths, settings)
 │   ├── logging.py                  # Structured logging with JSONL audit trail
 │   ├── progress.py                 # Progress tracking utilities
-│   └── sarif/
+│   ├── sarif/
+│   │   ├── __init__.py
+│   │   └── parser.py               # SARIF 2.1.0 parsing utilities
+│   └── inventory/                  # Shared source inventory
 │       ├── __init__.py
-│       └── parser.py               # SARIF 2.1.0 parsing utilities
+│       ├── builder.py              # build_inventory() — file enumeration + checksums
+│       ├── extractors.py           # Language-aware function extraction (12 languages)
+│       ├── languages.py            # LANGUAGE_MAP, detect_language
+│       ├── exclusions.py           # File exclusion logic + generated file detection
+│       ├── diff.py                 # compare_inventories() — SHA-256 diffing
+│       └── coverage.py             # checked_by tracking + coverage stats
 │
 ├── packages/                       # Security capabilities layer
 │   ├── __init__.py

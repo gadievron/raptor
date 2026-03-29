@@ -80,7 +80,9 @@ flow_format: source → transform(s) → sink
 
 ## Integration with Validation Pipeline
 
-Output schemas are aligned with the validation pipeline's formats (`attack-surface.json`, `attack-paths.json`, `findings.json`). Direct pipeline integration is planned for a follow-up.
+**Shared inventory:** MAP-0 runs `build_inventory.py` to produce `checklist.json` with SHA-256 checksums per file. This is the same inventory used by `/validate` Stage 0. Coverage tracking (`checked_by` per function) is cumulative across both skills.
+
+Output schemas are aligned with the validation pipeline's formats (`attack-surface.json`, `attack-paths.json`, `findings.json`).
 
 ---
 
