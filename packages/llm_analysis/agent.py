@@ -337,7 +337,7 @@ class AutonomousSecurityAgentV2:
             logger.info("RAPTOR Autonomous Security Agent initialised (prep-only mode, --prep-only)")
             logger.info(f"Repository: {repo_path}")
             logger.info(f"Output: {out_dir}")
-            print("\n🤖 Prep-only mode — external orchestrator will handle analysis")
+            print("\n🤖 Prep-only mode — Phase 4 will handle analysis")
             print()
         elif availability.external_llm:
             # External LLM configured — use LLMClient

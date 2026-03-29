@@ -120,7 +120,7 @@ def orchestrate(
     elapsed = time.monotonic() - start_time
 
     # Merge and write
-    merged = _merge_results(report, cc_results)
+    merged = _merge_results(report, cc_results, no_exploits=no_exploits, no_patches=no_patches)
     merged["orchestration"] = {
         "mode": "cc_dispatch",
         "findings_dispatched": len(findings),
@@ -250,11 +250,12 @@ def _invoke_cc(
     """
     finding_id = finding.get("finding_id", "unknown")
     prompt = _build_finding_prompt(finding, no_exploits, no_patches)
+    schema = _build_schema(no_exploits, no_patches)
 
     cmd = [
         claude_bin, "-p",
         "--output-format", "json",
-        "--json-schema", json.dumps(FINDING_RESULT_SCHEMA),
+        "--json-schema", json.dumps(schema),
         "--no-session-persistence",
         "--allowed-tools", "Read,Grep,Glob",
         "--add-dir", str(repo_path),
@@ -301,6 +302,16 @@ def _write_debug(
         result["cc_debug_file"] = f"debug/cc_{finding_id}.txt"
     except OSError:
         pass  # Best effort — don't fail the finding over a debug file
+
+
+def _build_schema(no_exploits: bool = False, no_patches: bool = False) -> Dict[str, Any]:
+    """Build JSON Schema for CC output, excluding fields the user didn't ask for."""
+    schema = copy.deepcopy(FINDING_RESULT_SCHEMA)
+    if no_exploits:
+        schema["properties"].pop("exploit_code", None)
+    if no_patches:
+        schema["properties"].pop("patch_code", None)
+    return schema
 
 
 def _build_finding_prompt(
@@ -419,7 +430,7 @@ def _parse_cc_result(
 ) -> Dict[str, Any]:
     """Parse CC sub-agent JSON output.
 
-    Handles: clean JSON, markdown-fenced JSON, partial output.
+    Handles: clean JSON, claude -p envelope, markdown-fenced JSON, partial output.
     """
     content = stdout.strip()
     if not content:
@@ -430,6 +441,12 @@ def _parse_cc_result(
     try:
         result = json.loads(content)
         if isinstance(result, dict):
+            # claude -p --output-format json wraps output in a metadata envelope.
+            # The actual structured output is in the "structured_output" field.
+            if "structured_output" in result and isinstance(result["structured_output"], dict):
+                inner = result["structured_output"]
+                inner.setdefault("finding_id", finding_id)
+                return inner
             result.setdefault("finding_id", finding_id)
             return result
     except json.JSONDecodeError:
@@ -467,6 +484,8 @@ def _parse_cc_result(
 def _merge_results(
     prep_report: Dict[str, Any],
     cc_results: List[Dict[str, Any]],
+    no_exploits: bool = False,
+    no_patches: bool = False,
 ) -> Dict[str, Any]:
     """Merge CC sub-agent results back into the prep report.
 
@@ -519,12 +538,12 @@ def _merge_results(
         if finding["exploitable"]:
             exploitable += 1
 
-        if cc.get("exploit_code"):
+        if not no_exploits and cc.get("exploit_code"):
             finding["has_exploit"] = True
             finding["exploit_code"] = cc["exploit_code"]
             exploits_generated += 1
 
-        if cc.get("patch_code"):
+        if not no_patches and cc.get("patch_code"):
             finding["has_patch"] = True
             finding["patch_code"] = cc["patch_code"]
             patches_generated += 1

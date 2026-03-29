@@ -698,8 +698,10 @@ Examples:
     if validation_result:
         print("   ✓ Validated exploitability (filtered noise)")
     print("   ✓ Analysed vulnerabilities")
-    print("   ✓ Generated exploits")
-    print("   ✓ Created patches")
+    if not args.no_exploits:
+        print("   ✓ Generated exploits")
+    if not args.no_patches:
+        print("   ✓ Created patches")
     if orchestration_result:
         orch = orchestration_result.get("orchestration", {})
         print(f"   ✓ Orchestrated via Claude Code ({orch.get('findings_analysed', 0)} findings)")

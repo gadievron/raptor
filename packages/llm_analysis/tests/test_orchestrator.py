@@ -15,6 +15,7 @@ from packages.llm_analysis.orchestrator import (
     orchestrate,
     _invoke_cc,
     _build_finding_prompt,
+    _build_schema,
     _parse_cc_result,
     _merge_results,
     _is_auth_error,
@@ -474,6 +475,30 @@ class TestParseCCResult:
         # raw_decode takes the first complete JSON object from first {
         assert "error" not in result
 
+    def test_claude_output_format_json_envelope(self):
+        """claude -p --output-format json wraps result in metadata envelope."""
+        envelope = json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": "",
+            "session_id": "abc-123",
+            "total_cost_usd": 0.15,
+            "structured_output": {
+                "finding_id": "f-001",
+                "is_true_positive": True,
+                "is_exploitable": True,
+                "exploitability_score": 0.9,
+                "reasoning": "Stack buffer overflow",
+            }
+        })
+        result = _parse_cc_result(envelope, "", "f-001")
+        assert result["finding_id"] == "f-001"
+        assert result["is_exploitable"] is True
+        assert result["exploitability_score"] == 0.9
+        assert result["reasoning"] == "Stack buffer overflow"
+        assert "session_id" not in result  # envelope fields stripped
+
 
 class TestMergeResults:
     """Test merging CC results back into prep report."""
@@ -535,6 +560,19 @@ class TestMergeResults:
 
         merged = _merge_results(report, cc_results)
         assert merged["mode"] == "orchestrated"
+
+    def test_no_exploits_flag_drops_exploit_code(self):
+        """With no_exploits=True, exploit_code is not merged even if agent returned it."""
+        finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
+        report = _make_prep_report(findings=[finding])
+        cc_results = [_make_cc_result("f-001", exploitable=True)]
+
+        merged = _merge_results(report, cc_results, no_exploits=True)
+        result = merged["results"][0]
+        assert result["exploitable"] is True
+        assert result.get("has_exploit") is not True
+        assert "exploit_code" not in result
+        assert merged["exploits_generated"] == 0
 
     def test_counters_updated(self):
         """Exploit/patch counters reflect CC results."""
@@ -614,3 +652,37 @@ class TestFindingResultSchema:
         score_schema = FINDING_RESULT_SCHEMA["properties"]["exploitability_score"]
         assert score_schema["minimum"] == 0
         assert score_schema["maximum"] == 1
+
+
+class TestBuildSchema:
+    """Test dynamic schema construction."""
+
+    def test_default_includes_all_fields(self):
+        """Default schema includes exploit_code and patch_code."""
+        schema = _build_schema()
+        assert "exploit_code" in schema["properties"]
+        assert "patch_code" in schema["properties"]
+
+    def test_no_exploits_removes_exploit_code(self):
+        """--no-exploits removes exploit_code from schema."""
+        schema = _build_schema(no_exploits=True)
+        assert "exploit_code" not in schema["properties"]
+        assert "patch_code" in schema["properties"]
+
+    def test_no_patches_removes_patch_code(self):
+        """--no-patches removes patch_code from schema."""
+        schema = _build_schema(no_patches=True)
+        assert "exploit_code" in schema["properties"]
+        assert "patch_code" not in schema["properties"]
+
+    def test_both_flags_removes_both(self):
+        """Both flags remove both fields."""
+        schema = _build_schema(no_exploits=True, no_patches=True)
+        assert "exploit_code" not in schema["properties"]
+        assert "patch_code" not in schema["properties"]
+
+    def test_does_not_mutate_base_schema(self):
+        """Building a schema doesn't mutate FINDING_RESULT_SCHEMA."""
+        _build_schema(no_exploits=True, no_patches=True)
+        assert "exploit_code" in FINDING_RESULT_SCHEMA["properties"]
+        assert "patch_code" in FINDING_RESULT_SCHEMA["properties"]
