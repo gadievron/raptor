@@ -194,6 +194,10 @@ Examples:
                        help="Skip exploitability validation (proceed directly to analysis)")
     parser.add_argument("--vuln-type", help="Vulnerability type to focus on (e.g., command_injection, sql_injection)")
 
+    # Orchestration options
+    parser.add_argument("--max-parallel", type=int, default=3,
+                       help="Maximum parallel Claude Code agents for Phase 4 orchestration (default: 3)")
+
     args = parser.parse_args()
 
     # Resolve paths
@@ -283,6 +287,10 @@ Examples:
         logger.info(f"Target binary: {args.binary}")
 
     workflow_start = time.time()
+
+    # Detect LLM availability once — single source of truth for all phases
+    from packages.llm_analysis.llm.config import detect_llm_availability
+    llm_env = detect_llm_availability()
 
     # ========================================================================
     # PHASE 0: PRE-EXPLOIT MITIGATION ANALYSIS (Optional but recommended)
@@ -466,10 +474,6 @@ Examples:
     # ========================================================================
     # PHASE 2: EXPLOITABILITY VALIDATION
     # ========================================================================
-    # Detect LLM availability once — single source of truth
-    from packages.llm_analysis.llm.config import detect_llm_availability
-    llm_env = detect_llm_availability()
-
     # Run validation phase (handles all modes: skip, dedup-only, full validation)
     from packages.exploitability_validation import run_validation_phase
 
@@ -530,6 +534,10 @@ Examples:
                 "--max-findings", str(args.max_findings)
             ]
 
+        # If CC will orchestrate in Phase 4, tell agent to prep only (skip LLM calls)
+        if llm_env.claude_code and not llm_env.external_llm:
+            analysis_cmd.append("--prep-only")
+
         rc, stdout, stderr = run_command_streaming(analysis_cmd, "Analysing vulnerabilities autonomously")
 
         # Parse analysis results
@@ -555,23 +563,31 @@ Examples:
             analysis = {}
 
     # ========================================================================
-    # PHASE 4: AGENTIC ORCHESTRATION (Optional - requires Claude Code)
+    # PHASE 4: AGENTIC ORCHESTRATION
     # ========================================================================
-    print("\n" + "=" * 70)
-    print("PHASE 4: AGENTIC ORCHESTRATION")
-    print("=" * 70)
-    print("\n💡 To enable FULL agentic capabilities:")
-    print("   1. Install Claude Code: npm install -g @anthropic-ai/claude-code")
-    print("   2. Run: python3 packages/llm_analysis/orchestrator.py \\")
-    print(f"           --repo {repo_path} \\")
-    print(f"           --sarif {' '.join(str(f) for f in sarif_files)} \\")
-    print(f"           --max-findings {args.max_findings}")
-    print("\n   This will spawn autonomous Claude Code agents that:")
-    print("   - Read your code files")
-    print("   - Understand vulnerabilities deeply")
-    print("   - Write working exploit code")
-    print("   - Create secure patches")
-    print("   - Test their work")
+    orchestration_result = None
+    if llm_env.claude_code and not llm_env.external_llm:
+        print("\n" + "=" * 70)
+        print("PHASE 4: AGENTIC ORCHESTRATION")
+        print("=" * 70)
+        # CC available, no external LLM → dispatch claude -p sub-agents
+        if analysis_report and analysis_report.exists():
+            from packages.llm_analysis.orchestrator import orchestrate
+            orchestration_result = orchestrate(
+                prep_report_path=analysis_report,
+                repo_path=repo_path,
+                out_dir=out_dir,
+                max_parallel=args.max_parallel,
+                no_exploits=args.no_exploits,
+                no_patches=args.no_patches,
+            )
+        else:
+            print("\n  No analysis report from Phase 3 — skipping orchestration")
+    elif not llm_env.claude_code:
+        # No CC available
+        print("\n  No Claude Code available. Findings prepared for manual review.")
+        print("  Install Claude Code for automated analysis: npm install -g @anthropic-ai/claude-code")
+    # else: CC available + external LLM — cross-finding merge goes here (PR 3)
 
     # ========================================================================
     # FINAL REPORT
@@ -620,11 +636,18 @@ Examples:
                 "patches_generated": analysis.get('patches_generated', 0),
                 "dataflow_validated": analysis.get('dataflow_validated', 0) if (args.codeql or args.codeql_only) else 0,
             },
+            "orchestration": {
+                "completed": bool(orchestration_result),
+                "mode": orchestration_result.get("orchestration", {}).get("mode", "none") if orchestration_result else "none",
+                "findings_analysed": orchestration_result.get("orchestration", {}).get("findings_analysed", 0) if orchestration_result else 0,
+                "findings_failed": orchestration_result.get("orchestration", {}).get("findings_failed", 0) if orchestration_result else 0,
+            },
         },
         "outputs": {
             "sarif_files": [str(f) for f in sarif_files],
             "validation_report": str(out_dir / "validation" / "findings.json") if validation_result else None,
             "autonomous_report": str(analysis_report) if analysis_report and analysis_report.exists() else None,
+            "orchestrated_report": str(out_dir / "orchestrated_report.json") if orchestration_result else None,
             "exploits_directory": str(autonomous_out / "exploits") if autonomous_out else None,
             "patches_directory": str(autonomous_out / "patches") if autonomous_out else None,
             "exploit_feasibility": str(out_dir / "exploit_feasibility.txt") if mitigation_result else None,
@@ -677,6 +700,9 @@ Examples:
     print("   ✓ Analysed vulnerabilities")
     print("   ✓ Generated exploits")
     print("   ✓ Created patches")
+    if orchestration_result:
+        orch = orchestration_result.get("orchestration", {})
+        print(f"   ✓ Orchestrated via Claude Code ({orch.get('findings_analysed', 0)} findings)")
     print("\nReview the outputs and apply patches as needed.")
     print("=" * 70)
 

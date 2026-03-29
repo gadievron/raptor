@@ -1,385 +1,548 @@
 #!/usr/bin/env python3
 """
-RAPTOR Truly Agentic Orchestrator
+RAPTOR Orchestrator — Phase 4 of the /agentic workflow.
 
-This orchestrator autonomously:
-1. analyses vulnerabilities with deep code understanding
-2. Generates working proof of concept exploits to help with detection engineering efforts and patching capabilities
-3. Creates secure patches with context awareness
-4. Coordinates multi step workflows
+Dispatches structured findings from Phase 3 to Claude Code sub-agents
+for parallel vulnerability analysis, exploit generation, and patch creation.
 
-This makes RAPTOR truly agentic, not just a wrapper.
+Three execution paths:
+  Path 1 (CC available, no external LLM): Dispatch to claude -p sub-agents
+  Path 2 (external LLM):                  Phase 3 already did analysis — passthrough
+  Path 3 (nothing):                        Manual review — passthrough
+
+Inside or outside Claude Code, dispatch uses claude -p subprocesses for
+consistent enforcement of tools, budget, schema, and parallelism.
 """
 
-import argparse
+import copy
 import json
+import logging
+import shutil
 import subprocess
-import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-sys.path.insert(0, str(Path(__file__).parent))
-sys.path.insert(0, str(Path(__file__).parent.parent / "static-analysis"))
-from core.config import RaptorConfig
-from core.logging import get_logger
-from core.sarif.parser import parse_sarif_findings, deduplicate_findings
-from codeql.env import detect_codeql, CodeQLEnv
+logger = logging.getLogger(__name__)
+
+# JSON Schema for CC sub-agent structured output.
+# Required fields ensure every result is usable even if the agent
+# produces minimal output.
+FINDING_RESULT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "finding_id": {"type": "string"},
+        "is_true_positive": {"type": "boolean"},
+        "is_exploitable": {"type": "boolean"},
+        "exploitability_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+        },
+        "severity_assessment": {"type": "string"},
+        "reasoning": {"type": "string"},
+        "attack_scenario": {"type": "string"},
+        "exploit_code": {"type": ["string", "null"]},
+        "patch_code": {"type": ["string", "null"]},
+    },
+    "required": ["finding_id", "is_true_positive", "is_exploitable", "reasoning"],
+}
+
+CC_TIMEOUT = 300  # 5 minutes per finding
+CC_BUDGET_PER_FINDING = "1.00"  # string — passed as CLI arg to --max-budget-usd
 
 
-logger = get_logger()
+def orchestrate(
+    prep_report_path: Path,
+    repo_path: Path,
+    out_dir: Path,
+    max_parallel: int = 3,
+    no_exploits: bool = False,
+    no_patches: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Orchestrate vulnerability analysis using Claude Code sub-agents.
 
-# Import the autonomous security agent to do the actual work
-try:
-    from agent import AutonomousSecurityAgentV2
-    AUTONOMOUS_AGENT_AVAILABLE = True
-except ImportError:
-    logger.error("Cannot import AutonomousSecurityAgentV2")
-    AUTONOMOUS_AGENT_AVAILABLE = False
+    Called from raptor_agentic.py Phase 4. Dispatches CC sub-agents
+    when claude is on PATH and no external LLM is configured (the
+    prep-only case). All other cases are passthrough.
 
+    Args:
+        prep_report_path: Path to autonomous_analysis_report.json from Phase 3.
+        repo_path: Target repository path.
+        out_dir: Output directory for orchestration results.
+        max_parallel: Maximum concurrent CC sub-agents.
+        no_exploits: Skip exploit generation.
+        no_patches: Skip patch generation.
 
-class AgenticOrchestrator:
+    Returns:
+        Orchestrated report dict, or None if orchestration was skipped.
     """
-    Orchestrator that coordinates autonomous security analysis.
+    # Load Phase 3 report
+    try:
+        report = json.loads(prep_report_path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        logger.error(f"Failed to read Phase 3 report: {e}")
+        print(f"\n  Failed to read analysis report: {e}")
+        return None
 
-    Uses the AutonomousSecurityAgentV2 to actually perform:
-    - Vulnerability analysis (LLM-powered, no heuristics)
-    - Exploit generation (context-aware, no templates)
-    - Patch creation (intelligent, no templates)
+    # Path 2/3: Phase 3 already did full analysis — nothing to add
+    if report.get("mode") != "prep_only":
+        logger.info("Phase 3 ran full analysis — orchestration not needed")
+        return None
+
+    # Verify claude binary exists before committing to dispatch
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        print("\n  claude not found on PATH — cannot dispatch sub-agents")
+        print("  Install Claude Code: npm install -g @anthropic-ai/claude-code")
+        return None
+
+    findings = report.get("results", [])
+    if not findings:
+        print("\n  No findings to analyse")
+        return None
+
+    print(f"\n  Dispatching {len(findings)} findings to Claude Code agents "
+          f"(max {max_parallel} parallel)")
+
+    # Dispatch all findings in parallel
+    start_time = time.monotonic()
+    cc_results = _dispatch_findings(
+        findings=findings,
+        repo_path=repo_path,
+        claude_bin=claude_bin,
+        out_dir=out_dir,
+        max_parallel=max_parallel,
+        no_exploits=no_exploits,
+        no_patches=no_patches,
+    )
+    elapsed = time.monotonic() - start_time
+
+    # Merge and write
+    merged = _merge_results(report, cc_results)
+    merged["orchestration"] = {
+        "mode": "cc_dispatch",
+        "findings_dispatched": len(findings),
+        "findings_analysed": sum(1 for r in cc_results if "error" not in r),
+        "findings_failed": sum(1 for r in cc_results if "error" in r),
+        "elapsed_seconds": round(elapsed, 1),
+        "max_parallel": max_parallel,
+    }
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "orchestrated_report.json"
+    out_path.write_text(json.dumps(merged, indent=2))
+    logger.info(f"Orchestrated report saved to {out_path}")
+
+    # Summary
+    orch = merged["orchestration"]
+    print(f"\n  Orchestration complete: {orch['findings_analysed']} analysed, "
+          f"{orch['findings_failed']} failed, {orch['elapsed_seconds']}s elapsed")
+    print(f"  Report: {out_path}")
+
+    return merged
+
+
+def _print_result(finding_id: str, result: Dict[str, Any]) -> None:
+    """Print a single finding result to console."""
+    exploitable = result.get("is_exploitable", False)
+    score = result.get("exploitability_score")
+    try:
+        status = f"exploitable ({float(score):.2f})" if exploitable else "not exploitable"
+    except (ValueError, TypeError):
+        status = "exploitable" if exploitable else "not exploitable"
+    print(f"  [done] {finding_id}: {status}")
+
+
+def _dispatch_findings(
+    findings: List[Dict[str, Any]],
+    repo_path: Path,
+    claude_bin: str,
+    out_dir: Path,
+    max_parallel: int,
+    no_exploits: bool,
+    no_patches: bool,
+) -> List[Dict[str, Any]]:
+    """Dispatch findings to CC sub-agents in parallel.
+
+    Returns a list of result dicts, one per finding (in completion order).
+    Failed findings have an "error" key.
     """
+    results: List[Dict[str, Any]] = []
+    total = len(findings)
+    abort = False
 
-    def __init__(self, repo_path: Path, out_dir: Path) -> None:
-        self.repo_path = repo_path.resolve()
-        self.out_dir = out_dir
-        self.out_dir.mkdir(parents=True, exist_ok=True)
+    with ThreadPoolExecutor(max_workers=max_parallel) as executor:
+        future_to_finding = {}
+        for idx, finding in enumerate(findings, 1):
+            finding_id = finding.get("finding_id", f"finding-{idx}")
+            rule_id = finding.get("rule_id", "unknown")
+            file_path = finding.get("file_path", "?")
+            start_line = finding.get("start_line", "?")
 
-        # Create subdirectories
-        (self.out_dir / "analysis").mkdir(exist_ok=True)
-        (self.out_dir / "exploits").mkdir(exist_ok=True)
-        (self.out_dir / "patches").mkdir(exist_ok=True)
+            print(f"  [{idx}/{total}] {rule_id} at {file_path}:{start_line} ...",
+                  flush=True)
 
-        logger.info("=" * 60)
-        logger.info("AGENTIC ORCHESTRATOR INITIALISED")
-        logger.info("=" * 60)
-        logger.info(f"Repository: {self.repo_path}")
-        logger.info(f"Output: {self.out_dir}")
+            future = executor.submit(
+                _invoke_cc,
+                finding=finding,
+                repo_path=repo_path,
+                claude_bin=claude_bin,
+                out_dir=out_dir,
+                no_exploits=no_exploits,
+                no_patches=no_patches,
+            )
+            future_to_finding[future] = (idx, finding_id)
 
-    def orchestrate_autonomous_workflow(
-        self,
-        sarif_paths: List[str],
-        max_findings: int = 5,
-        codeql_env: Optional[CodeQLEnv] = None,
-    ) -> Dict[str, Any]:
-        """
-        Main autonomous orchestration:
-        1. Load findings
-        2. Autonomously analyse each vulnerability
-        3. For exploitable findings, generate exploits
-        4. Generate patches for all findings
-        5. Coordinate and report
+        for future in as_completed(future_to_finding):
+            idx, finding_id = future_to_finding[future]
+            try:
+                result = future.result()
+            except Exception as e:
+                result = {"finding_id": finding_id, "error": str(e)}
 
-        Args:
-            sarif_paths: List of SARIF files
-            max_findings: Maximum findings to process (to avoid overwhelming)
-            codeql_env: Optional CodeQL environment snapshot for provenance
-        """
-        logger.info("=" * 60)
-        logger.info("STARTING AUTONOMOUS WORKFLOW ORCHESTRATION")
-        logger.info("=" * 60)
+            results.append(result)
 
-        # Debug: Show SARIF files being processed
-        print(f"\n[DEBUG] Processing SARIF files:")
-        for i, sarif_path in enumerate(sarif_paths, 1):
-            sarif_file = Path(sarif_path)
-            exists = "✓" if sarif_file.exists() else "✗"
-            size = sarif_file.stat().st_size if sarif_file.exists() else 0
-            print(f"  {i}. {exists} {sarif_path} ({size:,} bytes)")
+            if "error" in result:
+                err = result["error"]
+                print(f"  [fail] {finding_id}: {err}")
+                if result.get("cc_debug_file"):
+                    print(f"         debug: {result['cc_debug_file']}")
 
-        if not AUTONOMOUS_AGENT_AVAILABLE:
-            logger.error("AutonomousSecurityAgentV2 not available, cannot proceed")
-            print("❌ Error: Autonomous agent not available")
-            print("   Make sure autonomous_security_agent.py is in the same directory")
-            sys.exit(1)
+                # Abort on auth/billing errors — remaining will fail too
+                if _is_auth_error(err):
+                    print("\n  Authentication/billing error — aborting remaining agents")
+                    abort = True
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
+            else:
+                _print_result(finding_id, result)
 
-        # Quick check: Load findings to get counts
-        all_findings = []
-        for sarif_path in sarif_paths:
-            print(f"\n[DEBUG] Parsing SARIF: {sarif_path}")
-            findings = parse_sarif_findings(Path(sarif_path))
-            print(f"[DEBUG] Found {len(findings)} findings in this file")
-            all_findings.extend(findings)
+    if abort:
+        # Mark undispatched findings as aborted
+        completed_ids = {r.get("finding_id") for r in results}
+        for finding in findings:
+            fid = finding.get("finding_id")
+            if fid and fid not in completed_ids:
+                results.append({"finding_id": fid, "error": "aborted (auth failure)"})
 
-        print(f"\n[DEBUG] Total findings from all files: {len(all_findings)}")
-        unique_findings = deduplicate_findings(all_findings)
-        print(f"[DEBUG] Unique findings after deduplication: {len(unique_findings)}")
-        logger.info(
-            f"Found {len(unique_findings)} unique findings from {len(sarif_paths)} SARIF files"
+    return results
+
+
+def _invoke_cc(
+    finding: Dict[str, Any],
+    repo_path: Path,
+    claude_bin: str,
+    out_dir: Path,
+    no_exploits: bool = False,
+    no_patches: bool = False,
+    timeout: int = CC_TIMEOUT,
+) -> Dict[str, Any]:
+    """Invoke a single Claude Code sub-agent for one finding.
+
+    The prompt is lightweight — metadata only, no raw code from the
+    target repo. The agent reads code via Read/Grep/Glob tools. This
+    keeps attacker-controlled content out of the prompt (prompt injection
+    mitigation).
+
+    Returns parsed result dict, or dict with "error" key on failure.
+    """
+    finding_id = finding.get("finding_id", "unknown")
+    prompt = _build_finding_prompt(finding, no_exploits, no_patches)
+
+    cmd = [
+        claude_bin, "-p",
+        "--output-format", "json",
+        "--json-schema", json.dumps(FINDING_RESULT_SCHEMA),
+        "--no-session-persistence",
+        "--allowed-tools", "Read,Grep,Glob",
+        "--add-dir", str(repo_path),
+        "--max-budget-usd", CC_BUDGET_PER_FINDING,
+    ]
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
+    except subprocess.TimeoutExpired:
+        return {"finding_id": finding_id, "error": f"timeout after {timeout}s"}
 
-        if len(unique_findings) == 0:
-            print("⚠️  No findings to process.")
-            print(f"   Checked SARIF files: {sarif_paths}")
-            print("   Make sure the SARIF files contain vulnerability findings")
-            return {
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "repository": str(self.repo_path),
-                "total_findings": 0,
-                "unique_findings": 0,
-                "processed_findings": 0,
-                "analysed": 0,
-                "exploitable": 0,
-                "exploits_generated": 0,
-                "patches_generated": 0,
-                "execution_time_seconds": 0,
-                "detailed_results": [],
-                "codeql": codeql_env.to_dict() if codeql_env is not None else None,
-            }
+    if proc.returncode != 0:
+        stderr_excerpt = (proc.stderr or "")[:500]
+        result = {"finding_id": finding_id, "error": f"exit code {proc.returncode}: {stderr_excerpt}"}
+        _write_debug(out_dir, finding_id, proc.stdout, proc.stderr, result)
+        return result
 
-        # Initialise the autonomous agent
-        agent = AutonomousSecurityAgentV2(self.repo_path, self.out_dir)
+    parsed = _parse_cc_result(proc.stdout, proc.stderr, finding_id)
+    if "error" in parsed:
+        _write_debug(out_dir, finding_id, proc.stdout, proc.stderr, parsed)
+    return parsed
 
-        # Set max findings limit on the agent
-        if max_findings < len(unique_findings):
-            logger.warning(
-                f"Limiting to {max_findings} findings (found {len(unique_findings)})"
-            )
-            # Note: the agent processes all findings; limiting behaviour is enforced
-            # in the agent implementation.
 
-        # Process findings autonomously, passing SARIF paths and max_findings
-        results = agent.process_findings(sarif_paths, max_findings=max_findings)
+def _write_debug(
+    out_dir: Path,
+    finding_id: str,
+    stdout: str,
+    stderr: str,
+    result: Dict[str, Any],
+) -> None:
+    """Write raw CC output to a debug file on failure."""
+    try:
+        debug_dir = out_dir / "debug"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        debug_file = debug_dir / f"cc_{finding_id}.txt"
+        debug_file.write_text(f"STDOUT:\n{stdout or '(empty)'}\n\nSTDERR:\n{stderr or '(empty)'}")
+        # Relative path so it works regardless of output dir location
+        result["cc_debug_file"] = f"debug/cc_{finding_id}.txt"
+    except OSError:
+        pass  # Best effort — don't fail the finding over a debug file
 
-        # Generate orchestration report from agent results
-        report: Dict[str, Any] = {
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "repository": str(self.repo_path),
-            "total_findings": len(all_findings),
-            "unique_findings": len(unique_findings),
-            "processed_findings": results.get("processed", 0),
-            "analysed": results.get("analysed", 0),
-            "exploitable": results.get("exploitable", 0),
-            "exploits_generated": results.get("exploits_generated", 0),
-            "patches_generated": results.get("patches_generated", 0),
-            "execution_time_seconds": results.get("execution_time", 0),
-            "detailed_results": results.get("results", []),
+
+def _build_finding_prompt(
+    finding: Dict[str, Any],
+    no_exploits: bool = False,
+    no_patches: bool = False,
+) -> str:
+    """Build a lightweight prompt for a CC sub-agent.
+
+    The prompt contains metadata only — rule ID, file path, line numbers,
+    dataflow summary. No raw code from the target repo. The agent reads
+    code itself via Read/Grep/Glob tools, which provides natural separation
+    between instructions and attacker-controlled content.
+    """
+    finding_id = finding.get("finding_id", "unknown")
+    rule_id = finding.get("rule_id", "unknown")
+    file_path = finding.get("file_path", "unknown")
+    start_line = finding.get("start_line", "?")
+    end_line = finding.get("end_line", start_line)
+    # message is scanner-generated but may contain target-repo identifiers
+    # (variable names, file paths). Low risk given read-only tools + schema output.
+    message = finding.get("message", "")
+    level = finding.get("level", "warning")
+
+    prompt = f"""You are a security researcher analysing a potential vulnerability.
+
+## Finding
+- ID: {finding_id}
+- Rule: {rule_id}
+- Severity: {level}
+- File: {file_path}
+- Lines: {start_line}-{end_line}
+- Description: {message}
+"""
+
+    # Dataflow summary (metadata only, no code)
+    dataflow = finding.get("dataflow")
+    if dataflow:
+        source = dataflow.get("source", {})
+        sink = dataflow.get("sink", {})
+        steps = dataflow.get("steps", [])
+        sanitizers = dataflow.get("sanitizers_found", [])
+
+        prompt += f"""
+## Dataflow path
+- Source: {source.get('file', '?')}:{source.get('line', '?')} ({source.get('label', '')})
+- Sink: {sink.get('file', '?')}:{sink.get('line', '?')} ({sink.get('label', '')})
+- Intermediate steps: {len(steps)}
+- Sanitizers found: {len(sanitizers)}
+"""
+        if sanitizers:
+            prompt += "- Sanitizer locations: " + ", ".join(
+                f"{s.get('file', '?')}:{s.get('line', '?')}" for s in sanitizers
+                if isinstance(s, dict)
+            ) + "\n"
+
+    # Feasibility data (small, high-value — include directly)
+    feasibility = finding.get("feasibility")
+    if feasibility:
+        verdict = feasibility.get("verdict", "unknown")
+        chain_breaks = feasibility.get("chain_breaks", [])
+        what_would_help = feasibility.get("what_would_help", [])
+        prompt += f"""
+## Exploit feasibility analysis (from upstream validation pipeline)
+This finding has already been through automated feasibility analysis.
+The constraints below were empirically verified — treat them as ground truth.
+Focus your analysis on attack paths that work within these constraints.
+
+- Verdict: {verdict}
+"""
+        if chain_breaks:
+            prompt += "- Techniques that WON'T work (verified blockers):\n"
+            for cb in chain_breaks:
+                prompt += f"  - {cb}\n"
+        if what_would_help:
+            prompt += "- Viable approaches to consider:\n"
+            for wh in what_would_help:
+                prompt += f"  - {wh}\n"
+
+    # Instructions
+    prompt += """
+## Your task
+
+Read the code at the file path above using the Read tool. Examine the
+surrounding context, imports, and any functions called in the vulnerable code.
+
+1. **Analyse**: Is this a true positive? Is it exploitable in practice?
+   What would an attacker need? What's the real-world impact?
+   Rate exploitability_score from 0.0 (impossible) to 1.0 (trivial).
+"""
+
+    if not no_exploits:
+        prompt += """
+2. **Exploit**: If exploitable, write a proof-of-concept exploit.
+   The exploit should be practical and demonstrate the vulnerability.
+   Include clear comments explaining the attack.
+"""
+
+    if not no_patches:
+        prompt += f"""
+{"3" if not no_exploits else "2"}. **Patch**: Create a secure fix that preserves existing functionality.
+   Read the full file for context before writing the patch.
+"""
+
+    prompt += f"""
+Return your analysis as structured JSON with finding_id "{finding_id}".
+"""
+
+    return prompt
+
+
+def _parse_cc_result(
+    stdout: str,
+    stderr: str,
+    finding_id: str,
+) -> Dict[str, Any]:
+    """Parse CC sub-agent JSON output.
+
+    Handles: clean JSON, markdown-fenced JSON, partial output.
+    """
+    content = stdout.strip()
+    if not content:
+        stderr_excerpt = (stderr or "")[:500]
+        return {"finding_id": finding_id, "error": f"empty output: {stderr_excerpt}"}
+
+    # Try direct parse
+    try:
+        result = json.loads(content)
+        if isinstance(result, dict):
+            result.setdefault("finding_id", finding_id)
+            return result
+    except json.JSONDecodeError:
+        pass
+
+    # Try stripping markdown fences
+    if "```" in content:
+        try:
+            parts = content.split("```")
+            for part in parts[1::2]:  # odd-indexed parts are inside fences
+                # Strip optional language tag
+                lines = part.strip().split("\n", 1)
+                json_str = lines[1] if len(lines) > 1 and not lines[0].startswith("{") else part
+                result = json.loads(json_str.strip())
+                if isinstance(result, dict):
+                    result.setdefault("finding_id", finding_id)
+                    return result
+        except (json.JSONDecodeError, IndexError):
+            pass
+
+    # Last resort: find first valid JSON object using raw_decode
+    try:
+        decoder = json.JSONDecoder()
+        idx = content.index("{")
+        result, _ = decoder.raw_decode(content, idx)
+        if isinstance(result, dict):
+            result.setdefault("finding_id", finding_id)
+            return result
+    except (ValueError, json.JSONDecodeError):
+        pass
+
+    return {"finding_id": finding_id, "error": f"unparseable output: {content[:200]}"}
+
+
+def _merge_results(
+    prep_report: Dict[str, Any],
+    cc_results: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Merge CC sub-agent results back into the prep report.
+
+    Matches by finding_id. CC results update analysis fields while
+    preserving all prep data (code, dataflow, feasibility).
+    """
+    merged = dict(prep_report)
+    merged["mode"] = "orchestrated"
+
+    # Index CC results by finding_id
+    cc_by_id = {}
+    for r in cc_results:
+        fid = r.get("finding_id")
+        if fid:
+            cc_by_id[fid] = r
+
+    # Deep copy results so we don't mutate the caller's data
+    results = copy.deepcopy(merged.get("results", []))
+
+    # Merge into findings
+    analysed = 0
+    exploitable = 0
+    exploits_generated = 0
+    patches_generated = 0
+
+    for finding in results:
+        fid = finding.get("finding_id")
+        cc = cc_by_id.get(fid)
+        if not cc or "error" in cc:
+            # No CC result or failed — keep prep data, mark as unanalysed
+            finding["cc_error"] = cc.get("error") if cc else "not dispatched"
+            if cc and cc.get("cc_debug_file"):
+                finding["cc_debug_file"] = cc["cc_debug_file"]
+            continue
+
+        analysed += 1
+
+        # Update analysis fields from CC result
+        finding["analysis"] = {
+            "is_true_positive": cc.get("is_true_positive"),
+            "is_exploitable": cc.get("is_exploitable"),
+            "exploitability_score": cc.get("exploitability_score"),
+            "severity_assessment": cc.get("severity_assessment"),
+            "reasoning": cc.get("reasoning"),
+            "attack_scenario": cc.get("attack_scenario"),
         }
+        finding["exploitable"] = cc.get("is_exploitable", False)
+        finding["exploitability_score"] = cc.get("exploitability_score", 0)
 
-        # Attach CodeQL provenance if available
-        if codeql_env is not None:
-            report["codeql"] = codeql_env.to_dict()
+        if finding["exploitable"]:
+            exploitable += 1
 
-        # Save report
-        report_file = self.out_dir / "orchestration_report.json"
-        report_file.write_text(json.dumps(report, indent=2))
+        if cc.get("exploit_code"):
+            finding["has_exploit"] = True
+            finding["exploit_code"] = cc["exploit_code"]
+            exploits_generated += 1
 
-        logger.info("\n" + "=" * 60)
-        logger.info("ORCHESTRATION COMPLETE")
-        logger.info("=" * 60)
-        logger.info(f"analysed: {report['analysed']}")
-        logger.info(f"Exploitable: {report['exploitable']}")
-        logger.info(f"Exploits generated: {report['exploits_generated']}")
-        logger.info(f"Patches generated: {report['patches_generated']}")
-        logger.info(f"Report saved: {report_file}")
+        if cc.get("patch_code"):
+            finding["has_patch"] = True
+            finding["patch_code"] = cc["patch_code"]
+            patches_generated += 1
 
-        return report
+    merged["results"] = results
+    merged["analyzed"] = analysed
+    merged["exploitable"] = exploitable
+    merged["exploits_generated"] = exploits_generated
+    merged["patches_generated"] = patches_generated
 
-
-def main() -> None:
-    ap = argparse.ArgumentParser(
-        description="RAPTOR Agentic Orchestrator - Fully Autonomous Security Testing",
-        epilog="""
-Examples:
-  # Fully autonomous, scans and analyses automatically
-  python3 agentic_orchestrator.py --repo /path/to/code
-
-  # Use existing SARIF files
-  python3 agentic_orchestrator.py --repo /path/to/code --sarif results.sarif
-
-  # Specify policy groups for scanning
-  python3 agentic_orchestrator.py --repo /path/to/code --policy-groups crypto,secrets
-        """,
-    )
-    ap.add_argument("--repo", required=True, help="Repository path")
-    ap.add_argument(
-        "--sarif",
-        nargs="+",
-        help="SARIF files (optional, will scan if not provided)",
-    )
-    ap.add_argument(
-        "--policy-groups",
-        default="all",
-        help="Policy groups to scan (default: all)",
-    )
-    ap.add_argument("--out", help="Output directory")
-    ap.add_argument(
-        "--max-findings",
-        type=int,
-        default=10,
-        help="Maximum findings to process",
-    )
-    ap.add_argument(
-        "--codeql-mode",
-        choices=["disabled", "detect", "require"],
-        default="disabled",
-        help=(
-            "Enable optional CodeQL integration. "
-            "'disabled' ignores CodeQL, "
-            "'detect' uses CodeQL if available, "
-            "'require' fails if CodeQL is missing."
-        ),
-    )
-
-    args = ap.parse_args()
-
-    repo_path = Path(args.repo).resolve()
-    if not repo_path.exists():
-        print(f"❌ Error: Repository not found: {repo_path}")
-        sys.exit(1)
-
-    # Check for .git directory (used for Semgrep context)
-    git_dir = repo_path / ".git"
-    if not git_dir.exists():
-        print(f"\n⚠️  No .git directory found in {repo_path}")
-        print("    Initialising git repository for better context...")
-        try:
-            subprocess.run(
-                ["git", "init"],
-                cwd=repo_path,
-                capture_output=True,
-                timeout=30,
-                check=False,
-            )
-            subprocess.run(
-                ["git", "add", "."],
-                cwd=repo_path,
-                capture_output=True,
-                timeout=60,
-                check=False,
-            )
-            subprocess.run(
-                ["git", "commit", "-m", "Initial commit for RAPTOR scan"],
-                cwd=repo_path,
-                capture_output=True,
-                timeout=60,
-                check=False,
-            )
-            print("✓ Git repository initialised")
-        except Exception as e:
-            logger.warning(f"Could not initialise git: {e}")
-
-    # Generate output directory with repository name and timestamp
-    if args.out:
-        out_dir = Path(args.out).resolve()
-        repo_name = repo_path.name
-    else:
-        repo_name = repo_path.name
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        out_dir = RaptorConfig.get_out_dir() / f"agentic_{repo_name}_{timestamp}"
-
-    print("\n" + "=" * 70)
-    print(f"Repository: {repo_name}")
-    print(f"Full path: {repo_path}")
-    print(f"Output: {out_dir}")
-    print(f"Max findings: {args.max_findings}")
-    print("=" * 70 + "\n")
-
-    # CodeQL environment detection
-    codeql_env: CodeQLEnv = detect_codeql(mode=args.codeql_mode)
-    if args.codeql_mode == "require" and not codeql_env.available:
-        print("[RAPTOR] Error: CodeQL is required but not available.")
-        print(f"Reason: {codeql_env.reason}")
-        raise SystemExit(1)
-
-    print(f"[RAPTOR] CodeQL mode: {args.codeql_mode}")
-    if codeql_env.available:
-        print(f"[RAPTOR] CodeQL version: {codeql_env.version}")
-        print(f"[RAPTOR] CodeQL path: {codeql_env.cli_path}")
-    else:
-        print(f"[RAPTOR] CodeQL unavailable ({codeql_env.reason})")
-
-    # Autonomous behaviour: if no SARIF provided, run auto_codesec to create SARIF
-    if not args.sarif:
-        print("\n🔍 No SARIF files provided, running autonomous scan...")
-        print(f"Policy groups: {args.policy_groups}")
-        print("=" * 70)
-
-        scan_cmd = [
-            "python3",
-            str(Path(__file__).parent / "auto_codesec.py"),
-            "--repo",
-            str(repo_path),
-            "--policy_groups",
-            args.policy_groups,
-        ]
-
-        print(f"\n[*] Running: {' '.join(scan_cmd)}")
-        try:
-            result = subprocess.run(
-                scan_cmd,
-                capture_output=True,
-                text=True,
-                timeout=1800,  # 30 minutes
-                check=False,
-            )
-            if result.returncode != 0:
-                print("\n❌ Scan failed.")
-                print(f"Error: {result.stderr}")
-                sys.exit(1)
-
-            print("✓ Scan completed successfully")
-
-            # auto_codesec creates: out/scan_<repo>_<timestamp>/combined.sarif
-            scan_dirs = sorted(RaptorConfig.get_out_dir().glob(f"scan_{repo_name}_*"))
-            if not scan_dirs:
-                print("❌ Could not find scan output directory")
-                sys.exit(1)
-
-            latest_scan_dir = scan_dirs[-1]
-            combined_sarif = latest_scan_dir / "combined.sarif"
-
-            if not combined_sarif.exists():
-                print(f"❌ SARIF file not found: {combined_sarif}")
-                sys.exit(1)
-
-            sarif_paths = [str(combined_sarif)]
-            print(f"✓ Using SARIF: {combined_sarif}")
-
-        except subprocess.TimeoutExpired:
-            print("❌ Scan timed out after 30 minutes")
-            sys.exit(1)
-        except Exception as e:
-            print(f"❌ Scan error: {e}")
-            sys.exit(1)
-    else:
-        sarif_paths = args.sarif
-        print(f"\n📋 Using provided SARIF files: {len(sarif_paths)} file(s)")
-
-    orchestrator = AgenticOrchestrator(repo_path, out_dir)
-    report = orchestrator.orchestrate_autonomous_workflow(
-        sarif_paths,
-        args.max_findings,
-        codeql_env=codeql_env,
-    )
-
-    print("\n" + "=" * 70)
-    print("✅ AUTONOMOUS ORCHESTRATION COMPLETE")
-    print("=" * 70)
-    print(f"Total findings: {report['total_findings']}")
-    print(f"Processed: {report['processed_findings']}")
-    print(f"analysed: {report['analysed']}")
-    print(f"Exploitable: {report['exploitable']}")
-    print("\nAutonomous Actions:")
-    print(f"  ✓ Exploits generated: {report['exploits_generated']}")
-    print(f"  ✓ Patches generated: {report['patches_generated']}")
-    print(f"\nExecution time: {report['execution_time_seconds']:.2f}s")
-    print(f"\nResults saved to: {out_dir}")
-    print(f"  - Analysis: {out_dir / 'analysis'}")
-    print(f"  - Exploits: {out_dir / 'exploits'}")
-    print(f"  - Patches: {out_dir / 'patches'}")
-    print(f"  - Report: {out_dir / 'orchestration_report.json'}")
-    print("=" * 70)
+    return merged
 
 
-if __name__ == "__main__":
-    main()
+def _is_auth_error(error_str: str) -> bool:
+    """Check if an error string indicates an authentication/billing failure."""
+    lower = error_str.lower()
+    return any(x in lower for x in [
+        "401", "403", "authentication", "unauthorized",
+        "invalid api key", "billing", "quota", "rate limit",
+        "insufficient_quota", "credit",
+    ])

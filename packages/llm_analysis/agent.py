@@ -321,7 +321,8 @@ def convert_validated_to_agent_format(data: dict) -> List[Dict[str, Any]]:
 
 
 class AutonomousSecurityAgentV2:
-    def __init__(self, repo_path: Path, out_dir: Path, llm_config: Optional[LLMConfig] = None):
+    def __init__(self, repo_path: Path, out_dir: Path, llm_config: Optional[LLMConfig] = None,
+                 prep_only: bool = False):
         self.repo_path = repo_path
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -329,7 +330,16 @@ class AutonomousSecurityAgentV2:
         # Detect LLM availability and choose provider
         availability = detect_llm_availability()
 
-        if availability.external_llm:
+        if prep_only:
+            # Caller explicitly requested prep-only (e.g. CC will orchestrate)
+            self.llm_config = None
+            self.llm = ClaudeCodeProvider()
+            logger.info("RAPTOR Autonomous Security Agent initialised (prep-only mode, --prep-only)")
+            logger.info(f"Repository: {repo_path}")
+            logger.info(f"Output: {out_dir}")
+            print("\n🤖 Prep-only mode — external orchestrator will handle analysis")
+            print()
+        elif availability.external_llm:
             # External LLM configured — use LLMClient
             self.llm_config = llm_config or LLMConfig()
             self.llm = LLMClient(self.llm_config)
@@ -1352,6 +1362,8 @@ def main() -> None:
     ap.add_argument("--findings", help="Validated findings.json from exploitability validation pipeline")
     ap.add_argument("--out", help="Output directory")
     ap.add_argument("--max-findings", type=int, default=10, help="Max findings to process")
+    ap.add_argument("--prep-only", action="store_true",
+                    help="Skip LLM analysis; produce structured findings for external orchestration")
 
     args = ap.parse_args()
 
@@ -1374,7 +1386,7 @@ def main() -> None:
         out_dir = RaptorConfig.get_out_dir() / f"autonomous_v2_{timestamp}"
 
     # Initialize agent with LLM
-    agent = AutonomousSecurityAgentV2(repo_path, out_dir)
+    agent = AutonomousSecurityAgentV2(repo_path, out_dir, prep_only=args.prep_only)
 
     # Process findings - route based on input type
     if args.findings:
