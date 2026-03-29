@@ -104,6 +104,8 @@ raptor/
 │   │       ├── __init__.py
 │   │       ├── client.py           # LLM client abstraction
 │   │       ├── config.py           # LLM configuration
+│   │       ├── detection.py        # LLM availability detection
+│   │       ├── model_data.py       # Model costs, limits, provider endpoints
 │   │       └── providers.py        # Provider implementations (Anthropic, OpenAI, etc.)
 │   │
 │   ├── autonomous/                 # Autonomous agent capabilities
@@ -1110,7 +1112,7 @@ cd raptor
 pip install -r requirements.txt
 
 # Or install manually:
-pip install semgrep anthropic openai requests beautifulsoup4
+pip install semgrep anthropic openai instructor requests beautifulsoup4
 ```
 
 **Verify Installation**:

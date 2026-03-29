@@ -346,7 +346,7 @@ Usage: "Use [persona name]"
 
 Model selection and API use is handled through Claude Code natively.
 
-(very much) Eperimental benchmark for exploit generation:
+(very much) Experimental benchmark for exploit generation:
 
 | Provider             | Exploit Quality         | Cost        |
 |----------------------|-------------------------|-------------|
@@ -363,6 +363,8 @@ models work for analysis but may produce non-compilable exploit code.
 **LLM Configuration:**
 - `ANTHROPIC_API_KEY` - Anthropic Claude API key
 - `OPENAI_API_KEY` - OpenAI API key
+- `GEMINI_API_KEY` - Google Gemini API key
+- `MISTRAL_API_KEY` - Mistral API key
 - `OLLAMA_HOST` - Ollama server URL (default: `http://localhost:11434`)
 - `RAPTOR_CONFIG` - Path to RAPTOR models JSON configuration file (optional)
 
@@ -409,9 +411,7 @@ python3 raptor.py fuzz --binary /path/to/binary --duration 3600
 - **CLAUDE_CODE_USAGE.md** - Complete Claude Code usage guide
 - **PYTHON_CLI.md** - Python command-line reference
 - **FUZZING_QUICKSTART.md** - Binary fuzzing guide
-- **litellm-model-configuration-guide.md** - Model configuration and selection
 - **.claude/commands/oss-forensics.md** - OSS forensics investigation guide
-- **TESTING.md** - Test suite documentation and user stories
 
 ### Architecture & Development
 - **ARCHITECTURE.md** - Technical architecture details

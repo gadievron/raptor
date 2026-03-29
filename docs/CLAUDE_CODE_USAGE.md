@@ -4,12 +4,26 @@
 
 **Security testing:**
 ```
-/scan     - Static code analysis (Semgrep + CodeQL + LLM)
+/scan     - Static code analysis (Semgrep + CodeQL)
 /fuzz     - Binary fuzzing (AFL++ + crash analysis)
 /web      - Web application security testing
 /agentic  - Full autonomous workflow (most comprehensive)
 /codeql   - CodeQL-only deep analysis
 /analyze  - LLM analysis of existing SARIF files
+/validate - Exploitability validation pipeline
+```
+
+**Exploit development & patching:**
+```
+/exploit  - Generate exploit proof-of-concepts (beta)
+/patch    - Generate security patches (beta)
+```
+
+**Code understanding & forensics:**
+```
+/understand    - Adversarial code comprehension (map attack surface, trace data flows)
+/oss-forensics - Evidence-backed GitHub forensic investigation
+/crash-analysis - Autonomous crash root-cause analysis
 ```
 
 **Skill management:**

@@ -39,7 +39,7 @@ python3 raptor.py help scan
 - Python 3.9+
 - `pip install -r requirements.txt`
 - `pip install semgrep`
-- Set ANTHROPIC_API_KEY or OPENAI_API_KEY
+- Set an API key: ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, or MISTRAL_API_KEY (optional — Claude Code alone works for analysis)
 
 **Optional tools:**
 - AFL++ (`brew install afl++` or `apt install afl++`)
