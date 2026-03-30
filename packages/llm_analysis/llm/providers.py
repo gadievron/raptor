@@ -55,10 +55,35 @@ class LLMResponse:
     duration: float = 0.0
 
 
+@dataclass
+class StructuredResponse:
+    """Response from generate_structured() with metadata.
+
+    Iterable for backwards compatibility: result, raw = response
+    """
+    result: Dict[str, Any]
+    raw: str
+    cost: float = 0.0
+    tokens_used: int = 0
+    model: str = ""
+    provider: str = ""
+    duration: float = 0.0
+    cached: bool = False  # Not yet wired: generate_structured() has no cache path.
+    # generate() caches via _get_cached_response but returns LLMResponse, not this.
+    # To enable: add cache check in generate_structured() before provider call,
+    # return StructuredResponse(cached=True) on hit. Cache key must include schema.
+    # Inventory checksums (core/inventory) could feed cache invalidation.
+
+    def __iter__(self):
+        """Allow unpacking as 2-tuple for backwards compatibility."""
+        return iter((self.result, self.raw))
+
+
 class LLMProvider(ABC):
     """Abstract base class for LLM providers."""
 
     def __init__(self, config: ModelConfig):
+        import threading
         self.config = config
         self.total_tokens = 0
         self.total_input_tokens = 0
@@ -66,6 +91,7 @@ class LLMProvider(ABC):
         self.total_cost = 0.0
         self.call_count = 0
         self.total_duration = 0.0
+        self._usage_lock = threading.Lock()
 
     @abstractmethod
     def generate(self, prompt: str, system_prompt: Optional[str] = None,
@@ -82,13 +108,14 @@ class LLMProvider(ABC):
     def track_usage(self, tokens: int, cost: float,
                     input_tokens: int = 0, output_tokens: int = 0,
                     duration: float = 0.0) -> None:
-        """Track token usage, cost, and call duration."""
-        self.total_tokens += tokens
-        self.total_input_tokens += input_tokens
-        self.total_output_tokens += output_tokens
-        self.total_cost += (cost or 0.0)
-        self.call_count += 1
-        self.total_duration += duration
+        """Track token usage, cost, and call duration (thread-safe)."""
+        with self._usage_lock:
+            self.total_tokens += tokens
+            self.total_input_tokens += input_tokens
+            self.total_output_tokens += output_tokens
+            self.total_cost += (cost or 0.0)
+            self.call_count += 1
+            self.total_duration += duration
         logger.debug(f"LLM usage: {tokens} tokens, ${(cost or 0.0):.4f} (total: {self.total_tokens} tokens, ${self.total_cost:.4f})")
 
     def _calculate_cost_split(self, input_tokens: int, output_tokens: int) -> float:

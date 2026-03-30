@@ -1,4 +1,4 @@
-"""Tests for the orchestrator module (Phase 4 CC dispatch)."""
+"""Tests for orchestrator, CC dispatch, cost tracking, and structural grouping."""
 
 import json
 import os
@@ -13,15 +13,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from packages.llm_analysis.orchestrator import (
     orchestrate,
-    _invoke_cc,
-    _build_finding_prompt,
-    _build_schema,
-    _parse_cc_result,
     _merge_results,
-    _is_auth_error,
-    _print_result,
-    FINDING_RESULT_SCHEMA,
+    _structural_grouping,
+    CostTracker,
+    CUTOFF_SKIP_CONSENSUS,
 )
+from packages.llm_analysis.cc_dispatch import (
+    build_finding_prompt,
+    build_schema,
+    parse_cc_result,
+    parse_cc_freeform,
+)
+from packages.llm_analysis.prompts.schemas import FINDING_RESULT_SCHEMA
 
 
 def _make_prep_report(findings=None, mode="prep_only"):
@@ -108,7 +111,7 @@ class TestOrchestrate:
 
         with patch.dict(os.environ, {"CLAUDECODE": "1"}), \
              patch("packages.llm_analysis.orchestrator.shutil.which", return_value="/usr/bin/claude"), \
-             patch("packages.llm_analysis.orchestrator.subprocess.run",
+             patch("packages.llm_analysis.cc_dispatch.subprocess.run",
                    side_effect=_mock_subprocess_ok([cc_result])):
             result = orchestrate(
                 prep_report_path=report_path,
@@ -172,7 +175,7 @@ class TestOrchestrate:
 
         with patch.dict(os.environ, {}, clear=True), \
              patch("packages.llm_analysis.orchestrator.shutil.which", return_value="/usr/bin/claude"), \
-             patch("packages.llm_analysis.orchestrator.subprocess.run",
+             patch("packages.llm_analysis.cc_dispatch.subprocess.run",
                    side_effect=_mock_subprocess_ok(cc_results)):
             result = orchestrate(
                 prep_report_path=report_path,
@@ -225,7 +228,7 @@ class TestOrchestrate:
 
         with patch.dict(os.environ, {}, clear=True), \
              patch("packages.llm_analysis.orchestrator.shutil.which", return_value="/usr/bin/claude"), \
-             patch("packages.llm_analysis.orchestrator.subprocess.run", side_effect=mock_run):
+             patch("packages.llm_analysis.cc_dispatch.subprocess.run", side_effect=mock_run):
             result = orchestrate(
                 prep_report_path=report_path,
                 repo_path=tmp_path,
@@ -238,125 +241,13 @@ class TestOrchestrate:
         assert result["orchestration"]["findings_failed"] > 0
 
 
-class TestInvokeCC:
-    """Test single CC sub-agent invocation."""
-
-    def test_successful_invocation(self, tmp_path):
-        """Valid JSON from claude -p is parsed correctly."""
-        cc_result = _make_cc_result("f-001")
-
-        mock_proc = MagicMock()
-        mock_proc.returncode = 0
-        mock_proc.stdout = json.dumps(cc_result)
-        mock_proc.stderr = ""
-
-        with patch("packages.llm_analysis.orchestrator.subprocess.run", return_value=mock_proc):
-            result = _invoke_cc(
-                finding=_make_finding("f-001", "py/sql-injection", "db.py", 42),
-                repo_path=Path("/tmp/repo"),
-                claude_bin="/usr/bin/claude",
-                out_dir=tmp_path,
-            )
-
-        assert result["finding_id"] == "f-001"
-        assert result["is_exploitable"] is True
-        assert "error" not in result
-
-    def test_timeout(self, tmp_path):
-        """Timeout returns error dict."""
-        with patch("packages.llm_analysis.orchestrator.subprocess.run",
-                    side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=300)):
-            result = _invoke_cc(
-                finding=_make_finding("f-001", "py/sql-injection", "db.py", 42),
-                repo_path=Path("/tmp/repo"),
-                claude_bin="/usr/bin/claude",
-                out_dir=tmp_path,
-            )
-
-        assert result["finding_id"] == "f-001"
-        assert "timeout" in result["error"]
-
-    def test_nonzero_exit_writes_debug(self, tmp_path):
-        """Non-zero exit returns error dict with stderr and writes debug file."""
-        mock_proc = MagicMock()
-        mock_proc.returncode = 1
-        mock_proc.stdout = "some partial output"
-        mock_proc.stderr = "Something went wrong"
-
-        with patch("packages.llm_analysis.orchestrator.subprocess.run", return_value=mock_proc):
-            result = _invoke_cc(
-                finding=_make_finding("f-001", "py/sql-injection", "db.py", 42),
-                repo_path=Path("/tmp/repo"),
-                claude_bin="/usr/bin/claude",
-                out_dir=tmp_path,
-            )
-
-        assert "error" in result
-        assert "exit code 1" in result["error"]
-        assert "cc_debug_file" in result
-
-        # Verify debug file was written
-        debug_file = tmp_path / result["cc_debug_file"]
-        assert debug_file.exists()
-        content = debug_file.read_text()
-        assert "some partial output" in content
-        assert "Something went wrong" in content
-
-    def test_command_flags(self, tmp_path):
-        """Verify claude -p command includes all required flags."""
-        mock_proc = MagicMock()
-        mock_proc.returncode = 0
-        mock_proc.stdout = json.dumps(_make_cc_result("f-001"))
-        mock_proc.stderr = ""
-
-        with patch("packages.llm_analysis.orchestrator.subprocess.run", return_value=mock_proc) as mock_run:
-            _invoke_cc(
-                finding=_make_finding("f-001", "py/sql-injection", "db.py", 42),
-                repo_path=Path("/tmp/repo"),
-                claude_bin="/usr/bin/claude",
-                out_dir=tmp_path,
-            )
-
-        cmd = mock_run.call_args[0][0]
-        assert cmd[0] == "/usr/bin/claude"
-        assert "-p" in cmd
-        assert "--output-format" in cmd
-        assert "json" in cmd
-        assert "--json-schema" in cmd
-        assert "--no-session-persistence" in cmd
-        assert "--allowed-tools" in cmd
-        assert "--add-dir" in cmd
-        assert "/tmp/repo" in cmd
-        assert "--max-budget-usd" in cmd
-
-    def test_stdin_prompt(self, tmp_path):
-        """Prompt is passed via stdin, not as positional arg."""
-        mock_proc = MagicMock()
-        mock_proc.returncode = 0
-        mock_proc.stdout = json.dumps(_make_cc_result("f-001"))
-        mock_proc.stderr = ""
-
-        with patch("packages.llm_analysis.orchestrator.subprocess.run", return_value=mock_proc) as mock_run:
-            _invoke_cc(
-                finding=_make_finding("f-001", "py/sql-injection", "db.py", 42),
-                repo_path=Path("/tmp/repo"),
-                claude_bin="/usr/bin/claude",
-                out_dir=tmp_path,
-            )
-
-        kwargs = mock_run.call_args[1]
-        assert "input" in kwargs
-        assert isinstance(kwargs["input"], str)
-        assert len(kwargs["input"]) > 0
-
-
 class TestBuildFindingPrompt:
     """Test prompt construction."""
 
     def test_includes_finding_metadata(self):
         """Prompt includes rule_id, file_path, line numbers."""
         finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
-        prompt = _build_finding_prompt(finding)
+        prompt = build_finding_prompt(finding)
 
         assert "py/sql-injection" in prompt
         assert "db.py" in prompt
@@ -369,7 +260,7 @@ class TestBuildFindingPrompt:
         finding["code"] = "cursor.execute(f'SELECT * FROM users WHERE id={uid}')"
         finding["surrounding_context"] = "def get_user(uid):\n    cursor = db.cursor()\n    ..."
 
-        prompt = _build_finding_prompt(finding)
+        prompt = build_finding_prompt(finding)
 
         assert "cursor.execute" not in prompt
         assert "def get_user" not in prompt
@@ -384,7 +275,7 @@ class TestBuildFindingPrompt:
             "sanitizers_found": [],
         }
 
-        prompt = _build_finding_prompt(finding)
+        prompt = build_finding_prompt(finding)
         assert "routes.py:15" in prompt
         assert "db.py:42" in prompt
 
@@ -392,8 +283,8 @@ class TestBuildFindingPrompt:
         """--no-exploits suppresses exploit generation instructions."""
         finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
 
-        prompt_with = _build_finding_prompt(finding, no_exploits=False)
-        prompt_without = _build_finding_prompt(finding, no_exploits=True)
+        prompt_with = build_finding_prompt(finding, no_exploits=False)
+        prompt_without = build_finding_prompt(finding, no_exploits=True)
 
         assert "proof-of-concept" in prompt_with.lower() or "exploit" in prompt_with.lower()
         assert "proof-of-concept" not in prompt_without.lower()
@@ -402,8 +293,8 @@ class TestBuildFindingPrompt:
         """--no-patches suppresses patch generation instructions."""
         finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
 
-        prompt_with = _build_finding_prompt(finding, no_patches=False)
-        prompt_without = _build_finding_prompt(finding, no_patches=True)
+        prompt_with = build_finding_prompt(finding, no_patches=False)
+        prompt_without = build_finding_prompt(finding, no_patches=True)
 
         assert "secure fix" in prompt_with.lower() or "patch" in prompt_with.lower()
         assert "secure fix" not in prompt_without.lower()
@@ -411,7 +302,7 @@ class TestBuildFindingPrompt:
     def test_includes_score_range(self):
         """Prompt mentions the 0.0-1.0 score range."""
         finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
-        prompt = _build_finding_prompt(finding)
+        prompt = build_finding_prompt(finding)
         assert "0.0" in prompt and "1.0" in prompt
 
     def test_feasibility_framing(self):
@@ -423,7 +314,7 @@ class TestBuildFindingPrompt:
             "what_would_help": ["Format string"],
         }
 
-        prompt = _build_finding_prompt(finding)
+        prompt = build_finding_prompt(finding)
         assert "ground truth" in prompt
         assert "upstream validation pipeline" in prompt
         assert "GOT overwrite" in prompt
@@ -434,7 +325,7 @@ class TestParseCCResult:
 
     def test_valid_json(self):
         """Clean JSON is parsed directly."""
-        result = _parse_cc_result(
+        result = parse_cc_result(
             json.dumps({"finding_id": "f-001", "is_exploitable": True}),
             "", "f-001",
         )
@@ -446,32 +337,32 @@ class TestParseCCResult:
         content = "Here is the result:\n```json\n" + json.dumps({
             "finding_id": "f-001", "is_exploitable": False, "reasoning": "test"
         }) + "\n```\n"
-        result = _parse_cc_result(content, "", "f-001")
+        result = parse_cc_result(content, "", "f-001")
         assert result["finding_id"] == "f-001"
         assert "error" not in result
 
     def test_empty_output(self):
         """Empty stdout returns error dict."""
-        result = _parse_cc_result("", "some error", "f-001")
+        result = parse_cc_result("", "some error", "f-001")
         assert result["finding_id"] == "f-001"
         assert "error" in result
 
     def test_invalid_json(self):
         """Unparseable output returns error dict."""
-        result = _parse_cc_result("This is not JSON at all", "", "f-001")
+        result = parse_cc_result("This is not JSON at all", "", "f-001")
         assert "error" in result
 
     def test_json_embedded_in_text(self):
         """JSON object embedded in surrounding text is extracted via raw_decode."""
         content = 'I found that {"finding_id": "f-001", "is_exploitable": true, "reasoning": "vuln"} is the result.'
-        result = _parse_cc_result(content, "", "f-001")
+        result = parse_cc_result(content, "", "f-001")
         assert result["finding_id"] == "f-001"
         assert "error" not in result
 
     def test_multiple_json_fragments_takes_first(self):
         """With multiple JSON objects, raw_decode takes the first valid one."""
         content = 'prefix {"partial": true} and {"finding_id": "f-001", "is_exploitable": false, "reasoning": "safe"} end'
-        result = _parse_cc_result(content, "", "f-001")
+        result = parse_cc_result(content, "", "f-001")
         # raw_decode takes the first complete JSON object from first {
         assert "error" not in result
 
@@ -492,12 +383,46 @@ class TestParseCCResult:
                 "reasoning": "Stack buffer overflow",
             }
         })
-        result = _parse_cc_result(envelope, "", "f-001")
+        result = parse_cc_result(envelope, "", "f-001")
         assert result["finding_id"] == "f-001"
         assert result["is_exploitable"] is True
         assert result["exploitability_score"] == 0.9
         assert result["reasoning"] == "Stack buffer overflow"
         assert "session_id" not in result  # envelope fields stripped
+
+
+class TestParseCCFreeform:
+    """Test free-form CC output parsing with JSON envelope."""
+
+    def test_extracts_content_and_cost(self):
+        envelope = json.dumps({
+            "type": "result",
+            "result": "Here is the exploit code:\n```python\nimport os\n```",
+            "total_cost_usd": 0.18,
+            "duration_ms": 12500,
+            "modelUsage": {"claude-sonnet-4-20250514": {}},
+            "usage": {"input_tokens": 1000, "output_tokens": 500},
+        })
+        parsed = parse_cc_freeform(envelope, "")
+        assert "exploit code" in parsed["content"]
+        assert parsed["cost_usd"] == 0.18
+        assert parsed["duration_seconds"] == 12.5
+        assert parsed["analysed_by"] == "claude-sonnet-4-20250514"
+        assert parsed["_tokens"] == 1500
+
+    def test_empty_output(self):
+        parsed = parse_cc_freeform("", "some error")
+        assert "error" in parsed
+
+    def test_non_json_fallback(self):
+        parsed = parse_cc_freeform("Just plain text output", "")
+        assert parsed["content"] == "Just plain text output"
+
+    def test_envelope_without_cost(self):
+        envelope = json.dumps({"type": "result", "result": "analysis text"})
+        parsed = parse_cc_freeform(envelope, "")
+        assert parsed["content"] == "analysis text"
+        assert "cost_usd" not in parsed
 
 
 class TestMergeResults:
@@ -518,7 +443,7 @@ class TestMergeResults:
         assert result["code"] == "original code"
         assert result["has_dataflow"] is True
         assert result["exploitable"] is True
-        assert result["analysis"]["reasoning"] == "Test reasoning"
+        assert result["reasoning"] == "Test reasoning"
 
     def test_does_not_mutate_original(self):
         """Merging does not mutate the original prep report."""
@@ -590,44 +515,7 @@ class TestMergeResults:
         assert merged["analyzed"] == 2
         assert merged["exploitable"] == 1
         assert merged["exploits_generated"] == 1  # Only f-001 has exploit_code
-        assert merged["patches_generated"] == 2   # Both have patch_code
-
-
-class TestPrintResult:
-    """Test result display formatting."""
-
-    def test_handles_float_score(self):
-        """Normal float score formats correctly."""
-        _print_result("f-001", {"is_exploitable": True, "exploitability_score": 0.85})
-
-    def test_handles_none_score(self):
-        """None score doesn't crash."""
-        _print_result("f-001", {"is_exploitable": True, "exploitability_score": None})
-
-    def test_handles_string_score(self):
-        """String score doesn't crash."""
-        _print_result("f-001", {"is_exploitable": True, "exploitability_score": "high"})
-
-    def test_handles_missing_score(self):
-        """Missing score doesn't crash."""
-        _print_result("f-001", {"is_exploitable": False})
-
-
-class TestIsAuthError:
-    """Test auth error detection."""
-
-    def test_detects_401(self):
-        assert _is_auth_error("exit code 1: Error 401 Unauthorized") is True
-
-    def test_detects_invalid_api_key(self):
-        assert _is_auth_error("invalid api key provided") is True
-
-    def test_detects_billing(self):
-        assert _is_auth_error("billing issue: insufficient_quota") is True
-
-    def test_ignores_normal_errors(self):
-        assert _is_auth_error("timeout after 300s") is False
-        assert _is_auth_error("json parse error") is False
+        assert merged["patches_generated"] == 1   # Only exploitable f-001 gets patch
 
 
 class TestFindingResultSchema:
@@ -659,30 +547,196 @@ class TestBuildSchema:
 
     def test_default_includes_all_fields(self):
         """Default schema includes exploit_code and patch_code."""
-        schema = _build_schema()
+        schema = build_schema()
         assert "exploit_code" in schema["properties"]
         assert "patch_code" in schema["properties"]
 
     def test_no_exploits_removes_exploit_code(self):
         """--no-exploits removes exploit_code from schema."""
-        schema = _build_schema(no_exploits=True)
+        schema = build_schema(no_exploits=True)
         assert "exploit_code" not in schema["properties"]
         assert "patch_code" in schema["properties"]
 
     def test_no_patches_removes_patch_code(self):
         """--no-patches removes patch_code from schema."""
-        schema = _build_schema(no_patches=True)
+        schema = build_schema(no_patches=True)
         assert "exploit_code" in schema["properties"]
         assert "patch_code" not in schema["properties"]
 
     def test_both_flags_removes_both(self):
         """Both flags remove both fields."""
-        schema = _build_schema(no_exploits=True, no_patches=True)
+        schema = build_schema(no_exploits=True, no_patches=True)
         assert "exploit_code" not in schema["properties"]
         assert "patch_code" not in schema["properties"]
 
     def test_does_not_mutate_base_schema(self):
         """Building a schema doesn't mutate FINDING_RESULT_SCHEMA."""
-        _build_schema(no_exploits=True, no_patches=True)
+        build_schema(no_exploits=True, no_patches=True)
         assert "exploit_code" in FINDING_RESULT_SCHEMA["properties"]
         assert "patch_code" in FINDING_RESULT_SCHEMA["properties"]
+
+
+# ── Structural Grouping ─────────────────────────────────────────────
+
+class TestStructuralGrouping:
+    def test_same_file_groups(self):
+        results = [
+            {"finding_id": "f-001", "file_path": "db.py", "rule_id": "sqli"},
+            {"finding_id": "f-002", "file_path": "db.py", "rule_id": "xss"},
+        ]
+        groups = _structural_grouping(results)
+        file_groups = [g for g in groups if g["criterion"] == "file_path"]
+        assert len(file_groups) == 1
+        assert set(file_groups[0]["finding_ids"]) == {"f-001", "f-002"}
+
+    def test_same_rule_groups(self):
+        results = [
+            {"finding_id": "f-001", "file_path": "a.py", "rule_id": "sqli"},
+            {"finding_id": "f-002", "file_path": "b.py", "rule_id": "sqli"},
+            {"finding_id": "f-003", "file_path": "c.py", "rule_id": "xss"},
+            {"finding_id": "f-004", "file_path": "d.py", "rule_id": "path_traversal"},
+        ]
+        groups = _structural_grouping(results)
+        rule_groups = [g for g in groups if g["criterion"] == "rule_id"]
+        assert len(rule_groups) == 1
+        assert set(rule_groups[0]["finding_ids"]) == {"f-001", "f-002"}
+
+    def test_no_transitive_closure(self):
+        """A-B share file, B-C share rule. A and C should NOT be in same group."""
+        results = [
+            {"finding_id": "f-001", "file_path": "db.py", "rule_id": "sqli"},
+            {"finding_id": "f-002", "file_path": "db.py", "rule_id": "xss"},
+            {"finding_id": "f-003", "file_path": "api.py", "rule_id": "xss"},
+        ]
+        groups = _structural_grouping(results)
+        # f-001 and f-003 should NOT be in the same group
+        for g in groups:
+            ids = set(g["finding_ids"])
+            assert not ({"f-001", "f-003"} <= ids and "f-002" not in ids)
+
+    def test_overlapping_groups(self):
+        """A finding can appear in multiple groups."""
+        results = [
+            {"finding_id": "f-001", "file_path": "db.py", "rule_id": "sqli"},
+            {"finding_id": "f-002", "file_path": "db.py", "rule_id": "xss"},
+            {"finding_id": "f-003", "file_path": "api.py", "rule_id": "sqli"},
+            {"finding_id": "f-004", "file_path": "util.py", "rule_id": "path_traversal"},
+        ]
+        groups = _structural_grouping(results)
+        # f-001 should appear in both a file group (db.py) and a rule group (sqli)
+        f001_groups = [g for g in groups if "f-001" in g["finding_ids"]]
+        assert len(f001_groups) >= 2
+
+    def test_independent_findings_no_group(self):
+        results = [
+            {"finding_id": "f-001", "file_path": "a.py", "rule_id": "sqli"},
+            {"finding_id": "f-002", "file_path": "b.py", "rule_id": "xss"},
+        ]
+        groups = _structural_grouping(results)
+        assert len(groups) == 0
+
+    def test_shared_dataflow_source(self):
+        results = [
+            {"finding_id": "f-001", "file_path": "a.py", "rule_id": "sqli",
+             "dataflow": {"source": {"file": "routes.py", "line": 15}}},
+            {"finding_id": "f-002", "file_path": "b.py", "rule_id": "xss",
+             "dataflow": {"source": {"file": "routes.py", "line": 15}}},
+        ]
+        groups = _structural_grouping(results)
+        source_groups = [g for g in groups if g["criterion"] == "dataflow_source"]
+        assert len(source_groups) == 1
+
+
+
+# ── CostTracker ──────────────────────────────────────────────────────
+
+class TestCostTracker:
+    def test_basic_tracking(self):
+        ct = CostTracker(max_cost=10.0)
+        ct.add_cost("opus", 3.0)
+        ct.add_cost("opus", 2.0)
+        assert ct.total_cost == 5.0
+
+    def test_per_model_breakdown(self):
+        ct = CostTracker(max_cost=10.0)
+        ct.add_cost("opus", 3.0)
+        ct.add_cost("gemini", 2.0)
+        summary = ct.get_summary()
+        assert summary["cost_by_model"]["opus"] == 3.0
+        assert summary["cost_by_model"]["gemini"] == 2.0
+
+    def test_skip_consensus_at_70_percent(self):
+        ct = CostTracker(max_cost=10.0)
+        ct.add_cost("opus", 6.9)
+        assert ct.should_skip_consensus() is False
+        ct.add_cost("opus", 0.2)
+        assert ct.should_skip_consensus() is True
+
+    def test_skip_exploits_at_85_percent(self):
+        ct = CostTracker(max_cost=10.0)
+        ct.add_cost("opus", 8.4)
+        assert ct.should_skip_exploits() is False
+        ct.add_cost("opus", 0.2)
+        assert ct.should_skip_exploits() is True
+
+    def test_single_model_at_95_percent(self):
+        ct = CostTracker(max_cost=10.0)
+        ct.add_cost("opus", 9.4)
+        assert ct.should_single_model() is False
+        ct.add_cost("opus", 0.2)
+        assert ct.should_single_model() is True
+
+    def test_no_budget_never_skips(self):
+        ct = CostTracker(max_cost=0)
+        ct.add_cost("opus", 100.0)
+        assert ct.should_skip_consensus() is False
+        assert ct.should_skip_exploits() is False
+
+    def test_estimate_cost(self):
+        ct = CostTracker(max_cost=10.0)
+        est = ct.estimate_cost(50, n_consensus_models=1, model_name="unknown-model")
+        # Falls back to default $0.03/call: 100 calls * 0.03 = 3.0
+        assert est == 3.0
+
+
+
+# ── CostTracker Phase Skip ──────────────────────────────────────────
+
+class TestCostTrackerPhaseSkip:
+    def test_should_skip_phase_when_over_budget(self):
+        ct = CostTracker(max_cost=10.0)
+        ct.add_cost("opus", 8.0)  # 80% spent
+        # Consensus cutoff is 70%, estimate for 50 calls ≈ $1.50
+        assert ct.should_skip_phase(50, "opus", CUTOFF_SKIP_CONSENSUS, "consensus") is True
+
+    def test_should_not_skip_phase_when_within_budget(self):
+        ct = CostTracker(max_cost=10.0)
+        ct.add_cost("opus", 2.0)  # 20% spent
+        assert ct.should_skip_phase(10, "opus", CUTOFF_SKIP_CONSENSUS, "consensus") is False
+
+    def test_no_budget_never_skips_phase(self):
+        ct = CostTracker(max_cost=0)
+        ct.add_cost("opus", 100.0)
+        assert ct.should_skip_phase(1000, "opus", CUTOFF_SKIP_CONSENSUS, "consensus") is False
+
+
+class TestMergePrepProtection:
+    def test_prep_data_not_overwritten_by_dispatch(self):
+        """Dispatch result keys that match prep data should not overwrite."""
+        finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
+        finding["code"] = "original prep code"
+        report = _make_prep_report(findings=[finding])
+
+        # Simulate a dispatch result that tries to overwrite prep fields
+        cc_result = _make_cc_result("f-001", exploitable=True)
+        cc_result["code"] = "INJECTED CODE"
+        cc_result["file_path"] = "/etc/shadow"
+
+        merged = _merge_results(report, [cc_result])
+        result = merged["results"][0]
+
+        # Prep data should be preserved
+        assert result["code"] == "original prep code"
+        assert result["file_path"] == "db.py"
+        # Analysis data should still come through
+        assert result["is_exploitable"] is True

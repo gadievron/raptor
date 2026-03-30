@@ -14,7 +14,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import json
 
 # Add parent directories to path for core imports
@@ -173,6 +173,7 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
                             timeout=timeout,
                             temperature=0.7,
                             cost_per_1k_tokens=cost_per_1k,
+                            role=entry_role or None,
                         )
                     break
 
@@ -366,8 +367,137 @@ def _get_default_fallback_models() -> List['ModelConfig']:
 
 
 # ---------------------------------------------------------------------------
+# Model role resolution
+# ---------------------------------------------------------------------------
+
+VALID_ROLES = {"analysis", "code", "consensus", "fallback"}
+
+
+def resolve_model_roles(
+    primary_model: Optional['ModelConfig'] = None,
+    fallback_models: Optional[List['ModelConfig']] = None,
+) -> Dict[str, Any]:
+    """Resolve model roles from configured models.
+
+    If no roles are specified, applies defaults:
+    - First model → analysis + code
+    - Additional models → fallback
+
+    Returns:
+        {analysis_model: ModelConfig, code_model: ModelConfig,
+         consensus_models: [ModelConfig], fallback_models: [ModelConfig]}
+
+    Raises:
+        ConfigError on invalid role configurations.
+    """
+    if primary_model is None and not fallback_models:
+        return {
+            "analysis_model": None,
+            "code_model": None,
+            "consensus_models": [],
+            "fallback_models": [],
+        }
+
+    all_models = []
+    if primary_model:
+        all_models.append(primary_model)
+    if fallback_models:
+        all_models.extend(fallback_models)
+
+    # Check if any model has a role set
+    has_roles = any(m.role for m in all_models)
+
+    if not has_roles:
+        # Default: first model = analysis + code, rest = fallback
+        return {
+            "analysis_model": all_models[0] if all_models else None,
+            "code_model": all_models[0] if all_models else None,
+            "consensus_models": [],
+            "fallback_models": all_models[1:] if len(all_models) > 1 else [],
+        }
+
+    # Validate roles
+    _validate_model_roles(all_models)
+
+    # Resolve by role
+    analysis = [m for m in all_models if m.role == "analysis"]
+    code = [m for m in all_models if m.role == "code"]
+    consensus = [m for m in all_models if m.role == "consensus"]
+    fallbacks = [m for m in all_models if m.role == "fallback" or m.role is None]
+
+    analysis_model = analysis[0] if analysis else (all_models[0] if all_models else None)
+    code_model = code[0] if code else analysis_model
+
+    return {
+        "analysis_model": analysis_model,
+        "code_model": code_model,
+        "consensus_models": consensus,
+        "fallback_models": fallbacks,
+    }
+
+
+def _validate_model_roles(models: List['ModelConfig']) -> None:
+    """Validate model role configuration. Raises ConfigError on invalid combos."""
+    roles = [m.role for m in models if m.role]
+
+    # Check for invalid role names
+    for m in models:
+        if m.role and m.role not in VALID_ROLES:
+            raise ConfigError(
+                f"Invalid role '{m.role}' for model {m.model_name}. "
+                f"Valid roles: {', '.join(sorted(VALID_ROLES))}"
+            )
+
+    analysis_count = roles.count("analysis")
+    code_count = roles.count("code")
+    has_analysis = analysis_count > 0
+    has_consensus = "consensus" in roles
+    has_code = code_count > 0
+    only_fallback = all(r == "fallback" for r in roles) if roles else False
+
+    if has_consensus and not has_analysis:
+        raise ConfigError("Consensus models configured without an analysis model")
+
+    if has_code and not has_analysis:
+        raise ConfigError("Code model configured without an analysis model")
+
+    if analysis_count > 1:
+        raise ConfigError(
+            "Multiple models with role 'analysis'. Use 'consensus' for second opinions"
+        )
+
+    if code_count > 1:
+        raise ConfigError(
+            "Multiple models with role 'code'. Only one code model is supported"
+        )
+
+    if only_fallback:
+        raise ConfigError(
+            "All models are configured as fallback with no analysis model. "
+            "Set role to 'analysis' on at least one model."
+        )
+
+    # Check for same model with two roles (by model_name + provider)
+    seen = {}
+    for m in models:
+        if m.role:
+            key = (m.provider, m.model_name)
+            if key in seen and seen[key] != m.role:
+                raise ConfigError(
+                    f"Model {m.model_name} ({m.provider}) has conflicting roles: "
+                    f"'{seen[key]}' and '{m.role}'"
+                )
+            seen[key] = m.role
+
+
+# ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
+
+class ConfigError(Exception):
+    """Configuration validation error."""
+    pass
+
 
 @dataclass
 class ModelConfig:
@@ -382,6 +512,7 @@ class ModelConfig:
     timeout: int = 120
     cost_per_1k_tokens: float = 0.0  # Fallback rate — used only when model not in MODEL_COSTS
     enabled: bool = True
+    role: Optional[str] = None  # "analysis", "code", "consensus", "fallback"
 
 
 @dataclass

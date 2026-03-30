@@ -124,7 +124,7 @@ def mode_agentic(args: list) -> int:
     if '--codeql' not in args and '--codeql-only' not in args and '--no-codeql' not in args:
         args = ['--codeql'] + args
 
-    print("\n[*] Starting full autonomous workflow (Semgrep + CodeQL)...\n")
+    print("\n[*] Starting full autonomous workflow (Semgrep + CodeQL)...\n", flush=True)
     return run_script(agentic_script, args)
 
 

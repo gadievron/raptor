@@ -4,13 +4,14 @@ RAPTOR Truly Agentic Workflow
 
 Complete end-to-end autonomous security testing:
 0. Pre-exploit mitigation analysis (optional)
-1. Scan code with Semgrep AND CodeQL (parallel execution)
-2. Validate exploitability (filter hallucinations and unreachable code)
-3. Autonomously analyse findings (read code, understand context)
-4. Autonomously validate dataflow paths (CodeQL-specific)
-5. Autonomously generate exploits (write working PoC code)
-6. Autonomously create patches (write secure fixes)
-7. Report everything
+1. Scan code with Semgrep and CodeQL (parallel)
+2. Validate exploitability (filter false positives and unreachable code)
+3. Analyse each finding (read code, understand context, assess impact)
+4. Generate exploit PoCs for confirmed vulnerabilities
+5. Create secure patches
+6. Cross-finding analysis (structural grouping, shared root causes)
+7. Multi-model consensus (when configured)
+8. Report everything
 """
 
 import argparse
@@ -27,27 +28,6 @@ from core.config import RaptorConfig
 from core.logging import get_logger
 
 logger = get_logger()
-
-
-def run_command(cmd: list, description: str) -> tuple[int, str, str]:
-    """Run a command and return results."""
-    logger.info(f"Running: {description}")
-    print(f"\n[*] {description}...")
-
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=1800  # 30 minutes
-        )
-        return result.returncode, result.stdout, result.stderr
-    except subprocess.TimeoutExpired:
-        logger.error(f"Command timed out: {description}")
-        return -1, "", "Timeout"
-    except Exception as e:
-        logger.error(f"Command failed: {e}")
-        return -1, "", str(e)
 
 
 def run_command_streaming(cmd: list, description: str) -> tuple[int, str, str]:
@@ -197,6 +177,8 @@ Examples:
     # Orchestration options
     parser.add_argument("--max-parallel", type=int, default=3,
                        help="Maximum parallel Claude Code agents for Phase 4 orchestration (default: 3)")
+    parser.add_argument("--no-orchestration", action="store_true",
+                       help="Skip Phase 4 orchestration (use Phase 3 sequential analysis even when CC is available)")
 
     args = parser.parse_args()
 
@@ -346,26 +328,64 @@ Examples:
     semgrep_metrics = {}
     codeql_metrics = {}
 
-    # ---- Semgrep Scanning ----
-    if not args.codeql_only:
+    # Launch scanners in parallel when both are enabled
+    run_semgrep = not args.codeql_only
+    run_codeql = (args.codeql or args.codeql_only) and not args.no_codeql
+
+    semgrep_cmd = None
+    codeql_cmd = None
+    semgrep_proc = None
+    codeql_proc = None
+
+    if run_semgrep:
         print("\n[*] Running Semgrep analysis...")
-        scan_cmd = [
+        semgrep_cmd = [
             "python3",
             str(script_root / "packages/static-analysis/scanner.py"),
             "--repo", str(repo_path),
             "--policy_groups", args.policy_groups,
         ]
+        logger.info(f"Running: Scanning code with Semgrep")
+        semgrep_proc = subprocess.Popen(
+            semgrep_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
 
-        rc, stdout, stderr = run_command(scan_cmd, "Scanning code with Semgrep")
+    if run_codeql:
+        print("\n[*] Running CodeQL analysis...")
+        codeql_cmd = [
+            "python3",
+            str(script_root / "packages/codeql/agent.py"),
+            "--repo", str(repo_path),
+            "--out", str(out_dir / "codeql"),
+        ]
+        if args.languages:
+            codeql_cmd.extend(["--languages", args.languages])
+        if args.build_command:
+            codeql_cmd.extend(["--build-command", args.build_command])
+        if args.extended:
+            codeql_cmd.append("--extended")
+        if args.codeql_cli:
+            codeql_cmd.extend(["--codeql-cli", args.codeql_cli])
+        logger.info(f"Running: Scanning code with CodeQL")
+        codeql_proc = subprocess.Popen(
+            codeql_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
 
-        if rc not in (0, 1):
-            print(f"❌ Semgrep scan failed: {stderr}")
-            if args.codeql or args.codeql_only:
-                print("   Continuing with CodeQL scan...")
-            else:
+    # ---- Collect Semgrep results ----
+    if semgrep_proc:
+        try:
+            semgrep_stdout, semgrep_stderr = semgrep_proc.communicate(timeout=1800)
+            rc = semgrep_proc.returncode
+        except subprocess.TimeoutExpired:
+            semgrep_proc.kill()
+            semgrep_proc.communicate()
+            rc = -1
+            print(f"❌ Semgrep scan timed out (30m)")
+            logger.error("Semgrep scan timed out")
+            if not run_codeql:
                 sys.exit(1)
-        else:
-            # Parse Semgrep results
+
+        if rc in (0, 1):
             scanner_out_dir = RaptorConfig.get_out_dir()
             scan_dirs = sorted(scanner_out_dir.glob("scan_*"), key=lambda p: p.stat().st_mtime, reverse=True)
 
@@ -384,47 +404,39 @@ Examples:
                     print(f"  - Critical: {semgrep_metrics.get('findings_by_severity', {}).get('error', 0)}")
                     print(f"  - Warnings: {semgrep_metrics.get('findings_by_severity', {}).get('warning', 0)}")
 
-                # Get SARIF files
                 sarif_file = actual_scan_dir / "combined.sarif"
                 if sarif_file.exists():
                     all_sarif_files.append(sarif_file)
                 else:
                     semgrep_sarifs = list(actual_scan_dir.glob("semgrep_*.sarif"))
                     all_sarif_files.extend(semgrep_sarifs)
+        elif rc != -1:  # -1 is timeout, already reported
+            print(f"❌ Semgrep scan failed (exit code {rc})")
+            if not run_codeql:
+                sys.exit(1)
 
-    # ---- CodeQL Scanning ----
-    if (args.codeql or args.codeql_only) and not args.no_codeql:
-        print("\n[*] Running CodeQL analysis...")
-
-        # Build CodeQL command
-        codeql_cmd = [
-            "python3",
-            str(script_root / "packages/codeql/agent.py"),
-            "--repo", str(repo_path),
-            "--out", str(out_dir / "codeql")
-        ]
-
-        if args.languages:
-            codeql_cmd.extend(["--languages", args.languages])
-        if args.build_command:
-            codeql_cmd.extend(["--build-command", args.build_command])
-        if args.extended:
-            codeql_cmd.append("--extended")
-        if args.codeql_cli:
-            codeql_cmd.extend(["--codeql-cli", args.codeql_cli])
-
-        rc, stdout, stderr = run_command_streaming(codeql_cmd, "Scanning code with CodeQL")
+    # ---- Collect CodeQL results ----
+    if codeql_proc:
+        try:
+            codeql_stdout, codeql_stderr = codeql_proc.communicate(timeout=1800)
+            rc = codeql_proc.returncode
+        except subprocess.TimeoutExpired:
+            codeql_proc.kill()
+            codeql_proc.communicate()
+            rc = -1
+            print(f"❌ CodeQL scan timed out (30m)")
+            logger.error("CodeQL scan timed out")
 
         if rc != 0:
-            print(f"⚠️  CodeQL scan failed or completed with warnings")
-            if stderr:
-                print(f"    {stderr[:500]}")
+            if all_sarif_files:
+                print(f"⚠️  CodeQL scan failed — continuing with existing findings")
+            else:
+                print(f"⚠️  CodeQL scan failed — no findings from any scanner")
             logger.warning(f"CodeQL scan failed - rc={rc}")
             if args.codeql_only:
                 print("❌ CodeQL-only mode failed")
                 sys.exit(1)
         else:
-            # Parse CodeQL results
             codeql_out_dir = out_dir / "codeql"
             codeql_report = codeql_out_dir / "codeql_report.json"
 
@@ -440,7 +452,6 @@ Examples:
                 print(f"  - Findings: {total_findings}")
                 print(f"  - SARIF files: {len(sarif_files)}")
 
-                # Add CodeQL SARIF files
                 for sarif in sarif_files:
                     all_sarif_files.append(Path(sarif))
 
@@ -456,7 +467,7 @@ Examples:
         'total_files_scanned': semgrep_metrics.get('total_files_scanned', 0),
         'findings_by_severity': semgrep_metrics.get('findings_by_severity', {}),
         'semgrep': semgrep_metrics,
-        'codeql': codeql_metrics
+        'codeql': codeql_metrics,
     }
 
     sarif_files = all_sarif_files
@@ -514,7 +525,7 @@ Examples:
         # Check if validation produced enriched findings
         validated_findings_path = out_dir / "validation" / "findings.json"
         if validated_findings_path.exists():
-            logger.info("Using validated findings for LLM analysis (enriched with feasibility data)")
+            logger.info("Using findings from Phase 2 for analysis")
             analysis_cmd = [
                 "python3",
                 str(script_root / "packages/llm_analysis/agent.py"),
@@ -535,7 +546,7 @@ Examples:
             ]
 
         # If CC will orchestrate in Phase 4, tell agent to prep only (skip LLM calls)
-        if llm_env.claude_code and not llm_env.external_llm:
+        if llm_env.claude_code and not args.no_orchestration:
             analysis_cmd.append("--prep-only")
 
         rc, stdout, stderr = run_command_streaming(analysis_cmd, "Analysing vulnerabilities autonomously")
@@ -546,15 +557,17 @@ Examples:
             with open(analysis_report) as f:
                 analysis = json.load(f)
 
-            print(f"\n✓ Analysis complete:")
-            print(f"  - Analysed: {analysis.get('analyzed', 0)}")
-            print(f"  - Exploitable: {analysis.get('exploitable', 0)}")
-            print(f"  - Exploits generated: {analysis.get('exploits_generated', 0)}")
-            print(f"  - Patches generated: {analysis.get('patches_generated', 0)}")
+            if analysis.get('mode') == 'prep_only':
+                print(f"\n✓ Prep complete: {analysis.get('processed', 0)} findings ready for Phase 4")
+            else:
+                print(f"\n✓ Analysis complete:")
+                print(f"  - Analysed: {analysis.get('analyzed', 0)}")
+                print(f"  - Exploitable: {analysis.get('exploitable', 0)}")
+                print(f"  - Exploits generated: {analysis.get('exploits_generated', 0)}")
+                print(f"  - Patches generated: {analysis.get('patches_generated', 0)}")
 
-            # CodeQL-specific metrics
-            if args.codeql or args.codeql_only:
-                print(f"  - CodeQL dataflow paths validated: {analysis.get('dataflow_validated', 0)}")
+                if args.codeql or args.codeql_only:
+                    print(f"  - CodeQL dataflow paths validated: {analysis.get('dataflow_validated', 0)}")
         else:
             print(f"⚠️  Analysis failed or produced no output")
             if stderr:
@@ -566,12 +579,18 @@ Examples:
     # PHASE 4: AGENTIC ORCHESTRATION
     # ========================================================================
     orchestration_result = None
-    if llm_env.claude_code and not llm_env.external_llm:
+    if llm_env.claude_code and not args.no_orchestration:
         print("\n" + "=" * 70)
         print("PHASE 4: AGENTIC ORCHESTRATION")
         print("=" * 70)
-        # CC available, no external LLM → dispatch claude -p sub-agents
+
         if analysis_report and analysis_report.exists():
+            # Build LLMConfig if external LLM is available
+            llm_config = None
+            if llm_env.external_llm:
+                from packages.llm_analysis.llm.config import LLMConfig
+                llm_config = LLMConfig()
+
             from packages.llm_analysis.orchestrator import orchestrate
             orchestration_result = orchestrate(
                 prep_report_path=analysis_report,
@@ -580,6 +599,7 @@ Examples:
                 max_parallel=args.max_parallel,
                 no_exploits=args.no_exploits,
                 no_patches=args.no_patches,
+                llm_config=llm_config,
             )
         else:
             print("\n  No analysis report from Phase 3 — skipping orchestration")
@@ -587,7 +607,6 @@ Examples:
         # No CC available
         print("\n  No Claude Code available. Findings prepared for manual review.")
         print("  Install Claude Code for automated analysis: npm install -g @anthropic-ai/claude-code")
-    # else: CC available + external LLM — cross-finding merge goes here (PR 3)
 
     # ========================================================================
     # FINAL REPORT
@@ -636,11 +655,9 @@ Examples:
                 "patches_generated": analysis.get('patches_generated', 0),
                 "dataflow_validated": analysis.get('dataflow_validated', 0) if (args.codeql or args.codeql_only) else 0,
             },
-            "orchestration": {
-                "completed": bool(orchestration_result),
-                "mode": orchestration_result.get("orchestration", {}).get("mode", "none") if orchestration_result else "none",
-                "findings_analysed": orchestration_result.get("orchestration", {}).get("findings_analysed", 0) if orchestration_result else 0,
-                "findings_failed": orchestration_result.get("orchestration", {}).get("findings_failed", 0) if orchestration_result else 0,
+            "orchestration": orchestration_result.get("orchestration", {}) if orchestration_result else {
+                "completed": False,
+                "mode": "none",
             },
         },
         "outputs": {
@@ -669,12 +686,25 @@ Examples:
         if total_findings > 0:
             reduction = ((total_findings - validated_findings) / total_findings) * 100
             print(f"   Noise reduction: {reduction:.1f}%")
-    print(f"   Exploitable: {analysis.get('exploitable', 0)}")
-    print(f"   Exploits generated: {analysis.get('exploits_generated', 0)}")
-    print(f"   Patches generated: {analysis.get('patches_generated', 0)}")
+    analysed_count = analysis.get('analyzed', 0)
+    if orchestration_result:
+        analysed_count = max(analysed_count, orchestration_result.get("orchestration", {}).get("findings_analysed", 0))
+    if analysed_count > 0 and analysed_count < validated_findings:
+        print(f"   Analysed: {analysed_count} of {validated_findings} (capped by --max-findings {args.max_findings})")
+    orch_data = orchestration_result or {}
+    exploitable_count = max(analysis.get('exploitable', 0), orch_data.get('exploitable', 0))
+    exploits_count = analysis.get('exploits_generated', 0)
+    patches_count = analysis.get('patches_generated', 0)
+    if orchestration_result:
+        exploits_count = max(exploits_count, orchestration_result.get('exploits_generated', 0))
+        patches_count = max(patches_count, orchestration_result.get('patches_generated', 0))
+    print(f"   Exploitable: {exploitable_count}")
+    print(f"   Exploits generated: {exploits_count}")
+    print(f"   Patches generated: {patches_count}")
     if (args.codeql or args.codeql_only) and analysis.get('dataflow_validated', 0) > 0:
         print(f"   Dataflow paths validated: {analysis.get('dataflow_validated', 0)}")
-    print(f"   Duration: {workflow_duration:.2f}s")
+    from packages.llm_analysis.dispatch import _format_elapsed
+    print(f"   Duration: {_format_elapsed(workflow_duration)}")
 
     print(f"\n📁 Outputs:")
     print(f"   Main report: {report_file}")
@@ -684,24 +714,29 @@ Examples:
         print(f"   Validation: {out_dir / 'validation'}/")
     if analysis_report and analysis_report.exists():
         print(f"   Analysis: {analysis_report}")
-    if autonomous_out:
+    if exploits_count > 0 and autonomous_out:
         print(f"   Exploits: {autonomous_out / 'exploits'}/")
+    if patches_count > 0 and autonomous_out:
         print(f"   Patches: {autonomous_out / 'patches'}/")
 
     print("\n" + "=" * 70)
     print("RAPTOR has autonomously:")
     if not args.codeql_only:
         print("   ✓ Scanned with Semgrep")
-    if args.codeql or args.codeql_only:
+    if codeql_metrics:
         print("   ✓ Scanned with CodeQL")
-        print("   ✓ Validated dataflow paths")
+        if codeql_metrics.get('total_findings', 0) > 0:
+            print("   ✓ Validated dataflow paths")
     if validation_result:
-        print("   ✓ Validated exploitability (filtered noise)")
+        if isinstance(validation_result, dict) and validation_result.get('mode') == 'deduplication_only':
+            print("   ✓ Deduplicated findings")
+        else:
+            print("   ✓ Validated exploitability (filtered noise)")
     print("   ✓ Analysed vulnerabilities")
-    if not args.no_exploits:
-        print("   ✓ Generated exploits")
-    if not args.no_patches:
-        print("   ✓ Created patches")
+    if exploits_count > 0:
+        print(f"   ✓ Generated {exploits_count} exploit{'s' if exploits_count != 1 else ''}")
+    if patches_count > 0:
+        print(f"   ✓ Created {patches_count} patch{'es' if patches_count != 1 else ''}")
     if orchestration_result:
         orch = orchestration_result.get("orchestration", {})
         print(f"   ✓ Orchestrated via Claude Code ({orch.get('findings_analysed', 0)} findings)")

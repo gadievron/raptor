@@ -14,9 +14,11 @@ class HackerProgress:
 
     SPINNERS = ['▌', '▀', '▐', '▄']  # Block rotation
 
-    def __init__(self, total: Optional[int] = None, operation: str = "Processing"):
+    def __init__(self, total: Optional[int] = None, operation: str = "Processing",
+                 disabled: bool = False):
         self.total = total
         self.operation = operation
+        self.disabled = disabled
         self.current = 0
         self.start_time = time.time()
         self.last_update = 0
@@ -42,6 +44,8 @@ class HackerProgress:
 
     def update(self, current: Optional[int] = None, message: str = ""):
         """Update progress display."""
+        if self.disabled:
+            return
         now = time.time()
 
         # Only update display every 1 second
@@ -85,12 +89,15 @@ class HackerProgress:
 
     def __enter__(self):
         """Context manager entry."""
-        sys.stderr.write(f">>> {self.operation.upper()} SEQUENCE ACTIVE <<<\n")
-        sys.stderr.flush()
+        if not self.disabled:
+            sys.stderr.write(f">>> {self.operation.upper()} SEQUENCE ACTIVE <<<\n")
+            sys.stderr.flush()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit."""
+        if self.disabled:
+            return False
         if exc_type is None:
             self.finish()
         else:

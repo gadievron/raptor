@@ -309,7 +309,7 @@ def convert_validated_to_agent_format(data: dict) -> List[Dict[str, Any]]:
             "startLine": f.line,
             "endLine": f.line,
             "snippet": f.proof.vulnerable_code,
-            "message": f.candidate_reasoning or f"{f.vuln_type} in {f.function or 'unknown'}",
+            "message": f.candidate_reasoning or f.message or f"{f.vuln_type} in {f.function or 'unknown'}",
             "level": "error" if f.final_status in ("exploitable", "likely_exploitable", "confirmed_constrained") else "warning",
             "has_dataflow": bool(f.proof.flow),
             "feasibility": feasibility_d,
@@ -634,20 +634,27 @@ Do NOT:
             return {}
 
     def analyze_vulnerability(self, vuln: VulnerabilityContext) -> bool:
-        logger.info("=" * 70)
-        logger.info(f"Analysing vulnerability: {vuln.rule_id}")
-        logger.info(f"  File: {vuln.file_path}:{vuln.start_line}")
-        logger.info(f"  Severity: {vuln.level}")
-        logger.info(f"  Has dataflow: {'Yes' if vuln.has_dataflow else 'No'}")
-        logger.info(f"  Message: {vuln.message[:100]}..." if len(vuln.message) > 100 else f"  Message: {vuln.message}")
+        is_prep = isinstance(self.llm, ClaudeCodeProvider)
+
+        if is_prep:
+            # Condensed logging for prep-only mode
+            logger.info(f"Prepping: {vuln.rule_id} at {vuln.file_path}:{vuln.start_line}")
+        else:
+            logger.info("=" * 70)
+            logger.info(f"Analysing vulnerability: {vuln.rule_id}")
+            logger.info(f"  File: {vuln.file_path}:{vuln.start_line}")
+            logger.info(f"  Severity: {vuln.level}")
+            logger.info(f"  Has dataflow: {'Yes' if vuln.has_dataflow else 'No'}")
+            logger.info(f"  Message: {vuln.message[:100]}..." if len(vuln.message) > 100 else f"  Message: {vuln.message}")
 
         # Read the actual vulnerable code
         if not vuln.read_vulnerable_code():
             logger.error(f"✗ Cannot read code for {vuln.finding_id}")
             return False
 
-        logger.info(f"✓ Read vulnerable code ({len(vuln.full_code)} chars)")
-        logger.info(f"✓ Read context ({len(vuln.surrounding_context)} chars)")
+        if not is_prep:
+            logger.info(f"✓ Read vulnerable code ({len(vuln.full_code)} chars)")
+            logger.info(f"✓ Read context ({len(vuln.surrounding_context)} chars)")
 
         # Extract dataflow path if available
         if vuln.has_dataflow:
@@ -659,141 +666,28 @@ Do NOT:
                 logger.warning(f"⚠️  Failed to extract dataflow path")
 
         # Generate analysis using LLM
-        analysis_schema = {
-            "is_true_positive": "boolean",
-            "is_exploitable": "boolean",
-            "exploitability_score": "float (0.0-1.0)",
-            "severity_assessment": "string (critical/high/medium/low)",
-            "reasoning": "string",
-            "attack_scenario": "string",
-            "prerequisites": "list of strings",
-            "impact": "string",
-            "cvss_score_estimate": "float (0.0-10.0)",
-        }
+        from packages.llm_analysis.prompts import (
+            build_analysis_prompt, build_analysis_schema, ANALYSIS_SYSTEM_PROMPT,
+        )
 
-        # Add dataflow-specific fields if applicable
-        if vuln.has_dataflow:
-            analysis_schema.update({
-                "source_attacker_controlled": "boolean - is the dataflow source controlled by attacker?",
-                "sanitizers_effective": "boolean - are sanitizers in the path effective?",
-                "sanitizer_bypass_technique": "string - how to bypass sanitizers, or empty if effective",
-                "dataflow_exploitable": "boolean - is the complete dataflow path exploitable?",
-            })
+        analysis_schema = build_analysis_schema(has_dataflow=vuln.has_dataflow)
 
-        # Build base prompt
-        base_prompt = f"""You are an expert security researcher analysing a potential vulnerability. Reason with your deep knowledge of software security, exploit development, and real-world attack scenarios. Do not guess or assume at any time.
+        prompt = build_analysis_prompt(
+            rule_id=vuln.rule_id,
+            level=vuln.level,
+            file_path=vuln.file_path,
+            start_line=vuln.start_line,
+            end_line=vuln.end_line,
+            message=vuln.message,
+            code=vuln.full_code,
+            surrounding_context=vuln.surrounding_context,
+            has_dataflow=vuln.has_dataflow,
+            dataflow_source=vuln.dataflow_source,
+            dataflow_sink=vuln.dataflow_sink,
+            dataflow_steps=vuln.dataflow_steps,
+        )
 
-**Vulnerability Details:**
-- Rule: {vuln.rule_id}
-- Severity: {vuln.level}
-- File: {vuln.file_path}
-- Lines: {vuln.start_line}-{vuln.end_line}
-- Description: {vuln.message}
-"""
-
-        # Add dataflow analysis if available (GAME CHANGER!)
-        if vuln.has_dataflow and vuln.dataflow_source and vuln.dataflow_sink:
-            base_prompt += f"""
-**🔍 COMPLETE DATAFLOW PATH ANALYSIS (Source → Sink):**
-
-This vulnerability has a complete dataflow path tracked by CodeQL from tainted source to dangerous sink.
-
-**1. SOURCE (Where tainted data originates):**
-   Location: {vuln.dataflow_source['file']}:{vuln.dataflow_source['line']}
-   Type: {vuln.dataflow_source['label']}
-
-   Code:
-   ```
-{vuln.dataflow_source['code']}
-   ```
-
-"""
-
-            # Add intermediate steps
-            if vuln.dataflow_steps:
-                base_prompt += f"**2. DATAFLOW PATH ({len(vuln.dataflow_steps)} intermediate step(s)):**\n\n"
-
-                for i, step in enumerate(vuln.dataflow_steps, 1):
-                    marker = "🛡️ SANITIZER/VALIDATOR" if step['is_sanitizer'] else "⚙️ TRANSFORMATION"
-                    base_prompt += f"""   {marker} Step {i}: {step['label']}
-   Location: {step['file']}:{step['line']}
-
-   Code:
-   ```
-{step['code']}
-   ```
-
-"""
-
-            base_prompt += f"""**3. SINK (Dangerous operation where tainted data is used):**
-   Location: {vuln.dataflow_sink['file']}:{vuln.dataflow_sink['line']}
-   Type: {vuln.dataflow_sink['label']}
-
-   Code:
-   ```
-{vuln.dataflow_sink['code']}
-   ```
-
-**⚠️ CRITICAL DATAFLOW ANALYSIS REQUIRED:**
-
-You have the COMPLETE attack path from source to sink. Use this to make an informed decision:
-
-1. **Is the SOURCE actually attacker-controlled?**
-   - HTTP parameter, user input, file upload → HIGH risk, attacker controls this
-   - Configuration file, environment variable → MEDIUM risk, requires other access
-   - Hardcoded constant, internal data → FALSE POSITIVE, not attacker-controlled
-
-2. **Are any sanitizers in the path EFFECTIVE?**
-   - For each sanitizer/validator step, determine if it actually prevents exploitation
-   - Can an attacker bypass it with encoding, special characters, or edge cases?
-   - Is it applied correctly to all code paths?
-
-3. **Is the complete path EXPLOITABLE?**
-   - Can you trace a realistic attack from source through all steps to sink?
-   - What payload would bypass sanitizers and reach the sink with malicious content?
-
-4. **What's the ACTUAL exploitability** considering the full dataflow path?
-
-"""
-        else:
-            # No dataflow - use surrounding context
-            base_prompt += f"""
-**Vulnerable Code:**
-```
-{vuln.full_code}
-```
-
-**Surrounding Context:**
-```
-{vuln.surrounding_context}
-```
-
-"""
-
-        # Add analysis tasks
-        base_prompt += """
-**Your Task:**
-Analyse this vulnerability in depth:
-1. Is this a TRUE POSITIVE or FALSE POSITIVE?
-2. Is it actually EXPLOITABLE in practice?
-3. What's the real-world exploitability score (0.0 = impossible, 1.0 = trivial)?
-4. What would an attacker need to exploit this?
-5. What's the potential impact?
-6. Provide a CVSS score estimate (0.0-10.0)
-7. Explain your reasoning in detail.
-8. Showcase how modern mitigations might affect exploitability.
-
-Provide detailed technical analysis based on actual code review, not just the rule match."""
-
-        prompt = base_prompt
-
-        system_prompt = """You are a senior security researcher with expertise in:
-- Vulnerability analysis and exploit development
-- Secure code review
-- Static and variant analysis
-- Real-world attack scenarios
-
-Provide honest, technical assessments. Don't overstate severity, but don't downplay real risks."""
+        system_prompt = ANALYSIS_SYSTEM_PROMPT
 
         try:
             logger.info("Sending vulnerability to LLM for analysis...")
@@ -899,68 +793,22 @@ Provide honest, technical assessments. Don't overstate severity, but don't downp
         logger.info(f"Generating exploit PoC for {vuln.rule_id}")
         logger.info(f"   Target: {vuln.file_path}:{vuln.start_line}")
 
-        prompt = f"""You are an expert security researcher creating a proof-of-concept exploit for authorised security testing.
-        This is needed for detection engineering and to validate patches. This is strictly for defensive security purposes.
-        You are Mark Dowd or Charlie Miller. Do not guess or assume at any time.
+        from packages.llm_analysis.prompts import (
+            build_exploit_prompt, EXPLOIT_SYSTEM_PROMPT,
+        )
 
-**Vulnerability:**
-- Type: {vuln.rule_id}
-- File: {vuln.file_path}:{vuln.start_line}
-- Severity: {vuln.level}
+        prompt = build_exploit_prompt(
+            rule_id=vuln.rule_id,
+            file_path=vuln.file_path,
+            start_line=vuln.start_line,
+            level=vuln.level,
+            analysis=vuln.analysis,
+            code=vuln.full_code,
+            surrounding_context=vuln.surrounding_context,
+            feasibility=vuln.feasibility if hasattr(vuln, 'feasibility') else None,
+        )
 
-**Analysis:**
-{json.dumps(vuln.analysis, indent=2)}
-"""
-
-        # Add exploitation constraints from feasibility analysis if available
-        if hasattr(vuln, 'feasibility') and vuln.feasibility:
-            chain_breaks = vuln.feasibility.get("chain_breaks", [])
-            what_would_help = vuln.feasibility.get("what_would_help", [])
-            if chain_breaks or what_would_help:
-                prompt += "\n**EXPLOITATION CONSTRAINTS:**\n"
-                if chain_breaks:
-                    prompt += "Techniques that WON'T work (verified blockers):\n"
-                    for cb in chain_breaks:
-                        prompt += f"  - {cb}\n"
-                if what_would_help:
-                    prompt += "Viable approaches to consider:\n"
-                    for wh in what_would_help:
-                        prompt += f"  - {wh}\n"
-                prompt += "\nDo NOT attempt blocked techniques. Focus on viable approaches.\n"
-
-        prompt += f"""
-**Vulnerable Code:**
-```
-{vuln.full_code}
-```
-
-**Full Context:**
-```
-{vuln.surrounding_context}
-```
-
-**Your Task:**
-Create a WORKING proof-of-concept exploit that:
-1. Demonstrates this specific vulnerability
-2. Is safe to run in an isolated lab environment
-3. Includes clear comments explaining the attack
-4. Has detailed output showing successful exploitation
-5. Includes responsible disclosure warnings
-6. Prefer C++ for low-level exploits, Python for web/app vulnerabilities
-7. If you feel you cannot create a working exploit, explain why in full detail.
-
-Write complete, executable code as per the prime directives above. Make it realistic and practical, not just theoretical.
-The exploit should actually work against the vulnerable code, or system, shown above."""
-
-        system_prompt = """You are the legend that is Mark Dowd. A true legend in this space and prolific exploit developer.
-Create practical, working exploits that security teams can use to:
-- Validate vulnerability findings
-- Test detection capabilities
-- Develop patches with confidence
-
-Prefer C++ for low-level/binary exploits, Python for web/application vulnerabilities.
-Include all necessary imports, error handling, and clear output.
-Make exploits safe for authorised testing only and not sold to russians. coz that would be bad."""
+        system_prompt = EXPLOIT_SYSTEM_PROMPT
 
         try:
             logger.info("Requesting exploit code from LLM...")
@@ -1015,68 +863,29 @@ Make exploits safe for authorised testing only and not sold to russians. coz tha
         with open(file_path) as f:
             full_file_content = f.read()
 
-        prompt = f"""You are a senior software security engineer creating a secure patch.
+        from packages.llm_analysis.prompts import (
+            build_patch_prompt, PATCH_SYSTEM_PROMPT,
+        )
 
-**Vulnerability:**
-- Type: {vuln.rule_id}
-- File: {vuln.file_path}:{vuln.start_line}-{vuln.end_line}
-- Description: {vuln.message}
+        # Load attack path if available
+        attack_path = None
+        if vuln.attack_path_ref:
+            attack_path = self._load_attack_path(vuln.attack_path_ref)
 
-**Analysis:**
-{json.dumps(vuln.analysis, indent=2)}
-"""
+        prompt = build_patch_prompt(
+            rule_id=vuln.rule_id,
+            file_path=vuln.file_path,
+            start_line=vuln.start_line,
+            end_line=vuln.end_line,
+            message=vuln.message,
+            analysis=vuln.analysis,
+            code=vuln.full_code,
+            full_file_content=full_file_content,
+            feasibility=vuln.feasibility,
+            attack_path=attack_path,
+        )
 
-        # Add feasibility insights for patch guidance
-        if vuln.feasibility:
-            what_would_help = vuln.feasibility.get("what_would_help")
-            if what_would_help:
-                prompt += "\n**What Would Help Attacker (block these):**\n"
-                for wh in what_would_help:
-                    prompt += f"  - {wh}\n"
-
-            # Load and include attack path steps if available
-            if vuln.attack_path_ref:
-                attack_path = self._load_attack_path(vuln.attack_path_ref)
-                if attack_path and attack_path.get("path"):
-                    prompt += "\n**Attack Path (consider patching at earliest step):**\n"
-                    for step in attack_path["path"]:
-                        prompt += f"  Step {step.get('step', '?')}: {step.get('action', '')} → {step.get('result', '')}\n"
-
-        prompt += f"""
-**Vulnerable Code:**
-```
-{vuln.full_code}
-```
-
-**Full File Content:**
-```
-{full_file_content[:5000]}  # First 5000 chars for context
-```
-
-**Your Task:**
-Create a SECURE PATCH that:
-1. Completely fixes the vulnerability
-2. Preserves all existing functionality
-3. Follows the code's existing style and patterns
-4. Includes clear comments explaining the fix
-5. Adds input validation/sanitisation where needed
-6. Uses modern security best practices
-
-Provide BOTH:
-1. The complete fixed code (not just the diff)
-2. A clear explanation of what changed and why
-3. Testing recommendations
-
-Make this production-ready, not just a quick fix."""
-
-        system_prompt = """You are a senior security engineer responsible for secure code reviews.
-Create patches that are:
-- Secure and comprehensive
-- Maintainable and well-documented
-- Tested and production-ready
-- Following security best practices (OWASP, CWE guidance)
-
-Balance security with usability and performance."""
+        system_prompt = PATCH_SYSTEM_PROMPT
 
         try:
             logger.info("   🤖 Requesting secure patch from LLM...")
@@ -1168,7 +977,7 @@ Balance security with usability and performance."""
 
         converted = convert_validated_to_agent_format(data)
 
-        logger.info(f"Loaded {len(converted)} validated findings from {Path(findings_path).name} "
+        logger.info(f"Loaded {len(converted)} findings from {Path(findings_path).name} "
                     f"(skipped {len(data.get('findings', [])) - len(converted)} ruled out/unlikely)")
         return converted
 
@@ -1179,7 +988,7 @@ Balance security with usability and performance."""
 
         # Parse findings
         logger.info("=" * 70)
-        logger.info("PHASE II: AUTONOMOUS VULNERABILITY ANALYSIS")
+        logger.info("AUTONOMOUS VULNERABILITY ANALYSIS")
         logger.info("=" * 70)
 
         if findings_path:
@@ -1219,15 +1028,18 @@ Balance security with usability and performance."""
         false_positives_found = 0
         idx = 0  # Initialize idx to prevent UnboundLocalError when unique_findings is empty
 
-        # Add progress counter for long operations (>15s per vuln expected)
-        with HackerProgress(total=len(unique_findings), operation="Analyzing vulnerabilities") as progress:
+        is_prep = isinstance(self.llm, ClaudeCodeProvider)
+
+        with HackerProgress(total=len(unique_findings), operation="Analyzing vulnerabilities",
+                            disabled=is_prep) as progress:
             for idx, finding in enumerate(unique_findings, 1):
                 progress.update(current=idx, message=f"{finding.get('rule_id', 'unknown')}")
 
-                logger.info("")
-                logger.info(f"{'█' * 70}")
-                logger.info(f"VULNERABILITY {idx}/{len(unique_findings)}")
-                logger.info(f"{'█' * 70}")
+                if not isinstance(self.llm, ClaudeCodeProvider):
+                    logger.info("")
+                    logger.info(f"{'█' * 70}")
+                    logger.info(f"VULNERABILITY {idx}/{len(unique_findings)}")
+                    logger.info(f"{'█' * 70}")
 
                 vuln = VulnerabilityContext(finding, self.repo_path)
 
@@ -1259,12 +1071,15 @@ Balance security with usability and performance."""
                 results.append(vuln.to_dict())
 
             # Show progress
-            logger.info("")
-            logger.info(f"Progress: {idx}/{len(unique_findings)} analyzed, "
-                       f"{exploitable} exploitable, "
-                       f"{exploits_generated} exploits, "
-                       f"{patches_generated} patches, "
-                       f"{dataflow_validated} dataflow validated")
+            if isinstance(self.llm, ClaudeCodeProvider):
+                logger.info(f"Progress: {idx}/{len(unique_findings)} prepped")
+            else:
+                logger.info("")
+                logger.info(f"Progress: {idx}/{len(unique_findings)} analyzed, "
+                           f"{exploitable} exploitable, "
+                           f"{exploits_generated} exploits, "
+                           f"{patches_generated} patches, "
+                           f"{dataflow_validated} dataflow validated")
 
         execution_time = time.time() - start_time
 
@@ -1297,23 +1112,27 @@ Balance security with usability and performance."""
 
         logger.info("")
         logger.info("=" * 70)
-        logger.info("PHASE II COMPLETE")
+        logger.info("ANALYSIS COMPLETE")
         logger.info("=" * 70)
-        logger.info(f"✓ Processed: {len(unique_findings)} findings")
-        logger.info(f"✓ Analyzed: {analyzed} with LLM")
-        logger.info(f"✓ Exploitable: {exploitable} vulnerabilities")
-        logger.info(f"✓ Exploits generated: {exploits_generated}")
-        logger.info(f"✓ Patches generated: {patches_generated}")
-        logger.info(f"")
-        if dataflow_validated > 0:
-            logger.info(f"Dataflow Validation:")
-            logger.info(f"   Deep validated: {dataflow_validated} dataflow paths")
-            logger.info(f"   False positives caught: {false_positives_found}")
+
+        if is_prep_only:
+            logger.info(f"Prep complete: {len(unique_findings)} findings prepared for Phase 4 orchestration")
+        else:
+            logger.info(f"✓ Processed: {len(unique_findings)} findings")
+            logger.info(f"✓ Analyzed: {analyzed} with LLM")
+            logger.info(f"✓ Exploitable: {exploitable} vulnerabilities")
+            logger.info(f"✓ Exploits generated: {exploits_generated}")
+            logger.info(f"✓ Patches generated: {patches_generated}")
             logger.info(f"")
-        logger.info(f"LLM Statistics:")
-        logger.info(f"   Total requests: {llm_stats['total_requests']}")
-        logger.info(f"   Total cost: ${llm_stats['total_cost']:.4f}")
-        logger.info(f"   Execution time: {execution_time:.1f}s")
+            if dataflow_validated > 0:
+                logger.info(f"Dataflow Validation:")
+                logger.info(f"   Deep validated: {dataflow_validated} dataflow paths")
+                logger.info(f"   False positives caught: {false_positives_found}")
+                logger.info(f"")
+            logger.info(f"LLM Statistics:")
+            logger.info(f"   Total requests: {llm_stats['total_requests']}")
+            logger.info(f"   Total cost: ${llm_stats['total_cost']:.4f}")
+            logger.info(f"   Execution time: {execution_time:.1f}s")
         logger.info(f"")
         logger.info(f"Report saved: {report_file}")
         logger.info("=" * 70)
@@ -1394,16 +1213,17 @@ def main() -> None:
     else:
         report = agent.process_findings(sarif_paths=args.sarif, max_findings=args.max_findings)
 
-    print("\n" + "=" * 70)
-    print("Autonomous Security Agent Report")
-    print("=" * 70)
-    print(f"Analyzed: {report['analyzed']}")
-    print(f"Exploitable: {report['exploitable']}")
-    print(f"Exploits generated: {report['exploits_generated']} (LLM-generated)")
-    print(f"Patches generated: {report['patches_generated']} (LLM-generated)")
-    print(f"LLM cost: ${report['llm_stats']['total_cost']:.4f}")
-    print(f"Output: {out_dir}")
-    print("=" * 70)
+    if report.get('mode') != 'prep_only':
+        print("\n" + "=" * 70)
+        print("Autonomous Security Agent Report")
+        print("=" * 70)
+        print(f"Analyzed: {report['analyzed']}")
+        print(f"Exploitable: {report['exploitable']}")
+        print(f"Exploits generated: {report['exploits_generated']} (LLM-generated)")
+        print(f"Patches generated: {report['patches_generated']} (LLM-generated)")
+        print(f"LLM cost: ${report['llm_stats']['total_cost']:.4f}")
+        print(f"Output: {out_dir}")
+        print("=" * 70)
 
 
 if __name__ == "__main__":

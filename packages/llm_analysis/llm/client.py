@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from core.logging import get_logger
 from .config import LLMConfig, ModelConfig
-from .providers import LLMProvider, LLMResponse, create_provider
+from .providers import LLMProvider, LLMResponse, StructuredResponse, create_provider
 
 # Import for type-based error detection (optional SDKs)
 try:
@@ -163,11 +163,13 @@ class LLMClient:
     """Unified LLM client with multi-provider support and fallback."""
 
     def __init__(self, config: Optional[LLMConfig] = None):
+        import threading
         self.config = config or LLMConfig()
         self.providers: Dict[str, LLMProvider] = {}
         self.total_cost = 0.0
         self.request_count = 0
         self.task_type_costs: Dict[str, float] = {}  # task_type → cumulative cost
+        self._stats_lock = threading.RLock()
 
         # HEALTH CHECK: Warn if no API keys configured
         from .detection import detect_llm_availability
@@ -252,13 +254,14 @@ class LLMClient:
             logger.warning(f"Cache write error: {e}")
 
     def _check_budget(self, estimated_cost: float = 0.1) -> bool:
-        """Check if we're within budget."""
+        """Check if we're within budget (thread-safe)."""
         if not self.config.enable_cost_tracking:
             return True
 
-        if self.total_cost + estimated_cost > self.config.max_cost_per_scan:
-            logger.error(f"Budget exceeded: ${self.total_cost:.2f} + ${estimated_cost:.2f} > ${self.config.max_cost_per_scan:.2f}")
-            return False
+        with self._stats_lock:
+            if self.total_cost + estimated_cost > self.config.max_cost_per_scan:
+                logger.error(f"Budget exceeded: ${self.total_cost:.2f} + ${estimated_cost:.2f} > ${self.config.max_cost_per_scan:.2f}")
+                return False
 
         return True
 
@@ -277,7 +280,7 @@ class LLMClient:
         Returns:
             LLMResponse with generated content
 
-        Warning: Not thread-safe. Use locks if enabling concurrent access.
+        Thread-safe: stats tracking uses _stats_lock for concurrent access.
         """
         # Check budget
         if not self._check_budget():
@@ -299,7 +302,8 @@ class LLMClient:
         cached_content = self._get_cached_response(cache_key)
         if cached_content:
             print(f"► Using cached response for {model_config.provider}/{model_config.model_name}")
-            self.request_count += 1
+            with self._stats_lock:
+                self.request_count += 1
             return LLMResponse(
                 content=cached_content,
                 model=model_config.model_name,
@@ -354,11 +358,12 @@ class LLMClient:
                     response = provider.generate(prompt, system_prompt, **kwargs)
                     duration = time.time() - t_start
 
-                    # Track cost
-                    self.total_cost += response.cost
-                    self.request_count += 1
-                    if task_type:
-                        self.task_type_costs[task_type] = self.task_type_costs.get(task_type, 0.0) + response.cost
+                    # Track cost (thread-safe)
+                    with self._stats_lock:
+                        self.total_cost += response.cost
+                        self.request_count += 1
+                        if task_type:
+                            self.task_type_costs[task_type] = self.task_type_costs.get(task_type, 0.0) + response.cost
 
                     # Cache response
                     self._save_to_cache(cache_key, response)
@@ -413,7 +418,7 @@ class LLMClient:
 
     def generate_structured(self, prompt: str, schema: Dict[str, Any],
                            system_prompt: Optional[str] = None,
-                           task_type: Optional[str] = None, **kwargs) -> Tuple[Dict[str, Any], str]:
+                           task_type: Optional[str] = None, **kwargs):
         """
         Generate structured JSON output with automatic fallback.
 
@@ -426,9 +431,10 @@ class LLMClient:
                 model_config: Optional ModelConfig to override default model selection
 
         Returns:
-            Tuple of (parsed JSON object matching schema, full response content)
+            StructuredResponse with result dict, raw content, cost, and metadata.
+            For backwards compatibility, can be unpacked as a 2-tuple: result, raw = ...
 
-        Warning: Not thread-safe. Use locks if enabling concurrent access.
+        Thread-safe: stats tracking uses _stats_lock for concurrent access.
         """
         # Check budget
         if not self._check_budget():
@@ -487,23 +493,34 @@ class LLMClient:
                     tokens_before = provider.total_tokens
 
                     t_start = time.time()
-                    result = provider.generate_structured(prompt, schema, system_prompt)
+                    result_tuple = provider.generate_structured(prompt, schema, system_prompt)
                     duration = time.time() - t_start
 
                     # Calculate cost delta
                     cost_delta = provider.total_cost - cost_before
                     tokens_delta = provider.total_tokens - tokens_before
 
-                    # Track at client level
-                    self.total_cost += cost_delta
-                    self.request_count += 1
-                    if task_type:
-                        self.task_type_costs[task_type] = self.task_type_costs.get(task_type, 0.0) + cost_delta
+                    # Track at client level (thread-safe)
+                    with self._stats_lock:
+                        self.total_cost += cost_delta
+                        self.request_count += 1
+                        if task_type:
+                            self.task_type_costs[task_type] = self.task_type_costs.get(task_type, 0.0) + cost_delta
 
                     logger.info(f"Structured generation successful: {model.provider}/{model.model_name} "
                                f"(tokens: {tokens_delta}, cost: ${cost_delta:.4f}, "
                                f"duration: {duration:.1f}s)")
-                    return result
+
+                    result_dict, raw = result_tuple
+                    return StructuredResponse(
+                        result=result_dict,
+                        raw=raw,
+                        cost=cost_delta,
+                        tokens_used=tokens_delta,
+                        model=model.model_name,
+                        provider=model.provider,
+                        duration=duration,
+                    )
 
                 except Exception as e:
                     last_error = e
@@ -559,19 +576,21 @@ class LLMClient:
                 "avg_duration": round(avg_duration, 2),
             }
 
-        return {
-            "total_requests": self.request_count,
-            "total_cost": self.total_cost,
-            "budget_remaining": self.config.max_cost_per_scan - self.total_cost,
-            "providers": provider_stats,
-            "task_type_costs": dict(self.task_type_costs),
-        }
+        with self._stats_lock:
+            return {
+                "total_requests": self.request_count,
+                "total_cost": self.total_cost,
+                "budget_remaining": self.config.max_cost_per_scan - self.total_cost,
+                "providers": provider_stats,
+                "task_type_costs": dict(self.task_type_costs),
+            }
 
     def reset_stats(self) -> None:
         """Reset usage statistics."""
-        self.total_cost = 0.0
-        self.request_count = 0
-        self.task_type_costs.clear()
+        with self._stats_lock:
+            self.total_cost = 0.0
+            self.request_count = 0
+            self.task_type_costs.clear()
         for provider in self.providers.values():
             provider.total_tokens = 0
             provider.total_input_tokens = 0
