@@ -32,7 +32,7 @@ MODEL_COSTS = {
     "gpt-5.2":               {"input": 0.006, "output": 0.030},
     "gpt-5.2-thinking":      {"input": 0.012, "output": 0.060},
     "gemini-2.5-pro":        {"input": 0.002, "output": 0.010},
-    "gemini-2.0-flash":      {"input": 0.0002, "output": 0.001},
+    "gemini-2.5-flash":      {"input": 0.0002, "output": 0.001},
 }
 
 # Per-model context window and max output token limits
@@ -43,7 +43,7 @@ MODEL_LIMITS = {
     "gpt-5.2":               {"max_context": 128000,  "max_output": 16384},
     "gpt-5.2-thinking":      {"max_context": 128000,  "max_output": 16384},
     "gemini-2.5-pro":        {"max_context": 1000000, "max_output": 8192},
-    "gemini-2.0-flash":      {"max_context": 1000000, "max_output": 8192},
+    "gemini-2.5-flash":      {"max_context": 1000000, "max_output": 8192},
 }
 
 # Provider -> env var mapping for API key lookup
