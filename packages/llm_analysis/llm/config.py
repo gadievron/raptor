@@ -323,7 +323,7 @@ def _get_default_fallback_models() -> List['ModelConfig']:
             ))
 
     if os.getenv("GEMINI_API_KEY"):
-        for model_name in ["gemini-2.5-pro", "gemini-2.0-flash"]:
+        for model_name in ["gemini-2.5-pro", "gemini-2.5-flash"]:
             limits = MODEL_LIMITS.get(model_name, {})
             costs = MODEL_COSTS.get(model_name, {})
             fallbacks.append(ModelConfig(

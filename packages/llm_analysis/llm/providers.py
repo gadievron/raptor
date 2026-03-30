@@ -156,12 +156,68 @@ class LLMProvider(ABC):
                 content = content.split("\n", 1)[1] if "\n" in content else content[3:]
             content = content.strip()
             parsed = json.loads(content)
+            parsed = _coerce_to_schema(parsed, schema)
             validated = pydantic_model.model_validate(parsed)
             result_dict = validated.model_dump()
             return result_dict, json.dumps(result_dict, indent=2)
         except Exception as e:
             logger.error(f"Structured fallback failed (JSON parse or validation): {e}")
             raise
+
+
+def _coerce_to_schema(data: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Coerce LLM output values to match schema types before Pydantic validation.
+
+    LLMs (especially via JSON-in-prompt fallback) often return wrong types:
+    - "not_a_bool" or "true" instead of true for booleans
+    - "0.85" instead of 0.85 for numbers
+    - null instead of "" for strings
+
+    This coercion step fixes common mismatches so Pydantic validation succeeds.
+    """
+    properties = schema.get("properties", {})
+    if not properties:
+        return data
+
+    coerced = dict(data)
+    for field_name, field_spec in properties.items():
+        if field_name not in coerced:
+            continue
+
+        value = coerced[field_name]
+        field_type = field_spec.get("type", "string")
+
+        # Handle nullable types: ["string", "null"] or ["boolean", "null"]
+        if isinstance(field_type, list):
+            if value is None and "null" in field_type:
+                continue  # null is valid
+            # Use the non-null type for coercion
+            field_type = next((t for t in field_type if t != "null"), "string")
+
+        if field_type == "boolean" and not isinstance(value, bool):
+            if isinstance(value, str):
+                coerced[field_name] = value.lower() in ("true", "yes", "1")
+            elif isinstance(value, (int, float)):
+                coerced[field_name] = bool(value)
+            else:
+                coerced[field_name] = False
+
+        elif field_type == "number" and not isinstance(value, (int, float)):
+            try:
+                coerced[field_name] = float(value)
+            except (ValueError, TypeError):
+                coerced[field_name] = 0.0
+
+        elif field_type == "integer" and not isinstance(value, int):
+            try:
+                coerced[field_name] = int(value)
+            except (ValueError, TypeError):
+                coerced[field_name] = 0
+
+        elif field_type == "string" and value is None:
+            coerced[field_name] = ""
+
+    return coerced
 
 
 def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']]):
@@ -266,7 +322,18 @@ def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']]):
 
     for field_name, field_spec in properties.items():
         field_type = field_spec.get("type", "string")
+
+        # Handle nullable types: ["string", "null"] → Optional[str]
+        nullable = False
+        if isinstance(field_type, list):
+            nullable = "null" in field_type
+            non_null = [t for t in field_type if t != "null"]
+            field_type = non_null[0] if non_null else "string"
+
         python_type = type_map.get(field_type, str)
+        if nullable:
+            from typing import Optional as Opt
+            python_type = Opt[python_type]
 
         # Get default value if present
         default_value = field_spec.get("default", ...)
@@ -315,6 +382,7 @@ class OpenAICompatibleProvider(LLMProvider):
         )
 
         self.instructor_client = None
+        self._instructor_warned = False
         if INSTRUCTOR_AVAILABLE:
             self.instructor_client = instructor.from_openai(self.client)
         else:
@@ -416,7 +484,13 @@ class OpenAICompatibleProvider(LLMProvider):
                 return result_dict, full_response
 
             except Exception as e:
-                logger.warning(f"Instructor structured generation failed, falling back to JSON prompt: {e}")
+                if not self._instructor_warned:
+                    logger.warning(f"Instructor structured generation failed for {self.config.provider}/{self.config.model_name} — disabling for this provider, using JSON fallback")
+                    self._instructor_warned = True
+                else:
+                    logger.debug(f"Instructor fallback (repeat): {e}")
+                # Disable Instructor for this provider — same error will repeat
+                self.instructor_client = None
 
         # Fallback: JSON-in-prompt
         return self._structured_fallback(prompt, schema, pydantic_model, system_prompt)
@@ -443,6 +517,7 @@ class AnthropicProvider(LLMProvider):
         )
 
         self.instructor_client = None
+        self._instructor_warned = False
         if INSTRUCTOR_AVAILABLE:
             self.instructor_client = instructor.from_anthropic(self.client)
         else:
@@ -549,7 +624,13 @@ class AnthropicProvider(LLMProvider):
                 return result_dict, full_response
 
             except Exception as e:
-                logger.warning(f"Instructor structured generation failed, falling back to JSON prompt: {e}")
+                if not self._instructor_warned:
+                    logger.warning(f"Instructor structured generation failed for {self.config.provider}/{self.config.model_name} — disabling for this provider, using JSON fallback")
+                    self._instructor_warned = True
+                else:
+                    logger.debug(f"Instructor fallback (repeat): {e}")
+                # Disable Instructor for this provider — same error will repeat
+                self.instructor_client = None
 
         # Fallback: JSON-in-prompt
         return self._structured_fallback(prompt, schema, pydantic_model, system_prompt)

@@ -134,6 +134,36 @@ def _is_quota_error(error: Exception) -> bool:
     ])
 
 
+def _is_retryable_error(error: Exception) -> bool:
+    """Check if an error is transient and worth retrying.
+
+    Retryable: rate limits, timeouts, server errors (5xx), connection errors.
+    Non-retryable: schema validation, auth errors (401/403), bad request (400),
+    Instructor failures, Pydantic validation errors.
+    """
+    # Rate limits are retryable (with backoff)
+    if _is_quota_error(error):
+        return True
+
+    # Check exception types
+    error_type = type(error).__name__
+    retryable_types = ("Timeout", "ConnectionError", "APIConnectionError",
+                       "InternalServerError", "ServiceUnavailableError")
+    if any(t in error_type for t in retryable_types):
+        return True
+
+    # Check error message for retryable patterns
+    error_str = str(error).lower()
+    retryable_patterns = ("timeout", "connection", "502", "503", "504",
+                          "internal server error", "service unavailable")
+    if any(p in error_str for p in retryable_patterns):
+        return True
+
+    # Everything else is non-retryable (schema errors, 400, 401, 403, 404,
+    # Instructor failures, Pydantic validation, etc.)
+    return False
+
+
 def _get_quota_guidance(model_name: str, provider: str) -> str:
     """
     Get simple, clear detection message for quota/rate limit errors.
@@ -377,7 +407,6 @@ class LLMClient:
                 except Exception as e:
                     last_error = e
 
-                    # Check if quota/rate limit error and log specific guidance
                     if _is_quota_error(e):
                         quota_guidance = _get_quota_guidance(model.model_name, model.provider)
                         logger.warning(f"Quota error for {model.provider}/{model.model_name}:{quota_guidance}")
@@ -385,8 +414,12 @@ class LLMClient:
                     logger.warning(f"Attempt {attempt + 1}/{self.config.max_retries} failed for "
                                  f"{model.provider}/{model.model_name}: {_sanitize_log_message(str(e))}")
 
+                    if not _is_retryable_error(e):
+                        logger.info(f"Non-retryable error — skipping remaining retries for {model.provider}/{model.model_name}")
+                        break
+
                     if attempt < self.config.max_retries - 1:
-                        delay = self.config.retry_delay * (2 ** attempt)  # Exponential backoff
+                        delay = self.config.retry_delay * (2 ** attempt)
                         logger.debug(f"Retrying in {delay}s...")
                         time.sleep(delay)
 
@@ -529,8 +562,11 @@ class LLMClient:
                         quota_guidance = _get_quota_guidance(model.model_name, model.provider)
                         logger.warning(f"Quota error for {model.provider}/{model.model_name}:{quota_guidance}")
 
-                    # SECURITY: Sanitize exception message to prevent API key leakage
                     logger.warning(_sanitize_log_message(f"Structured generation attempt {attempt + 1} failed: {str(e)}"))
+
+                    if not _is_retryable_error(e):
+                        logger.info(f"Non-retryable error — skipping remaining retries for {model.provider}/{model.model_name}")
+                        break
 
                     if attempt < self.config.max_retries - 1:
                         delay = self.config.retry_delay * (2 ** attempt)

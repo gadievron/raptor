@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from packages.llm_analysis.llm.providers import (
     _dict_schema_to_pydantic,
+    _coerce_to_schema,
     LLMProvider,
     LLMResponse,
 )
@@ -136,6 +137,20 @@ class TestDictSchemaToPydanticJsonSchema:
         result = _dict_schema_to_pydantic(MyModel)
         assert result is MyModel
 
+    def test_nullable_type_becomes_optional(self):
+        """JSON Schema ["string", "null"] produces Optional[str]."""
+        schema = {
+            "properties": {
+                "name": {"type": "string"},
+                "notes": {"type": ["string", "null"]},
+            },
+            "required": ["name", "notes"],
+        }
+        model = _dict_schema_to_pydantic(schema)
+        instance = model(name="test", notes=None)
+        assert instance.name == "test"
+        assert instance.notes is None
+
     def test_invalid_schema_type_raises(self):
         """Non-dict, non-Pydantic schema raises ValueError."""
         with pytest.raises(ValueError, match="must be dict or Pydantic"):
@@ -145,6 +160,52 @@ class TestDictSchemaToPydanticJsonSchema:
         """List schema raises ValueError."""
         with pytest.raises(ValueError, match="must be dict or Pydantic"):
             _dict_schema_to_pydantic(["field1", "field2"])
+
+
+class TestCoerceToSchema:
+    """Verify _coerce_to_schema normalises LLM output before Pydantic validation."""
+
+    def test_string_boolean_true(self):
+        schema = {"properties": {"flag": {"type": "boolean"}}}
+        assert _coerce_to_schema({"flag": "true"}, schema) == {"flag": True}
+
+    def test_string_boolean_false(self):
+        schema = {"properties": {"flag": {"type": "boolean"}}}
+        assert _coerce_to_schema({"flag": "false"}, schema) == {"flag": False}
+
+    def test_non_boolean_string_becomes_false(self):
+        schema = {"properties": {"flag": {"type": "boolean"}}}
+        assert _coerce_to_schema({"flag": "not_a_bool"}, schema) == {"flag": False}
+
+    def test_string_number(self):
+        schema = {"properties": {"score": {"type": "number"}}}
+        assert _coerce_to_schema({"score": "0.85"}, schema) == {"score": 0.85}
+
+    def test_invalid_number_becomes_zero(self):
+        schema = {"properties": {"score": {"type": "number"}}}
+        assert _coerce_to_schema({"score": "not_a_number"}, schema) == {"score": 0.0}
+
+    def test_null_string_becomes_empty(self):
+        schema = {"properties": {"text": {"type": "string"}}}
+        assert _coerce_to_schema({"text": None}, schema) == {"text": ""}
+
+    def test_nullable_type_allows_null(self):
+        schema = {"properties": {"text": {"type": ["string", "null"]}}}
+        assert _coerce_to_schema({"text": None}, schema) == {"text": None}
+
+    def test_correct_types_unchanged(self):
+        schema = {"properties": {"flag": {"type": "boolean"}, "score": {"type": "number"}}}
+        data = {"flag": True, "score": 0.9}
+        assert _coerce_to_schema(data, schema) == data
+
+    def test_extra_fields_preserved(self):
+        schema = {"properties": {"flag": {"type": "boolean"}}}
+        result = _coerce_to_schema({"flag": "yes", "extra": "kept"}, schema)
+        assert result["flag"] is True
+        assert result["extra"] == "kept"
+
+    def test_empty_schema_noop(self):
+        assert _coerce_to_schema({"anything": "here"}, {}) == {"anything": "here"}
 
 
 class TestStructuredFallback:
