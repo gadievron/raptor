@@ -55,8 +55,12 @@ def run_command_streaming(cmd: list, description: str) -> tuple[int, str, str]:
             for line in iter(pipe.readline, ''):
                 if line:
                     storage.append(line)
-                    # Print in real-time (with optional prefix)
-                    print(f"{prefix}{line.rstrip()}", flush=True)
+                    # Strip [INFO] prefix for cleaner output.
+                    # Keep [WARNING], [ERROR], [DEBUG] visible.
+                    display = line.rstrip()
+                    if display.startswith("[INFO] "):
+                        display = display[7:]
+                    print(f"{prefix}{display}", flush=True)
         except Exception:
             pass
         finally:
@@ -545,8 +549,8 @@ Examples:
                 "--max-findings", str(args.max_findings)
             ]
 
-        # If CC will orchestrate in Phase 4, tell agent to prep only (skip LLM calls)
-        if llm_env.claude_code and not args.no_orchestration:
+        # If Phase 4 will orchestrate, tell agent to prep only (skip LLM calls)
+        if (llm_env.claude_code or llm_env.external_llm) and not args.no_orchestration:
             analysis_cmd.append("--prep-only")
 
         rc, stdout, stderr = run_command_streaming(analysis_cmd, "Analysing vulnerabilities autonomously")
@@ -579,7 +583,7 @@ Examples:
     # PHASE 4: AGENTIC ORCHESTRATION
     # ========================================================================
     orchestration_result = None
-    if llm_env.claude_code and not args.no_orchestration:
+    if (llm_env.claude_code or llm_env.external_llm) and not args.no_orchestration:
         print("\n" + "=" * 70)
         print("PHASE 4: AGENTIC ORCHESTRATION")
         print("=" * 70)
@@ -603,10 +607,9 @@ Examples:
             )
         else:
             print("\n  No analysis report from Phase 3 — skipping orchestration")
-    elif not llm_env.claude_code:
-        # No CC available
-        print("\n  No Claude Code available. Findings prepared for manual review.")
-        print("  Install Claude Code for automated analysis: npm install -g @anthropic-ai/claude-code")
+    elif not llm_env.llm_available:
+        print("\n  No LLM available. Findings prepared for manual review.")
+        print("  For automated analysis, set an API key or install Claude Code.")
 
     # ========================================================================
     # FINAL REPORT

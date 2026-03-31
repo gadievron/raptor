@@ -309,7 +309,7 @@ def convert_validated_to_agent_format(data: dict) -> List[Dict[str, Any]]:
             "startLine": f.line,
             "endLine": f.line,
             "snippet": f.proof.vulnerable_code,
-            "message": f.candidate_reasoning or f.message or f"{f.vuln_type} in {f.function or 'unknown'}",
+            "message": f.candidate_reasoning or f.message or f.rule_id or f"{f.vuln_type} in {f.function or 'unknown'}",
             "level": "error" if f.final_status in ("exploitable", "likely_exploitable", "confirmed_constrained") else "warning",
             "has_dataflow": bool(f.proof.flow),
             "feasibility": feasibility_d,
