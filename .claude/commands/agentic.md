@@ -1,3 +1,7 @@
+---
+description: Full autonomous security workflow — scan, validate, analyse, group, consensus, exploit, patch
+---
+
 # /agentic - RAPTOR Full Autonomous Workflow
 
 🤖 **AGENTIC MODE** - This will autonomously:
@@ -11,16 +15,21 @@ Nothing will be applied to your code - only generated in out/ directory.
 
 Execute: `python3 raptor.py agentic --repo <path>`
 
-## Claude Code as the LLM
+## How analysis works
 
-When no external LLM is configured, **YOU (Claude Code) are the LLM.** Phase 4
-dispatches `claude -p` sub-agents to analyse each finding in parallel. If Phase 4
-did not run (no `claude` on PATH), you may be asked to analyse the findings directly.
+Phase 4 dispatches findings for parallel analysis via one of two paths:
 
-When an external LLM is configured, Phase 4 dispatches to it in parallel via
-`generate_structured()`. Model roles determine which model analyses (analysis),
-writes code (code), and provides second opinions (consensus). If the external
-LLM fails, Phase 4 falls back to Claude Code dispatch automatically.
+- **Claude Code on PATH**: dispatches `claude -p` sub-agents (separate processes)
+- **External LLM configured**: dispatches via `generate_structured()` API calls
+- **Both available**: uses external LLM, falls back to Claude Code if it fails
+
+Model roles determine which model analyses (analysis), writes code (code), and
+provides second opinions (consensus).
+
+If **neither** is available, Phase 4 cannot run. The pipeline produces prep-only
+output. In that case, **YOU (Claude Code) are the LLM** — the user may ask you
+to analyse the findings directly in conversation. See the prep_only report mode
+below for instructions.
 
 After per-finding analysis: structural grouping identifies related findings,
 group analysis explains shared patterns, and consensus (if configured) flags

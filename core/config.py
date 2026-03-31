@@ -127,7 +127,7 @@ class RaptorConfig:
 
     # Logging Configuration
     LOG_DIR = BASE_OUT_DIR / "logs"
-    LOG_FORMAT_CONSOLE = "[%(levelname)s] %(module)s: %(message)s"
+    LOG_FORMAT_CONSOLE = "[%(levelname)s] %(message)s"
     LOG_FORMAT_FILE = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
     @staticmethod
