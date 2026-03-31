@@ -7,9 +7,10 @@ build commands for CodeQL database creation.
 """
 
 import os
+import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from shlex import quote
 from typing import Dict, List, Optional
@@ -32,6 +33,7 @@ class BuildSystem:
     env_vars: Dict[str, str]  # Environment variables needed
     confidence: float  # 0.0 - 1.0
     detected_files: List[str]  # Files that indicated this build system
+    cleanup_paths: List[Path] = field(default_factory=list)  # Temp files/dirs to remove after CodeQL
 
 
 class BuildDetector:
@@ -387,6 +389,347 @@ class BuildDetector:
         except Exception as e:
             logger.warning(f"✗ Error validating {build_system.type}: {e}")
             return False
+
+    # Languages that require compilation for CodeQL database creation.
+    COMPILED_LANGUAGES = {"cpp", "java", "csharp", "swift", "rust"}
+
+    # Validates individual compiler flag tokens.
+    # No $, backticks, semicolons, pipes, quotes, etc.
+    # Note: -I/ (root include) is technically allowed — file permissions are
+    # the protection. CodeQL's --source-root prevents system headers from
+    # being indexed as project code.
+    _SAFE_FLAG_TOKEN = re.compile(r'^-?[A-Za-z0-9._/+=-]+$')
+
+    def _validate_flags(self, flags: list) -> list:
+        """Validate and normalise compiler flags.
+
+        Accepts both single tokens ("-DFOO") and space-separated pairs
+        ("-include header.h"). Splits pairs into individual tokens.
+        Rejects anything with shell/Make metacharacters.
+        """
+        safe = []
+        for flag in flags:
+            if not isinstance(flag, str):
+                continue
+            # Split space-separated flags like "-include header.h"
+            tokens = flag.split()
+            if all(self._SAFE_FLAG_TOKEN.match(t) for t in tokens):
+                safe.extend(tokens)
+            else:
+                logger.warning(f"Rejected unsafe compiler flag: {flag}")
+        return safe
+
+    def synthesise_build_command(self, language: str) -> Optional[BuildSystem]:
+        """Synthesise a build command for compiled languages without a build system.
+
+        Generates a Python build script that compiles each source file via
+        subprocess.run (no shell, no quoting issues). CodeQL traces the gcc
+        invocations through its preload tracer.
+
+        Flow: heuristic build → dry-run → if failures and CC available,
+        CC suggests flags → validated → dry-run again → use best result.
+
+        All temporary files (script + build dir) are created via mkstemp/mkdtemp
+        and tracked in BuildSystem.cleanup_paths for the caller to clean up.
+
+        Returns None for unsupported languages or no source files.
+        """
+        if language not in self.COMPILED_LANGUAGES or language not in ("cpp", "java"):
+            return None
+
+        source_files, compiler, include_flags, define_flags = self._detect_build_params(language)
+        if not source_files:
+            return None
+
+        # Create build dir and script once — reused across heuristic and CC
+        import tempfile
+        build_dir = Path(tempfile.mkdtemp(prefix=".raptor_build_", dir=self.repo_path))
+        fd, script_name = tempfile.mkstemp(
+            prefix=".raptor_build_", suffix=".py", dir=self.repo_path,
+        )
+        os.close(fd)
+        script_path = Path(script_name)
+        build_cmd = f"{sys.executable} {quote(str(script_path))}"
+        cleanup = [script_path, build_dir]
+
+        # Write heuristic build script and dry-run
+        self._write_build_script(
+            script_path, build_dir,
+            source_files, compiler, include_flags, define_flags,
+        )
+        logger.info(f"Synthesised build script for {language}: {script_path}")
+        logger.info(f"  Source files: {len(source_files)}")
+
+        failures = self._dry_run(script_path)
+        build_type = "synthesised"
+        confidence = 0.7
+
+        # If heuristic has failures, try CC for better flags
+        if failures:
+            heuristic_ok = len(source_files) - len(failures)
+            logger.info(f"  Dry-run: {heuristic_ok}/{len(source_files)} compiled, {len(failures)} failed")
+
+            cc_flags = self._cc_suggest_flags(failures, language)
+            if cc_flags:
+                self._write_build_script(
+                    script_path, build_dir, source_files, compiler,
+                    include_flags + cc_flags.get("includes", []),
+                    define_flags + cc_flags.get("defines", []),
+                )
+                cc_failures = self._dry_run(script_path)
+                cc_ok = len(source_files) - len(cc_failures)
+                if cc_ok > heuristic_ok:
+                    logger.info(f"  CC improved: {heuristic_ok} → {cc_ok} compiled")
+                    build_type = "synthesised-cc"
+                else:
+                    logger.info(f"  CC didn't improve, using heuristic")
+                    self._write_build_script(
+                        script_path, build_dir,
+                        source_files, compiler, include_flags, define_flags,
+                    )
+                    confidence = 0.5
+            else:
+                confidence = 0.5
+        else:
+            logger.info(f"  Dry-run: all files compiled successfully")
+
+        return BuildSystem(
+            type=build_type, command=build_cmd,
+            working_dir=self.repo_path, env_vars={},
+            confidence=confidence, detected_files=[],
+            cleanup_paths=cleanup,
+        )
+
+    def _detect_build_params(self, language: str):
+        """Detect source files, compiler, and include/define flags."""
+        source_files = []
+        if language == "cpp":
+            for ext in (".c", ".cc", ".cpp", ".cxx"):
+                source_files.extend(self.repo_path.rglob(f"*{ext}"))
+            has_cpp = any(f.suffix in (".cpp", ".cc", ".cxx") for f in source_files)
+            compiler = "g++" if has_cpp else "gcc"
+
+            # Auto-detect -I flags from header locations
+            include_flags = set()
+            for ext in (".h", ".hpp", ".hh"):
+                for h in self.repo_path.rglob(f"*{ext}"):
+                    try:
+                        include_flags.add(f"-I{h.parent.relative_to(self.repo_path)}")
+                    except ValueError:
+                        pass
+            include_flags = sorted(include_flags)
+        elif language == "java":
+            source_files = list(self.repo_path.rglob("*.java"))
+            compiler = "javac"
+            include_flags = [f"-sourcepath", str(self.repo_path)]
+        else:
+            return [], "", [], []
+
+        # Validate all auto-detected flags
+        include_flags = self._validate_flags(include_flags)
+        return source_files, compiler, include_flags, []
+
+    def _write_build_script(self, script_path, build_dir,
+                            source_files, compiler, include_flags, define_flags):
+        """Write a Python build script that compiles via subprocess.run.
+
+        Security model:
+        - No shell: compiler args are a Python list → subprocess.run uses execve
+          directly. Filenames with spaces, $, quotes, etc. are safe.
+        - Data via repr(): all interpolated values use {!r} which produces valid
+          Python literals. No code injection via crafted paths or flags.
+        - Flags validated: _validate_flags rejects shell/Make metacharacters
+          before any flag reaches the script.
+        - Path traversal check: realpath + startswith('..') prevents symlinks
+          from writing object files outside the build directory.
+        - File permissions: script is chmod 0o500 after write (read+execute
+          only) to prevent modification between generation and execution.
+        - Build isolation: output goes to a mkdtemp directory, not the source
+          tree. Cleanup paths are tracked explicitly on the BuildSystem.
+
+        Reuses the same script_path and build_dir across heuristic and CC
+        attempts — one directory, one script, one cleanup.
+        """
+        # SECURITY: validate all flags before they reach the generated script
+        include_flags = self._validate_flags(include_flags)
+        define_flags = self._validate_flags(define_flags)
+
+        files_list = [str(f) for f in source_files]
+        repo_root = str(self.repo_path)
+        is_java = compiler == "javac"
+
+        script_path.chmod(0o700)  # Temporarily writable for rewrites (CC path)
+        # SECURITY: all data interpolated via {!r} (Python repr) — produces
+        # valid Python literals, not executable code.
+        script_path.write_text(f'''#!/usr/bin/env python3
+"""Synthesised by RAPTOR for CodeQL database creation.
+
+Compiles each source file individually via subprocess.run (no shell).
+CodeQL traces the compiler invocations through its preload tracer.
+Tolerates individual compilation failures.
+"""
+import os, subprocess, sys
+
+COMPILER = {compiler!r}
+FLAGS = {(include_flags + define_flags)!r}
+BUILD_DIR = {str(build_dir)!r}
+REPO_ROOT = os.path.realpath({repo_root!r})
+FILES = {files_list!r}
+IS_JAVA = {is_java!r}
+
+total = len(FILES)
+ok = 0
+fail = 0
+created_dirs = set()
+for i, src in enumerate(FILES):
+    if i > 0 and i % 50 == 0:
+        print(f"  Compiling... {{i}}/{{total}}", file=sys.stderr)
+
+    # SECURITY: resolve symlinks and reject paths that escape the repo root.
+    # Prevents writing object files outside the build directory via symlinks.
+    rel = os.path.relpath(os.path.realpath(src), REPO_ROOT)
+    if rel.startswith('..'):
+        fail += 1
+        continue
+
+    # SECURITY: subprocess.run with list args — no shell, no injection.
+    # Filenames are list elements passed directly to execve.
+    if IS_JAVA:
+        cmd = [COMPILER] + FLAGS + ["-d", BUILD_DIR, src]
+    else:
+        obj = os.path.join(BUILD_DIR, rel + ".o")
+        obj_dir = os.path.dirname(obj)
+        if obj_dir not in created_dirs:
+            os.makedirs(obj_dir, exist_ok=True)
+            created_dirs.add(obj_dir)
+        cmd = [COMPILER, "-w"] + FLAGS + ["-c", src, "-o", obj]
+
+    result = subprocess.run(cmd, stderr=subprocess.PIPE)
+    if result.returncode == 0:
+        ok += 1
+    else:
+        fail += 1
+        sys.stderr.buffer.write(result.stderr)
+
+print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
+''')
+        # SECURITY: make read+execute only after writing — prevents modification
+        # between generation and CodeQL execution (TOCTOU mitigation).
+        script_path.chmod(0o500)
+        return script_path
+
+    def _dry_run(self, script_path) -> list:
+        """Run the build script and return compilation failures."""
+        try:
+            result = subprocess.run(
+                [sys.executable, str(script_path)],
+                cwd=self.repo_path,
+                capture_output=True, text=True, timeout=300,
+            )
+            # Script crash (not compilation failure) — treat as unknown
+            if result.returncode != 0 and "Traceback" in result.stderr:
+                logger.warning(f"Build script crashed: {result.stderr.split(chr(10))[-2]}")
+                return []
+        except (subprocess.TimeoutExpired, Exception):
+            return []
+
+        # Parse gcc/g++ errors from stderr
+        failures = []
+        for line in result.stderr.split("\n"):
+            if ": error:" in line or ": fatal error:" in line:
+                parts = line.split(":", 1)
+                src_file = parts[0].strip() if parts else "unknown"
+                error = parts[1].strip() if len(parts) > 1 else "unknown"
+                if not any(f["file"] == src_file for f in failures):
+                    failures.append({"file": src_file, "error": error})
+        return failures
+
+    def _cc_suggest_flags(self, failures: list, language: str) -> Optional[dict]:
+        """Ask CC to suggest -I and -D flags to fix compilation failures.
+
+        Security model:
+        - CC has read-only access (--allowed-tools Read,Grep,Glob)
+        - CC outputs JSON data, not code — parsed by json.loads
+        - Every flag from CC goes through _validate_flags before use
+        - CC cannot modify the build script or execute commands
+        - Invalid/malicious flags are silently rejected
+        """
+        import shutil as _shutil
+        claude_bin = _shutil.which("claude")
+        if not claude_bin:
+            return None
+
+        failure_sample = "\n".join(
+            f"- {f['file']}: {f['error']}" for f in failures[:15]
+        )
+
+        prompt = f"""I have a {language} project in {self.repo_path} with no build system.
+Compilation with {language == 'cpp' and 'gcc' or 'javac'} -w -c and auto-detected -I flags partially works,
+but {len(failures)} files fail.
+
+Sample errors:
+{failure_sample}
+
+Read the source files to understand what's needed. Then output ONLY a JSON
+object with two arrays — no other text:
+
+{{"includes": ["-Ipath1", "-Ipath2"], "defines": ["-DFOO", "-DBAR=1", "-include header.h"]}}
+
+Rules:
+- Only suggest -I, -D, -include, and -std flags
+- Do NOT invent #define values that aren't in the source
+- Paths should be relative to the project root
+"""
+
+        try:
+            logger.info("  Asking Claude Code for additional compiler flags...")
+            result = subprocess.run(
+                [claude_bin, "-p",
+                 "--no-session-persistence",
+                 "--allowed-tools", "Read,Grep,Glob",
+                 "--add-dir", str(self.repo_path),
+                 "--max-budget-usd", "2.00"],
+                input=prompt, capture_output=True, text=True, timeout=180,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return None
+
+            content = result.stdout.strip()
+            if "```" in content:
+                parts = content.split("```")
+                for part in parts[1::2]:
+                    lines = part.strip().split("\n", 1)
+                    candidate = lines[1].strip() if len(lines) > 1 else part.strip()
+                    if "{" in candidate:
+                        content = candidate
+                        break
+
+            import json
+            try:
+                # Try strict parse first (entire content is JSON)
+                data = json.loads(content)
+            except json.JSONDecodeError:
+                # Fallback: find first { and try to parse from there
+                try:
+                    idx = content.index("{")
+                    data = json.loads(content[idx:])
+                except (ValueError, json.JSONDecodeError):
+                    logger.debug("CC output wasn't valid JSON")
+                    return None
+
+            includes = self._validate_flags(data.get("includes", []))
+            defines = self._validate_flags(data.get("defines", []))
+
+            if includes or defines:
+                logger.info(f"  CC suggested {len(includes)} includes, {len(defines)} defines")
+                return {"includes": includes, "defines": defines}
+
+        except subprocess.TimeoutExpired:
+            logger.info("  CC flag suggestion timed out (180s)")
+        except Exception as e:
+            logger.debug(f"CC flag suggestion failed: {e}")
+
+        return None
 
     def generate_no_build_config(self, language: str) -> BuildSystem:
         """

@@ -249,8 +249,11 @@ class CodeQLAgent:
                             logger.warning(f"Build system validation failed for {lang}, using no-build mode")
                             build_system = self.build_detector.generate_no_build_config(lang)
                     else:
-                        # Use no-build mode for interpreted languages
-                        build_system = self.build_detector.generate_no_build_config(lang)
+                        # Try to synthesise a build command for compiled languages
+                        build_system = self.build_detector.synthesise_build_command(lang)
+                        if not build_system:
+                            # Interpreted language or no source files — use no-build mode
+                            build_system = self.build_detector.generate_no_build_config(lang)
 
                     language_build_map[lang] = build_system
 
@@ -264,6 +267,15 @@ class CodeQLAgent:
                 language_build_map,
                 force=force_db_creation
             )
+
+            # Clean up synthesised build artifacts
+            import shutil
+            for bs in language_build_map.values():
+                for p in getattr(bs, 'cleanup_paths', None) or []:
+                    if p.is_dir():
+                        shutil.rmtree(p)
+                    elif p.is_file():
+                        p.unlink()
 
             # Check for failures
             successful_dbs = {
