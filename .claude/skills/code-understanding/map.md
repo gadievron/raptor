@@ -14,6 +14,18 @@ This is not documentation generation. It is adversarial reconnaissance at the so
 
 ## Task
 
+**[MAP-0] Source Inventory**
+
+Before any manual enumeration, run the inventory builder to get a reliable file and function list:
+
+```
+python3 build_inventory.py --repo <target> --out $WORKDIR
+```
+
+Read the resulting `checklist.json`. It provides every source file with language, line count, SHA-256 checksum, and every function with name, line number, and signature. Excluded files are recorded with reasons.
+
+Use this as your ground truth for what exists in the codebase. Do NOT manually enumerate files.
+
 **[MAP-1] Entry Point Enumeration**
 
 Find all locations where external input enters the application:
@@ -142,6 +154,34 @@ Produce a brief summary covering:
 GATES APPLY: U1 [READ-FIRST], U2 [ATTACKER-LENS], U5 [EVIDENCE-ONLY]
 
 Do not populate `sources`, `sinks`, or `entry_points` from file names or common patterns alone — read the code and verify.
+
+**[MAP-5] Record Coverage**
+
+After writing `context-map.json`, update the inventory with which functions you examined.
+Build a list of every function you read and analysed (entry points, sinks, trust boundary
+checks), then write a small Python script to record them:
+
+```python
+# Save as /tmp/record_coverage.py and run: python3 /tmp/record_coverage.py
+import json, sys
+from core.inventory.coverage import update_coverage
+
+workdir = sys.argv[1]
+inv = json.load(open(f"{workdir}/checklist.json"))
+checked = [
+    # Add one entry per function you examined:
+    {"file": "src/routes/query.py", "function": "handle_query"},
+    {"file": "src/db/query.py", "function": "run_query"},
+    # ... etc
+]
+update_coverage(inv, checked, "understand:map")
+json.dump(inv, open(f"{workdir}/checklist.json", "w"), indent=2)
+print(f"Recorded {len(checked)} functions as checked by understand:map")
+```
+
+Run via Bash tool: `python3 /tmp/record_coverage.py <workdir_path>`
+
+This ensures coverage tracking is cumulative across `/understand` and `/validate` runs.
 
 ## Output
 
