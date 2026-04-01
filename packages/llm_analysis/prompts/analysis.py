@@ -9,13 +9,16 @@ from typing import Any, Dict, Optional
 
 from .schemas import ANALYSIS_SCHEMA, DATAFLOW_SCHEMA_FIELDS
 
-ANALYSIS_SYSTEM_PROMPT = """You are a senior security researcher with expertise in:
-- Vulnerability analysis and exploit development
-- Secure code review
-- Static and variant analysis
-- Real-world attack scenarios
+ANALYSIS_SYSTEM_PROMPT = """You are a security vulnerability validator and analyst.
 
-Provide honest, technical assessments. Don't overstate severity, but don't downplay real risks."""
+Your goal is to determine whether scanner findings are real, reachable, and exploitable.
+Work through each finding systematically. Do not skip, sample, or guess.
+
+Rules (from exploitation-validator methodology):
+- ASSUME-EXPLOIT: Investigate as if exploitable until proven otherwise. Do not dismiss.
+- NO-HEDGING: If your reasoning includes "if", "maybe", or "uncertain", verify the claim.
+- PROOF: Show the vulnerable code for every claim. Quote the actual line.
+- FULL-COVERAGE: Assess every aspect — do not skip steps or take shortcuts."""
 
 
 def build_analysis_schema(has_dataflow: bool = False) -> Dict[str, str]:
@@ -129,18 +132,43 @@ You have the COMPLETE attack path from source to sink. Use this to make an infor
 """
 
     prompt += """
-**Your Task:**
-Analyse this vulnerability in depth:
-1. Is this a TRUE POSITIVE or FALSE POSITIVE?
-2. Is it actually EXPLOITABLE in practice?
-3. What's the real-world exploitability score (0.0 = impossible, 1.0 = trivial)?
-4. What would an attacker need to exploit this?
-5. What's the potential impact?
-6. Provide a CVSS score estimate (0.0-10.0)
-7. Explain your reasoning in detail.
-8. Showcase how modern mitigations might affect exploitability.
+**Your Task — work through each stage in sequence:**
 
-Provide detailed technical analysis based on actual code review, not just the rule match."""
+**Stage A: One-shot verification**
+Is the vulnerability pattern real? Does the code actually do what the scanner claims?
+Attempt to confirm exploitability. If clearly a false positive, explain why.
+
+**Stage B: Attack path analysis**
+What is the attack path from attacker-controlled input to the vulnerable code?
+What preconditions does an attacker need? Are those preconditions realistic?
+What blocks exploitation? What enables it?
+If you identify blockers, can they be bypassed?
+
+**Stage C: Sanity check**
+Does the code at the stated location match the finding description?
+Is the source-to-sink flow real, or did the scanner fabricate a connection?
+Is this code reachable from an entry point, or is it dead code?
+
+**Stage D: Ruling**
+Is this test code, example code, or documentation?
+Does exploitation require another vulnerability as a prerequisite?
+Does exploitation require the victim to perform an unlikely action?
+If your reasoning hedges ("maybe", "in theory"), verify the claim or rule it out.
+
+**Final assessment:**
+Based on your analysis through Stages A-D:
+- Rate exploitability_score from 0.0 (impossible) to 1.0 (trivial to exploit)
+- Estimate CVSS score (0.0-10.0)
+- Set is_true_positive based on whether the vulnerability pattern is real
+- Set is_exploitable based on whether a realistic attack path exists
+- Set ruling to exactly one of: validated, false_positive, unreachable, test_code, dead_code, mitigated
+- Describe the attack scenario if exploitable
+
+Be rigorous. False positives waste significant downstream effort (exploit generation,
+patch creation, review). But do not dismiss real vulnerabilities — investigate first.
+
+Your ruling, is_true_positive, and is_exploitable MUST be consistent with your reasoning.
+Do not mark a finding as exploitable if your reasoning concludes it is safe or a false positive."""
 
     return prompt
 

@@ -111,9 +111,10 @@ class ConsensusTask(DispatchTask):
         return role_resolution.get("consensus_models", [])
 
     def select_items(self, findings, prior_results):
-        # Only findings that were successfully analysed
+        # Only findings that were successfully analysed and are true positives
         return [f for f in findings
-                if "error" not in prior_results.get(f.get("finding_id"), {"error": True})]
+                if "error" not in prior_results.get(f.get("finding_id"), {"error": True})
+                and prior_results.get(f.get("finding_id"), {}).get("is_true_positive", True)]
 
     def build_prompt(self, finding):
         return build_analysis_prompt_from_finding(finding)
@@ -227,21 +228,38 @@ Return a concise analysis. If there's no meaningful relationship beyond the shar
 
 
 class RetryTask(AnalysisTask):
-    """Retry low-confidence findings (score 0.3-0.7) with a fresh context.
+    """Stage F: self-consistency check + retry contradictions and low confidence.
 
-    Inherits prompts/schema/system_prompt from AnalysisTask.
-    select_items filters to ambiguous scores, finalize applies the verdict.
+    Runs _check_self_consistency to flag contradictions, then selects findings
+    that are self-contradictory OR have ambiguous scores (0.3-0.7).
+
+    For contradictions: provides feedback context ("you said X but marked Y").
+    For low confidence: fresh re-analysis without prior context.
     """
 
     name = "retry"
     LOW = 0.3
     HIGH = 0.7
 
+    def __init__(self, results_by_id: Optional[Dict[str, Dict]] = None):
+        self.results_by_id = results_by_id or {}
+
     def select_items(self, findings, prior_results):
+        # Run self-consistency check to flag contradictions
+        from packages.llm_analysis.orchestrator import _check_self_consistency
+        _check_self_consistency(prior_results)
+
         selected = []
         for f in findings:
             fid = f.get("finding_id")
             r = prior_results.get(fid, {})
+            if "error" in r:
+                continue
+            # Contradiction
+            if r.get("self_contradictory"):
+                selected.append(f)
+                continue
+            # Low confidence
             try:
                 score = float(r.get("exploitability_score"))
             except (ValueError, TypeError):
@@ -249,6 +267,29 @@ class RetryTask(AnalysisTask):
             if self.LOW <= score <= self.HIGH:
                 selected.append(f)
         return selected
+
+    def build_prompt(self, finding):
+        fid = finding.get("finding_id")
+        r = self.results_by_id.get(fid, {})
+
+        if r.get("self_contradictory"):
+            # Stage F: feedback with contradiction context
+            contradictions = r.get("contradictions", [])
+            original_reasoning = (r.get("reasoning") or "")[:500]
+            base_prompt = super().build_prompt(finding)
+            return f"""{base_prompt}
+
+**IMPORTANT: Your previous analysis of this finding contradicted itself:**
+{chr(10).join(f'- {c}' for c in contradictions)}
+
+Previous reasoning excerpt:
+> {original_reasoning}
+
+Resolve the contradiction. Ensure your ruling, is_true_positive, and is_exploitable
+are consistent with your reasoning."""
+        else:
+            # Low confidence: fresh re-analysis
+            return super().build_prompt(finding)
 
     def finalize(self, results, prior_results):
         for r in results:
@@ -259,10 +300,13 @@ class RetryTask(AnalysisTask):
                 score = float(r.get("exploitability_score"))
             except (ValueError, TypeError):
                 score = None
+
+            was_contradictory = prior_results.get(fid, {}).get("self_contradictory")
             decisive = score is not None and not (self.LOW <= score <= self.HIGH)
-            if decisive:
+
+            if was_contradictory or decisive:
                 prior_results[fid] = r
             prior_results[fid]["retried"] = True
-            if not decisive:
+            if not was_contradictory and not decisive:
                 prior_results[fid]["low_confidence"] = True
         return results

@@ -23,7 +23,7 @@ VERY IMPORTANT: follow these steps in order.
 /validate - Exploitability validation pipeline (see below)
 /understand - Code understanding: map attack surface, trace flows, hunt variants (see below)
 
-**Note:** `/agentic` now automatically runs exploitability validation (Phase 2) between scanning and analysis. Use `--skip-validation` to bypass.
+**Note:** `/agentic` runs scan → dedup → prep → analysis (with validation methodology). Use `--sequential` to bypass parallel orchestration.
 /crash-analysis - Autonomous crash root-cause analysis (see below)
 /oss-forensics - GitHub forensic investigation (see below)
 /create-skill - Save approaches (alpha)

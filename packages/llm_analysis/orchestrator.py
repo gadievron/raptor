@@ -133,6 +133,7 @@ def orchestrate(
     repo_path: Path,
     out_dir: Path,
     max_parallel: int = 3,
+    max_findings: int = 0,
     no_exploits: bool = False,
     no_patches: bool = False,
     llm_config: Optional[Any] = None,
@@ -179,6 +180,10 @@ def orchestrate(
         print("\n  No findings to analyse")
         return None
 
+    if max_findings > 0 and len(findings) > max_findings:
+        logger.info(f"Capping at {max_findings} findings (of {len(findings)})")
+        findings = findings[:max_findings]
+
     # Resolve model roles
     from packages.llm_analysis.llm.config import resolve_model_roles
     role_resolution = {"analysis_model": None, "code_model": None,
@@ -193,15 +198,14 @@ def orchestrate(
     max_cost = getattr(llm_config, 'max_cost_per_scan', 0) if llm_config else 0
     cost_tracker = CostTracker(max_cost=max_cost or 0)
 
-    # Estimate and print cost
+    # Print dispatch info
     n_consensus = len(role_resolution.get("consensus_models", []))
     analysis_model_name = role_resolution.get("analysis_model").model_name if role_resolution.get("analysis_model") else ""
     is_cc_dispatch = not (llm_config and llm_config.primary_model)
-    estimate = cost_tracker.estimate_cost(len(findings), n_consensus,
-                                          model_name=analysis_model_name, is_cc=is_cc_dispatch)
-    if estimate > 0:
-        print(f"\n  Estimated cost: ~${estimate:.2f} for {len(findings)} findings"
-              + (f" + {n_consensus} consensus model(s)" if n_consensus else ""))
+    model_label = analysis_model_name or ("Claude Code" if is_cc_dispatch else "unknown")
+    n = len(findings)
+    print(f"\n  {n} finding{'s' if n != 1 else ''} → {model_label}"
+          + (f" + {n_consensus} consensus model{'s' if n_consensus != 1 else ''}" if n_consensus else ""))
 
     # --- Build dispatch callable ---
     from packages.llm_analysis.dispatch import dispatch_task, DispatchResult
@@ -285,7 +289,31 @@ def orchestrate(
         if fid:
             results_by_id[fid] = r
 
-    # --- Exploit/patch generation ---
+    # --- Pipeline flow (maps to exploitation-validator stages) ---
+    # Stage E (binary feasibility) runs in Phase 0 if --binary provided.
+    # Its results are in finding["feasibility"] and included in the prompt.
+    #
+    # AnalysisTask (above)  → Stages A-D: is this real? how exploitable?
+    # RetryTask             → Stage F: self-consistency check + retry
+    # ConsensusTask         → Second model votes (if configured)
+    # ExploitTask/PatchTask → Generate code (only for final-verdict exploitable)
+    # GroupAnalysisTask     → Cross-finding patterns
+
+    # Stage F: self-consistency check + retry contradictions and low confidence
+    dispatch_task(
+        RetryTask(results_by_id=results_by_id), findings, dispatch_fn, role_resolution,
+        results_by_id, cost_tracker, max_parallel,
+    )
+
+    # Consensus (if configured)
+    consensus_models = role_resolution.get("consensus_models", [])
+    if consensus_models:
+        dispatch_task(
+            ConsensusTask(), findings, dispatch_fn, role_resolution,
+            results_by_id, cost_tracker, max_parallel,
+        )
+
+    # Exploit/patch generation — after final verdict
     # CC analysis may produce exploits/patches inline via schema. ExploitTask/PatchTask
     # only select findings that are exploitable AND missing exploit_code/patch_code,
     # so this is a no-op when CC already generated them.
@@ -298,20 +326,6 @@ def orchestrate(
     if not no_patches:
         dispatch_task(
             PatchTask(), findings, dispatch_fn, role_resolution,
-            results_by_id, cost_tracker, max_parallel,
-        )
-
-    # --- Consensus (if configured, skip retry) ---
-    consensus_models = role_resolution.get("consensus_models", [])
-    if consensus_models:
-        dispatch_task(
-            ConsensusTask(), findings, dispatch_fn, role_resolution,
-            results_by_id, cost_tracker, max_parallel,
-        )
-    else:
-        # Retry low-confidence findings (only when no consensus)
-        dispatch_task(
-            RetryTask(), findings, dispatch_fn, role_resolution,
             results_by_id, cost_tracker, max_parallel,
         )
 
@@ -382,6 +396,58 @@ def orchestrate(
     print(f"  Report: {out_path}")
 
     return merged
+
+
+def _check_self_consistency(results_by_id: Dict[str, Dict]) -> None:
+    """Check for contradictions between LLM reasoning and verdict fields.
+
+    Agentic equivalent of /validate Stage F (self-review). Flags findings
+    where the reasoning text contradicts is_true_positive, is_exploitable,
+    or ruling. No LLM call — pure text analysis.
+    """
+    contradiction_signals = {
+        "false_positive": ["false positive", "not a real", "scanner error",
+                           "not actually vulnerable", "not a vulnerability"],
+        "not_exploitable": ["not exploitable", "cannot be exploited",
+                            "no realistic attack", "unexploitable"],
+        "safe": ["safe", "harmless", "benign", "no security impact"],
+    }
+
+    flagged = 0
+    for fid, r in results_by_id.items():
+        if "error" in r:
+            continue
+        reasoning = (r.get("reasoning") or "").lower()
+        if not reasoning:
+            continue
+
+        is_tp = r.get("is_true_positive", True)
+        is_exp = r.get("is_exploitable", False)
+
+        contradictions = []
+
+        # Reasoning says false positive but verdict says true positive
+        if is_tp:
+            for signal in contradiction_signals["false_positive"]:
+                if signal in reasoning:
+                    contradictions.append(f"reasoning says '{signal}' but is_true_positive=True")
+                    break
+
+        # Reasoning says not exploitable but verdict says exploitable
+        if is_exp:
+            for signal in contradiction_signals["not_exploitable"] + contradiction_signals["safe"]:
+                if signal in reasoning:
+                    contradictions.append(f"reasoning says '{signal}' but is_exploitable=True")
+                    break
+
+        if contradictions:
+            r["self_contradictory"] = True
+            r["contradictions"] = contradictions
+            flagged += 1
+            logger.warning(f"Self-contradiction in {fid}: {contradictions[0]}")
+
+    if flagged:
+        logger.info(f"Self-consistency check: {flagged} finding(s) flagged as contradictory")
 
 
 def _merge_results(

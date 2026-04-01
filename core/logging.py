@@ -100,7 +100,7 @@ class RaptorLogger:
 
         RaptorLogger._initialized = True
 
-        self.info(f"RAPTOR logging initialized - audit trail: {log_file}")
+        self.debug(f"RAPTOR logging initialized - audit trail: {log_file}")
 
     def debug(self, message: str, **kwargs: Any) -> None:
         """Log debug message."""

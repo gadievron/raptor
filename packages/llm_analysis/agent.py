@@ -331,14 +331,10 @@ class AutonomousSecurityAgentV2:
         availability = detect_llm_availability()
 
         if prep_only:
-            # Caller explicitly requested prep-only (e.g. CC will orchestrate)
+            # Phase 3 prep — read code, build structured findings
             self.llm_config = None
             self.llm = ClaudeCodeProvider()
-            logger.info("RAPTOR Autonomous Security Agent initialised (prep-only mode, --prep-only)")
-            logger.info(f"Repository: {repo_path}")
-            logger.info(f"Output: {out_dir}")
-            print("\n🤖 Prep-only mode — Phase 4 will handle analysis")
-            print()
+            logger.debug(f"Prep mode: {repo_path} → {out_dir}")
         elif availability.external_llm:
             # External LLM configured — use LLMClient
             self.llm_config = llm_config or LLMConfig()
@@ -637,8 +633,7 @@ Do NOT:
         is_prep = isinstance(self.llm, ClaudeCodeProvider)
 
         if is_prep:
-            # Condensed logging for prep-only mode
-            logger.info(f"Prepping: {vuln.rule_id} at {vuln.file_path}:{vuln.start_line}")
+            logger.debug(f"Prepping: {vuln.rule_id} at {vuln.file_path}:{vuln.start_line}")
         else:
             logger.info("=" * 70)
             logger.info(f"Analysing vulnerability: {vuln.rule_id}")
@@ -690,7 +685,8 @@ Do NOT:
         system_prompt = ANALYSIS_SYSTEM_PROMPT
 
         try:
-            logger.info("Sending vulnerability to LLM for analysis...")
+            if not isinstance(self.llm, ClaudeCodeProvider):
+                logger.info("Sending vulnerability to LLM for analysis...")
 
             # Use LLM for intelligent analysis
             analysis, _full_response = self.llm.generate_structured(
@@ -700,7 +696,7 @@ Do NOT:
             )
 
             if analysis is None:
-                logger.info("No external LLM available — skipping analysis (prep-only mode)")
+                logger.debug("Prep mode — Phase 4 will handle analysis")
                 return False
 
             vuln.exploitable = analysis.get("is_exploitable", False)
@@ -987,9 +983,11 @@ Do NOT:
         start_time = time.time()
 
         # Parse findings
-        logger.info("=" * 70)
-        logger.info("AUTONOMOUS VULNERABILITY ANALYSIS")
-        logger.info("=" * 70)
+        is_prep_only = isinstance(self.llm, ClaudeCodeProvider)
+        if not is_prep_only:
+            logger.info("=" * 70)
+            logger.info("AUTONOMOUS VULNERABILITY ANALYSIS")
+            logger.info("=" * 70)
 
         if findings_path:
             # Load pre-validated findings
@@ -1009,13 +1007,18 @@ Do NOT:
 
         # Put dataflow findings first, then others
         prioritized_findings = findings_with_dataflow + findings_without_dataflow
-        prioritized_findings = prioritized_findings[:max_findings]
+        if not is_prep_only:
+            # Cap in sequential mode — in prep mode, Phase 4 enforces the cap
+            prioritized_findings = prioritized_findings[:max_findings]
 
-        logger.info(f"After deduplication: {len(unique_findings)} unique findings")
-        logger.info(f"  With dataflow: {len(findings_with_dataflow)}")
-        logger.info(f"  Without dataflow: {len(findings_without_dataflow)}")
-        logger.info(f"Processing top {max_findings} findings (dataflow prioritized)")
-        logger.info("=" * 70)
+        if is_prep_only:
+            logger.debug(f"Dedup: {len(unique_findings)} unique, {len(findings_with_dataflow)} with dataflow")
+        else:
+            logger.info(f"After deduplication: {len(unique_findings)} unique findings")
+            logger.info(f"  With dataflow: {len(findings_with_dataflow)}")
+            logger.info(f"  Without dataflow: {len(findings_without_dataflow)}")
+            logger.info(f"Processing top {max_findings} findings (dataflow prioritized)")
+            logger.info("=" * 70)
 
         unique_findings = prioritized_findings
 
@@ -1035,7 +1038,10 @@ Do NOT:
             for idx, finding in enumerate(unique_findings, 1):
                 progress.update(current=idx, message=f"{finding.get('rule_id', 'unknown')}")
 
-                if not isinstance(self.llm, ClaudeCodeProvider):
+                if is_prep and idx % 10 == 0:
+                    print(f"  Preparing... {idx}/{len(unique_findings)}", flush=True)
+
+                if not is_prep:
                     logger.info("")
                     logger.info(f"{'█' * 70}")
                     logger.info(f"VULNERABILITY {idx}/{len(unique_findings)}")
@@ -1072,7 +1078,7 @@ Do NOT:
 
             # Show progress
             if isinstance(self.llm, ClaudeCodeProvider):
-                logger.info(f"Progress: {idx}/{len(unique_findings)} prepped")
+                logger.debug(f"Progress: {idx}/{len(unique_findings)} prepped")
             else:
                 logger.info("")
                 logger.info(f"Progress: {idx}/{len(unique_findings)} analyzed, "
@@ -1110,13 +1116,8 @@ Do NOT:
         with open(report_file, 'w') as f:
             json.dump(report, f, indent=2)
 
-        logger.info("")
-        logger.info("=" * 70)
-        logger.info("ANALYSIS COMPLETE")
-        logger.info("=" * 70)
-
         if is_prep_only:
-            logger.info(f"Prep complete: {len(unique_findings)} findings prepared for Phase 4 orchestration")
+            logger.debug(f"Prep complete: {len(unique_findings)} findings")
         else:
             logger.info(f"✓ Processed: {len(unique_findings)} findings")
             logger.info(f"✓ Analyzed: {analyzed} with LLM")
@@ -1133,9 +1134,10 @@ Do NOT:
             logger.info(f"   Total requests: {llm_stats['total_requests']}")
             logger.info(f"   Total cost: ${llm_stats['total_cost']:.4f}")
             logger.info(f"   Execution time: {execution_time:.1f}s")
-        logger.info(f"")
-        logger.info(f"Report saved: {report_file}")
-        logger.info("=" * 70)
+        if not is_prep_only:
+            logger.info(f"")
+            logger.info(f"Report saved: {report_file}")
+            logger.info("=" * 70)
 
         return report
 

@@ -140,7 +140,7 @@ Examples:
   python3 raptor.py agentic --repo /path/to/code --no-exploits
 
   # Skip exploitability validation (faster, but may include false positives)
-  python3 raptor.py agentic --repo /path/to/code --skip-validation
+  python3 raptor.py agentic --repo /path/to/code --skip-dedup
 
   # Focus validation on specific vulnerability type
   python3 raptor.py agentic --repo /path/to/code --vuln-type sql_injection
@@ -174,15 +174,15 @@ Examples:
                        help="Skip per-vulnerability mitigation checks during exploit generation")
 
     # Exploitability validation options
-    parser.add_argument("--skip-validation", action="store_true",
-                       help="Skip exploitability validation (proceed directly to analysis)")
+    parser.add_argument("--skip-dedup", action="store_true",
+                       help="Skip deduplication (pass all scanner findings directly to analysis)")
     parser.add_argument("--vuln-type", help="Vulnerability type to focus on (e.g., command_injection, sql_injection)")
 
     # Orchestration options
     parser.add_argument("--max-parallel", type=int, default=3,
                        help="Maximum parallel Claude Code agents for Phase 4 orchestration (default: 3)")
-    parser.add_argument("--no-orchestration", action="store_true",
-                       help="Skip Phase 4 orchestration (use Phase 3 sequential analysis even when CC is available)")
+    parser.add_argument("--sequential", action="store_true",
+                       help="Sequential analysis in Phase 3 instead of parallel Phase 4 orchestration")
 
     args = parser.parse_args()
 
@@ -284,7 +284,7 @@ Examples:
     mitigation_result = None
     if args.check_mitigations or args.binary:
         print("\n" + "=" * 70)
-        print("PHASE 0: PRE-EXPLOIT MITIGATION ANALYSIS")
+        print("MITIGATION ANALYSIS")
         print("=" * 70)
         print("\nChecking system and binary mitigations BEFORE scanning...")
         print("This prevents wasted effort on impossible exploits.\n")
@@ -325,7 +325,7 @@ Examples:
     # PHASE 1: CODE SCANNING (Semgrep + CodeQL)
     # ========================================================================
     print("\n" + "=" * 70)
-    print("PHASE 1: AUTONOMOUS CODE SCANNING")
+    print("SCANNING")
     print("=" * 70)
 
     all_sarif_files = []
@@ -477,7 +477,7 @@ Examples:
     sarif_files = all_sarif_files
 
     print(f"\n{'=' * 70}")
-    print(f"✓ PHASE 1 COMPLETE")
+    print(f"✓ SCANNING COMPLETE")
     print(f"{'=' * 70}")
     print(f"Total findings: {total_findings}")
     if semgrep_metrics:
@@ -499,7 +499,7 @@ Examples:
         total_findings=total_findings,
         vuln_type=args.vuln_type,
         binary_path=args.binary,
-        skip_validation=args.skip_validation,
+        skip_dedup=args.skip_dedup,
         skip_feasibility=not (args.binary or args.check_mitigations),
         external_llm=llm_env.external_llm,
     )
@@ -508,7 +508,7 @@ Examples:
     # PHASE 3: AUTONOMOUS ANALYSIS
     # ========================================================================
     print("\n" + "=" * 70)
-    print("PHASE 3: AUTONOMOUS VULNERABILITY ANALYSIS")
+    print("PREPARING FINDINGS")
     print("=" * 70)
 
     analysis = {}
@@ -549,11 +549,11 @@ Examples:
                 "--max-findings", str(args.max_findings)
             ]
 
-        # If Phase 4 will orchestrate, tell agent to prep only (skip LLM calls)
-        if (llm_env.claude_code or llm_env.external_llm) and not args.no_orchestration:
+        # Phase 3 preps data; Phase 4 handles LLM work (unless --sequential)
+        if (llm_env.claude_code or llm_env.external_llm) and not args.sequential:
             analysis_cmd.append("--prep-only")
 
-        rc, stdout, stderr = run_command_streaming(analysis_cmd, "Analysing vulnerabilities autonomously")
+        rc, stdout, stderr = run_command_streaming(analysis_cmd, "Preparing findings for analysis")
 
         # Parse analysis results
         analysis_report = autonomous_out / "autonomous_analysis_report.json"
@@ -562,7 +562,7 @@ Examples:
                 analysis = json.load(f)
 
             if analysis.get('mode') == 'prep_only':
-                print(f"\n✓ Prep complete: {analysis.get('processed', 0)} findings ready for Phase 4")
+                print(f"\n✓ {analysis.get('processed', 0)} findings prepared for analysis")
             else:
                 print(f"\n✓ Analysis complete:")
                 print(f"  - Analysed: {analysis.get('analyzed', 0)}")
@@ -583,9 +583,9 @@ Examples:
     # PHASE 4: AGENTIC ORCHESTRATION
     # ========================================================================
     orchestration_result = None
-    if (llm_env.claude_code or llm_env.external_llm) and not args.no_orchestration:
+    if (llm_env.claude_code or llm_env.external_llm) and not args.sequential:
         print("\n" + "=" * 70)
-        print("PHASE 4: AGENTIC ORCHESTRATION")
+        print("ANALYSING", flush=True)
         print("=" * 70)
 
         if analysis_report and analysis_report.exists():
@@ -601,6 +601,7 @@ Examples:
                 repo_path=repo_path,
                 out_dir=out_dir,
                 max_parallel=args.max_parallel,
+                max_findings=args.max_findings,
                 no_exploits=args.no_exploits,
                 no_patches=args.no_patches,
                 llm_config=llm_config,
@@ -645,7 +646,7 @@ Examples:
             },
             "exploitability_validation": {
                 "completed": bool(validation_result),
-                "skipped": args.skip_validation,
+                "skipped": args.skip_dedup,
                 "original_findings": total_findings,
                 "validated_findings": validated_findings,
                 "noise_reduction_percent": ((total_findings - validated_findings) / total_findings * 100) if total_findings > 0 else 0,
@@ -684,37 +685,74 @@ Examples:
         print(f"     Semgrep: {semgrep_metrics.get('total_findings', 0)}")
     if codeql_metrics:
         print(f"     CodeQL: {codeql_metrics.get('total_findings', 0)}")
-    if validation_result:
-        print(f"   Validated findings: {validated_findings}")
-        if total_findings > 0:
-            reduction = ((total_findings - validated_findings) / total_findings) * 100
-            print(f"   Noise reduction: {reduction:.1f}%")
-    analysed_count = analysis.get('analyzed', 0)
-    if orchestration_result:
-        analysed_count = max(analysed_count, orchestration_result.get("orchestration", {}).get("findings_analysed", 0))
-    if analysed_count > 0 and analysed_count < validated_findings:
-        print(f"   Analysed: {analysed_count} of {validated_findings} (capped by --max-findings {args.max_findings})")
-    orch_data = orchestration_result or {}
-    exploitable_count = max(analysis.get('exploitable', 0), orch_data.get('exploitable', 0))
+    # Build findings funnel from orchestration results
+    analysed_count = 0
+    true_positives = 0
+    false_positives = 0
+    exploitable_count = 0
     exploits_count = analysis.get('exploits_generated', 0)
     patches_count = analysis.get('patches_generated', 0)
+
     if orchestration_result:
+        orch = orchestration_result.get("orchestration", {})
+        analysed_count = orch.get("findings_analysed", 0)
         exploits_count = max(exploits_count, orchestration_result.get('exploits_generated', 0))
         patches_count = max(patches_count, orchestration_result.get('patches_generated', 0))
+        for r in orchestration_result.get("results", []):
+            if "error" in r:
+                continue
+            # Only count findings that were actually analysed (have explicit verdict)
+            if "is_true_positive" not in r:
+                continue
+            if r.get("is_true_positive") is False:
+                false_positives += 1
+            else:
+                true_positives += 1
+            if r.get("is_exploitable"):
+                exploitable_count += 1
+    else:
+        analysed_count = analysis.get('analyzed', 0)
+        exploitable_count = analysis.get('exploitable', 0)
+
+    # Findings funnel
+    if validation_result:
+        print(f"   After dedup: {validated_findings}")
+        if total_findings > validated_findings:
+            reduction = ((total_findings - validated_findings) / total_findings) * 100
+            print(f"   Duplicates removed: {reduction:.0f}%")
+    if analysed_count > 0 and analysed_count < validated_findings:
+        skipped = validated_findings - analysed_count
+        print(f"   Analysed: {analysed_count} of {validated_findings}")
+        print(f"   ⚠️  {skipped} finding{'s' if skipped != 1 else ''} skipped (--max-findings {args.max_findings})")
+    elif analysed_count > 0:
+        print(f"   Analysed: {analysed_count}")
+    if true_positives > 0 or false_positives > 0:
+        print(f"   True positives: {true_positives}")
+        if false_positives > 0:
+            print(f"   False positives: {false_positives}")
+    contradictions = sum(1 for r in orchestration_result.get("results", [])
+                         if r.get("self_contradictory")) if orchestration_result else 0
+    if contradictions > 0:
+        print(f"   ⚠️  Self-contradictory: {contradictions} (review recommended)")
     print(f"   Exploitable: {exploitable_count}")
-    print(f"   Exploits generated: {exploits_count}")
-    print(f"   Patches generated: {patches_count}")
+    if exploits_count > 0:
+        print(f"   Exploits generated: {exploits_count}")
+    if patches_count > 0:
+        print(f"   Patches generated: {patches_count}")
     if (args.codeql or args.codeql_only) and analysis.get('dataflow_validated', 0) > 0:
         print(f"   Dataflow paths validated: {analysis.get('dataflow_validated', 0)}")
     from packages.llm_analysis.dispatch import _format_elapsed
     print(f"   Duration: {_format_elapsed(workflow_duration)}")
+    if orchestration_result:
+        cost = orchestration_result.get("orchestration", {}).get("cost", {}).get("total_cost", 0)
+        if cost > 0:
+            print(f"   Cost: ${cost:.2f} (successful calls only)")
 
     print(f"\n📁 Outputs:")
     print(f"   Main report: {report_file}")
     if mitigation_result:
         print(f"   Exploit feasibility: {out_dir / 'exploit_feasibility.txt'}")
-    if validation_result:
-        print(f"   Validation: {out_dir / 'validation'}/")
+    # Dedup results are intermediate — don't list in user-facing outputs
     if analysis_report and analysis_report.exists():
         print(f"   Analysis: {analysis_report}")
     if exploits_count > 0 and autonomous_out:
@@ -731,10 +769,7 @@ Examples:
         if codeql_metrics.get('total_findings', 0) > 0:
             print("   ✓ Validated dataflow paths")
     if validation_result:
-        if isinstance(validation_result, dict) and validation_result.get('mode') == 'deduplication_only':
-            print("   ✓ Deduplicated findings")
-        else:
-            print("   ✓ Validated exploitability (filtered noise)")
+        print("   ✓ Deduplicated findings")
     print("   ✓ Analysed vulnerabilities")
     if exploits_count > 0:
         print(f"   ✓ Generated {exploits_count} exploit{'s' if exploits_count != 1 else ''}")
@@ -742,9 +777,18 @@ Examples:
         print(f"   ✓ Created {patches_count} patch{'es' if patches_count != 1 else ''}")
     if orchestration_result:
         orch = orchestration_result.get("orchestration", {})
-        print(f"   ✓ Orchestrated via Claude Code ({orch.get('findings_analysed', 0)} findings)")
+        mode = orch.get("mode", "unknown")
+        if mode == "cc_dispatch":
+            via = "Claude Code"
+        elif mode == "external_llm":
+            via = orch.get("analysis_model") or "external LLM"
+        elif mode == "cc_fallback":
+            via = "Claude Code (fallback)"
+        else:
+            via = mode
+        n = orch.get('findings_analysed', 0)
+        print(f"   ✓ Analysed {n} finding{'s' if n != 1 else ''} via {via}")
     print("\nReview the outputs and apply patches as needed.")
-    print("=" * 70)
 
 
 if __name__ == "__main__":

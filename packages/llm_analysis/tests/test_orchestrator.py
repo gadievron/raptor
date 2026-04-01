@@ -15,6 +15,7 @@ from packages.llm_analysis.orchestrator import (
     orchestrate,
     _merge_results,
     _structural_grouping,
+    _check_self_consistency,
     CostTracker,
     CUTOFF_SKIP_CONSENSUS,
 )
@@ -740,3 +741,67 @@ class TestMergePrepProtection:
         assert result["file_path"] == "db.py"
         # Analysis data should still come through
         assert result["is_exploitable"] is True
+
+
+class TestSelfConsistency:
+    def test_flags_false_positive_contradiction(self):
+        results = {
+            "f-001": {
+                "is_true_positive": True,
+                "is_exploitable": True,
+                "reasoning": "This is a false positive because the input is sanitised.",
+            }
+        }
+        _check_self_consistency(results)
+        assert results["f-001"]["self_contradictory"] is True
+
+    def test_flags_not_exploitable_contradiction(self):
+        results = {
+            "f-001": {
+                "is_true_positive": True,
+                "is_exploitable": True,
+                "reasoning": "The code is safe and cannot be exploited in practice.",
+            }
+        }
+        _check_self_consistency(results)
+        assert results["f-001"]["self_contradictory"] is True
+
+    def test_no_flag_when_consistent(self):
+        results = {
+            "f-001": {
+                "is_true_positive": True,
+                "is_exploitable": True,
+                "reasoning": "Buffer overflow with attacker-controlled input, trivially exploitable.",
+            }
+        }
+        _check_self_consistency(results)
+        assert "self_contradictory" not in results["f-001"]
+
+    def test_no_flag_when_not_exploitable_consistent(self):
+        results = {
+            "f-001": {
+                "is_true_positive": False,
+                "is_exploitable": False,
+                "reasoning": "This is a false positive, the code is unreachable.",
+            }
+        }
+        _check_self_consistency(results)
+        assert "self_contradictory" not in results["f-001"]
+
+    def test_skips_errors(self):
+        results = {
+            "f-001": {"error": "timeout"},
+        }
+        _check_self_consistency(results)
+        assert "self_contradictory" not in results["f-001"]
+
+    def test_skips_empty_reasoning(self):
+        results = {
+            "f-001": {
+                "is_true_positive": True,
+                "is_exploitable": True,
+                "reasoning": "",
+            }
+        }
+        _check_self_consistency(results)
+        assert "self_contradictory" not in results["f-001"]

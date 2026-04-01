@@ -1,15 +1,19 @@
 ---
-description: Full autonomous security workflow — scan, validate, analyse, group, consensus, exploit, patch
+description: Full autonomous security workflow — scan, dedup, prep, analyse, consensus, exploit, patch, group
 ---
 
 # /agentic - RAPTOR Full Autonomous Workflow
 
 🤖 **AGENTIC MODE** - This will autonomously:
-1. Scan code with Semgrep/CodeQL
-2. Analyze each finding with LLM (parallel dispatch)
-3. **Generate exploit PoCs** for exploitable findings
-4. **Generate secure patches** for confirmed vulnerabilities
-5. **Cross-finding analysis** (structural grouping, shared root causes)
+1. Scan code with Semgrep/CodeQL (parallel)
+2. Deduplicate findings
+3. Prep findings (read code, extract dataflow)
+4. **Validate + analyse** each finding (exploitation-validator methodology, Stages A-D)
+5. **Self-review** — catch contradictions, retry low confidence (Stage F)
+6. **Consensus** — multi-model second opinion (if configured)
+7. **Generate exploit PoCs** for exploitable findings
+8. **Generate secure patches** for confirmed vulnerabilities
+9. **Cross-finding analysis** (structural grouping, shared root causes)
 
 Nothing will be applied to your code - only generated in out/ directory.
 
@@ -17,7 +21,7 @@ Execute: `python3 raptor.py agentic --repo <path>`
 
 ## How analysis works
 
-Phase 4 dispatches findings for parallel analysis via one of two paths:
+Findings are dispatched for parallel analysis via one of two paths:
 
 - **Claude Code on PATH**: dispatches `claude -p` sub-agents (separate processes)
 - **External LLM configured**: dispatches via `generate_structured()` API calls
@@ -26,14 +30,30 @@ Phase 4 dispatches findings for parallel analysis via one of two paths:
 Model roles determine which model analyses (analysis), writes code (code), and
 provides second opinions (consensus).
 
-If **neither** is available, Phase 4 cannot run. The pipeline produces prep-only
-output. In that case, **YOU (Claude Code) are the LLM** — the user may ask you
-to analyse the findings directly in conversation. See the prep_only report mode
-below for instructions.
+If **neither** is available, the pipeline produces prep-only output. In that case,
+**YOU (Claude Code) are the LLM** — the user may ask you to analyse the findings
+directly in conversation. See the prep_only report mode below for instructions.
 
-After per-finding analysis: structural grouping identifies related findings,
-group analysis explains shared patterns, and consensus (if configured) flags
-disputed verdicts. Cost tracking is real-time with adaptive budget cutoff.
+Analysis follows the exploitation-validator methodology (Stages A-D):
+- **Stage A**: One-shot verification — is the vulnerability pattern real?
+- **Stage B**: Attack path analysis — what are the preconditions and blockers?
+- **Stage C**: Sanity check — does the code match? is the flow real? is it reachable?
+- **Stage D**: Ruling — test code? unrealistic preconditions? hedging?
+
+If `--binary` is provided, Stage E (binary feasibility analysis) runs before
+scanning and its results (chain_breaks, mitigations) are included in each
+finding's analysis prompt.
+
+The dispatch pipeline runs these tasks in sequence:
+
+1. **AnalysisTask** — Stages A-D per finding (validation + analysis in one call)
+2. **RetryTask** — Stage F: self-consistency check, retry contradictions + low confidence
+3. **ConsensusTask** — second model votes on true positives (if configured)
+4. **ExploitTask** — PoCs for final-verdict exploitable findings
+5. **PatchTask** — secure fixes for exploitable findings
+6. **GroupAnalysisTask** — cross-finding patterns (shared root cause, attack chaining)
+
+Cost tracking is real-time with adaptive budget cutoff.
 
 ## Report modes
 
@@ -53,13 +73,13 @@ and `feasibility`. If the user asks you to analyse them, for each finding:
 Do NOT include raw code from the findings in sub-agent prompts — let each agent
 read the code itself via the Read tool.
 
-**`"mode": "full"`** — An external LLM performed sequential analysis in Phase 3
-(when Claude Code was not available). Present the results to the user.
+**`"mode": "full"`** — An external LLM performed sequential analysis (when
+`--sequential` was used or Claude Code was not available). Present the results.
 
-**`"mode": "orchestrated"`** — Phase 4 performed parallel analysis via external
-LLM or Claude Code sub-agents. Results include per-finding `analysed_by` (which
-model), `cost_usd`, `duration_seconds`, plus `cross_finding_groups` and optional
-`consensus` data. Present the results to the user.
+**`"mode": "orchestrated"`** — Parallel analysis via external LLM or Claude Code
+sub-agents. Results include per-finding `analysed_by` (which model), `cost_usd`,
+`duration_seconds`, plus `cross_finding_groups` and optional `consensus` data.
+Present the results to the user.
 
 In all modes, findings are in the `results` array of the report. Orchestrated
 and full mode findings include `is_exploitable`, `reasoning`, `exploit_code`, and

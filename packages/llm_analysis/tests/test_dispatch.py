@@ -228,6 +228,18 @@ class TestConsensusTask:
         task.finalize(consensus_results, prior)
         assert prior["f-001"]["consensus"] == "agreed"
 
+    def test_skips_false_positives(self):
+        task = ConsensusTask()
+        findings = [_make_finding("f-001"), _make_finding("f-002"), _make_finding("f-003")]
+        prior = {
+            "f-001": {"is_exploitable": True, "is_true_positive": True},
+            "f-002": {"is_exploitable": False, "is_true_positive": False},
+            "f-003": {"error": "failed"},
+        }
+        selected = task.select_items(findings, prior)
+        assert len(selected) == 1
+        assert selected[0]["finding_id"] == "f-001"
+
 
 class TestGroupAnalysisTask:
     def test_selects_groups_of_two_plus(self):

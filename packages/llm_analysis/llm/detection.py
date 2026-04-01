@@ -429,7 +429,7 @@ def detect_llm_availability() -> LLMAvailability:
         llm_available=external_llm or claude_code,
     )
 
-    logger.info(
+    logger.debug(
         f"LLM availability: external_llm={availability.external_llm}, "
         f"claude_code={availability.claude_code}, "
         f"llm_available={availability.llm_available}"

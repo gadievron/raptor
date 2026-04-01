@@ -208,10 +208,15 @@ def dispatch_task(
                 if "is_exploitable" in processed:
                     exploitable = processed.get("is_exploitable", False)
                     score = processed.get("exploitability_score")
+                    ruling = processed.get("ruling")
                     try:
                         status = f"exploitable ({float(score):.2f})" if exploitable else "not exploitable"
                     except (ValueError, TypeError):
                         status = "exploitable" if exploitable else "not exploitable"
+                    # Show short ruling labels (enum values), not long-form text
+                    valid_rulings = {"false_positive", "unreachable", "test_code", "dead_code", "mitigated"}
+                    if ruling and ruling in valid_rulings and not exploitable:
+                        status = ruling.replace("_", " ")
                 else:
                     status = "done"
                 cost = processed.get("cost_usd")

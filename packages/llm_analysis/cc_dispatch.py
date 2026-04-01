@@ -173,33 +173,53 @@ Focus your analysis on attack paths that work within these constraints.
             for wh in what_would_help:
                 prompt += f"  - {wh}\n"
 
-    # Instructions
+    # Instructions — follows exploitation-validator methodology (Stages A-D)
     prompt += """
-## Your task
+## Your task — work through each stage
 
 Read the code at the file path above using the Read tool. Examine the
 surrounding context, imports, and any functions called in the vulnerable code.
 
-1. **Analyse**: Is this a true positive? Is it exploitable in practice?
-   What would an attacker need? What's the real-world impact?
-   Rate exploitability_score from 0.0 (impossible) to 1.0 (trivial).
+**Stage A: One-shot verification**
+Is the vulnerability pattern real? Does the code actually do what the scanner claims?
+Attempt to confirm exploitability. If clearly a false positive, explain why.
+
+**Stage B: Attack path analysis**
+What is the attack path from attacker-controlled input to the vulnerable code?
+What preconditions does an attacker need? Are those preconditions realistic?
+What blocks exploitation? What enables it?
+
+**Stage C: Sanity check**
+Open and read the actual file. Verify the code at the stated line matches the finding.
+Is the source-to-sink flow real? Is this code reachable from an entry point?
+
+**Stage D: Ruling**
+Is this test code, example code, or documentation?
+Does exploitation require unrealistic preconditions?
+If your reasoning hedges ("maybe", "in theory"), verify the claim or rule it out.
+
+Rules: Investigate as if exploitable until proven otherwise. Do not guess or assume.
+If uncertain, verify by reading the code. Show the vulnerable code for every claim.
+Your ruling, is_true_positive, and is_exploitable MUST be consistent with your reasoning.
 """
 
     if not no_exploits:
         prompt += """
-2. **Exploit**: If exploitable, write a proof-of-concept exploit.
-   The exploit should be practical and demonstrate the vulnerability.
-   Include clear comments explaining the attack.
+**If exploitable**: Write a proof-of-concept exploit.
+The exploit should be practical and demonstrate the vulnerability.
+Include clear comments explaining the attack.
 """
 
     if not no_patches:
-        prompt += f"""
-{"3" if not no_exploits else "2"}. **Patch**: Create a secure fix that preserves existing functionality.
-   Read the full file for context before writing the patch.
+        prompt += """
+**If exploitable**: Create a secure fix that preserves existing functionality.
+Read the full file for context before writing the patch.
 """
 
     prompt += f"""
 Return your analysis as structured JSON with finding_id "{finding_id}".
+Rate exploitability_score from 0.0 (impossible) to 1.0 (trivial).
+Include a ruling: validated, false_positive, unreachable, test_code, dead_code, or mitigated.
 """
 
     return prompt

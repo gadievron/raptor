@@ -331,7 +331,7 @@ class LLMClient:
         cache_key = self._get_cache_key(prompt, system_prompt, model_config.model_name)
         cached_content = self._get_cached_response(cache_key)
         if cached_content:
-            print(f"► Using cached response for {model_config.provider}/{model_config.model_name}")
+            logger.debug(f"Using cached response for {model_config.provider}/{model_config.model_name}")
             with self._stats_lock:
                 self.request_count += 1
             return LLMResponse(
@@ -366,22 +366,19 @@ class LLMClient:
 
             attempts_count += 1
 
-            # Show which model we're using (visible to user)
             if model_idx == 0:
-                print(f"► Using model: {model.provider}/{model.model_name}")
-                if model.provider.lower() == "ollama":
-                    print(f"  ⚠️  Local model - exploit PoCs may be unreliable")
+                logger.debug(f"Using model: {model.provider}/{model.model_name}")
             else:
-                print(f"► Falling back to: {model.provider}/{model.model_name}")
-                if model.provider.lower() == "ollama":
-                    print(f"  ⚠️  Local model - exploit PoCs may be unreliable")
+                logger.warning(f"Falling back to: {model.provider}/{model.model_name}")
+            if model.provider.lower() == "ollama":
+                logger.warning(f"Local model — exploit PoCs may be unreliable")
 
             logger.debug(f"Trying model: {model.provider}/{model.model_name}")
 
             for attempt in range(self.config.max_retries):
                 try:
                     if attempt > 0:
-                        print(f"  ↻ Retrying... (attempt {attempt + 1}/{self.config.max_retries})")
+                        logger.info(f"Retrying {model.provider}/{model.model_name} (attempt {attempt + 1}/{self.config.max_retries})")
 
                     provider = self._get_provider(model)
                     t_start = time.time()
@@ -398,9 +395,9 @@ class LLMClient:
                     # Cache response
                     self._save_to_cache(cache_key, response)
 
-                    logger.info(f"Generation successful: {model.provider}/{model.model_name} "
-                               f"(tokens: {response.tokens_used}, cost: ${response.cost:.4f}, "
-                               f"duration: {duration:.1f}s)")
+                    logger.debug(f"Generation successful: {model.provider}/{model.model_name} "
+                                f"(tokens: {response.tokens_used}, cost: ${response.cost:.4f}, "
+                                f"duration: {duration:.1f}s)")
 
                     return response
 
@@ -504,20 +501,17 @@ class LLMClient:
 
             attempts_count += 1
 
-            # Show which model we're using (visible to user)
             if model_idx == 0:
-                print(f"► Using model: {model.provider}/{model.model_name} (structured)")
-                if model.provider.lower() == "ollama":
-                    print(f"  ⚠️  Local model - exploit PoCs may be unreliable")
+                logger.debug(f"Using model: {model.provider}/{model.model_name} (structured)")
             else:
-                print(f"► Falling back to: {model.provider}/{model.model_name} (structured)")
-                if model.provider.lower() == "ollama":
-                    print(f"  ⚠️  Local model - exploit PoCs may be unreliable")
+                logger.warning(f"Falling back to: {model.provider}/{model.model_name} (structured)")
+            if model.provider.lower() == "ollama":
+                logger.warning(f"Local model — exploit PoCs may be unreliable")
 
             for attempt in range(self.config.max_retries):
                 try:
                     if attempt > 0:
-                        print(f"  ↻ Retrying... (attempt {attempt + 1}/{self.config.max_retries})")
+                        logger.info(f"Retrying {model.provider}/{model.model_name} (attempt {attempt + 1}/{self.config.max_retries})")
 
                     provider = self._get_provider(model)
 
@@ -540,9 +534,9 @@ class LLMClient:
                         if task_type:
                             self.task_type_costs[task_type] = self.task_type_costs.get(task_type, 0.0) + cost_delta
 
-                    logger.info(f"Structured generation successful: {model.provider}/{model.model_name} "
-                               f"(tokens: {tokens_delta}, cost: ${cost_delta:.4f}, "
-                               f"duration: {duration:.1f}s)")
+                    logger.debug(f"Structured generation successful: {model.provider}/{model.model_name} "
+                                f"(tokens: {tokens_delta}, cost: ${cost_delta:.4f}, "
+                                f"duration: {duration:.1f}s)")
 
                     result_dict, raw = result_tuple
                     return StructuredResponse(
