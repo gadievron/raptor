@@ -1,3 +1,7 @@
+---
+description: Validate that vulnerability findings are real, reachable, and exploitable
+---
+
 # /validate - Exploitability Validation Pipeline
 
 Validates that vulnerability findings are real, reachable, and exploitable before investing in exploit development.

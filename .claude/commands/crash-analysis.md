@@ -1,3 +1,7 @@
+---
+description: Autonomous crash root-cause analysis for C/C++ bugs
+---
+
 # /crash-analysis - Autonomous Crash Root-Cause Analysis
 
 Analyzes security bugs from bug tracker reports with full root-cause tracing.

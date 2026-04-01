@@ -1,6 +1,7 @@
 ---
 name: rr-debugger
 description: Deterministic debugging with rr record-replay. Use when debugging crashes, ASAN faults, or when reverse execution is needed. Provides reverse-next, reverse-step, reverse-continue commands and crash trace extraction.
+user-invocable: false
 ---
 
 # rr Deterministic Debugger

@@ -1,3 +1,7 @@
+---
+description: Evidence-backed forensic investigation for GitHub repositories
+---
+
 # /oss-forensics - OSS GitHub Forensic Investigation
 
 You are about to orchestrate a forensic investigation on a public GitHub repository.

@@ -1,6 +1,7 @@
 ---
 name: Code Coverage with gcov
 description: Add gcov code coverage instrumentation to C/C++ projects
+user-invocable: false
 version: 1.0
 author: Claude
 tags:

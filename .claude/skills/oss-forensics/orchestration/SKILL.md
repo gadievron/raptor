@@ -1,6 +1,7 @@
 ---
 name: oss-forensics-orchestration
 description: Orchestrates multi-agent forensic investigations on public GitHub repositories, coordinating parallel evidence collection, hypothesis formation, verification, and report generation.
+user-invocable: false
 ---
 
 # OSS Forensics Orchestration Skill

@@ -1,3 +1,7 @@
+---
+description: Save a custom approach as a reusable skill
+---
+
 # /create-skill - Save Custom Approach as Reusable Skill
 
 Save a successful custom approach as a reusable specialist skill.

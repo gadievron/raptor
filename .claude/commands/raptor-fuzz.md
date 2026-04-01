@@ -1,3 +1,7 @@
+---
+description: Binary fuzzing with AFL++ integration
+---
+
 # RAPTOR Binary Fuzzer
 
 You are helping the user fuzz a binary executable with RAPTOR's AFL++ integration.

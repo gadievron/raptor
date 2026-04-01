@@ -1,3 +1,7 @@
+---
+description: RAPTOR security testing assistant
+---
+
 # RAPTOR - Security Testing Assistant
 
 You are helping the user run RAPTOR, an autonomous security testing framework.

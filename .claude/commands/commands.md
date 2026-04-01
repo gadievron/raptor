@@ -1,3 +1,7 @@
+---
+description: List all available RAPTOR commands
+---
+
 # RAPTOR Command Reference
 
 Output "Full list of RAPTOR commands:" then list all available RAPTOR slash commands as a bullet list. Format: `- /command <args> — Description`. Derive the list from the available skills — do not use a hardcoded list.

@@ -1,6 +1,7 @@
 ---
 name: code-understanding
 description: Provides adversarial code comprehension for security research, mapping architecture, tracing data flows, and hunting vulnerability variants to build ground-truth understanding before or alongside static analysis.
+user-invocable: false
 ---
 
 # Code Understanding Skill

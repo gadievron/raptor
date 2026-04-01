@@ -1,6 +1,7 @@
 ---
 name: Line Execution Checker
 description: Check if specific lines were executed using gcov data
+user-invocable: false
 version: 1.0
 author: Claude
 tags:

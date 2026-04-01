@@ -1,6 +1,7 @@
 ---
 name: code-understanding-teach
 description: Explains unfamiliar code, frameworks, or patterns in depth, focusing on security properties and failure conditions, and returns a clear security verdict to resume interrupted analysis.
+user-invocable: false
 ---
 
 # [TEACH] Code Explanation Mode

@@ -1,6 +1,7 @@
 ---
 name: github-commit-recovery
 description: Recover deleted commits from GitHub using REST API, web interface, and git fetch. Use when you have commit SHAs and need to retrieve actual commit content, diffs, or patches. Includes techniques for accessing "deleted" commits that remain on GitHub servers.
+user-invocable: false
 version: 1.0
 author: mbrg
 tags:

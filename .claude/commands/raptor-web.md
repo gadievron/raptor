@@ -1,3 +1,7 @@
+---
+description: Web application security scanner (alpha)
+---
+
 # RAPTOR Web Application Scanner
 
 WARNING: /web is a STUB and should not be relied upon. Consider a placeholder/in alpha.

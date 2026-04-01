@@ -1,3 +1,7 @@
+---
+description: Map attack surface, trace data flows, hunt vulnerability variants
+---
+
 # /understand - RAPTOR Code Understanding
 
 You cannot find bugs if you don't have a deep, adversarial code understanding and comprehension for said codebase. This helps map the attack surface, trace data flows, hunt for vulnerability variants and so much more.....

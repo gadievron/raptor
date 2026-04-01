@@ -1,6 +1,7 @@
 ---
 name: code-understanding-trace
 description: Follows a single data flow from untrusted input through every function call to a dangerous sink, with full branch coverage and attacker control assessment, producing a structured trace for validation pipeline integration.
+user-invocable: false
 ---
 
 # [TRACE] Data Flow Tracing

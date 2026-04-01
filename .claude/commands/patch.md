@@ -1,3 +1,7 @@
+---
+description: Generate secure patches for vulnerabilities (beta)
+---
+
 # /patch - Generate Secure Patches (beta)
 
 Generate secure patches to fix vulnerabilities.

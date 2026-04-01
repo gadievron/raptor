@@ -1,6 +1,7 @@
 ---
 name: code-understanding-hunt
 description: Systematically finds all instances of a vulnerability pattern across the codebase, classifying each match by taint status and grouping by root cause to determine fix scope.
+user-invocable: false
 ---
 
 # [HUNT] Variant Analysis

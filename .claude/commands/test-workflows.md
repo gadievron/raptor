@@ -1,3 +1,7 @@
+---
+description: Run automated workflow tests for all commands
+---
+
 # /test-workflows - Run RAPTOR Test Suite
 
 Runs automated workflow tests to validate all commands and user scenarios.

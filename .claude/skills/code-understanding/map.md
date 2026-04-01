@@ -1,6 +1,7 @@
 ---
 name: code-understanding-map
 description: Builds a ground-truth model of a codebase's entry points, trust boundaries, and dangerous sinks from an attacker's perspective, producing context-map.json for pipeline integration.
+user-invocable: false
 ---
 
 # [MAP] Application Context Mapping
