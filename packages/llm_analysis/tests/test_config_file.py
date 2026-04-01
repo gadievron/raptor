@@ -110,8 +110,8 @@ class TestProviderDefaultModels:
     def test_anthropic_defaults_to_opus(self):
         assert PROVIDER_DEFAULT_MODELS["anthropic"] == "claude-opus-4-6"
 
-    def test_openai_defaults_to_thinking(self):
-        assert PROVIDER_DEFAULT_MODELS["openai"] == "gpt-5.2-thinking"
+    def test_openai_defaults_to_gpt54(self):
+        assert PROVIDER_DEFAULT_MODELS["openai"] == "gpt-5.4"
 
     def test_gemini_defaults_to_pro(self):
         assert PROVIDER_DEFAULT_MODELS["gemini"] == "gemini-2.5-pro"
@@ -119,14 +119,12 @@ class TestProviderDefaultModels:
     def test_all_defaults_have_costs(self):
         """Every default model should be in MODEL_COSTS."""
         for provider, model in PROVIDER_DEFAULT_MODELS.items():
-            if model != "mistral-large-latest":  # Mistral not in costs table
-                assert model in MODEL_COSTS, f"Default {provider} model '{model}' not in MODEL_COSTS"
+            assert model in MODEL_COSTS, f"Default {provider} model '{model}' not in MODEL_COSTS"
 
     def test_all_defaults_have_limits(self):
         """Every default model should be in MODEL_LIMITS."""
         for provider, model in PROVIDER_DEFAULT_MODELS.items():
-            if model != "mistral-large-latest":
-                assert model in MODEL_LIMITS, f"Default {provider} model '{model}' not in MODEL_LIMITS"
+            assert model in MODEL_LIMITS, f"Default {provider} model '{model}' not in MODEL_LIMITS"
 
 
 class TestModelDefaulting:
@@ -147,7 +145,7 @@ class TestModelDefaulting:
         assert result.model_name == "claude-opus-4-6"
         assert result.api_key == "sk-ant-test"
 
-    def test_openai_without_model_gets_thinking(self, tmp_path):
+    def test_openai_without_model_gets_gpt54(self, tmp_path):
         config = tmp_path / "models.json"
         config.write_text(json.dumps([
             {"provider": "openai", "api_key": "sk-test"}
@@ -158,7 +156,7 @@ class TestModelDefaulting:
             cfg._cached_thinking_model = None
             result = _get_best_thinking_model()
         assert result is not None
-        assert result.model_name == "gpt-5.2-thinking"
+        assert result.model_name == "gpt-5.4"
 
     def test_api_key_falls_back_to_env_var(self, tmp_path):
         """Config without api_key uses env var."""

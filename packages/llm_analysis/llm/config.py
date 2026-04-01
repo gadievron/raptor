@@ -73,9 +73,9 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
     Cached per-process.
 
     Priority:
-    1. Models with explicit reasoning support (gpt-5.2-thinking)
-    2. Most capable models (Opus > Sonnet > others)
-    3. Latest versions
+    1. Most capable models (Opus > gpt-5.4-pro > o3)
+    2. Strong models (gpt-5.2 > o4-mini > Mistral Large)
+    3. Fallback (Sonnet > Gemini Pro > Gemini Flash)
 
     Returns ModelConfig for best available thinking model, or None if none found.
     """
@@ -94,15 +94,19 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
     thinking_model_patterns = [
         # Tier 1: Most capable models
         ("anthropic", "claude-opus-4-6", 110),
-        ("openai", "gpt-5.2-thinking", 95),
+        ("openai", "gpt-5.4-pro", 100),
+        ("openai", "gpt-5.4", 95),
+        ("openai", "o3", 90),
 
         # Tier 2: Strong models
         ("openai", "gpt-5.2", 80),
+        ("openai", "o4-mini", 78),
         ("mistral", "mistral-large-latest", 75),
 
         # Tier 3: Latest capable models (fallback)
         ("anthropic", "claude-sonnet-4-6", 70),
         ("gemini", "gemini-2.5-pro", 65),
+        ("gemini", "gemini-2.5-flash", 55),
     ]
 
     # Find best matching model
@@ -308,7 +312,7 @@ def _get_default_fallback_models() -> List['ModelConfig']:
             ))
 
     if os.getenv("OPENAI_API_KEY"):
-        for model_name in ["gpt-5.2", "gpt-5.2-thinking"]:
+        for model_name in ["gpt-5.4", "gpt-5.2"]:
             limits = MODEL_LIMITS.get(model_name, {})
             costs = MODEL_COSTS.get(model_name, {})
             fallbacks.append(ModelConfig(

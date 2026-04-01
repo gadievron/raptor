@@ -45,14 +45,17 @@ class CostTracker:
         self._lock = threading.RLock()  # Reentrant — get_summary calls _budget_ratio
         self._total_cost = 0.0
         self._total_tokens = 0
+        self._thinking_tokens = 0
         self._max_cost = max_cost  # 0 = no limit
         self._per_model: Dict[str, float] = {}
 
-    def add_cost(self, model_name: str, cost: float, tokens: int = 0) -> None:
+    def add_cost(self, model_name: str, cost: float, tokens: int = 0,
+                 thinking_tokens: int = 0) -> None:
         """Record cost and tokens from any source (thread-safe)."""
         with self._lock:
             self._total_cost += cost
             self._total_tokens += tokens
+            self._thinking_tokens += thinking_tokens
             self._per_model[model_name] = self._per_model.get(model_name, 0.0) + cost
 
     @property
@@ -119,13 +122,16 @@ class CostTracker:
 
     def get_summary(self) -> Dict[str, Any]:
         with self._lock:
-            return {
+            summary = {
                 "total_cost": round(self._total_cost, 4),
                 "total_tokens": self._total_tokens,
                 "max_cost": self._max_cost,
                 "budget_used_percent": round(self._budget_ratio() * 100, 1) if self._max_cost > 0 else 0,
                 "cost_by_model": {k: round(v, 4) for k, v in self._per_model.items()},
             }
+            if self._thinking_tokens > 0:
+                summary["thinking_tokens"] = self._thinking_tokens
+            return summary
 
 
 def orchestrate(

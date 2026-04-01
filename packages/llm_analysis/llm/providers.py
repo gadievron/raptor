@@ -52,6 +52,7 @@ class LLMResponse:
     finish_reason: str
     input_tokens: int = 0
     output_tokens: int = 0
+    thinking_tokens: int = 0
     duration: float = 0.0
 
 
@@ -118,16 +119,21 @@ class LLMProvider(ABC):
             self.total_duration += duration
         logger.debug(f"LLM usage: {tokens} tokens, ${(cost or 0.0):.4f} (total: {self.total_tokens} tokens, ${self.total_cost:.4f})")
 
-    def _calculate_cost_split(self, input_tokens: int, output_tokens: int) -> float:
-        """Calculate cost using split input/output pricing."""
+    def _calculate_cost_split(self, input_tokens: int, output_tokens: int,
+                              thinking_tokens: int = 0) -> float:
+        """Calculate cost using split input/output pricing.
+
+        Thinking/reasoning tokens are billed at the output rate on all
+        providers (OpenAI, Google, Anthropic).
+        """
         from .model_data import MODEL_COSTS
         rates = MODEL_COSTS.get(self.config.model_name)
         if not rates:
             rate = self.config.cost_per_1k_tokens or 0.0
-            return ((input_tokens + output_tokens) / 1000) * rate
+            return ((input_tokens + output_tokens + thinking_tokens) / 1000) * rate
         return (
             (input_tokens / 1000) * rates["input"]
-            + (output_tokens / 1000) * rates["output"]
+            + ((output_tokens + thinking_tokens) / 1000) * rates["output"]
         )
 
     def _structured_fallback(self, prompt: str, schema: Dict[str, Any],
@@ -418,15 +424,24 @@ class OpenAICompatibleProvider(LLMProvider):
 
             input_tokens = 0
             output_tokens = 0
+            thinking_tokens = 0
             if response.usage:
                 input_tokens = response.usage.prompt_tokens or 0
                 output_tokens = response.usage.completion_tokens or 0
+                # Extract thinking/reasoning tokens (o3, o4-mini, etc.)
+                details = getattr(response.usage, 'completion_tokens_details', None)
+                if details:
+                    thinking_tokens = getattr(details, 'reasoning_tokens', 0) or 0
+                    # Reasoning tokens are included in completion_tokens — subtract
+                    # to get actual output tokens for display, but bill both as output
+                    output_tokens = output_tokens - thinking_tokens
 
-            tokens_used = input_tokens + output_tokens
-            cost = self._calculate_cost_split(input_tokens, output_tokens)
+            tokens_used = input_tokens + output_tokens + thinking_tokens
+            cost = self._calculate_cost_split(input_tokens, output_tokens, thinking_tokens)
 
             self.track_usage(tokens_used, cost, input_tokens, output_tokens, duration)
-            logger.debug(f"[OpenAI] model={self.config.model_name}, tokens={tokens_used}, cost=${cost:.4f}, duration={duration:.2f}s")
+            logger.debug(f"[OpenAI] model={self.config.model_name}, tokens={tokens_used}, cost=${cost:.4f}, duration={duration:.2f}s"
+                         + (f", thinking={thinking_tokens}" if thinking_tokens else ""))
 
             return LLMResponse(
                 content=content,
@@ -437,6 +452,7 @@ class OpenAICompatibleProvider(LLMProvider):
                 finish_reason=finish_reason,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
+                thinking_tokens=thinking_tokens,
                 duration=duration,
             )
 
@@ -473,12 +489,17 @@ class OpenAICompatibleProvider(LLMProvider):
 
                 input_tokens = 0
                 output_tokens = 0
+                thinking_tokens = 0
                 if completion.usage:
                     input_tokens = completion.usage.prompt_tokens or 0
                     output_tokens = completion.usage.completion_tokens or 0
+                    details = getattr(completion.usage, 'completion_tokens_details', None)
+                    if details:
+                        thinking_tokens = getattr(details, 'reasoning_tokens', 0) or 0
+                        output_tokens = output_tokens - thinking_tokens
 
-                tokens_used = input_tokens + output_tokens
-                cost = self._calculate_cost_split(input_tokens, output_tokens)
+                tokens_used = input_tokens + output_tokens + thinking_tokens
+                cost = self._calculate_cost_split(input_tokens, output_tokens, thinking_tokens)
                 self.track_usage(tokens_used, cost, input_tokens, output_tokens, duration)
 
                 return result_dict, full_response
@@ -558,11 +579,14 @@ class AnthropicProvider(LLMProvider):
 
             input_tokens = 0
             output_tokens = 0
+            thinking_tokens = 0
             if response.usage:
                 input_tokens = response.usage.input_tokens or 0
                 output_tokens = response.usage.output_tokens or 0
-            tokens_used = input_tokens + output_tokens
-            cost = self._calculate_cost_split(input_tokens, output_tokens)
+                # Anthropic extended thinking (when available)
+                thinking_tokens = getattr(response.usage, 'thinking_tokens', 0) or 0
+            tokens_used = input_tokens + output_tokens + thinking_tokens
+            cost = self._calculate_cost_split(input_tokens, output_tokens, thinking_tokens)
 
             self.track_usage(tokens_used, cost, input_tokens, output_tokens, duration)
             logger.debug(f"[Anthropic] model={self.config.model_name}, tokens={tokens_used}, cost=${cost:.4f}, duration={duration:.2f}s")
@@ -576,6 +600,7 @@ class AnthropicProvider(LLMProvider):
                 finish_reason=finish_reason,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
+                thinking_tokens=thinking_tokens,
                 duration=duration,
             )
 
@@ -614,11 +639,13 @@ class AnthropicProvider(LLMProvider):
 
                 input_tokens = 0
                 output_tokens = 0
+                thinking_tokens = 0
                 if completion.usage:
                     input_tokens = completion.usage.input_tokens or 0
                     output_tokens = completion.usage.output_tokens or 0
-                tokens_used = input_tokens + output_tokens
-                cost = self._calculate_cost_split(input_tokens, output_tokens)
+                    thinking_tokens = getattr(completion.usage, 'thinking_tokens', 0) or 0
+                tokens_used = input_tokens + output_tokens + thinking_tokens
+                cost = self._calculate_cost_split(input_tokens, output_tokens, thinking_tokens)
                 self.track_usage(tokens_used, cost, input_tokens, output_tokens, duration)
 
                 return result_dict, full_response
