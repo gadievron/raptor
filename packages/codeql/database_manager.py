@@ -8,11 +8,13 @@ validation, and cleanup.
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
@@ -348,7 +350,11 @@ class DatabaseManager:
             if Path(build_cmd).is_file() or re.fullmatch(r'[a-zA-Z0-9._-]+', build_cmd):
                 cmd.extend(["--command", build_cmd])
             else:
-                build_script = Path(working_dir) / ".raptor_codeql_build.sh"
+                fd, script_name = tempfile.mkstemp(
+                    prefix=".raptor_codeql_build_", suffix=".sh", dir=working_dir,
+                )
+                os.close(fd)
+                build_script = Path(script_name)
                 build_script.write_text(f"#!/bin/bash\n{build_cmd}\n")
                 build_script.chmod(build_script.stat().st_mode | stat.S_IEXEC)
                 cmd.extend(["--command", str(build_script)])
