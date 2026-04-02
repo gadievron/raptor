@@ -213,9 +213,12 @@ class LiteLLMProvider(LLMProvider):
             )
 
         # Build model identifier for LiteLLM
-        # Format: provider/model-name (e.g., "openai/gpt-4o-mini", "ollama/deepseek-coder:latest")
+        # Format: provider/model-name (e.g., "openai/gpt-4o-mini", "ollama_chat/llama3.3:70b")
+        # Use ollama_chat/ (not ollama/) to route through LiteLLM's chat endpoint handler.
+        # The ollama/ prefix uses the /api/generate endpoint which returns empty content
+        # and no reasoning_content for thinking models, making fallback impossible.
         if config.provider.lower() == "ollama":
-            self.model_id = f"{config.provider.lower()}/{config.model_name}"
+            self.model_id = f"ollama_chat/{config.model_name}"
         else:
             self.model_id = f"{config.provider.lower()}/{config.model_name}"
 
@@ -378,8 +381,88 @@ class LiteLLMProvider(LLMProvider):
             return result_dict, full_response
 
         except Exception as e:
+            # Thinking model fallback: some Ollama models (e.g. qwen3.5, gpt-oss) put
+            # their response in reasoning_content instead of content. Instructor can't
+            # parse an empty content field, so we bypass it and extract JSON directly.
+            if self.config.provider.lower() == "ollama":
+                try:
+                    result = self._thinking_model_fallback(
+                        messages, pydantic_model, create_kwargs
+                    )
+                    if result is not None:
+                        return result
+                except Exception as fallback_err:
+                    logger.debug(f"Thinking model fallback also failed: {fallback_err}")
+
             logger.error(f"Structured generation failed: {e}")
             raise
+
+    def _thinking_model_fallback(
+        self, messages: list, pydantic_model, create_kwargs: dict
+    ) -> Optional[Tuple[Dict[str, Any], str]]:
+        """
+        Fallback for thinking models that put JSON in reasoning_content instead of content.
+
+        Some Ollama models (e.g. qwen3.5:122b) return their response in the
+        reasoning_content field while leaving content empty. Instructor only reads
+        content, so it fails. This method makes a direct LiteLLM call and extracts
+        JSON from reasoning_content.
+
+        Args:
+            messages: Chat messages to send
+            pydantic_model: Pydantic model class for validation
+            create_kwargs: Original kwargs (for api_base, api_key, etc.)
+
+        Returns:
+            Tuple of (parsed dict, full response) if successful, None otherwise
+        """
+        logger.info(
+            "Instructor failed with empty content — attempting thinking model fallback "
+            f"for {self.config.model_name}"
+        )
+
+        response = self.litellm.completion(
+            model=self.model_id,
+            messages=messages,
+            temperature=self.config.temperature,
+            max_tokens=self.config.max_tokens,
+            api_base=create_kwargs.get("api_base"),
+            api_key=create_kwargs.get("api_key"),
+            format="json",
+        )
+
+        content = response.choices[0].message.content or ""
+        reasoning = getattr(response.choices[0].message, "reasoning_content", "") or ""
+
+        # Use content if available, otherwise fall back to reasoning_content
+        json_source = content.strip() if content.strip() else reasoning.strip()
+        if not json_source:
+            logger.warning(
+                f"Thinking model fallback: both content and reasoning_content are empty "
+                f"for {self.config.model_name}"
+            )
+            return None
+
+        source_label = "content" if content.strip() else "reasoning_content"
+        logger.info(
+            f"Thinking model fallback: extracted JSON from {source_label} "
+            f"for {self.config.model_name}"
+        )
+
+        # Parse and validate against the Pydantic schema
+        parsed = json.loads(json_source)
+        validated = pydantic_model.model_validate(parsed)
+        result_dict = validated.model_dump()
+        full_response = json.dumps(result_dict, indent=2)
+
+        # Track usage
+        tokens_used = response.usage.total_tokens if (
+            hasattr(response, 'usage') and response.usage is not None
+        ) else 0
+        cost = (tokens_used / 1000) * self.config.cost_per_1k_tokens
+        self.track_usage(tokens_used, cost)
+
+        return result_dict, full_response
 
 
 def create_provider(config: ModelConfig) -> LLMProvider:
