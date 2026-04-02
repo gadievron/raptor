@@ -56,6 +56,8 @@ class VulnerabilityContext:
         self.snippet = finding.get("snippet")
         self.message = finding.get("message")
         self.level = finding.get("level", "warning")
+        self.cwe_id = finding.get("cwe_id")
+        self.tool = finding.get("tool")
 
         # Dataflow analysis fields
         self.has_dataflow: bool = finding.get("has_dataflow", False)
@@ -244,6 +246,8 @@ class VulnerabilityContext:
             "end_line": self.end_line,
             "level": self.level,
             "message": self.message,
+            "cwe_id": self.cwe_id,
+            "tool": self.tool,
             "exploitable": self.exploitable,
             "exploitability_score": self.exploitability_score,
             "analysis": self.analysis,
@@ -316,6 +320,8 @@ def convert_validated_to_agent_format(data: dict) -> List[Dict[str, Any]]:
             "attack_path_ref": f.feasibility.attack_path_ref,
             "ruling": f.ruling.to_dict(),
             "final_status": f.final_status or "pending",
+            "tool": f.tool,
+            "cwe_id": f.cwe_id,
         })
     return converted
 

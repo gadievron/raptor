@@ -7,6 +7,7 @@ including validation, deduplication, and merging.
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -107,6 +108,31 @@ def deduplicate_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     return unique
 
 
+def _extract_cwe_from_rule(rule: Dict[str, Any]) -> Optional[str]:
+    """Extract CWE ID from a SARIF rule's properties/tags.
+
+    SARIF rules carry CWE metadata in various places:
+    - properties.tags: ["external/cwe/cwe-89", "security"]
+    - properties.cwe: "CWE-89"
+    - shortDescription or fullDescription text
+    """
+    # Check properties.cwe directly
+    props = rule.get("properties", {})
+    if props.get("cwe"):
+        cwe = props["cwe"]
+        if isinstance(cwe, str) and re.match(r"CWE-\d+", cwe):
+            return cwe
+
+    # Check tags for CWE patterns
+    for tag in props.get("tags", []):
+        if isinstance(tag, str) and "cwe" in tag.lower():
+            m = re.search(r"cwe-(\d+)", tag, re.IGNORECASE)
+            if m:
+                return f"CWE-{m.group(1)}"
+
+    return None
+
+
 def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
     """
     Parse findings from a SARIF file.
@@ -135,7 +161,18 @@ def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
     for run_idx, run in enumerate(runs):
         results = run.get("results", [])
         print(f"[SARIF Parser] Run {run_idx + 1}: {len(results)} result(s)")
-        
+
+        # Extract tool name for provenance
+        tool_name = run.get("tool", {}).get("driver", {}).get("name")
+
+        # Build rule_id → CWE lookup from tool.driver.rules
+        rules_by_id = {}
+        for rule in run.get("tool", {}).get("driver", {}).get("rules", []):
+            rid = rule.get("id", "")
+            cwe_id = _extract_cwe_from_rule(rule)
+            if rid:
+                rules_by_id[rid] = {"cwe_id": cwe_id}
+
         for result in results:
             finding_id = (
                 result.get("fingerprints", {}).get("matchBasedId/v1")
@@ -152,17 +189,22 @@ def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
             code_flows = result.get("codeFlows", [])
             dataflow_path = extract_dataflow_path(code_flows) if code_flows else None
 
+            rule_id = result.get("ruleId")
+            rule_meta = rules_by_id.get(rule_id, {})
+
             findings.append(
                 {
                     "finding_id": finding_id,
-                    "rule_id": result.get("ruleId"),
+                    "rule_id": rule_id,
                     "message": result.get("message", {}).get("text"),
                     "file": artifact.get("uri"),
                     "startLine": region.get("startLine"),
                     "endLine": region.get("endLine"),
                     "snippet": snippet,
                     "level": result.get("level", "warning"),
-                    # NEW: Dataflow information
+                    "cwe_id": rule_meta.get("cwe_id"),
+                    "tool": tool_name,
+                    # Dataflow information
                     "has_dataflow": dataflow_path is not None,
                     "dataflow_path": dataflow_path,
                 }

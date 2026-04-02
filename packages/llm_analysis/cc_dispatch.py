@@ -219,7 +219,12 @@ Read the full file for context before writing the patch.
     prompt += f"""
 Return your analysis as structured JSON with finding_id "{finding_id}".
 Rate exploitability_score from 0.0 (impossible) to 1.0 (trivial).
+Set confidence to high, medium, or low.
 Include a ruling: validated, false_positive, unreachable, test_code, dead_code, or mitigated.
+Identify the CWE ID (e.g., CWE-79) and vuln_type category (e.g., xss, buffer_overflow).
+Summarize the dataflow as source->sink chain in dataflow_summary.
+Provide remediation guidance in the remediation field.
+If false_positive, set false_positive_reason to explain why.
 """
 
     return prompt

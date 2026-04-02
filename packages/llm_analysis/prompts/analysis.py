@@ -158,11 +158,17 @@ If your reasoning hedges ("maybe", "in theory"), verify the claim or rule it out
 **Final assessment:**
 Based on your analysis through Stages A-D:
 - Rate exploitability_score from 0.0 (impossible) to 1.0 (trivial to exploit)
+- Set confidence to high, medium, or low based on how certain you are
 - Estimate CVSS score (0.0-10.0)
 - Set is_true_positive based on whether the vulnerability pattern is real
 - Set is_exploitable based on whether a realistic attack path exists
 - Set ruling to exactly one of: validated, false_positive, unreachable, test_code, dead_code, mitigated
 - Describe the attack scenario if exploitable
+- Identify the CWE ID if applicable (e.g., CWE-79 for XSS, CWE-120 for buffer overflow)
+- Identify the vuln_type category (e.g., command_injection, xss, buffer_overflow)
+- Summarize the dataflow as a concise source->sink chain (e.g., "request.getParameter('id') -> Statement.executeQuery()")
+- Provide remediation guidance: what should the developer do to fix this?
+- If ruling is false_positive, set false_positive_reason to explain why
 
 Be rigorous. False positives waste significant downstream effort (exploit generation,
 patch creation, review). But do not dismiss real vulnerabilities — investigate first.

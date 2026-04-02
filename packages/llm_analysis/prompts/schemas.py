@@ -1,20 +1,30 @@
 """Shared schemas for LLM analysis prompts.
 
 Used by both agent.py (sequential external LLM) and orchestrator.py (parallel dispatch).
+Field names and types are aligned with the /validate pipeline — see
+packages/schema_constants.py for the canonical field list.
 """
+
+from packages.schema_constants import AGENTIC_RULING_VALUES, SEVERITY_LEVELS
 
 # Schema for vulnerability analysis — used with generate_structured()
 ANALYSIS_SCHEMA = {
     "is_true_positive": "boolean",
     "is_exploitable": "boolean",
     "exploitability_score": "float (0.0-1.0)",
-    "severity_assessment": "string (critical/high/medium/low)",
-    "ruling": "string (validated/false_positive/unreachable/test_code/dead_code/mitigated)",
+    "confidence": "string (high/medium/low)",
+    "severity_assessment": f"string ({'/'.join(SEVERITY_LEVELS)})",
+    "ruling": f"string ({'/'.join(AGENTIC_RULING_VALUES)})",
     "reasoning": "string",
     "attack_scenario": "string",
     "prerequisites": "list of strings",
     "impact": "string",
     "cvss_score_estimate": "float (0.0-10.0)",
+    "vuln_type": "string - vulnerability category (e.g. command_injection, xss, buffer_overflow)",
+    "cwe_id": "string (CWE-NNN) or null",
+    "dataflow_summary": "string - concise source->sanitizer->sink chain",
+    "remediation": "string - what to fix and how",
+    "false_positive_reason": "string or null - reason when ruling is false_positive",
 }
 
 # Additional fields when dataflow is available
@@ -38,12 +48,21 @@ FINDING_RESULT_SCHEMA = {
             "minimum": 0,
             "maximum": 1,
         },
+        "confidence": {"type": ["string", "null"]},
         "severity_assessment": {"type": "string"},
         "ruling": {"type": ["string", "null"]},
         "reasoning": {"type": "string"},
-        "attack_scenario": {"type": "string"},
+        "attack_scenario": {"type": ["string", "null"]},
         "exploit_code": {"type": ["string", "null"]},
         "patch_code": {"type": ["string", "null"]},
+        "cvss_score_estimate": {"type": ["number", "null"]},
+        "vuln_type": {"type": ["string", "null"]},
+        "cwe_id": {"type": ["string", "null"]},
+        "dataflow_summary": {"type": ["string", "null"]},
+        "remediation": {"type": ["string", "null"]},
+        "false_positive_reason": {"type": ["string", "null"]},
+        "tool": {"type": ["string", "null"]},
+        "rule_id": {"type": ["string", "null"]},
     },
     "required": ["finding_id", "is_true_positive", "is_exploitable", "reasoning"],
     "additionalProperties": False,
