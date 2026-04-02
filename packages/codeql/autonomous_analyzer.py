@@ -57,6 +57,21 @@ class VulnerabilityAnalysis:
     mitigation: str
 
 
+# Dict schema for LLM structured generation (consistent with other callers)
+VULNERABILITY_ANALYSIS_SCHEMA = {
+    "is_true_positive": "boolean",
+    "is_exploitable": "boolean",
+    "exploitability_score": "float (0.0-1.0)",
+    "severity_assessment": "string (critical/high/medium/low)",
+    "reasoning": "string",
+    "attack_scenario": "string",
+    "prerequisites": "list of strings",
+    "impact": "string",
+    "cvss_estimate": "float (0.0-10.0)",
+    "mitigation": "string",
+}
+
+
 @dataclass
 class AutonomousAnalysisResult:
     """Complete autonomous analysis result."""
@@ -283,7 +298,7 @@ Respond in JSON format:
             # Use LLM for analysis (Bug #15: multi_turn path removed - analyze_vulnerability_deeply() doesn't exist)
             response_dict, _ = self.llm.generate_structured(
                 prompt=prompt,
-                schema=VulnerabilityAnalysis,
+                schema=VULNERABILITY_ANALYSIS_SCHEMA,
                 system_prompt="You are Mark Dowd, an expert security researcher."
             )
 

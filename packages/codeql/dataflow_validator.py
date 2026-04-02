@@ -55,6 +55,20 @@ class DataflowValidation:
     prerequisites: List[str]
 
 
+# Dict schema for LLM structured generation (consistent with other callers)
+DATAFLOW_VALIDATION_SCHEMA = {
+    "is_exploitable": "boolean",
+    "confidence": "float (0.0-1.0)",
+    "sanitizers_effective": "boolean",
+    "bypass_possible": "boolean",
+    "bypass_strategy": "string - strategy to bypass sanitizers, or empty if none",
+    "attack_complexity": "string (low/medium/high)",
+    "reasoning": "string",
+    "barriers": "list of strings",
+    "prerequisites": "list of strings",
+}
+
+
 class DataflowValidator:
     """
     Validate CodeQL dataflow findings using LLM analysis.
@@ -263,7 +277,7 @@ Respond in JSON format:
             # Use LLM to analyze
             response_dict, _ = self.llm.generate_structured(
                 prompt=prompt,
-                schema=DataflowValidation,
+                schema=DATAFLOW_VALIDATION_SCHEMA,
                 system_prompt="You are an expert security researcher analyzing dataflow vulnerabilities."
             )
 
