@@ -39,6 +39,12 @@ try:
 except ImportError:
     ANTHROPIC_SDK_AVAILABLE = False
 
+try:
+    from google import genai as _genai_module
+    GENAI_SDK_AVAILABLE = True
+except ImportError:
+    GENAI_SDK_AVAILABLE = False
+
 
 @dataclass
 class LLMAvailability:
@@ -357,7 +363,10 @@ def _config_has_keyed_models() -> bool:
         elif provider == "ollama":
             if not OPENAI_SDK_AVAILABLE:
                 continue
-        elif provider in ("openai", "gemini", "mistral"):
+        elif provider == "gemini":
+            if not (GENAI_SDK_AVAILABLE or OPENAI_SDK_AVAILABLE):
+                continue
+        elif provider in ("openai", "mistral"):
             if not OPENAI_SDK_AVAILABLE:
                 continue
         else:
@@ -401,7 +410,7 @@ def detect_llm_availability() -> LLMAvailability:
     # Check cloud API keys, gated on SDK availability
     has_anthropic = bool(os.getenv("ANTHROPIC_API_KEY")) and (ANTHROPIC_SDK_AVAILABLE or OPENAI_SDK_AVAILABLE)
     has_openai = bool(os.getenv("OPENAI_API_KEY")) and OPENAI_SDK_AVAILABLE
-    has_gemini = bool(os.getenv("GEMINI_API_KEY")) and OPENAI_SDK_AVAILABLE
+    has_gemini = bool(os.getenv("GEMINI_API_KEY")) and (GENAI_SDK_AVAILABLE or OPENAI_SDK_AVAILABLE)
     has_mistral = bool(os.getenv("MISTRAL_API_KEY")) and OPENAI_SDK_AVAILABLE
 
     has_cloud_keys = has_anthropic or has_openai or has_gemini or has_mistral
@@ -449,7 +458,7 @@ def _warn_unusable_keys():
     sdk_requirements = {
         "anthropic": ("anthropic or openai", ANTHROPIC_SDK_AVAILABLE or OPENAI_SDK_AVAILABLE),
         "openai": ("openai", OPENAI_SDK_AVAILABLE),
-        "gemini": ("openai", OPENAI_SDK_AVAILABLE),
+        "gemini": ("google-genai or openai", GENAI_SDK_AVAILABLE or OPENAI_SDK_AVAILABLE),
         "mistral": ("openai", OPENAI_SDK_AVAILABLE),
     }
 

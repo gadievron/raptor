@@ -82,10 +82,21 @@ class TestCreateProviderOpenAIRoute:
         """create_provider('openai') returns OpenAICompatibleProvider."""
         self._make_provider("openai", "gpt-5.2", "sk-test", "https://api.openai.com/v1")
 
-    def test_returns_openai_provider_for_gemini(self):
-        """create_provider('gemini') returns OpenAICompatibleProvider."""
-        self._make_provider("gemini", "gemini-2.5-pro", "AIza-test",
-                           "https://generativelanguage.googleapis.com/v1beta/openai")
+    def test_returns_native_provider_for_gemini(self):
+        """create_provider('gemini') returns GeminiProvider when google-genai is installed."""
+        from packages.llm_analysis.llm.providers import GENAI_SDK_AVAILABLE
+        if GENAI_SDK_AVAILABLE:
+            from packages.llm_analysis.llm.providers import GeminiProvider, create_provider as _create
+            config = ModelConfig(
+                provider="gemini", model_name="gemini-2.5-pro",
+                api_key="test-gemini-key",
+                api_base="https://generativelanguage.googleapis.com/v1beta/openai",
+            )
+            provider = _create(config)
+            assert isinstance(provider, GeminiProvider)
+        else:
+            self._make_provider("gemini", "gemini-2.5-pro", "test-gemini-key",
+                               "https://generativelanguage.googleapis.com/v1beta/openai")
 
     def test_returns_openai_provider_for_mistral(self):
         """create_provider('mistral') returns OpenAICompatibleProvider."""

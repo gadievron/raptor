@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-LLM Provider Implementations — OpenAI SDK + Anthropic SDK + Instructor
+LLM Provider Implementations — OpenAI SDK + Anthropic SDK + Gemini SDK + Instructor
 
-Dual-SDK approach: uses the OpenAI SDK for OpenAI-compatible providers
-(OpenAI, Ollama, vLLM, etc.) and the Anthropic SDK for Anthropic models.
+Native SDKs where available: Anthropic SDK for Anthropic, google-genai
+for Gemini (with OpenAI shim fallback), and OpenAI SDK for everything else.
 Instructor is used for structured output when available, with a universal
 JSON-in-prompt fallback for providers that lack native structured support.
 """
@@ -26,13 +26,15 @@ from .config import ModelConfig
 logger = get_logger()
 
 # SDK availability flags (canonical source is detection.py)
-from .detection import OPENAI_SDK_AVAILABLE, ANTHROPIC_SDK_AVAILABLE
+from .detection import OPENAI_SDK_AVAILABLE, ANTHROPIC_SDK_AVAILABLE, GENAI_SDK_AVAILABLE
 
 # Re-import the actual modules where available (config.py only sets flags)
 if OPENAI_SDK_AVAILABLE:
     from openai import OpenAI
 if ANTHROPIC_SDK_AVAILABLE:
     import anthropic
+if GENAI_SDK_AVAILABLE:
+    from google import genai as _genai_module
 
 try:
     import instructor
@@ -224,6 +226,49 @@ def _coerce_to_schema(data: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str,
             coerced[field_name] = ""
 
     return coerced
+
+
+def _schema_to_gemini(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert JSON Schema to Gemini-compatible schema.
+
+    The google-genai SDK rejects nullable union types like ["string", "null"].
+    Gemini expects single type strings ("STRING") with a separate "nullable" flag.
+    """
+    TYPE_MAP = {
+        "string": "STRING", "number": "NUMBER", "integer": "INTEGER",
+        "boolean": "BOOLEAN", "array": "ARRAY", "object": "OBJECT", "null": "NULL",
+    }
+
+    def convert_property(prop: Dict[str, Any]) -> Dict[str, Any]:
+        out = {}
+        prop_type = prop.get("type")
+        if isinstance(prop_type, list):
+            # ["string", "null"] → type="STRING", nullable=True
+            non_null = [t for t in prop_type if t != "null"]
+            out["type"] = TYPE_MAP.get(non_null[0], non_null[0]) if non_null else "STRING"
+            if "null" in prop_type:
+                out["nullable"] = True
+        elif prop_type:
+            out["type"] = TYPE_MAP.get(prop_type, prop_type)
+
+        if "description" in prop:
+            out["description"] = prop["description"]
+        if "enum" in prop:
+            out["enum"] = prop["enum"]
+        if "items" in prop:
+            out["items"] = convert_property(prop["items"])
+        if "properties" in prop:
+            out["properties"] = {k: convert_property(v) for k, v in prop["properties"].items()}
+            if "required" in prop:
+                out["required"] = prop["required"]
+        return out
+
+    result = {"type": "OBJECT"}
+    if "properties" in schema:
+        result["properties"] = {k: convert_property(v) for k, v in schema["properties"].items()}
+    if "required" in schema:
+        result["required"] = schema["required"]
+    return result
 
 
 def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']]):
@@ -663,6 +708,163 @@ class AnthropicProvider(LLMProvider):
         return self._structured_fallback(prompt, schema, pydantic_model, system_prompt)
 
 
+class GeminiProvider(LLMProvider):
+    """Native Google Gemini provider using the google-genai SDK.
+
+    Advantages over the OpenAI-compatible shim:
+    - Exposes thoughts_token_count for accurate cost tracking
+    - Native schema-constrained JSON output (server-side grammar enforcement)
+    - No dependency on Google's OpenAI compatibility layer
+
+    Falls back to OpenAICompatibleProvider if google-genai is not installed.
+    """
+
+    def __init__(self, config: ModelConfig):
+        super().__init__(config)
+        if not GENAI_SDK_AVAILABLE:
+            raise RuntimeError("google-genai SDK not installed: pip install google-genai")
+
+        import threading
+        self._local = threading.local()
+        logger.debug(f"Initialized GeminiProvider: {config.model_name}")
+
+    @property
+    def client(self):
+        """Per-thread client — google-genai is not guaranteed thread-safe."""
+        if not hasattr(self._local, 'client'):
+            self._local.client = _genai_module.Client(api_key=self.config.api_key)
+        return self._local.client
+
+    def generate(self, prompt: str, system_prompt: Optional[str] = None,
+                 **kwargs) -> LLMResponse:
+        """Generate completion using the native Gemini SDK."""
+        config_kwargs = {
+            "temperature": kwargs.get("temperature", self.config.temperature),
+            "max_output_tokens": kwargs.get("max_tokens", self.config.max_tokens),
+        }
+
+        contents = [{"role": "user", "parts": [{"text": prompt}]}]
+        generate_kwargs = {
+            "model": self.config.model_name,
+            "contents": contents,
+            "config": config_kwargs,
+        }
+        if system_prompt:
+            generate_kwargs["config"]["system_instruction"] = system_prompt
+
+        try:
+            t_start = time.monotonic()
+            response = self.client.models.generate_content(**generate_kwargs)
+            duration = time.monotonic() - t_start
+
+            if not response.text and not response.candidates:
+                raise RuntimeError("Gemini returned empty response")
+
+            content = response.text or ""
+            finish_reason = "complete"
+            if response.candidates and response.candidates[0].finish_reason:
+                fr = response.candidates[0].finish_reason
+                finish_reason = getattr(fr, 'name', str(fr)).lower()
+
+            # Gemini safety filters block exploit/attack content — detect and raise
+            # so the caller sees a clear error rather than empty content
+            if not content and finish_reason in ('safety', 'recitation', 'blocked', 'other'):
+                raise RuntimeError(
+                    f"Gemini blocked response (finish_reason={finish_reason}). "
+                    f"This typically happens with exploit code or attack scenario prompts."
+                )
+
+            input_tokens = 0
+            output_tokens = 0
+            thinking_tokens = 0
+            if response.usage_metadata:
+                input_tokens = response.usage_metadata.prompt_token_count or 0
+                output_tokens = response.usage_metadata.candidates_token_count or 0
+                thinking_tokens = getattr(response.usage_metadata, 'thoughts_token_count', 0) or 0
+
+            tokens_used = input_tokens + output_tokens + thinking_tokens
+            cost = self._calculate_cost_split(input_tokens, output_tokens, thinking_tokens)
+
+            self.track_usage(tokens_used, cost, input_tokens, output_tokens, duration)
+            logger.debug(f"[Gemini] model={self.config.model_name}, tokens={tokens_used}, cost=${cost:.4f}, "
+                         f"duration={duration:.2f}s, thinking={thinking_tokens}")
+
+            return LLMResponse(
+                content=content,
+                model=self.config.model_name,
+                provider="gemini",
+                tokens_used=tokens_used,
+                cost=cost,
+                finish_reason=finish_reason,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                thinking_tokens=thinking_tokens,
+                duration=duration,
+            )
+
+        except Exception as e:
+            logger.error(f"Gemini completion failed: {e}")
+            raise
+
+    def generate_structured(self, prompt: str, schema: Dict[str, Any],
+                           system_prompt: Optional[str] = None) -> Tuple[Dict[str, Any], str]:
+        """Generate structured output using Gemini's native JSON mode."""
+        pydantic_model = _dict_schema_to_pydantic(schema)
+
+        config_kwargs = {
+            "temperature": self.config.temperature,
+            "max_output_tokens": self.config.max_tokens,
+            "response_mime_type": "application/json",
+            "response_schema": _schema_to_gemini(schema),
+        }
+
+        contents = [{"role": "user", "parts": [{"text": prompt}]}]
+        generate_kwargs = {
+            "model": self.config.model_name,
+            "contents": contents,
+            "config": config_kwargs,
+        }
+        if system_prompt:
+            generate_kwargs["config"]["system_instruction"] = system_prompt
+
+        try:
+            t_start = time.monotonic()
+            response = self.client.models.generate_content(**generate_kwargs)
+            duration = time.monotonic() - t_start
+
+            content = response.text or ""
+            parsed = json.loads(content)
+            parsed = _coerce_to_schema(parsed, schema)
+            validated = pydantic_model.model_validate(parsed)
+            result_dict = validated.model_dump()
+            full_response = json.dumps(result_dict, indent=2)
+
+            input_tokens = 0
+            output_tokens = 0
+            thinking_tokens = 0
+            if response.usage_metadata:
+                input_tokens = response.usage_metadata.prompt_token_count or 0
+                output_tokens = response.usage_metadata.candidates_token_count or 0
+                thinking_tokens = getattr(response.usage_metadata, 'thoughts_token_count', 0) or 0
+
+            tokens_used = input_tokens + output_tokens + thinking_tokens
+            cost = self._calculate_cost_split(input_tokens, output_tokens, thinking_tokens)
+            self.track_usage(tokens_used, cost, input_tokens, output_tokens, duration)
+
+            logger.debug(f"[Gemini] structured model={self.config.model_name}, tokens={tokens_used}, "
+                         f"cost=${cost:.4f}, duration={duration:.2f}s, thinking={thinking_tokens}")
+
+            return result_dict, full_response
+
+        except (json.JSONDecodeError, ValueError, KeyError) as e:
+            # Schema/parsing error — native mode incompatible, fall back to JSON-in-prompt
+            logger.warning(f"Gemini native structured generation failed (falling back): {e}")
+            return self._structured_fallback(prompt, schema, pydantic_model, system_prompt)
+        except Exception:
+            # Auth, network, quota — don't waste a second call
+            raise
+
+
 class ClaudeCodeProvider:
     """
     LLM provider stub that signals 'Claude Code will handle this.'
@@ -715,8 +917,9 @@ def create_provider(config: ModelConfig) -> LLMProvider:
     """
     Factory function to create appropriate provider.
 
-    Uses AnthropicProvider for Anthropic models and OpenAICompatibleProvider
-    for everything else (OpenAI, Ollama, vLLM, Gemini, Mistral, etc.).
+    Uses native SDKs where available: AnthropicProvider for Anthropic,
+    GeminiProvider for Gemini (with OpenAI shim fallback), and
+    OpenAICompatibleProvider for everything else.
 
     Args:
         config: ModelConfig specifying provider and model
@@ -740,6 +943,17 @@ def create_provider(config: ModelConfig) -> LLMProvider:
         else:
             raise RuntimeError(
                 "Anthropic provider requires: pip install anthropic (or) pip install openai"
+            )
+    if provider == "gemini":
+        if GENAI_SDK_AVAILABLE:
+            return GeminiProvider(config)
+        elif OPENAI_SDK_AVAILABLE:
+            logger.info("google-genai SDK not installed — using OpenAI-compatible endpoint for Gemini. "
+                        "For accurate thinking token tracking: pip install google-genai")
+            return OpenAICompatibleProvider(config)
+        else:
+            raise RuntimeError(
+                "Gemini provider requires: pip install google-genai (or) pip install openai"
             )
     if OPENAI_SDK_AVAILABLE:
         return OpenAICompatibleProvider(config)

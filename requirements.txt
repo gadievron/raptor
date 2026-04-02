@@ -9,8 +9,9 @@ pydantic>=2.9.2
 instructor>=1.0.0
 
 # Optional: LLM provider SDKs (install for external LLM support)
-# pip install openai        # OpenAI, Gemini, Mistral, Ollama
+# pip install openai        # OpenAI, Gemini (via shim), Mistral, Ollama
 # pip install anthropic     # Anthropic Claude (native structured output)
+# pip install google-genai  # Google Gemini (native SDK, accurate thinking token costs)
 
 # Optional: For enhanced dataflow visualization (recommended)
 tabulate>=0.9.0
