@@ -144,6 +144,10 @@ class LLMProvider(ABC):
         with Pydantic. Works with any LLM that can produce JSON.
         Usage is tracked by self.generate() — no double counting.
         """
+        # Normalize schema to a dict for JSON serialization and coercion
+        # (handles dataclass classes and other non-dict inputs)
+        if not isinstance(schema, dict):
+            schema = pydantic_model.model_json_schema()
         schema_json = json.dumps(schema, indent=2)
         augmented_prompt = (
             f"{prompt}\n\n"
@@ -250,12 +254,36 @@ def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']]):
     Raises:
         ValueError: If schema is invalid or empty
     """
+    from dataclasses import fields as dc_fields, is_dataclass
     from pydantic import BaseModel, Field, create_model
     from typing import get_type_hints
 
     # Check if already a Pydantic model class
     if isclass(schema) and issubclass(schema, BaseModel):
         return schema  # Already Pydantic, return as-is
+
+    # Convert dataclass to JSON Schema dict so it flows through the normal path
+    if isclass(schema) and is_dataclass(schema):
+        hints = get_type_hints(schema)
+        properties = {}
+        # Map Python type annotations to JSON Schema types
+        py_to_json = {
+            bool: "boolean",
+            str: "string",
+            int: "integer",
+            float: "number",
+        }
+        for f in dc_fields(schema):
+            hint = hints.get(f.name, str)
+            origin = getattr(hint, "__origin__", None)
+            if origin is list:
+                properties[f.name] = {"type": "array", "items": {"type": "string"}}
+            elif origin is dict:
+                properties[f.name] = {"type": "object"}
+            else:
+                json_type = py_to_json.get(hint, "string")
+                properties[f.name] = {"type": json_type}
+        schema = {"properties": properties, "required": [f.name for f in dc_fields(schema)]}
 
     # Validate it's a dict if not Pydantic
     if not isinstance(schema, dict):
