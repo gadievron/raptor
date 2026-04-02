@@ -3,6 +3,10 @@
 GDB Debugger Wrapper
 
 Provides programmatic interface to GDB for crash analysis.
+
+Security: Input files are passed via subprocess stdin, NOT via GDB's
+`run < path` in-script redirection. This prevents CWE-78 command injection
+through crafted filenames (GDB's parser interprets shell metacharacters).
 """
 
 import subprocess
@@ -69,33 +73,33 @@ class GDBDebugger:
         commands = [
             "set pagination off",
             "set confirm off",
-            f"run < {input_file}",
+            "run",
             "backtrace full",
             "quit",
         ]
 
-        return self.run_commands(commands)
+        return self.run_commands(commands, input_file=input_file)
 
     def get_registers(self, input_file: Path) -> str:
         """Get register state at crash."""
         commands = [
             "set pagination off",
             "set confirm off",
-            f"run < {input_file}",
+            "run",
             "info registers",
             "quit",
         ]
 
-        return self.run_commands(commands)
+        return self.run_commands(commands, input_file=input_file)
 
     def examine_memory(self, input_file: Path, address: str, num_bytes: int = 64) -> str:
         """Examine memory at address."""
         commands = [
             "set pagination off",
             "set confirm off",
-            f"run < {input_file}",
+            "run",
             f"x/{num_bytes}xb {address}",
             "quit",
         ]
 
-        return self.run_commands(commands)
+        return self.run_commands(commands, input_file=input_file)

@@ -474,7 +474,7 @@ class CrashAnalyser:
             "handle SIGBUS stop",   # Stop on bus errors
             "handle SIGILL stop",   # Stop on illegal instructions
             "handle SIGFPE stop",   # Stop on floating point exceptions
-            f"run < '{input_file}'",  # Run with input (quoted for paths with spaces)
+            "run",  # Input provided via subprocess stdin (no path in script — CWE-78 safe)
             "info registers",       # Get register state
             "backtrace full",       # Get full backtrace
             "x/10i $pc",           # Examine instructions at PC
@@ -488,13 +488,16 @@ class CrashAnalyser:
             cmd_f.write("\n".join(gdb_commands))
 
         try:
-            # Run GDB
-            result = subprocess.run(
-                ["gdb", "-batch", "-x", str(cmd_file), str(self.binary)],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
+            # Run GDB with input file via stdin (not in GDB script — avoids path injection)
+            cmd = ["gdb", "-batch", "-x", str(cmd_file), str(self.binary)]
+            with open(input_file, "rb") as f:
+                result = subprocess.run(
+                    cmd,
+                    stdin=f,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
         finally:
             # Clean up command file
             try:
@@ -503,7 +506,7 @@ class CrashAnalyser:
                 pass
 
         # Debug: save GDB output for inspection (using proper temp file)
-        with tempfile.NamedTemporaryFile(mode='w', suffix=f'_gdb_{input_file.name}.txt', delete=False) as debug_f:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='_gdb_output.txt', delete=False) as debug_f:
             debug_file = Path(debug_f.name)
             debug_f.write(result.stdout + "\n--- STDERR ---\n" + result.stderr)
 
