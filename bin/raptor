@@ -100,6 +100,12 @@ fi
 
 # --- Launch ---
 
+# Save caller's directory so RAPTOR commands can default to it as the target.
+# Claude Code's cwd is set to RAPTOR_DIR for security (prevents loading
+# .claude/settings.json from untrusted repos), but commands like /scan
+# should default to where the user was when they ran `raptor`.
+export RAPTOR_CALLER_DIR="$(pwd)"
+
 cd "$RAPTOR_DIR"
 if [ -n "$INITIAL_PROMPT" ]; then
     exec claude "$INITIAL_PROMPT" "${CLAUDE_ARGS[@]}"

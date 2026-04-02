@@ -114,6 +114,80 @@ def run_command_streaming(cmd: list, description: str) -> tuple[int, str, str]:
         return -1, "", str(e)
 
 
+def _check_repo_claude_settings(repo_path: str) -> bool:
+    """Check target repo for malicious .claude/settings.json.
+
+    Claude Code's credential helpers execute shell commands from settings.
+    A malicious repo could contain .claude/settings.json with injected
+    helper values that exfiltrate credentials when Claude Code processes
+    the workspace.
+    Ref: CVE-2026-21852, Phoenix Security CWE-78 disclosure (2026-03-31).
+
+    Returns True if dangerous helpers found (CC dispatch should be blocked).
+    """
+    # Don't flag RAPTOR's own settings when scanning ourselves
+    raptor_dir = Path(__file__).resolve().parent
+    target = Path(repo_path).resolve()
+    if target == raptor_dir:
+        return False
+
+    claude_dir = target / ".claude"
+    settings_files = [claude_dir / name for name in ("settings.json", "settings.local.json")
+                      if (claude_dir / name).exists()]
+    if not settings_files:
+        return False
+
+    try:
+        import json
+
+        print(f"\n{'=' * 70}")
+        print("⚠️  TARGET REPO CONTAINS CLAUDE CODE SETTINGS")
+        print(f"{'=' * 70}")
+
+        # Check for known credential helper keys (shell-executed by Claude Code).
+        # List based on Claude Code source (2026-03-31). May need updating.
+        dangerous_keys = [
+            "apiKeyHelper", "awsAuthHelper", "awsAuthRefresh", "gcpAuthRefresh",
+        ]
+
+        for settings_path in settings_files:
+            print(f"   File: {settings_path}")
+            if settings_path.stat().st_size > 1_000_000:
+                print("   (skipped — file too large)")
+                continue
+            try:
+                data = json.loads(settings_path.read_text())
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                print("   (malformed — could not parse)")
+                continue
+            if isinstance(data, dict):
+                for key in dangerous_keys:
+                    val = data.get(key)
+                    if val and isinstance(val, str):
+                        display = val[:60] + "..." if len(val) > 60 else val
+                        print(f"   ⚠️  {key}: {display}  (executed as shell command)")
+
+        print()
+        print("   A .claude/ directory in a third-party repo can configure Claude")
+        print("   Code's behaviour in ways that may not be safe.")
+        print()
+        print("   RAPTOR's sub-agents use --add-dir (file access only, no settings")
+        print("   loading), so RAPTOR's own dispatch is not directly vulnerable.")
+        print("   If you used `bin/raptor` to launch, you are safe — it sets the")
+        print("   working directory to the RAPTOR repo, not the target.")
+        print("   If you ran `claude` directly from inside this repo, Claude Code")
+        print("   may have already loaded these settings.")
+        print()
+        print("   RAPTOR will not dispatch Claude Code sub-agents for this repo")
+        print("   as a precaution. Scanning and external LLM analysis proceed normally.")
+        print("   Review and remove the files to enable CC dispatch.")
+        print(f"{'=' * 70}\n")
+        return True
+    except Exception:
+        pass
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="RAPTOR Agentic Security Testing - Scan, Analyse, Exploit, Patch",
@@ -147,7 +221,8 @@ Examples:
         """
     )
 
-    parser.add_argument("--repo", required=True, help="Path to repository to Analyse")
+    parser.add_argument("--repo", default=os.environ.get("RAPTOR_CALLER_DIR"),
+                        help="Path to repository to analyse (default: directory raptor was launched from)")
     parser.add_argument("--policy-groups", default="all", help="Comma-separated policy groups (default: all)")
     parser.add_argument("--max-findings", type=int, default=10, help="Maximum findings to process (default: 10)")
     parser.add_argument("--no-exploits", action="store_true", help="Skip exploit generation")
@@ -185,6 +260,11 @@ Examples:
                        help="Sequential analysis in Phase 3 instead of parallel Phase 4 orchestration")
 
     args = parser.parse_args()
+
+    if not args.repo:
+        parser.error("--repo is required (or launch via `raptor` from the target directory)")
+    if not Path(args.repo).exists():
+        parser.error(f"--repo path does not exist: {args.repo}")
 
     # Resolve paths
     script_root = Path(__file__).parent.resolve()  # RAPTOR-daniel-modular directory
@@ -320,6 +400,11 @@ Examples:
         except Exception as e:
             print(f"Mitigation check failed: {e}")
             logger.error(f"Mitigation check error: {e}")
+
+    # ========================================================================
+    # PRE-SCAN: Check target repo for malicious Claude Code settings
+    # ========================================================================
+    block_cc_dispatch = _check_repo_claude_settings(repo_path)
 
     # ========================================================================
     # PHASE 1: CODE SCANNING (Semgrep + CodeQL)
@@ -605,6 +690,7 @@ Examples:
                 no_exploits=args.no_exploits,
                 no_patches=args.no_patches,
                 llm_config=llm_config,
+                block_cc_dispatch=block_cc_dispatch,
             )
         else:
             print("\n  No analysis report from Phase 3 — skipping orchestration")

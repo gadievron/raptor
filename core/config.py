@@ -112,7 +112,23 @@ class RaptorConfig:
     # Proxy variables to strip for security
     PROXY_ENV_VARS = [
         "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
-        "http_proxy", "https_proxy", "no_proxy"
+        "http_proxy", "https_proxy", "no_proxy",
+    ]
+
+    # Environment variables that can be exploited for command injection
+    # when consumed by tools that shell-evaluate their values.
+    # Ref: Phoenix Security CWE-78 disclosure (2026-03-31, VULN-01)
+    # TODO: Replace blocklist with a minimal allowlist (PATH, HOME, LANG,
+    # tool-specific vars). Needs testing of what semgrep, codeql, git, gdb,
+    # afl-fuzz each require.
+    DANGEROUS_ENV_VARS = [
+        "TERMINAL",       # Shell-evaluated by command lookup utilities
+        "BROWSER",        # Shell-evaluated by open/xdg-open
+        "PAGER",          # Shell-evaluated by less/more invocation
+        "VISUAL",         # Shell-evaluated by editor invocation
+        "EDITOR",         # Shell-evaluated by editor invocation
+        # Note: TERM is NOT stripped — it's read as a string (terminfo lookup),
+        # not shell-evaluated. Stripping it breaks colour output in git/grep/etc.
     ]
 
     # Git Configuration
@@ -164,6 +180,8 @@ class RaptorConfig:
         """
         env = os.environ.copy()
         for var in RaptorConfig.PROXY_ENV_VARS:
+            env.pop(var, None)
+        for var in RaptorConfig.DANGEROUS_ENV_VARS:
             env.pop(var, None)
         env["PYTHONUNBUFFERED"] = "1"
         return env

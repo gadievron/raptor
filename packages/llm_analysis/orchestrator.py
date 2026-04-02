@@ -143,6 +143,7 @@ def orchestrate(
     no_exploits: bool = False,
     no_patches: bool = False,
     llm_config: Optional[Any] = None,
+    block_cc_dispatch: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Orchestrate vulnerability analysis via external LLM or Claude Code.
 
@@ -254,6 +255,11 @@ def orchestrate(
         dispatch_mode = "external_llm"
     else:
         # CC: dispatch via claude -p subprocess
+        if block_cc_dispatch:
+            print("\n  CC dispatch blocked — target repo contains credential helpers in .claude/settings.json")
+            print("  Use an external LLM (GEMINI_API_KEY, OPENAI_API_KEY) or remove the helpers to enable CC dispatch")
+            return None
+
         claude_bin = shutil.which("claude")
         if not claude_bin:
             print("\n  claude not found on PATH — cannot dispatch sub-agents")
