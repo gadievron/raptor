@@ -690,6 +690,9 @@ Examples:
     true_positives = 0
     false_positives = 0
     exploitable_count = 0
+    failed_count = 0
+    blocked_count = 0
+    severity_mismatches = []
     exploits_count = analysis.get('exploits_generated', 0)
     patches_count = analysis.get('patches_generated', 0)
 
@@ -700,12 +703,20 @@ Examples:
         patches_count = max(patches_count, orchestration_result.get('patches_generated', 0))
         for r in orchestration_result.get("results", []):
             if "error" in r:
+                if r.get("error_type") == "blocked":
+                    blocked_count += 1
+                else:
+                    failed_count += 1
                 continue
             # Only count findings that were actually analysed (have explicit verdict)
             if "is_true_positive" not in r:
                 continue
             if r.get("is_true_positive") is False:
                 false_positives += 1
+                # Flag severity mismatches: scanner says error/critical but LLM says false positive
+                scanner_level = r.get("level", "")
+                if scanner_level == "error":
+                    severity_mismatches.append(r)
             else:
                 true_positives += 1
             if r.get("is_exploitable"):
@@ -726,6 +737,13 @@ Examples:
         print(f"   ⚠️  {skipped} finding{'s' if skipped != 1 else ''} skipped (--max-findings {args.max_findings})")
     elif analysed_count > 0:
         print(f"   Analysed: {analysed_count}")
+    if failed_count > 0 or blocked_count > 0:
+        parts = []
+        if blocked_count > 0:
+            parts.append(f"{blocked_count} blocked by content filter")
+        if failed_count > 0:
+            parts.append(f"{failed_count} failed")
+        print(f"   ⚠️  {', '.join(parts)}")
     if true_positives > 0 or false_positives > 0:
         print(f"   True positives: {true_positives}")
         if false_positives > 0:
@@ -734,6 +752,9 @@ Examples:
                          if r.get("self_contradictory")) if orchestration_result else 0
     if contradictions > 0:
         print(f"   ⚠️  Self-contradictory: {contradictions} (review recommended)")
+    if severity_mismatches:
+        print(f"   ⚠️  {len(severity_mismatches)} high-severity finding{'s' if len(severity_mismatches) != 1 else ''} "
+              f"ruled as false positive (review recommended)")
     print(f"   Exploitable: {exploitable_count}")
     if exploits_count > 0:
         print(f"   Exploits generated: {exploits_count}")
@@ -744,9 +765,19 @@ Examples:
     from packages.llm_analysis.dispatch import _format_elapsed
     print(f"   Duration: {_format_elapsed(workflow_duration)}")
     if orchestration_result:
-        cost = orchestration_result.get("orchestration", {}).get("cost", {}).get("total_cost", 0)
+        cost_summary = orchestration_result.get("orchestration", {}).get("cost", {})
+        cost = cost_summary.get("total_cost", 0)
         if cost > 0:
-            print(f"   Cost: ${cost:.2f} (successful calls only)")
+            thinking = cost_summary.get("thinking_tokens", 0)
+            cost_str = f"   Cost: ${cost:.2f}"
+            if thinking > 0:
+                cost_str += f" ({thinking:,} thinking tokens)"
+            print(cost_str)
+            # Per-model breakdown if multiple models used
+            by_model = cost_summary.get("cost_by_model", {})
+            if len(by_model) > 1:
+                for model, mcost in by_model.items():
+                    print(f"     {model}: ${mcost:.2f}")
 
     print(f"\n📁 Outputs:")
     print(f"   Main report: {report_file}")

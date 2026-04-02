@@ -110,6 +110,23 @@ def _is_auth_error(error_str: str) -> bool:
     ])
 
 
+def _classify_error(error_str: str) -> str:
+    """Classify an error for structured reporting.
+
+    Returns: 'blocked' (content filter/safety/refusal), 'auth' (key/billing/quota),
+    'timeout', or 'error' (everything else).
+    """
+    lower = error_str.lower()
+    if any(x in lower for x in ["content filter", "blocked response", "safety",
+                                 "refused request", "refusal"]):
+        return "blocked"
+    if _is_auth_error(error_str):
+        return "auth"
+    if any(x in lower for x in ["timeout", "timed out"]):
+        return "timeout"
+    return "error"
+
+
 def dispatch_task(
     task: DispatchTask,
     items: list,
@@ -226,7 +243,9 @@ def dispatch_task(
 
             except Exception as e:
                 err_str = str(e)
-                results.append({"finding_id": item_id, "error": err_str})
+                error_type = _classify_error(err_str)
+                results.append({"finding_id": item_id, "error": err_str,
+                                "error_type": error_type})
                 display = task.get_item_display(item)
                 print(f"  [{completed}/{total} {_format_elapsed(elapsed)} ${running_cost:.2f}] "
                       f"{display} FAILED — {err_str}")

@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from packages.llm_analysis.dispatch import (
     DispatchTask, DispatchResult, dispatch_task, _format_elapsed,
+    _classify_error,
 )
 from packages.llm_analysis.tasks import (
     AnalysisTask, ExploitTask, PatchTask, ConsensusTask, GroupAnalysisTask,
@@ -520,3 +521,31 @@ class TestFormatElapsed:
 
     def test_hours(self):
         assert _format_elapsed(3700) == "1h 01m"
+
+
+class TestClassifyError:
+    """Test error classification for structured reporting."""
+
+    def test_content_filter(self):
+        assert _classify_error("Response blocked by content filter") == "blocked"
+
+    def test_safety_block(self):
+        assert _classify_error("Gemini blocked response (finish_reason=safety)") == "blocked"
+
+    def test_refusal(self):
+        assert _classify_error("Model refused request: I cannot help with exploits") == "blocked"
+
+    def test_auth_error(self):
+        assert _classify_error("401 Unauthorized: invalid API key") == "auth"
+
+    def test_quota_error(self):
+        assert _classify_error("insufficient_quota: billing limit reached") == "auth"
+
+    def test_timeout(self):
+        assert _classify_error("Request timed out after 120s") == "timeout"
+
+    def test_generic_error(self):
+        assert _classify_error("JSON parse failed: unexpected token") == "error"
+
+    def test_empty_string(self):
+        assert _classify_error("") == "error"

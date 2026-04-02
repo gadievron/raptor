@@ -393,10 +393,30 @@ def orchestrate(
 
     # Summary
     orch = merged["orchestration"]
-    cost_total = orch["cost"]["total_cost"]
-    print(f"\n  Orchestration complete: {orch['findings_analysed']} analysed, "
-          f"{orch['findings_failed']} failed, {_format_elapsed(orch['elapsed_seconds'])} elapsed"
-          + (f", ${cost_total:.2f}" if cost_total > 0 else ""))
+    cost_summary = orch["cost"]
+    cost_total = cost_summary["total_cost"]
+    model_name = orch.get("analysis_model") or ""
+    model_str = f" ({model_name})" if model_name else ""
+
+    parts = [f"{orch['findings_analysed']} analysed"]
+    if orch['findings_failed'] > 0:
+        # Break down failures by type
+        blocked = sum(1 for r in per_finding_results if r.get("error_type") == "blocked")
+        other_fails = orch['findings_failed'] - blocked
+        if blocked and other_fails:
+            parts.append(f"{blocked} blocked, {other_fails} failed")
+        elif blocked:
+            parts.append(f"{blocked} blocked")
+        else:
+            parts.append(f"{orch['findings_failed']} failed")
+    parts.append(f"{_format_elapsed(orch['elapsed_seconds'])} elapsed")
+    if cost_total > 0:
+        parts.append(f"${cost_total:.2f}")
+
+    print(f"\n  Orchestration complete{model_str}: {', '.join(parts)}")
+    thinking = cost_summary.get("thinking_tokens", 0)
+    if thinking > 0:
+        print(f"  Thinking tokens: {thinking:,}")
     if groups:
         print(f"  Cross-finding groups: {len(groups)}")
     print(f"  Report: {out_path}")
