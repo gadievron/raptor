@@ -419,8 +419,23 @@ class OpenAICompatibleProvider(LLMProvider):
 
             if not response.choices:
                 raise RuntimeError("OpenAI returned empty choices")
-            content = response.choices[0].message.content or ""
+            message = response.choices[0].message
+            content = message.content or ""
             finish_reason = response.choices[0].finish_reason or "complete"
+
+            # Detect content filter blocks and model refusals
+            refusal = getattr(message, 'refusal', None)
+            if refusal:
+                raise RuntimeError(
+                    f"Model refused request: {refusal}"
+                )
+            if finish_reason == "content_filter":
+                if not content:
+                    raise RuntimeError(
+                        "Response blocked by content filter. "
+                        "This typically happens with exploit code or attack scenario prompts."
+                    )
+                logger.warning("Response truncated by content filter")
 
             input_tokens = 0
             output_tokens = 0
