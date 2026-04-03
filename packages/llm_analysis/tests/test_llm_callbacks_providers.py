@@ -219,6 +219,15 @@ class TestCalculateCostSplit:
         actual_cost = provider._calculate_cost_split(0, 0)
         assert actual_cost == 0.0
 
+    def test_all_model_costs_have_input_output(self):
+        """Every entry in MODEL_COSTS has both 'input' and 'output' keys."""
+        for model_name, rates in MODEL_COSTS.items():
+            assert "input" in rates, f"{model_name} missing 'input' rate"
+            assert "output" in rates, f"{model_name} missing 'output' rate"
+            assert rates["input"] >= 0, f"{model_name} has negative input rate"
+            assert rates["output"] >= 0, f"{model_name} has negative output rate"
+
+
 class TestThinkingModelFallback:
     """Verify reasoning_content fallback for Ollama thinking models."""
 
@@ -305,7 +314,6 @@ class TestThinkingModelFallback:
             response = MagicMock()
             response.choices = [MagicMock()]
             response.choices[0].message.content = "Normal response"
-            # No reasoning_content attribute
             del response.choices[0].message.reasoning_content
             response.choices[0].message.refusal = None
             response.choices[0].finish_reason = "stop"
