@@ -222,6 +222,7 @@ Return your analysis as structured JSON with finding_id "{finding_id}".
 Rate exploitability_score from 0.0 (impossible) to 1.0 (trivial).
 Set confidence to high, medium, or low.
 Include a ruling: validated, false_positive, unreachable, test_code, dead_code, or mitigated.
+Set cvss_vector as a CVSS v3.1 vector: CVSS:3.1/AV:_/AC:_/PR:_/UI:_/S:_/C:_/I:_/A:_. The score is computed automatically.
 Identify the CWE ID (e.g., CWE-79) and vuln_type category (e.g., xss, buffer_overflow).
 Summarize the dataflow as source->sink chain in dataflow_summary.
 Provide remediation guidance in the remediation field.

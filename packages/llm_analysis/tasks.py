@@ -33,6 +33,17 @@ class AnalysisTask(DispatchTask):
     def get_system_prompt(self):
         return ANALYSIS_SYSTEM_PROMPT
 
+    def process_result(self, item, result):
+        out = super().process_result(item, result)
+        # Compute CVSS score from vector if LLM provided one
+        from packages.cvss import compute_score_safe
+        cvss_vector = out.get("cvss_vector")
+        if cvss_vector:
+            score, _ = compute_score_safe(cvss_vector)
+            if score is not None:
+                out["cvss_score_estimate"] = score
+        return out
+
 
 class ExploitTask(DispatchTask):
     """Exploit PoC generation for exploitable findings."""

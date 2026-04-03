@@ -16,7 +16,8 @@ Field alignment between pipelines:
 | Exploitability score | exploitability_score | exploitability_score  | Yes     |
 | Proximity            | proximity (0-10)     | n/a                   | No      |
 | Severity             | severity_assessment  | severity_assessment   | Yes     |
-| CVSS                 | cvss_score_estimate  | cvss_score_estimate   | Yes     |
+| CVSS score           | cvss_score_estimate  | cvss_score_estimate   | Yes     |
+| CVSS vector          | cvss_vector          | cvss_vector           | Yes     |
 | Ruling               | ruling.status        | ruling                | No *    |
 | FP reason            | false_positive_reason| false_positive_reason | Yes     |
 | Reasoning            | description + proof  | reasoning + attack_scenario | No |
