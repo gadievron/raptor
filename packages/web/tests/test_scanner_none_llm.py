@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for WebScanner handling of None LLM.
 
-Requires bs4 and requests — skipped in CI via conftest.py if missing.
+Requires bs4 and requests — skipped if missing.
 """
 
 import tempfile
@@ -9,9 +9,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from packages.web.scanner import WebScanner
+try:
+    from packages.web.scanner import WebScanner
+    HAS_WEB_DEPS = True
+except ImportError:
+    HAS_WEB_DEPS = False
 
 
+@unittest.skipUnless(HAS_WEB_DEPS, "bs4/requests not installed")
 class TestWebScannerNoneLlm(unittest.TestCase):
     """Test that WebScanner works when LLM is None."""
 
