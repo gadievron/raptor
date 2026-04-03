@@ -10,14 +10,18 @@ Provides agentic web application testing capabilities:
 - Dynamic vulnerability detection
 """
 
-from .client import WebClient
-from .crawler import WebCrawler
-from .fuzzer import WebFuzzer
-from .scanner import WebScanner
+try:
+    from .client import WebClient
+    from .crawler import WebCrawler
+    from .fuzzer import WebFuzzer
+    from .scanner import WebScanner
 
-__all__ = [
-    'WebClient',
-    'WebCrawler',
-    'WebFuzzer',
-    'WebScanner',
-]
+    __all__ = [
+        'WebClient',
+        'WebCrawler',
+        'WebFuzzer',
+        'WebScanner',
+    ]
+except ImportError:
+    # bs4/requests not installed — web module unavailable
+    __all__ = []
