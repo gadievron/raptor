@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""Tests for WebScanner handling of None LLM."""
+"""Tests for WebScanner handling of None LLM.
 
-import sys
+Requires bs4 and requests — skipped in CI via conftest.py if missing.
+"""
+
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-# bs4 may not be installed in CI — stub it before importing scanner
-if "bs4" not in sys.modules:
-    sys.modules["bs4"] = MagicMock()
 
 from packages.web.scanner import WebScanner
 
@@ -40,11 +38,8 @@ class TestWebScannerNoneLlm(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             scanner = WebScanner("http://example.com", None, Path(tmpdir))
 
-            # Confirm fuzzer is None (fuzzing cannot happen)
             self.assertIsNone(scanner.fuzzer)
 
-            # Mock crawler to return results WITH parameters
-            # (if fuzzer were called, it would process these)
             scanner.crawler.crawl.return_value = {
                 "stats": {"total_pages": 1, "total_parameters": 3},
                 "discovered_parameters": ["q", "id", "page"],
@@ -52,7 +47,6 @@ class TestWebScannerNoneLlm(unittest.TestCase):
             }
 
             result = scanner.scan()
-            # Despite having parameters, no fuzzing occurred
             self.assertEqual(result["total_vulnerabilities"], 0)
             self.assertEqual(result["findings"], [])
 
