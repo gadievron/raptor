@@ -137,11 +137,6 @@ class TestDebuggerTempFile:
             except sp.TimeoutExpired:
                 pass
 
-        # No leftover .raptor_gdb_ files
-        leftover = glob.glob("/tmp/.raptor_gdb_*")
-        # Can't guarantee no other tests left files, but our specific run shouldn't
-        # Just verify the pattern is used (tested in test_no_predictable_path)
-
 
 class TestLLDBNoPathInjection:
     """Verify LLDB script doesn't contain input file path."""
@@ -155,12 +150,15 @@ class TestLLDBNoPathInjection:
         input_file = tmp_path / "crash'; shell id'.bin"
         input_file.write_text("crash data")
 
-        analyser = CrashAnalyser(str(binary))
+        with patch.object(CrashAnalyser, '_detect_debugger', return_value='lldb'), \
+             patch.object(CrashAnalyser, '_check_tool_availability', return_value={}), \
+             patch.object(CrashAnalyser, '_load_symbol_table', return_value={}):
+            analyser = CrashAnalyser(str(binary))
 
         captured_scripts = []
+        captured = {}
 
         def fake_run(cmd, **kw):
-            # Capture LLDB script content
             for i, arg in enumerate(cmd):
                 if arg == "-s" and i + 1 < len(cmd):
                     script = Path(cmd[i + 1])
@@ -173,12 +171,11 @@ class TestLLDBNoPathInjection:
             r.returncode = 0
             return r
 
-        captured = {}
         with patch("subprocess.run", side_effect=fake_run):
             try:
                 analyser._run_lldb_analysis(input_file)
             except Exception:
-                pass  # May fail on other things, we just need the script
+                pass
 
         if captured_scripts:
             for script in captured_scripts:
@@ -199,7 +196,6 @@ class TestPathTraversal:
         repo.mkdir()
         (repo / "safe.py").write_text("print('hello')\n")
 
-        # Create a secret file outside the repo
         secret = tmp_path / "secret.txt"
         secret.write_text("TOP SECRET")
 
