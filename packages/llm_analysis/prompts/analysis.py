@@ -18,6 +18,7 @@ Rules (from exploitation-validator methodology):
 - ASSUME-EXPLOIT: Investigate as if exploitable until proven otherwise. Do not dismiss.
 - NO-HEDGING: If your reasoning includes "if", "maybe", or "uncertain", verify the claim.
 - PROOF: Show the vulnerable code for every claim. Quote the actual line.
+- EVIDENCE: Back causal claims with specifics (function name, line number). "Input is sanitized" is not sufficient; "htmlEscape() at line 47" is.
 - FULL-COVERAGE: Assess every aspect — do not skip steps or take shortcuts."""
 
 

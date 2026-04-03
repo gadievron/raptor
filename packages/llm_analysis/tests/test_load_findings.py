@@ -119,9 +119,9 @@ class TestMissingOptionalFields:
         result = convert_validated_to_agent_format(data)
         assert len(result) == 1
         assert result[0]["finding_id"] == "FIND-BARE"
-        # Dataclass defaults: feasibility is a full dict with default fields, ruling likewise
+        # Dataclass defaults: feasibility has "pending", ruling has empty strings stripped
         assert result[0]["feasibility"]["status"] == "pending"
-        assert result[0]["ruling"]["status"] == ""
+        assert "status" not in result[0].get("ruling", {})  # empty string stripped by _clean_dict
         assert result[0]["final_status"] == "pending"  # None defaults to "pending"
 
 

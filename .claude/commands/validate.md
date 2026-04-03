@@ -278,6 +278,8 @@ This command enforces strict validation gates:
 4. **NO-HEDGING**: Verify all "if/maybe/uncertain" claims
 5. **FULL-COVERAGE**: Check ALL code, no sampling
 6. **PROOF**: Show vulnerable code for every finding
+7. **CONSISTENCY**: Verify vuln_type/severity/status match description and proof
+8. **POC-EVIDENCE**: PoC must produce observable evidence, not just "ran without error"
 
 ## When to Use
 

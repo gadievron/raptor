@@ -200,6 +200,7 @@ If your reasoning hedges ("maybe", "in theory"), verify the claim or rule it out
 
 Rules: Investigate as if exploitable until proven otherwise. Do not guess or assume.
 If uncertain, verify by reading the code. Show the vulnerable code for every claim.
+Back causal claims with specifics (function name, line number). "Input is sanitized" is not sufficient; "htmlEscape() at line 47" is.
 Your ruling, is_true_positive, and is_exploitable MUST be consistent with your reasoning.
 """
 
