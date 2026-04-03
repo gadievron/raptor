@@ -421,6 +421,9 @@ class OpenAICompatibleProvider(LLMProvider):
                 raise RuntimeError("OpenAI returned empty choices")
             message = response.choices[0].message
             content = message.content or ""
+            # Ollama thinking models (qwen3, etc.) put responses in reasoning_content
+            if not content:
+                content = getattr(message, 'reasoning_content', '') or ""
             finish_reason = response.choices[0].finish_reason or "complete"
 
             # Detect content filter blocks and model refusals
