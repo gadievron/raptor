@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from core.logging import get_logger
 
@@ -79,7 +79,7 @@ class FuzzingState:
     goal_progress: float = 0.0
 
     # Binary characteristics
-    binary_path: Path = None
+    binary_path: Optional[Path] = None
     has_asan: bool = False
     has_afl_instrumentation: bool = False
 
@@ -288,7 +288,7 @@ class FuzzingPlanner:
         # Return prioritised list
         return [c for c, s, f in crash_scores]
 
-    def select_fuzzing_strategy(self, state: FuzzingState) -> Dict[str, any]:
+    def select_fuzzing_strategy(self, state: FuzzingState) -> Dict[str, Any]:
         """
         Select optimal fuzzing strategy based on current state.
 

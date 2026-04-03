@@ -12,7 +12,7 @@ This module enables RAPTOR to work towards user-specified goals:
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from core.logging import get_logger
 
@@ -41,7 +41,7 @@ class Goal:
     start_time: float = field(default_factory=time.time)
 
     # Strategy adjustments for this goal
-    strategy_hints: Dict[str, any] = field(default_factory=dict)
+    strategy_hints: Dict[str, Any] = field(default_factory=dict)
 
 
 class GoalPlanner:

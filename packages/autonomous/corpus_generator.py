@@ -12,7 +12,7 @@ Instead of hardcoded seeds, this module:
 import json
 import subprocess
 from pathlib import Path
-from typing import List, Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from core.logging import get_logger
 
@@ -45,7 +45,7 @@ class CorpusGenerator:
 
         logger.info("Autonomous corpus generator initialized")
 
-    def analyze_binary(self) -> Dict[str, any]:
+    def analyze_binary(self) -> Dict[str, Any]:
         """
         Analyze binary to detect expected input formats.
 

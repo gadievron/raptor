@@ -157,11 +157,19 @@ def run_autonomous_workflow(args):
     for sarif_file in scan_result.sarif_files:
         logger.info(f"\nAnalyzing SARIF: {sarif_file}")
 
-        with open(sarif_file) as f:
-            sarif = json.load(f)
+        try:
+            with open(sarif_file) as f:
+                sarif = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"Could not read SARIF file {sarif_file}: {e}")
+            continue
 
-        run = sarif["runs"][0]
-        results = run["results"]
+        runs = sarif.get("runs", [])
+        if not runs:
+            logger.warning(f"No runs in SARIF file: {sarif_file}")
+            continue
+        run = runs[0]
+        results = run.get("results", [])
 
         # Analyze findings (up to max_findings)
         findings_to_analyze = results[:args.max_findings]

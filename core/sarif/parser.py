@@ -147,6 +147,17 @@ def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
         print(f"[SARIF Parser] ERROR: File does not exist: {sarif_path}")
         return []
 
+    # Guard against multi-GB SARIF files (OOM prevention)
+    max_size = 100 * 1024 * 1024  # 100 MiB — generous for even large scans
+    try:
+        file_size = sarif_path.stat().st_size
+        if file_size > max_size:
+            print(f"[SARIF Parser] ERROR: File too large ({file_size / 1024 / 1024:.0f} MiB): {sarif_path}")
+            return []
+    except OSError as e:
+        print(f"[SARIF Parser] WARNING: Could not stat {sarif_path}: {e}")
+        # Continue — read_text() will raise its own clear error if unreadable
+
     try:
         data = json.loads(sarif_path.read_text() or "{}")
     except json.JSONDecodeError as e:

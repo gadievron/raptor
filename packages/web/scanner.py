@@ -8,7 +8,7 @@ Combines crawling, fuzzing, and LLM analysis for complete web app testing.
 import json
 import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 
 # Add paths for cross-package imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -25,7 +25,7 @@ logger = get_logger()
 class WebScanner:
     """Fully autonomous web application security scanner."""
 
-    def __init__(self, base_url: str, llm: LLMProvider, out_dir: Path, verify_ssl: bool = True):
+    def __init__(self, base_url: str, llm: Optional[LLMProvider], out_dir: Path, verify_ssl: bool = True):
         self.base_url = base_url
         self.llm = llm
         self.out_dir = out_dir
@@ -34,7 +34,7 @@ class WebScanner:
         # Initialize components
         self.client = WebClient(base_url, verify_ssl=verify_ssl)
         self.crawler = WebCrawler(self.client)
-        self.fuzzer = WebFuzzer(self.client, llm)
+        self.fuzzer = WebFuzzer(self.client, llm) if llm else None
 
         logger.info(f"Web scanner initialized for {base_url} (verify_ssl={verify_ssl})")
 
@@ -59,17 +59,20 @@ class WebScanner:
         logger.info(f"Discovery complete: {crawl_results['stats']}")
 
         # Phase 2: Intelligent Fuzzing
-        logger.info("Phase 2: Intelligent Fuzzing")
         fuzzing_findings = []
 
-        # Fuzz all discovered parameters
-        for param in crawl_results['discovered_parameters']:
-            findings = self.fuzzer.fuzz_parameter(
-                self.base_url,
-                param,
-                vulnerability_types=['sqli', 'xss', 'command_injection']
-            )
-            fuzzing_findings.extend(findings)
+        if self.fuzzer:
+            logger.info("Phase 2: Intelligent Fuzzing")
+            # Fuzz all discovered parameters
+            for param in crawl_results['discovered_parameters']:
+                findings = self.fuzzer.fuzz_parameter(
+                    self.base_url,
+                    param,
+                    vulnerability_types=['sqli', 'xss', 'command_injection']
+                )
+                fuzzing_findings.extend(findings)
+        else:
+            logger.warning("Phase 2: Skipping fuzzing (no LLM available)")
 
         # Phase 3: Generate Report
         logger.info("Phase 3: Generating Security Report")
@@ -154,7 +157,6 @@ Examples:
         print(f"\n⚠️  Warning: Could not initialize LLM client: {e}")
         print("    Web scanning will work but fuzzing will be limited")
         logger.warning(f"LLM initialization failed: {e}")
-        # Create a dummy LLM for basic scanning
         llm = None
 
     # Run scan

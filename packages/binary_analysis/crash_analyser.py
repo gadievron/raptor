@@ -83,9 +83,9 @@ class CrashAnalyser:
                 timeout=5,
             )
             binary_type = result.stdout.lower()
-        except:
+        except (OSError, subprocess.SubprocessError):
             binary_type = ""
-        
+
         # For macOS binaries (Mach-O), prefer LLDB
         if system == "darwin" or "mach-o" in binary_type:
             logger.info(f"Detected macOS/Mach-O binary, trying LLDB. Binary type: {binary_type[:100]}...")
@@ -105,7 +105,7 @@ class CrashAnalyser:
             if result.returncode == 0:
                 logger.info("Using GDB debugger")
                 return "gdb"
-        except:
+        except (OSError, subprocess.SubprocessError):
             pass
             
         raise RuntimeError("No suitable debugger found (gdb or lldb)")
@@ -125,13 +125,13 @@ class CrashAnalyser:
         for tool, description in tools.items():
             try:
                 result = subprocess.run(
-                    [tool, "--version"], 
-                    capture_output=True, 
-                    text=True, 
+                    [tool, "--version"],
+                    capture_output=True,
+                    text=True,
                     timeout=2
                 )
                 available[tool] = result.returncode == 0
-            except:
+            except (OSError, subprocess.SubprocessError):
                 available[tool] = False
                 
         # Log availability
@@ -502,7 +502,7 @@ class CrashAnalyser:
             # Clean up command file
             try:
                 cmd_file.unlink()
-            except:
+            except OSError:
                 pass
 
         # Debug: save GDB output for inspection (using proper temp file)
@@ -565,7 +565,7 @@ class CrashAnalyser:
                 try:
                     Path(lldb_out.name).unlink()
                     Path(lldb_err.name).unlink()
-                except:
+                except OSError:
                     pass
                 return self._run_lldb_fallback(input_file)
 
@@ -588,7 +588,7 @@ class CrashAnalyser:
                 cmd_file.unlink()
                 Path(lldb_out.name).unlink()
                 Path(lldb_err.name).unlink()
-            except:
+            except OSError:
                 pass
 
     def _run_lldb_fallback(self, input_file: Path) -> str:
@@ -624,7 +624,7 @@ class CrashAnalyser:
             # Clean up temp file
             try:
                 cmd_file.unlink()
-            except:
+            except OSError:
                 pass
 
     def _parse_lldb_output(self, context: CrashContext, lldb_output: str) -> None:
@@ -973,7 +973,7 @@ class CrashAnalyser:
                     aslr_level = result.stdout.strip()
                     info["aslr_enabled"] = aslr_level != "0"
                     info["aslr_level"] = aslr_level
-        except:
+        except (OSError, subprocess.SubprocessError):
             info["aslr_enabled"] = "unknown"
             
         # Check if binary has stack canaries
@@ -988,7 +988,7 @@ class CrashAnalyser:
                 info["stack_canaries"] = "enabled"
             else:
                 info["stack_canaries"] = "not_detected"
-        except:
+        except (OSError, subprocess.SubprocessError):
             info["stack_canaries"] = "unknown"
             
         # Check for NX/DEP
@@ -1003,7 +1003,7 @@ class CrashAnalyser:
                 info["nx_enabled"] = "enabled"
             else:
                 info["nx_enabled"] = "not_detected"
-        except:
+        except (OSError, subprocess.SubprocessError):
             try:
                 # Try Linux way
                 result = subprocess.run(
@@ -1016,7 +1016,7 @@ class CrashAnalyser:
                     info["nx_enabled"] = "enabled"
                 else:
                     info["nx_enabled"] = "not_detected"
-            except:
+            except (OSError, subprocess.SubprocessError):
                 info["nx_enabled"] = "unknown"
                 
         return info
