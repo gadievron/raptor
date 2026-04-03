@@ -42,6 +42,7 @@ def build_analysis_prompt(
     dataflow_source: Optional[Dict[str, Any]] = None,
     dataflow_sink: Optional[Dict[str, Any]] = None,
     dataflow_steps: Optional[list] = None,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Build the vulnerability analysis prompt.
 
@@ -56,6 +57,25 @@ def build_analysis_prompt(
 - Lines: {start_line}-{end_line}
 - Description: {message}
 """
+
+    if metadata:
+        parts = []
+        if metadata.get("class_name"):
+            parts.append(f"Class: {metadata['class_name']}")
+        if metadata.get("attributes"):
+            parts.append(f"Decorators/Annotations: {', '.join(metadata['attributes'])}")
+        if metadata.get("visibility"):
+            parts.append(f"Visibility: {metadata['visibility']}")
+        if metadata.get("return_type"):
+            parts.append(f"Return type: {metadata['return_type']}")
+        if metadata.get("parameters"):
+            param_strs = [f"{n}: {t}" if t else n for n, t in metadata["parameters"]]
+            parts.append(f"Parameters: {', '.join(param_strs)}")
+        if parts:
+            prompt += "\n**Function context (from inventory):**\n"
+            for p in parts:
+                prompt += f"- {p}\n"
+            prompt += "\n"
 
     if has_dataflow and dataflow_source and dataflow_sink:
         prompt += f"""
@@ -192,4 +212,5 @@ def build_analysis_prompt_from_finding(finding: Dict[str, Any]) -> str:
         dataflow_source=dataflow.get("source") if dataflow else None,
         dataflow_sink=dataflow.get("sink") if dataflow else None,
         dataflow_steps=dataflow.get("steps") if dataflow else None,
+        metadata=finding.get("metadata"),
     )

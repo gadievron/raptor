@@ -157,6 +157,17 @@ def _check_env(unavailable_features: set) -> tuple[list, list]:
     if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
         warnings.append("/oss-forensics unavailable \u2014 BigQuery not configured")
 
+    # Tree-sitter inventory enrichment
+    try:
+        from core.inventory.extractors import _get_ts_languages
+        ts_langs = _get_ts_languages()
+        if ts_langs:
+            parts.append(f"tree-sitter \u2713 ({', '.join(ts_langs)})")
+        else:
+            parts.append("tree-sitter \u2717")
+    except Exception:
+        pass
+
     return parts, warnings
 
 

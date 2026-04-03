@@ -110,6 +110,8 @@ The `/validate` command validates that vulnerability findings are real, reachabl
 
 **Output:** `out/exploitability-validation-<timestamp>/validation-report.md`
 
+**Pipeline handoff:** For `/understand` → `/validate` workflows, use the same `--out` directory so `context-map.json`, `checklist.json`, and `flow-trace-*.json` are shared automatically.
+
 ---
 
 ## CODE UNDERSTANDING

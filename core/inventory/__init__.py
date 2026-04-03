@@ -22,6 +22,7 @@ from .exclusions import (
 )
 from .extractors import (
     FunctionInfo,
+    FunctionMetadata,
     extract_functions,
     PythonExtractor,
     JavaScriptExtractor,
@@ -29,7 +30,8 @@ from .extractors import (
     JavaExtractor,
     GoExtractor,
     GenericExtractor,
-    EXTRACTORS,
+    _REGEX_EXTRACTORS as EXTRACTORS,  # Backward compat
+    _get_ts_languages,
 )
 from .diff import compare_inventories
 from .coverage import update_coverage, get_coverage_stats, format_coverage_summary

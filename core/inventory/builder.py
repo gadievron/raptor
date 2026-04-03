@@ -258,13 +258,7 @@ def _process_single_file(
             'lines': line_count,
             'sha256': sha256,
             'functions': [
-                {
-                    'name': f.name,
-                    'line_start': f.line_start,
-                    'line_end': f.line_end,
-                    'signature': f.signature,
-                    'checked_by': list(f.checked_by),
-                }
+                f.to_dict()
                 for f in functions
             ],
         }

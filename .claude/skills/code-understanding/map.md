@@ -30,6 +30,14 @@ python3 build_inventory.py --repo <target> --out $WORKDIR
 
 Read the resulting `checklist.json`. It provides every source file with language, line count, SHA-256 checksum, and every function with name, line number, and signature. Excluded files are recorded with reasons.
 
+If tree-sitter is installed, functions also include a `metadata` field with:
+- `attributes` — decorators (Python) and annotations (Java) that identify entry points and auth gates
+- `visibility` — public/private/static/exported/extern
+- `class_name` — enclosing class or receiver type
+- `return_type` and `parameters` — typed signatures for data flow analysis
+
+Check the metadata BEFORE reading code — it may already answer questions about entry points, trust boundaries, and attack surface without needing to open files.
+
 Use this as your ground truth for what exists in the codebase. Do NOT manually enumerate files.
 
 **[MAP-1] Entry Point Enumeration**
