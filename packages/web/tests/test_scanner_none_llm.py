@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """Tests for WebScanner handling of None LLM."""
 
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+# bs4 may not be installed in CI — stub it before importing scanner
+if "bs4" not in sys.modules:
+    sys.modules["bs4"] = MagicMock()
+
+from packages.web.scanner import WebScanner
 
 
 class TestWebScannerNoneLlm(unittest.TestCase):
@@ -13,8 +20,6 @@ class TestWebScannerNoneLlm(unittest.TestCase):
     @patch("packages.web.scanner.WebCrawler")
     @patch("packages.web.scanner.WebClient")
     def test_init_with_none_llm(self, mock_client_cls, mock_crawler_cls):
-        from packages.web.scanner import WebScanner
-
         with tempfile.TemporaryDirectory() as tmpdir:
             scanner = WebScanner("http://example.com", None, Path(tmpdir))
             self.assertIsNone(scanner.fuzzer)
@@ -23,8 +28,6 @@ class TestWebScannerNoneLlm(unittest.TestCase):
     @patch("packages.web.scanner.WebCrawler")
     @patch("packages.web.scanner.WebClient")
     def test_init_with_llm_creates_fuzzer(self, mock_client_cls, mock_crawler_cls):
-        from packages.web.scanner import WebScanner
-
         mock_llm = MagicMock()
         with tempfile.TemporaryDirectory() as tmpdir:
             scanner = WebScanner("http://example.com", mock_llm, Path(tmpdir))
@@ -34,8 +37,6 @@ class TestWebScannerNoneLlm(unittest.TestCase):
     @patch("packages.web.scanner.WebClient")
     def test_scan_without_llm_skips_fuzzing(self, mock_client_cls, mock_crawler_cls):
         """With no LLM, scan completes but fuzzer is never invoked."""
-        from packages.web.scanner import WebScanner
-
         with tempfile.TemporaryDirectory() as tmpdir:
             scanner = WebScanner("http://example.com", None, Path(tmpdir))
 
@@ -59,8 +60,6 @@ class TestWebScannerNoneLlm(unittest.TestCase):
     @patch("packages.web.scanner.WebClient")
     def test_scan_with_llm_calls_fuzzer(self, mock_client_cls, mock_crawler_cls):
         """With LLM present, fuzzer is invoked for each parameter."""
-        from packages.web.scanner import WebScanner
-
         mock_llm = MagicMock()
         with tempfile.TemporaryDirectory() as tmpdir:
             scanner = WebScanner("http://example.com", mock_llm, Path(tmpdir))
