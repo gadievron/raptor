@@ -163,7 +163,7 @@ Try /analyze on one of our tests in /tests/data
 RAPTOR uses the OpenAI and Anthropic SDKs directly for LLM provider integration with automatic fallback, cost tracking, and budget enforcement. Both SDKs are optional — RAPTOR works with just Claude Code installed.
 
 **Key Features:**
-- **Direct SDK Integration:** OpenAI SDK for OpenAI/Gemini/Mistral/Ollama, Anthropic SDK for Claude
+- **Direct SDK Integration:** OpenAI SDK for OpenAI/Mistral/Ollama, Anthropic SDK for Claude, native google-genai SDK for Gemini/Gemma
 - **Smart Model Selection:** Auto-selects best reasoning model from config or environment
 - **Structured Output:** Instructor + Pydantic fallback for reliable JSON responses
 - **Budget Enforcement:** Prevents exceeding cost limits with detailed error messages
@@ -350,10 +350,13 @@ Model selection and API use is handled through Claude Code natively.
 | **Anthropic Claude** | ✅ Compilable C code    | ~$0.03/vuln |
 | **OpenAI GPT-4**     | ✅ Compilable C code    | ~$0.03/vuln |
 | **Gemini 2.5**       | ✅ Compilable C code    | ~$0.03/vuln |
+| **Gemma 4 (local/API)** | ⚠️ Untested          | FREE*       |
 | **Ollama (local)**   | ❌ Often broken         | FREE        |
 
 **Note:** Exploit generation requires frontier models (Claude, GPT, or Gemini). Local
-models work for analysis but may produce non-compilable exploit code.
+models and Gemma work for analysis but may produce non-compilable exploit code.
+
+*Gemma 4 is free locally via Ollama and free tier via the Gemini API (rate-limited, subject to change). Use `provider: "gemini"` with `GEMINI_API_KEY` for API access, or `provider: "ollama"` for local.
 
 ### Environment Variables
 

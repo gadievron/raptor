@@ -48,6 +48,8 @@ MODEL_COSTS = {
     "gemini-2.5-pro":          {"input": 0.00125, "output": 0.010},
     "gemini-2.5-flash":        {"input": 0.0003,  "output": 0.0025},
     "gemini-2.5-flash-lite":   {"input": 0.0001,  "output": 0.0004},
+    # Google Gemma (free tier only via Gemini API as of 2026-04, also runs locally via Ollama)
+    "gemma-4-31b-it":          {"input": 0,       "output": 0},
     # Mistral
     "mistral-large-latest":    {"input": 0.0005,  "output": 0.0015},
     "mistral-small-latest":    {"input": 0.00015, "output": 0.0006},
@@ -74,6 +76,8 @@ MODEL_LIMITS = {
     "gemini-2.5-pro":          {"max_context": 1048576, "max_output": 65536},
     "gemini-2.5-flash":        {"max_context": 1048576, "max_output": 65536},
     "gemini-2.5-flash-lite":   {"max_context": 1048576, "max_output": 65536},
+    # Google Gemma (free tier only via Gemini API as of 2026-04, also runs locally via Ollama)
+    "gemma-4-31b-it":          {"max_context": 262144,  "max_output": 32768},
     # Mistral
     "mistral-large-latest":    {"max_context": 262100,  "max_output": 262100},
     "mistral-small-latest":    {"max_context": 256000,  "max_output": 256000},
