@@ -536,7 +536,7 @@ class CrashAnalyser:
             "process handle SIGBUS -s true -n true",   # Stop on bus errors
             "process handle SIGILL -s true -n true",   # Stop on illegal instructions
             "process handle SIGFPE -s true -n true",   # Stop on floating point exceptions
-            f"process launch -i {input_file} -o {lldb_out.name} -e {lldb_err.name}",  # Run with input
+            f"process launch -o {lldb_out.name} -e {lldb_err.name}",  # Input via subprocess stdin (no path in script — CWE-78 safe)
             "register read",                   # Get register state
             "thread backtrace --extended true", # Get full backtrace
             "disassemble --count 10 --start-address $pc",  # Examine instructions at PC
@@ -551,14 +551,16 @@ class CrashAnalyser:
             cmd_f.write("\n".join(lldb_commands))
 
         try:
-            # Run LLDB with longer timeout
+            # Run LLDB with longer timeout — input file via stdin (not in script)
             try:
-                result = subprocess.run(
-                    ["lldb", "-s", str(cmd_file), str(self.binary)],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,  # Increased timeout
-                )
+                with open(input_file, "rb") as stdin_f:
+                    result = subprocess.run(
+                        ["lldb", "-s", str(cmd_file), str(self.binary)],
+                        stdin=stdin_f,
+                        capture_output=True,
+                        text=True,
+                        timeout=60,  # Increased timeout
+                    )
             except subprocess.TimeoutExpired:
                 logger.warning("LLDB analysis timed out - trying fallback approach")
                 # Clean up temp files before fallback

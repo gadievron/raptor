@@ -332,7 +332,7 @@ def main() -> None:
                             exploit_code = exploit_file.read_text()
 
                             # Validate and iteratively refine
-                            success, refined_code, binary_path = exploit_validator.validate_and_refine(
+                            success, refined_code, _refined_binary = exploit_validator.validate_and_refine(
                                 exploit_code=exploit_code,
                                 exploit_name=f"{crash.crash_id}_refined",
                                 crash_context=crash_context,
