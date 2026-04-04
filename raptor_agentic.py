@@ -413,6 +413,15 @@ Examples:
     print("SCANNING")
     print("=" * 70)
 
+    # Build inventory checklist (independent of scanning, available to all phases)
+    try:
+        from core.inventory import build_inventory
+        if not (out_dir / "checklist.json").exists():
+            build_inventory(str(repo_path), str(out_dir))
+            logger.info(f"Inventory checklist built: {out_dir / 'checklist.json'}")
+    except Exception as e:
+        logger.warning(f"Inventory build failed (continuing without metadata): {e}")
+
     all_sarif_files = []
     semgrep_metrics = {}
     codeql_metrics = {}
@@ -630,6 +639,10 @@ Examples:
                 "--out", str(autonomous_out),
                 "--max-findings", str(args.max_findings)
             ]
+
+        # Attach checklist for metadata lookup
+        if (out_dir / "checklist.json").exists():
+            analysis_cmd.extend(["--checklist", str(out_dir / "checklist.json")])
 
         # Phase 3 preps data; Phase 4 handles LLM work (unless --sequential)
         if (llm_env.claude_code or llm_env.external_llm) and not args.sequential:

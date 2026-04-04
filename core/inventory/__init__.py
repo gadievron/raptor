@@ -33,5 +33,6 @@ from .extractors import (
     _REGEX_EXTRACTORS as EXTRACTORS,  # Backward compat
     _get_ts_languages,
 )
+from .lookup import lookup_function, normalise_path
 from .diff import compare_inventories
 from .coverage import update_coverage, get_coverage_stats, format_coverage_summary

@@ -26,6 +26,7 @@ from core.config import RaptorConfig
 from core.logging import get_logger
 from core.progress import HackerProgress
 from core.sarif.parser import parse_sarif_findings, deduplicate_findings
+from core.inventory.lookup import lookup_function as _lookup_function
 from llm.client import LLMClient, _is_auth_error
 from llm.config import LLMConfig, detect_llm_availability
 from llm.providers import ClaudeCodeProvider
@@ -66,6 +67,9 @@ class VulnerabilityContext:
         self.dataflow_sink: Optional[Dict[str, Any]] = None
         self.dataflow_steps: List[Dict[str, Any]] = []
         self.sanitizers_found: List[str] = []
+
+        # Function metadata from inventory (if available)
+        self.metadata: Optional[Dict[str, Any]] = finding.get("metadata")
 
         # Feasibility data from validation pipeline (if available)
         from packages.exploitability_validation.models import Feasibility
@@ -257,6 +261,10 @@ class VulnerabilityContext:
             "has_exploit": self.exploit_code is not None,
             "has_patch": self.patch_code is not None,
         }
+
+        # Add function metadata if available (from inventory checklist)
+        if self.metadata:
+            result["metadata"] = self.metadata
 
         # Add code context if available (populated by read_vulnerable_code)
         if self.full_code:
@@ -999,7 +1007,7 @@ Do NOT:
         return converted
 
     def process_findings(self, sarif_paths: List[str] = None, findings_path: str = None,
-                         max_findings: int = 10) -> Dict[str, Any]:
+                         max_findings: int = 10, checklist: Dict[str, Any] = None) -> Dict[str, Any]:
         """Process findings with full LLM-powered autonomous workflow."""
         start_time = time.time()
 
@@ -1067,6 +1075,17 @@ Do NOT:
                     logger.info(f"{'█' * 70}")
                     logger.info(f"VULNERABILITY {idx}/{len(unique_findings)}")
                     logger.info(f"{'█' * 70}")
+
+                # Attach function metadata from inventory checklist
+                if checklist and not finding.get("metadata"):
+                    fpath = finding.get("file_path") or finding.get("file") or ""
+                    fline = finding.get("start_line") if finding.get("start_line") is not None else finding.get("startLine", 0)
+                    func = _lookup_function(
+                        checklist, fpath, fline,
+                        repo_root=str(self.repo_path),
+                    )
+                    if func and func.get("metadata"):
+                        finding["metadata"] = dict(func["metadata"])
 
                 vuln = VulnerabilityContext(finding, self.repo_path)
 
@@ -1204,6 +1223,7 @@ def main() -> None:
     ap.add_argument("--findings", help="Validated findings.json from exploitability validation pipeline")
     ap.add_argument("--out", help="Output directory")
     ap.add_argument("--max-findings", type=int, default=10, help="Max findings to process")
+    ap.add_argument("--checklist", help="Inventory checklist.json for function metadata lookup")
     ap.add_argument("--prep-only", action="store_true",
                     help="Skip LLM analysis; produce structured findings for external orchestration")
 
@@ -1230,11 +1250,23 @@ def main() -> None:
     # Initialize agent with LLM
     agent = AutonomousSecurityAgentV2(repo_path, out_dir, prep_only=args.prep_only)
 
+    # Load checklist for metadata lookup
+    checklist = None
+    if args.checklist:
+        try:
+            with open(args.checklist) as f:
+                checklist = json.load(f)
+            logger.info(f"Loaded inventory checklist: {args.checklist}")
+        except Exception as e:
+            logger.warning(f"Could not load checklist: {e}")
+
     # Process findings - route based on input type
     if args.findings:
-        report = agent.process_findings(findings_path=args.findings, max_findings=args.max_findings)
+        report = agent.process_findings(findings_path=args.findings, max_findings=args.max_findings,
+                                        checklist=checklist)
     else:
-        report = agent.process_findings(sarif_paths=args.sarif, max_findings=args.max_findings)
+        report = agent.process_findings(sarif_paths=args.sarif, max_findings=args.max_findings,
+                                        checklist=checklist)
 
     if report.get('mode') != 'prep_only':
         print("\n" + "=" * 70)
