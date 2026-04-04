@@ -126,17 +126,22 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
 
 
 def _load_optional_list(path: Path) -> list | None:
-    """Load a JSON file whose top level is a list.
+    """Load a JSON file that contains a list, either bare or in a dict envelope.
 
-    Returns None if the file is missing, unreadable, or top-level is not a list.
-    attack-paths.json and hypotheses.json are bare lists; disproven.json is a
-    dict envelope handled separately by _load_disproven.
+    Handles both bare lists ([...]) and single-key dict envelopes ({"paths": [...]}).
+    Returns None if the file is missing, unreadable, or no list can be found.
     """
     if not path.exists():
         return None
     try:
         data = json.loads(path.read_text())
-        return data if isinstance(data, list) else None
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            for v in data.values():
+                if isinstance(v, list):
+                    return v
+        return None
     except Exception:
         return None
 
