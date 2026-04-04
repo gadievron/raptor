@@ -117,3 +117,23 @@ def compute_score_safe(vector: Optional[str]) -> tuple[Optional[float], Optional
         return compute_base_score(vector)
     except ValueError:
         return None, None
+
+
+def score_finding(finding: dict) -> None:
+    """Compute CVSS score for a single finding dict. Modifies in place.
+
+    If the finding has a cvss_vector, computes the numeric score and
+    sets cvss_score_estimate and severity_assessment.
+    """
+    vec = finding.get("cvss_vector")
+    if vec:
+        score, label = compute_score_safe(vec)
+        if score is not None:
+            finding["cvss_score_estimate"] = score
+            finding["severity_assessment"] = label.lower()
+
+
+def score_findings(findings: list[dict]) -> None:
+    """Compute CVSS scores for a list of finding dicts. Modifies in place."""
+    for f in findings:
+        score_finding(f)

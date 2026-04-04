@@ -129,3 +129,67 @@ class TestComputeScoreSafe:
         score, label = compute_score_safe("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H")
         assert score == 9.8
         assert label == "Critical"
+
+
+class TestScoreFinding:
+    """Tests for score_finding — single finding dict."""
+
+    def test_sets_score_and_severity(self):
+        from packages.cvss import score_finding
+        f = {"cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}
+        score_finding(f)
+        assert f["cvss_score_estimate"] == 9.8
+        assert f["severity_assessment"] == "critical"
+
+    def test_no_vector_unchanged(self):
+        from packages.cvss import score_finding
+        f = {"rule_id": "test"}
+        score_finding(f)
+        assert "cvss_score_estimate" not in f
+        assert "severity_assessment" not in f
+
+    def test_none_vector_unchanged(self):
+        from packages.cvss import score_finding
+        f = {"cvss_vector": None}
+        score_finding(f)
+        assert "cvss_score_estimate" not in f
+
+    def test_invalid_vector_unchanged(self):
+        from packages.cvss import score_finding
+        f = {"cvss_vector": "not-a-vector"}
+        score_finding(f)
+        assert "cvss_score_estimate" not in f
+
+    def test_overwrites_existing_score(self):
+        from packages.cvss import score_finding
+        f = {"cvss_vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H", "cvss_score_estimate": 0.0}
+        score_finding(f)
+        assert f["cvss_score_estimate"] == 7.8
+
+
+class TestScoreFindings:
+    """Tests for score_findings — list of finding dicts."""
+
+    def test_scores_all(self):
+        from packages.cvss import score_findings
+        findings = [
+            {"cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"},
+            {"cvss_vector": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"},
+        ]
+        score_findings(findings)
+        assert findings[0]["cvss_score_estimate"] == 9.8
+        assert findings[1]["cvss_score_estimate"] == 7.8
+
+    def test_skips_missing_vectors(self):
+        from packages.cvss import score_findings
+        findings = [
+            {"cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"},
+            {"no_vector": True},
+        ]
+        score_findings(findings)
+        assert findings[0]["cvss_score_estimate"] == 9.8
+        assert "cvss_score_estimate" not in findings[1]
+
+    def test_empty_list(self):
+        from packages.cvss import score_findings
+        score_findings([])  # Should not raise

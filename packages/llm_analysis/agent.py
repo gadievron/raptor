@@ -726,16 +726,10 @@ Do NOT:
             logger.info(f"  Exploitability Score: {vuln.exploitability_score:.2f}")
             logger.info(f"  Severity Assessment: {analysis.get('severity_assessment', 'unknown')}")
             # Compute CVSS score from vector if provided
-            from packages.cvss import compute_score_safe
-            cvss_vector = analysis.get("cvss_vector")
-            if cvss_vector:
-                computed_score, computed_label = compute_score_safe(cvss_vector)
-                if computed_score is not None:
-                    analysis["cvss_score_estimate"] = computed_score
-                    logger.info(f"  CVSS: {computed_score} ({computed_label}) from {cvss_vector}")
-                else:
-                    logger.warning(f"  CVSS vector invalid: {cvss_vector}")
-                    logger.info(f"  CVSS Estimate: {analysis.get('cvss_score_estimate', 'N/A')}")
+            from packages.cvss import score_finding
+            score_finding(analysis)
+            if analysis.get("cvss_score_estimate"):
+                logger.info(f"  CVSS: {analysis['cvss_score_estimate']} ({analysis.get('severity_assessment', '?')}) from {analysis.get('cvss_vector')}")
             else:
                 logger.info(f"  CVSS Estimate: {analysis.get('cvss_score_estimate', 'N/A')}")
 

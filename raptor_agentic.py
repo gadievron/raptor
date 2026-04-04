@@ -985,37 +985,16 @@ _CWE_FROM_VULN_TYPE = {
     "type_confusion": "CWE-843",
 }
 
-# CVSS score to severity label
-_CVSS_SEVERITY = [
-    (9.0, "critical"),
-    (7.0, "high"),
-    (4.0, "medium"),
-    (0.1, "low"),
-]
-
 
 def _postprocess_findings(results):
-    """Post-process LLM results: compute CVSS scores, infer CWE, fix severity."""
-    from packages.cvss import compute_score_safe
+    """Post-process LLM results: compute CVSS scores, infer CWE."""
+    from packages.cvss import score_finding
 
     for r in results:
         if "error" in r:
             continue
 
-        # Compute CVSS score from vector (always overwrite — LLM may estimate wrong)
-        vec = r.get("cvss_vector")
-        if vec:
-            score, _ = compute_score_safe(vec)
-            if score is not None:
-                r["cvss_score_estimate"] = score
-
-                # Fix severity to match CVSS score
-                severity = "informational"
-                for threshold, label in _CVSS_SEVERITY:
-                    if score >= threshold:
-                        severity = label
-                        break
-                r["severity_assessment"] = severity
+        score_finding(r)
 
         # Infer CWE from vuln_type if LLM didn't provide one
         if not r.get("cwe_id"):
