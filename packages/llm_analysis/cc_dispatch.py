@@ -209,6 +209,7 @@ Your ruling, is_true_positive, and is_exploitable MUST be consistent with your r
 **If exploitable**: Write a proof-of-concept exploit.
 The exploit should be practical and demonstrate the vulnerability.
 Include clear comments explaining the attack.
+The PoC must produce observable evidence: a crash, changed output, callback, file read, error message, or measurable state change. "Ran without error" is not evidence.
 """
 
     if not no_patches:
@@ -219,14 +220,19 @@ Read the full file for context before writing the patch.
 
     prompt += f"""
 Return your analysis as structured JSON with finding_id "{finding_id}".
+Set is_true_positive and is_exploitable based on your analysis.
 Rate exploitability_score from 0.0 (impossible) to 1.0 (trivial).
 Set confidence to high, medium, or low.
-Include a ruling: validated, false_positive, unreachable, test_code, dead_code, or mitigated.
-Set cvss_vector as a CVSS v3.1 vector: CVSS:3.1/AV:_/AC:_/PR:_/UI:_/S:_/C:_/I:_/A:_. The score is computed automatically.
-Identify the CWE ID (e.g., CWE-79) and vuln_type category (e.g., xss, buffer_overflow).
+Set ruling to exactly one of: validated, false_positive, unreachable, test_code, dead_code, mitigated.
+Set severity_assessment to one of: critical, high, medium, low, informational.
+Set cwe_id to the most specific applicable CWE — always provide one (e.g., CWE-120 for buffer overflow, CWE-78 for command injection, CWE-79 for XSS, CWE-89 for SQL injection, CWE-416 for use-after-free, CWE-134 for format string).
+Set vuln_type category (e.g., command_injection, xss, buffer_overflow, format_string).
+Set cvss_vector as a CVSS v3.1 vector: CVSS:3.1/AV:_/AC:_/PR:_/UI:_/S:_/C:_/I:_/A:_. The score is computed automatically — do not estimate it. Score the vulnerability's **inherent impact**, not binary mitigations. A heap overflow capable of code execution = C:H/I:H/A:H even with RELRO+PIE. AV = how the attacker reaches the code: CLI binary = AV:L, network service = AV:N.
 Summarize the dataflow as source->sink chain in dataflow_summary.
 Provide remediation guidance in the remediation field.
 If false_positive, set false_positive_reason to explain why.
+
+Consistency: ruling, is_true_positive, is_exploitable must agree with your reasoning. severity_assessment must be consistent with cvss_vector — high severity with low CVSS indicates an error.
 """
 
     return prompt

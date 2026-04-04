@@ -158,24 +158,27 @@ If your reasoning hedges ("maybe", "in theory"), verify the claim or rule it out
 
 **Final assessment:**
 Based on your analysis through Stages A-D:
-- Rate exploitability_score from 0.0 (impossible) to 1.0 (trivial to exploit)
-- Set confidence to high, medium, or low based on how certain you are
-- Set cvss_vector as a CVSS v3.1 vector string by choosing: Attack Vector (N/A/L/P), Attack Complexity (L/H), Privileges Required (N/L/H), User Interaction (N/R), Scope (U/C), Confidentiality (N/L/H), Integrity (N/L/H), Availability (N/L/H). Format: CVSS:3.1/AV:_/AC:_/PR:_/UI:_/S:_/C:_/I:_/A:_. The numeric score will be computed automatically.
 - Set is_true_positive based on whether the vulnerability pattern is real
 - Set is_exploitable based on whether a realistic attack path exists
+- Rate exploitability_score from 0.0 (impossible) to 1.0 (trivial to exploit)
+- Set confidence to high, medium, or low based on how certain you are
 - Set ruling to exactly one of: validated, false_positive, unreachable, test_code, dead_code, mitigated
+- Set severity_assessment to one of: critical, high, medium, low, informational
+- Set cwe_id to the most specific applicable CWE. Always provide one (e.g., CWE-120 for buffer overflow, CWE-78 for command injection, CWE-79 for XSS, CWE-89 for SQL injection, CWE-416 for use-after-free, CWE-134 for format string, CWE-190 for integer overflow)
+- Set vuln_type category (e.g., command_injection, xss, buffer_overflow, format_string, use_after_free, sql_injection)
+- Set cvss_vector as a CVSS v3.1 vector string by choosing: Attack Vector (N/A/L/P), Attack Complexity (L/H), Privileges Required (N/L/H), User Interaction (N/R), Scope (U/C), Confidentiality (N/L/H), Integrity (N/L/H), Availability (N/L/H). Format: CVSS:3.1/AV:_/AC:_/PR:_/UI:_/S:_/C:_/I:_/A:_. The numeric score is computed automatically — do not estimate it. Score the vulnerability's **inherent impact**, not binary mitigations. A heap overflow capable of code execution = C:H/I:H/A:H even with RELRO+PIE. AV = how the attacker reaches the code: CLI binary = AV:L, network service = AV:N.
 - Describe the attack scenario if exploitable
-- Identify the CWE ID if applicable (e.g., CWE-79 for XSS, CWE-120 for buffer overflow)
-- Identify the vuln_type category (e.g., command_injection, xss, buffer_overflow)
 - Summarize the dataflow as a concise source->sink chain (e.g., "request.getParameter('id') -> Statement.executeQuery()")
 - Provide remediation guidance: what should the developer do to fix this?
 - If ruling is false_positive, set false_positive_reason to explain why
 
-Be rigorous. False positives waste significant downstream effort (exploit generation,
-patch creation, review). But do not dismiss real vulnerabilities — investigate first.
+**Consistency checks (mandatory):**
+- Your ruling, is_true_positive, and is_exploitable MUST be consistent with your reasoning. Do not mark a finding as exploitable if your reasoning concludes it is safe.
+- severity_assessment must be consistent with cvss_vector. High severity with a low CVSS score (or vice versa) indicates an error — review and correct.
+- If you generated a PoC exploit, it must produce observable evidence: a crash, changed output, callback, file read, error message, or measurable state change. "Ran without error" is not evidence.
 
-Your ruling, is_true_positive, and is_exploitable MUST be consistent with your reasoning.
-Do not mark a finding as exploitable if your reasoning concludes it is safe or a false positive."""
+Be rigorous. False positives waste significant downstream effort (exploit generation,
+patch creation, review). But do not dismiss real vulnerabilities — investigate first."""
 
     return prompt
 
