@@ -12,7 +12,6 @@ def merge_sarif_files(output_path: str, input_paths: list) -> None:
     from core.sarif.parser import merge_sarif
 
     merged = merge_sarif(input_paths)
-    merged["$schema"] = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json"
 
     # Write merged output
     with open(output_path, 'w') as f:

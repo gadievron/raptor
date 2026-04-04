@@ -118,7 +118,11 @@ def merge_sarif(sarif_paths: List[str]) -> Dict[str, Any]:
     Returns:
         Merged SARIF dict with all runs combined
     """
-    merged: Dict[str, Any] = {"version": "2.1.0", "runs": []}
+    merged: Dict[str, Any] = {
+        "version": "2.1.0",
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "runs": [],
+    }
     for sarif_path in sarif_paths:
         sarif_data = load_sarif(Path(sarif_path))
         if sarif_data:
