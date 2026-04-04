@@ -38,7 +38,7 @@ def main() -> int:
     parser.add_argument(
         "--type",
         metavar="TYPE",
-        choices=["context-map", "flow-trace", "attack-tree", "attack-paths", "all"],
+        choices=["context-map", "flow-trace", "attack-tree", "attack-paths", "hypotheses", "all"],
         default="all",
         dest="diagram_type",
         help="Which diagram type to generate (default: all).",
@@ -61,12 +61,14 @@ def main() -> int:
             flow_trace_from_file,
             attack_tree_from_file,
             attack_paths_from_file,
+            hypotheses_from_file,
         )
         type_map = {
             "context-map": ("context-map.json", context_map_from_file),
             "flow-trace": (None, None),  # handled specially below
             "attack-tree": ("attack-tree.json", attack_tree_from_file),
             "attack-paths": ("attack-paths.json", attack_paths_from_file),
+            "hypotheses": ("hypotheses.json", hypotheses_from_file),
         }
         if args.diagram_type == "flow-trace":
             traces = sorted(out_dir.glob("flow-trace-*.json"))

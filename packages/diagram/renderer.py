@@ -38,7 +38,7 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
 
     # --- Context map / attack surface ---
     for fname, title in [
-        ("context-map.json", "Context Map,Entry Points, Trust Boundaries, Sinks"),
+        ("context-map.json", "Context Map, Entry Points, Trust Boundaries, Sinks"),
         ("attack-surface.json", "Attack Surface (Stage B)"),
     ]:
         fpath = out_dir / fname
