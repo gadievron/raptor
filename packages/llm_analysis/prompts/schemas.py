@@ -2,10 +2,10 @@
 
 Used by both agent.py (sequential external LLM) and orchestrator.py (parallel dispatch).
 Field names and types are aligned with the /validate pipeline — see
-packages/schema_constants.py for the canonical field list.
+core/schema_constants.py for the canonical field list.
 """
 
-from packages.schema_constants import AGENTIC_RULING_VALUES, SEVERITY_LEVELS
+from core.schema_constants import AGENTIC_RULING_VALUES, SEVERITY_LEVELS
 
 # Schema for vulnerability analysis — used with generate_structured()
 ANALYSIS_SCHEMA = {

@@ -62,7 +62,7 @@ VULN_TYPES = [
 ]
 
 # Severity assessment levels.
-SEVERITY_LEVELS = ["critical", "high", "medium", "low"]
+SEVERITY_LEVELS = ["critical", "high", "medium", "low", "informational"]
 
 # Agentic ruling values (single-pass categorised verdict).
 # "validated" = confirmed real vulnerability.
