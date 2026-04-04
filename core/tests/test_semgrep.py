@@ -21,7 +21,7 @@ class TestRunSemgrep:
     """Tests for run_semgrep function."""
 
     @patch('shutil.which')
-    @patch('core.exec.run')
+    @patch('core.semgrep.run')
     @patch('core.semgrep.validate_sarif')
     def test_successful_scan(self, mock_validate, mock_run, mock_which, tmp_path):
         """Test successful semgrep scan."""
@@ -41,7 +41,7 @@ class TestRunSemgrep:
         assert sarif_path == output_file
 
     @patch('shutil.which')
-    @patch('core.exec.run')
+    @patch('core.semgrep.run')
     @patch('core.semgrep.validate_sarif')
     def test_scan_with_findings(self, mock_validate, mock_run, mock_which, tmp_path):
         """Test scan with exit code 1 (findings found) is still successful."""
@@ -59,7 +59,7 @@ class TestRunSemgrep:
         assert success is True
 
     @patch('shutil.which')
-    @patch('core.exec.run')
+    @patch('core.semgrep.run')
     def test_scan_failure(self, mock_run, mock_which, tmp_path):
         """Test failed semgrep scan."""
         mock_which.return_value = "/usr/bin/semgrep"
@@ -81,7 +81,7 @@ class TestRunSingleSemgrep:
     """Tests for run_single_semgrep function."""
 
     @patch('shutil.which')
-    @patch('core.exec.run')
+    @patch('core.semgrep.run')
     @patch('core.semgrep.validate_sarif')
     def test_creates_output_files(self, mock_validate, mock_run, mock_which, tmp_path):
         """Test that all expected output files are created."""
@@ -103,7 +103,7 @@ class TestRunSingleSemgrep:
         assert (tmp_path / "semgrep_test_scan.exit").exists()
 
     @patch('shutil.which')
-    @patch('core.exec.run')
+    @patch('core.semgrep.run')
     @patch('core.semgrep.validate_sarif')
     def test_sanitizes_name_with_slashes(self, mock_validate, mock_run, mock_which, tmp_path):
         """Test that names with special chars are sanitized."""
@@ -123,7 +123,7 @@ class TestRunSingleSemgrep:
         assert "p_security-audit" in sarif_path
 
     @patch('shutil.which')
-    @patch('core.exec.run')
+    @patch('core.semgrep.run')
     @patch('core.semgrep.validate_sarif')
     def test_progress_callback_called(self, mock_validate, mock_run, mock_which, tmp_path):
         """Test that progress callback is invoked."""

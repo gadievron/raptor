@@ -86,13 +86,9 @@ class TestRun:
         # Should still have PATH from os.environ
 
     def test_run_with_description(self, caplog):
-        """Test that description parameter logs correctly."""
-        rc, stdout, stderr = run(
-            ["python", "--version"],
-            description="Testing Python version",
-            timeout=10
-        )
-        assert "Testing Python version" in caplog.text or rc == 0  # May not log if logger not configured
+        """Test that run() works normally (description is not a parameter)."""
+        rc, stdout, stderr = run(["python", "--version"], timeout=10)
+        assert rc == 0
 
     def test_run_returns_tuple(self):
         """Test that run() returns correct tuple format."""
