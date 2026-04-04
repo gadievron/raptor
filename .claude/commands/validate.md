@@ -12,7 +12,8 @@ Validates that vulnerability findings are real, reachable, and exploitable befor
 
 ### Step-by-Step Execution
 
-**All stages are mandatory. Execute in sequence: 0 → A → B → C → D → E → F**
+**All stages are mandatory. Execute in sequence: 0 → A → B → C → D → E → F → 1**
+(Stage E only applies to memory corruption vulnerabilities. All others are mandatory.)
 
 1. **Stage 0 (Python):** Run `build_checklist()` to get inventory
    ```python
@@ -66,12 +67,21 @@ Validates that vulnerability findings are real, reachable, and exploitable befor
    Output: `exploit-context.json` (if binary provided)
 
 7. **Stage F (Claude):** Self-review - catch mistakes before finalizing
-   - Run schema validators against findings.json
    - Verify Stage E verdicts mapped correctly to final_status
    - Check proximity score consistency across same bug class
    - Verify all preconditions cite evidence (line numbers, grep results)
+   - Check CVSS vector accuracy (AV, C/I/A reflect inherent impact)
    - Ask: "What did I get wrong?" — look for misclassifications, missed instances, weak evidence
-   - Fix any issues found, document in validation-report.md under "## Stage F Review"
+   - Fix any issues found, add `stage_f_review` field to corrected findings
+   - **Do not write validation-report.md** — Stage 1 generates it
+
+8. **Stage 1 (Python):** Outputs - CVSS scoring, schema validation, report generation
+   ```python
+   from packages.exploitability_validation.report import write_validation_report, generate_summary
+   write_validation_report(output_dir)
+   print(generate_summary(output_dir))
+   ```
+   Output: `validation-report.md`, findings summary displayed in chat
 
 ### Write Results Back
 
@@ -106,14 +116,15 @@ When user runs `/validate <path>`:
 3. Stage A: Read files, identify vulnerabilities → `findings.json`
 4. **Stage B: Build attack trees, form & test hypotheses** → 5 working docs
 5. Stage C: Verify findings against actual code
-6. Stage D: Make rulings based on Stage B evidence
+6. Stage D: Make rulings + select CVSS vectors
 7. Run Stage E via Python if binary provided
-8. Stage F: Self-review — catch misclassifications, fix schema errors
+8. Stage F: Self-review — catch misclassifications, correct vectors/rulings
+9. Run Stage 1 via Python — CVSS scoring, schema validation, report generation, display summary
 
 ```
 User: /validate /tmp/vuln
        ↓
-Claude: Stage 0 → Stage A → Stage B → Stage C → Stage D → Stage E → Stage F
+Claude: Stage 0 → Stage A → Stage B → Stage C → Stage D → Stage E → Stage F → Stage 1
               ↓
         Output: checklist.json, findings.json, attack-surface.json,
                 attack-tree.json, hypotheses.json, disproven.json,

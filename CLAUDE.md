@@ -119,11 +119,12 @@ The `/validate` command validates that vulnerability findings are real, reachabl
 
 **Usage:** `/validate <target_path> [--vuln-type <type>] [--findings <file>]`
 
-**Stages:** 0 (Inventory) → A (One-Shot) → B (Process) → C (Sanity) → D (Ruling) → E (Feasibility) → F (Review)
+**Stages:** 0 → A → B → C → D → E → F → 1 (see `.claude/skills/exploitability-validation/PIPELINE.md`)
 
 **Skills** (in `.claude/skills/exploitability-validation/`):
+- `PIPELINE.md` - Stage naming convention (letters = LLM, numbers = mechanical)
 - `SKILL.md` - Shared context, gates, execution rules
-- `stage-0-inventory.md` through `stage-f-review.md` - Stage instructions
+- `stage-0-inventory.md` through `stage-1-outputs.md` - Stage instructions
 
 **Output:** `out/exploitability-validation-<timestamp>/validation-report.md`
 
