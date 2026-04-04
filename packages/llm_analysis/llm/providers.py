@@ -228,6 +228,53 @@ def _coerce_to_schema(data: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str,
     return coerced
 
 
+def _normalize_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize simple format schema to JSON Schema format.
+
+    Simple format: {"field": "type description"}
+    JSON Schema format: {"properties": {...}, "required": [...]}
+
+    Returns the schema unchanged if already in JSON Schema format.
+    """
+    if "properties" in schema:
+        return schema  # Already JSON Schema
+
+    type_aliases = {
+        "bool": "boolean", "str": "string", "int": "integer",
+        "float": "number", "list": "array", "dict": "object",
+    }
+
+    properties = {}
+    for field_name, field_desc in schema.items():
+        if isinstance(field_desc, dict):
+            properties[field_name] = field_desc
+            continue
+
+        field_desc_str = str(field_desc)
+        field_type = field_desc_str.split()[0].strip()
+        field_type = type_aliases.get(field_type, field_type)
+
+        # Detect nullable: "string or null", "float or null"
+        if " or null" in field_desc_str.lower():
+            prop = {"type": [field_type, "null"]}
+        else:
+            prop = {"type": field_type}
+
+        # Arrays need an items definition for Gemini
+        if field_type == "array":
+            prop["items"] = {"type": "string"}
+
+        # Extract description
+        if " - " in field_desc_str:
+            prop["description"] = field_desc_str.split(" - ", 1)[1].strip()
+        elif "(" in field_desc_str:
+            prop["description"] = field_desc_str[field_desc_str.find("("):].strip()
+
+        properties[field_name] = prop
+
+    return {"properties": properties, "required": list(schema.keys())}
+
+
 def _schema_to_gemini(schema: Dict[str, Any]) -> Dict[str, Any]:
     """Convert JSON Schema to Gemini-compatible schema.
 
@@ -309,49 +356,8 @@ def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']]):
             f"got {type(schema).__name__}"
         )
 
-    # AUTO-WRAP: Convert simple format to JSON Schema if needed
-    if "properties" not in schema:
-        # Simple format detected: {"field": "type description"}
-        # Convert to JSON Schema: {"properties": {"field": {"type": "type"}}, "required": [...]}
-
-        # Type aliases: map common Python types to JSON Schema types
-        type_aliases = {
-            "bool": "boolean",
-            "str": "string",
-            "int": "integer",
-            "float": "number",
-            "list": "array",
-            "dict": "object",
-        }
-
-        properties = {}
-        for field_name, field_desc in schema.items():
-            if isinstance(field_desc, str):
-                # Parse description like "boolean" or "float (0.0-1.0)" or "string - description"
-                # Extract type (first word/token before space or parenthesis)
-                field_type = field_desc.split()[0].strip()
-
-                # Normalize type using aliases
-                field_type = type_aliases.get(field_type, field_type)
-
-                # Map to JSON Schema type
-                properties[field_name] = {"type": field_type}
-
-                # Add description if present (anything after " - " or in parentheses)
-                if " - " in field_desc:
-                    desc = field_desc.split(" - ", 1)[1].strip()
-                    properties[field_name]["description"] = desc
-                elif "(" in field_desc:
-                    desc = field_desc[field_desc.find("("):].strip()
-                    properties[field_name]["description"] = desc
-            elif isinstance(field_desc, dict):
-                # Already in property format (partial JSON Schema)
-                properties[field_name] = field_desc
-            else:
-                raise ValueError(f"Invalid field description for '{field_name}': {field_desc}")
-
-        # Wrap into JSON Schema format with all fields required by default
-        schema = {"properties": properties, "required": list(schema.keys())}
+    # Normalize simple format to JSON Schema
+    schema = _normalize_schema(schema)
 
     properties = schema.get("properties", {})
     required_fields = schema.get("required", [])
@@ -398,6 +404,11 @@ def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']]):
         if not is_required and default_value is ...:
             from typing import Optional as Opt
             python_type = Opt[python_type]
+            default_value = None
+
+        # Nullable fields should default to None even if required in the schema —
+        # LLMs frequently omit nullable fields rather than explicitly returning null
+        if nullable and default_value is ...:
             default_value = None
 
         # Create field definition
@@ -827,13 +838,16 @@ class GeminiProvider(LLMProvider):
     def generate_structured(self, prompt: str, schema: Dict[str, Any],
                            system_prompt: Optional[str] = None) -> Tuple[Dict[str, Any], str]:
         """Generate structured output using Gemini's native JSON mode."""
-        pydantic_model = _dict_schema_to_pydantic(schema)
+        # Normalize simple schema to JSON Schema format so both pydantic and
+        # Gemini schema conversion see the same structure
+        normalized = _normalize_schema(schema)
+        pydantic_model = _dict_schema_to_pydantic(normalized)
 
         config_kwargs = {
             "temperature": self.config.temperature,
             "max_output_tokens": self.config.max_tokens,
             "response_mime_type": "application/json",
-            "response_schema": _schema_to_gemini(schema),
+            "response_schema": _schema_to_gemini(normalized),
         }
 
         contents = [{"role": "user", "parts": [{"text": prompt}]}]
@@ -852,6 +866,9 @@ class GeminiProvider(LLMProvider):
 
             content = response.text or ""
             parsed = json.loads(content)
+            if not parsed:
+                # Gemini sometimes returns {} in structured mode — fall back to text
+                raise ValueError("Gemini returned empty object in structured mode")
             parsed = _coerce_to_schema(parsed, schema)
             validated = pydantic_model.model_validate(parsed)
             result_dict = validated.model_dump()
