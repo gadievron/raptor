@@ -126,7 +126,12 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
 
 
 def _load_optional_list(path: Path) -> list | None:
-    """Load a JSON file that should be a list (or None if missing/invalid)."""
+    """Load a JSON file whose top level is a list.
+
+    Returns None if the file is missing, unreadable, or top-level is not a list.
+    attack-paths.json and hypotheses.json are bare lists; disproven.json is a
+    dict envelope handled separately by _load_disproven.
+    """
     if not path.exists():
         return None
     try:
