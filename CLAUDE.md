@@ -22,6 +22,7 @@ VERY IMPORTANT: follow these steps in order.
 /exploit /patch - Generate PoCs and fixes (beta)
 /validate - Exploitability validation pipeline (see below)
 /understand - Code understanding: map attack surface, trace flows, hunt variants (see below)
+/diagram - Generate Mermaid visual maps from /understand or /validate output (see below)
 
 **Note:** `/agentic` runs scan → dedup → prep → analysis (with validation methodology). Use `--sequential` to bypass parallel orchestration.
 /crash-analysis - Autonomous crash root-cause analysis (see below)
@@ -152,6 +153,36 @@ The `/understand` command provides deep, adversarial code comprehension for secu
 **Output:** `.out/code-understanding-<timestamp>/`
 
 **Pipeline integration:** Planned — output schemas are aligned with validation pipeline formats for future integration.
+
+---
+
+## DIAGRAM GENERATION
+
+The `/diagram` command generates Mermaid visual maps from `/understand` and `/validate` JSON outputs, giving researchers a visual representation of code flows, sources, sinks, trust boundaries, attack trees, and attack paths. Consider this 
+very much a WIP but it could be of use for those wanting to see relationships and flows better. 
+
+**Usage:** `/diagram <out-dir> [--target <name>] [--type context-map|flow-trace|attack-tree|attack-paths|all]`
+
+**What gets rendered:**
+- `context-map.json` → flowchart LR: entry points → trust boundaries → sinks; unchecked flows as dashed edges
+- `attack-surface.json` → same layout (Stage B equivalent view)
+- `flow-trace-*.json` → flowchart TD per trace: each hop in the call chain, tainted variables, branches, attacker control summary
+- `attack-tree.json` → flowchart TD: knowledge graph nodes styled by status (confirmed/disproven/exploring/unexplored)
+- `attack-paths.json` → flowchart TD per path: step chain with proximity score and blocker annotations
+
+**Output:** `diagrams.md` written into the target directory (or `--stdout` to print)
+
+**Implementation:** `generate_diagram.py` (CLI) and `packages/diagram/` (library)
+
+```python
+# Programmatic use
+from packages.diagram import render_and_write
+from pathlib import Path
+
+out_file = render_and_write(Path(".out/code-understanding-20240101/"), target="myapp")
+```
+
+**When to run:** After `/understand --map`, `/understand --trace`, or a full `/validate` run. Can be run on any output directory — it auto-discovers what JSON files are present and renders only those.
 
 ---
 
