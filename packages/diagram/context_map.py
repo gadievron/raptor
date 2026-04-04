@@ -115,7 +115,7 @@ def generate(data: dict[str, Any]) -> str:
                 for tb_id in tb_for_ep:
                     lines.append(f"    {tb_id} --> {sink_id}")
             else:
-                # No TB — direct edge (will also appear as unchecked)
+                # No TB,direct edge (will also appear as unchecked)
                 lines.append(f"    {ep_id} --> {sink_id}")
 
     # -- Unchecked flows: dashed red edges --

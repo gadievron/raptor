@@ -8,20 +8,11 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-from . import context_map, flow_trace, attack_tree, attack_paths
+from . import context_map, flow_trace, attack_tree, attack_paths, hypotheses
 
 
-# Files we know how to render, in display order
-_KNOWN_FILES = [
-    "context-map.json",
-    "attack-surface.json",
-    "attack-tree.json",
-    "attack-paths.json",
-]
-
-# flow-trace files are discovered by glob
 _FLOW_TRACE_GLOB = "flow-trace-*.json"
 
 
@@ -30,22 +21,24 @@ def _section(title: str, body: str, level: int = 2) -> str:
     return f"{heading} {title}\n\n{body}\n"
 
 
+def _load_json(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return None
+
+
 def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
-    """
-    Discover all known JSON outputs in out_dir and render a combined diagrams.md.
-    Returns the markdown string.
-    """
     out_dir = Path(out_dir)
     sections: list[str] = []
 
-    # Header
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     target_str = f" for `{target}`" if target else ""
     sections.append(f"# Security Diagrams{target_str}\n\n_Generated {now}_\n")
 
     # --- Context map / attack surface ---
     for fname, title in [
-        ("context-map.json", "Context Map — Entry Points, Trust Boundaries, Sinks"),
+        ("context-map.json", "Context Map,Entry Points, Trust Boundaries, Sinks"),
         ("attack-surface.json", "Attack Surface (Stage B)"),
     ]:
         fpath = out_dir / fname
@@ -75,16 +68,43 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
                 trace_sections.append(_section(tf.stem, f"> Could not render `{tf.name}`: {exc}", level=3))
         sections.append(_section("Data Flow Traces", "\n".join(trace_sections)))
 
-    # --- Attack tree ---
+    # --- Attack tree (with companion files for enrichment) ---
     tree_path = out_dir / "attack-tree.json"
     if tree_path.exists():
         try:
             data = json.loads(tree_path.read_text())
-            diagram = attack_tree.generate(data)
-            body = f"_Source: `attack-tree.json`_\n\n```mermaid\n{diagram}\n```"
+
+            # Load companion files for cross-referencing
+            ap_data = _load_optional_list(out_dir / "attack-paths.json")
+            disproven_data = _load_disproven(out_dir / "disproven.json")
+            hyp_data = _load_optional_list(out_dir / "hypotheses.json")
+
+            enriched = any([ap_data, disproven_data, hyp_data])
+            note = " _(enriched with proximity scores and disproven reasons)_" if enriched else ""
+
+            diagram = attack_tree.generate(
+                data,
+                attack_paths=ap_data,
+                disproven=disproven_data,
+                hypotheses=hyp_data,
+            )
+            body = f"_Source: `attack-tree.json`_{note}\n\n```mermaid\n{diagram}\n```"
             sections.append(_section("Attack Tree", body))
         except Exception as exc:
             sections.append(_section("Attack Tree", f"> Could not render `attack-tree.json`: {exc}"))
+
+    # --- Hypotheses (separate evidence-chain diagram) ---
+    hyp_path = out_dir / "hypotheses.json"
+    if hyp_path.exists():
+        try:
+            raw = json.loads(hyp_path.read_text())
+            hyp_list = raw if isinstance(raw, list) else raw.get("hypotheses", [])
+            if hyp_list:
+                diagram = hypotheses.generate(hyp_list)
+                body = "_Source: `hypotheses.json`_\n\n```mermaid\n{diagram}\n```".format(diagram=diagram)
+                sections.append(_section("Hypotheses,Evidence Chain", body))
+        except Exception as exc:
+            sections.append(_section("Hypotheses,Evidence Chain", f"> Could not render `hypotheses.json`: {exc}"))
 
     # --- Attack paths ---
     paths_path = out_dir / "attack-paths.json"
@@ -92,8 +112,7 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
         try:
             data = json.loads(paths_path.read_text())
             if isinstance(data, dict):
-                data = (data.get("paths") or data.get("attack_paths") or
-                        next(iter(data.values()), []))
+                data = data.get("paths") or data.get("attack_paths") or next(iter(data.values()), [])
             if isinstance(data, list) and data:
                 body = f"_Source: `attack-paths.json`_\n\n" + attack_paths.generate(data)
                 sections.append(_section("Attack Paths", body))
@@ -106,11 +125,31 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
     return "\n".join(sections)
 
 
+def _load_optional_list(path: Path) -> list | None:
+    """Load a JSON file that should be a list (or None if missing/invalid)."""
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+        return data if isinstance(data, list) else None
+    except Exception:
+        return None
+
+
+def _load_disproven(path: Path) -> list | None:
+    """Load disproven.json,unwraps the {'disproven': [...]} envelope."""
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+        if isinstance(data, dict):
+            return data.get("disproven", [])
+        return data if isinstance(data, list) else None
+    except Exception:
+        return None
+
+
 def render_and_write(out_dir: Path, target: Optional[str] = None) -> Path:
-    """
-    Render all diagrams and write diagrams.md into out_dir.
-    Returns the path to the written file.
-    """
     content = render_directory(out_dir, target)
     output_path = out_dir / "diagrams.md"
     output_path.write_text(content, encoding="utf-8")

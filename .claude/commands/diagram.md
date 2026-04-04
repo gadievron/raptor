@@ -57,11 +57,11 @@ out_file = render_and_write(Path(".out/code-understanding-20240101/"), target="m
 ```
 
 **`packages/diagram/` modules:**
-- `context_map.py` — context-map.json / attack-surface.json → flowchart LR
-- `flow_trace.py` — flow-trace-*.json → flowchart TD
-- `attack_tree.py` — attack-tree.json → flowchart TD with status styling
-- `attack_paths.py` — attack-paths.json → flowchart TD per path with proximity
-- `renderer.py` — discovers files in a directory, combines into diagrams.md
+- `context_map.py`: context-map.json / attack-surface.json → flowchart LR
+- `flow_trace.py`: flow-trace-*.json → flowchart TD
+- `attack_tree.py`: attack-tree.json → flowchart TD with status styling
+- `attack_paths.py`: attack-paths.json → flowchart TD per path with proximity
+- `renderer.py`: discovers files in a directory, combines into diagrams.md
 
 ## When to run
 
@@ -70,7 +70,7 @@ After any of:
 - `/understand --trace <entry>` (produces `flow-trace-*.json`)
 - `/validate` (produces `attack-surface.json`, `attack-tree.json`, `attack-paths.json`)
 
-Point it at the same `--out` directory. It picks up whatever JSON is there — no configuration needed.
+Point it at the same `--out` directory. It picks up whatever JSON is there: no configuration needed.
 
 ## Execution
 

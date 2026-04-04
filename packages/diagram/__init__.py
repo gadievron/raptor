@@ -1,5 +1,5 @@
 """
-Diagram package — Mermaid diagram generation from /understand and /validate outputs.
+Diagram package,Mermaid diagram generation from /understand and /validate outputs.
 
 Public API:
     from packages.diagram import render_and_write, render_directory
@@ -27,6 +27,7 @@ from .context_map import generate as generate_context_map, generate_from_file as
 from .flow_trace import generate as generate_flow_trace, generate_from_file as flow_trace_from_file
 from .attack_tree import generate as generate_attack_tree, generate_from_file as attack_tree_from_file
 from .attack_paths import generate as generate_attack_paths, generate_from_file as attack_paths_from_file
+from .hypotheses import generate as generate_hypotheses, generate_from_file as hypotheses_from_file
 
 __all__ = [
     "render_and_write",
@@ -35,10 +36,12 @@ __all__ = [
     "generate_flow_trace",
     "generate_attack_tree",
     "generate_attack_paths",
+    "generate_hypotheses",
     "context_map_from_file",
     "flow_trace_from_file",
     "attack_tree_from_file",
     "attack_paths_from_file",
+    "hypotheses_from_file",
 ]
 
 __version__ = "0.1.0"

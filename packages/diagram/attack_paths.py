@@ -61,7 +61,7 @@ def generate_single(path_data: dict[str, Any], path_index: int) -> str:
     prox_desc = _proximity_desc(int(proximity))
 
     lines = ["flowchart TD"]
-    title_label = f"{name}\\nProximity: {proximity}/10 — {prox_desc}\\nStatus: {status}"
+    title_label = f"{name}\\nProximity: {proximity}/10,{prox_desc}\\nStatus: {status}"
     lines.append(f'    TITLE_{path_index}["{_sanitize(title_label)}"]')
     lines.append(f"    style TITLE_{path_index} fill:#f0f0f0,stroke:#999,font-weight:bold")
     lines.append("")

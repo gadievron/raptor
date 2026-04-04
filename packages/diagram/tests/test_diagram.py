@@ -11,6 +11,7 @@ from ..context_map import generate as gen_context_map
 from ..flow_trace import generate as gen_flow_trace
 from ..attack_tree import generate as gen_attack_tree
 from ..attack_paths import generate as gen_attack_paths, generate_single
+from ..hypotheses import generate as gen_hypotheses
 from ..renderer import render_directory, render_and_write
 
 
@@ -82,6 +83,43 @@ ATTACK_TREE_DATA = {
          "status": "disproven", "leads_to": ""},
     ],
 }
+
+HYPOTHESES_DATA = [
+    {
+        "id": "HYPO-001",
+        "finding": "FIND-001",
+        "claim": "POST body reaches raw SQL execution with no parameterization",
+        "status": "confirmed",
+        "predictions": [
+            {
+                "id": "PRED-001",
+                "prediction": "Input ' OR 1=1-- returns all rows",
+                "result": "200 response with all user rows returned",
+                "status": "confirmed",
+            },
+            {
+                "id": "PRED-002",
+                "prediction": "UNION SELECT returns data from other tables",
+                "result": "query returns schema info",
+                "status": "confirmed",
+            },
+        ],
+    },
+    {
+        "id": "HYPO-002",
+        "finding": "FIND-002",
+        "claim": "Error-based injection leaks schema info",
+        "status": "disproven",
+        "predictions": [
+            {
+                "id": "PRED-003",
+                "prediction": "Invalid syntax returns DB error message",
+                "result": "Error messages suppressed by application",
+                "status": "disproven",
+            },
+        ],
+    },
+]
 
 ATTACK_PATHS_DATA = [
     {
@@ -296,6 +334,95 @@ class TestAttackTree:
         n1_edges = [l for l in lines if l.strip().startswith("N1 -->")]
         assert not n1_edges
 
+    def test_confirmed_node_shows_proximity_when_provided(self):
+        attack_paths = [{"id": "P1", "finding": "N1", "proximity": 9, "steps": [], "status": "confirmed"}]
+        out = gen_attack_tree(ATTACK_TREE_DATA, attack_paths=attack_paths)
+        assert "proximity 9/10" in out
+
+    def test_disproven_node_shows_why_wrong_when_provided(self):
+        disproven = [{"finding": "N2", "why_wrong": "Error messages suppressed", "lesson": ""}]
+        out = gen_attack_tree(ATTACK_TREE_DATA, disproven=disproven)
+        assert "ruled out" in out
+        assert "suppressed" in out
+
+    def test_enrichment_absent_still_renders(self):
+        out = gen_attack_tree(ATTACK_TREE_DATA, attack_paths=None, disproven=None)
+        assert "ROOT" in out
+
+    def test_subgraphs_emitted_for_multi_branch_tree(self):
+        # ROOT has two children (N1, N2) each with their own children
+        tree = {
+            "root": "ROOT",
+            "nodes": [
+                {"id": "ROOT", "goal": "Exploit app", "status": "exploring", "leads_to": "FIND-001,FIND-002"},
+                {"id": "FIND-001", "goal": "SQL injection", "status": "confirmed", "leads_to": "N1A,N1B"},
+                {"id": "FIND-002", "goal": "Command injection", "status": "exploring", "leads_to": "N2A"},
+                {"id": "N1A", "goal": "Direct injection", "status": "confirmed", "leads_to": ""},
+                {"id": "N1B", "goal": "Blind injection", "status": "disproven", "leads_to": ""},
+                {"id": "N2A", "goal": "Semicolon payload", "status": "exploring", "leads_to": ""},
+            ],
+        }
+        out = gen_attack_tree(tree)
+        assert "subgraph" in out
+        assert "FIND-001" in out
+        assert "FIND-002" in out
+
+    def test_no_subgraphs_for_flat_tree(self):
+        # Root has children but none of those children have their own children
+        tree = {
+            "root": "ROOT",
+            "nodes": [
+                {"id": "ROOT", "goal": "Exploit", "status": "exploring", "leads_to": "N1,N2"},
+                {"id": "N1", "goal": "Path A", "status": "confirmed", "leads_to": ""},
+                {"id": "N2", "goal": "Path B", "status": "disproven", "leads_to": ""},
+            ],
+        }
+        out = gen_attack_tree(tree)
+        assert "subgraph" not in out
+
+
+# ---------------------------------------------------------------------------
+# hypotheses tests
+# ---------------------------------------------------------------------------
+
+class TestHypotheses:
+    def test_produces_flowchart_td(self):
+        out = gen_hypotheses(HYPOTHESES_DATA)
+        assert out.startswith("flowchart TD")
+
+    def test_hypothesis_ids_present(self):
+        out = gen_hypotheses(HYPOTHESES_DATA)
+        assert "HYPO-001" in out
+        assert "HYPO-002" in out
+
+    def test_predictions_present(self):
+        out = gen_hypotheses(HYPOTHESES_DATA)
+        assert "PRED-001" in out
+        assert "PRED-002" in out
+
+    def test_subgraph_per_finding(self):
+        out = gen_hypotheses(HYPOTHESES_DATA)
+        assert "subgraph" in out
+        assert "FIND-001" in out
+        assert "FIND-002" in out
+
+    def test_empty_list(self):
+        out = gen_hypotheses([])
+        assert "No hypotheses" in out
+
+    def test_confirmed_and_disproven_style_classes(self):
+        out = gen_hypotheses(HYPOTHESES_DATA)
+        assert "classDef confirmed" in out
+        assert "classDef disproven" in out
+
+    def test_prediction_edges_present(self):
+        out = gen_hypotheses(HYPOTHESES_DATA)
+        assert "-->" in out
+
+    def test_no_em_dashes(self):
+        out = gen_hypotheses(HYPOTHESES_DATA)
+        assert "\u2014" not in out
+
 
 # ---------------------------------------------------------------------------
 # attack_paths tests
@@ -380,12 +507,32 @@ class TestRenderer:
             "flow-trace-EP-001.json": FLOW_TRACE_DATA,
             "attack-tree.json": ATTACK_TREE_DATA,
             "attack-paths.json": ATTACK_PATHS_DATA,
+            "hypotheses.json": HYPOTHESES_DATA,
         })
         out = render_directory(tmp_path, target="full-run")
         assert "Context Map" in out
         assert "Attack Tree" in out
         assert "Attack Paths" in out
-        assert out.count("```mermaid") >= 4
+        assert "Hypotheses" in out
+        assert out.count("```mermaid") >= 5
+
+    def test_render_attack_tree_enriched_with_companions(self, tmp_path):
+        disproven_wrapped = {"disproven": [{"finding": "N2", "why_wrong": "suppressed errors", "lesson": ""}]}
+        self._make_out_dir(tmp_path, {
+            "attack-tree.json": ATTACK_TREE_DATA,
+            "attack-paths.json": ATTACK_PATHS_DATA,
+            "disproven.json": disproven_wrapped,
+            "hypotheses.json": HYPOTHESES_DATA,
+        })
+        out = render_directory(tmp_path)
+        assert "Attack Tree" in out
+        assert "enriched" in out
+
+    def test_render_hypotheses(self, tmp_path):
+        self._make_out_dir(tmp_path, {"hypotheses.json": HYPOTHESES_DATA})
+        out = render_directory(tmp_path)
+        assert "Hypotheses" in out
+        assert "HYPO-001" in out
 
     def test_corrupt_json_handled_gracefully(self, tmp_path):
         (tmp_path / "context-map.json").write_text("{corrupt json", encoding="utf-8")
