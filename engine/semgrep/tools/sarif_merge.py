@@ -9,24 +9,10 @@ from pathlib import Path
 
 def merge_sarif_files(output_path: str, input_paths: list) -> None:
     """Merge multiple SARIF files into one."""
-    merged = {
-        "version": "2.1.0",
-        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-        "runs": []
-    }
+    from core.sarif.parser import merge_sarif
 
-    for input_path in input_paths:
-        try:
-            with open(input_path) as f:
-                sarif = json.load(f)
-
-            # Add all runs from this SARIF
-            if "runs" in sarif:
-                merged["runs"].extend(sarif["runs"])
-
-        except Exception as e:
-            print(f"Warning: Failed to merge {input_path}: {e}", file=sys.stderr)
-            continue
+    merged = merge_sarif(input_paths)
+    merged["$schema"] = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json"
 
     # Write merged output
     with open(output_path, 'w') as f:

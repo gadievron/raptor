@@ -623,12 +623,18 @@ def main():
     parser.add_argument("--max-findings", type=int, default=10, help="Max findings to analyze")
     args = parser.parse_args()
 
+    from core.sarif.parser import load_sarif
     print(f"Loading SARIF: {args.sarif}")
-    with open(args.sarif) as f:
-        sarif = json.load(f)
+    sarif = load_sarif(Path(args.sarif))
+    if not sarif:
+        sys.exit(1)
 
-    run = sarif["runs"][0]
-    results = run["results"]
+    runs = sarif.get("runs", [])
+    if not runs:
+        print("No runs in SARIF file")
+        sys.exit(1)
+    run = runs[0]
+    results = run.get("results", [])
 
     print(f"Found {len(results)} findings")
     print(f"Analyzing up to {args.max_findings} findings...")

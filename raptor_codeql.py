@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from core.config import RaptorConfig
 from core.logging import get_logger
+from core.sarif.parser import load_sarif
 from packages.codeql.agent import CodeQLAgent
 from packages.codeql.autonomous_analyzer import AutonomousCodeQLAnalyzer
 
@@ -157,11 +158,8 @@ def run_autonomous_workflow(args):
     for sarif_file in scan_result.sarif_files:
         logger.info(f"\nAnalyzing SARIF: {sarif_file}")
 
-        try:
-            with open(sarif_file) as f:
-                sarif = json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning(f"Could not read SARIF file {sarif_file}: {e}")
+        sarif = load_sarif(Path(sarif_file))
+        if not sarif:
             continue
 
         runs = sarif.get("runs", [])

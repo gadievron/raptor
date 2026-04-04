@@ -252,24 +252,12 @@ class QueryRunner:
             findings_count = 0
             queries_executed = 0
 
-            if sarif_path.exists():
-                try:
-                    with open(sarif_path) as f:
-                        sarif_data = json.load(f)
-
-                    # Count findings
-                    for run in sarif_data.get("runs", []):
-                        results = run.get("results", [])
-                        findings_count += len(results)
-
-                        # Count queries executed
-                        tool = run.get("tool", {})
-                        driver = tool.get("driver", {})
-                        rules = driver.get("rules", [])
-                        queries_executed += len(rules)
-
-                except Exception as e:
-                    logger.warning(f"Failed to parse SARIF: {e}")
+            from core.sarif.parser import load_sarif
+            sarif_data = load_sarif(sarif_path) if sarif_path.exists() else None
+            if sarif_data:
+                for run in sarif_data.get("runs", []):
+                    findings_count += len(run.get("results", []))
+                    queries_executed += len(run.get("tool", {}).get("driver", {}).get("rules", []))
 
             logger.info(f"✓ Analysis completed for {language}")
             logger.info(f"  Findings: {findings_count}")
@@ -472,18 +460,11 @@ class QueryRunner:
 
     def _count_sarif_findings(self, sarif_path: Path) -> int:
         """Count findings in SARIF file."""
-        try:
-            with open(sarif_path) as f:
-                sarif_data = json.load(f)
-
-            count = 0
-            for run in sarif_data.get("runs", []):
-                count += len(run.get("results", []))
-
-            return count
-        except Exception as e:
-            logger.debug(f"Failed to count SARIF findings: {e}")
+        from core.sarif.parser import load_sarif
+        sarif_data = load_sarif(sarif_path)
+        if not sarif_data:
             return 0
+        return sum(len(run.get("results", [])) for run in sarif_data.get("runs", []))
 
     def get_sarif_summary(self, sarif_path: Path) -> Dict:
         """
@@ -493,8 +474,10 @@ class QueryRunner:
             Dict with summary statistics
         """
         try:
-            with open(sarif_path) as f:
-                sarif_data = json.load(f)
+            from core.sarif.parser import load_sarif
+            sarif_data = load_sarif(sarif_path)
+            if not sarif_data:
+                return {}
 
             summary = {
                 "total_findings": 0,

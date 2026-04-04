@@ -447,8 +447,10 @@ class CodeQLAgent:
         """Extract example dataflow paths from SARIF for visualization."""
         examples = []
         try:
-            with open(sarif_path) as f:
-                sarif_data = json.load(f)
+            from core.sarif.parser import load_sarif
+            sarif_data = load_sarif(sarif_path)
+            if not sarif_data:
+                return examples
 
             for run in sarif_data.get("runs", []):
                 for result in run.get("results", []):

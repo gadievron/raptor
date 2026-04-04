@@ -831,11 +831,16 @@ def main():
     args = parser.parse_args()
 
     # Load SARIF
-    with open(args.sarif) as f:
-        sarif = json.load(f)
+    from core.sarif.parser import load_sarif
+    sarif = load_sarif(Path(args.sarif))
+    if not sarif:
+        return
 
-    # Get finding
-    results = sarif["runs"][0]["results"]
+    runs = sarif.get("runs", [])
+    if not runs:
+        print("No runs in SARIF file")
+        return
+    results = runs[0].get("results", [])
     if args.finding_index >= len(results):
         print(f"Finding index {args.finding_index} out of range (0-{len(results)-1})")
         return
