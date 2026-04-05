@@ -77,10 +77,10 @@ Validates that vulnerability findings are real, reachable, and exploitable befor
 
 8. **Stage 1 (Python):** Outputs - CVSS scoring, schema validation, report generation
    ```python
-   from packages.exploitability_validation.report import write_validation_report, generate_summary
+   from packages.exploitability_validation.report import write_validation_report
    write_validation_report(output_dir)
-   print(generate_summary(output_dir))
    ```
+   Then read `{output_dir}/summary.txt` using the Read tool and output its contents verbatim.
    Output: `validation-report.md`, findings summary displayed in chat
 
 ### Write Results Back
