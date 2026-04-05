@@ -911,7 +911,7 @@ Examples:
             columns = FINDINGS_COLUMNS
             counts = build_findings_summary(analysed_results)
             footer = findings_summary_line(counts) + "\n\n  CVSS scores reflect inherent vulnerability impact — not binary mitigations."
-            print(render_console_table(columns, rows, max_widths={1: 19, 3: 28, 4: 25}, footer=footer))
+            print(render_console_table(columns, rows, max_widths={3: 28, 4: 25}, footer=footer))
 
     print("\n" + "=" * 70)
     print("RAPTOR has autonomously:")
