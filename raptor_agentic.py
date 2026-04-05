@@ -1045,26 +1045,7 @@ Examples:
     print(f"   Report: {md_path}")
 
 
-# Fallback CWE mapping for when LLM returns null
-_CWE_FROM_VULN_TYPE = {
-    "buffer_overflow": "CWE-120",
-    "format_string": "CWE-134",
-    "command_injection": "CWE-78",
-    "xss": "CWE-79",
-    "sql_injection": "CWE-89",
-    "use_after_free": "CWE-416",
-    "double_free": "CWE-415",
-    "integer_overflow": "CWE-190",
-    "null_dereference": "CWE-476",
-    "path_traversal": "CWE-22",
-    "ssrf": "CWE-918",
-    "deserialization": "CWE-502",
-    "race_condition": "CWE-367",
-    "buffer_overread": "CWE-125",
-    "heap_overflow": "CWE-122",
-    "stack_overflow": "CWE-121",
-    "type_confusion": "CWE-843",
-}
+from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE
 
 
 def _postprocess_findings(results):

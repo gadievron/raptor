@@ -408,7 +408,7 @@ class CrashAnalyser:
             elif "stack" in memory_region or any(word in context.function_name.lower() for word in ["strcpy", "strcat", "gets", "sprintf"]):
                 return "stack_overflow"
             elif "null" in memory_region or context.crash_address in ["0x0", "0x00000000"]:
-                return "null_pointer_dereference"
+                return "null_deref"
             else:
                 return "memory_access_violation"
                 
@@ -1260,7 +1260,7 @@ class CrashAnalyser:
                 rip = context.registers.get("rip", "")
 
                 if rsp and "0x00000" in rsp:
-                    return "null_pointer_dereference"
+                    return "null_deref"
                 elif "call" in context.crash_instruction.lower():
                     return "call_to_invalid_address"
                 else:
