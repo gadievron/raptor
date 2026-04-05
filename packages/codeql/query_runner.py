@@ -24,6 +24,24 @@ from core.logging import get_logger
 logger = get_logger()
 
 
+import re
+
+_PACK_NOT_FOUND_RE = re.compile(r"[Qq]uery pack ([\w/.-]+)\S* cannot be found")
+
+
+def _extract_missing_pack(stderr: str) -> str | None:
+    """Extract the missing pack name from a CodeQL 'cannot be found' error.
+
+    Matches: "Query pack codeql/cpp-queries:suites/foo.qls cannot be found."
+    Does NOT match: "Could not read /path/to/suite.qls" (different error).
+    """
+    m = _PACK_NOT_FOUND_RE.search(stderr)
+    if m:
+        # Strip trailing colon or version: "codeql/cpp-queries:" → "codeql/cpp-queries"
+        return m.group(1).rstrip(":").split("@")[0]
+    return None
+
+
 @dataclass
 class QueryResult:
     """Result of query execution."""
@@ -229,6 +247,26 @@ class QueryRunner:
             )
 
             success = result.returncode == 0
+
+            # Auto-download missing query packs and retry once
+            if not success and "cannot be found" in (result.stderr or "").lower():
+                pack_name = _extract_missing_pack(result.stderr)
+                if pack_name:
+                    logger.info(f"Query pack '{pack_name}' not found — downloading...")
+                    dl = subprocess.run(
+                        [self.codeql_cli, "pack", "download", pack_name],
+                        capture_output=True, text=True, timeout=120,
+                    )
+                    if dl.returncode == 0:
+                        logger.info(f"✓ Downloaded {pack_name} — retrying analysis")
+                        result = subprocess.run(
+                            cmd, capture_output=True, text=True,
+                            timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,
+                        )
+                        success = result.returncode == 0
+                    else:
+                        errors.append(f"Pack download failed: {dl.stderr[:200]}")
+                        logger.error(f"✗ Failed to download {pack_name}: {dl.stderr[:200]}")
 
             if not success:
                 errors.append(f"Analysis failed with exit code {result.returncode}")
