@@ -282,11 +282,52 @@ def _get_default_primary_model() -> Optional['ModelConfig']:
     return None
 
 
+def _model_config_from_entry(entry: Dict) -> 'ModelConfig':
+    """Build a ModelConfig from a config file entry.
+
+    API key resolution: inline api_key → provider env var.
+    Other config fields (timeout, max_context, max_output) are honoured.
+    """
+    provider = entry.get("provider", "")
+    model_name = entry.get("model", "")
+    if not model_name and provider:
+        model_name = PROVIDER_DEFAULT_MODELS.get(provider, "")
+
+    api_key = entry.get("api_key")
+    if not api_key:
+        env_key = PROVIDER_ENV_KEYS.get(provider)
+        if env_key:
+            api_key = os.getenv(env_key)
+
+    limits = MODEL_LIMITS.get(model_name, {})
+    costs = MODEL_COSTS.get(model_name, {})
+    cost_per_1k = (costs.get("input", 0.005) + costs.get("output", 0.005)) / 2
+
+    return ModelConfig(
+        provider=provider,
+        model_name=model_name,
+        api_key=api_key,
+        api_base=PROVIDER_ENDPOINTS.get(provider),
+        max_tokens=entry.get("max_output", limits.get("max_output", 8192)),
+        max_context=entry.get("max_context", limits.get("max_context", 32000)),
+        timeout=entry.get("timeout", 120),
+        temperature=0.7,
+        cost_per_1k_tokens=cost_per_1k,
+        role=entry.get("role") or None,
+    )
+
+
 def _get_default_fallback_models() -> List['ModelConfig']:
     """
     Get default fallback models based on primary model tier.
 
-    Fallback stays within same tier (local->local, cloud->cloud).
+    Reads config file first — entries with role="fallback" (or entries
+    that aren't the primary model) become fallbacks. API keys resolve
+    from config inline, then env var.
+
+    For providers not covered by the config file, falls back to env var
+    detection (original behaviour).
+
     Returns ALL available models; client.py filters to same tier as primary.
     """
     from core.config import RaptorConfig
@@ -296,9 +337,37 @@ def _get_default_fallback_models() -> List['ModelConfig']:
         return []
 
     fallbacks = []
+    config_providers = set()  # Track which providers the config covers
 
-    if os.getenv("ANTHROPIC_API_KEY"):
+    # --- Config file entries first ---
+    primary = _get_best_thinking_model()
+    primary_key = (primary.provider, primary.model_name) if primary else None
+
+    for entry in _get_configured_models():
+        if not isinstance(entry, dict):
+            continue
+        provider = entry.get("provider", "")
+        model_name = entry.get("model", "")
+        if not model_name and provider:
+            model_name = PROVIDER_DEFAULT_MODELS.get(provider, "")
+
+        # Skip the primary model
+        if primary_key and (provider, model_name) == primary_key:
+            continue
+
+        mc = _model_config_from_entry(entry)
+        if mc.api_key:
+            fallbacks.append(mc)
+            config_providers.add(provider)
+
+    # --- Env var fallback for providers not in config ---
+    def _is_primary(provider, model):
+        return primary_key and (provider, model) == primary_key
+
+    if "anthropic" not in config_providers and os.getenv("ANTHROPIC_API_KEY"):
         for model_name in ["claude-opus-4-6", "claude-sonnet-4-6"]:
+            if _is_primary("anthropic", model_name):
+                continue
             limits = MODEL_LIMITS.get(model_name, {})
             costs = MODEL_COSTS.get(model_name, {})
             fallbacks.append(ModelConfig(
@@ -311,8 +380,10 @@ def _get_default_fallback_models() -> List['ModelConfig']:
                 cost_per_1k_tokens=(costs.get("input", 0.003) + costs.get("output", 0.015)) / 2,
             ))
 
-    if os.getenv("OPENAI_API_KEY"):
+    if "openai" not in config_providers and os.getenv("OPENAI_API_KEY"):
         for model_name in ["gpt-5.4", "gpt-5.2"]:
+            if _is_primary("openai", model_name):
+                continue
             limits = MODEL_LIMITS.get(model_name, {})
             costs = MODEL_COSTS.get(model_name, {})
             fallbacks.append(ModelConfig(
@@ -326,8 +397,10 @@ def _get_default_fallback_models() -> List['ModelConfig']:
                 cost_per_1k_tokens=(costs.get("input", 0.006) + costs.get("output", 0.030)) / 2,
             ))
 
-    if os.getenv("GEMINI_API_KEY"):
+    if "gemini" not in config_providers and os.getenv("GEMINI_API_KEY"):
         for model_name in ["gemini-2.5-pro", "gemini-2.5-flash"]:
+            if _is_primary("gemini", model_name):
+                continue
             limits = MODEL_LIMITS.get(model_name, {})
             costs = MODEL_COSTS.get(model_name, {})
             fallbacks.append(ModelConfig(
@@ -341,17 +414,18 @@ def _get_default_fallback_models() -> List['ModelConfig']:
                 cost_per_1k_tokens=(costs.get("input", 0.002) + costs.get("output", 0.010)) / 2,
             ))
 
-    if os.getenv("MISTRAL_API_KEY"):
-        fallbacks.append(ModelConfig(
-            provider="mistral",
-            model_name="mistral-large-latest",
-            api_key=os.getenv("MISTRAL_API_KEY"),
-            api_base=PROVIDER_ENDPOINTS["mistral"],
-            max_tokens=128000,
-            max_context=128000,
-            temperature=0.7,
-            cost_per_1k_tokens=0.002,
-        ))
+    if "mistral" not in config_providers and os.getenv("MISTRAL_API_KEY"):
+        if not _is_primary("mistral", "mistral-large-latest"):
+            fallbacks.append(ModelConfig(
+                provider="mistral",
+                model_name="mistral-large-latest",
+                api_key=os.getenv("MISTRAL_API_KEY"),
+                api_base=PROVIDER_ENDPOINTS["mistral"],
+                max_tokens=128000,
+                max_context=128000,
+                temperature=0.7,
+                cost_per_1k_tokens=0.002,
+            ))
 
     # Add local models
     ollama_models = _get_available_ollama_models()

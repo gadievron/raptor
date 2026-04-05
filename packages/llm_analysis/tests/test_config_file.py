@@ -9,7 +9,10 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
-from packages.llm_analysis.llm.config import _get_configured_models, _get_best_thinking_model
+from packages.llm_analysis.llm.config import (
+    _get_configured_models, _get_best_thinking_model,
+    _get_default_fallback_models, _model_config_from_entry,
+)
 from packages.llm_analysis.llm.model_data import PROVIDER_DEFAULT_MODELS, MODEL_COSTS, MODEL_LIMITS
 
 
@@ -620,6 +623,85 @@ class TestWarnUnusableKeys:
             os.environ.pop("OPENAI_API_KEY", None)
             _warn_unusable_keys()
         mock_logger.warning.assert_not_called()
+
+
+class TestFallbackModelsFromConfig:
+    """Test that _get_default_fallback_models reads config file."""
+
+    def test_config_fallback_role_used(self, tmp_path):
+        """Models with role=fallback in config become fallback models."""
+        config = tmp_path / "models.json"
+        config.write_text(json.dumps({"models": [
+            {"provider": "gemini", "model": "gemini-2.5-pro",
+             "api_key": "test-key", "role": "analysis"},
+            {"provider": "gemini", "model": "gemini-2.5-flash",
+             "api_key": "test-key", "role": "fallback"},
+        ]}))
+        with patch.dict(os.environ, {"RAPTOR_CONFIG": str(config)}, clear=False):
+            # Clear env vars so only config is used
+            env = {k: v for k, v in os.environ.items()
+                   if k not in ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "MISTRAL_API_KEY")}
+            with patch.dict(os.environ, env, clear=True):
+                import packages.llm_analysis.llm.config as cfg
+                cfg._thinking_model_checked = False
+                cfg._cached_thinking_model = None
+                fallbacks = _get_default_fallback_models()
+        names = [f.model_name for f in fallbacks]
+        assert "gemini-2.5-flash" in names
+        # Primary should NOT be in fallbacks
+        assert "gemini-2.5-pro" not in names
+
+    def test_config_api_key_from_env(self, tmp_path):
+        """Config entry without inline api_key resolves from env var."""
+        config = tmp_path / "models.json"
+        config.write_text(json.dumps({"models": [
+            {"provider": "gemini", "model": "gemini-2.5-pro",
+             "api_key": "test-key", "role": "analysis"},
+            {"provider": "gemini", "model": "gemini-2.5-flash",
+             "role": "fallback"},
+        ]}))
+        with patch.dict(os.environ, {
+            "RAPTOR_CONFIG": str(config),
+            "GEMINI_API_KEY": "env-key",
+        }, clear=False):
+            env_clean = {k: v for k, v in os.environ.items()
+                         if k not in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "MISTRAL_API_KEY")}
+            with patch.dict(os.environ, env_clean, clear=True):
+                import packages.llm_analysis.llm.config as cfg
+                cfg._thinking_model_checked = False
+                cfg._cached_thinking_model = None
+                fallbacks = _get_default_fallback_models()
+        flash = [f for f in fallbacks if f.model_name == "gemini-2.5-flash"]
+        assert len(flash) == 1
+        assert flash[0].api_key == "env-key"
+
+    def test_config_timeout_honoured(self, tmp_path):
+        """Config file timeout flows through to fallback ModelConfig."""
+        entry = {"provider": "gemini", "model": "gemini-2.5-flash",
+                 "api_key": "test-key", "timeout": 300}
+        mc = _model_config_from_entry(entry)
+        assert mc.timeout == 300
+        assert mc.model_name == "gemini-2.5-flash"
+        assert mc.api_key == "test-key"
+
+    def test_env_var_fallback_when_no_config(self, tmp_path):
+        """Without config file, env vars still produce fallbacks (backwards compat)."""
+        config = tmp_path / "models.json"
+        config.write_text(json.dumps({"models": []}))
+        with patch.dict(os.environ, {
+            "RAPTOR_CONFIG": str(config),
+            "GEMINI_API_KEY": "env-key",
+        }, clear=False):
+            env_clean = {k: v for k, v in os.environ.items()
+                         if k not in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "MISTRAL_API_KEY")}
+            with patch.dict(os.environ, env_clean, clear=True):
+                import packages.llm_analysis.llm.config as cfg
+                cfg._thinking_model_checked = False
+                cfg._cached_thinking_model = None
+                fallbacks = _get_default_fallback_models()
+        names = [f.model_name for f in fallbacks]
+        assert "gemini-2.5-pro" in names
+        assert "gemini-2.5-flash" in names
 
 
 class TestModelDataConsistency:
