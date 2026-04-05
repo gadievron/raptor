@@ -14,6 +14,17 @@ def get_display_status(finding: Dict[str, Any]) -> str:
     if "error" in finding:
         return f"Error ({finding.get('error_type', 'unknown')})"
 
+    # Boolean fields (agentic pipeline) are the actual verdict — check first.
+    # These take priority over the string 'ruling' field, which may describe
+    # code provenance (test_code, dead_code) rather than exploitability.
+    if "is_true_positive" in finding or "is_exploitable" in finding:
+        if finding.get("is_true_positive") is False:
+            return "False Positive"
+        if finding.get("is_exploitable"):
+            return "Exploitable"
+        if finding.get("is_true_positive"):
+            return "Confirmed"
+
     # Check ruling dict (validate pipeline)
     ruling = finding.get("ruling", {})
     if isinstance(ruling, dict):
@@ -23,15 +34,6 @@ def get_display_status(finding: Dict[str, Any]) -> str:
 
     # Fall through to flat fields
     status = status or finding.get("final_status", "") or finding.get("status", "")
-
-    # If still empty, derive from boolean fields (agentic)
-    if not status:
-        if finding.get("is_true_positive") is False:
-            return "False Positive"
-        if finding.get("is_exploitable"):
-            return "Exploitable"
-        if finding.get("is_true_positive"):
-            return "Confirmed"
 
     status_map = {
         "exploitable": "Exploitable",

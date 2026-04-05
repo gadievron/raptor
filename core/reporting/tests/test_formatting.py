@@ -45,6 +45,22 @@ class TestGetDisplayStatus(unittest.TestCase):
     def test_validated_ruling(self):
         self.assertEqual(get_display_status({"ruling": {"status": "validated"}}), "Confirmed")
 
+    def test_boolean_overrides_ruling_string(self):
+        # Agentic: is_exploitable=True should win over ruling=test_code
+        self.assertEqual(get_display_status(
+            {"is_true_positive": True, "is_exploitable": True, "ruling": "test_code"}
+        ), "Exploitable")
+
+    def test_boolean_false_positive_overrides_ruling(self):
+        self.assertEqual(get_display_status(
+            {"is_true_positive": False, "ruling": "validated"}
+        ), "False Positive")
+
+    def test_boolean_confirmed_when_not_exploitable(self):
+        self.assertEqual(get_display_status(
+            {"is_true_positive": True, "is_exploitable": False, "ruling": "test_code"}
+        ), "Confirmed")
+
 
 class TestTitleCaseType(unittest.TestCase):
 
