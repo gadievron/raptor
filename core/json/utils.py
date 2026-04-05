@@ -71,7 +71,8 @@ class _RaptorEncoder(json.JSONEncoder):
 def save_json(path: Union[str, Path], data: Any) -> None:
     """Save data as pretty-printed JSON. Handles Path/datetime serialization.
 
-    Creates parent directories if needed.
+    Creates parent directories if needed. Raises on write failure —
+    a failed save should not be silent.
     """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
