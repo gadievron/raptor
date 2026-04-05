@@ -52,11 +52,29 @@ def get_display_status(finding: Dict[str, Any]) -> str:
     return status_map.get(status, status.replace("_", " ").title() if status else "Unknown")
 
 
+_DISPLAY_NAMES = {
+    "null_deref": "Null Pointer Dereference",
+    "xss": "Cross-Site Scripting",
+    "ssrf": "Server-Side Request Forgery",
+    "csrf": "Cross-Site Request Forgery",
+    "xxe": "XML External Entity",
+    "rce": "Remote Code Execution",
+    "lfi": "Local File Inclusion",
+    "rfi": "Remote File Inclusion",
+    "idor": "Insecure Direct Object Reference",
+    "sca": "Software Composition Analysis",
+    "weak_crypto": "Weak Cryptography",
+    "sql_injection": "SQL Injection",
+    "out_of_bounds_read": "Out-of-Bounds Read",
+    "out_of_bounds_write": "Out-of-Bounds Write",
+}
+
+
 def title_case_type(vuln_type: str) -> str:
-    """Convert snake_case vuln_type to Title Case display."""
+    """Convert snake_case vuln_type to human-readable display name."""
     if not vuln_type:
         return "—"
-    return vuln_type.replace("_", " ").title()
+    return _DISPLAY_NAMES.get(vuln_type, vuln_type.replace("_", " ").title())
 
 
 def truncate_path(path: str, max_len: int = 40) -> str:

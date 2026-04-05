@@ -76,6 +76,14 @@ class TestTitleCaseType(unittest.TestCase):
     def test_none(self):
         self.assertEqual(title_case_type(None), "—")
 
+    def test_display_name_lookup(self):
+        self.assertEqual(title_case_type("null_deref"), "Null Pointer Dereference")
+        self.assertEqual(title_case_type("xss"), "Cross-Site Scripting")
+        self.assertEqual(title_case_type("sql_injection"), "SQL Injection")
+
+    def test_fallback_for_unlisted(self):
+        self.assertEqual(title_case_type("race_condition"), "Race Condition")
+
 
 class TestTruncatePath(unittest.TestCase):
 
