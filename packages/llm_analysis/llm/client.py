@@ -325,6 +325,13 @@ class LLMClient:
             else:
                 model_config = self.config.primary_model
 
+        # Warn if prompt likely exceeds context window (~4 chars per token)
+        estimated_tokens = (len(prompt) + len(system_prompt or "")) // 4
+        if estimated_tokens > model_config.max_context * 0.8:
+            logger.warning(
+                f"Prompt ~{estimated_tokens} tokens may exceed {model_config.model_name} "
+                f"context window ({model_config.max_context})")
+
         # Check cache
         cache_key = self._get_cache_key(prompt, system_prompt, model_config.model_name)
         cached_content = self._get_cached_response(cache_key)
@@ -414,7 +421,7 @@ class LLMClient:
                         break
 
                     if attempt < self.config.max_retries - 1:
-                        delay = self.config.retry_delay * (2 ** attempt)
+                        delay = min(self.config.retry_delay * (2 ** attempt), 30)
                         logger.debug(f"Retrying in {delay}s...")
                         time.sleep(delay)
 
@@ -478,6 +485,13 @@ class LLMClient:
                 model_config = self.config.get_model_for_task(task_type)
             else:
                 model_config = self.config.primary_model
+
+        # Warn if prompt likely exceeds context window (~4 chars per token)
+        estimated_tokens = (len(prompt) + len(system_prompt or "")) // 4
+        if estimated_tokens > model_config.max_context * 0.8:
+            logger.warning(
+                f"Prompt ~{estimated_tokens} tokens may exceed {model_config.model_name} "
+                f"context window ({model_config.max_context})")
 
         # Try models in order (same tier only: local→local, cloud→cloud)
         models_to_try = [model_config]
@@ -561,7 +575,7 @@ class LLMClient:
                         break
 
                     if attempt < self.config.max_retries - 1:
-                        delay = self.config.retry_delay * (2 ** attempt)
+                        delay = min(self.config.retry_delay * (2 ** attempt), 30)
                         logger.debug(f"Retrying in {delay}s...")
                         time.sleep(delay)
 
