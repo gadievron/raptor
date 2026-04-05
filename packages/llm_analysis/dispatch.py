@@ -88,16 +88,9 @@ class DispatchTask:
 
 
 def _format_elapsed(seconds: float) -> str:
-    """Format elapsed seconds: '45s', '2m 15s', or '1h 05m'."""
-    if seconds < 60:
-        return f"{seconds:.0f}s"
-    if seconds < 3600:
-        minutes = int(seconds // 60)
-        secs = int(seconds % 60)
-        return f"{minutes}m {secs:02d}s"
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    return f"{hours}h {minutes:02d}m"
+    """Format elapsed seconds. Delegates to core.reporting.formatting."""
+    from core.reporting.formatting import format_elapsed
+    return format_elapsed(seconds)
 
 
 def _is_auth_error(error_str: str) -> bool:

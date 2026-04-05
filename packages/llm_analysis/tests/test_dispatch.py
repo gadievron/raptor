@@ -520,7 +520,7 @@ class TestFormatElapsed:
         assert _format_elapsed(100) == "1m 40s"
 
     def test_hours(self):
-        assert _format_elapsed(3700) == "1h 01m"
+        assert _format_elapsed(3700) == "1h 1m"
 
 
 class TestClassifyError:
