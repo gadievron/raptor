@@ -84,3 +84,61 @@ FP_REASONS = [
     "unreachable_path", "safe_api_usage", "compiler_optimized",
     "defense_in_depth", "other",
 ]
+
+# CWE ↔ vuln_type bidirectional mapping.
+# Superset of all CWE mappings used across the codebase.
+# CWE → vuln_type: used by orchestrator.py to classify SARIF findings.
+# vuln_type → CWE: used by raptor_agentic.py to infer CWE when LLM omits it.
+CWE_TO_VULN_TYPE = {
+    "CWE-22": "path_traversal",
+    "CWE-78": "command_injection",
+    "CWE-79": "xss",
+    "CWE-89": "sql_injection",
+    "CWE-90": "other",              # LDAP injection
+    "CWE-91": "other",              # XML injection
+    "CWE-94": "command_injection",   # Code injection
+    "CWE-119": "buffer_overflow",    # Generic buffer issue
+    "CWE-120": "buffer_overflow",
+    "CWE-121": "stack_overflow",
+    "CWE-122": "heap_overflow",
+    "CWE-125": "out_of_bounds_read",
+    "CWE-134": "format_string",
+    "CWE-190": "integer_overflow",
+    "CWE-200": "other",             # Information disclosure
+    "CWE-327": "weak_crypto",
+    "CWE-328": "weak_crypto",       # Weak hash
+    "CWE-367": "race_condition",
+    "CWE-415": "double_free",
+    "CWE-416": "use_after_free",
+    "CWE-476": "null_deref",
+    "CWE-502": "deserialization",
+    "CWE-611": "other",             # XXE
+    "CWE-787": "out_of_bounds_write",
+    "CWE-843": "type_confusion",
+    "CWE-918": "ssrf",
+}
+
+# Reverse: vuln_type → preferred CWE. Explicit — not derived from the forward
+# mapping, because multiple CWEs map to the same vuln_type and the most common
+# one isn't always first or last.
+VULN_TYPE_TO_CWE = {
+    "path_traversal": "CWE-22",
+    "command_injection": "CWE-78",
+    "xss": "CWE-79",
+    "sql_injection": "CWE-89",
+    "buffer_overflow": "CWE-120",
+    "stack_overflow": "CWE-121",
+    "heap_overflow": "CWE-122",
+    "out_of_bounds_read": "CWE-125",
+    "format_string": "CWE-134",
+    "integer_overflow": "CWE-190",
+    "weak_crypto": "CWE-327",
+    "race_condition": "CWE-367",
+    "double_free": "CWE-415",
+    "use_after_free": "CWE-416",
+    "null_deref": "CWE-476",
+    "deserialization": "CWE-502",
+    "out_of_bounds_write": "CWE-787",
+    "type_confusion": "CWE-843",
+    "ssrf": "CWE-918",
+}

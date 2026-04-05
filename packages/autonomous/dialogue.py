@@ -370,7 +370,7 @@ Be specific and provide clear reasoning."""
         elif "use-after-free" in response_lower or "use after free" in response_lower:
             analysis["vulnerability_type"] = "use_after_free"
         elif "null pointer" in response_lower:
-            analysis["vulnerability_type"] = "null_pointer_dereference"
+            analysis["vulnerability_type"] = "null_deref"
 
         # Detect exploitability
         if "high" in response_lower and "exploit" in response_lower:
