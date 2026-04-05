@@ -85,3 +85,9 @@ In all modes, findings are in the `results` array of the report. Orchestrated
 and full mode findings include `is_exploitable`, `reasoning`, `exploit_code`, and
 `patch_code` fields. Prep-only findings include `code`, `surrounding_context`,
 `dataflow`, and `feasibility` for review.
+
+**After the pipeline completes**, read `agentic-report.md` from the output directory
+and add a 1-2 sentence summary paragraph after the `# RAPTOR Agentic Security Report`
+header — e.g., "Scanned 26 findings across 10 C files. 8 are exploitable buffer overflows
+and command injections; 2 were ruled out as false positives." Use only facts from the
+report data. The report should stand on its own without this paragraph.
