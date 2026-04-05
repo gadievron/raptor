@@ -1042,15 +1042,6 @@ Examples:
         f.write(md_report)
     print(f"   Report: {md_path}")
 
-    # Generate summary diagrams (verdict + type pies from orchestrated results)
-    try:
-        from packages.diagram import render_and_write
-        diagrams_path = render_and_write(out_dir)
-        if diagrams_path.stat().st_size > 200:
-            print(f"   Diagrams: {diagrams_path}")
-    except Exception:
-        pass
-
 
 from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE
 
