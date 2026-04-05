@@ -145,18 +145,13 @@ Examples:
     logger.info(f"Output: {out_dir}")
 
     # Initialize LLM client with multi-model support, fallback, and retry
-    try:
-        from packages.llm_analysis.llm.client import LLMClient
-        from packages.llm_analysis.llm.config import LLMConfig
-
-        llm_config = LLMConfig()
-        llm = LLMClient(llm_config)
+    from packages.llm_analysis import get_client
+    llm = get_client()
+    if llm:
         logger.info("LLM client initialized")
-    except Exception as e:
-        print(f"\n⚠️  Warning: Could not initialize LLM client: {e}")
+    else:
+        print("\n⚠️  Warning: Could not initialize LLM client")
         print("    Web scanning will work but fuzzing will be limited")
-        logger.warning(f"LLM initialization failed: {e}")
-        llm = None
 
     # Run scan
     verify_ssl = not args.insecure

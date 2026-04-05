@@ -358,7 +358,7 @@ Examples:
     workflow_start = time.time()
 
     # Detect LLM availability once — single source of truth for all phases
-    from packages.llm_analysis.llm.config import detect_llm_availability
+    from packages.llm_analysis import detect_llm_availability
     llm_env = detect_llm_availability()
 
     # ========================================================================
@@ -687,7 +687,7 @@ Examples:
             # Build LLMConfig if external LLM is available
             llm_config = None
             if llm_env.external_llm:
-                from packages.llm_analysis.llm.config import LLMConfig
+                from packages.llm_analysis import LLMConfig
                 llm_config = LLMConfig()
 
             from packages.llm_analysis.orchestrator import orchestrate
@@ -1047,8 +1047,9 @@ from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE
 
 
 def _postprocess_findings(results):
-    """Post-process LLM results: compute CVSS scores, infer CWE."""
+    """Post-process LLM results: compute CVSS scores, infer CWE, check consistency."""
     from packages.cvss import score_finding
+    from packages.llm_analysis.validation import check_self_consistency
 
     for r in results:
         if "error" in r:
@@ -1062,6 +1063,10 @@ def _postprocess_findings(results):
             cwe = _CWE_FROM_VULN_TYPE.get(vuln_type)
             if cwe:
                 r["cwe_id"] = cwe
+
+    # Flag self-contradictory findings (reasoning vs verdict mismatch)
+    by_id = {r.get("finding_id", f"idx-{i}"): r for i, r in enumerate(results) if "error" not in r}
+    check_self_consistency(by_id)
 
 
 if __name__ == "__main__":

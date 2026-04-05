@@ -36,12 +36,8 @@ logger = get_logger()
 
 def get_llm_client():
     """Initialize LLM client from existing RAPTOR system."""
-    try:
-        from packages.llm_analysis.llm.client import LLMClient
-        return LLMClient()
-    except Exception as e:
-        logger.warning(f"LLM client not available: {e}")
-        return None
+    from packages.llm_analysis import get_client
+    return get_client()
 
 
 def get_exploit_validator(work_dir: Path):
