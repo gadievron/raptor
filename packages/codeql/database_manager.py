@@ -13,6 +13,7 @@ import re
 import shutil
 import stat
 import subprocess
+
 import sys
 import tempfile
 import time
@@ -25,6 +26,7 @@ from typing import Dict, List, Optional
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from core.json import load_json, save_json
 from core.config import RaptorConfig
 from core.logging import get_logger
 from packages.codeql.build_detector import BuildSystem
@@ -199,10 +201,11 @@ class DatabaseManager:
         if not metadata_path.exists():
             return None
 
+        data = load_json(metadata_path)
+        if data is None:
+            return None
         try:
-            with open(metadata_path) as f:
-                data = json.load(f)
-                return DatabaseMetadata.from_dict(data)
+            return DatabaseMetadata.from_dict(data)
         except Exception as e:
             logger.warning(f"Failed to load metadata: {e}")
             return None
@@ -213,8 +216,7 @@ class DatabaseManager:
         metadata_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            with open(metadata_path, 'w') as f:
-                json.dump(metadata.to_dict(), f, indent=2)
+            save_json(metadata_path, metadata.to_dict())
         except Exception as e:
             logger.error(f"Failed to save metadata: {e}")
 
@@ -582,20 +584,21 @@ class DatabaseManager:
             # Check all metadata files in this repo
             for metadata_file in repo_dir.glob("*-metadata.json"):
                 try:
-                    with open(metadata_file) as f:
-                        data = json.load(f)
-                        created_at = datetime.fromisoformat(data["created_at"])
+                    data = load_json(metadata_file)
+                    if data is None:
+                        continue
+                    created_at = datetime.fromisoformat(data["created_at"])
 
-                        if created_at < cutoff:
-                            db_path = Path(data["database_path"])
-                            if db_path.exists():
-                                if not dry_run:
-                                    shutil.rmtree(db_path)
-                                    metadata_file.unlink()
-                                    logger.info(f"Deleted old database: {db_path}")
-                                else:
-                                    logger.info(f"Would delete: {db_path}")
-                                deleted.append(str(db_path))
+                    if created_at < cutoff:
+                        db_path = Path(data["database_path"])
+                        if db_path.exists():
+                            if not dry_run:
+                                shutil.rmtree(db_path)
+                                metadata_file.unlink()
+                                logger.info(f"Deleted old database: {db_path}")
+                            else:
+                                logger.info(f"Would delete: {db_path}")
+                            deleted.append(str(db_path))
                 except Exception as e:
                     logger.warning(f"Error processing {metadata_file}: {e}")
 

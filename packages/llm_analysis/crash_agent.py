@@ -8,6 +8,8 @@ LLM-powered analysis of crashes from fuzzing.
 import json
 import time
 from pathlib import Path
+
+from core.json import save_json
 from typing import Any, Dict, List
 
 from core.logging import get_logger
@@ -273,15 +275,14 @@ Be honest about exploitability - not every crash is exploitable."""
             except Exception as e:
                 input_info["input_content_error"] = str(e)
             
-            with open(analysis_file, 'w') as f:
-                json.dump({
+            save_json(analysis_file, {
                     "crash_id": crash_context.crash_id,
                     "crash_type": crash_context.crash_type,
                     "exploitability": crash_context.exploitability,
                     "input_info": input_info,
                     "analysis": analysis,
-                    "full_response": full_response,  
-                }, f, indent=2)
+                    "full_response": full_response,
+                })
 
             return True
 

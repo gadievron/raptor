@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from core.config import RaptorConfig
+from core.json import load_json
 
 
 def extract_dataflow_path(code_flows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -315,8 +316,9 @@ def validate_sarif(sarif_path: Path, schema_path: Optional[Path] = None) -> bool
             schema_path = RaptorConfig.SCHEMAS_DIR / "sarif-2.1.0.json"
 
         if schema_path.exists():
-            schema = json.loads(schema_path.read_text())
-            jsonschema.validate(instance=sarif_data, schema=schema)
+            schema = load_json(schema_path)
+            if schema is not None:
+                jsonschema.validate(instance=sarif_data, schema=schema)
         else:
             # Skip full validation if schema not available
             pass

@@ -7,6 +7,7 @@
 """
 import argparse, json, os, shutil, subprocess, sys, tempfile, time, hashlib
 from pathlib import Path
+from core.json import save_json
 
 
 def get_out_dir() -> Path:
@@ -87,10 +88,10 @@ def main():
             'timestamp_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
             'input_hash': sha256_tree(repo_path)
         }
-        (out_dir / 'scan-manifest.json').write_text(json.dumps(manifest, indent=2))
+        save_json(out_dir / 'scan-manifest.json', manifest)
 
         inv = inventory(repo_path)
-        (out_dir / 'recon.json').write_text(json.dumps({'manifest': manifest, 'inventory': inv}, indent=2))
+        save_json(out_dir / 'recon.json', {'manifest': manifest, 'inventory': inv})
 
         print(json.dumps({'status':'ok','manifest':manifest,'inventory':inv}, indent=2))
     finally:

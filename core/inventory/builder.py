@@ -5,13 +5,14 @@ Used by both /validate (Stage 0) and /understand (MAP-0).
 """
 
 import hashlib
-import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
+
+from core.json import load_json, save_json
 
 from .languages import LANGUAGE_MAP, detect_language
 from .exclusions import (
@@ -130,10 +131,9 @@ def build_inventory(
     output_path.mkdir(parents=True, exist_ok=True)
     checklist_file = output_path / 'checklist.json'
 
-    if checklist_file.exists():
+    old_inventory = load_json(checklist_file)
+    if old_inventory is not None:
         try:
-            with open(checklist_file) as f:
-                old_inventory = json.load(f)
             diff = compare_inventories(old_inventory, inventory)
             if diff is None:
                 logger.info("Source material unchanged (SHA256 match)")
@@ -148,11 +148,10 @@ def build_inventory(
                 inventory['changes_since_last'] = diff
                 # Carry forward checked_by only for unchanged files
                 _carry_forward_coverage(old_inventory, inventory, modified=set(diff['modified']))
-        except (json.JSONDecodeError, KeyError, TypeError):
-            pass  # Corrupt or incompatible old inventory
+        except (KeyError, TypeError):
+            pass  # Incompatible old inventory
 
-    with open(checklist_file, 'w') as f:
-        json.dump(inventory, f, indent=2)
+    save_json(checklist_file, inventory)
 
     logger.info(f"Built inventory: {len(files_info)} files, {total_functions} functions "
                 f"({skipped} skipped, {len(excluded_files)} excluded)")

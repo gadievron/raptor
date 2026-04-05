@@ -14,13 +14,14 @@ This is very much a work-in-progress!
 """
 
 import argparse
-import json
 import sys
 import time
 from pathlib import Path
 
 # Add to path
 sys.path.insert(0, str(Path(__file__).parent))
+
+from core.json import save_json
 
 from core.config import RaptorConfig
 from core.logging import get_logger
@@ -456,8 +457,7 @@ def main() -> None:
             logger.info("Campaign recorded in memory for future learning")
 
     report_file = out_dir / "fuzzing_report.json"
-    with open(report_file, 'w') as f:
-        json.dump(report, f, indent=2)
+    save_json(report_file, report)
 
     print(f"   Report: {report_file}")
 

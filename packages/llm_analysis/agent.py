@@ -21,6 +21,8 @@ from typing import Any, Dict, List, Optional
 # Add parent directory to path for core imports
 # Add current directory to path for llm imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from core.json import load_json, save_json
 sys.path.insert(0, str(Path(__file__).parent))
 from core.config import RaptorConfig
 from core.logging import get_logger
@@ -409,11 +411,9 @@ class AutonomousSecurityAgentV2:
                 self.out_dir.parent / file_name,                    # One level up
             ]
             for search_path in candidates:
-                if search_path.exists():
-                    with open(search_path, 'r', encoding='utf-8', errors='replace') as f:
-                        paths = json.load(f)
-                    if isinstance(paths, list):
-                        return next((p for p in paths if p.get("id") == path_id), None)
+                paths = load_json(search_path)
+                if paths is not None and isinstance(paths, list):
+                    return next((p for p in paths if p.get("id") == path_id), None)
             return None
         except (json.JSONDecodeError, OSError, StopIteration) as e:
             logger.debug(f"Failed to load attack path from '{ref}': {e}")
@@ -636,9 +636,7 @@ Do NOT:
 
             # Save validation details
             validation_file = self.out_dir / "validation" / f"{vuln.finding_id}_validation.json"
-            validation_file.parent.mkdir(exist_ok=True, parents=True)
-            with open(validation_file, 'w') as f:
-                json.dump(validation, f, indent=2)
+            save_json(validation_file, validation)
 
             return validation
 
@@ -780,14 +778,12 @@ Do NOT:
 
             # Save detailed analysis
             analysis_file = self.out_dir / "analysis" / f"{vuln.finding_id}.json"
-            analysis_file.parent.mkdir(exist_ok=True, parents=True)
-            with open(analysis_file, 'w') as f:
-                json.dump({
-                    "finding_id": vuln.finding_id,
-                    "rule_id": vuln.rule_id,
-                    "file": vuln.file_path,
-                    "analysis": analysis,
-                }, f, indent=2)
+            save_json(analysis_file, {
+                "finding_id": vuln.finding_id,
+                "rule_id": vuln.rule_id,
+                "file": vuln.file_path,
+                "analysis": analysis,
+            })
 
             return True
 
@@ -991,8 +987,9 @@ Do NOT:
         Skips ruled_out findings and unlikely verdict findings.
         Converts validation format to VulnerabilityContext expected format.
         """
-        with open(findings_path, 'r') as f:
-            data = json.load(f)
+        data = load_json(findings_path, strict=True)
+        if data is None:
+            raise FileNotFoundError(f"Findings file not found: {findings_path}")
 
         converted = convert_validated_to_agent_format(data)
 
@@ -1147,8 +1144,7 @@ Do NOT:
 
         # Save report
         report_file = self.out_dir / "autonomous_analysis_report.json"
-        with open(report_file, 'w') as f:
-            json.dump(report, f, indent=2)
+        save_json(report_file, report)
 
         if is_prep_only:
             logger.debug(f"Prep complete: {len(unique_findings)} findings")
@@ -1247,12 +1243,12 @@ def main() -> None:
     # Load checklist for metadata lookup
     checklist = None
     if args.checklist:
-        try:
-            with open(args.checklist) as f:
-                checklist = json.load(f)
+        # Non-strict: checklist is optional metadata, pipeline continues without it
+        checklist = load_json(args.checklist)
+        if checklist:
             logger.info(f"Loaded inventory checklist: {args.checklist}")
-        except Exception as e:
-            logger.warning(f"Could not load checklist: {e}")
+        else:
+            logger.warning(f"Could not load checklist: {args.checklist}")
 
     # Process findings - route based on input type
     if args.findings:

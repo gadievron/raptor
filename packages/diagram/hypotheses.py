@@ -13,6 +13,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from core.json import load_json
+
 
 def _sanitize(text: str) -> str:
     return (
@@ -176,7 +178,9 @@ def generate(hypotheses: list[dict[str, Any]]) -> str:
 
 
 def generate_from_file(path: Path) -> str:
-    data = json.loads(path.read_text())
+    data = load_json(path)
+    if data is None:
+        raise ValueError(f"Failed to load {path}")
     if isinstance(data, dict):
         data = data.get("hypotheses", list(data.values())[0] if data else [])
     return generate(data if isinstance(data, list) else [])

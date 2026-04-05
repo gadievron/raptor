@@ -6,12 +6,13 @@ This module enables RAPTOR to learn from past fuzzing campaigns and
 improve over time through persistent knowledge storage.
 """
 
-import json
 import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
+
+from core.json import load_json, save_json
 
 from core.logging import get_logger
 
@@ -111,8 +112,10 @@ class FuzzingMemory:
             return
 
         try:
-            with open(self.memory_file, 'r') as f:
-                data = json.load(f)
+            data = load_json(self.memory_file)
+            if data is None:
+                logger.warning(f"Failed to parse memory file: {self.memory_file}")
+                return
 
             # Load knowledge entries
             for key, k_dict in data.get("knowledge", {}).items():
@@ -158,8 +161,7 @@ class FuzzingMemory:
                 "last_saved": time.time(),
             }
 
-            with open(self.memory_file, 'w') as f:
-                json.dump(data, f, indent=2)
+            save_json(self.memory_file, data)
 
             logger.debug(f"Memory saved to {self.memory_file}")
 

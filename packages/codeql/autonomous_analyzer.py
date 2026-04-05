@@ -13,11 +13,14 @@ Fully autonomous analysis of CodeQL findings with:
 import json
 import sys
 from dataclasses import dataclass, asdict
+
 from pathlib import Path
 from typing import Dict, List, Optional
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from core.json import save_json
 
 from core.logging import get_logger
 from packages.codeql.dataflow_validator import DataflowValidator, DataflowValidation
@@ -578,18 +581,17 @@ Provide ONLY the complete, working exploit code. Include a header comment explai
 
         # Save analysis
         analysis_file = out_dir / f"{finding.rule_id}_{finding.start_line}_analysis.json"
-        with open(analysis_file, 'w') as f:
-            analysis_data = {
-                "finding": asdict(finding),
-                "analysis": asdict(analysis),
-                "dataflow_validation": asdict(dataflow_validation) if dataflow_validation else None,
+        analysis_data = {
+            "finding": asdict(finding),
+            "analysis": asdict(analysis),
+            "dataflow_validation": asdict(dataflow_validation) if dataflow_validation else None,
+        }
+        # Add visualization paths if available
+        if visualization_paths:
+            analysis_data["visualizations"] = {
+                fmt: str(path) for fmt, path in visualization_paths.items()
             }
-            # Add visualization paths if available
-            if visualization_paths:
-                analysis_data["visualizations"] = {
-                    fmt: str(path) for fmt, path in visualization_paths.items()
-                }
-            json.dump(analysis_data, f, indent=2)
+        save_json(analysis_file, analysis_data)
 
         # Save exploit
         if exploit_code:

@@ -16,9 +16,9 @@ Usage:
 
     # Or render just one type
     from packages.diagram import generate_context_map
-    import json
+    from core.json import load_json
 
-    data = json.loads(Path("context-map.json").read_text())
+    data = load_json(Path("context-map.json"))
     mermaid = generate_context_map(data)
 """
 

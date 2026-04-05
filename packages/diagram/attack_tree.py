@@ -18,6 +18,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from core.json import load_json
+
 
 def _sanitize(text: str) -> str:
     return (
@@ -300,9 +302,11 @@ def generate_from_file(
     disproven_path: Path | None = None,
     hypotheses_path: Path | None = None,
 ) -> str:
-    data = json.loads(path.read_text())
-    attack_paths = json.loads(attack_paths_path.read_text()) if attack_paths_path and attack_paths_path.exists() else None
-    disproven_raw = json.loads(disproven_path.read_text()) if disproven_path and disproven_path.exists() else None
+    data = load_json(path)
+    if data is None:
+        raise ValueError(f"Failed to load {path}")
+    attack_paths = load_json(attack_paths_path) if attack_paths_path else None
+    disproven_raw = load_json(disproven_path) if disproven_path else None
     disproven = disproven_raw.get("disproven", []) if isinstance(disproven_raw, dict) else disproven_raw
-    hypotheses = json.loads(hypotheses_path.read_text()) if hypotheses_path and hypotheses_path.exists() else None
+    hypotheses = load_json(hypotheses_path) if hypotheses_path else None
     return generate(data, attack_paths=attack_paths, disproven=disproven, hypotheses=hypotheses)

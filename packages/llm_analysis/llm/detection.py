@@ -210,9 +210,8 @@ def _try_auto_migrate(old_config: Path, new_config: Path) -> bool:
             return False
 
         # Write new config
-        new_config.parent.mkdir(parents=True, exist_ok=True)
-        with open(new_config, 'w') as f:
-            json.dump({"models": models}, f, indent=2)
+        from core.json import save_json
+        save_json(new_config, {"models": models})
         os.chmod(new_config, 0o600)
 
         # Check if any keys need attention
@@ -314,22 +313,17 @@ def _read_config_models() -> list:
     """
     import json
     try:
+        from core.json import load_json_with_comments
+
         config_path_str = os.getenv('RAPTOR_CONFIG')
         if config_path_str:
             config_path = Path(config_path_str).resolve()
         else:
             config_path = Path.home() / ".config/raptor/models.json"
 
-        if not config_path.exists():
+        data = load_json_with_comments(config_path)
+        if data is None:
             return []
-
-        raw = config_path.read_text()
-        if not raw.strip():
-            return []
-
-        # Strip // line comments
-        lines = [l for l in raw.splitlines() if not l.lstrip().startswith("//")]
-        data = json.loads("\n".join(lines))
 
         # Accept both {"models": [...]} and bare [...]
         if isinstance(data, dict):

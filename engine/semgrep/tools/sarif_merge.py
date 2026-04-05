@@ -2,9 +2,10 @@
 """
 Simple SARIF merger - combines multiple SARIF files into one.
 """
-import json
 import sys
 from pathlib import Path
+
+from core.json import save_json
 
 
 def merge_sarif_files(output_path: str, input_paths: list) -> None:
@@ -14,8 +15,7 @@ def merge_sarif_files(output_path: str, input_paths: list) -> None:
     merged = merge_sarif(input_paths)
 
     # Write merged output
-    with open(output_path, 'w') as f:
-        json.dump(merged, f, indent=2)
+    save_json(output_path, merged)
 
     print(f"Merged {len(input_paths)} SARIF files into {output_path}")
     print(f"Total runs: {len(merged['runs'])}")

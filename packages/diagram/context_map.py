@@ -8,6 +8,7 @@ with unchecked flows shown as dashed edges.
 from __future__ import annotations
 
 import json
+from core.json import load_json
 from pathlib import Path
 from typing import Any
 
@@ -148,5 +149,7 @@ def generate(data: dict[str, Any]) -> str:
 
 
 def generate_from_file(path: Path) -> str:
-    data = json.loads(path.read_text())
+    data = load_json(path)
+    if data is None:
+        raise ValueError(f"Failed to load {path}")
     return generate(data)

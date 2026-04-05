@@ -618,18 +618,17 @@ class LLMConfig:
 
     def to_file(self, config_path: Path) -> None:
         """Save configuration to JSON file."""
-        config_path.parent.mkdir(parents=True, exist_ok=True)
+        from core.json import save_json
         primary = None
         if self.primary_model:
             primary = {
                 "provider": self.primary_model.provider,
                 "model_name": self.primary_model.model_name,
             }
-        with open(config_path, 'w') as f:
-            json.dump({
-                "primary_model": primary,
-                "fallback_enabled": self.enable_fallback,
-            }, f, indent=2)
+        save_json(config_path, {
+            "primary_model": primary,
+            "fallback_enabled": self.enable_fallback,
+        })
 
     def get_model_for_task(self, task_type: str) -> ModelConfig:
         """Get the appropriate model for a specific task type."""

@@ -171,11 +171,16 @@ def orchestrate(
         Orchestrated report dict, or None if orchestration was skipped.
     """
     # Load Phase 3 report
+    from core.json import load_json
     try:
-        report = json.loads(prep_report_path.read_text())
-    except (json.JSONDecodeError, OSError) as e:
+        report = load_json(prep_report_path, strict=True)
+    except Exception as e:
         logger.error(f"Failed to read Phase 3 report: {e}")
         print(f"\n  Failed to read analysis report: {e}")
+        return None
+    if report is None:
+        logger.error(f"Phase 3 report not found: {prep_report_path}")
+        print(f"\n  Phase 3 report not found: {prep_report_path}")
         return None
 
     if report.get("mode") != "prep_only":
@@ -393,8 +398,9 @@ def orchestrate(
     }
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    from core.json import save_json
     out_path = out_dir / "orchestrated_report.json"
-    out_path.write_text(json.dumps(merged, indent=2))
+    save_json(out_path, merged)
     logger.info(f"Orchestrated report saved to {out_path}")
 
     # Summary

@@ -13,11 +13,14 @@ import sys
 import time
 from dataclasses import dataclass, asdict
 from datetime import datetime
+
 from pathlib import Path
 from typing import Dict, List, Optional
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from core.json import save_json
 
 from core.config import RaptorConfig
 from core.logging import get_logger
@@ -384,8 +387,7 @@ class CodeQLAgent:
         report_path = self.out_dir / "codeql_report.json"
 
         try:
-            with open(report_path, 'w') as f:
-                json.dump(result.to_dict(), f, indent=2, default=str)
+            save_json(report_path, result.to_dict())
             logger.info(f"✓ Report saved: {report_path}")
         except Exception as e:
             logger.error(f"Failed to save report: {e}")

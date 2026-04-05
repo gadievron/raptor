@@ -306,11 +306,12 @@ class BuildDetector:
     def _has_build_script(self, package_json: Path) -> bool:
         """Check if package.json has a build script."""
         try:
-            import json
-            with open(package_json) as f:
-                data = json.load(f)
-                scripts = data.get("scripts", {})
-                return "build" in scripts
+            from core.json import load_json
+            data = load_json(package_json)
+            if data is None:
+                return False
+            scripts = data.get("scripts", {})
+            return "build" in scripts
         except Exception as e:
             logger.debug(f"Error parsing package.json: {e}")
             return False

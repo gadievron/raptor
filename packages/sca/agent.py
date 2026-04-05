@@ -6,6 +6,7 @@
 """
 import argparse, json, os, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
+from core.json import load_json, save_json
 import xml.etree.ElementTree as ET
 
 
@@ -45,7 +46,9 @@ def parse_requirements(p):
 
 def parse_package_json(p):
     try:
-        obj = json.loads(p.read_text())
+        obj = load_json(p)
+        if obj is None:
+            return {'error': 'failed to parse JSON'}
         deps = obj.get('dependencies', {})
         return [{'name':k,'version':v} for k,v in deps.items()]
     except Exception as e:
@@ -74,7 +77,7 @@ def main():
 
     out_dir = get_out_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / 'sca.json').write_text(json.dumps(out, indent=2))
+    save_json(out_dir / 'sca.json', out)
     print(json.dumps({'status':'ok','files_found': len(out['files'])}))
 
 

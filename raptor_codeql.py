@@ -17,12 +17,13 @@ Workflow:
 """
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
 # Add to path
 sys.path.insert(0, str(Path(__file__).parent))
+
+from core.json import save_json
 
 from core.config import RaptorConfig
 from core.logging import get_logger
@@ -223,8 +224,7 @@ def run_autonomous_workflow(args):
     }
 
     summary_file = agent.out_dir / "autonomous_summary.json"
-    with open(summary_file, 'w') as f:
-        json.dump(summary, f, indent=2)
+    save_json(summary_file, summary)
 
     logger.info(f"\n✓ Autonomous analysis summary saved: {summary_file}")
 

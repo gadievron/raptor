@@ -19,11 +19,14 @@ import json
 import os
 import subprocess
 import sys
+
 import time
 from pathlib import Path
 
 # Add to path
 sys.path.insert(0, str(Path(__file__).parent))
+
+from core.json import load_json, save_json
 from core.config import RaptorConfig
 from core.logging import get_logger
 
@@ -493,8 +496,7 @@ Examples:
 
                 scan_metrics_file = actual_scan_dir / "scan_metrics.json"
                 if scan_metrics_file.exists():
-                    with open(scan_metrics_file) as f:
-                        semgrep_metrics = json.load(f)
+                    semgrep_metrics = load_json(scan_metrics_file)
 
                     print(f"\n✓ Semgrep scan complete:")
                     print(f"  - Files scanned: {semgrep_metrics.get('total_files_scanned', 0)}")
@@ -539,8 +541,7 @@ Examples:
             codeql_report = codeql_out_dir / "codeql_report.json"
 
             if codeql_report.exists():
-                with open(codeql_report) as f:
-                    codeql_metrics = json.load(f)
+                codeql_metrics = load_json(codeql_report)
 
                 total_findings = codeql_metrics.get('total_findings', 0)
                 sarif_files = codeql_metrics.get('sarif_files', [])
@@ -653,8 +654,7 @@ Examples:
         # Parse analysis results
         analysis_report = autonomous_out / "autonomous_analysis_report.json"
         if analysis_report.exists():
-            with open(analysis_report) as f:
-                analysis = json.load(f)
+            analysis = load_json(analysis_report)
 
             if analysis.get('mode') == 'prep_only':
                 print(f"\n✓ {analysis.get('processed', 0)} findings prepared for analysis")
@@ -772,8 +772,7 @@ Examples:
     }
 
     report_file = out_dir / "raptor_agentic_report.json"
-    with open(report_file, "w") as f:
-        json.dump(final_report, f, indent=2)
+    save_json(report_file, final_report)
 
     print(f"\n📊 Summary:")
     print(f"   Total findings: {scan_metrics.get('total_findings', 0)}")
@@ -827,8 +826,7 @@ Examples:
         # Write corrected results back to disk
         orch_report_path = out_dir / "orchestrated_report.json"
         if orch_report_path.exists():
-            with open(orch_report_path, "w") as f:
-                json.dump(orchestration_result, f, indent=2)
+            save_json(orch_report_path, orchestration_result)
 
     # Findings funnel
     if validation_result:

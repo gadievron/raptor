@@ -5,13 +5,14 @@ Autonomous Web Security Scanner
 Combines crawling, fuzzing, and LLM analysis for complete web app testing.
 """
 
-import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 # Add paths for cross-package imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from core.json import save_json
 
 from core.logging import get_logger
 from packages.llm_analysis.llm.providers import LLMProvider
@@ -53,8 +54,7 @@ class WebScanner:
 
         # Save crawl results
         crawl_file = self.out_dir / "crawl_results.json"
-        with open(crawl_file, 'w') as f:
-            json.dump(crawl_results, f, indent=2)
+        save_json(crawl_file, crawl_results)
 
         logger.info(f"Discovery complete: {crawl_results['stats']}")
 
@@ -85,8 +85,7 @@ class WebScanner:
 
         # Save report
         report_file = self.out_dir / "web_scan_report.json"
-        with open(report_file, 'w') as f:
-            json.dump(report, f, indent=2)
+        save_json(report_file, report)
 
         logger.info(f"Web scan complete. Found {len(fuzzing_findings)} potential vulnerabilities")
         logger.info(f"Report saved to {report_file}")
