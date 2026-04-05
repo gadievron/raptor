@@ -867,8 +867,12 @@ Examples:
         print(f"   Patches generated: {patches_count}")
     if (args.codeql or args.codeql_only) and analysis.get('dataflow_validated', 0) > 0:
         print(f"   Dataflow paths validated: {analysis.get('dataflow_validated', 0)}")
-    from packages.llm_analysis.dispatch import _format_elapsed
-    print(f"   Duration: {_format_elapsed(workflow_duration)}")
+    from core.reporting import (
+        FINDINGS_COLUMNS, render_console_table, render_report, build_findings_spec,
+        build_findings_rows, build_findings_summary, findings_summary_line,
+    )
+    from core.reporting.formatting import format_elapsed
+    print(f"   Duration: {format_elapsed(workflow_duration)}")
     if orchestration_result:
         cost_summary = orchestration_result.get("orchestration", {}).get("cost", {})
         cost = cost_summary.get("total_cost", 0)
@@ -896,9 +900,18 @@ Examples:
     if patches_count > 0 and autonomous_out:
         print(f"   Patches: {autonomous_out / 'patches'}/")
 
+    # Filter to analysed results (used by both console table and report)
+    results = orchestration_result.get("results", []) if orchestration_result else []
+    analysed_results = [r for r in results if "is_true_positive" in r or "error" in r]
+
     # Results at a Glance table (matches /validate console output)
     if orchestration_result:
-        _print_findings_table(orchestration_result.get("results", []))
+        if analysed_results:
+            rows = build_findings_rows(analysed_results, filename_only=True)
+            columns = FINDINGS_COLUMNS
+            counts = build_findings_summary(analysed_results)
+            footer = findings_summary_line(counts) + "\n\n  CVSS scores reflect inherent vulnerability impact — not binary mitigations."
+            print(render_console_table(columns, rows, max_widths={1: 19, 3: 28, 4: 25}, footer=footer))
 
     print("\n" + "=" * 70)
     print("RAPTOR has autonomously:")
@@ -931,37 +944,105 @@ Examples:
     print("\nReview the outputs and apply patches as needed.")
 
     # Generate markdown report
-    md_report = _generate_markdown_report(
-        final_report=final_report,
-        orchestration_result=orchestration_result,
-        analysed_count=analysed_count,
-        true_positives=true_positives,
-        false_positives=false_positives,
-        exploitable_count=exploitable_count,
-        exploits_count=exploits_count,
-        patches_count=patches_count,
-        failed_count=failed_count,
-        blocked_count=blocked_count,
-        severity_mismatches=severity_mismatches,
-        contradictions=contradictions,
+
+    phases = final_report.get("phases", {})
+    scanning = phases.get("scanning", {})
+    validation = phases.get("exploitability_validation", {})
+    orch_phase = phases.get("orchestration", {})
+    duration = final_report.get("duration_seconds", 0)
+
+    # Determine model
+    mode = orch_phase.get("mode", "none")
+    if mode == "cc_dispatch":
+        via = "Claude Code"
+    elif mode == "external_llm":
+        via = orch_phase.get("analysis_model") or "external LLM"
+    elif mode == "cc_fallback":
+        via = "Claude Code (fallback)"
+    else:
+        via = None
+
+    pipeline_parts = ["Scan"]
+    if validation.get("completed"):
+        pipeline_parts.append("Dedup")
+    if analysed_count > 0:
+        pipeline_parts.append("Analyse")
+    if exploits_count > 0:
+        pipeline_parts.append("Exploit")
+    if patches_count > 0:
+        pipeline_parts.append("Patch")
+
+    metadata = {
+        "Target": f"`{final_report.get('repository', 'unknown')}`",
+        "Date": final_report.get("timestamp", "unknown")[:10],
+        "Pipeline": f"{' → '.join(pipeline_parts)} ({format_elapsed(duration)})",
+    }
+    if via:
+        metadata["Model"] = via
+
+    # Build extra summary (scanning/dedup metrics go before findings counts)
+    extra_summary = {}
+    extra_summary["Total findings"] = scanning.get("total_findings", 0)
+    semgrep = scanning.get("semgrep", {})
+    if semgrep.get("enabled"):
+        extra_summary["Semgrep"] = semgrep.get("findings", 0)
+    codeql = scanning.get("codeql", {})
+    if codeql.get("enabled"):
+        extra_summary["CodeQL"] = codeql.get("findings", 0)
+    if validation.get("completed"):
+        extra_summary["After deduplication"] = validation.get("validated_findings", 0)
+    if analysed_count > 0:
+        extra_summary["Analysed"] = analysed_count
+    if failed_count > 0:
+        extra_summary["Failed"] = failed_count
+    if blocked_count > 0:
+        extra_summary["Blocked (content filter)"] = blocked_count
+    if exploits_count > 0:
+        extra_summary["Exploits generated"] = exploits_count
+    if patches_count > 0:
+        extra_summary["Patches generated"] = patches_count
+    cost_summary = orch_phase.get("cost", {})
+    cost = cost_summary.get("total_cost", 0)
+    if cost > 0:
+        extra_summary["Cost"] = f"${cost:.2f}"
+
+    # Warnings
+    warnings = []
+    if severity_mismatches:
+        warnings.append(f"{len(severity_mismatches)} high-severity finding(s) ruled as false positive — review recommended")
+    if contradictions > 0:
+        warnings.append(f"{contradictions} self-contradictory verdict(s) — reasoning conflicts with conclusion")
+
+    # Output files — significant outputs only, not per-category SARIF
+    outputs = final_report.get("outputs", {})
+    output_files = []
+    if outputs.get("orchestrated_report"):
+        output_files.append(outputs["orchestrated_report"])
+    if outputs.get("autonomous_report"):
+        output_files.append(outputs["autonomous_report"])
+    sarif_files = outputs.get("sarif_files", [])
+    combined = [sf for sf in sarif_files if "combined" in sf]
+    if combined:
+        output_files.append(combined[0])
+    elif len(sarif_files) == 1:
+        output_files.append(sarif_files[0])
+    output_files.append("agentic-report.md")
+
+    spec = build_findings_spec(
+        analysed_results,
+        title="RAPTOR Agentic Security Report",
+        metadata=metadata,
+        extra_summary=extra_summary,
+        warnings=warnings,
+        output_files=output_files,
+        include_details=False,
     )
+
+    md_report = render_report(spec)
     md_path = out_dir / "agentic-report.md"
     with open(md_path, "w") as f:
         f.write(md_report)
     print(f"   Report: {md_path}")
-
-
-def _format_elapsed(seconds):
-    """Format seconds as human-readable duration."""
-    if seconds < 60:
-        return f"{seconds:.0f}s"
-    minutes = int(seconds // 60)
-    secs = int(seconds % 60)
-    if minutes < 60:
-        return f"{minutes}m {secs}s"
-    hours = int(minutes // 60)
-    mins = minutes % 60
-    return f"{hours}h {mins}m"
 
 
 # Fallback CWE mapping for when LLM returns null
@@ -1002,235 +1083,6 @@ def _postprocess_findings(results):
             cwe = _CWE_FROM_VULN_TYPE.get(vuln_type)
             if cwe:
                 r["cwe_id"] = cwe
-
-
-def _get_finding_status(r):
-    """Derive display status from a finding result dict."""
-    if "error" in r:
-        return f"Error ({r.get('error_type', 'unknown')})"
-    if r.get("is_true_positive") is False:
-        return "False Positive"
-    if r.get("is_exploitable"):
-        return "Exploitable"
-    if r.get("ruling") == "ruled_out":
-        return "Ruled Out"
-    return "Confirmed"
-
-
-def _build_finding_row(i, r):
-    """Build a display row tuple from a finding result dict.
-
-    Returns (index, vuln_label, cwe, file_loc, status, severity, cvss).
-    """
-    vuln_type = r.get("vuln_type", "unknown")
-    vuln_label = vuln_type.replace("_", " ").title()
-
-    cwe = r.get("cwe_id") or ""
-
-    fpath = r.get("file_path", r.get("file", "unknown"))
-    fname = fpath.rsplit("/", 1)[-1] if "/" in fpath else fpath
-    start = r.get("start_line")
-    if start:
-        fname = f"{fname}:{start}"
-
-    status = _get_finding_status(r)
-
-    severity = r.get("severity_assessment", "")
-    severity = severity.title() if severity and len(severity) <= 15 else ""
-
-    cvss = r.get("cvss_score_estimate")
-    cvss_str = str(cvss) if cvss else ""
-
-    return (str(i), vuln_label, cwe, fname, status, severity, cvss_str)
-
-
-def _print_findings_table(results):
-    """Print a formatted findings table to console, matching /validate style."""
-    analysed = [r for r in results if "is_true_positive" in r or "error" in r]
-    if not analysed:
-        return
-
-    rows = [_build_finding_row(i, r) for i, r in enumerate(analysed, 1)]
-
-    headers = ("#", "Type", "CWE", "File", "Status", "Severity", "CVSS")
-    widths = [max(len(h), max((len(row[j]) for row in rows), default=0)) for j, h in enumerate(headers)]
-    # Cap widths to prevent extreme lines
-    widths[1] = min(widths[1], 19)
-    widths[3] = min(widths[3], 28)
-    widths[4] = min(widths[4], 25)
-
-    def fmt_row(cols):
-        return "  │ " + " │ ".join(c.ljust(widths[j])[:widths[j]] for j, c in enumerate(cols)) + " │"
-
-    def separator(left, mid, right):
-        return "  " + left + mid.join("─" * (w + 2) for w in widths) + right
-
-    print("\nResults at a Glance\n")
-    print(separator("┌", "┬", "┐"))
-    print(fmt_row(headers))
-    print(separator("├", "┼", "┤"))
-    for idx, row in enumerate(rows):
-        print(fmt_row(row))
-        if idx < len(rows) - 1:
-            print(separator("├", "┼", "┤"))
-    print(separator("└", "┴", "┘"))
-
-    exploitable = sum(1 for r in analysed if r.get("is_exploitable"))
-    confirmed = sum(1 for r in analysed if r.get("is_true_positive") is not False and not r.get("is_exploitable") and "error" not in r)
-    false_pos = sum(1 for r in analysed if r.get("is_true_positive") is False)
-    ruled_out = sum(1 for r in analysed if r.get("ruling") == "ruled_out")
-    print(f"\n  {exploitable} Exploitable, {confirmed} Confirmed, {false_pos} False Positive, {ruled_out} Ruled Out.")
-    print("\n  CVSS scores reflect inherent vulnerability impact — not binary mitigations.")
-
-
-def _generate_markdown_report(
-    final_report,
-    orchestration_result,
-    analysed_count,
-    true_positives,
-    false_positives,
-    exploitable_count,
-    exploits_count,
-    patches_count,
-    failed_count,
-    blocked_count,
-    severity_mismatches,
-    contradictions,
-):
-    """Generate a human-readable markdown report matching /validate format."""
-    phases = final_report.get("phases", {})
-    scanning = phases.get("scanning", {})
-    validation = phases.get("exploitability_validation", {})
-    orch = phases.get("orchestration", {})
-    outputs = final_report.get("outputs", {})
-    duration = final_report.get("duration_seconds", 0)
-    total_findings = scanning.get("total_findings", 0)
-    deduped = validation.get("validated_findings", total_findings)
-
-    mode = orch.get("mode", "none")
-    if mode == "cc_dispatch":
-        via = "Claude Code"
-    elif mode == "external_llm":
-        via = orch.get("analysis_model") or "external LLM"
-    elif mode == "cc_fallback":
-        via = "Claude Code (fallback)"
-    else:
-        via = None
-
-    pipeline_parts = ["Scan"]
-    if validation.get("completed"):
-        pipeline_parts.append("Dedup")
-    if analysed_count > 0:
-        pipeline_parts.append("Analyse")
-    if exploits_count > 0:
-        pipeline_parts.append("Exploit")
-    if patches_count > 0:
-        pipeline_parts.append("Patch")
-
-    lines = []
-
-    lines.append("# RAPTOR Agentic Security Report")
-    lines.append("")
-    lines.append(f"**Target:** `{final_report.get('repository', 'unknown')}`")
-    lines.append(f"**Date:** {final_report.get('timestamp', 'unknown')[:10]}")
-    lines.append(f"**Pipeline:** {' → '.join(pipeline_parts)} ({_format_elapsed(duration)})")
-    if via:
-        lines.append(f"**Model:** {via}")
-    lines.append("")
-    lines.append("---")
-    lines.append("")
-
-    # Summary
-    lines.append("## Summary")
-    lines.append("")
-    lines.append("| Metric | Value |")
-    lines.append("|--------|-------|")
-    lines.append(f"| Total findings | {total_findings} |")
-
-    semgrep = scanning.get("semgrep", {})
-    if semgrep.get("enabled"):
-        lines.append(f"| Semgrep | {semgrep.get('findings', 0)} |")
-    codeql = scanning.get("codeql", {})
-    if codeql.get("enabled"):
-        lines.append(f"| CodeQL | {codeql.get('findings', 0)} |")
-
-    if validation.get("completed"):
-        lines.append(f"| After deduplication | {deduped} |")
-
-    if analysed_count > 0:
-        lines.append(f"| Analysed | {analysed_count} |")
-        lines.append(f"| True positive | {true_positives} |")
-        lines.append(f"| False positive | {false_positives} |")
-        lines.append(f"| Exploitable | {exploitable_count} |")
-        if failed_count > 0:
-            lines.append(f"| Failed | {failed_count} |")
-        if blocked_count > 0:
-            lines.append(f"| Blocked (content filter) | {blocked_count} |")
-
-    if exploits_count > 0:
-        lines.append(f"| Exploits generated | {exploits_count} |")
-    if patches_count > 0:
-        lines.append(f"| Patches generated | {patches_count} |")
-
-    cost_summary = orch.get("cost", {})
-    cost = cost_summary.get("total_cost", 0)
-    if cost > 0:
-        lines.append(f"| Cost | ${cost:.2f} |")
-
-    lines.append("")
-
-    if severity_mismatches or contradictions > 0:
-        if severity_mismatches:
-            lines.append(f"⚠️ **{len(severity_mismatches)} high-severity finding(s) ruled as false positive** — review recommended")
-        if contradictions > 0:
-            lines.append(f"⚠️ **{contradictions} self-contradictory verdict(s)** — reasoning conflicts with conclusion")
-        lines.append("")
-
-    lines.append("---")
-    lines.append("")
-
-    # Findings table — uses shared helpers
-    results = orchestration_result.get("results", []) if orchestration_result else []
-    analysed_results = [r for r in results if "is_true_positive" in r or "error" in r]
-    if analysed_results:
-        lines.append("## Findings")
-        lines.append("")
-        lines.append("| # | Type | CWE | File | Status | Severity | CVSS |")
-        lines.append("|---|------|-----|------|--------|----------|------|")
-        for i, r in enumerate(analysed_results, 1):
-            row = _build_finding_row(i, r)
-            # Use full path for markdown (not just filename)
-            fpath = r.get("file_path", r.get("file", ""))
-            start = r.get("start_line")
-            loc = f"{fpath}:{start}" if start else fpath
-            if len(loc) > 40:
-                loc = "..." + loc[-37:]
-            # Replace file column with full path version
-            lines.append(f"| {row[0]} | {row[1]} | {row[2] or '—'} | `{loc}` | {row[4]} | {row[5] or '—'} | {row[6] or '—'} |")
-        lines.append("")
-        lines.append("CVSS scores reflect **inherent vulnerability impact** — not binary mitigations.")
-        lines.append("")
-
-    # Output Files
-    lines.append("## Output Files")
-    lines.append("")
-    lines.append("```")
-    if outputs.get("orchestrated_report"):
-        lines.append(f"  {outputs['orchestrated_report']:<50s} Full analysis results")
-    if outputs.get("autonomous_report"):
-        lines.append(f"  {outputs['autonomous_report']:<50s} Prepared findings")
-    for sf in outputs.get("sarif_files", []):
-        lines.append(f"  {sf:<50s} Scanner output (SARIF)")
-    if outputs.get("exploits_directory") and exploits_count > 0:
-        lines.append(f"  {outputs['exploits_directory']:<50s} Exploit PoCs")
-    if outputs.get("patches_directory") and patches_count > 0:
-        lines.append(f"  {outputs['patches_directory']:<50s} Secure patches")
-    if outputs.get("exploit_feasibility"):
-        lines.append(f"  {outputs['exploit_feasibility']:<50s} Binary feasibility analysis")
-    lines.append("```")
-    lines.append("")
-
-    return "\n".join(lines)
 
 
 if __name__ == "__main__":
