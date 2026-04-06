@@ -335,13 +335,15 @@ Examples:
 
     # Generate output directory with repository name and timestamp
     repo_name = repo_path.name  # Define repo_name for logging
-    if args.out:
-        out_dir = Path(args.out).resolve()
-    else:
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        out_dir = RaptorConfig.get_out_dir() / f"raptor_{repo_name}_{timestamp}"
-
+    from core.run import get_output_dir
+    out_dir = get_output_dir("agentic", target_name=repo_name, explicit_out=args.out if args.out else None)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from core.run import start_run
+        start_run(out_dir, "agentic")
+    except Exception as e:
+        logger.debug(f"Run metadata: {e}")  # Optional — don't fail the pipeline
 
     logger.info("=" * 70)
     logger.info("RAPTOR AGENTIC WORKFLOW STARTED")
@@ -1050,6 +1052,17 @@ Examples:
             print(f"   Diagrams: {diagrams_path}")
     except Exception:
         pass
+
+    # Mark run as completed
+    try:
+        from core.run import complete_run
+        complete_run(out_dir, extra={
+            "findings_count": analysed_count,
+            "exploitable_count": exploitable_count,
+            "duration_seconds": round(workflow_duration, 1),
+        })
+    except Exception as e:
+        logger.debug(f"Run metadata: {e}")  # Optional — don't fail the pipeline
 
 
 from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE
