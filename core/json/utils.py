@@ -71,9 +71,21 @@ class _RaptorEncoder(json.JSONEncoder):
 def save_json(path: Union[str, Path], data: Any) -> None:
     """Save data as pretty-printed JSON. Handles Path/datetime serialization.
 
-    Creates parent directories if needed. Raises on write failure —
-    a failed save should not be silent.
+    Creates parent directories if needed. Uses atomic write (write to temp
+    file then rename) to prevent corruption if the process is killed mid-write.
+    Raises on write failure — a failed save should not be silent.
     """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, indent=2, cls=_RaptorEncoder) + "\n", encoding="utf-8")
+    content = json.dumps(data, indent=2, cls=_RaptorEncoder) + "\n"
+
+    # Write to temp file then rename — atomic on POSIX (same filesystem).
+    # .~ prefix makes stale temps visually obvious and excluded by get_run_dirs.
+    tmp = p.with_name(f".~{p.name}.tmp")
+    try:
+        tmp.write_text(content, encoding="utf-8")
+        tmp.replace(p)
+    except BaseException:
+        # Clean up temp file on any failure
+        tmp.unlink(missing_ok=True)
+        raise

@@ -30,6 +30,7 @@ usage() {
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠻⠿⣿⣧
 
 Usage: raptor [options] [target]
+       raptor project <subcommand> [args]
 
 Arguments:
   target             Path or URL to scan (optional)
@@ -37,8 +38,16 @@ Arguments:
 Options:
   -c, --continue     Resume last RAPTOR session
   -m, --model MODEL  Choose model (opus, sonnet, haiku)
+  -p, --project NAME Use a named project for this session
   -v, --verbose      Verbose output
   -h, --help         Show this help
+
+Projects:
+  raptor project list              Show all projects
+  raptor project create <name>     Create a new project
+  raptor project status [<name>]   Show project summary
+  raptor project use [<name>]      Set/show active project
+  raptor project help              Full subcommand list
 
 Any additional flags are passed through to claude.
 EOF
@@ -46,6 +55,18 @@ EOF
 }
 
 # --- Parse args ---
+
+# --- Project subcommand routing (pure Python, no Claude Code) ---
+if [[ "${1:-}" == "project" ]]; then
+    shift
+    cd "$RAPTOR_DIR"
+    exec python3 -c "
+import sys
+sys.path.insert(0, '.')
+from core.project.cli import main
+main()
+" "$@"
+fi
 
 CLAUDE_ARGS=(-n RAPTOR)
 INITIAL_PROMPT="/raptor"
@@ -70,6 +91,28 @@ while [[ $# -gt 0 ]]; do
             CLAUDE_ARGS+=(--verbose)
             shift
             ;;
+        -p|--project)
+            [[ $# -ge 2 ]] || { echo "  -p requires a project name"; exit 1; }
+            # Look up the project's output dir and set env var
+            PROJECT_NAME="$2"
+            PROJECT_INFO=$(cd "$RAPTOR_DIR" && python3 -c "
+import sys; sys.path.insert(0, '.')
+from core.project import ProjectManager
+p = ProjectManager().load(sys.argv[1])
+if p: print(p.output_dir + '\n' + p.target)
+" "$PROJECT_NAME" 2>/dev/null)
+            PROJECT_DIR=$(echo "$PROJECT_INFO" | sed -n '1p')
+            PROJECT_TARGET=$(echo "$PROJECT_INFO" | sed -n '2p')
+            if [ -n "$PROJECT_DIR" ]; then
+                export RAPTOR_PROJECT_DIR="$PROJECT_DIR"
+                export RAPTOR_PROJECT_NAME="$PROJECT_NAME"
+                export RAPTOR_PROJECT_TARGET="$PROJECT_TARGET"
+            else
+                echo "  Project '$2' not found"
+                exit 1
+            fi
+            shift 2
+            ;;
         -*)
             CLAUDE_ARGS+=("$1")
             shift
@@ -83,6 +126,35 @@ done
 
 if [ -n "$TARGET" ] && [ -n "$INITIAL_PROMPT" ]; then
     INITIAL_PROMPT="/raptor $TARGET"
+fi
+
+# --- Auto-load active project if no -p was given ---
+
+if [ -z "${RAPTOR_PROJECT_DIR:-}" ]; then
+    ACTIVE_LINK="$HOME/.raptor/projects/.active"
+    if [ -L "$ACTIVE_LINK" ]; then
+        ACTIVE_INFO=$(cd "$RAPTOR_DIR" && python3 -c "
+import sys, os; sys.path.insert(0, '.')
+from pathlib import Path
+link = Path.home() / '.raptor' / 'projects' / '.active'
+if link.is_symlink():
+    t = os.readlink(link)
+    if t.endswith('.json') and '/' not in t:
+        pf = link.parent / t
+        if pf.exists():
+            from core.json import load_json
+            d = load_json(pf)
+            if d: print(d.get('output_dir','') + '\n' + d.get('name','') + '\n' + d.get('target',''))
+" 2>/dev/null)
+        ACTIVE_PROJECT_DIR=$(echo "$ACTIVE_INFO" | sed -n '1p')
+        ACTIVE_PROJECT_NAME=$(echo "$ACTIVE_INFO" | sed -n '2p')
+        ACTIVE_PROJECT_TARGET=$(echo "$ACTIVE_INFO" | sed -n '3p')
+        if [ -n "$ACTIVE_PROJECT_DIR" ]; then
+            export RAPTOR_PROJECT_DIR="$ACTIVE_PROJECT_DIR"
+            export RAPTOR_PROJECT_NAME="$ACTIVE_PROJECT_NAME"
+            export RAPTOR_PROJECT_TARGET="$ACTIVE_PROJECT_TARGET"
+        fi
+    fi
 fi
 
 # --- Prerequisites ---
@@ -105,6 +177,7 @@ fi
 # .claude/settings.json from untrusted repos), but commands like /scan
 # should default to where the user was when they ran `raptor`.
 export RAPTOR_CALLER_DIR="$(pwd)"
+export PATH="$PATH:$RAPTOR_DIR/bin"
 
 cd "$RAPTOR_DIR"
 if [ -n "$INITIAL_PROMPT" ]; then

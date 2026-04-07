@@ -18,6 +18,7 @@ VERY IMPORTANT: follow these steps in order.
 
 ## COMMANDS
 
+/project - Project management: create, list, status, diff, merge, report, clean, export
 /scan /fuzz /web /agentic /codeql /analyze - Security testing
 /exploit /patch - Generate PoCs and fixes (beta)
 /validate - Exploitability validation pipeline (see below)
@@ -31,9 +32,58 @@ VERY IMPORTANT: follow these steps in order.
 
 ---
 
+## PROJECTS
+
+Projects are opt-in named workspaces that corral analysis runs into a shared directory. Commands with `--project <name>` or after `/project use <name>` write output to the project directory. Without a project, commands behave as before (timestamped dirs under `out/`).
+
+```
+/project create myapp --target /path/to/code -d "Description"
+/project use myapp
+/scan                          # output goes to project dir
+/project status                # shows all runs and findings
+/project report                # merged view across all runs
+/project clean --keep 3        # delete old runs
+```
+
+See `/project help` for full command list.
+
+---
+
 ## DEFAULT TARGET DIRECTORY
 
-When launched via `bin/raptor`, the environment variable `RAPTOR_CALLER_DIR` contains the directory the user was in when they ran `raptor`. If a command like `/scan`, `/agentic`, `/validate`, `/codeql`, or `/fuzz` is run **without a path argument**, use `$RAPTOR_CALLER_DIR` as the default target if set. Do not use it if the user already specified a path.
+When a command like `/scan`, `/agentic`, `/validate`, `/codeql`, or `/fuzz` is run **without a path argument**, resolve the default target in this order:
+
+1. **Active project target:** if `$RAPTOR_PROJECT_TARGET` is set, use it
+2. **Caller's directory:** if `$RAPTOR_CALLER_DIR` is set (launcher saves the user's cwd before switching to the RAPTOR repo dir), use it
+3. **Ask the user** for the target path
+
+Do not use the current working directory as a fallback — it is always the RAPTOR repo dir, not the user's target. Do not use any of these if the user already specified a path.
+
+---
+
+## RUN LIFECYCLE
+
+When running any analysis command (`/scan`, `/validate`, `/understand`, `/codeql`, `/fuzz`, `/web`), use the run lifecycle stubs to create the output directory and track status:
+
+**Before starting work:**
+```bash
+OUTPUT_DIR=$(python3 -m core.run start <command>)
+```
+This creates the output directory, writes `.raptor-run.json` with `status: running`, and prints the path. Use `$OUTPUT_DIR` for all output files.
+
+**After successful completion:**
+```bash
+python3 -m core.run complete "$OUTPUT_DIR"
+```
+
+**On failure:**
+```bash
+python3 -m core.run fail "$OUTPUT_DIR" "error description"
+```
+
+The `start` command automatically resolves the output directory using the active project (if any) or the default `out/` directory. Do not construct output paths manually.
+
+For commands that run via `python3 raptor.py` (agentic, scan, codeql), the Python script handles lifecycle internally — do not call the stubs.
 
 ---
 

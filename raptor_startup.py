@@ -126,6 +126,32 @@ def _key_source(provider: str, env_keys: dict) -> str:
     return "via models.json"
 
 
+def _check_active_project() -> str | None:
+    """Return a one-line project status string, or None if no active project."""
+    try:
+        from core.project.project import PROJECTS_DIR
+        active_link = PROJECTS_DIR / ".active"
+        if not active_link.is_symlink():
+            return None
+        target = os.readlink(active_link)
+        if not target.endswith(".json") or "/" in target or "\\" in target:
+            return None
+        project_file = PROJECTS_DIR / target
+        if not project_file.exists():
+            # Dangling — clean up
+            active_link.unlink(missing_ok=True)
+            return None
+        from core.json import load_json
+        data = load_json(project_file)
+        if not data:
+            return None
+        name = data.get("name", target[:-5])
+        proj_target = data.get("target", "")
+        return f"Project: {name} ({proj_target}) \u2014 `raptor project use none` to clear"
+    except Exception:
+        return None
+
+
 def _check_env(unavailable_features: set) -> tuple[list, list]:
     """Returns (env_parts, warnings)."""
     from core.config import RaptorConfig
@@ -171,7 +197,7 @@ def _check_env(unavailable_features: set) -> tuple[list, list]:
     return parts, warnings
 
 
-def _format(logo, quote, tool_results, tool_warnings, llm_lines, llm_warnings, env_parts, env_warnings):
+def _format(logo, quote, tool_results, tool_warnings, llm_lines, llm_warnings, env_parts, env_warnings, project_line=None):
     lines = []
 
     if logo:
@@ -187,6 +213,10 @@ def _format(logo, quote, tool_results, tool_warnings, llm_lines, llm_warnings, e
 
     # LLM
     lines.extend(llm_lines)
+
+    # Active project
+    if project_line:
+        lines.append(f"   {project_line}")
 
     # Warnings: unavailable first, then limited, then other
     all_raw = tool_warnings + env_warnings + llm_warnings
@@ -219,15 +249,29 @@ def main():
         tool_results, tool_warnings, unavailable = _check_tools()
         llm_lines, llm_warnings = _check_llm()
         env_parts, env_warnings = _check_env(unavailable)
+        project_line = _check_active_project()
 
         logging.disable(logging.NOTSET)
 
-        output = _format(logo, quote, tool_results, tool_warnings, llm_lines, llm_warnings, env_parts, env_warnings)
+        output = _format(logo, quote, tool_results, tool_warnings, llm_lines, llm_warnings, env_parts, env_warnings, project_line)
     except Exception:
         output = f"{logo}\n\nraptor:~$ {quote}"
 
     OUTPUT_FILE.write_text(output)
     print(output)
+
+    # Add bin/ to PATH via CLAUDE_ENV_FILE (covers direct `claude` launches
+    # where bin/raptor didn't set PATH; harmless duplicate if it did)
+    env_file = os.environ.get("CLAUDE_ENV_FILE")
+    if env_file:
+        bin_dir = str(REPO_ROOT / "bin")
+        try:
+            existing = Path(env_file).read_text() if Path(env_file).exists() else ""
+            if bin_dir not in existing:
+                with open(env_file, "a") as f:
+                    f.write(f'export PATH="$PATH:{bin_dir}"\n')
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":
