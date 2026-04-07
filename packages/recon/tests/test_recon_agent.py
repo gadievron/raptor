@@ -2,7 +2,6 @@
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -121,68 +120,30 @@ class TestGetOutDir:
 
 class TestSafeClone:
 
-    @patch("subprocess.run")
-    def test_successful_clone(self, mock_run, tmp_path):
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
+    @patch("packages.recon.agent.clone_repository")
+    def test_returns_dest_path(self, mock_clone, tmp_path):
+        mock_clone.return_value = True
         result = safe_clone("https://github.com/example/repo", tmp_path / "repo")
         assert result == tmp_path / "repo"
 
-    @patch("subprocess.run")
-    def test_strips_proxy_env_vars(self, mock_run, tmp_path):
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
-        proxy_vars = {
-            "HTTP_PROXY": "http://proxy.corp",
-            "HTTPS_PROXY": "http://proxy.corp",
-            "NO_PROXY": "localhost",
-            "http_proxy": "http://proxy.corp",
-            "https_proxy": "http://proxy.corp",
-            "no_proxy": "localhost",
-        }
-        with patch.dict(os.environ, proxy_vars):
-            safe_clone("https://github.com/example/repo", tmp_path / "repo")
-
-        _, kwargs = mock_run.call_args
-        env_used = kwargs.get("env", {})
-        for var in proxy_vars:
-            assert var not in env_used, f"Proxy var {var} should be stripped"
-
-    @patch("subprocess.run")
-    def test_disables_git_terminal_prompt(self, mock_run, tmp_path):
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
+    @patch("packages.recon.agent.clone_repository")
+    def test_delegates_to_core_clone(self, mock_clone, tmp_path):
+        """safe_clone() must call core.git.clone_repository with depth=1."""
+        mock_clone.return_value = True
         safe_clone("https://github.com/example/repo", tmp_path / "repo")
-        _, kwargs = mock_run.call_args
-        env_used = kwargs.get("env", {})
-        assert env_used.get("GIT_TERMINAL_PROMPT") == "0"
-
-    @patch("subprocess.run")
-    def test_sets_git_askpass(self, mock_run, tmp_path):
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
-        safe_clone("https://github.com/example/repo", tmp_path / "repo")
-        _, kwargs = mock_run.call_args
-        env_used = kwargs.get("env", {})
-        assert env_used.get("GIT_ASKPASS") == "true"
-
-    @patch("subprocess.run")
-    def test_clone_failure_raises_runtime_error(self, mock_run, tmp_path):
-        mock_run.return_value = MagicMock(
-            returncode=1, stderr="fatal: repository not found"
+        mock_clone.assert_called_once_with(
+            "https://github.com/example/repo",
+            tmp_path / "repo",
+            depth=1,
         )
+
+    def test_invalid_url_raises(self, tmp_path):
+        """Invalid URLs must be rejected by core.git.clone_repository."""
+        with pytest.raises((ValueError, RuntimeError)):
+            safe_clone("https://evil.com/bad/repo", tmp_path / "repo")
+
+    @patch("packages.recon.agent.clone_repository")
+    def test_clone_failure_propagates(self, mock_clone, tmp_path):
+        mock_clone.side_effect = RuntimeError("git clone failed: not found")
         with pytest.raises(RuntimeError, match="git clone failed"):
             safe_clone("https://github.com/example/repo", tmp_path / "repo")
-
-    @patch("subprocess.run")
-    def test_uses_shallow_clone(self, mock_run, tmp_path):
-        """Clone must use --depth 1 to avoid pulling full history."""
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
-        safe_clone("https://github.com/example/repo", tmp_path / "repo")
-        cmd_used = mock_run.call_args.args[0]
-        assert "--depth" in cmd_used
-        assert "1" in cmd_used
-
-    @patch("subprocess.run")
-    def test_uses_no_tags(self, mock_run, tmp_path):
-        """Clone must use --no-tags to reduce download size."""
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
-        safe_clone("https://github.com/example/repo", tmp_path / "repo")
-        cmd_used = mock_run.call_args.args[0]
-        assert "--no-tags" in cmd_used

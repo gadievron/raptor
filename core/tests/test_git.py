@@ -14,7 +14,6 @@ from core.git import (
     clone_repository,
     get_safe_git_env,
 )
-from core.exec import run
 
 
 class TestValidateRepoUrl:
@@ -84,22 +83,3 @@ class TestCloneRepository:
             clone_repository("https://github.com/valid/repo", tmp_path / "target")
 
 
-class TestRunCommand:
-    """Tests for run command helper."""
-
-    def test_run_simple_command(self):
-        """Test running a simple command."""
-        rc, stdout, stderr = run(["echo", "hello"], timeout=10)
-        # Note: On Windows 'echo' might behave differently
-        assert rc == 0
-
-    def test_run_with_timeout(self):
-        """Test that timeout is respected."""
-        import subprocess
-        # This test is platform-specific, skip detailed implementation
-        # Just verify the function accepts timeout parameter
-        try:
-            rc, stdout, stderr = run(["sleep", "0.1"], timeout=5)
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            # sleep might not exist on Windows, that's OK
-            pass
