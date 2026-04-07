@@ -30,10 +30,16 @@ def main():
 
     if action == "start":
         if len(sys.argv) < 3:
-            print("Usage: python3 -m core.run start <command>", file=sys.stderr)
+            print("Usage: python3 -m core.run start <command> [--target <path>]",
+                  file=sys.stderr)
             sys.exit(1)
         command = sys.argv[2]
-        out_dir = get_output_dir(command)
+        target_path = None
+        if "--target" in sys.argv:
+            idx = sys.argv.index("--target")
+            if idx + 1 < len(sys.argv):
+                target_path = sys.argv[idx + 1]
+        out_dir = get_output_dir(command, target_path=target_path)
         start_run(out_dir, command)
         # Print path for caller to capture
         print(out_dir)
