@@ -37,7 +37,7 @@ The modular architecture refactors the original monolithic structure into a clea
 
 ```
 raptor/
-├── core/                  # Shared utilities (config, exec, git, hash, semgrep, SARIF, JSON, reporting, project, run)
+├── core/                  # Shared utilities (config, logging, exec, git, hash, semgrep, SARIF)
 ├── packages/              # Independent security capabilities
 │   ├── static-analysis/   # Semgrep scanning
 │   ├── codeql/            # CodeQL deep analysis and dataflow validation
@@ -74,37 +74,10 @@ raptor/
 │   ├── hash.py                     # Directory tree hashing (sha256_tree)
 │   ├── logging.py                  # Structured logging with JSONL audit trail
 │   ├── progress.py                 # Progress tracking utilities
-│   ├── schema_constants.py          # Shared schema constants (CWE mappings, status values)
 │   ├── semgrep.py                  # Semgrep scanning (parallel/sequential orchestration)
 │   ├── sarif/
 │   │   ├── __init__.py
 │   │   └── parser.py               # SARIF 2.1.0 parsing utilities
-│   ├── json/
-│   │   ├── __init__.py
-│   │   └── utils.py                # Centralised JSON load/save with Path/datetime support
-│   ├── reporting/
-│   │   ├── __init__.py
-│   │   ├── console.py              # Terminal output formatting
-│   │   ├── findings.py             # Finding report generation
-│   │   ├── formatting.py           # Report formatting utilities
-│   │   ├── renderer.py             # Report rendering (Markdown, JSON)
-│   │   └── spec.py                 # Report specification
-│   ├── project/
-│   │   ├── __init__.py
-│   │   ├── project.py              # Project create, open, status
-│   │   ├── cli.py                  # Project CLI (python -m core.project)
-│   │   ├── schema.py               # Project schema definition
-│   │   ├── diff.py                 # Project diff between runs
-│   │   ├── merge.py                # Merge multiple project runs
-│   │   ├── export.py               # Export projects (CSV, JSON, SARIF)
-│   │   ├── report.py               # Project report generation
-│   │   ├── clean.py                # Clean up old project data
-│   │   └── findings_utils.py       # Finding lookup helpers
-│   ├── run/
-│   │   ├── __init__.py
-│   │   ├── __main__.py             # Run CLI entry point
-│   │   ├── metadata.py             # Run metadata collection
-│   │   └── output.py               # Run output management
 │   └── inventory/                  # Shared source inventory
 │       ├── __init__.py
 │       ├── builder.py              # build_inventory() — file enumeration + checksums
@@ -360,44 +333,6 @@ def get_logger(name: str = "raptor") -> logging.Logger:
 - Strips venv from PATH/env before calling semgrep
 - Baseline packs always included; category packs added per policy group
 - Deduplicates pack IDs across categories
-
-#### `core/json/` - JSON File I/O
-**Responsibility**: Centralised JSON load/save with consistent error handling
-
-**Functions**:
-- `load_json(path, strict)`: Load JSON, returns None if missing (or raises if strict)
-- `save_json(path, data)`: Save with indent=2 and Path/datetime serialisation
-
-#### `core/reporting/` - Report Generation
-**Responsibility**: Unified report rendering across scan types
-
-**Components**:
-- `findings.py` — Finding report data assembly
-- `formatting.py` — Report formatting utilities
-- `renderer.py` — Markdown and JSON report rendering
-- `console.py` — Terminal output formatting
-- `spec.py` — Report specification
-
-#### `core/project/` - Project Management
-**Responsibility**: Multi-run project lifecycle (create, diff, merge, export)
-
-**Components**:
-- `project.py` — Project create, open, add runs, query status
-- `cli.py` — CLI entry point (`python -m core.project`)
-- `schema.py` — Project JSON schema
-- `diff.py` — Diff findings between runs
-- `merge.py` — Merge runs from multiple projects
-- `export.py` — Export to CSV, JSON, SARIF
-- `report.py` — Project summary report
-- `clean.py` — Clean up old project data
-
-#### `core/run/` - Run Metadata
-**Responsibility**: Capture and manage per-run metadata and output
-
-**Components**:
-- `metadata.py` — Collect run metadata (tool versions, timestamps, config)
-- `output.py` — Run output directory management
-- `__main__.py` — CLI entry point (`python -m core.run`)
 
 
 ## Packages Layer
