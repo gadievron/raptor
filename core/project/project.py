@@ -356,8 +356,8 @@ class ProjectManager:
     def _update_env_file(self, name: str = None) -> None:
         """Update CLAUDE_ENV_FILE with project env vars.
 
-        Rewrites the RAPTOR_PROJECT_* lines. Preserves other content (e.g. PATH).
-        If name is None, removes the project env vars.
+        Writes project vars directly to the env file without modifying
+        os.environ (the launcher manages process env vars).
         """
         env_file = os.environ.get("CLAUDE_ENV_FILE")
         if not env_file:
@@ -369,17 +369,17 @@ class ProjectManager:
         except OSError:
             return
 
-        # Remove old RAPTOR_PROJECT_* lines
         lines = [l for l in existing.splitlines()
                  if not l.startswith("export RAPTOR_PROJECT_")]
 
-        # Add new ones if a project is active
         if name:
             project = self.load(name)
             if project:
-                lines.append(f'export RAPTOR_PROJECT_DIR="{project.output_dir}"')
-                lines.append(f'export RAPTOR_PROJECT_NAME="{project.name}"')
-                lines.append(f'export RAPTOR_PROJECT_TARGET="{project.target}"')
+                def _sh(v):
+                    return v.replace('\\', '\\\\').replace('"', '\\"')
+                lines.append(f'export RAPTOR_PROJECT_DIR="{_sh(project.output_dir)}"')
+                lines.append(f'export RAPTOR_PROJECT_NAME="{_sh(project.name)}"')
+                lines.append(f'export RAPTOR_PROJECT_TARGET="{_sh(project.target)}"')
 
         try:
             env_path.write_text("\n".join(lines) + "\n" if lines else "")

@@ -9,7 +9,7 @@ Dangerous operations (apply patches, delete, git push): ASK FIRST.
 
 **On first message:**
 VERY IMPORTANT: follow these steps in order.
-1. Run `python3 raptor_startup.py >/dev/null 2>&1` (generates `.startup-output`)
+1. Run `python3 -m core.startup.init >/dev/null 2>&1` (generates `.startup-output`)
 2. Read `.startup-output` using the Read tool, then output its contents verbatim as a fenced code block (``` with no language tag). Do NOT paraphrase or reformat.
 3. **UNLOAD:** Remove `.startup-output` contents from context (do not retain in conversation history)
 4. On a single line, output "Quick commands:" then list the /agentic, /scan, /fuzz, /web commands (don't explain what they do) and note /commands for the full list.

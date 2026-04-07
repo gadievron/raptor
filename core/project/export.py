@@ -65,7 +65,8 @@ def _sha256_file(path: Path) -> str:
 
 
 def export_project(project_output_dir: Path, dest_path: Path,
-                   project_json_path: Path = None) -> Dict[str, str]:
+                   project_json_path: Path = None,
+                   force: bool = False) -> Dict[str, str]:
     """Zip a project output directory, skipping symlinks.
 
     Args:
@@ -88,6 +89,9 @@ def export_project(project_output_dir: Path, dest_path: Path,
     # Ensure dest has .zip extension
     if dest_path.suffix != ".zip":
         dest_path = dest_path.with_suffix(".zip")
+
+    if dest_path.exists() and not force:
+        raise FileExistsError(f"File already exists: {dest_path} (use --force to overwrite)")
 
     dest_path.parent.mkdir(parents=True, exist_ok=True)
 

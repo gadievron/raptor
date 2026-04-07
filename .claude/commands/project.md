@@ -31,7 +31,7 @@ Manage projects — named workspaces that corral analysis runs into one director
 | `diff <name> <run1> <run2>` | Compare findings between two runs |
 | `merge [<name>] [--type <type>] [--yes]` | Merge runs per command type (destructive) |
 | `clean [<name>] [--keep <n>] [--dry-run] [--yes]` | Delete old runs, keep latest n |
-| `export <name> <path>` | Export project as zip (prints sha256) |
+| `export <name> <path> [--force]` | Export project as zip (prints sha256) |
 | `import <path> [--force] [--sha256 <hash>]` | Import project from zip |
 
 ## Execution

@@ -25,102 +25,132 @@ def _red(text): return _c(text, "31")
 def _yellow(text): return _c(text, "33")
 
 
+class _Fmt(argparse.HelpFormatter):
+    """Wider help alignment for subcommand option lists."""
+    def __init__(self, prog):
+        super().__init__(prog, max_help_position=34)
+
+
 def main():
-    parser = argparse.ArgumentParser(prog="raptor project", description="Manage RAPTOR projects")
-    sub = parser.add_subparsers(dest="subcommand")
+    parser = argparse.ArgumentParser(
+        prog="raptor project",
+        usage="raptor project <command> [args]",
+        description="Manage RAPTOR projects. Run 'raptor project help <command>' for details.",
+        formatter_class=lambda prog: argparse.HelpFormatter(prog, max_help_position=20),
+    )
+    sub = parser.add_subparsers(dest="subcommand", title="commands", metavar="")
+    _F = {"formatter_class": _Fmt}  # shorthand for subparsers
 
     # create
-    p_create = sub.add_parser("create", help="Create a new project")
-    p_create.add_argument("name")
-    p_create.add_argument("--target", required=True, help="Path to target codebase")
-    p_create.add_argument("-d", "--description", default="", help="One-line description")
-    p_create.add_argument("--output-dir", default=None, help="Custom output directory")
+    p_create = sub.add_parser("create", help="Create a new project",
+                              usage="raptor project create <name> --target <path> [-d <desc>] [--output-dir <dir>]", **_F)
+    p_create.add_argument("name", help="Project name")
+    p_create.add_argument("--target", required=True, metavar="<path>", help="Path to target codebase")
+    p_create.add_argument("-d", "--description", default="", metavar="<text>", help="One-line description")
+    p_create.add_argument("--output-dir", default=None, metavar="<dir>", help="Custom output directory")
 
     # use
-    p_use = sub.add_parser("use", help="Set the active project (no arg = show current)")
+    p_use = sub.add_parser("use", help="Set the active project (no arg = show current)",
+                           usage="raptor project use [<name>]", **_F)
     p_use.add_argument("name", nargs="?", help="Project name, 'none' to clear")
 
     # list
-    sub.add_parser("list", help="Show all projects")
+    sub.add_parser("list", help="Show all projects",
+                   usage="raptor project list", **_F)
 
     # status
-    p_status = sub.add_parser("status", help="Show project summary")
+    p_status = sub.add_parser("status", help="Show project summary",
+                              usage="raptor project status [<name>]", **_F)
     p_status.add_argument("name", nargs="?", help="Project name")
 
     # delete
-    p_delete = sub.add_parser("delete", help="Delete a project")
-    p_delete.add_argument("name")
+    p_delete = sub.add_parser("delete", help="Delete a project",
+                              usage="raptor project delete <name> [--purge] [--yes]", **_F)
+    p_delete.add_argument("name", help="Project name")
     p_delete.add_argument("--purge", action="store_true", help="Also delete output directory")
     p_delete.add_argument("--yes", action="store_true", help="Skip confirmation")
 
     # rename
-    p_rename = sub.add_parser("rename", help="Rename a project")
-    p_rename.add_argument("old")
-    p_rename.add_argument("new")
+    p_rename = sub.add_parser("rename", help="Rename a project",
+                              usage="raptor project rename <old> <new>", **_F)
+    p_rename.add_argument("old", help="Current name")
+    p_rename.add_argument("new", help="New name")
 
     # notes
-    p_notes = sub.add_parser("notes", help="View or update project notes")
-    p_notes.add_argument("name")
+    p_notes = sub.add_parser("notes", help="View or update project notes",
+                             usage="raptor project notes <name> [<text>] [--file <path>] [--edit]", **_F)
+    p_notes.add_argument("name", help="Project name")
     p_notes.add_argument("text", nargs="?", help="New notes text")
     if os.isatty(0):
         p_notes.add_argument("--edit", action="store_true", help="Open in $EDITOR")
-    p_notes.add_argument("--file", default=None, help="Read notes from file")
+    p_notes.add_argument("--file", default=None, metavar="<path>", help="Read notes from file")
 
     # description
-    p_desc = sub.add_parser("description", help="View or update project description")
-    p_desc.add_argument("name")
+    p_desc = sub.add_parser("description", help="View or update project description",
+                            usage="raptor project description <name> [<text>]", **_F)
+    p_desc.add_argument("name", help="Project name")
     p_desc.add_argument("text", nargs="?", help="New description text")
 
     # add
-    p_add = sub.add_parser("add", help="Add existing runs to a project")
-    p_add.add_argument("name")
-    p_add.add_argument("directory")
-    p_add.add_argument("--target", help="Target path (creates project if needed)")
-    p_add.add_argument("--output-dir", default=None, help="Custom output directory")
+    p_add = sub.add_parser("add", help="Add existing runs to a project",
+                           usage="raptor project add <name> <directory> [--target <path>] [--output-dir <dir>]", **_F)
+    p_add.add_argument("name", help="Project name")
+    p_add.add_argument("directory", help="Directory containing runs")
+    p_add.add_argument("--target", metavar="<path>", help="Target path (creates project if needed)")
+    p_add.add_argument("--output-dir", default=None, metavar="<dir>", help="Custom output directory")
 
     # remove
-    p_remove = sub.add_parser("remove", help="Move a run out of the project")
-    p_remove.add_argument("name")
-    p_remove.add_argument("run")
-    p_remove.add_argument("--to", required=True, help="Destination path")
+    p_remove = sub.add_parser("remove", help="Move a run out of the project",
+                              usage="raptor project remove <name> <run> --to <path>", **_F)
+    p_remove.add_argument("name", help="Project name")
+    p_remove.add_argument("run", help="Run directory name")
+    p_remove.add_argument("--to", required=True, metavar="<path>", help="Destination path")
 
     # report
-    p_report = sub.add_parser("report", help="Generate merged report across all runs")
-    p_report.add_argument("name", nargs="?")
+    p_report = sub.add_parser("report", help="Generate merged report across all runs",
+                              usage="raptor project report [<name>]", **_F)
+    p_report.add_argument("name", nargs="?", help="Project name")
 
     # diff
-    p_diff = sub.add_parser("diff", help="Compare findings between two runs")
-    p_diff.add_argument("name")
-    p_diff.add_argument("run1")
-    p_diff.add_argument("run2")
+    p_diff = sub.add_parser("diff", help="Compare findings between two runs",
+                            usage="raptor project diff <name> <run1> <run2>", **_F)
+    p_diff.add_argument("name", help="Project name")
+    p_diff.add_argument("run1", help="Baseline run")
+    p_diff.add_argument("run2", help="Comparison run")
 
     # merge
-    p_merge = sub.add_parser("merge", help="Merge runs per command type (destructive)")
-    p_merge.add_argument("name", nargs="?")
-    p_merge.add_argument("--type", default="all", help="Command type to merge (scan|validate|agentic|all)")
+    p_merge = sub.add_parser("merge", help="Merge runs per command type (destructive)",
+                             usage="raptor project merge [<name>] [--type <type>] [--yes]", **_F)
+    p_merge.add_argument("name", nargs="?", help="Project name")
+    p_merge.add_argument("--type", default="all", metavar="<type>", help="scan|validate|agentic|all")
     p_merge.add_argument("--yes", action="store_true", help="Skip confirmation")
 
     # clean
-    p_clean = sub.add_parser("clean", help="Delete old runs, keep latest n")
-    p_clean.add_argument("name", nargs="?")
-    p_clean.add_argument("--keep", type=int, default=1, help="Runs to keep per type (default: 1)")
+    p_clean = sub.add_parser("clean", help="Delete old runs, keep latest n",
+                             usage="raptor project clean [<name>] [--keep <n>] [--dry-run] [--yes]", **_F)
+    p_clean.add_argument("name", nargs="?", help="Project name")
+    p_clean.add_argument("--keep", type=int, default=1, metavar="<n>", help="Runs to keep per type (default: 1)")
     p_clean.add_argument("--dry-run", action="store_true", help="Show what would be deleted")
     p_clean.add_argument("--yes", action="store_true", help="Skip confirmation")
 
     # export
-    p_export = sub.add_parser("export", help="Export project as zip")
-    p_export.add_argument("name")
+    p_export = sub.add_parser("export", help="Export project as zip",
+                              usage="raptor project export <name> <path> [--force]", **_F)
+    p_export.add_argument("name", help="Project name")
     p_export.add_argument("path", help="Destination zip path")
+    p_export.add_argument("--force", action="store_true", help="Overwrite existing file")
 
     # import
-    p_import = sub.add_parser("import", help="Import project from zip")
+    p_import = sub.add_parser("import", help="Import project from zip",
+                              usage="raptor project import <path> [--force] [--sha256 <hash>]", **_F)
     p_import.add_argument("path", help="Zip file path")
     p_import.add_argument("--force", action="store_true", help="Overwrite existing project")
-    p_import.add_argument("--sha256", default=None, help="Expected SHA-256 hash to verify")
+    p_import.add_argument("--sha256", default=None, metavar="<hash>", help="Expected SHA-256 hash to verify")
 
     # help
-    p_help = sub.add_parser("help", help="Show help")
-    p_help.add_argument("topic", nargs="?", help="Subcommand to get help for")
+    p_help = sub.add_parser("help", help="Show help",
+                            usage="raptor project help [<subcommand>]", **_F)
+    p_help.add_argument("topic", nargs="?", help="Subcommand name")
 
     args = parser.parse_args()
 
@@ -334,7 +364,8 @@ def main():
                 return
             project_json = mgr.projects_dir / f"{args.name}.json"
             result = export_project(p.output_path, Path(args.path),
-                                    project_json_path=project_json)
+                                    project_json_path=project_json,
+                                    force=args.force)
             print(f"Exported to {result['path']}")
             print(f"  sha256: {result['sha256']}")
 
@@ -375,7 +406,7 @@ def main():
                 return
             _do_merge(p, args.type, args.yes)
 
-    except ValueError as e:
+    except (ValueError, FileExistsError) as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:

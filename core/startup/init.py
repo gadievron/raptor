@@ -1,37 +1,33 @@
-#!/usr/bin/env python3
-"""
-RAPTOR startup display — prints banner and environment status.
+"""RAPTOR startup — environment checks and session initialisation.
 
-Called by the /raptor skill. Writes output to .startup-output for the LLM to read.
+Gathers system status (tools, LLM, env, active project), formats
+the startup banner, writes .startup-output, and sets up CLAUDE_ENV_FILE.
+
+Entry point: `python3 -m core.startup.init`
 """
 
+import logging
 import os
-import random
 import shutil
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent
+from . import REPO_ROOT
+from .banner import format_banner, read_logo, read_random_quote
+
 sys.path.insert(0, str(REPO_ROOT))
 OUTPUT_FILE = REPO_ROOT / ".startup-output"
 
 
-def _read_logo() -> str:
-    path = REPO_ROOT / "raptor-offset"
-    return path.read_text().rstrip() if path.exists() else ""
+# ---------------------------------------------------------------------------
+# Checks
+# ---------------------------------------------------------------------------
 
+def check_tools() -> tuple[list, list, set]:
+    """Check for required external tools.
 
-def _read_random_quote() -> str:
-    path = REPO_ROOT / "hackers-8ball"
-    if path.exists():
-        lines = [l.strip() for l in path.read_text().splitlines() if l.strip()]
-        if lines:
-            return random.choice(lines)
-    return '"Hack the planet!"'
-
-
-def _check_tools() -> tuple[list, list, set]:
-    """Returns (results, warnings, unavailable_features)."""
+    Returns (results, warnings, unavailable_features).
+    """
     from core.config import RaptorConfig
 
     results = []
@@ -68,8 +64,11 @@ def _check_tools() -> tuple[list, list, set]:
     return results, warnings, unavailable_features
 
 
-def _check_llm() -> tuple[list, list]:
-    """Returns (lines, warnings)."""
+def check_llm() -> tuple[list, list]:
+    """Check LLM availability and configuration.
+
+    Returns (lines, warnings).
+    """
     lines = []
     warnings = []
 
@@ -126,34 +125,11 @@ def _key_source(provider: str, env_keys: dict) -> str:
     return "via models.json"
 
 
-def _check_active_project() -> str | None:
-    """Return a one-line project status string, or None if no active project."""
-    try:
-        from core.project.project import PROJECTS_DIR
-        active_link = PROJECTS_DIR / ".active"
-        if not active_link.is_symlink():
-            return None
-        target = os.readlink(active_link)
-        if not target.endswith(".json") or "/" in target or "\\" in target:
-            return None
-        project_file = PROJECTS_DIR / target
-        if not project_file.exists():
-            # Dangling — clean up
-            active_link.unlink(missing_ok=True)
-            return None
-        from core.json import load_json
-        data = load_json(project_file)
-        if not data:
-            return None
-        name = data.get("name", target[:-5])
-        proj_target = data.get("target", "")
-        return f"Project: {name} ({proj_target}) \u2014 `raptor project use none` to clear"
-    except Exception:
-        return None
+def check_env(unavailable_features: set) -> tuple[list, list]:
+    """Check environment: output dir, disk, config vars, tree-sitter.
 
-
-def _check_env(unavailable_features: set) -> tuple[list, list]:
-    """Returns (env_parts, warnings)."""
+    Returns (env_parts, warnings).
+    """
     from core.config import RaptorConfig
 
     parts = []
@@ -197,81 +173,77 @@ def _check_env(unavailable_features: set) -> tuple[list, list]:
     return parts, warnings
 
 
-def _format(logo, quote, tool_results, tool_warnings, llm_lines, llm_warnings, env_parts, env_warnings, project_line=None):
-    lines = []
+def check_active_project() -> str | None:
+    """Return a one-line project status string, or None if no active project."""
+    try:
+        from . import PROJECTS_DIR, get_active_name
+        name = get_active_name()
+        if not name:
+            return None
+        from core.json import load_json
+        data = load_json(PROJECTS_DIR / f"{name}.json")
+        if not data:
+            return None
+        proj_target = data.get("target", "")
+        if os.environ.get("RAPTOR_PROJECT_AUTO"):
+            return f"Auto-activated project: {name} ({proj_target}) \u2014 `raptor project use none` to clear"
+        return f"Project: {name} ({proj_target}) \u2014 `raptor project use none` to clear"
+    except Exception:
+        return None
 
-    if logo:
-        lines.append(logo)
-        lines.append("")
 
-    # Tools
-    tool_parts = [f"{name} {'\u2713' if ok else '\u2717'}" for name, ok in tool_results]
-    lines.append(f" tools: {'  '.join(tool_parts)}")
+# ---------------------------------------------------------------------------
+# Environment setup
+# ---------------------------------------------------------------------------
 
-    # Env
-    lines.append(f"   env: {'  '.join(env_parts)}")
+def setup_env_file():
+    """Add bin/ to PATH via CLAUDE_ENV_FILE.
 
-    # LLM
-    lines.extend(llm_lines)
+    Covers direct `claude` launches where bin/raptor didn't set PATH.
+    Harmless duplicate if it did.
+    """
+    env_file = os.environ.get("CLAUDE_ENV_FILE")
+    if not env_file:
+        return
+    bin_dir = str(REPO_ROOT / "bin")
+    try:
+        existing = Path(env_file).read_text() if Path(env_file).exists() else ""
+        if bin_dir not in existing:
+            with open(env_file, "a") as f:
+                f.write(f'export PATH="$PATH:{bin_dir}"\n')
+    except OSError:
+        pass
 
-    # Active project
-    if project_line:
-        lines.append(f"   {project_line}")
 
-    # Warnings: unavailable first, then limited, then other
-    all_raw = tool_warnings + env_warnings + llm_warnings
-    ordered = (
-        [w for w in all_raw if "unavailable" in w] +
-        [w for w in all_raw if "limited" in w] +
-        [w for w in all_raw if "unavailable" not in w and "limited" not in w]
-    )
-    if ordered:
-        lines.append(f"  warn: {ordered[0]}")
-        for w in ordered[1:]:
-            lines.append(f"        {w}")
-
-    lines.append("")
-    lines.append("  For defensive security research, education, and authorized penetration testing.")
-    lines.append("")
-    lines.append(f"raptor:~$ {quote}")
-
-    return "\n".join(lines)
-
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
-    logo = _read_logo()
-    quote = _read_random_quote()
+    logo = read_logo()
+    quote = read_random_quote()
 
     try:
-        import logging
         logging.disable(logging.WARNING)
 
-        tool_results, tool_warnings, unavailable = _check_tools()
-        llm_lines, llm_warnings = _check_llm()
-        env_parts, env_warnings = _check_env(unavailable)
-        project_line = _check_active_project()
+        tool_results, tool_warnings, unavailable = check_tools()
+        llm_lines, llm_warnings = check_llm()
+        env_parts, env_warnings = check_env(unavailable)
+        project_line = check_active_project()
 
         logging.disable(logging.NOTSET)
 
-        output = _format(logo, quote, tool_results, tool_warnings, llm_lines, llm_warnings, env_parts, env_warnings, project_line)
+        output = format_banner(
+            logo, quote, tool_results, tool_warnings,
+            llm_lines, llm_warnings, env_parts, env_warnings,
+            project_line,
+        )
     except Exception:
         output = f"{logo}\n\nraptor:~$ {quote}"
 
     OUTPUT_FILE.write_text(output)
     print(output)
-
-    # Add bin/ to PATH via CLAUDE_ENV_FILE (covers direct `claude` launches
-    # where bin/raptor didn't set PATH; harmless duplicate if it did)
-    env_file = os.environ.get("CLAUDE_ENV_FILE")
-    if env_file:
-        bin_dir = str(REPO_ROOT / "bin")
-        try:
-            existing = Path(env_file).read_text() if Path(env_file).exists() else ""
-            if bin_dir not in existing:
-                with open(env_file, "a") as f:
-                    f.write(f'export PATH="$PATH:{bin_dir}"\n')
-        except OSError:
-            pass
+    setup_env_file()
 
 
 if __name__ == "__main__":

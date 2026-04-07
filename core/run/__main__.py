@@ -14,8 +14,8 @@ for the caller to capture.
 import sys
 from pathlib import Path
 
-# Ensure repo root is on path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+# core/run/__main__.py → core/ → raptor/ (repo root)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from core.run.output import get_output_dir
 from core.run.metadata import start_run, complete_run, fail_run, cancel_run
