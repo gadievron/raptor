@@ -8,7 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# tests/test_security_mitigations.py -> repo root
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.config import RaptorConfig
 from raptor_agentic import _check_repo_claude_settings
@@ -98,7 +99,8 @@ class TestCheckRepoClaudeSettings:
 
     def test_skips_raptor_own_directory(self):
         """Don't flag RAPTOR's own .claude/ directory."""
-        raptor_dir = str(Path(__file__).resolve().parent.parent)
+        # tests/test_security_mitigations.py -> repo root
+        raptor_dir = str(Path(__file__).resolve().parents[1])
         assert _check_repo_claude_settings(raptor_dir) is False
 
     def test_oversized_file_blocked(self, tmp_path):

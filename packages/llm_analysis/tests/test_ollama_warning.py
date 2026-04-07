@@ -8,7 +8,8 @@ from io import StringIO
 from pathlib import Path
 
 # Add parent directories to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
+# packages/llm_analysis/tests/test_ollama_warning.py -> repo root
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from packages.llm_analysis.llm.client import LLMClient
 from packages.llm_analysis.llm.config import ModelConfig, LLMConfig

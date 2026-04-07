@@ -11,7 +11,8 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 # Add parent directories to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
+# packages/llm_analysis/tests/test_llm_callbacks_providers.py -> repo root
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from packages.llm_analysis.llm.config import ModelConfig
 from packages.llm_analysis.llm.model_data import MODEL_COSTS

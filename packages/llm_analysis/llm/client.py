@@ -19,7 +19,8 @@ from pathlib import Path
 from typing import Dict, Optional, Any, Tuple
 
 # Add parent directories to path for core imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
+# packages/llm_analysis/llm/client.py -> repo root
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from core.logging import get_logger
 from .config import LLMConfig, ModelConfig

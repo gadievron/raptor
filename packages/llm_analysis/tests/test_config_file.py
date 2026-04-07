@@ -7,7 +7,8 @@ import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
+# packages/llm_analysis/tests/test_config_file.py -> repo root
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from packages.llm_analysis.llm.config import (
     _get_configured_models, _get_best_thinking_model,

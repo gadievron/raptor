@@ -14,7 +14,8 @@ from pathlib import Path
 import pytest
 
 # Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# .claude/skills/oss-forensics/github-evidence-kit/tests/conftest.py -> .claude/skills/oss-forensics/github-evidence-kit
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src import EvidenceStore, load_evidence_from_json
 

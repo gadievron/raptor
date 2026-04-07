@@ -6,7 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
+# packages/llm_analysis/tests/test_dispatch.py -> repo root
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from packages.llm_analysis.dispatch import (
     DispatchTask, DispatchResult, dispatch_task, _format_elapsed,

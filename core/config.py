@@ -33,7 +33,8 @@ class RaptorConfig:
     }
 
     # Path Configuration
-    REPO_ROOT = Path(__file__).resolve().parent.parent
+    # core/config.py -> repo root
+    REPO_ROOT = Path(__file__).resolve().parents[1]
     ENGINE_DIR = REPO_ROOT / "engine"
     MCP_DIR = REPO_ROOT / "mcp"
     AGENTS_DIR = MCP_DIR / "agents"

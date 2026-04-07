@@ -22,7 +22,8 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 # Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+# packages/static-analysis/scanner.py -> repo root
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from core.json import save_json
 from core.config import RaptorConfig

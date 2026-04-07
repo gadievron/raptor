@@ -19,7 +19,8 @@ from typing import List, Optional
 import requests
 
 # Add parent directories to path for core imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
+# packages/llm_analysis/llm/detection.py -> repo root
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from core.config import RaptorConfig
 from core.logging import get_logger

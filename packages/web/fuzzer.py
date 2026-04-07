@@ -19,7 +19,8 @@ import sys
 from pathlib import Path
 
 # Add paths for cross-package imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+# packages/web/fuzzer.py -> repo root
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from core.logging import get_logger
 from packages.llm_analysis.llm.providers import LLMProvider

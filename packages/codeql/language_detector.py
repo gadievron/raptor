@@ -13,7 +13,8 @@ from typing import Dict, List, Set
 from collections import defaultdict
 
 # Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+# packages/codeql/language_detector.py -> repo root
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from core.logging import get_logger
 
