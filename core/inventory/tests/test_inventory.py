@@ -20,6 +20,9 @@ from core.inventory import (
     get_coverage_stats,
     format_coverage_summary,
     extract_functions,
+    extract_items,
+    count_sloc,
+    get_items,
     should_exclude,
     is_binary_file,
     is_generated_file,
@@ -27,7 +30,11 @@ from core.inventory import (
     LANGUAGE_MAP,
     DEFAULT_EXCLUDES,
     GENERATED_MARKERS,
+    CodeItem,
     FunctionInfo,
+    KIND_FUNCTION,
+    KIND_GLOBAL,
+    KIND_MACRO,
     PythonExtractor,
     JavaScriptExtractor,
     CExtractor,
@@ -264,7 +271,7 @@ class TestBuildInventory:
         (src / "app.py").write_text("def main(): pass\n")
 
         inv = build_inventory(str(src), str(tmp_path / "out"))
-        func = inv["files"][0]["functions"][0]
+        func = inv["files"][0]["items"][0]
         assert isinstance(func["checked_by"], list)
         assert func["checked_by"] == []
 
@@ -361,13 +368,13 @@ class TestCumulativeCoverage:
         # First run
         inv1 = build_inventory(str(src), str(out))
         # Simulate coverage
-        inv1["files"][0]["functions"][0]["checked_by"] = ["validate:stage-a"]
+        inv1["files"][0]["items"][0]["checked_by"] = ["validate:stage-a"]
         with open(out / "checklist.json", "w") as f:
             json.dump(inv1, f)
 
         # Second run (same source)
         inv2 = build_inventory(str(src), str(out))
-        assert inv2["files"][0]["functions"][0]["checked_by"] == ["validate:stage-a"]
+        assert inv2["files"][0]["items"][0]["checked_by"] == ["validate:stage-a"]
 
     def test_clear_modified_file(self, tmp_path):
         src = tmp_path / "src"
@@ -378,7 +385,7 @@ class TestCumulativeCoverage:
 
         # First run
         inv1 = build_inventory(str(src), str(out))
-        inv1["files"][0]["functions"][0]["checked_by"] = ["validate:stage-a"]
+        inv1["files"][0]["items"][0]["checked_by"] = ["validate:stage-a"]
         with open(out / "checklist.json", "w") as f:
             json.dump(inv1, f)
 
@@ -387,7 +394,7 @@ class TestCumulativeCoverage:
 
         # Second run
         inv2 = build_inventory(str(src), str(out))
-        assert inv2["files"][0]["functions"][0]["checked_by"] == []
+        assert inv2["files"][0]["items"][0]["checked_by"] == []
 
     def test_new_file_empty_coverage(self, tmp_path):
         src = tmp_path / "src"
@@ -405,7 +412,7 @@ class TestCumulativeCoverage:
         # Second run
         inv2 = build_inventory(str(src), str(out))
         new_file = next(f for f in inv2["files"] if f["path"] == "new.py")
-        assert new_file["functions"][0]["checked_by"] == []
+        assert new_file["items"][0]["checked_by"] == []
 
 
 # ── Coverage Stats ──────────────────────────────────────────────────
@@ -497,3 +504,182 @@ class TestCLIScript:
             capture_output=True, text=True, timeout=30,
         )
         assert result.returncode == 1
+
+
+# ── CodeItem / FunctionInfo ────────────────────────────────────────
+
+class TestCodeItem:
+    def test_code_item_to_dict(self):
+        item = CodeItem(name="MAX_SIZE", kind=KIND_GLOBAL, line_start=5, line_end=5)
+        d = item.to_dict()
+        assert d["name"] == "MAX_SIZE"
+        assert d["kind"] == "global"
+        assert d["line_start"] == 5
+
+    def test_code_item_from_dict_global(self):
+        d = {"name": "MAX_SIZE", "kind": "global", "line_start": 5}
+        item = CodeItem.from_dict(d)
+        assert isinstance(item, CodeItem)
+        assert not isinstance(item, FunctionInfo)
+        assert item.kind == "global"
+
+    def test_code_item_from_dict_function(self):
+        d = {"name": "main", "kind": "function", "line_start": 1, "signature": "main()"}
+        item = CodeItem.from_dict(d)
+        assert isinstance(item, FunctionInfo)
+        assert item.kind == "function"
+        assert item.signature == "main()"
+
+    def test_code_item_from_dict_old_format(self):
+        """Old format (no kind field) deserialises as FunctionInfo."""
+        d = {"name": "old_func", "line_start": 10, "signature": "old_func()"}
+        item = CodeItem.from_dict(d)
+        assert isinstance(item, FunctionInfo)
+        assert item.kind == "function"
+
+    def test_function_info_inherits_code_item(self):
+        fi = FunctionInfo(name="test", line_start=1, signature="test()")
+        assert isinstance(fi, CodeItem)
+        assert fi.kind == "function"
+
+    def test_function_info_to_dict_includes_kind(self):
+        fi = FunctionInfo(name="test", line_start=1, signature="test()")
+        d = fi.to_dict()
+        assert d["kind"] == "function"
+        assert "signature" in d
+
+
+# ── get_items helper ───────────────────────────────────────────────
+
+class TestGetItems:
+    def test_reads_new_format(self):
+        entry = {"items": [{"name": "foo", "kind": "function"}]}
+        assert len(get_items(entry)) == 1
+
+    def test_reads_old_format(self):
+        entry = {"functions": [{"name": "foo"}]}
+        assert len(get_items(entry)) == 1
+
+    def test_new_format_preferred(self):
+        entry = {
+            "items": [{"name": "new"}],
+            "functions": [{"name": "old"}],
+        }
+        assert get_items(entry)[0]["name"] == "new"
+
+    def test_empty_entry(self):
+        assert get_items({}) == []
+
+
+# ── extract_items ──────────────────────────────────────────────────
+
+class TestExtractItems:
+    def test_python_functions(self):
+        code = "def foo(): pass\ndef bar(): pass\n"
+        items = extract_items("test.py", "python", code)
+        funcs = [i for i in items if i.kind == KIND_FUNCTION]
+        assert len(funcs) >= 2
+
+    def test_python_globals(self):
+        code = "MAX_SIZE = 100\ndef foo(): pass\n"
+        items = extract_items("test.py", "python", code)
+        globals_ = [i for i in items if i.kind == KIND_GLOBAL]
+        names = [g.name for g in globals_]
+        # MAX_SIZE is ALL_CAPS — should be captured (with tree-sitter)
+        # May be empty without tree-sitter — that's OK
+        if globals_:
+            assert "MAX_SIZE" in names
+
+    def test_c_macros(self):
+        code = "#define BUF_SIZE 1024\n#define MAX(a,b) ((a)>(b)?(a):(b))\nvoid foo() {}\n"
+        items = extract_items("test.c", "c", code)
+        macros = [i for i in items if i.kind == KIND_MACRO]
+        names = [m.name for m in macros]
+        assert "BUF_SIZE" in names
+        assert "MAX" in names
+
+    def test_returns_code_items(self):
+        code = "def foo(): pass\n"
+        items = extract_items("test.py", "python", code)
+        for item in items:
+            assert isinstance(item, CodeItem)
+
+
+# ── count_sloc ─────────────────────────────────────────────────────
+
+class TestCountSloc:
+    def test_simple_python(self):
+        code = "# comment\n\ndef foo():\n    pass\n"
+        sloc = count_sloc(code, "python")
+        # 4 lines total, 1 blank, 1 comment = 2 SLOC
+        assert sloc == 2
+
+    def test_blank_only(self):
+        assert count_sloc("\n\n\n", "python") == 0
+
+    def test_all_comments_python(self):
+        code = "# line 1\n# line 2\n"
+        assert count_sloc(code, "python") == 0
+
+    def test_c_block_comment(self):
+        code = "/* block\n   comment */\nint x = 1;\n"
+        sloc = count_sloc(code, "c")
+        assert sloc >= 1  # at least the int x line
+
+    def test_mixed(self):
+        code = "import os\n\n# comment\ndef main():\n    pass\n"
+        sloc = count_sloc(code, "python")
+        # 5 lines, 1 blank, 1 comment = 3 SLOC
+        assert sloc == 3
+
+    def test_empty_file(self):
+        assert count_sloc("", "python") == 0
+
+    def test_inline_comment_counts_as_code(self):
+        code = "int x = 1; // init\n"
+        sloc = count_sloc(code, "c")
+        assert sloc == 1  # code line, not a comment line
+
+
+# ── Build inventory output format ─────────────────────────────────
+
+class TestInventoryOutputFormat:
+    def test_uses_items_key(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "app.py").write_text("def main(): pass\n")
+        inv = build_inventory(str(src), str(tmp_path / "out"))
+        assert "items" in inv["files"][0]
+        assert "functions" not in inv["files"][0]
+
+    def test_has_sloc(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "app.py").write_text("# comment\ndef main(): pass\n")
+        inv = build_inventory(str(src), str(tmp_path / "out"))
+        assert "sloc" in inv["files"][0]
+        assert inv["files"][0]["sloc"] >= 1
+
+    def test_has_total_sloc(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "app.py").write_text("def main(): pass\n")
+        inv = build_inventory(str(src), str(tmp_path / "out"))
+        assert "total_sloc" in inv
+        assert inv["total_sloc"] >= 1
+
+    def test_has_total_items(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "app.py").write_text("def main(): pass\n")
+        inv = build_inventory(str(src), str(tmp_path / "out"))
+        assert "total_items" in inv
+        assert inv["total_items"] >= 1
+
+    def test_items_have_kind(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "app.py").write_text("def main(): pass\n")
+        inv = build_inventory(str(src), str(tmp_path / "out"))
+        for item in inv["files"][0]["items"]:
+            assert "kind" in item
