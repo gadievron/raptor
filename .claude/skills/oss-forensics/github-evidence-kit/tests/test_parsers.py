@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 # .claude/skills/oss-forensics/github-evidence-kit/tests/test_parsers.py -> .claude/skills/oss-forensics/github-evidence-kit
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from src.parsers import (
     _RowContext,

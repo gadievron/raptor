@@ -19,7 +19,7 @@ from typing import Dict, List, Optional
 
 # Add parent directory to path for imports
 # packages/codeql/autonomous_analyzer.py -> repo root
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.json import save_json
 

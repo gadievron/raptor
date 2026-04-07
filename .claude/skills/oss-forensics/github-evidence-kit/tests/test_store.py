@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 # .claude/skills/oss-forensics/github-evidence-kit/tests/test_store.py -> .claude/skills/oss-forensics/github-evidence-kit
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from src import EvidenceStore, EvidenceSource, load_evidence_from_json
 

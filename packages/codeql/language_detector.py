@@ -14,7 +14,7 @@ from collections import defaultdict
 
 # Add parent directory to path for imports
 # packages/codeql/language_detector.py -> repo root
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.logging import get_logger
 

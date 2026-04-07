@@ -17,7 +17,7 @@ from typing import Dict, List, Optional
 
 # Add parent directory to path for imports
 # packages/codeql/query_runner.py -> repo root
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.config import RaptorConfig
 from core.logging import get_logger

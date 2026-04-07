@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 # Add parent directory to path for core imports
 # Add current directory to path for llm imports
 # packages/llm_analysis/agent.py -> repo root
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.json import load_json, save_json
 sys.path.insert(0, str(Path(__file__).parent))

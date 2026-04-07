@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 
 # Add paths for cross-package imports
 # packages/web/scanner.py -> repo root
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.json import save_json
 

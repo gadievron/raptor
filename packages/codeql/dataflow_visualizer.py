@@ -18,7 +18,7 @@ from html import escape
 
 # Add parent directory to path for imports
 # packages/codeql/dataflow_visualizer.py -> repo root
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.logging import get_logger
 from packages.codeql.dataflow_validator import DataflowPath, DataflowStep

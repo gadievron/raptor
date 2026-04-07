@@ -19,7 +19,7 @@ from pathlib import Path
 
 # Add parent directories to path for core imports
 # packages/llm_analysis/llm/providers.py -> repo root
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from core.logging import get_logger
 from .config import ModelConfig

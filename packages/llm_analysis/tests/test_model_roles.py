@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 # packages/llm_analysis/tests/test_model_roles.py -> repo root
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from packages.llm_analysis.llm.config import (
     ModelConfig, ConfigError, resolve_model_roles, VALID_ROLES,

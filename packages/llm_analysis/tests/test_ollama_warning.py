@@ -9,7 +9,7 @@ from pathlib import Path
 
 # Add parent directories to path for imports
 # packages/llm_analysis/tests/test_ollama_warning.py -> repo root
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from packages.llm_analysis.llm.client import LLMClient
 from packages.llm_analysis.llm.config import ModelConfig, LLMConfig

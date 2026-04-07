@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 # .claude/skills/oss-forensics/github-evidence-kit/tests/test_clients.py -> .claude/skills/oss-forensics/github-evidence-kit
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from src.clients.gharchive import GHArchiveClient
 from src.clients.git import GitClient

@@ -20,7 +20,7 @@ from pathlib import Path
 
 # Add paths for cross-package imports
 # packages/web/fuzzer.py -> repo root
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.logging import get_logger
 from packages.llm_analysis.llm.providers import LLMProvider

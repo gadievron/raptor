@@ -18,7 +18,7 @@ import xml.etree.ElementTree as ET
 
 # Add parent directory to path for imports
 # packages/codeql/build_detector.py -> repo root
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.logging import get_logger
 
