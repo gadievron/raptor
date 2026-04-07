@@ -17,7 +17,7 @@ from pathlib import Path
 # core/run/__main__.py → core/ → raptor/ (repo root)
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from core.run.output import get_output_dir
+from core.run.output import get_output_dir, TargetMismatchError
 from core.run.metadata import start_run, complete_run, fail_run, cancel_run
 
 
@@ -39,7 +39,14 @@ def main():
             idx = sys.argv.index("--target")
             if idx + 1 < len(sys.argv):
                 target_path = sys.argv[idx + 1]
-        out_dir = get_output_dir(command, target_path=target_path)
+        elif len(sys.argv) > 3 and not sys.argv[3].startswith("--"):
+            # Accept positional target: python3 -m core.run start <command> <target>
+            target_path = sys.argv[3]
+        try:
+            out_dir = get_output_dir(command, target_path=target_path)
+        except TargetMismatchError as e:
+            print(f"error: {e}", file=sys.stderr)
+            sys.exit(1)
         start_run(out_dir, command)
         # Print path for caller to capture
         print(out_dir)

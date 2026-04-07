@@ -42,9 +42,51 @@ import subprocess
 import sys
 from pathlib import Path
 
+from core.run.output import get_output_dir, TargetMismatchError
+from core.run.metadata import start_run, complete_run, fail_run
 
 
-def run_script(script_path: Path, args: list) -> int:
+def _extract_target(args: list) -> str | None:
+    """Extract the target path from command args (--repo, --binary, or --url)."""
+    for flag in ("--repo", "--binary", "--url"):
+        if flag in args:
+            idx = args.index(flag)
+            if idx + 1 < len(args):
+                return args[idx + 1]
+    return None
+
+
+def _run_with_lifecycle(command: str, script_path: Path, args: list,
+                        label: str) -> int:
+    """Run a script with lifecycle start/complete/fail wrapping.
+
+    Resolves the output directory via the run lifecycle, injects --out
+    into the downstream script args, and marks the run complete or failed.
+    """
+    target = _extract_target(args)
+    try:
+        out_dir = get_output_dir(command, target_path=target)
+    except TargetMismatchError as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return 1
+
+    start_run(out_dir, command)
+
+    # Inject --out so the downstream script uses the lifecycle directory
+    if "--out" not in args:
+        args = args + ["--out", str(out_dir)]
+
+    print(f"\n[*] {label}\n")
+    rc = _run_script(script_path, args)
+
+    if rc == 0:
+        complete_run(out_dir)
+    else:
+        fail_run(out_dir, error=f"exit code {rc}")
+    return rc
+
+
+def _run_script(script_path: Path, args: list) -> int:
     """
     Run a RAPTOR script with given arguments.
     
@@ -72,26 +114,26 @@ def mode_scan(args: list) -> int:
     """Run static code analysis (Semgrep)."""
     script_root = Path(__file__).parent
     scanner_script = script_root / "packages/static-analysis/scanner.py"
-    
+
     if not scanner_script.exists():
         print(f"✗ Scanner not found: {scanner_script}")
         return 1
-    
-    print("\n[*] Running static analysis with Semgrep...\n")
-    return run_script(scanner_script, args)
+
+    return _run_with_lifecycle("scan", scanner_script, args,
+                              "Running static analysis with Semgrep...")
 
 
 def mode_fuzz(args: list) -> int:
     """Run binary fuzzing with AFL++."""
     script_root = Path(__file__).parent
     fuzzing_script = script_root / "raptor_fuzzing.py"
-    
+
     if not fuzzing_script.exists():
         print(f"✗ Fuzzing script not found: {fuzzing_script}")
         return 1
-    
-    print("\n[*] Starting binary fuzzing workflow...\n")
-    return run_script(fuzzing_script, args)
+
+    return _run_with_lifecycle("fuzz", fuzzing_script, args,
+                              "Starting binary fuzzing workflow...")
 
 
 def mode_web(args: list) -> int:
@@ -106,8 +148,8 @@ def mode_web(args: list) -> int:
     # Display alpha warning
     print("\nWARNING: /web is a STUB and should not be relied upon. Consider a placeholder/in alpha.\n")
 
-    print("[*] Running web application scanner...\n")
-    return run_script(web_script, args)
+    return _run_with_lifecycle("web", web_script, args,
+                              "Running web application scanner...")
 
 
 def mode_agentic(args: list) -> int:
@@ -124,21 +166,25 @@ def mode_agentic(args: list) -> int:
     if '--codeql' not in args and '--codeql-only' not in args and '--no-codeql' not in args:
         args = ['--codeql'] + args
 
-    print("\n[*] Starting full autonomous workflow (Semgrep + CodeQL)...\n", flush=True)
-    return run_script(agentic_script, args)
+    return _run_with_lifecycle("agentic", agentic_script, args,
+                              "Starting full autonomous workflow (Semgrep + CodeQL)...")
 
 
 def mode_codeql(args: list) -> int:
-    """Run CodeQL analysis."""
+    """Run CodeQL analysis (scan only — no autonomous analysis)."""
     script_root = Path(__file__).parent
     codeql_script = script_root / "raptor_codeql.py"
-    
+
     if not codeql_script.exists():
         print(f"✗ CodeQL script not found: {codeql_script}")
         return 1
-    
-    print("\n[*] Running CodeQL analysis...\n")
-    return run_script(codeql_script, args)
+
+    # Default to scan-only; autonomous analysis requires explicit --analyze
+    if '--scan-only' not in args and '--analyze' not in args:
+        args = ['--scan-only'] + args
+
+    return _run_with_lifecycle("codeql", codeql_script, args,
+                              "Running CodeQL analysis...")
 
 
 def mode_llm_analysis(args: list) -> int:
@@ -151,7 +197,7 @@ def mode_llm_analysis(args: list) -> int:
         return 1
     
     print("\n[*] Running LLM-powered vulnerability analysis...\n")
-    return run_script(llm_script, args)
+    return _run_script(llm_script, args)
 
 
 def show_mode_help(mode: str) -> None:

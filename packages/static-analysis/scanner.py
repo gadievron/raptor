@@ -377,6 +377,7 @@ def main():
     ap.add_argument("--codeql", action="store_true", help="Run CodeQL stage if available")
     ap.add_argument("--keep", action="store_true", help="Keep temp working directory")
     ap.add_argument("--sequential", action="store_true", help="Disable parallel scanning (for debugging)")
+    ap.add_argument("--out", default=None, help="Output directory (from lifecycle). Overrides auto-generated path.")
     args = ap.parse_args()
 
     start_time = time.time()
@@ -407,10 +408,13 @@ def main():
 
         logger.info(f"Using {len(rules_dirs)} rule directories")
 
-        # Generate output directory with repository name and timestamp
-        repo_name = repo_path.name
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        out_dir = RaptorConfig.get_out_dir() / f"scan_{repo_name}_{timestamp}"
+        # Output directory: use --out if provided (lifecycle), otherwise generate
+        if args.out:
+            out_dir = Path(args.out)
+        else:
+            repo_name = repo_path.name
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            out_dir = RaptorConfig.get_out_dir() / f"scan_{repo_name}_{timestamp}"
         out_dir.mkdir(parents=True, exist_ok=True)
 
         # Manifest

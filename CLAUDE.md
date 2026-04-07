@@ -83,7 +83,9 @@ python3 -m core.run fail "$OUTPUT_DIR" "error description"
 
 The `start` command automatically resolves the output directory using the active project (if any) or the default `out/` directory. Do not construct output paths manually.
 
-For commands that run via `python3 raptor.py` (agentic, scan, codeql), the Python script handles lifecycle internally — do not call the stubs.
+**If `start` fails (non-zero exit):** STOP. Report the error to the user. Do not proceed with the command.
+
+Commands run via `python3 raptor.py` (scan, agentic, codeql, fuzz, web) manage lifecycle internally — do not call the stubs separately for those.
 
 ---
 
