@@ -3,6 +3,11 @@
 from typing import Any, Dict, List
 
 
+def _get_items(file_info):
+    """Read code items from a file entry. Handles both old and new format."""
+    return file_info.get("items", file_info.get("functions", []))
+
+
 def update_coverage(
     inventory: Dict[str, Any],
     checked_functions: List[Dict[str, str]],
@@ -21,7 +26,7 @@ def update_coverage(
     checked_set = {(f['file'], f['function']) for f in checked_functions}
 
     for file_info in inventory.get('files', []):
-        for func in file_info.get('functions', []):
+        for func in _get_items(file_info):
             key = (file_info['path'], func['name'])
             if key in checked_set:
                 checked_by = func.get('checked_by', [])
@@ -36,26 +41,42 @@ def get_coverage_stats(inventory: Dict[str, Any]) -> Dict[str, Any]:
     """Compute coverage statistics from an inventory.
 
     Returns:
-        Dict with total_functions, checked_functions, coverage_percent,
-        and by_source breakdown.
+        Dict with total/checked counts (overall and by kind),
+        SLOC stats, coverage_percent, and by_source breakdown.
     """
     total = 0
     checked = 0
     by_source: Dict[str, int] = {}
+    by_kind: Dict[str, Dict[str, int]] = {}  # kind -> {total, checked}
 
     for file_info in inventory.get('files', []):
-        for func in file_info.get('functions', []):
+        for item in _get_items(file_info):
             total += 1
-            checked_by = func.get('checked_by', [])
+            kind = item.get('kind', 'function')
+
+            if kind not in by_kind:
+                by_kind[kind] = {"total": 0, "checked": 0}
+            by_kind[kind]["total"] += 1
+
+            checked_by = item.get('checked_by', [])
             if checked_by:
                 checked += 1
+                by_kind[kind]["checked"] += 1
                 for source in checked_by:
                     by_source[source] = by_source.get(source, 0) + 1
 
+    total_sloc = inventory.get('total_sloc', 0)
+
+    func_stats = by_kind.get('function', {"total": 0, "checked": 0})
+
     return {
-        'total_functions': total,
-        'checked_functions': checked,
+        'total_items': total,
+        'checked_items': checked,
+        'total_functions': func_stats["total"],      # backwards compat
+        'checked_functions': func_stats["checked"],   # backwards compat
         'coverage_percent': (checked / total * 100) if total > 0 else 0,
+        'total_sloc': total_sloc,
+        'by_kind': by_kind,
         'by_source': by_source,
     }
 
@@ -68,18 +89,31 @@ def format_coverage_summary(inventory: Dict[str, Any]) -> str:
     stats = get_coverage_stats(inventory)
     total_files = inventory.get('total_files', 0)
     excluded = len(inventory.get('excluded_files', []))
+    sloc = stats.get('total_sloc', 0)
 
-    lines = [
-        f"Inventory: {total_files} files, {stats['total_functions']} functions"
-        + (f" ({excluded} excluded)" if excluded else ""),
-    ]
+    # Inventory line: files, SLOC, items by kind
+    _PLURALS = {"function": "functions", "global": "globals", "macro": "macros", "class": "classes"}
+    kind_parts = []
+    for kind, counts in sorted(stats.get('by_kind', {}).items()):
+        label = _PLURALS.get(kind, kind + "s")
+        kind_parts.append(f"{counts['total']} {label}")
+    items_str = ", ".join(kind_parts) if kind_parts else f"{stats['total_items']} items"
 
-    if stats['checked_functions'] > 0:
+    inv_line = f"Inventory: {total_files} files, {sloc:,} SLOC, {items_str}"
+    if excluded:
+        inv_line += f" ({excluded} excluded)"
+    lines = [inv_line]
+
+    if stats['checked_items'] > 0:
         lines.append(
-            f"Coverage: {stats['checked_functions']}/{stats['total_functions']} "
-            f"functions checked ({stats['coverage_percent']:.1f}%)"
+            f"Coverage: {stats['checked_items']}/{stats['total_items']} "
+            f"items checked ({stats['coverage_percent']:.1f}%)"
         )
         for source, count in sorted(stats['by_source'].items()):
             lines.append(f"  - {source}: {count}")
+
+    limitations = inventory.get('limitations', [])
+    if limitations:
+        lines.append("Limitations: " + "; ".join(limitations))
 
     return '\n'.join(lines)
