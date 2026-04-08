@@ -52,32 +52,24 @@ TRACE_SOURCE_LABEL = "understand:trace"
 def find_understand_dir(project_output_dir: Path) -> Optional[Path]:
     """Find the most recent /understand run inside a project output directory.
 
-    Looks for subdirectories named ``code-understanding-*`` that contain a
-    ``context-map.json``. Returns the most recent by modification time, or
-    None if none exists.
-    This is a convenience for the common case where an analyst runs /understand
+    Uses infer_command_type from core.run to identify understand runs regardless
+    of directory naming convention. Returns the most recent by modification time,
+    or None if none exists.
     """
+    from core.run import infer_command_type
+
     project_output_dir = Path(project_output_dir)
     if not project_output_dir.is_dir():
         return None
 
-    # Project mode produces "understand-YYYYMMDD-HHMMSS" (via core.run lifecycle).
-    # Standalone mode produces "understand_<target>_<timestamp>" or the older
-    # "code-understanding-<timestamp>" format. Both are valid.
-    candidates = sorted(
-        (
-            d for d in project_output_dir.iterdir()
-            if d.is_dir()
-            and (
-                d.name.startswith("understand-")
-                or d.name.startswith("understand_")
-                or d.name.startswith("code-understanding-")
-            )
-            and (d / "context-map.json").exists()
-        ),
-        key=lambda d: d.stat().st_mtime,
-        reverse=True,
-    )
+    candidates = [
+        d for d in sorted(project_output_dir.iterdir(),
+                          key=lambda d: d.stat().st_mtime, reverse=True)
+        if d.is_dir()
+        and not d.name.startswith((".", "_"))
+        and infer_command_type(d) == "understand"
+        and (d / "context-map.json").exists()
+    ]
 
     if candidates:
         logger.debug("Auto-detected understand dir: %s", candidates[0])
@@ -172,7 +164,7 @@ def enrich_checklist(checklist: Dict[str, Any], context_map: Dict[str, Any]) -> 
 
         if file_reason:
             # Mark all functions in this file as high priority
-            for func in file_info.get("functions", []):
+            for func in file_info.get("items", file_info.get("functions", [])):
                 func["priority"] = "high"
                 func["priority_reason"] = file_reason
 
