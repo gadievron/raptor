@@ -11,9 +11,15 @@ from core.json import load_json
 from core.run.metadata import RUN_METADATA_FILE
 
 
-def _run_stub(*args, env_extra=None):
-    """Run python3 -m core.run with given args."""
+def _run_stub(*args, env_extra=None, tmp_home=None):
+    """Run python3 -m core.run with given args.
+
+    Uses a temporary HOME to isolate from the real .active symlink.
+    """
     env = os.environ.copy()
+    # Isolate from real ~/.raptor/projects/.active
+    if tmp_home:
+        env["HOME"] = tmp_home
     if env_extra:
         env.update(env_extra)
     result = subprocess.run(
@@ -26,9 +32,10 @@ def _run_stub(*args, env_extra=None):
 class TestRunCLI(unittest.TestCase):
 
     def test_start_creates_dir_and_metadata(self):
-        with TemporaryDirectory() as d:
-            result = _run_stub("start", "scan", env_extra={"RAPTOR_PROJECT_DIR": d})
-            self.assertEqual(result.returncode, 0)
+        with TemporaryDirectory() as d, TemporaryDirectory() as home:
+            result = _run_stub("start", "scan", env_extra={"RAPTOR_PROJECT_DIR": d},
+                               tmp_home=home)
+            self.assertEqual(result.returncode, 0, result.stderr)
             out_dir = Path(result.stdout.strip())
             self.assertTrue(out_dir.exists())
             self.assertTrue(out_dir.name.startswith("scan-"))
@@ -37,19 +44,19 @@ class TestRunCLI(unittest.TestCase):
             self.assertEqual(meta["status"], "running")
 
     def test_complete_updates_status(self):
-        with TemporaryDirectory() as d:
-            # Start
-            result = _run_stub("start", "validate", env_extra={"RAPTOR_PROJECT_DIR": d})
+        with TemporaryDirectory() as d, TemporaryDirectory() as home:
+            result = _run_stub("start", "validate", env_extra={"RAPTOR_PROJECT_DIR": d},
+                               tmp_home=home)
             out_dir = Path(result.stdout.strip())
-            # Complete
             result = _run_stub("complete", str(out_dir))
             self.assertEqual(result.returncode, 0)
             meta = load_json(out_dir / RUN_METADATA_FILE)
             self.assertEqual(meta["status"], "completed")
 
     def test_fail_updates_status_with_error(self):
-        with TemporaryDirectory() as d:
-            result = _run_stub("start", "scan", env_extra={"RAPTOR_PROJECT_DIR": d})
+        with TemporaryDirectory() as d, TemporaryDirectory() as home:
+            result = _run_stub("start", "scan", env_extra={"RAPTOR_PROJECT_DIR": d},
+                               tmp_home=home)
             out_dir = Path(result.stdout.strip())
             result = _run_stub("fail", str(out_dir), "semgrep crashed")
             self.assertEqual(result.returncode, 0)
@@ -58,8 +65,9 @@ class TestRunCLI(unittest.TestCase):
             self.assertEqual(meta["extra"]["error"], "semgrep crashed")
 
     def test_cancel_updates_status(self):
-        with TemporaryDirectory() as d:
-            result = _run_stub("start", "scan", env_extra={"RAPTOR_PROJECT_DIR": d})
+        with TemporaryDirectory() as d, TemporaryDirectory() as home:
+            result = _run_stub("start", "scan", env_extra={"RAPTOR_PROJECT_DIR": d},
+                               tmp_home=home)
             out_dir = Path(result.stdout.strip())
             result = _run_stub("cancel", str(out_dir))
             self.assertEqual(result.returncode, 0)
