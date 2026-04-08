@@ -22,7 +22,7 @@ from .exclusions import (
     should_exclude,
     match_exclusion_reason,
 )
-from .extractors import extract_functions
+from .extractors import extract_functions, extract_items, count_sloc
 from .diff import compare_inventories
 
 logger = logging.getLogger(__name__)
@@ -77,11 +77,12 @@ def build_inventory(
 
     files_info = []
     excluded_files = []
-    total_functions = 0
+    total_items = 0
+    total_sloc = 0
     skipped = 0
 
     def _collect_result(result):
-        nonlocal total_functions, skipped
+        nonlocal total_items, total_sloc, skipped
         if result is None:
             skipped += 1
         elif result.get("_excluded"):
@@ -93,7 +94,8 @@ def build_inventory(
             skipped += 1
         else:
             files_info.append(result)
-            total_functions += len(result['functions'])
+            total_items += len(result['items'])
+            total_sloc += result.get('sloc', 0)
 
     if parallel and len(file_list) > 10:
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -115,16 +117,33 @@ def build_inventory(
     files_info.sort(key=lambda x: x['path'])
     excluded_files.sort(key=lambda x: x['path'])
 
+    # Count functions specifically for backwards-compatible field
+    total_functions = sum(
+        1 for f in files_info for item in f.get('items', [])
+        if item.get('kind', 'function') == 'function'
+    )
+
+    # Record limitations when extraction is incomplete
+    limitations = []
+    from .extractors import _TS_AVAILABLE
+    if not _TS_AVAILABLE:
+        limitations.append("globals not extracted (tree-sitter was not available)")
+        limitations.append("SLOC counts used regex fallback (less accurate)")
+
     inventory = {
         'generated_at': datetime.now().isoformat(),
         'target_path': str(target_path),
         'total_files': len(files_info),
+        'total_items': total_items,
         'total_functions': total_functions,
+        'total_sloc': total_sloc,
         'skipped_files': skipped,
         'excluded_patterns': exclude_patterns,
         'excluded_files': excluded_files,
         'files': files_info,
     }
+    if limitations:
+        inventory['limitations'] = limitations
 
     # Cumulative coverage: carry forward checked_by from previous inventory
     output_path = Path(output_dir)
@@ -153,8 +172,9 @@ def build_inventory(
 
     save_json(checklist_file, inventory)
 
-    logger.info(f"Built inventory: {len(files_info)} files, {total_functions} functions "
-                f"({skipped} skipped, {len(excluded_files)} excluded)")
+    logger.info(f"Built inventory: {len(files_info)} files, {total_items} items "
+                f"({total_functions} functions, {total_sloc} SLOC, "
+                f"{skipped} skipped, {len(excluded_files)} excluded)")
     logger.info(f"Saved to: {checklist_file}")
 
     return inventory
@@ -175,25 +195,28 @@ def _carry_forward_coverage(
     if modified is None:
         modified = set()
 
-    # Build lookup: (path, func_name) -> checked_by from old inventory
+    def _get_items(fi):
+        return fi.get("items", fi.get("functions", []))
+
+    # Build lookup: (path, name, kind) -> checked_by from old inventory
     old_coverage = {}
     for file_info in old.get('files', []):
         path = file_info.get('path')
         if path in modified:
             continue  # Don't carry forward stale coverage
-        for func in file_info.get('functions', []):
-            key = (path, func.get('name'))
-            checked_by = func.get('checked_by', [])
+        for item in _get_items(file_info):
+            key = (path, item.get('name'), item.get('kind', 'function'))
+            checked_by = item.get('checked_by', [])
             if checked_by:
                 old_coverage[key] = checked_by
 
     # Apply to new inventory
     for file_info in new.get('files', []):
         path = file_info.get('path')
-        for func in file_info.get('functions', []):
-            key = (path, func.get('name'))
+        for item in _get_items(file_info):
+            key = (path, item.get('name'), item.get('kind', 'function'))
             if key in old_coverage:
-                func['checked_by'] = list(old_coverage[key])
+                item['checked_by'] = list(old_coverage[key])
 
 
 def _collect_source_files(target: Path, extensions: Set[str]) -> List[Path]:
@@ -249,17 +272,17 @@ def _process_single_file(
         line_count = content.count('\n') + 1
         sha256 = hashlib.sha256(content.encode('utf-8')).hexdigest()
 
-        functions = extract_functions(str(filepath), language, content)
+        tree_cache = {}
+        items = extract_items(str(filepath), language, content, _tree_cache=tree_cache)
+        sloc = count_sloc(content, language, _tree=tree_cache.get("tree"))
 
         return {
             'path': rel_path,
             'language': language,
             'lines': line_count,
+            'sloc': sloc,
             'sha256': sha256,
-            'functions': [
-                f.to_dict()
-                for f in functions
-            ],
+            'items': [item.to_dict() for item in items],
         }
 
     except Exception as e:

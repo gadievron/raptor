@@ -51,7 +51,7 @@ def lookup_function(checklist: Dict[str, Any], file_path: str, line: int,
             continue
 
         best_fuzzy = None
-        for func in file_entry.get("functions", []):
+        for func in file_entry.get("items", file_entry.get("functions", [])):
             func_start = func.get("line_start", 0)
             func_end = func.get("line_end")
 
