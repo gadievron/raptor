@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/libexec/raptor-hook-read",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

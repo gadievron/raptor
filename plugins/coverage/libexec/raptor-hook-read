@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+#
+# PostToolUse hook for Read — tracks file reads for coverage.
+# Runs async (configured in .claude/settings.json).
+#
+# Finds the active running run via the project symlink, then
+# appends the file path to the run's reads manifest.
+#
+
+umask 077
+
+# Find active project
+ACTIVE_LINK="$HOME/.raptor/projects/.active"
+[ ! -L "$ACTIVE_LINK" ] && exit 0
+
+LINK_TARGET=$(readlink "$ACTIVE_LINK")
+PROJECT_FILE="$HOME/.raptor/projects/$LINK_TARGET"
+[ ! -f "$PROJECT_FILE" ] && exit 0
+
+# Read project output dir and target
+if command -v jq >/dev/null 2>&1; then
+    PROJECT_DIR=$(jq -r '.output_dir // empty' "$PROJECT_FILE" 2>/dev/null)
+    PROJECT_TARGET=$(jq -r '.target // empty' "$PROJECT_FILE" 2>/dev/null)
+else
+    PROJECT_DIR=$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('output_dir',''))" "$PROJECT_FILE" 2>/dev/null)
+    PROJECT_TARGET=$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('target',''))" "$PROJECT_FILE" 2>/dev/null)
+fi
+[ -z "$PROJECT_DIR" ] && exit 0
+[ ! -d "$PROJECT_DIR" ] && exit 0
+
+# Find the most recent running run
+RUN_DIR=""
+for d in "$PROJECT_DIR"/*/; do
+    [ -f "${d}.raptor-run.json" ] || continue
+    if command -v jq >/dev/null 2>&1; then
+        STATUS=$(jq -r '.status // empty' "${d}.raptor-run.json" 2>/dev/null)
+    else
+        STATUS=$(python3 -c "import json;print(json.load(open('${d}.raptor-run.json')).get('status',''))" 2>/dev/null)
+    fi
+    [ "$STATUS" = "running" ] && RUN_DIR="$d" && break
+done
+[ -z "$RUN_DIR" ] && exit 0
+
+# Extract file path from hook payload (JSON on stdin)
+if command -v jq >/dev/null 2>&1; then
+    FILE_PATH=$(jq -r '.tool_input.file_path // empty' 2>/dev/null)
+else
+    FILE_PATH=$(python3 -c "import json,sys;print(json.load(sys.stdin).get('tool_input',{}).get('file_path',''))" 2>/dev/null)
+fi
+[ -z "$FILE_PATH" ] && exit 0
+
+# Skip non-source files
+case "${FILE_PATH##*.}" in
+    py|js|ts|jsx|tsx|c|h|cpp|hpp|cc|cxx|java|go|rs|rb|php|cs|swift|kt|scala|sh) ;;
+    *) exit 0 ;;
+esac
+
+# Reject paths with newlines or control characters
+case "$FILE_PATH" in
+    *$'\n'*|*$'\r'*) exit 0 ;;
+esac
+
+# Skip files outside the target directory
+if [ -n "$PROJECT_TARGET" ]; then
+    case "$FILE_PATH" in
+        "$PROJECT_TARGET"*) ;;
+        *) exit 0 ;;
+    esac
+fi
+
+# Append to manifest
+echo "$FILE_PATH" >> "${RUN_DIR}.reads-manifest"

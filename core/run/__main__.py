@@ -55,7 +55,20 @@ def main():
         if len(sys.argv) < 3:
             print("Usage: python3 -m core.run complete <path>", file=sys.stderr)
             sys.exit(1)
-        complete_run(Path(sys.argv[2]))
+        run_path = Path(sys.argv[2])
+        complete_run(run_path)
+        # Convert reads manifest to coverage record if it exists
+        try:
+            from core.coverage.record import build_from_manifest, write_record, cleanup_manifest
+            from core.run.metadata import load_run_metadata
+            meta = load_run_metadata(run_path)
+            tool = meta.get("command", "unknown") if meta else "unknown"
+            record = build_from_manifest(run_path, tool)
+            if record:
+                write_record(run_path, record)
+                cleanup_manifest(run_path)
+        except Exception:
+            pass  # Coverage record is optional — don't fail the complete
 
     elif action == "fail":
         if len(sys.argv) < 3:

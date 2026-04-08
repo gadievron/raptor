@@ -88,6 +88,10 @@ The `start` command automatically resolves the output directory using the active
 
 Commands run via `python3 raptor.py` (scan, agentic, codeql, fuzz, web) manage lifecycle internally — do not call the stubs separately for those.
 
+### Coverage tracking
+
+The coverage tracking plugin (`plugins/coverage/`) tracks which source files the LLM reads during analysis via a PostToolUse hook. Loaded automatically by the launcher. Logs file paths to a manifest in the active run directory, converted to `coverage-record.json` when the run completes. Zero overhead when no run is active.
+
 ---
 
 ## SECURITY: UNTRUSTED REPOS

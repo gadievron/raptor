@@ -235,6 +235,11 @@ def main():
     if bin_dir not in path:
         os.environ["PATH"] = f"{path}:{bin_dir}"
 
+    # --- Load plugins ---
+    coverage_plugin = RAPTOR_DIR / "plugins" / "coverage"
+    if coverage_plugin.is_dir():
+        claude_args.extend(["--plugin-dir", str(coverage_plugin)])
+
     # --- Launch Claude Code ---
     if initial_prompt:
         os.execvp("claude", ["claude", initial_prompt] + claude_args)
