@@ -22,8 +22,8 @@ Usage (from Stage 0 in /validate):
 
     # Auto-detect from active project, or pass an explicit path
     bridge = load_understand_context(understand_dir=Path("/some/understand-run"), validate_dir=output_dir)
-    if bridge["context_map_loaded"]:
-        enrich_checklist(checklist, bridge["_context_map"])
+    if bridge["context_map"]:
+        enrich_checklist(checklist, bridge["context_map"])
 
 Auto-detection (project mode):
 
@@ -101,7 +101,7 @@ def load_understand_context(
             "count": 0,
             "imported_as_paths": 0,
         },
-        "_context_map": {},
+        "context_map": {},
     }
 
     # --- Load context-map.json ---
@@ -111,7 +111,7 @@ def load_understand_context(
         return summary
 
     summary["context_map_loaded"] = True
-    summary["_context_map"] = context_map
+    summary["context_map"] = context_map
 
     # --- Populate attack-surface.json ---
     surface_stats = _merge_attack_surface(context_map, validate_dir, understand_dir)
@@ -136,11 +136,13 @@ def load_understand_context(
     return summary
 
 
-def enrich_checklist(checklist: Dict[str, Any], context_map: Dict[str, Any]) -> None:
-    #Mark entry points and sinks as high-priority in a checklist.
+def enrich_checklist(checklist: Dict[str, Any], context_map: Dict[str, Any]) -> Dict[str, Any]:
+    """Mark entry points and sinks as high-priority in a checklist.
 
+    Mutates checklist in place. Returns the checklist for chaining.
+    """
     if not checklist or not context_map:
-        return
+        return checklist
 
     # Build lookup sets: (relative_path, function_name) → reason
     priority_functions: Dict[tuple, str] = {}
@@ -185,6 +187,8 @@ def enrich_checklist(checklist: Dict[str, Any], context_map: Dict[str, Any]) -> 
             len(unchecked),
         )
 
+    return checklist
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -200,6 +204,13 @@ def _load_context_map(understand_dir: Path) -> Optional[Dict[str, Any]]:
     if not isinstance(data, dict):
         logger.warning("understand_bridge: context-map.json is not a JSON object")
         return None
+
+    # Basic shape validation — sources and sinks should be lists
+    for key in ("sources", "sinks", "trust_boundaries"):
+        val = data.get(key)
+        if val is not None and not isinstance(val, list):
+            logger.warning("understand_bridge: context-map.json '%s' is not a list, skipping", key)
+            data[key] = []
 
     return data
 
@@ -219,21 +230,16 @@ def _merge_attack_surface(
 
     # Annotate trust boundaries with gap information from boundary_details
     gap_count = 0
-    boundary_details = {
-        bd.get("id", ""): bd
-        for bd in context_map.get("boundary_details", [])
-        if bd.get("id")
-    }
+    all_boundary_details = context_map.get("boundary_details", [])
     for boundary in new_boundaries:
-        # boundary_details entries carry an id that maps to boundary objects
-        # via the covers[] field, but a direct name match is more reliable here.
-        for bd in context_map.get("boundary_details", []):
+        for bd in all_boundary_details:
             if bd.get("gaps") and _boundary_matches(boundary, bd):
                 boundary["gaps"] = bd["gaps"]
                 boundary["gaps_source"] = "understand:map"
                 gap_count += 1
                 break
 
+    changed = False
     if surface_path.exists():
         existing = load_json(surface_path) or {}
         merged_sources = _merge_list_by_key(
@@ -245,20 +251,25 @@ def _merge_attack_surface(
         merged_boundaries = _merge_list_by_key(
             existing.get("trust_boundaries", []), new_boundaries, key="boundary"
         )
+        # Only rewrite if the merge added something
+        changed = (len(merged_sources) != len(existing.get("sources", []))
+                   or len(merged_sinks) != len(existing.get("sinks", []))
+                   or len(merged_boundaries) != len(existing.get("trust_boundaries", [])))
     else:
         merged_sources = new_sources
         merged_sinks = new_sinks
         merged_boundaries = new_boundaries
+        changed = bool(new_sources or new_sinks or new_boundaries)
 
-    attack_surface = {
-        "sources": merged_sources,
-        "sinks": merged_sinks,
-        "trust_boundaries": merged_boundaries,
-        "_imported_from": str(understand_dir / "context-map.json"),
-        "_imported_at": datetime.now().isoformat(),
-    }
-
-    save_json(surface_path, attack_surface)
+    if changed:
+        attack_surface = {
+            "sources": merged_sources,
+            "sinks": merged_sinks,
+            "trust_boundaries": merged_boundaries,
+            "_imported_from": str(understand_dir / "context-map.json"),
+            "_imported_at": datetime.now().isoformat(),
+        }
+        save_json(surface_path, attack_surface)
 
     unchecked_count = len(context_map.get("unchecked_flows", []))
     return {
@@ -368,14 +379,21 @@ def _merge_list_by_key(
 
 
 def _boundary_matches(boundary: Dict[str, Any], detail: Dict[str, Any]) -> bool:
-    #Check whether a trust_boundaries entry corresponds to a boundary_details entry.
+    """Check whether a trust_boundaries entry corresponds to a boundary_details entry.
 
-    boundary_name = boundary.get("boundary", "").lower()
-    if not boundary_name:
+    Uses normalised substring matching with a minimum length to avoid
+    short strings like "a" matching everything.
+    """
+    boundary_name = boundary.get("boundary", "").lower().strip()
+    detail_id = detail.get("id", "").lower().strip()
+
+    if not boundary_name or not detail_id:
         return False
 
-    detail_id = detail.get("id", "").lower()
-    if boundary_name in detail_id or detail_id in boundary_name:
-        return True
+    # Require the shorter string to be at least 4 chars to avoid
+    # false positives from very short boundary names
+    shorter = min(len(boundary_name), len(detail_id))
+    if shorter < 4:
+        return boundary_name == detail_id
 
-    return False
+    return boundary_name in detail_id or detail_id in boundary_name
