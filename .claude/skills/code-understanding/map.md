@@ -177,7 +177,8 @@ checks), then write a small Python script to record them:
 
 ```python
 # Save as /tmp/record_coverage.py and run: python3 /tmp/record_coverage.py
-import json, sys
+import json, sys, os
+sys.path.insert(0, os.getcwd())  # script is in /tmp but cwd is the raptor repo root
 from core.inventory.coverage import update_coverage
 
 workdir = sys.argv[1]
