@@ -49,7 +49,8 @@ def start_run(output_dir: Path, command: str, extra: Dict[str, Any] = None) -> P
     """Write initial .raptor-run.json with status=running.
 
     Call this at the start of a command. Returns the output_dir (for chaining).
-    Creates the directory if it doesn't exist.
+    Creates the directory if it doesn't exist. In project mode, creates a
+    checklist.json symlink pointing to the project-level checklist.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -63,7 +64,95 @@ def start_run(output_dir: Path, command: str, extra: Dict[str, Any] = None) -> P
     }
 
     save_json(output_dir / RUN_METADATA_FILE, metadata)
+    _setup_checklist_symlink(output_dir)
     return output_dir
+
+
+def _setup_checklist_symlink(run_dir: Path) -> None:
+    """Create a checklist.json symlink in the run dir pointing to the project-level checklist.
+
+    Only acts in project mode (active project detected via .active symlink or
+    RAPTOR_PROJECT_DIR env var). In standalone mode, does nothing.
+
+    If no project-level checklist exists yet, promotes the newest run-level
+    checklist from sibling run dirs.
+    """
+    import os
+
+    # Determine project output dir
+    project_dir = None
+    try:
+        from core.startup import PROJECTS_DIR, get_active_name
+        name = get_active_name()
+        if name:
+            from core.json import load_json as _load
+            data = _load(PROJECTS_DIR / f"{name}.json")
+            if data:
+                candidate = Path(data.get("output_dir", ""))
+                if candidate.is_dir():
+                    project_dir = candidate
+    except Exception:
+        pass
+
+    if not project_dir:
+        pd = os.environ.get("RAPTOR_PROJECT_DIR")
+        if pd and Path(pd).is_dir():
+            project_dir = Path(pd)
+
+    if not project_dir:
+        return  # Standalone mode
+
+    # Don't create symlink if a real checklist already exists in the run dir
+    checklist_in_run = run_dir / "checklist.json"
+    if checklist_in_run.exists() and not checklist_in_run.is_symlink():
+        return
+
+    # Don't create symlink if it already exists
+    if checklist_in_run.is_symlink():
+        return
+
+    # Promote: if no project-level checklist, find the newest run-level one
+    project_checklist = project_dir / "checklist.json"
+    if not project_checklist.exists():
+        _promote_checklist(project_dir)
+
+    # Create relative symlink: run_dir/checklist.json → ../checklist.json
+    try:
+        checklist_in_run.symlink_to("../checklist.json")
+    except OSError:
+        pass  # Silently skip if symlink creation fails
+
+
+def _promote_checklist(project_dir: Path) -> None:
+    """Copy the newest run-level checklist to the project level.
+
+    Scans sibling run dirs for checklist.json files. Takes the newest
+    and copies it to project_dir/checklist.json, merging checked_by
+    from older checklists.
+    """
+    from core.json import load_json, save_json
+
+    checklists = []
+    for d in sorted(project_dir.iterdir(), key=lambda d: d.stat().st_mtime, reverse=True):
+        if not d.is_dir() or d.name.startswith((".", "_")):
+            continue
+        cl = d / "checklist.json"
+        if cl.exists() and not cl.is_symlink():
+            data = load_json(cl)
+            if data:
+                checklists.append(data)
+
+    if not checklists:
+        return
+
+    # Start with newest, merge checked_by from older ones
+    promoted = checklists[0]
+    if len(checklists) > 1:
+        from core.inventory.builder import _carry_forward_coverage
+        for older in checklists[1:]:
+            _carry_forward_coverage(older, promoted)
+
+    save_json(project_dir / "checklist.json", promoted)
 
 
 def complete_run(output_dir: Path, extra: Dict[str, Any] = None) -> None:

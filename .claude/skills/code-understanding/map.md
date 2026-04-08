@@ -180,6 +180,7 @@ checks), then write a small Python script to record them:
 import json, sys, os
 sys.path.insert(0, os.getcwd())  # script is in /tmp but cwd is the raptor repo root
 from core.inventory.coverage import update_coverage
+from core.inventory import save_checklist
 
 workdir = sys.argv[1]
 inv = json.load(open(f"{workdir}/checklist.json"))
@@ -190,7 +191,7 @@ checked = [
     # ... etc
 ]
 update_coverage(inv, checked, "understand:map")
-json.dump(inv, open(f"{workdir}/checklist.json", "w"), indent=2)
+save_checklist(workdir, inv)
 print(f"Recorded {len(checked)} functions as checked by understand:map")
 ```
 

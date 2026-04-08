@@ -53,3 +53,41 @@ def get_items(file_entry):
     New format: file_entry["items"] (list of CodeItem dicts with "kind" field)
     """
     return file_entry.get("items", file_entry.get("functions", []))
+
+
+def save_checklist(output_dir, data):
+    """Save checklist.json, resolving symlinks and using file locking.
+
+    In project mode, output_dir/checklist.json is a symlink to the
+    project-level checklist. This function resolves the symlink before
+    writing so the symlink is preserved. Uses fcntl.flock for safe
+    concurrent writes.
+
+    In standalone mode, writes directly to output_dir/checklist.json.
+    """
+    import fcntl
+    from pathlib import Path
+    from core.json import save_json
+
+    checklist_path = Path(output_dir) / "checklist.json"
+
+    # Resolve symlink to write to the real file
+    if checklist_path.is_symlink():
+        checklist_path = checklist_path.resolve()
+
+    # Ensure parent exists
+    checklist_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # File lock for concurrent write safety
+    lock_path = checklist_path.with_suffix(".lock")
+    try:
+        lock_file = open(lock_path, "w")
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        save_json(checklist_path, data)
+    finally:
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+            lock_file.close()
+            lock_path.unlink(missing_ok=True)
+        except Exception:
+            pass

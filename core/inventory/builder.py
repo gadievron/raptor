@@ -75,6 +75,17 @@ def build_inventory(
     file_list = _collect_source_files(target, extensions)
     logger.info(f"Found {len(file_list)} source files to process")
 
+    # Load previous inventory for hash-based skip optimisation
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    checklist_file = output_path / 'checklist.json'
+    old_inventory = load_json(checklist_file)
+    old_files_by_path = {}
+    if old_inventory:
+        for f in old_inventory.get('files', []):
+            if f.get('path') and f.get('sha256'):
+                old_files_by_path[f['path']] = f
+
     files_info = []
     excluded_files = []
     total_items = 0
@@ -101,7 +112,8 @@ def build_inventory(
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = {
                 executor.submit(
-                    _process_single_file, fp, target, exclude_patterns, skip_generated
+                    _process_single_file, fp, target, exclude_patterns,
+                    skip_generated, old_files_by_path
                 ): fp
                 for fp in file_list
             }
@@ -110,7 +122,8 @@ def build_inventory(
     else:
         for filepath in file_list:
             _collect_result(
-                _process_single_file(filepath, target, exclude_patterns, skip_generated)
+                _process_single_file(filepath, target, exclude_patterns,
+                                     skip_generated, old_files_by_path)
             )
 
     # Sort for consistent output
@@ -146,11 +159,6 @@ def build_inventory(
         inventory['limitations'] = limitations
 
     # Cumulative coverage: carry forward checked_by from previous inventory
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    checklist_file = output_path / 'checklist.json'
-
-    old_inventory = load_json(checklist_file)
     if old_inventory is not None:
         try:
             diff = compare_inventories(old_inventory, inventory)
@@ -170,7 +178,8 @@ def build_inventory(
         except (KeyError, TypeError):
             pass  # Incompatible old inventory
 
-    save_json(checklist_file, inventory)
+    from core.inventory import save_checklist
+    save_checklist(str(output_path), inventory)
 
     logger.info(f"Built inventory: {len(files_info)} files, {total_items} items "
                 f"({total_functions} functions, {total_sloc} SLOC, "
@@ -240,8 +249,12 @@ def _process_single_file(
     target: Path,
     exclude_patterns: List[str],
     skip_generated: bool = True,
+    old_files: Dict[str, Any] = None,
 ) -> Optional[Dict[str, Any]]:
     """Process a single file for the inventory.
+
+    If old_files contains an entry for this file with a matching SHA-256,
+    the old entry is returned as-is (skipping tree-sitter parsing).
 
     Returns:
         File info dict, exclusion record (with _excluded flag), or None if skipped.
@@ -271,6 +284,12 @@ def _process_single_file(
 
         line_count = content.count('\n') + 1
         sha256 = hashlib.sha256(content.encode('utf-8')).hexdigest()
+
+        # If file unchanged from previous inventory, reuse old entry (skip parsing)
+        if old_files and rel_path in old_files:
+            old_entry = old_files[rel_path]
+            if old_entry.get('sha256') == sha256:
+                return old_entry
 
         tree_cache = {}
         items = extract_items(str(filepath), language, content, _tree_cache=tree_cache)

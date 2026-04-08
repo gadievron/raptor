@@ -136,10 +136,12 @@ def load_understand_context(
     return summary
 
 
-def enrich_checklist(checklist: Dict[str, Any], context_map: Dict[str, Any]) -> Dict[str, Any]:
+def enrich_checklist(checklist: Dict[str, Any], context_map: Dict[str, Any],
+                     output_dir: str = None) -> Dict[str, Any]:
     """Mark entry points and sinks as high-priority in a checklist.
 
     Mutates checklist in place. Returns the checklist for chaining.
+    If output_dir is provided, saves the enriched checklist (symlink-safe).
     """
     if not checklist or not context_map:
         return checklist
@@ -186,6 +188,10 @@ def enrich_checklist(checklist: Dict[str, Any], context_map: Dict[str, Any]) -> 
             "understand_bridge: marked %d unchecked flows as priority targets",
             len(unchecked),
         )
+
+    if output_dir:
+        from core.inventory import save_checklist
+        save_checklist(output_dir, checklist)
 
     return checklist
 
