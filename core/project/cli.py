@@ -237,7 +237,13 @@ def main():
                 return
             if args.purge and not args.yes and p.output_path.exists():
                 size = sum(f.stat().st_size for f in p.output_path.rglob("*") if f.is_file())
-                print(f"This will delete {args.name} and its output ({size / 1024 / 1024:.1f}MB)")
+                if size >= 1024 * 1024:
+                    size_str = f"{size / 1024 / 1024:.1f}MB"
+                elif size >= 1024:
+                    size_str = f"{size / 1024:.1f}KB"
+                else:
+                    size_str = f"{size}B"
+                print(f"This will delete {args.name} and its output ({size_str})")
                 if input("Proceed? [y/N] ").lower() != "y":
                     print("Cancelled.")
                     return
@@ -482,7 +488,12 @@ def _print_status(project):
                         total_size += f.stat().st_size
                     except OSError:
                         pass
-        print(f"\nDisk usage: {total_size / 1024 / 1024:.1f}MB")
+        if total_size >= 1024 * 1024:
+            print(f"\nDisk usage: {total_size / 1024 / 1024:.1f}MB")
+        elif total_size >= 1024:
+            print(f"\nDisk usage: {total_size / 1024:.1f}KB")
+        else:
+            print(f"\nDisk usage: {total_size}B")
     else:
         print("\nNo runs.")
 
