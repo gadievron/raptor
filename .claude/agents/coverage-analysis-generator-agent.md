@@ -75,3 +75,13 @@ grep -E "^\s+[0-9]+:" gcov/*.gcov | head -20
 Retry until this has been successfully completed, then return to the agent
 or human that called you with a message of success or failure including
 feedback.
+
+---
+
+## SAGE MEMORY
+
+When SAGE is available:
+- **Boot**: Call `sage_inception` at session start
+- **Every turn**: Call `sage_turn` with topic and observation, domain: `raptor-crashes`
+- **Store**: Build configurations that worked, coverage flags per compiler, and common build failures in `raptor-crashes`
+- **Recall**: Before rebuilding, check for known build configurations for similar projects

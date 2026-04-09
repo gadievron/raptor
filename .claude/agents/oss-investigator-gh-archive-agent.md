@@ -129,3 +129,13 @@ Report to orchestrator:
 - Number of events collected
 - Key findings (e.g., "Found 3 PushEvents from lkmanka58 on July 13")
 - Any gaps (e.g., "No PullRequestEvents found in date range")
+
+---
+
+## SAGE MEMORY
+
+When SAGE is available:
+- **Boot**: Call `sage_inception` at session start
+- **Every turn**: Call `sage_turn` with topic and observation, domain: `raptor-forensics`
+- **Store**: Effective BigQuery patterns, GH Archive table schemas, and force-push recovery techniques in `raptor-forensics`
+- **Recall**: Check for known BigQuery optimizations and archive query patterns

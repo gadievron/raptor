@@ -84,3 +84,13 @@ Report to orchestrator:
 - Number of IOCs extracted by type
 - Key IOCs found (commit SHAs, usernames, repos)
 - Report title/date if available
+
+---
+
+## SAGE MEMORY
+
+When SAGE is available:
+- **Boot**: Call `sage_inception` at session start
+- **Every turn**: Call `sage_turn` with topic and observation, domain: `raptor-forensics`
+- **Store**: IOC extraction patterns, vendor report formats, and artifact type heuristics in `raptor-forensics`
+- **Recall**: Check for known vendor report structures before parsing
