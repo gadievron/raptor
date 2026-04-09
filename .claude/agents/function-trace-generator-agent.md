@@ -77,3 +77,13 @@ head -50 traces/trace_*.log
 Retry until this has been successfully completed, then return to the agent
 or human that called you with a message of success or failure including
 feedback.
+
+---
+
+## SAGE MEMORY
+
+When SAGE is available:
+- **Boot**: Call `sage_inception` at session start
+- **Every turn**: Call `sage_turn` with topic and observation, domain: `raptor-crashes`
+- **Store**: Instrumentation techniques, trace generation patterns, and Perfetto conversion tips in `raptor-crashes`
+- **Recall**: Check for known instrumentation issues with specific compilers or build systems

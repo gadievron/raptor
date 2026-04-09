@@ -20,3 +20,7 @@ out/
 
 # Runtime artifacts
 codeql_dbs/
+
+# SAGE
+.sage/
+*.sage.key

@@ -76,3 +76,13 @@ Report to orchestrator:
 - Recovered content (issues, PRs, files, pages)
 - Wayback snapshots found (timestamps and URLs)
 - Content that could not be recovered (no archived snapshots)
+
+---
+
+## SAGE MEMORY
+
+When SAGE is available:
+- **Boot**: Call `sage_inception` at session start
+- **Every turn**: Call `sage_turn` with topic and observation, domain: `raptor-forensics`
+- **Store**: Wayback CDX API patterns, URL construction heuristics, and content recovery techniques in `raptor-forensics`
+- **Recall**: Check for known Wayback limitations and workarounds

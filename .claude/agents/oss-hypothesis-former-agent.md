@@ -136,3 +136,14 @@ If hypothesis complete:
 - Confirm `hypothesis-YYY.md` written
 - Summary of key findings
 - Evidence citation count
+
+---
+
+## SAGE MEMORY
+
+When SAGE is available:
+- **Boot**: Call `sage_inception` at session start
+- **Every turn**: Call `sage_turn` with topic and observation, domain: `raptor-forensics`
+- **Store**: Successful hypothesis formation patterns, evidence combination strategies in `raptor-forensics`
+- **Recall**: Before forming hypotheses, check for similar incident patterns in `raptor-forensics`
+- **Reflect**: Record which evidence types were most decisive for hypothesis formation
