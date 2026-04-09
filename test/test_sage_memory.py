@@ -235,7 +235,15 @@ class TestSageRecallMethods(unittest.TestCase):
     """Test SAGE recall methods return empty when SAGE unavailable."""
 
     def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
 
     def test_recall_similar_no_sage(self):
         from core.sage.config import SageConfig
