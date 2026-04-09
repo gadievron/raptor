@@ -37,15 +37,20 @@ def sync_project_env_file():
         return
 
     lines = [l for l in existing.splitlines()
-             if not l.startswith("export RAPTOR_PROJECT_")]
+             if not l.startswith(("export RAPTOR_PROJECT_", "unset RAPTOR_PROJECT_"))]
 
     project_dir = os.environ.get("RAPTOR_PROJECT_DIR")
+    def _sh(v):
+        return v.replace('\\', '\\\\').replace('"', '\\"')
     if project_dir:
-        def _sh(v):
-            return v.replace('\\', '\\\\').replace('"', '\\"')
         lines.append(f'export RAPTOR_PROJECT_DIR="{_sh(project_dir)}"')
         lines.append(f'export RAPTOR_PROJECT_NAME="{_sh(os.environ.get("RAPTOR_PROJECT_NAME", ""))}"')
         lines.append(f'export RAPTOR_PROJECT_TARGET="{_sh(os.environ.get("RAPTOR_PROJECT_TARGET", ""))}"')
+    else:
+        # Override stale vars inherited from the parent process
+        lines.append('unset RAPTOR_PROJECT_DIR')
+        lines.append('unset RAPTOR_PROJECT_NAME')
+        lines.append('unset RAPTOR_PROJECT_TARGET')
 
     try:
         env_path.write_text("\n".join(lines) + "\n" if lines else "")

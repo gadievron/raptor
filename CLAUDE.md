@@ -67,9 +67,9 @@ When running any analysis command (`/scan`, `/validate`, `/understand`, `/codeql
 
 **Before starting work:**
 ```bash
-OUTPUT_DIR=$(python3 -m core.run start <command> --target <resolved_target>)
+OUTPUT_DIR=$(python3 -m core.run start <command> --target <resolved_target> [--out <dir>])
 ```
-Always pass `--target` with the resolved target path (see DEFAULT TARGET DIRECTORY for resolution order). This creates the output directory, writes `.raptor-run.json` with `status: running`, and prints the path.
+Always pass `--target` with the resolved target path (see DEFAULT TARGET DIRECTORY for resolution order). Optionally pass `--out <dir>` to use a specific output directory (bypasses project/default resolution — useful for sharing a directory between `/understand` and `/validate` without a project). This creates the output directory, writes `.raptor-run.json` with `status: running`, and prints the path.
 **Use `$OUTPUT_DIR` for all output files.** Do not construct output paths manually.
 
 **After successful completion:**

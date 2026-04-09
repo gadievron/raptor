@@ -36,5 +36,6 @@ if [[ "${1:-}" != "project" ]]; then
 fi
 
 export RAPTOR_CALLER_DIR="$(pwd)"
+export RAPTOR_DIR
 cd "$RAPTOR_DIR" || { echo "raptor: cannot cd to $RAPTOR_DIR" >&2; exit 1; }
 exec python3 -m core.startup.launcher "$@"

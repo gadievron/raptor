@@ -50,6 +50,7 @@ Writes `diagrams.md` into the target directory next to the existing JSON files. 
 
 **Library:**
 ```python
+import sys, os; sys.path.insert(0, os.environ["RAPTOR_DIR"])
 from packages.diagram import render_and_write
 from pathlib import Path
 

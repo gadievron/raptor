@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""SessionStart hook: ensure RAPTOR env vars are in CLAUDE_ENV_FILE.
+
+Called automatically by Claude Code on session start (via .claude/settings.json).
+Sets RAPTOR_DIR, PATH, and syncs project vars from the .active symlink.
+"""
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.startup.init import setup_env_file
+from core.startup import get_active_name, sync_project_env_file
+
+# Write RAPTOR_DIR and PATH
+setup_env_file()
+
+# Sync project vars from symlink (not from stale env vars)
+active = get_active_name()
+if active:
+    from core.project.project import ProjectManager
+    mgr = ProjectManager()
+    project = mgr.load(active)
+    if project:
+        os.environ["RAPTOR_PROJECT_DIR"] = project.output_dir
+        os.environ["RAPTOR_PROJECT_NAME"] = project.name
+        os.environ["RAPTOR_PROJECT_TARGET"] = project.target
+    else:
+        for key in ("RAPTOR_PROJECT_DIR", "RAPTOR_PROJECT_NAME", "RAPTOR_PROJECT_TARGET"):
+            os.environ.pop(key, None)
+else:
+    for key in ("RAPTOR_PROJECT_DIR", "RAPTOR_PROJECT_NAME", "RAPTOR_PROJECT_TARGET"):
+        os.environ.pop(key, None)
+
+sync_project_env_file()

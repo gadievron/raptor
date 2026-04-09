@@ -173,28 +173,29 @@ Do not populate `sources`, `sinks`, or `entry_points` from file names or common 
 
 After writing `context-map.json`, update the inventory with which functions you examined.
 Build a list of every function you read and analysed (entry points, sinks, trust boundary
-checks), then write a small Python script to record them:
+checks), then run a `python3 -c` snippet to record them:
 
-```python
-# Save as /tmp/record_coverage.py and run: python3 /tmp/record_coverage.py
-import json, sys, os
-sys.path.insert(0, os.getcwd())  # script is in /tmp but cwd is the raptor repo root
+```bash
+python3 -c "
+import sys, os, json
+sys.path.insert(0, os.environ['RAPTOR_DIR'])
 from core.inventory.coverage import update_coverage
+from core.json import save_json
+from pathlib import Path
 
 workdir = sys.argv[1]
-inv = json.load(open(f"{workdir}/checklist.json"))
+inv = json.load(open(f'{workdir}/checklist.json'))
 checked = [
     # Add one entry per function you examined:
-    {"file": "src/routes/query.py", "function": "handle_query"},
-    {"file": "src/db/query.py", "function": "run_query"},
+    {'file': 'src/routes/query.py', 'function': 'handle_query'},
+    {'file': 'src/db/query.py', 'function': 'run_query'},
     # ... etc
 ]
-update_coverage(inv, checked, "understand:map")
-json.dump(inv, open(f"{workdir}/checklist.json", "w"), indent=2)
-print(f"Recorded {len(checked)} functions as checked by understand:map")
+update_coverage(inv, checked, 'understand:map')
+save_json(Path(workdir) / 'checklist.json', inv)
+print(f'Recorded {len(checked)} functions as checked by understand:map')
+" <workdir_path>
 ```
-
-Run via Bash tool: `python3 /tmp/record_coverage.py <workdir_path>`
 
 This ensures coverage tracking is cumulative across `/understand` and `/validate` runs.
 

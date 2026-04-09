@@ -17,6 +17,7 @@ Validates that vulnerability findings are real, reachable, and exploitable befor
 
 1. **Stage 0 (Python):** Run `build_checklist()` to get inventory
    ```python
+   import sys, os; sys.path.insert(0, os.environ["RAPTOR_DIR"])
    from packages.exploitability_validation import build_checklist
    checklist = build_checklist(target_path, output_dir)
    ```
@@ -61,6 +62,7 @@ Validates that vulnerability findings are real, reachable, and exploitable befor
 
 6. **Stage E (Python):** Feasibility - for memory corruption only
    ```python
+   import sys, os; sys.path.insert(0, os.environ["RAPTOR_DIR"])
    from packages.exploit_feasibility import analyze_binary
    result = analyze_binary(binary_path, vuln_type='buffer_overflow')
    ```
@@ -77,6 +79,7 @@ Validates that vulnerability findings are real, reachable, and exploitable befor
 
 8. **Stage 1 (Python):** Outputs - CVSS scoring, schema validation, report generation, diagrams
    ```python
+   import sys, os; sys.path.insert(0, os.environ["RAPTOR_DIR"])
    from packages.exploitability_validation.report import write_validation_report
    from packages.diagram import render_and_write
    from pathlib import Path
@@ -95,16 +98,17 @@ Validates that vulnerability findings are real, reachable, and exploitable befor
 
 After your analysis, save findings for Stage E:
 ```python
+import sys, os; sys.path.insert(0, os.environ["RAPTOR_DIR"])
 from packages.exploitability_validation.schemas import create_finding, create_empty_findings
-import json
+from core.json import save_json
+from pathlib import Path
 
-findings = create_empty_findings("D", target_path)
+findings = create_empty_findings("D", "$TARGET_PATH")  # use the resolved target path
 findings["findings"] = [
-    create_finding("FIND-0001", "/path/file.c", "func_name", 42, "buffer_overflow", "confirmed"),
+    create_finding("FIND-0001", "/path/file.c", "func_name", 42, "buffer_overflow", "confirmed", cwe_id="CWE-120"),
     # ... more findings
 ]
-with open(f"{workdir}/findings.json", "w") as f:
-    json.dump(findings, f, indent=2)
+save_json(Path(workdir) / "findings.json", findings)
 ```
 
 ---
@@ -168,7 +172,7 @@ Semgrep → SARIF (21 findings) → Dedupe (15 unique) → [LLM validation if AP
 ## Usage
 
 ```
-/validate <target_path> [--vuln-type <type>] [--findings <file>] [--binary <path>] [--skip-feasibility]
+/validate <target_path> [--vuln-type <type>] [--findings <file>] [--binary <path>] [--out <dir>] [--skip-feasibility]
 ```
 
 ## Arguments
@@ -179,6 +183,7 @@ Semgrep → SARIF (21 findings) → Dedupe (15 unique) → [LLM validation if AP
 | `--vuln-type` | Focus on specific vulnerability type (optional) |
 | `--findings` | Pre-existing findings.json to validate (skips discovery) |
 | `--binary` | Path to compiled binary for Stage E feasibility analysis |
+| `--out` | Explicit output directory (bypasses project/default resolution) |
 | `--skip-feasibility` | Skip Stage E even for memory corruption vulns |
 
 ## Vulnerability Types
@@ -249,6 +254,7 @@ out/exploitability-validation-20260122-143022/
 For memory corruption findings, Stage E automatically runs binary constraint analysis:
 
 ```python
+import sys, os; sys.path.insert(0, os.environ["RAPTOR_DIR"])
 from packages.exploit_feasibility import analyze_binary, save_exploit_context
 
 # Analyzes: PIE, NX, Canary, RELRO, glibc mitigations, ROP gadgets, bad bytes

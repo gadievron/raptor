@@ -30,11 +30,12 @@ def main():
 
     if action == "start":
         if len(sys.argv) < 3:
-            print("Usage: python3 -m core.run start <command> [--target <path>]",
+            print("Usage: python3 -m core.run start <command> [--target <path>] [--out <dir>]",
                   file=sys.stderr)
             sys.exit(1)
         command = sys.argv[2]
         target_path = None
+        explicit_out = None
         if "--target" in sys.argv:
             idx = sys.argv.index("--target")
             if idx + 1 < len(sys.argv):
@@ -42,8 +43,12 @@ def main():
         elif len(sys.argv) > 3 and not sys.argv[3].startswith("--"):
             # Accept positional target: python3 -m core.run start <command> <target>
             target_path = sys.argv[3]
+        if "--out" in sys.argv:
+            idx = sys.argv.index("--out")
+            if idx + 1 < len(sys.argv):
+                explicit_out = sys.argv[idx + 1]
         try:
-            out_dir = get_output_dir(command, target_path=target_path)
+            out_dir = get_output_dir(command, target_path=target_path, explicit_out=explicit_out)
         except TargetMismatchError as e:
             print(f"error: {e}", file=sys.stderr)
             sys.exit(1)

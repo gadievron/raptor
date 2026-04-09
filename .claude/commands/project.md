@@ -40,7 +40,7 @@ Run project commands via the Bash tool:
 
 ```bash
 cd "$RAPTOR_DIR" && python3 -c "
-import sys; sys.path.insert(0, '.')
+import sys, os; sys.path.insert(0, os.environ['RAPTOR_DIR'])
 from core.project.cli import main
 main()
 " <subcommand> [args]
