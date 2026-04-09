@@ -48,3 +48,12 @@ python3 raptor.py web --url https://example.com --auth-token "Bearer xyz"
 - Results are saved to `out/web_scan_<timestamp>/`
 
 Be ethical and responsible with security testing!
+
+---
+
+## SAGE MEMORY
+
+When SAGE is available:
+- **Before scanning**: Call `sage_recall` with domain `raptor-findings` to check for known web vulnerability patterns
+- **After scanning**: Store web findings via `sage_remember` in domain `raptor-findings` — vulnerability types, attack vectors, affected endpoints
+- **If SAGE is unavailable, skip — purely additive**
