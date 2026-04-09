@@ -203,13 +203,17 @@ async def _store_findings_async(
             message = finding.get("message", "")
             is_exploitable = finding.get("is_exploitable", None)
 
+            # Extract a human-readable vuln type from the rule ID
+            # e.g. "javascript.express.security.audit.express-open-redirect" → "open redirect"
+            vuln_type = rule_id.rsplit(".", 1)[-1].replace("-", " ").replace("_", " ")
+
             content = (
-                f"Security finding in {lang_str} project {repo_name}: "
-                f"{rule_id} ({level}) in {file_path}. "
+                f"{vuln_type} vulnerability in {repo_name} ({file_path}): "
                 f"{message[:200]}. "
+                f"Rule: {rule_id}. Severity: {level}. "
             )
             if is_exploitable is not None:
-                content += f"Exploitable: {is_exploitable}. "
+                content += f"Confirmed exploitable: {is_exploitable}. "
 
             confidence = {"error": 0.95, "warning": 0.85, "note": 0.75}.get(level, 0.70)
 
@@ -349,7 +353,9 @@ def enrich_analysis_prompt(
         return ""
 
     try:
-        query = f"historical findings and analysis for {rule_id} in {language} code"
+        # Extract human-readable vuln type for better semantic matching
+        vuln_type = rule_id.rsplit(".", 1)[-1].replace("-", " ").replace("_", " ")
+        query = f"{vuln_type} vulnerability findings and exploitability in {language} code"
         results = _run_async(client.query(
             text=query,
             domain_tag="raptor-findings",
