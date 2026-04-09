@@ -217,6 +217,14 @@ def main():
             if args.name == "none":
                 prev = mgr.get_active()
                 mgr.set_active(None)
+                # Clear env vars so sync_project_env_file removes them from CLAUDE_ENV_FILE
+                for key in ("RAPTOR_PROJECT_DIR", "RAPTOR_PROJECT_NAME", "RAPTOR_PROJECT_TARGET"):
+                    os.environ.pop(key, None)
+                try:
+                    from core.startup import sync_project_env_file
+                    sync_project_env_file()
+                except Exception:
+                    pass
                 if prev:
                     print(f"Cleared active project: {prev}")
                 else:

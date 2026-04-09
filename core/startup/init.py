@@ -205,12 +205,18 @@ def setup_env_file():
     env_file = os.environ.get("CLAUDE_ENV_FILE")
     if not env_file:
         return
+    repo_root = str(REPO_ROOT)
     bin_dir = str(REPO_ROOT / "bin")
     try:
         existing = Path(env_file).read_text() if Path(env_file).exists() else ""
+        additions = []
         if bin_dir not in existing:
+            additions.append(f'export PATH="$PATH:{bin_dir}"')
+        if "RAPTOR_DIR" not in existing:
+            additions.append(f'export RAPTOR_DIR="{repo_root}"')
+        if additions:
             with open(env_file, "a") as f:
-                f.write(f'export PATH="$PATH:{bin_dir}"\n')
+                f.write("\n".join(additions) + "\n")
     except OSError:
         pass
 

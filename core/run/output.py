@@ -4,12 +4,15 @@ Centralises the logic for choosing where a command writes its output.
 Checks (in order): explicit --out argument, active project, default out/ dir.
 """
 
+import logging
 import os
 import time
 from pathlib import Path
 from typing import Optional, Tuple
 
 from core.config import RaptorConfig
+
+logger = logging.getLogger(__name__)
 
 
 class TargetMismatchError(ValueError):
@@ -70,6 +73,9 @@ def get_output_dir(command: str, target_name: str = "", explicit_out: str = None
         TargetMismatchError: If target_path is outside the active project's target.
     """
     if explicit_out:
+        active = _resolve_active_project()
+        if active:
+            logger.warning("--out overrides active project '%s' output directory", active[1])
         return Path(explicit_out).resolve()
 
     active = _resolve_active_project()

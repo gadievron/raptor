@@ -1,0 +1,20 @@
+{
+  "env": {
+    "CLAUDE_ENV_FILE": ".claude/raptor.env",
+    "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1",
+    "BASH_DEFAULT_TIMEOUT_MS": "300000"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/libexec/raptor-session-init\""
+          }
+        ]
+      }
+    ]
+  }
+}

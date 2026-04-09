@@ -60,10 +60,17 @@ Understanding output feeds into Gadi & JC's epic exploitability validation:
 - `flow-trace-*.json` → confirms reachability for Stage C
 - `variants.json` → expands `checklist.json` scope for Stage 0
 
+**With a project (recommended):** The bridge auto-detects the most recent `/understand` run. Just run both commands — no manual path wiring needed:
 ```
-# Map first, then validate with richer context
+/project use myapp
+/understand ./src --map
+/validate ./src
+```
+
+**Without a project:** Use `--out` on both commands to share a directory. Using a project is recommended — it handles this automatically.
+```
 /understand ./src --map --out .out/my-run/
-/validate ./src --findings .out/my-run/variants.json
+/validate ./src --out .out/my-run/
 ```
 
 ## Skill Files
@@ -89,6 +96,7 @@ All JSON outputs write to `$WORKDIR` (`.out/code-understanding-<timestamp>/` by 
 
 **After writing JSON outputs** for `--map` or `--trace`, generate diagrams:
 ```python
+import sys, os; sys.path.insert(0, os.environ["RAPTOR_DIR"])
 from packages.diagram import render_and_write
 from pathlib import Path
 render_and_write(Path(workdir))

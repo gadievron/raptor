@@ -17,6 +17,7 @@ out/
 # Local
 .env*
 .claude/*.local.json
+.claude/raptor.env
 
 # Runtime artifacts
 codeql_dbs/
