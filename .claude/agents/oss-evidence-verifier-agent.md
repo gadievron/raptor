@@ -85,3 +85,13 @@ Report to orchestrator:
 - Verification complete
 - Count of verified vs unverified evidence
 - List of unverified evidence IDs (cannot be cited in final report)
+
+---
+
+## SAGE MEMORY
+
+When SAGE is available:
+- **Boot**: Call `sage_inception` at session start
+- **Every turn**: Call `sage_turn` with topic and observation, domain: `raptor-forensics`
+- **Store**: Verification patterns — which sources are reliable, common data integrity issues in `raptor-forensics`
+- **Recall**: Check for known verification pitfalls before re-querying sources

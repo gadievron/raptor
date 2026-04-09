@@ -323,3 +323,13 @@ This command enforces strict validation gates:
  vulns    they're     working
           real        exploits
 ```
+
+---
+
+## SAGE MEMORY
+
+When SAGE is available:
+- **Before validation**: Call `sage_recall` with domain `raptor-exploits` to check for known exploitability patterns for similar vulnerability types
+- **After validation**: Store validation outcomes via `sage_remember` in domain `raptor-exploits` — which findings were confirmed exploitable vs ruled out, and the key factors
+- **After Stage E (feasibility)**: Store exploit feasibility results in domain `raptor-exploits` — primitive chains, mitigation impacts, confidence scores
+- **If SAGE is unavailable, skip — purely additive**

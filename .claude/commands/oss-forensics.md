@@ -84,3 +84,13 @@ Key outputs:
 - Wait for each phase to complete before proceeding
 - Spawn followup investigations if oss-hypothesis-former-agent identifies any loose ends
 - Pass working directory to all agents
+
+---
+
+## SAGE MEMORY
+
+When SAGE is available:
+- **Before investigation**: Call `sage_recall` with domain `raptor-forensics` to check for similar incident patterns or known actor TTPs
+- **After investigation**: Store key investigation findings via `sage_remember` in domain `raptor-forensics` — IOCs, actor patterns, evidence collection techniques that worked
+- **After report generation**: Store report structure insights in domain `raptor-reports`
+- **If SAGE is unavailable, skip — purely additive**
