@@ -1,0 +1,911 @@
+#!/usr/bin/env python3
+"""Prepare a validation pipeline stage by running all mechanical checks.
+
+Usage:
+  raptor-prepare-validation-stage 0 --target <path>     # start run + inventory
+  raptor-prepare-validation-stage <A|B|C|D|E|F> <workdir> [--target <path>]
+  raptor-prepare-validation-stage 1 <workdir>            # report + complete
+
+Stages:
+  0  Start run lifecycle, build checklist (prints workdir to stdout)
+  A  Load checklist and pre-existing findings
+  B  Validate Stage A output, dedup flag, load attack surface
+  C  Validate Stage B output (5 docs), pre-check findings against inventory
+  D  Validate Stage C output, test/mock path filter, evidence card assembly
+  E  Validate Stage D output, discover binaries (requires --target)
+  F  Map Stage E verdicts, compute CVSS scores, consistency checks
+  1  Generate report + diagrams, complete run lifecycle
+"""
+import re
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import hashlib
+from core.json import load_json, save_json
+from core.schema_constants import MEMORY_CORRUPTION_TYPES, normalise_vuln_type
+from core.inventory.lookup import normalise_path
+from packages.exploitability_validation.schemas import (
+    create_empty_findings, validate_findings, validate_attack_tree,
+    validate_attack_paths, validate_attack_surface, validate_hypotheses,
+    validate_disproven,
+)
+
+STAGE_LETTERS = "ABCDEF"
+
+
+def _is_validated(workdir, filename):
+    """Check if a file was already validated (hash matches .validated record)."""
+    vfile = Path(workdir) / ".validated"
+    filepath = Path(workdir) / filename
+    if not vfile.exists() or not filepath.exists():
+        return False
+    current = hashlib.sha256(filepath.read_bytes()).hexdigest()
+    for line in vfile.read_text().splitlines():
+        if line.startswith(f"{filename}:"):
+            return line.split(":", 1)[1].strip() == current
+    return False
+
+
+def _validate_file(workdir, filename, validator_func):
+    """Validate a file, skipping if already validated by raptor-validate-schema."""
+    if _is_validated(workdir, filename):
+        print(f"  {filename}: OK (cached)")
+        return True, []
+    data = load_json(Path(workdir) / filename)
+    if not data:
+        print(f"  {filename}: not found")
+        return True, []
+    valid, errors = validator_func(data)
+    if not valid:
+        print(f"  {filename}: ERRORS {errors}")
+    else:
+        print(f"  {filename}: OK")
+    return valid, errors
+
+
+def _findings(workdir):
+    return load_json(Path(workdir) / "findings.json")
+
+
+def _save_findings(workdir, data):
+    save_json(Path(workdir) / "findings.json", data)
+
+
+WORKING_DOCS = [
+    "findings.json", "attack-surface.json", "attack-tree.json",
+    "hypotheses.json", "disproven.json", "attack-paths.json",
+]
+
+
+def _report_workdir_files(workdir, verb="available"):
+    """Print which working docs exist and which are missing."""
+    present = []
+    missing = []
+    for doc in WORKING_DOCS:
+        if (Path(workdir) / doc).exists():
+            present.append(doc)
+        else:
+            missing.append(doc)
+    ctx_files = list(Path(workdir).glob("*_exploit_context.json"))
+    if ctx_files:
+        present.extend(f.name for f in ctx_files)
+    if missing:
+        print(f"  Create: {', '.join(missing)}")
+    if present:
+        print(f"  {verb.capitalize()}: {', '.join(present)}")
+
+
+def _deep_merge(target, source):
+    """Recursively merge source into target. Source values win."""
+    for key, value in source.items():
+        if key in target and isinstance(target[key], dict) and isinstance(value, dict):
+            _deep_merge(target[key], value)
+        else:
+            target[key] = value
+
+
+def _apply_stage_file(workdir, stage_letter):
+    """Merge stage-X.json into findings.json, then delete the stage file.
+
+    Stage A: stage-a.json contains a full findings container — builds findings.json.
+    Stages B-F: stage-X.json contains per-finding updates — merges into findings.json.
+
+    Returns True if a stage file was found and applied.
+    """
+    stage_path = Path(workdir) / f"stage-{stage_letter.lower()}.json"
+    if not stage_path.exists():
+        return False
+
+    staged = load_json(stage_path)
+    if not staged:
+        print(f"  WARNING: stage-{stage_letter.lower()}.json exists but is empty/invalid")
+        return False
+
+    findings_path = Path(workdir) / "findings.json"
+
+    if stage_letter.upper() == "A":
+        # Build: stage-a.json IS the findings container
+        target_path = staged.get("target_path", "")
+        container = create_empty_findings("A", target_path, staged.get("vuln_type_focus"))
+        container["findings"] = staged.get("findings", [])
+        save_json(findings_path, container)
+        count = len(container["findings"])
+        print(f"  Built findings.json from stage-a.json: {count} findings")
+    else:
+        # Update: merge per-finding updates into existing findings.json
+        container = load_json(findings_path)
+        if not container:
+            print(f"  ERROR: findings.json not found — cannot apply stage-{stage_letter.lower()}.json")
+            return False
+
+        by_id = {f["id"]: f for f in container.get("findings", [])}
+        applied = 0
+
+        if "updates" in staged and isinstance(staged["updates"], dict):
+            # Preferred format: {"updates": {"FIND-001": {fields...}}}
+            for finding_id, update_dict in staged["updates"].items():
+                finding = by_id.get(finding_id)
+                if finding:
+                    _deep_merge(finding, update_dict)
+                    applied += 1
+                else:
+                    print(f"  WARNING: {finding_id} not found in findings.json — skipped")
+
+        elif "findings" in staged and isinstance(staged["findings"], list):
+            # Fallback: Claude wrote a findings array — merge by ID, don't replace
+            for staged_finding in staged["findings"]:
+                fid = staged_finding.get("id")
+                if not fid:
+                    continue
+                existing = by_id.get(fid)
+                if existing:
+                    _deep_merge(existing, staged_finding)
+                    applied += 1
+                else:
+                    # New finding not in findings.json — append
+                    container["findings"].append(staged_finding)
+                    by_id[fid] = staged_finding
+                    applied += 1
+
+        # Copy top-level metadata (but NOT findings or updates — those are handled above)
+        for key, value in staged.items():
+            if key not in ("stage", "updates", "findings"):
+                container[key] = value
+
+        container["stage"] = staged.get("stage", stage_letter.upper())
+        save_json(findings_path, container)
+        print(f"  Merged stage-{stage_letter.lower()}.json: {applied} findings updated")
+
+    # Delete the stage file
+    stage_path.unlink()
+    return True
+
+
+def _active(findings_data):
+    """Non-disproven findings."""
+    return [f for f in findings_data.get("findings", []) if f.get("status") != "disproven"]
+
+
+# ---------------------------------------------------------------------------
+# A: Load checklist and pre-existing findings
+# ---------------------------------------------------------------------------
+
+_POC_GCC_FLAGS = [
+    "-fno-stack-protector", "-no-pie", "-z", "execstack",
+    "-z", "norelro", "-g", "-O0",
+    "-include", "stdio.h", "-include", "stdlib.h",
+    "-include", "string.h", "-include", "unistd.h",
+    "-Wall",  # warnings are useful signals for the LLM
+]
+
+_BUILD_SYSTEM_MARKERS = [
+    "Makefile", "makefile", "CMakeLists.txt", "configure", "meson.build",
+    "Cargo.toml", "go.mod", "build.gradle", "pom.xml", "setup.py",
+    "pyproject.toml", "package.json",
+]
+
+
+def _build_standalone_pocs(target, build_dir):
+    """Build PoC binaries from standalone C/C++ files (no Makefile)."""
+    import subprocess as _sp
+
+    target = Path(target)
+    build_dir = Path(build_dir)
+
+    if any((target / m).exists() for m in _BUILD_SYSTEM_MARKERS):
+        print("Target has a build system — skipping PoC build")
+        return
+
+    extensions = {".c", ".cpp", ".cc", ".cxx"}
+    sources = [
+        f for f in sorted(target.iterdir())
+        if f.is_file() and f.suffix.lower() in extensions
+        and ("int main" in f.read_text(encoding="utf-8", errors="ignore")
+             or "void main" in f.read_text(encoding="utf-8", errors="ignore"))
+    ]
+    if not sources:
+        return
+
+    build_dir.mkdir(parents=True, exist_ok=True)
+
+    compiler = "gcc"
+    try:
+        _sp.run([compiler, "--version"], capture_output=True, check=True)
+    except (FileNotFoundError, _sp.CalledProcessError):
+        compiler = "cc"
+        try:
+            _sp.run([compiler, "--version"], capture_output=True, check=True)
+        except (FileNotFoundError, _sp.CalledProcessError):
+            print("No C compiler found — skipping PoC build")
+            return
+
+    built = 0
+    for source in sources:
+        output = build_dir / source.stem
+        if output.exists():
+            built += 1
+            continue
+        cmd = [compiler] + _POC_GCC_FLAGS + ["-o", str(output), str(source)]
+        try:
+            result = _sp.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0:
+                print(f"  Built: {source.name} -> {output.name}")
+                if result.stderr.strip():
+                    for line in result.stderr.strip().splitlines()[:5]:
+                        print(f"    warning: {line}")
+                built += 1
+            else:
+                print(f"  Build failed: {source.name} ({result.stderr.strip()[:80]})")
+        except Exception:
+            pass
+
+    if built:
+        print(f"PoC binaries: {built}/{len(sources)} in {build_dir}")
+
+
+def prepare_A(workdir, target=None):
+    checklist = load_json(Path(workdir) / "checklist.json")
+    existing = load_json(Path(workdir) / "findings.json")
+    if not checklist:
+        print("ERROR: checklist.json not found")
+        sys.exit(1)
+    total_files = checklist['total_files']
+    total_sloc = checklist.get('total_sloc', 0)
+    print(f"Checklist: {total_files} files, {checklist['total_items']} items, {total_sloc} SLOC")
+    if total_files <= 20 and total_sloc < 2000:
+        print("  Target size: small — keep analysis concise, one tool call per finding where possible")
+    if existing:
+        print(f"Pre-existing findings: {len(existing.get('findings', []))}")
+    else:
+        print("No pre-existing findings")
+
+    # Discover existing binaries and build PoCs for standalone C files
+    if target:
+        build_dir = Path(workdir) / "build"
+        _build_standalone_pocs(target, str(build_dir))
+
+        executables = _discover_executables(target)
+        build_exes = _discover_executables(str(build_dir)) if build_dir.exists() else {}
+        if executables or build_exes:
+            print(f"Source → binary mapping:")
+            for f in checklist.get("files", []):
+                src = f["path"]
+                stem = Path(src).stem
+                prefix = stem.split("_")[0] if "_" in stem else ""
+                poc = build_exes.get(stem) or (build_exes.get(prefix) if prefix else "")
+                orig = executables.get(stem) or (executables.get(prefix) if prefix else "")
+                parts = []
+                if poc:
+                    parts.append(f"poc={poc}")
+                if orig:
+                    parts.append(f"original={orig}")
+                if parts:
+                    print(f"  {src}: {', '.join(parts)}")
+                else:
+                    print(f"  {src}: no binary")
+
+
+# ---------------------------------------------------------------------------
+# B: Validate Stage A output + dedup + load attack surface
+# ---------------------------------------------------------------------------
+
+def prepare_B(workdir, target=None):
+    _apply_stage_file(workdir, "A")
+
+
+    data = _findings(workdir)
+    findings = data.get("findings", [])
+
+    # --- Normalise vuln_types (LLM aliases → canonical) ---
+    for finding in findings:
+        vt = finding.get("vuln_type", "")
+        normalised = normalise_vuln_type(vt)
+        if normalised != vt:
+            print(f"  Normalised: {finding['id']} vuln_type '{vt}' -> '{normalised}'")
+            finding["vuln_type"] = normalised
+
+    # --- Dedup flag ---
+    for i, f1 in enumerate(findings):
+        for f2 in findings[i + 1:]:
+            if f1.get("status") == "disproven" or f2.get("status") == "disproven":
+                continue
+            same_func = (f1.get("file") == f2.get("file")
+                         and f1.get("function") == f2.get("function"))
+            nearby = (f1.get("file") == f2.get("file")
+                      and f1.get("vuln_type") == f2.get("vuln_type")
+                      and abs(f1.get("line", 0) - f2.get("line", 0)) <= 5)
+            if same_func or nearby:
+                f2["dedup_flag"] = f"potential_dup:{f1['id']}"
+                print(f"  Dedup flag: {f2['id']} may duplicate {f1['id']}")
+
+    # --- Carry-forward check (Stage A) ---
+    for finding in findings:
+        if finding.get("status") == "disproven":
+            continue
+        sa = finding.get("stage_a_summary")
+        if not sa:
+            print(f"  WARN: {finding['id']} missing stage_a_summary — add it")
+        elif not all(k in sa for k in ("confidence", "status")):
+            print(f"  WARN: {finding['id']} stage_a_summary incomplete — needs confidence, status")
+        if not finding.get("origin"):
+            print(f"  WARN: {finding['id']} missing origin field")
+
+    _save_findings(workdir, data)
+
+    # --- Schema validation ---
+    _validate_file(workdir, "findings.json", validate_findings)
+
+    # --- Fast-path for poc_success findings ---
+    hypotheses = load_json(Path(workdir) / "hypotheses.json") or []
+    attack_paths = load_json(Path(workdir) / "attack-paths.json") or []
+    existing_hyp_ids = {h.get("id") for h in hypotheses}
+    existing_path_ids = {p.get("id") for p in attack_paths}
+
+    fast_count = 0
+    full_count = 0
+    for finding in findings:
+        if finding.get("status") == "disproven":
+            continue
+        sa = finding.get("stage_a_summary", {})
+        poc = finding.get("poc", {})
+        fid = finding["id"]
+        num = fid.split("-")[-1] if "-" in fid else str(fast_count + 1)
+
+        if (finding.get("status") == "poc_success"
+                and sa.get("confidence") == "high"
+                and poc.get("result") and poc["result"] != "ran without error"):
+
+            # Mechanical fast-path: create audit trail entries
+            hyp_id = f"H{num}"
+            path_id = f"AP-{num}"
+
+            if hyp_id not in existing_hyp_ids:
+                hypotheses.append({
+                    "id": hyp_id,
+                    "finding": fid,
+                    "claim": f"{finding.get('vuln_type', 'vulnerability')} in {finding.get('file', '?')}:{finding.get('line', '?')} — exploitable via {finding.get('dataflow_summary', 'confirmed data flow')}",
+                    "predictions": [{
+                        "id": f"P{num}.1",
+                        "prediction": f"PoC: {poc.get('description', poc.get('payload', 'trigger vulnerability'))}",
+                        "result": poc.get("result", ""),
+                        "status": "confirmed",
+                    }],
+                    "status": "confirmed",
+                })
+
+            if path_id not in existing_path_ids:
+                attack_paths.append({
+                    "id": path_id,
+                    "name": f"PoC-confirmed: {finding.get('vuln_type', '')}",
+                    "finding": fid,
+                    "steps": [{"step": 1, "action": poc.get("description", "Run PoC"),
+                               "result": poc.get("result", "")}],
+                    "proximity": 9,
+                    "blockers": [],
+                    "status": "confirmed",
+                })
+
+            finding["stage_b_summary"] = {
+                "hypothesis_id": hyp_id,
+                "hypothesis_status": "confirmed",
+                "proximity": 9,
+                "attack_path_id": path_id,
+            }
+            fast_count += 1
+        else:
+            full_count += 1
+
+    # Always create all 5 working docs (empty if no data).
+    # This ensures Claude can Read-then-Write without "file not found" errors.
+    wdir = Path(workdir)
+    save_json(wdir / "hypotheses.json", hypotheses)
+    save_json(wdir / "attack-paths.json", attack_paths)
+    if not (wdir / "attack-surface.json").exists():
+        save_json(wdir / "attack-surface.json", {"sources": [], "sinks": [], "trust_boundaries": []})
+    if not (wdir / "attack-tree.json").exists():
+        save_json(wdir / "attack-tree.json", {"root": "ROOT", "nodes": []})
+    if not (wdir / "disproven.json").exists():
+        save_json(wdir / "disproven.json", {"disproven": []})
+    _save_findings(workdir, data)
+
+    if fast_count:
+        print(f"Fast-path: {fast_count} poc_success findings (audit trail created)")
+    if full_count:
+        print(f"Full analysis needed: {full_count} findings")
+
+    # --- Load attack surface ---
+    surface = load_json(wdir / "attack-surface.json")
+    active = _active(data)
+    deduped = [f for f in active if f.get("dedup_flag")]
+    not_done = [f for f in active if not f.get("stage_b_summary")]
+    print(f"{len(not_done)} findings need Stage B analysis (of {len(active)} active)")
+    if surface:
+        print(f"  Pre-existing attack surface: {len(surface.get('sources', []))} sources, "
+              f"{len(surface.get('sinks', []))} sinks")
+    if deduped:
+        print(f"  {len(deduped)} findings flagged as potential duplicates — review during analysis")
+
+    _report_workdir_files(workdir, "existing")
+
+
+# ---------------------------------------------------------------------------
+# C: Validate Stage B output + pre-check findings against inventory
+# ---------------------------------------------------------------------------
+
+def prepare_C(workdir, target=None):
+    _apply_stage_file(workdir, "B")
+
+    # --- Validate 6 working docs ---
+    for name, validator in [
+        ("findings.json", validate_findings),
+        ("attack-tree.json", validate_attack_tree),
+        ("attack-paths.json", validate_attack_paths),
+        ("attack-surface.json", validate_attack_surface),
+        ("hypotheses.json", validate_hypotheses),
+        ("disproven.json", validate_disproven),
+    ]:
+        if (Path(workdir) / name).exists():
+            _validate_file(workdir, name, validator)
+        else:
+            print(f"  {name}: not found")
+
+    # --- Carry-forward check (Stage B) ---
+    findings_data = _findings(workdir)
+    for finding in _active(findings_data):
+        sb = finding.get("stage_b_summary")
+        if not sb:
+            print(f"  WARN: {finding['id']} missing stage_b_summary — add it")
+        elif not all(k in sb for k in ("hypothesis_id", "hypothesis_status", "proximity")):
+            print(f"  WARN: {finding['id']} stage_b_summary incomplete")
+
+    # --- Pre-check findings against inventory ---
+    checklist = load_json(Path(workdir) / "checklist.json")
+    inv_files = {}
+    for f in checklist.get("files", []):
+        inv_files[f["path"]] = f
+    inv_paths = list(inv_files.keys())
+
+    for finding in findings_data.get("findings", []):
+        if finding.get("status") == "disproven":
+            finding["checklist_verified"] = True
+            continue
+        fpath = finding.get("file", "")
+        fline = finding.get("line", 0)
+        inv = inv_files.get(fpath)
+        if inv is None:
+            normalised = normalise_path(fpath, inv_paths)
+            inv = inv_files.get(normalised) if normalised else None
+        if inv is None:
+            finding["checklist_verified"] = False
+            print(f"  C0 FAIL: {finding['id']} — file '{fpath}' not in inventory")
+        elif fline > inv.get("lines", 0):
+            finding["checklist_verified"] = False
+            print(f"  C0 FAIL: {finding['id']} — line {fline} > file length {inv['lines']}")
+        else:
+            finding["checklist_verified"] = True
+
+    _save_findings(workdir, findings_data)
+    failed = sum(1 for f in findings_data["findings"] if f.get("checklist_verified") is False)
+    print(f"Inventory check: {failed} failed, {len(findings_data['findings']) - failed} passed")
+
+
+# ---------------------------------------------------------------------------
+# D: Validate Stage C output + test filter + evidence cards
+# ---------------------------------------------------------------------------
+
+TEST_PATTERNS = [
+    r"(^|/)tests?/", r"(^|/)__tests__/", r"(^|/)spec/",
+    r"(^|/)test_", r"_test\.\w+$", r"_spec\.\w+$",
+    r"(^|/)mock[s_]", r"(^|/)example[s]?/", r"(^|/)demo/",
+    r"(^|/)fixture[s]?/",
+]
+
+
+def prepare_D(workdir, target=None):
+    _apply_stage_file(workdir, "C")
+
+
+    data = _findings(workdir)
+
+    # --- Schema validation ---
+    _validate_file(workdir, "findings.json", validate_findings)
+
+    # --- Carry-forward check (Stage C) ---
+    REQUIRED_CHECKS = ("file_exists", "code_verbatim", "flow_real", "reachable")
+    for finding in data["findings"]:
+        if finding.get("status") == "disproven":
+            continue
+        sc = finding.get("stage_c_summary")
+        if not sc:
+            print(f"  WARN: {finding['id']} missing stage_c_summary — add it")
+        elif not isinstance(sc.get("checks"), dict):
+            print(f"  WARN: {finding['id']} stage_c_summary.checks must be a dict "
+                  f"with keys: {REQUIRED_CHECKS}")
+        elif not all(k in sc["checks"] for k in REQUIRED_CHECKS):
+            print(f"  WARN: {finding['id']} stage_c_summary.checks incomplete")
+
+    passed = sum(1 for f in data["findings"]
+                 if f.get("sanity_check", {}).get("passed"))
+    failed = sum(1 for f in data["findings"]
+                 if f.get("sanity_check", {}).get("passed") is False)
+    print(f"Sanity check: {passed} passed, {failed} failed")
+
+    # --- Test/mock path filter ---
+    for finding in data.get("findings", []):
+        if finding.get("status") == "disproven":
+            continue
+        fpath = finding.get("file", "")
+        finding["test_code_flag"] = any(re.search(p, fpath) for p in TEST_PATTERNS)
+        if finding["test_code_flag"]:
+            print(f"  D0 FLAG: {finding['id']} in test/mock path: {fpath}")
+
+    # --- Evidence card assembly ---
+    for finding in data.get("findings", []):
+        if finding.get("status") == "disproven":
+            continue
+        a = finding.get("stage_a_summary", {})
+        b = finding.get("stage_b_summary", {})
+        c = finding.get("stage_c_summary", {})
+        if a or b or c:
+            finding.setdefault("ruling", {})
+            finding["ruling"]["evidence_synthesis"] = {
+                "stage_a_confidence": a.get("confidence", ""),
+                "stage_b_hypothesis": b.get("hypothesis_status", "none"),
+                "stage_c_passed": c.get("passed"),
+                "synthesis": "",
+            }
+
+    _save_findings(workdir, data)
+    flagged = sum(1 for f in data["findings"] if f.get("test_code_flag"))
+    print(f"Test filter: {flagged} flagged, evidence cards assembled")
+
+
+# ---------------------------------------------------------------------------
+# E: Validate Stage D output + discover binaries
+# ---------------------------------------------------------------------------
+
+def _discover_executables(target):
+    """Find executable files in target directory. Returns {stem: path}."""
+    import subprocess as _sp
+    result = {}
+    try:
+        proc = _sp.run(
+            ["find", target, "-executable", "-type", "f"],
+            capture_output=True, text=True, timeout=30
+        )
+        for line in proc.stdout.strip().split("\n"):
+            if line:
+                p = Path(line)
+                result[p.stem] = str(p)
+    except Exception:
+        pass
+    return result
+
+
+def _match_finding_to_binary(finding, executables):
+    """Match a finding's source file to a discovered binary."""
+    src = finding.get("file", "")
+    if not src:
+        return ""
+    stem = Path(src).stem
+    if stem in executables:
+        return executables[stem]
+    if "_" in stem:
+        prefix = stem.split("_")[0]
+        if prefix in executables:
+            return executables[prefix]
+    for name, path in executables.items():
+        if stem.startswith(name) or name.startswith(stem):
+            return path
+    return ""
+
+
+def _discover_and_match_binaries(workdir, target, data):
+    """Discover binaries and match to findings."""
+
+    executables = _discover_executables(target)
+    if executables:
+        print(f"Discovered {len(executables)} executable(s) in {target}")
+
+    matched = 0
+    skipped = 0
+    for finding in data.get("findings", []):
+        if finding.get("status") == "disproven":
+            continue
+        if finding.get("ruling", {}).get("status") == "ruled_out":
+            continue
+        if finding.get("vuln_type", "") not in MEMORY_CORRUPTION_TYPES:
+            finding.setdefault("feasibility", {})["status"] = "not_applicable"
+            finding["stage_e_summary"] = {"status": "not_applicable"}
+            continue
+        bp = finding.get("feasibility", {}).get("binary_path", "")
+        if not bp and executables:
+            bp = _match_finding_to_binary(finding, executables)
+            if bp:
+                finding.setdefault("feasibility", {})["binary_path"] = bp
+                print(f"  {finding['id']}: matched -> {bp}")
+                matched += 1
+        if not bp:
+            finding.setdefault("feasibility", {})["status"] = "skipped"
+            finding["stage_e_summary"] = {"status": "skipped", "reason": "no binary found"}
+            skipped += 1
+
+    _save_findings(workdir, data)
+
+    groups = {}
+    for f in data.get("findings", []):
+        bp = f.get("feasibility", {}).get("binary_path", "")
+        if bp:
+            groups.setdefault(bp, []).append(f["id"])
+    print(f"{len(groups)} binary group(s), {matched} matched, {skipped} skipped")
+    for bp, ids in groups.items():
+        print(f"  {bp}: {', '.join(ids)}")
+
+
+def prepare_E(workdir, target=None):
+    _apply_stage_file(workdir, "D")
+
+
+    data = _findings(workdir)
+
+    # --- Schema validation ---
+    _validate_file(workdir, "findings.json", validate_findings)
+
+    # --- Carry-forward check (Stage D) ---
+    for finding in data["findings"]:
+        if finding.get("status") == "disproven":
+            continue
+        if finding.get("ruling", {}).get("status") == "ruled_out":
+            continue
+        sd = finding.get("stage_d_summary")
+        if not sd:
+            print(f"  WARN: {finding['id']} missing stage_d_summary — add it")
+        elif "ruling" not in sd:
+            print(f"  WARN: {finding['id']} stage_d_summary missing 'ruling' key")
+
+    ruled_out = sum(1 for f in data["findings"]
+                    if f.get("ruling", {}).get("status") == "ruled_out")
+    confirmed = sum(1 for f in data["findings"]
+                    if f.get("ruling", {}).get("status") in ("confirmed", "exploitable"))
+    print(f"Ruling: {confirmed} confirmed, {ruled_out} ruled out")
+
+    _save_findings(workdir, data)
+
+    # --- Discover binaries ---
+    if target:
+        _discover_and_match_binaries(workdir, target, data)
+    else:
+        print("  No --target provided, skipping binary discovery")
+
+
+# ---------------------------------------------------------------------------
+# F: Map Stage E verdicts + CVSS scoring + consistency checks
+# ---------------------------------------------------------------------------
+
+VERDICT_MAP = {
+    "likely": "exploitable",
+    "likely_exploitable": "exploitable",
+    "exploitable": "exploitable",
+    "difficult": "confirmed_constrained",
+    "unlikely": "confirmed_blocked",
+}
+
+
+def prepare_F(workdir, target=None):
+    _apply_stage_file(workdir, "E")
+
+
+    data = _findings(workdir)
+
+    # --- Verdict-to-status mapping ---
+    for finding in data.get("findings", []):
+        verdict = finding.get("feasibility", {}).get("verdict", "")
+        if verdict and verdict in VERDICT_MAP:
+            mapped = VERDICT_MAP[verdict]
+            finding["final_status"] = mapped
+            # Sync status with final_status so the report reflects Stage E results
+            old_status = finding.get("status", "")
+            if old_status != mapped:
+                finding["status"] = mapped
+                print(f"  {finding['id']}: {verdict} -> {mapped} (was {old_status})")
+            else:
+                print(f"  {finding['id']}: {verdict} -> {mapped}")
+
+    # --- Set final_status for non-memory-corruption findings ---
+    for finding in data.get("findings", []):
+        if not finding.get("final_status") and finding.get("status"):
+            finding["final_status"] = finding["status"]
+
+    # --- Derive is_exploitable from final_status ---
+    for finding in data.get("findings", []):
+        fs = finding.get("final_status", "")
+        if fs in ("exploitable",):
+            finding["is_exploitable"] = True
+        elif fs in ("confirmed_constrained", "confirmed_blocked", "confirmed", "confirmed_unverified"):
+            finding["is_exploitable"] = False
+
+    # --- Carry-forward check (Stage E) ---
+    for finding in data.get("findings", []):
+        se = finding.get("stage_e_summary")
+        if not se and finding.get("vuln_type") in MEMORY_CORRUPTION_TYPES:
+            print(f"  WARN: {finding['id']} missing stage_e_summary — add it")
+
+    _save_findings(workdir, data)
+
+    # --- CVSS score computation ---
+    try:
+        from packages.cvss import score_findings
+        score_findings(data.get("findings", []))
+        for finding in data.get("findings", []):
+            score = finding.get("cvss_score_estimate")
+            vector = finding.get("cvss_vector")
+            if score is not None:
+                print(f"  {finding['id']}: {vector} -> {score}")
+        _save_findings(workdir, data)
+    except Exception as e:
+        print(f"  CVSS scoring error: {e}")
+
+    # --- Verdict mapping consistency ---
+    for finding in data.get("findings", []):
+        verdict = finding.get("feasibility", {}).get("verdict", "")
+        if verdict and verdict in VERDICT_MAP:
+            expected = VERDICT_MAP[verdict]
+            actual = finding.get("final_status")
+            if actual != expected:
+                print(f"  MISMATCH: {finding['id']} verdict={verdict} "
+                      f"expected={expected} got={actual}")
+
+    # --- Proximity consistency ---
+    by_vuln = defaultdict(list)
+    for finding in data.get("findings", []):
+        b = finding.get("stage_b_summary", {})
+        if b.get("proximity") is not None:
+            by_vuln[finding.get("vuln_type", "")].append(
+                (finding["id"], b["proximity"])
+            )
+    for vuln, scores in by_vuln.items():
+        if len(scores) > 1:
+            vals = [s[1] for s in scores]
+            if max(vals) - min(vals) > 3:
+                print(f"  PROXIMITY SPREAD: {vuln} — {scores} (spread > 3)")
+
+    _report_workdir_files(workdir, "available for review")
+
+    print("Stage F prep complete")
+
+
+# ---------------------------------------------------------------------------
+# 0: Start run + build inventory
+# ---------------------------------------------------------------------------
+
+def prepare_0(workdir_unused, target=None):
+    if not target:
+        print("ERROR: --target is required for stage 0", file=sys.stderr)
+        sys.exit(1)
+
+    from core.run.output import get_output_dir, TargetMismatchError
+    from core.run.metadata import start_run
+
+    try:
+        out_dir = get_output_dir("validate", target_path=target)
+    except TargetMismatchError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    start_run(out_dir, "validate")
+
+    from packages.exploitability_validation import build_checklist
+    checklist = build_checklist(target, str(out_dir))
+
+    # Create build directory for PoC compilation
+    (out_dir / "build").mkdir(exist_ok=True)
+
+    print(f"Checklist: {checklist['total_files']} files, {checklist['total_items']} items")
+    print(f"OUTPUT_DIR={out_dir}")
+
+
+# ---------------------------------------------------------------------------
+# 1: Generate report + complete run
+# ---------------------------------------------------------------------------
+
+def prepare_1(workdir, target=None):
+    _apply_stage_file(workdir, "F")
+
+    from packages.exploitability_validation.report import write_validation_report
+    try:
+        write_validation_report(workdir)
+        print("Report generated")
+    except Exception as e:
+        print(f"Report error: {e}")
+
+    try:
+        from packages.diagram import render_and_write
+        render_and_write(Path(workdir))
+        print("Diagrams generated")
+    except Exception as e:
+        print(f"Diagram error: {e}")
+
+    # Print summary
+    from packages.exploitability_validation.report import generate_summary
+    print(generate_summary(workdir))
+
+    # Complete run lifecycle
+    from core.run.metadata import complete_run
+    try:
+        complete_run(Path(workdir))
+    except Exception as e:
+        print(f"Lifecycle error: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+
+STAGES = {
+    "0": prepare_0,
+    "A": prepare_A,
+    "B": prepare_B,
+    "C": prepare_C,
+    "D": prepare_D,
+    "E": prepare_E,
+    "F": prepare_F,
+    "1": prepare_1,
+}
+
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] not in STAGES:
+        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>]")
+        sys.exit(1)
+
+    stage = args[0]
+    target = None
+    if "--target" in args:
+        idx = args.index("--target")
+        if idx + 1 < len(args):
+            target = args[idx + 1]
+
+    # Stage 0 doesn't need a workdir (it creates one)
+    if stage == "0":
+        prepare_0(None, target)
+        return
+
+    # All other stages need a workdir
+    if len(args) < 2 or args[1].startswith("--"):
+        print(f"ERROR: workdir required for stage {stage}", file=sys.stderr)
+        sys.exit(1)
+
+    workdir = args[1]
+    if not Path(workdir).is_dir():
+        print(f"ERROR: workdir not found: {workdir}", file=sys.stderr)
+        sys.exit(1)
+
+    STAGES[stage](workdir, target)
+
+
+if __name__ == "__main__":
+    main()

@@ -25,15 +25,17 @@ def get_display_status(finding: Dict[str, Any]) -> str:
         if finding.get("is_true_positive"):
             return "Confirmed"
 
-    # Check ruling dict (validate pipeline)
-    ruling = finding.get("ruling", {})
-    if isinstance(ruling, dict):
-        status = ruling.get("status", "")
-    else:
-        status = str(ruling) if ruling else ""
+    # final_status is authoritative (set after Stage E feasibility adjustment)
+    status = finding.get("final_status", "")
 
-    # Fall through to flat fields
-    status = status or finding.get("final_status", "") or finding.get("status", "")
+    # Fall back to ruling.status (Stage D), then top-level status
+    if not status:
+        ruling = finding.get("ruling", {})
+        if isinstance(ruling, dict):
+            status = ruling.get("status", "")
+        else:
+            status = str(ruling) if ruling else ""
+    status = status or finding.get("status", "")
 
     status_map = {
         "exploitable": "Exploitable",

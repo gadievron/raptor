@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Run exploit feasibility analysis on a binary for a group of findings.
+
+Usage: raptor-run-feasibility <binary_path> <findings.json> <output_dir> [--vuln-type <type>]
+
+Runs analyze_binary once, saves exploit context, then maps constraints
+to all findings that reference this binary. Updates findings.json in place.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.json import load_json, save_json
+
+
+def main():
+    if len(sys.argv) < 4:
+        print(f"Usage: {sys.argv[0]} <binary_path> <findings.json> <output_dir> [--vuln-type <type>]")
+        sys.exit(1)
+
+    binary_path = sys.argv[1]
+    findings_path = Path(sys.argv[2])
+    output_dir = sys.argv[3]
+
+    vuln_type = None
+    if "--vuln-type" in sys.argv:
+        idx = sys.argv.index("--vuln-type")
+        if idx + 1 < len(sys.argv):
+            vuln_type = sys.argv[idx + 1]
+
+    if not Path(binary_path).exists():
+        print(f"ERROR: binary not found: {binary_path}")
+        sys.exit(1)
+
+    findings_data = load_json(findings_path)
+    if not findings_data:
+        print("ERROR: cannot load findings")
+        sys.exit(1)
+
+    # Find findings that reference this binary
+    group = [
+        f for f in findings_data.get("findings", [])
+        if f.get("feasibility", {}).get("binary_path") == binary_path
+        and f.get("status") != "disproven"
+        and f.get("ruling", {}).get("status") != "ruled_out"
+    ]
+
+    if not group:
+        print(f"No findings reference binary: {binary_path}")
+        return
+
+    # Determine vuln_type from first finding if not specified
+    if not vuln_type:
+        vuln_type = group[0].get("vuln_type", "")
+
+    print(f"Analyzing {binary_path} ({len(group)} finding(s), vuln_type={vuln_type})")
+
+    from packages.exploit_feasibility import (
+        save_exploit_context,
+        load_exploit_context,
+        map_findings_to_constraints,
+    )
+
+    # Run analysis and save context in one call (avoids duplicate analysis)
+    context_file = save_exploit_context(binary_path, output_dir=output_dir, vuln_type=vuln_type)
+    print(f"  Context saved: {context_file}")
+
+    # Load context for mapping
+    constraints = load_exploit_context(context_file)
+    result = constraints
+    print(f"  Binary verdict (generic): {constraints.get('verdict', 'unknown')}")
+    print(f"  Mapping per-finding verdicts (vuln-type-aware)...")
+    mapped = map_findings_to_constraints(
+        [{"id": f["id"], "vuln_type": f.get("vuln_type", "")} for f in group],
+        constraints,
+    )
+
+    # Update findings with feasibility data
+    by_id = {f["id"]: f for f in findings_data.get("findings", [])}
+    for assessment in mapped:
+        finding = by_id.get(assessment.finding_id)
+        if finding:
+            finding["feasibility"] = {
+                "status": "analyzed",
+                "binary_path": binary_path,
+                "context_file": str(context_file),
+                "verdict": assessment.verdict,
+                "impact": assessment.impact,
+                "blockers": assessment.blockers,
+                "chain_breaks": result.get("chain_breaks", []),
+                "what_would_help": result.get("what_would_help", []),
+                "notes": assessment.notes,
+                "exploitation_paths": [
+                    {"technique": p.technique, "target": p.target}
+                    for p in (assessment.exploitation_paths or [])
+                ],
+            }
+            finding["stage_e_summary"] = {
+                "verdict": assessment.verdict,
+                "binary_path": binary_path,
+                "impact": assessment.impact,
+            }
+            print(f"  {finding['id']}: {assessment.verdict}")
+
+    save_json(findings_path, findings_data)
+    print(f"Updated {len(mapped)} finding(s)")
+
+
+if __name__ == "__main__":
+    main()

@@ -4,6 +4,15 @@
     "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1",
     "BASH_DEFAULT_TIMEOUT_MS": "300000"
   },
+  "permissions": {
+    "allow": [
+      "Bash(libexec/raptor-prepare-validation-stage *)",
+      "Bash(libexec/raptor-run-feasibility *)",
+      "Bash(libexec/raptor-validate-schema *)",
+      "Write(/out/**)",
+      "Edit(/out/**)"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {

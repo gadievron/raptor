@@ -61,6 +61,127 @@ VULN_TYPES = [
     "hardcoded_secret", "weak_crypto", "other",
 ]
 
+# Memory corruption vuln_types — Stage E feasibility analysis applies to these.
+# Non-memory-corruption types (command_injection, sql_injection, xss, etc.) skip Stage E.
+MEMORY_CORRUPTION_TYPES = frozenset({
+    "buffer_overflow", "heap_overflow", "stack_overflow",
+    "format_string", "use_after_free", "double_free",
+    "integer_overflow", "out_of_bounds_read", "out_of_bounds_write",
+    "null_deref", "type_confusion", "uninitialized_memory",
+})
+
+def needs_feasibility_analysis(vuln_type: str) -> bool:
+    """Check if a vuln_type requires Stage E binary feasibility analysis."""
+    return normalise_vuln_type(vuln_type) in MEMORY_CORRUPTION_TYPES
+
+
+# ---------------------------------------------------------------------------
+# LLM alias → canonical vuln_type mapping
+# ---------------------------------------------------------------------------
+# LLMs produce varied names for the same vuln type. This maps common
+# alternatives to the canonical VULN_TYPES enum values.
+
+VULN_TYPE_ALIASES = {
+    # Race condition / TOCTOU
+    "toctou": "race_condition",
+    "time_of_check_time_of_use": "race_condition",
+    "time_of_check_to_time_of_use": "race_condition",
+    "race": "race_condition",
+    # Null dereference
+    "null_pointer_dereference": "null_deref",
+    "null_ptr_dereference": "null_deref",
+    "null_dereference": "null_deref",
+    "nullptr_deref": "null_deref",
+    "null_pointer": "null_deref",
+    "null_ptr_deref": "null_deref",
+    "null_pointer_deref": "null_deref",
+    # Buffer overflow
+    "bof": "buffer_overflow",
+    "stack_buffer_overflow": "buffer_overflow",
+    "heap_buffer_overflow": "heap_overflow",
+    "stack_bof": "stack_overflow",
+    "heap_bof": "heap_overflow",
+    # Use-after-free
+    "uaf": "use_after_free",
+    "use_after_free_read": "use_after_free",
+    "use_after_free_write": "use_after_free",
+    # Double free
+    "double-free": "double_free",
+    # Format string
+    "fmt_string": "format_string",
+    "format_string_bug": "format_string",
+    "format_string_vulnerability": "format_string",
+    "printf_vulnerability": "format_string",
+    # XSS
+    "cross_site_scripting": "xss",
+    "reflected_xss": "xss",
+    "stored_xss": "xss",
+    "dom_xss": "xss",
+    # SQL injection
+    "sqli": "sql_injection",
+    "sql_injection_blind": "sql_injection",
+    # Command injection
+    "os_command_injection": "command_injection",
+    "cmd_injection": "command_injection",
+    "shell_injection": "command_injection",
+    "code_injection": "command_injection",
+    "rce": "command_injection",
+    "remote_code_execution": "command_injection",
+    # Path traversal
+    "directory_traversal": "path_traversal",
+    "lfi": "path_traversal",
+    "local_file_inclusion": "path_traversal",
+    "file_inclusion": "path_traversal",
+    # SSRF
+    "server_side_request_forgery": "ssrf",
+    # Integer overflow
+    "int_overflow": "integer_overflow",
+    "integer_underflow": "integer_overflow",
+    "int_underflow": "integer_overflow",
+    "integer_wrap": "integer_overflow",
+    # Out of bounds
+    "oob_read": "out_of_bounds_read",
+    "oob_write": "out_of_bounds_write",
+    "out_of_bounds": "out_of_bounds_read",
+    "stack_overread": "out_of_bounds_read",
+    "heap_overread": "out_of_bounds_read",
+    "buffer_over_read": "out_of_bounds_read",
+    "buffer_overread": "out_of_bounds_read",
+    # Deserialization
+    "insecure_deserialization": "deserialization",
+    "unsafe_deserialization": "deserialization",
+    # Memory leak
+    "information_leak": "memory_leak",
+    "info_leak": "memory_leak",
+    # Crypto
+    "weak_cryptography": "weak_crypto",
+    "insecure_crypto": "weak_crypto",
+    # Type confusion
+    "type_confusion_vulnerability": "type_confusion",
+    # Uninitialized memory
+    "uninitialized_variable": "uninitialized_memory",
+    "uninitialized_read": "uninitialized_memory",
+    # Privilege
+    "privilege_escalation": "privilege_confusion",
+    # Hardcoded secrets
+    "hardcoded_credentials": "hardcoded_secret",
+    "hardcoded_password": "hardcoded_secret",
+    "embedded_secret": "hardcoded_secret",
+}
+
+
+def normalise_vuln_type(vuln_type: str) -> str:
+    """Normalize a vuln_type string to its canonical form.
+
+    Accepts LLM-friendly aliases (toctou, null_pointer_dereference, etc.)
+    and returns the canonical VULN_TYPES enum value. Returns unchanged if
+    already canonical or unrecognised.
+    """
+    if not vuln_type:
+        return vuln_type
+    lower = vuln_type.lower().strip()
+    return VULN_TYPE_ALIASES.get(lower, lower)
+
 # Severity assessment levels.
 SEVERITY_LEVELS = ["critical", "high", "medium", "low", "informational"]
 

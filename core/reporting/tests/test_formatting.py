@@ -45,6 +45,19 @@ class TestGetDisplayStatus(unittest.TestCase):
     def test_validated_ruling(self):
         self.assertEqual(get_display_status({"ruling": {"status": "validated"}}), "Confirmed")
 
+    def test_final_status_overrides_ruling(self):
+        """final_status (post-feasibility) takes priority over ruling.status (Stage D)."""
+        self.assertEqual(get_display_status({
+            "ruling": {"status": "exploitable"},
+            "final_status": "confirmed_constrained",
+        }), "Confirmed (Constrained)")
+
+    def test_final_status_overrides_ruling_blocked(self):
+        self.assertEqual(get_display_status({
+            "ruling": {"status": "confirmed"},
+            "final_status": "confirmed_blocked",
+        }), "Confirmed (Blocked)")
+
     def test_boolean_overrides_ruling_string(self):
         # Agentic: is_exploitable=True should win over ruling=test_code
         self.assertEqual(get_display_status(

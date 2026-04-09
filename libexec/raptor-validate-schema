@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""Validate a RAPTOR JSON output file against its schema.
+
+Usage: raptor-validate-schema <type> <file>
+
+Types:
+  findings        findings.json
+  checklist       checklist.json
+  attack-tree     attack-tree.json
+  attack-paths    attack-paths.json
+  attack-surface  attack-surface.json
+  hypotheses      hypotheses.json
+  disproven       disproven.json
+
+Exit code 0 on success, 1 on validation errors, 2 on missing file.
+
+On success, records file hash in <dir>/.validated so the prep script
+can skip re-validation if the file hasn't changed.
+"""
+import hashlib
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.json import load_json, save_json
+
+
+VALIDATORS = {
+    "findings": "validate_findings",
+    "checklist": "validate_checklist",
+    "attack-tree": "validate_attack_tree",
+    "attack-paths": "validate_attack_paths",
+    "attack-surface": "validate_attack_surface",
+    "hypotheses": "validate_hypotheses",
+    "disproven": "validate_disproven",
+    "stage": None,  # handled separately
+}
+
+
+def _hash_file(filepath):
+    return hashlib.sha256(filepath.read_bytes()).hexdigest()
+
+
+def _read_validated(directory):
+    """Read .validated hashes. Returns {filename: hash}."""
+    vfile = Path(directory) / ".validated"
+    result = {}
+    if vfile.exists():
+        for line in vfile.read_text().splitlines():
+            if ":" in line:
+                name, h = line.split(":", 1)
+                result[name.strip()] = h.strip()
+    return result
+
+
+def _write_validated(directory, filename, filehash):
+    """Record a validated file hash."""
+    vfile = Path(directory) / ".validated"
+    existing = _read_validated(directory)
+    existing[filename] = filehash
+    lines = [f"{k}:{v}" for k, v in sorted(existing.items())]
+    vfile.write_text("\n".join(lines) + "\n")
+
+
+def _validate_stage_file(data, filename):
+    """Validate a stage-X.json file. Returns list of errors (empty = valid)."""
+    errors = []
+
+    if not isinstance(data, dict):
+        return ["stage file must be a JSON object"]
+
+    stage = data.get("stage", "")
+    if not stage:
+        errors.append("missing 'stage' field")
+
+    # Stage A: build format — has "findings" array
+    if stage.upper() == "A":
+        if "findings" not in data:
+            errors.append("stage-a.json must have 'findings' array")
+        elif not isinstance(data["findings"], list):
+            errors.append("'findings' must be an array")
+        else:
+            for i, f in enumerate(data["findings"]):
+                if not isinstance(f, dict):
+                    errors.append(f"findings[{i}]: must be an object")
+                elif not f.get("id"):
+                    errors.append(f"findings[{i}]: missing 'id'")
+                elif not f.get("vuln_type"):
+                    errors.append(f"findings[{i}]: missing 'vuln_type'")
+    else:
+        # Stages B-F: update format — has "updates" map
+        if "updates" not in data:
+            errors.append(f"{filename} must have 'updates' map")
+        elif not isinstance(data["updates"], dict):
+            errors.append("'updates' must be an object (finding ID -> fields)")
+        else:
+            for fid, update in data["updates"].items():
+                if not isinstance(update, dict):
+                    errors.append(f"updates.{fid}: must be an object")
+
+    return errors
+
+
+def is_already_validated(filepath):
+    """Check if file was already validated and hasn't changed."""
+    filepath = Path(filepath)
+    validated = _read_validated(filepath.parent)
+    recorded = validated.get(filepath.name)
+    if not recorded:
+        return False
+    return recorded == _hash_file(filepath)
+
+
+def main():
+    if len(sys.argv) < 3 or sys.argv[1] not in VALIDATORS:
+        print(f"Usage: {sys.argv[0]} <type> <file>")
+        print(f"Types: {', '.join(sorted(VALIDATORS.keys()))}")
+        sys.exit(2)
+
+    schema_type = sys.argv[1]
+    filepath = Path(sys.argv[2])
+
+    # Auto-detect stage files regardless of what type was requested
+    if filepath.name.startswith("stage-") and filepath.name.endswith(".json"):
+        if schema_type != "stage":
+            print(f"NOTE: auto-detected stage file — using 'stage' validator instead of '{schema_type}'")
+            schema_type = "stage"
+
+    if not filepath.exists():
+        print(f"ERROR: file not found: {filepath}")
+        sys.exit(2)
+
+    data = load_json(filepath)
+    if data is None:
+        print(f"ERROR: cannot parse JSON: {filepath}")
+        sys.exit(2)
+
+    # Stage file validation (different format from findings.json)
+    if schema_type == "stage":
+        errors = _validate_stage_file(data, filepath.name)
+        if not errors:
+            _write_validated(filepath.parent, filepath.name, _hash_file(filepath))
+            print(f"OK: {filepath.name}")
+        else:
+            print(f"ERRORS in {filepath.name}:")
+            for e in errors:
+                print(f"  {e}")
+            sys.exit(1)
+        return
+
+    # Normalise vuln_types before validating findings
+    if schema_type == "findings":
+        from core.schema_constants import normalise_vuln_type
+        changed = False
+        for f in data.get("findings", []):
+            vt = f.get("vuln_type", "")
+            norm = normalise_vuln_type(vt)
+            if norm != vt:
+                f["vuln_type"] = norm
+                changed = True
+        if changed:
+            save_json(filepath, data)
+
+    from packages.exploitability_validation import schemas
+    validator = getattr(schemas, VALIDATORS[schema_type])
+    valid, errors = validator(data)
+
+    if valid:
+        _write_validated(filepath.parent, filepath.name, _hash_file(filepath))
+        print(f"OK: {filepath.name}")
+    else:
+        print(f"ERRORS in {filepath.name}:")
+        for e in errors:
+            print(f"  {e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
