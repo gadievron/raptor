@@ -38,18 +38,18 @@ def _get_client() -> Optional[SageClient]:
 
 
 def _run_async(coro):
-    """Run an async coroutine from sync code safely."""
+    """Run an async coroutine from sync code safely.
+
+    Always creates a fresh event loop to avoid 'Event loop is closed'
+    errors when called from subprocesses or after asyncio.run().
+    """
+    loop = asyncio.new_event_loop()
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_closed():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
         return loop.run_until_complete(coro)
-    except RuntimeError:
-        # No event loop — create one
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+        # Reset so the next call also gets a fresh loop
+        asyncio.set_event_loop(asyncio.new_event_loop())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
