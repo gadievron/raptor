@@ -376,6 +376,7 @@ def main():
             if not p:
                 print(f"Project '{args.name}' not found.")
                 return
+            p.sweep_stale_runs(keep_latest=True)
             project_json = mgr.projects_dir / f"{args.name}.json"
             result = export_project(p.output_path, Path(args.path),
                                     project_json_path=project_json,

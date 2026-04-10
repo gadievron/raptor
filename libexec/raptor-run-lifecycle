@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Run lifecycle management — start, complete, fail.
+"""Run lifecycle management — start, complete, fail, cancel.
 
 Usage:
   raptor-run-lifecycle start <command> --target <path> [--out <dir>]
   raptor-run-lifecycle complete <output_dir>
   raptor-run-lifecycle fail <output_dir> [message]
+  raptor-run-lifecycle cancel <output_dir>
 
 start: creates output directory, writes .raptor-run.json, prints OUTPUT_DIR=<path>
-complete: marks run as completed
+complete: marks run as completed, writes coverage record from reads manifest
 fail: marks run as failed with optional error message
+cancel: marks run as cancelled
 """
 import sys
 from pathlib import Path
@@ -68,6 +70,18 @@ def main():
         except Exception as e:
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)
+        # Convert reads manifest to coverage record if it exists
+        try:
+            from core.coverage.record import build_from_manifest, write_record, cleanup_manifest
+            from core.run.metadata import load_run_metadata
+            meta = load_run_metadata(output_dir)
+            tool = meta.get("command", "unknown") if meta else "unknown"
+            record = build_from_manifest(output_dir, tool)
+            if record:
+                write_record(output_dir, record)
+                cleanup_manifest(output_dir)
+        except Exception:
+            pass  # Coverage record is optional
 
     elif action == "fail":
         if len(sys.argv) < 3:
@@ -81,9 +95,21 @@ def main():
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)
 
+    elif action == "cancel":
+        if len(sys.argv) < 3:
+            print("Usage: raptor-run-lifecycle cancel <output_dir>", file=sys.stderr)
+            sys.exit(1)
+        output_dir = Path(sys.argv[2])
+        try:
+            from core.run.metadata import cancel_run
+            cancel_run(output_dir)
+        except Exception as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
+
     else:
         print(f"Unknown action: {action}", file=sys.stderr)
-        print("Actions: start, complete, fail", file=sys.stderr)
+        print("Actions: start, complete, fail, cancel", file=sys.stderr)
         sys.exit(1)
 
 

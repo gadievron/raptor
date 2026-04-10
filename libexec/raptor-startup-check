@@ -124,6 +124,12 @@ def main():
             i += 1
 
     try:
+        # Clear stale auto-activation marker from previous session
+        from core.startup import PROJECTS_DIR
+        auto_marker = PROJECTS_DIR / ".auto"
+        if auto_marker.exists():
+            auto_marker.unlink()
+
         # Handle -p flag
         if project_flag:
             if not _activate(project_flag):
@@ -136,12 +142,21 @@ def main():
         if not active and caller_dir:
             auto_name = _find_project_for(caller_dir)
             if auto_name and _activate(auto_name):
+                (PROJECTS_DIR / ".auto").write_text(auto_name)
                 print(f"  Auto-activated project: {auto_name}")
                 return
 
         # Mismatch check
         if active and caller_dir:
             _check_mismatch(caller_dir)
+
+        # Sweep stale runs in the active project
+        active = _load_active()
+        if active:
+            from core.project import ProjectManager
+            p = ProjectManager().load(active["name"])
+            if p:
+                p.sweep_stale_runs()
 
     except Exception as e:
         # Non-fatal — continue to Claude without project

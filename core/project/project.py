@@ -61,27 +61,74 @@ class Project:
     def output_path(self) -> Path:
         return Path(self.output_dir)
 
-    def get_run_dirs(self) -> List[Path]:
+    def _list_run_dirs(self) -> List[Path]:
+        """List run directories (unsorted). Shared by get_run_dirs and sweep."""
+        if not self.output_path.exists():
+            return []
+        return [d for d in self.output_path.iterdir()
+                if d.is_dir() and not d.name.startswith((".", "_"))]
+
+    def get_run_dirs(self, sweep=True) -> List[Path]:
         """List run directories sorted newest-first.
 
         Uses the timestamp embedded in the directory name when available
         (deterministic), falls back to mtime for non-standard names.
-        Excludes directories starting with '.' or '_' (internal/metadata dirs).
+        When sweep=True (default), marks stale 'running' dirs as failed.
+        Inside Claude Code (CLAUDECODE=1), keeps the newest running dir
+        (may be active). Outside Claude Code, sweeps all.
         """
-        if not self.output_path.exists():
-            return []
         from core.run.metadata import parse_timestamp_from_name
 
         def _sort_key(d: Path) -> str:
             ts = parse_timestamp_from_name(d.name)
             if ts:
                 return ts
-            # Fallback: convert mtime to ISO for consistent comparison
             return datetime.fromtimestamp(d.stat().st_mtime, tz=timezone.utc).isoformat()
 
-        dirs = [d for d in self.output_path.iterdir()
-                if d.is_dir() and not d.name.startswith((".", "_"))]
+        dirs = self._list_run_dirs()
+        if sweep:
+            in_session = bool(os.environ.get("CLAUDECODE"))
+            self._sweep_stale(dirs, keep_latest=in_session)
         return sorted(dirs, key=_sort_key, reverse=True)
+
+    def sweep_stale_runs(self, keep_latest=False) -> int:
+        """Mark stale 'running' run dirs as failed.
+
+        Args:
+            keep_latest: if True, skip the most recent 'running' dir
+                         (it may be actively running this session).
+                         False at startup (nothing is running).
+
+        Returns count of dirs marked failed.
+        """
+        return self._sweep_stale(self._list_run_dirs(), keep_latest)
+
+    def _sweep_stale(self, dirs: list, keep_latest=False) -> int:
+        """Mark 'running' dirs as failed, optionally keeping the newest."""
+        from core.run.metadata import RUN_METADATA_FILE, fail_run
+        from core.json import load_json
+
+        # Find all running dirs with their timestamps
+        running = []
+        for d in dirs:
+            meta_file = d / RUN_METADATA_FILE
+            if not meta_file.exists():
+                continue
+            meta = load_json(meta_file)
+            if meta and meta.get("status") == "running":
+                running.append((meta.get("timestamp", ""), d))
+
+        if not running:
+            return 0
+
+        # Sort newest first; optionally skip the newest
+        running.sort(reverse=True)
+        to_sweep = running[1:] if keep_latest else running
+
+        for _, d in to_sweep:
+            fail_run(d, "stale — session ended without completion")
+
+        return len(to_sweep)
 
     def get_run_dirs_by_type(self) -> Dict[str, List[Path]]:
         """Group run directories by command type.
@@ -92,7 +139,7 @@ class Project:
         from core.run import infer_command_type, generate_run_metadata
         from core.run.metadata import RUN_METADATA_FILE
         groups: Dict[str, List[Path]] = {}
-        for d in self.get_run_dirs():
+        for d in self.get_run_dirs(sweep=False):
             if not (d / RUN_METADATA_FILE).exists():
                 generate_run_metadata(d)
             cmd_type = infer_command_type(d)
@@ -330,11 +377,12 @@ class ProjectManager:
         """Set the active project symlink. Pass None to clear.
 
         The symlink is the single source of truth for project state.
-        No env vars are set or cleared.
         """
         active_link = self.projects_dir / ".active"
+        auto_marker = self.projects_dir / ".auto"
         if active_link.is_symlink() or active_link.exists():
             active_link.unlink()
+        auto_marker.unlink(missing_ok=True)
         if name is not None:
             active_link.symlink_to(f"{name}.json")
 

@@ -28,7 +28,7 @@ class TestProject(unittest.TestCase):
     def test_get_run_dirs_empty(self):
         with TemporaryDirectory() as d:
             p = Project(name="test", target="/tmp", output_dir=d)
-            self.assertEqual(p.get_run_dirs(), [])
+            self.assertEqual(p.get_run_dirs(sweep=False), [])
 
     def test_get_run_dirs_sorted(self):
         with TemporaryDirectory() as d:
@@ -36,7 +36,7 @@ class TestProject(unittest.TestCase):
             (Path(d) / "scan-20260401").mkdir()
             (Path(d) / "scan-20260403").mkdir()
             p = Project(name="test", target="/tmp", output_dir=d)
-            dirs = p.get_run_dirs()
+            dirs = p.get_run_dirs(sweep=False)
             self.assertEqual(len(dirs), 2)
             # Newest first
             self.assertEqual(dirs[0].name, "scan-20260403")
@@ -48,9 +48,57 @@ class TestProject(unittest.TestCase):
             (Path(d) / "_tmp").mkdir()
             (Path(d) / "scan-20260401").mkdir()
             p = Project(name="test", target="/tmp", output_dir=d)
-            dirs = p.get_run_dirs()
+            dirs = p.get_run_dirs(sweep=False)
             self.assertEqual(len(dirs), 1)
             self.assertEqual(dirs[0].name, "scan-20260401")
+
+    def test_sweep_marks_stale_running_as_failed(self):
+        """sweep_stale_runs marks 'running' dirs as failed."""
+        from core.run.metadata import start_run, RUN_METADATA_FILE
+        from core.json import load_json
+        with TemporaryDirectory() as d:
+            run1 = Path(d) / "scan-20260401"
+            run1.mkdir()
+            start_run(run1, "scan")
+            run2 = Path(d) / "scan-20260402"
+            run2.mkdir()
+            start_run(run2, "scan")
+            p = Project(name="test", target="/tmp", output_dir=d)
+            count = p.sweep_stale_runs(keep_latest=False)
+            self.assertEqual(count, 2)
+            self.assertEqual(load_json(run1 / RUN_METADATA_FILE)["status"], "failed")
+            self.assertEqual(load_json(run2 / RUN_METADATA_FILE)["status"], "failed")
+
+    def test_sweep_keep_latest_preserves_newest(self):
+        """sweep with keep_latest=True skips the newest running dir."""
+        from core.run.metadata import start_run, RUN_METADATA_FILE
+        from core.json import load_json
+        with TemporaryDirectory() as d:
+            old = Path(d) / "scan-20260401"
+            old.mkdir()
+            start_run(old, "scan")
+            new = Path(d) / "scan-20260402"
+            new.mkdir()
+            start_run(new, "scan")
+            p = Project(name="test", target="/tmp", output_dir=d)
+            count = p.sweep_stale_runs(keep_latest=True)
+            self.assertEqual(count, 1)
+            self.assertEqual(load_json(old / RUN_METADATA_FILE)["status"], "failed")
+            self.assertEqual(load_json(new / RUN_METADATA_FILE)["status"], "running")
+
+    def test_sweep_ignores_completed(self):
+        """sweep doesn't touch completed/failed dirs."""
+        from core.run.metadata import start_run, complete_run, RUN_METADATA_FILE
+        from core.json import load_json
+        with TemporaryDirectory() as d:
+            run1 = Path(d) / "scan-20260401"
+            run1.mkdir()
+            start_run(run1, "scan")
+            complete_run(run1)
+            p = Project(name="test", target="/tmp", output_dir=d)
+            count = p.sweep_stale_runs(keep_latest=False)
+            self.assertEqual(count, 0)
+            self.assertEqual(load_json(run1 / RUN_METADATA_FILE)["status"], "completed")
 
     def test_get_run_dirs_by_type_jit_metadata(self):
         """Runs without .raptor-run.json get metadata generated on access."""

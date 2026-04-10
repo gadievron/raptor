@@ -274,6 +274,9 @@ def check_active_project() -> str | None:
         if not data:
             return None
         proj_target = data.get("target", "")
+        auto_marker = PROJECTS_DIR / ".auto"
+        if auto_marker.exists() and auto_marker.read_text().strip() == name:
+            return f"Auto-activated project: {name} ({proj_target}) \u2014 `/project none` to clear"
         return f"Project: {name} ({proj_target}) \u2014 `/project none` to clear"
     except Exception:
         return None
