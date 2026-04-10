@@ -434,7 +434,7 @@ Windsurf, Copilot, or Codex? Devin? Cline? Antigravity?
 Hacker poetry? :)
 
 Chat with us on the #raptor channel at the Prompt||GTFO Slack:
-https://join.slack.com/t/promptgtfo/shared_invite/zt-3kbaqgq2p-O8MAvwU1SPc10KjwJ8MN2w
+[https://join.slack.com/t/promptgtfo/shared_invite/zt-3kbaqgq2p-O8MAvwU1SPc10KjwJ8MN2w](https://join.slack.com/t/promptgtfo/shared_invite/zt-3ri5ndtkl-cXwvzcGAs~xdSqWi0e3BJg)
 
 **See:** `docs/EXTENDING_LAUNCHER.md` for developer guide
 
@@ -442,7 +442,7 @@ https://join.slack.com/t/promptgtfo/shared_invite/zt-3kbaqgq2p-O8MAvwU1SPc10KjwJ
 
 ## License
 
-MIT License - Copyright (c) 2025 Gadi Evron, Daniel Cuthbert, Thomas Dullien (Halvar Flake), and Michael Bargury
+MIT License - Copyright (c) 2025 Gadi Evron, Daniel Cuthbert, Thomas Dullien (Halvar Flake), Michael Bargury, John Cartwright
 
 See LICENSE file for full text.
 
@@ -457,4 +457,4 @@ Make sure and review the licenses for the various tools. For example, CodeQL doe
 **Documentation:** See `docs/` directory
 
 Chat with us on the #raptor channel at the Prompt||GTFO Slack:
-https://join.slack.com/t/promptgtfo/shared_invite/zt-3kbaqgq2p-O8MAvwU1SPc10KjwJ8MN2w
+[https://join.slack.com/t/promptgtfo/shared_invite/zt-3kbaqgq2p-O8MAvwU1SPc10KjwJ8MN2w](https://join.slack.com/t/promptgtfo/shared_invite/zt-3ri5ndtkl-cXwvzcGAs~xdSqWi0e3BJg)
