@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""Mechanical prep for /understand — builds inventory and records coverage.
+
+Subcommands:
+    inventory <target> [--out <dir>]
+                        Build checklist.json in the run's output directory.
+                        Prints OUTPUT_DIR on the last line.
+    coverage <workdir>  Record which functions were examined (reads stdin as JSON).
+
+Examples:
+    # MAP-0: build inventory (run lifecycle starts automatically)
+    libexec/raptor-prepare-understand inventory /tmp/vulns
+
+    # MAP-0: build inventory with explicit output directory
+    libexec/raptor-prepare-understand inventory /tmp/vulns --out /tmp/shared-run
+
+    # MAP-5: record coverage after analysis
+    # (first write coverage-input.json via the Write tool, then:)
+    libexec/raptor-prepare-understand coverage "$WORKDIR"
+"""
+
+import json
+import sys
+from pathlib import Path
+
+# Ensure repo root is on the path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
+
+
+def cmd_inventory(target, explicit_out=None):
+    """MAP-0: build source inventory and start run lifecycle."""
+    from core.run.output import get_output_dir, TargetMismatchError
+    from core.run.metadata import start_run
+    from packages.exploitability_validation import build_checklist
+
+    try:
+        out_dir = get_output_dir("understand", target_path=target,
+                                 explicit_out=explicit_out)
+    except TargetMismatchError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    start_run(out_dir, "understand")
+    checklist = build_checklist(target, str(out_dir))
+
+    total = checklist["total_files"]
+    items = checklist["total_items"]
+    sloc = checklist.get("total_sloc", 0)
+    print(f"Checklist: {total} files, {items} items, {sloc} SLOC")
+    print(f"OUTPUT_DIR={out_dir}")
+
+
+def cmd_coverage(workdir):
+    """MAP-5: record which functions were examined.
+
+    Reads $WORKDIR/coverage-input.json — a JSON array of objects:
+        [{"file": "path/to/file.py", "function": "func_name"}, ...]
+
+    The file is deleted after successful processing.
+    """
+    from core.inventory.coverage import update_coverage
+    from core.inventory import save_checklist
+    from core.json import load_json
+
+    workdir = Path(workdir)
+    checklist_path = workdir / "checklist.json"
+    if not checklist_path.exists():
+        print("ERROR: checklist.json not found in workdir", file=sys.stderr)
+        sys.exit(1)
+
+    coverage_path = workdir / "coverage-input.json"
+    if not coverage_path.exists():
+        print("ERROR: coverage-input.json not found in workdir", file=sys.stderr)
+        print("  Write it first, then re-run this command.", file=sys.stderr)
+        sys.exit(1)
+
+    checked = load_json(coverage_path)
+    if not isinstance(checked, list):
+        print("ERROR: coverage-input.json must be a JSON array", file=sys.stderr)
+        sys.exit(1)
+
+    # Validate entries: each must have "file" and "function" strings
+    for i, entry in enumerate(checked):
+        if not isinstance(entry, dict):
+            print(f"ERROR: entry {i} is not an object", file=sys.stderr)
+            sys.exit(1)
+        if "file" not in entry or "function" not in entry:
+            print(f"ERROR: entry {i} missing 'file' or 'function' key", file=sys.stderr)
+            sys.exit(1)
+
+    inv = load_json(checklist_path)
+    update_coverage(inv, checked, "understand:map")
+    save_checklist(str(workdir), inv)
+    coverage_path.unlink()
+    print(f"Recorded {len(checked)} functions as checked by understand:map")
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] not in ("inventory", "coverage"):
+        print(f"Usage: {sys.argv[0]} <inventory|coverage> <path> [--out <dir>]")
+        sys.exit(1)
+
+    subcmd = sys.argv[1]
+    args = sys.argv[2:]
+
+    # Extract --out <dir> if present
+    explicit_out = None
+    if "--out" in args:
+        idx = args.index("--out")
+        if idx + 1 >= len(args):
+            print("ERROR: --out requires a directory argument", file=sys.stderr)
+            sys.exit(1)
+        explicit_out = args[idx + 1]
+        args = args[:idx] + args[idx + 2:]
+
+    if not args:
+        print(f"ERROR: {subcmd} requires a path argument", file=sys.stderr)
+        sys.exit(1)
+
+    path = args[0]
+
+    if subcmd == "inventory":
+        cmd_inventory(path, explicit_out=explicit_out)
+    elif subcmd == "coverage":
+        cmd_coverage(path)
+
+
+if __name__ == "__main__":
+    main()

@@ -71,15 +71,14 @@ def start_run(output_dir: Path, command: str, extra: Dict[str, Any] = None) -> P
 def _setup_checklist_symlink(run_dir: Path) -> None:
     """Create a checklist.json symlink in the run dir pointing to the project-level checklist.
 
-    Only acts in project mode (active project detected via .active symlink or
-    RAPTOR_PROJECT_DIR env var). In standalone mode, does nothing.
+    Only acts in project mode (active project detected via .active symlink).
+    In standalone mode, does nothing.
 
     If no project-level checklist exists yet, promotes the newest run-level
     checklist from sibling run dirs.
     """
-    import os
 
-    # Determine project output dir
+    # Determine project output dir from .active symlink only
     project_dir = None
     try:
         from core.startup import PROJECTS_DIR, get_active_name
@@ -93,11 +92,6 @@ def _setup_checklist_symlink(run_dir: Path) -> None:
                     project_dir = candidate
     except Exception:
         pass
-
-    if not project_dir:
-        pd = os.environ.get("RAPTOR_PROJECT_DIR")
-        if pd and Path(pd).is_dir():
-            project_dir = Path(pd)
 
     if not project_dir:
         return  # Standalone mode

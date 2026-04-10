@@ -25,12 +25,10 @@ This is not documentation generation. It is adversarial reconnaissance at the so
 Before any manual enumeration, run the inventory builder to get a reliable file and function list:
 
 ```bash
-python3 -c "
-import sys; sys.path.insert(0, '.')
-from packages.exploitability_validation import build_checklist
-build_checklist('<target>', '$WORKDIR')
-"
+libexec/raptor-prepare-understand inventory <target>
 ```
+
+The last line of output is `OUTPUT_DIR=<path>` — use that as `$WORKDIR`.
 
 Read the resulting `checklist.json`. It provides every source file with language, line count, SHA-256 checksum, and every function with name, line number, and signature. Excluded files are recorded with reasons.
 
@@ -176,29 +174,22 @@ Do not populate `sources`, `sinks`, or `entry_points` from file names or common 
 **[MAP-5] Record Coverage**
 
 After writing `context-map.json`, update the inventory with which functions you examined.
-Build a list of every function you read and analysed (entry points, sinks, trust boundary
-checks), then run a `python3 -c` snippet to record them:
+Write a JSON array of every function you read and analysed (entry points, sinks, trust boundary
+checks) to `$WORKDIR/coverage-input.json`, then run the coverage recorder:
 
-```bash
-python3 -c "
-import sys, os, json
-sys.path.insert(0, os.environ['RAPTOR_DIR'])
-from core.inventory.coverage import update_coverage
-from core.inventory import save_checklist
-
-workdir = sys.argv[1]
-inv = json.load(open(f'{workdir}/checklist.json'))
-checked = [
-    # Add one entry per function you examined:
-    {'file': 'src/routes/query.py', 'function': 'handle_query'},
-    {'file': 'src/db/query.py', 'function': 'run_query'},
-    # ... etc
+```json
+// $WORKDIR/coverage-input.json
+[
+    {"file": "src/routes/query.py", "function": "handle_query"},
+    {"file": "src/db/query.py", "function": "run_query"}
 ]
-update_coverage(inv, checked, "understand:map")
-save_checklist(workdir, inv)
-print(f"Recorded {len(checked)} functions as checked by understand:map")
 ```
 
+```bash
+libexec/raptor-prepare-understand coverage "$WORKDIR"
+```
+
+The script reads `coverage-input.json`, updates the checklist, and deletes the input file.
 This ensures coverage tracking is cumulative across `/understand` and `/validate` runs.
 
 ## Output

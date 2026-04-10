@@ -18,13 +18,18 @@ If no mode flag is given, default to `--map`.
 
 ## Execution
 
-**Before starting work**, create the output directory via the run lifecycle:
+**Before starting work**, build the inventory and create the output directory:
 ```bash
-libexec/raptor-run-lifecycle start understand --target <resolved_target> [--out <dir>]
+libexec/raptor-prepare-understand inventory <resolved_target>
 ```
-The last line of output is `OUTPUT_DIR=<path>` — use that path as `$WORKDIR` for all subsequent output files.
+This starts the run lifecycle and builds `checklist.json`. The last line of output is `OUTPUT_DIR=<path>` — use that path as `$WORKDIR` for all subsequent output files.
 
-**After successful completion:**
+**After writing JSON outputs** (for `--map` or `--trace`), generate diagrams:
+```bash
+libexec/raptor-render-diagrams "$OUTPUT_DIR"
+```
+
+**After all work is done:**
 ```bash
 libexec/raptor-run-lifecycle complete "$OUTPUT_DIR"
 ```
@@ -78,18 +83,13 @@ Understanding output feeds into Gadi & JC's epic exploitability validation:
 - `flow-trace-*.json` → confirms reachability for Stage C
 - `variants.json` → expands `checklist.json` scope for Stage 0
 
-**With a project (recommended):** The bridge auto-detects the most recent `/understand` run. Just run both commands — no manual path wiring needed:
+**Automatic bridge:** `/validate` Stage 0 automatically finds and imports `/understand` output. No `--out` alignment needed — the bridge searches co-located files, project siblings, and global `out/` (matching by target path and SHA-256 freshness). Just run both commands:
 ```
-/project use myapp
 /understand ./src --map
 /validate ./src
 ```
 
-**Without a project:** Use `--out` on both commands to share a directory. Using a project is recommended — it handles this automatically.
-```
-/understand ./src --map --out .out/my-run/
-/validate ./src --out .out/my-run/
-```
+This works with or without a project. With a project, sibling runs are found first. Without a project, the bridge matches by `checklist.json` target path across `out/`.
 
 ## Skill Files
 
@@ -112,10 +112,3 @@ All JSON outputs write to `$WORKDIR` (resolved by `raptor-run-lifecycle start`, 
 | `diagrams.md` | `--map`, `--trace` | Mermaid diagrams (auto-generated) |
 | *(none)* | `--teach` | Inline explanation — no file written |
 
-**After writing JSON outputs** for `--map` or `--trace`, generate diagrams:
-```python
-import sys, os; sys.path.insert(0, os.environ["RAPTOR_DIR"])
-from packages.diagram import render_and_write
-from pathlib import Path
-render_and_write(Path(workdir))
-```

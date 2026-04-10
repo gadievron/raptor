@@ -9,8 +9,7 @@ from unittest.mock import patch
 
 from core.run.output import get_output_dir, TargetMismatchError
 
-# Prevent the .active symlink from interfering with env-var-based tests.
-# Tests control project state entirely through env vars.
+# Mock that disables project resolution — for testing standalone (no project) mode.
 _NO_SYMLINK = patch("core.run.output._resolve_active_project", return_value=None)
 
 
@@ -25,34 +24,24 @@ class TestGetOutputDir(unittest.TestCase):
 
     def test_project_dir_produces_hyphen_subdir(self):
         with TemporaryDirectory() as d:
-            env = {"RAPTOR_PROJECT_DIR": d, "RAPTOR_PROJECT_TARGET": "", "RAPTOR_PROJECT_NAME": "test"}
-            with patch.dict(os.environ, env):
-                with patch("core.run.output._resolve_active_project",
-                           return_value=(d, "test", "")):
-                    result = get_output_dir("scan")
-                    self.assertEqual(result.parent, Path(d))
-                    self.assertTrue(result.name.startswith("scan-"))
-                    self.assertNotIn("_", result.name.split("-", 1)[1][:8])
+            with patch("core.run.output._resolve_active_project",
+                       return_value=(d, "test", "")):
+                result = get_output_dir("scan")
+                self.assertEqual(result.parent, Path(d))
+                self.assertTrue(result.name.startswith("scan-"))
+                self.assertNotIn("_", result.name.split("-", 1)[1][:8])
 
     @_NO_SYMLINK
     def test_default_produces_underscore_dirname(self, _mock):
-        with patch.dict(os.environ, {}, clear=True):
-            env = os.environ.copy()
-            env.pop("RAPTOR_PROJECT_DIR", None)
-            with patch.dict(os.environ, env, clear=True):
-                result = get_output_dir("scan", target_name="myrepo")
-                self.assertIn("scan_myrepo_", result.name)
+        result = get_output_dir("scan", target_name="myrepo")
+        self.assertIn("scan_myrepo_", result.name)
 
     @_NO_SYMLINK
     def test_empty_target_omits_target(self, _mock):
-        with patch.dict(os.environ, {}, clear=True):
-            env = os.environ.copy()
-            env.pop("RAPTOR_PROJECT_DIR", None)
-            with patch.dict(os.environ, env, clear=True):
-                result = get_output_dir("scan", target_name="")
-                self.assertTrue(result.name.startswith("scan_"))
-                parts = result.name.split("_")
-                self.assertEqual(len(parts), 3)
+        result = get_output_dir("scan", target_name="")
+        self.assertTrue(result.name.startswith("scan_"))
+        parts = result.name.split("_")
+        self.assertEqual(len(parts), 3)
 
 
 def _mock_project(d, name="myapp", target="/tmp/vulns"):
@@ -87,15 +76,6 @@ class TestTargetMismatch(unittest.TestCase):
             with _mock_project(d, target=""):
                 get_output_dir("scan", target_path="/tmp/anything")
 
-    @_NO_SYMLINK
-    def test_no_target_no_caller_dir_skips_check(self, _mock):
-        """Without target_path or RAPTOR_CALLER_DIR, mismatch check is skipped."""
-        with TemporaryDirectory() as d:
-            env = {"RAPTOR_PROJECT_DIR": d, "RAPTOR_PROJECT_TARGET": "/tmp/vulns",
-                   "RAPTOR_PROJECT_NAME": "myapp"}
-            with patch.dict(os.environ, env):
-                get_output_dir("scan")
-
     def test_caller_dir_mismatch_raises(self):
         """RAPTOR_CALLER_DIR is used for mismatch check when no explicit target."""
         with TemporaryDirectory() as d:
@@ -113,12 +93,9 @@ class TestTargetMismatch(unittest.TestCase):
                 with _mock_project(d):
                     get_output_dir("scan")
 
-    @_NO_SYMLINK
-    def test_explicit_out_skips_check(self, _mock):
+    def test_explicit_out_skips_check(self):
         with TemporaryDirectory() as d:
-            env = {"RAPTOR_PROJECT_DIR": d, "RAPTOR_PROJECT_TARGET": "/tmp/vulns",
-                   "RAPTOR_PROJECT_NAME": "myapp"}
-            with patch.dict(os.environ, env):
+            with _mock_project(d):
                 result = get_output_dir("scan", explicit_out="/tmp/manual",
                                         target_path="/tmp/other")
                 self.assertEqual(result, Path("/tmp/manual").resolve())

@@ -75,11 +75,19 @@ def build_inventory(
     file_list = _collect_source_files(target, extensions)
     logger.info(f"Found {len(file_list)} source files to process")
 
-    # Load previous inventory for hash-based skip optimisation
+    # Reuse existing inventory when one exists for the same target.
+    # The checklist is a snapshot: hashes record the state at inventory time.
+    # Consumers (bridge, validation stages) detect staleness by comparing
+    # checklist hashes to current disk — the builder never silently updates them.
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     checklist_file = output_path / 'checklist.json'
     old_inventory = load_json(checklist_file)
+
+    if old_inventory and old_inventory.get('target_path') == str(target_path):
+        logger.info("Reusing existing inventory for %s", target_path)
+        return old_inventory
+
     old_files_by_path = {}
     if old_inventory:
         for f in old_inventory.get('files', []):
@@ -277,13 +285,14 @@ def _process_single_file(
         return None
 
     try:
-        content = filepath.read_text(encoding='utf-8', errors='ignore')
+        raw_bytes = filepath.read_bytes()
+        content = raw_bytes.decode('utf-8', errors='ignore')
 
         if skip_generated and is_generated_file(content):
             return {"path": rel_path, "_excluded": True, "_reason": "generated_file", "_pattern": None}
 
         line_count = content.count('\n') + 1
-        sha256 = hashlib.sha256(content.encode('utf-8')).hexdigest()
+        sha256 = hashlib.sha256(raw_bytes).hexdigest()
 
         # If file unchanged from previous inventory, reuse old entry (skip parsing)
         if old_files and rel_path in old_files:

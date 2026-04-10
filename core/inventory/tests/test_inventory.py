@@ -376,43 +376,55 @@ class TestCumulativeCoverage:
         inv2 = build_inventory(str(src), str(out))
         assert inv2["files"][0]["items"][0]["checked_by"] == ["validate:stage-a"]
 
-    def test_clear_modified_file(self, tmp_path):
+    def test_reuse_when_source_modified(self, tmp_path):
+        """build_inventory returns existing checklist even if source changed.
+
+        The checklist is a snapshot — hashes record state at inventory time.
+        Consumers detect staleness by comparing hashes to disk, not the builder.
+        """
+        import hashlib
         src = tmp_path / "src"
         src.mkdir()
         (src / "app.py").write_text("def main(): pass\n")
 
         out = tmp_path / "out"
 
-        # First run
         inv1 = build_inventory(str(src), str(out))
+        original_hash = inv1["files"][0]["sha256"]
         inv1["files"][0]["items"][0]["checked_by"] = ["validate:stage-a"]
         with open(out / "checklist.json", "w") as f:
             json.dump(inv1, f)
 
-        # Modify source
+        # Modify source — disk hash now differs from checklist hash
         (src / "app.py").write_text("def main():\n    print('changed')\n")
 
-        # Second run
+        # Second call reuses existing inventory (snapshot preserved)
         inv2 = build_inventory(str(src), str(out))
-        assert inv2["files"][0]["items"][0]["checked_by"] == []
+        assert inv2["files"][0]["sha256"] == original_hash
+        assert inv2["files"][0]["items"][0]["checked_by"] == ["validate:stage-a"]
 
-    def test_new_file_empty_coverage(self, tmp_path):
+        # Consumer can detect staleness by hashing disk
+        disk_hash = hashlib.sha256((src / "app.py").read_bytes()).hexdigest()
+        assert disk_hash != original_hash
+
+    def test_reuse_when_file_added(self, tmp_path):
+        """New files on disk don't trigger a rebuild — checklist is a snapshot.
+
+        Consumers discover new files by comparing checklist paths to disk.
+        """
         src = tmp_path / "src"
         src.mkdir()
         (src / "app.py").write_text("def main(): pass\n")
 
         out = tmp_path / "out"
 
-        # First run
-        build_inventory(str(src), str(out))
-
-        # Add new file
+        inv1 = build_inventory(str(src), str(out))
         (src / "new.py").write_text("def new_func(): pass\n")
 
-        # Second run
+        # Second call reuses — new.py is not in the snapshot
         inv2 = build_inventory(str(src), str(out))
-        new_file = next(f for f in inv2["files"] if f["path"] == "new.py")
-        assert new_file["items"][0]["checked_by"] == []
+        assert len(inv2["files"]) == 1
+        assert inv2["files"][0]["path"] == "app.py"
 
 
 # ── Coverage Stats ──────────────────────────────────────────────────

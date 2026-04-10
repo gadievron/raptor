@@ -70,8 +70,7 @@ def main():
     if not run_dir:
         return
 
-    # Also check env var for target (may be more current)
-    target = os.environ.get("RAPTOR_PROJECT_TARGET", target or "")
+    target = target or ""
 
     # Read hook payload from stdin
     try:

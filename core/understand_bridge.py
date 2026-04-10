@@ -18,17 +18,18 @@ Handles three things automatically so the analyst doesn't have to:
 
 Usage (from Stage 0 in /validate):
 
-    from core.understand_bridge import load_understand_context, enrich_checklist
+    from core.understand_bridge import find_understand_output, load_understand_context, enrich_checklist
 
-    # Auto-detect from active project, or pass an explicit path
-    bridge = load_understand_context(understand_dir=Path("/some/understand-run"), validate_dir=output_dir)
-    if bridge["context_map"]:
-        enrich_checklist(checklist, bridge["context_map"])
+    understand_dir = find_understand_output(validate_dir, target_path=target)
+    if understand_dir:
+        bridge = load_understand_context(understand_dir, validate_dir)
+        if bridge["context_map_loaded"]:
+            enrich_checklist(checklist, bridge["context_map"], str(validate_dir))
 
-Auto-detection (project mode):
-
-    from core.understand_bridge import find_understand_dir
-    understand_dir = find_understand_dir(project_output_dir)  # None if not found
+The three-tier search in find_understand_output() covers:
+  1. Shared --out directory (context-map.json co-located)
+  2. Project sibling directories (same project, different run)
+  3. Global out/ scan (match by checklist target_path — no project needed)
 """
 
 import logging
@@ -49,33 +50,220 @@ TRACE_SOURCE_LABEL = "understand:trace"
 # Public API
 # ---------------------------------------------------------------------------
 
-def find_understand_dir(project_output_dir: Path) -> Optional[Path]:
-    """Find the most recent /understand run inside a project output directory.
 
-    Uses infer_command_type from core.run to identify understand runs regardless
-    of directory naming convention. Returns the most recent by modification time,
-    or None if none exists.
+def find_understand_output(
+    validate_dir: Path,
+    target_path: str = None,
+) -> Optional[Path]:
+    """Find the best /understand output for a validate run.
+
+    Three-tier search eliminates the need for --out alignment:
+
+    1. **Local**: context-map.json already in validate_dir (shared --out case)
+    2. **Project siblings**: sibling run dirs in the same project
+    3. **Global out/**: scan out/ for understand runs matching the same target_path
+
+    When multiple candidates exist across tiers 2+3, they are ranked by
+    hash freshness first (files unchanged since understand ran) then by
+    modification time. A stale candidate is only selected if no fresh one
+    exists.
+
+    Freshness is determined by hashing current files on disk and comparing
+    against the understand run's checklist — not against the validate
+    checklist, which may share a symlinked file in project mode.
+
+    Args:
+        validate_dir: The validate run's output directory.
+        target_path: The target being validated (used for target-path match,
+            global out/ search, and on-disk hash freshness checks).
+
+    Returns:
+        Path to the understand output directory, or None.
+        When tier 1 matches, returns validate_dir itself.
+    """
+    validate_dir = Path(validate_dir)
+
+    # Tier 1: context-map.json co-located (shared --out directory)
+    if (validate_dir / "context-map.json").exists():
+        logger.debug("understand output: tier 1 (local) — %s", validate_dir)
+        return validate_dir
+
+    # Collect candidates from tiers 2 and 3
+    candidates = _collect_candidates(validate_dir, target_path)
+    if not candidates:
+        return None
+
+    # Rank: fresh hashes beat stale, then newest wins
+    best = _rank_candidates(candidates, target_path)
+    if best:
+        logger.debug("understand output: selected %s", best)
+    return best
+
+
+def _collect_candidates(
+    validate_dir: Path, target_path: str = None,
+) -> List[Path]:
+    """Gather understand run directories from tiers 2 and 3."""
+    seen: set = set()
+    results: List[Path] = []
+
+    # Tier 2: project sibling directories
+    parent = validate_dir.parent  # e.g. out/projects/myapp/
+    for d in _search_understand_dirs(parent, exclude=validate_dir,
+                                     require_target=target_path):
+        resolved = d.resolve()
+        if resolved not in seen:
+            seen.add(resolved)
+            results.append(d)
+
+    # Tier 3: global out/ search (only dirs matching target_path)
+    if target_path:
+        from core.config import RaptorConfig
+        out_root = RaptorConfig.get_out_dir()
+        for d in _search_understand_dirs(out_root, exclude=validate_dir,
+                                         require_target=target_path):
+            resolved = d.resolve()
+            if resolved not in seen:
+                seen.add(resolved)
+                results.append(d)
+
+    return results
+
+
+def _rank_candidates(
+    candidates: List[Path],
+    target_path: str = None,
+) -> Optional[Path]:
+    """Pick the best candidate: fresh hashes > stale, then newest first.
+
+    Freshness is checked by hashing the current files on disk under
+    target_path and comparing against the understand run's checklist.
+    This avoids the symlink problem where project-mode checklists
+    share a single file and the validate rebuild overwrites understand
+    hashes.
+
+    Returns None if candidates is empty.
+    """
+    if not candidates:
+        return None
+
+    if not target_path:
+        # No target — can't hash on disk, just pick newest
+        candidates.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+        return candidates[0]
+
+    scored = []
+    for d in candidates:
+        u_checklist = load_json(d / "checklist.json")
+        if not u_checklist:
+            # No checklist — treat as stale (can't verify)
+            scored.append((1, d.stat().st_mtime, d))
+            continue
+        u_hashes = _extract_hashes(u_checklist)
+        stale_count = _count_stale_on_disk(u_hashes, target_path)
+        # fresh = 0 stale files → sort key 0 (best)
+        scored.append((stale_count, d.stat().st_mtime, d))
+
+    # Sort: fewest stale first, then newest mtime first (negate for descending)
+    scored.sort(key=lambda t: (t[0], -t[1]))
+    best_stale, _, best_dir = scored[0]
+
+    if best_stale > 0:
+        logger.warning(
+            "understand_bridge: best candidate %s has %d stale file(s)"
+            " — importing anyway, Stage C will catch stale refs",
+            best_dir.name, best_stale,
+        )
+
+    return best_dir
+
+
+def _extract_hashes(checklist: Dict[str, Any]) -> Dict[str, str]:
+    """Build {relative_path: sha256} from a checklist."""
+    return {
+        f["path"]: f["sha256"]
+        for f in checklist.get("files", [])
+        if f.get("sha256")
+    }
+
+
+def _count_stale_on_disk(
+    understand_hashes: Dict[str, str],
+    target_path: str,
+) -> int:
+    """Count files whose on-disk SHA-256 differs from the understand checklist.
+
+    Hashes the actual files under target_path rather than comparing against
+    another checklist. This is immune to the project-mode symlink problem
+    where both runs share one checklist.json file.
+    """
+    import hashlib
+
+    target = Path(target_path)
+    stale = 0
+    for rel_path, u_hash in understand_hashes.items():
+        full_path = target / rel_path
+        if not full_path.is_file():
+            # File deleted since understand ran — counts as stale
+            stale += 1
+            continue
+        disk_hash = hashlib.sha256(full_path.read_bytes()).hexdigest()
+        if disk_hash != u_hash:
+            stale += 1
+    return stale
+
+
+def _search_understand_dirs(
+    parent_dir: Path,
+    exclude: Path = None,
+    require_target: str = None,
+) -> List[Path]:
+    """Find understand run directories under parent_dir.
+
+    Args:
+        parent_dir: Directory to scan (e.g. project dir or out/).
+        exclude: Directory to skip (typically the validate dir itself).
+        require_target: If set, only return dirs whose checklist.json
+            target_path resolves to this path.
+
+    Returns:
+        List of matching directories, sorted newest-first by mtime.
     """
     from core.run import infer_command_type
 
-    project_output_dir = Path(project_output_dir)
-    if not project_output_dir.is_dir():
-        return None
+    parent_dir = Path(parent_dir)
+    if not parent_dir.is_dir():
+        return []
 
-    candidates = [
-        d for d in sorted(project_output_dir.iterdir(),
-                          key=lambda d: d.stat().st_mtime, reverse=True)
-        if d.is_dir()
-        and not d.name.startswith((".", "_"))
-        and infer_command_type(d) == "understand"
-        and (d / "context-map.json").exists()
-    ]
+    target_resolved = (
+        str(Path(require_target).resolve()) if require_target else None
+    )
 
-    if candidates:
-        logger.debug("Auto-detected understand dir: %s", candidates[0])
-        return candidates[0]
+    results = []
+    for d in parent_dir.iterdir():
+        try:
+            if not (d.is_dir()
+                    and d != exclude
+                    and not d.name.startswith((".", "_"))
+                    and infer_command_type(d) == "understand"
+                    and (d / "context-map.json").exists()):
+                continue
+        except OSError:
+            continue  # broken symlinks, permission errors
 
-    return None
+        if target_resolved:
+            from core.json import load_json
+            checklist = load_json(d / "checklist.json")
+            if not checklist:
+                continue
+            d_target = checklist.get("target_path", "")
+            if not d_target or str(Path(d_target).resolve()) != target_resolved:
+                continue
+
+        results.append(d)
+
+    results.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+    return results
 
 
 def load_understand_context(

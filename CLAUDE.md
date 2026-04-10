@@ -210,7 +210,7 @@ The `/understand` command provides deep, adversarial code comprehension for secu
 
 **Output:** Resolved by `libexec/raptor-run-lifecycle start understand` (project dir or `out/understand_<timestamp>/`)
 
-**Pipeline integration:** Output schemas are aligned with validation pipeline formats. Use `--out` to share a directory with `/validate`.
+**Pipeline integration:** `/validate` Stage 0 automatically imports `/understand` output via the bridge (`core/understand_bridge.py`). No `--out` alignment needed — the bridge searches: (1) co-located files, (2) project siblings, (3) global `out/` by target path + SHA-256 freshness. When found, it pre-populates `attack-surface.json`, imports flow traces as attack paths, and marks entry points/sinks as high-priority in the checklist.
 
 ---
 
@@ -230,15 +230,7 @@ very much a WIP but it could be of use for those wanting to see relationships an
 
 **Output:** `diagrams.md` written into the target directory (or `--stdout` to print)
 
-**Implementation:** `generate_diagram.py` (CLI) and `packages/diagram/` (library)
-
-```python
-# Programmatic use
-from packages.diagram import render_and_write
-from pathlib import Path
-
-out_file = render_and_write(Path(".out/code-understanding-20240101/"), target="myapp")
-```
+**Implementation:** `libexec/raptor-render-diagrams <out-dir> [--target <name>]`
 
 **When to run:** Diagrams are auto-generated at the end of `/validate` and `/understand --map`/`--trace`. Use `/diagram <dir>` to re-render after manual edits to JSON outputs.
 

@@ -116,15 +116,12 @@ class TestSetupChecklistSymlink(unittest.TestCase):
             if active_link.is_symlink():
                 active_link.unlink()
 
-            old_env = os.environ.pop("RAPTOR_PROJECT_DIR", None)
             try:
                 _setup_checklist_symlink(run_dir)
                 self.assertFalse((run_dir / "checklist.json").exists())
             finally:
                 if old_link:
                     active_link.symlink_to(old_link)
-                if old_env:
-                    os.environ["RAPTOR_PROJECT_DIR"] = old_env
 
     def test_skips_existing_real_file(self):
         with TemporaryDirectory() as d:

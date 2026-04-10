@@ -1,8 +1,10 @@
 """Tests for core.understand_bridge — /understand → /validate pipeline handoff."""
 
+import copy
 import json
 import sys
-import tempfile
+import time
+import unittest.mock
 from pathlib import Path
 
 import pytest
@@ -11,10 +13,13 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.understand_bridge import (
-    find_understand_dir,
+    find_understand_output,
     load_understand_context,
     enrich_checklist,
     TRACE_SOURCE_LABEL,
+    _extract_hashes,
+    _count_stale_on_disk,
+    _rank_candidates,
 )
 
 
@@ -147,51 +152,238 @@ def _write_json(path: Path, data: object) -> None:
     path.write_text(json.dumps(data, indent=2))
 
 
+def _make_understand_dir(parent, name="understand-20260401-120000",
+                         context_map=None, checklist=None):
+    """Create a minimal understand run directory with metadata."""
+    d = parent / name
+    d.mkdir(parents=True, exist_ok=True)
+    _write_json(d / "context-map.json", context_map or {"sources": []})
+    # .raptor-run.json so infer_command_type works
+    _write_json(d / ".raptor-run.json", {"version": 1, "command": "understand",
+                                          "status": "completed"})
+    if checklist:
+        _write_json(d / "checklist.json", checklist)
+    return d
+
+
 # ---------------------------------------------------------------------------
-# find_understand_dir
+# find_understand_output — 3-tier search
 # ---------------------------------------------------------------------------
 
-class TestFindUnderstandDir:
-    def test_finds_most_recent_project_mode(self, tmp_path):
-        # Project mode: understand-YYYYMMDD-HHMMSS (via core.run lifecycle)
-        old = tmp_path / "understand-20260401-120000"
-        new = tmp_path / "understand-20260402-120000"
-        for d in (old, new):
-            d.mkdir()
-            _write_json(d / "context-map.json", {"sources": []})
+class TestFindUnderstandOutput:
+    def test_tier1_local_context_map(self, tmp_path):
+        """Tier 1: context-map.json co-located in validate dir (shared --out)."""
+        validate_dir = tmp_path / "shared"
+        validate_dir.mkdir()
+        _write_json(validate_dir / "context-map.json", {"sources": []})
 
-        import time
+        result = find_understand_output(validate_dir)
+        assert result == validate_dir
+
+    def test_tier2_project_sibling(self, tmp_path):
+        """Tier 2: understand run as sibling in same project dir."""
+        project_dir = tmp_path / "project"
+        validate_dir = project_dir / "validate-20260402-120000"
+        validate_dir.mkdir(parents=True)
+
+        _make_understand_dir(project_dir)
+
+        result = find_understand_output(validate_dir)
+        assert result == project_dir / "understand-20260401-120000"
+
+    def test_tier2_picks_newest_sibling(self, tmp_path):
+        project_dir = tmp_path / "project"
+        validate_dir = project_dir / "validate-20260403-120000"
+        validate_dir.mkdir(parents=True)
+
+        old = _make_understand_dir(project_dir, "understand-20260401-120000")
         time.sleep(0.01)
-        (new / "context-map.json").touch()
+        new = _make_understand_dir(project_dir, "understand-20260402-120000")
 
-        result = find_understand_dir(tmp_path)
+        result = find_understand_output(validate_dir)
         assert result == new
 
-    def test_finds_standalone_mode_format(self, tmp_path):
-        # Standalone mode: code-understanding-<timestamp>
-        d = tmp_path / "code-understanding-20260401-120000"
-        d.mkdir()
-        _write_json(d / "context-map.json", {"sources": []})
+    def test_tier3_global_out_by_target_path(self, tmp_path, monkeypatch):
+        """Tier 3: scan out/ matching by checklist target_path."""
+        out_root = tmp_path / "out"
+        out_root.mkdir()
 
-        result = find_understand_dir(tmp_path)
-        assert result == d
+        # Monkeypatch RaptorConfig to use our tmp out/
+        monkeypatch.setattr("core.config.RaptorConfig.get_out_dir",
+                            staticmethod(lambda: out_root))
+
+        _make_understand_dir(
+            out_root, "understand_20260401_120000",
+            checklist={"target_path": "/tmp/vulns", "files": []},
+        )
+
+        # validate_dir outside out/ with no siblings
+        validate_dir = tmp_path / "validate-run"
+        validate_dir.mkdir()
+
+        result = find_understand_output(validate_dir, target_path="/tmp/vulns")
+        assert result == out_root / "understand_20260401_120000"
+
+    def test_tier3_no_match_for_wrong_target(self, tmp_path, monkeypatch):
+        out_root = tmp_path / "out"
+        out_root.mkdir()
+
+        monkeypatch.setattr("core.config.RaptorConfig.get_out_dir",
+                            staticmethod(lambda: out_root))
+
+        _make_understand_dir(
+            out_root, "understand_20260401_120000",
+            checklist={"target_path": "/tmp/vulns", "files": []},
+        )
+
+        validate_dir = tmp_path / "validate-run"
+        validate_dir.mkdir()
+
+        result = find_understand_output(validate_dir, target_path="/tmp/other")
+        assert result is None
+
+    def test_returns_none_when_no_candidates(self, tmp_path, monkeypatch):
+        out_root = tmp_path / "empty-out"
+        out_root.mkdir()
+        monkeypatch.setattr("core.config.RaptorConfig.get_out_dir",
+                            staticmethod(lambda: out_root))
+
+        validate_dir = tmp_path / "validate-run"
+        validate_dir.mkdir()
+
+        result = find_understand_output(validate_dir, target_path="/tmp/vulns")
+        assert result is None
 
     def test_ignores_dirs_without_context_map(self, tmp_path):
-        empty = tmp_path / "understand-20260401-120000"
+        project_dir = tmp_path / "project"
+        validate_dir = project_dir / "validate-20260402-120000"
+        validate_dir.mkdir(parents=True)
+
+        # understand dir exists but has no context-map.json
+        empty = project_dir / "understand-20260401-120000"
         empty.mkdir()
-        # No context-map.json
+        _write_json(empty / ".raptor-run.json", {"version": 1, "command": "understand"})
 
-        assert find_understand_dir(tmp_path) is None
-
-    def test_returns_none_for_nonexistent_dir(self, tmp_path):
-        assert find_understand_dir(tmp_path / "does-not-exist") is None
+        assert find_understand_output(validate_dir) is None
 
     def test_ignores_non_understand_dirs(self, tmp_path):
-        scan = tmp_path / "scan-20260401-120000"
-        scan.mkdir()
-        _write_json(scan / "context-map.json", {})
+        project_dir = tmp_path / "project"
+        validate_dir = project_dir / "validate-20260402-120000"
+        validate_dir.mkdir(parents=True)
 
-        assert find_understand_dir(tmp_path) is None
+        scan = project_dir / "scan-20260401-120000"
+        scan.mkdir()
+        _write_json(scan / "context-map.json", {"sources": []})
+        _write_json(scan / ".raptor-run.json", {"version": 1, "command": "scan"})
+
+        assert find_understand_output(validate_dir) is None
+
+
+# ---------------------------------------------------------------------------
+# Hash freshness ranking
+# ---------------------------------------------------------------------------
+
+class TestHashFreshness:
+    def test_extract_hashes(self):
+        hashes = _extract_hashes(MINIMAL_CHECKLIST)
+        assert hashes == {"src/routes/query.py": "aaa", "src/db/query.py": "bbb"}
+
+    def test_count_stale_zero_when_matching(self, tmp_path):
+        """On-disk files matching understand hashes → 0 stale."""
+        import hashlib
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "a.py").write_text("aaa")
+        (target / "b.py").write_text("bbb")
+        h1 = {
+            "a.py": hashlib.sha256(b"aaa").hexdigest(),
+            "b.py": hashlib.sha256(b"bbb").hexdigest(),
+        }
+        assert _count_stale_on_disk(h1, str(target)) == 0
+
+    def test_count_stale_detects_changed_files(self, tmp_path):
+        """On-disk file differs from understand hash → 1 stale."""
+        import hashlib
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "a.py").write_text("aaa")
+        (target / "b.py").write_text("MODIFIED")
+        h1 = {
+            "a.py": hashlib.sha256(b"aaa").hexdigest(),
+            "b.py": hashlib.sha256(b"bbb").hexdigest(),  # original content
+        }
+        assert _count_stale_on_disk(h1, str(target)) == 1
+
+    def test_count_stale_deleted_file_is_stale(self, tmp_path):
+        """File in understand checklist but deleted from disk → stale."""
+        import hashlib
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "a.py").write_text("aaa")
+        h1 = {
+            "a.py": hashlib.sha256(b"aaa").hexdigest(),
+            "gone.py": hashlib.sha256(b"xyz").hexdigest(),
+        }
+        assert _count_stale_on_disk(h1, str(target)) == 1
+
+    def test_rank_prefers_fresh_over_newest(self, tmp_path):
+        """A fresh older candidate beats a stale newer one."""
+        import hashlib
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "a.py").write_text("current")
+        disk_hash = hashlib.sha256(b"current").hexdigest()
+
+        old_dir = tmp_path / "old"
+        new_dir = tmp_path / "new"
+        old_dir.mkdir()
+        time.sleep(0.01)
+        new_dir.mkdir()
+
+        # old has matching hash, new has stale hash
+        _write_json(old_dir / "checklist.json", {
+            "files": [{"path": "a.py", "sha256": disk_hash}],
+        })
+        _write_json(new_dir / "checklist.json", {
+            "files": [{"path": "a.py", "sha256": "STALE"}],
+        })
+
+        result = _rank_candidates([new_dir, old_dir], str(target))
+        assert result == old_dir
+
+    def test_rank_falls_back_to_newest_when_all_fresh(self, tmp_path):
+        import hashlib
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "a.py").write_text("current")
+        disk_hash = hashlib.sha256(b"current").hexdigest()
+
+        d1 = tmp_path / "d1"
+        d2 = tmp_path / "d2"
+        d1.mkdir()
+        time.sleep(0.01)
+        d2.mkdir()
+
+        for d in (d1, d2):
+            _write_json(d / "checklist.json", {
+                "files": [{"path": "a.py", "sha256": disk_hash}],
+            })
+
+        result = _rank_candidates([d1, d2], str(target))
+        assert result == d2  # newer
+
+    def test_rank_without_target_picks_newest(self, tmp_path):
+        d1 = tmp_path / "d1"
+        d2 = tmp_path / "d2"
+        d1.mkdir()
+        time.sleep(0.01)
+        d2.mkdir()
+
+        result = _rank_candidates([d1, d2], target_path=None)
+        assert result == d2
+
+    def test_rank_empty_candidates(self):
+        assert _rank_candidates([], None) is None
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +418,6 @@ class TestLoadUnderstandContextAttackSurface:
         understand_dir.mkdir()
         validate_dir.mkdir()
 
-        # Pre-existing attack-surface with one source Stage B already wrote
         _write_json(validate_dir / "attack-surface.json", {
             "sources": [
                 {"type": "cli_arg", "entry": "main() arg parsing @ src/main.py:10"},
@@ -240,7 +431,6 @@ class TestLoadUnderstandContextAttackSurface:
         load_understand_context(understand_dir, validate_dir)
 
         surface = json.loads((validate_dir / "attack-surface.json").read_text())
-        # Should have both the pre-existing source and the imported one
         assert len(surface["sources"]) == 2
 
     def test_does_not_duplicate_existing_sources(self, tmp_path):
@@ -249,7 +439,6 @@ class TestLoadUnderstandContextAttackSurface:
         understand_dir.mkdir()
         validate_dir.mkdir()
 
-        # Same entry already exists
         _write_json(validate_dir / "attack-surface.json", {
             "sources": [
                 {"type": "http_route", "entry": "POST /api/query @ src/routes/query.py:34"},
@@ -263,7 +452,7 @@ class TestLoadUnderstandContextAttackSurface:
         load_understand_context(understand_dir, validate_dir)
 
         surface = json.loads((validate_dir / "attack-surface.json").read_text())
-        assert len(surface["sources"]) == 1  # not doubled
+        assert len(surface["sources"]) == 1
 
     def test_gap_annotations_added_to_trust_boundaries(self, tmp_path):
         understand_dir = tmp_path / "understand"
@@ -276,11 +465,7 @@ class TestLoadUnderstandContextAttackSurface:
         load_understand_context(understand_dir, validate_dir)
 
         surface = json.loads((validate_dir / "attack-surface.json").read_text())
-        # The JWT boundary should have a gaps annotation (TB-001 has gaps in fixture)
-        # Note: boundary matching is name-based so this depends on the id containing
-        # a fragment of the boundary name or vice versa — adjust if needed.
         jwt_boundary = surface["trust_boundaries"][0]
-        # Even without a name match, the merge itself should succeed
         assert "boundary" in jwt_boundary
 
     def test_missing_context_map_returns_empty_summary(self, tmp_path):
@@ -343,7 +528,6 @@ class TestLoadUnderstandContextFlowTraces:
         understand_dir.mkdir()
         validate_dir.mkdir()
 
-        # attack-paths.json already has TRACE-001
         _write_json(validate_dir / "attack-paths.json", [
             {"id": "TRACE-001", "status": "confirmed", "steps": [], "proximity": 9},
         ])
@@ -356,7 +540,6 @@ class TestLoadUnderstandContextFlowTraces:
         assert result["flow_traces"]["imported_as_paths"] == 0
         paths = json.loads((validate_dir / "attack-paths.json").read_text())
         assert len(paths) == 1
-        # Original confirmed status preserved
         assert paths[0]["status"] == "confirmed"
 
     def test_merges_with_existing_paths(self, tmp_path):
@@ -398,12 +581,10 @@ class TestLoadUnderstandContextFlowTraces:
 
 class TestEnrichChecklist:
     def test_marks_entry_point_files_as_high_priority(self):
-        import copy
         checklist = copy.deepcopy(MINIMAL_CHECKLIST)
 
         enrich_checklist(checklist, MINIMAL_CONTEXT_MAP)
 
-        # src/routes/query.py is an entry_point file
         routes_file = next(
             f for f in checklist["files"] if f["path"] == "src/routes/query.py"
         )
@@ -411,7 +592,6 @@ class TestEnrichChecklist:
         assert routes_file["functions"][0]["priority_reason"] == "entry_point"
 
     def test_marks_sink_files_as_high_priority(self):
-        import copy
         checklist = copy.deepcopy(MINIMAL_CHECKLIST)
 
         enrich_checklist(checklist, MINIMAL_CONTEXT_MAP)
@@ -422,7 +602,6 @@ class TestEnrichChecklist:
         assert db_file["functions"][0]["priority"] == "high"
 
     def test_adds_priority_targets_for_unchecked_flows(self):
-        import copy
         checklist = copy.deepcopy(MINIMAL_CHECKLIST)
 
         enrich_checklist(checklist, MINIMAL_CONTEXT_MAP)
@@ -433,7 +612,6 @@ class TestEnrichChecklist:
         assert checklist["priority_targets"][0]["source"] == "understand:map"
 
     def test_no_unchecked_flows_omits_priority_targets(self):
-        import copy
         checklist = copy.deepcopy(MINIMAL_CHECKLIST)
         context_map = dict(MINIMAL_CONTEXT_MAP)
         context_map["unchecked_flows"] = []
@@ -447,7 +625,6 @@ class TestEnrichChecklist:
         enrich_checklist(None, None)
 
     def test_does_not_touch_unrelated_files(self):
-        import copy
         checklist = copy.deepcopy(MINIMAL_CHECKLIST)
         checklist["files"].append({
             "path": "src/utils/helpers.py",
@@ -463,3 +640,198 @@ class TestEnrichChecklist:
             f for f in checklist["files"] if f["path"] == "src/utils/helpers.py"
         )
         assert "priority" not in helpers_file["functions"][0]
+
+
+# ---------------------------------------------------------------------------
+# Deduplication and staleness edge cases
+# ---------------------------------------------------------------------------
+
+class TestEdgeCases:
+    def test_tier2_and_tier3_same_dir_not_duplicated(self, tmp_path, monkeypatch):
+        """Dir found via both project sibling and global scan appears only once."""
+        project_dir = tmp_path / "out" / "projects" / "myapp"
+        validate_dir = project_dir / "validate-20260402-120000"
+        validate_dir.mkdir(parents=True)
+
+        # Create a target dir so on-disk hashing works
+        target_dir = tmp_path / "vulns"
+        target_dir.mkdir()
+
+        understand = _make_understand_dir(
+            project_dir, "understand-20260401-120000",
+            checklist={"target_path": str(target_dir), "files": []},
+        )
+
+        # Point global out/ at the same parent so tier 3 finds same dir
+        monkeypatch.setattr("core.config.RaptorConfig.get_out_dir",
+                            staticmethod(lambda: project_dir))
+
+        result = find_understand_output(
+            validate_dir, target_path=str(target_dir),
+        )
+        assert result == understand
+
+    def test_staleness_warning_logged(self, tmp_path):
+        """When best candidate has stale files, _rank_candidates logs a warning."""
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "a.py").write_text("MODIFIED")
+
+        stale_dir = tmp_path / "stale"
+        stale_dir.mkdir()
+        _write_json(stale_dir / "checklist.json", {
+            "files": [{"path": "a.py", "sha256": "OLD_HASH_WONT_MATCH"}],
+        })
+
+        with unittest.mock.patch("core.understand_bridge.logger") as mock_logger:
+            result = _rank_candidates([stale_dir], str(target))
+
+        assert result == stale_dir
+        mock_logger.warning.assert_called_once()
+        assert "stale" in mock_logger.warning.call_args[0][0].lower()
+
+    def test_tier1_takes_priority_over_fresher_sibling(self, tmp_path):
+        """Co-located context-map (tier 1) wins even if a sibling exists."""
+        project_dir = tmp_path / "project"
+        validate_dir = project_dir / "validate-20260402-120000"
+        validate_dir.mkdir(parents=True)
+
+        # Tier 1: context-map in validate dir itself
+        _write_json(validate_dir / "context-map.json", {"sources": []})
+
+        # Tier 2: sibling that's newer
+        _make_understand_dir(project_dir, "understand-20260403-120000")
+
+        result = find_understand_output(validate_dir)
+        assert result == validate_dir  # tier 1 wins
+
+    def test_candidate_without_checklist_ranked_lowest(self, tmp_path):
+        """Candidate missing checklist.json treated as stale."""
+        import hashlib
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "a.py").write_text("content")
+        disk_hash = hashlib.sha256(b"content").hexdigest()
+
+        d_no_checklist = tmp_path / "no-checklist"
+        d_with_checklist = tmp_path / "with-checklist"
+        d_no_checklist.mkdir()
+        time.sleep(0.01)
+        d_with_checklist.mkdir()
+
+        # Newer dir has no checklist
+        # Older dir has fresh checklist matching disk
+        _write_json(d_with_checklist / "checklist.json", {
+            "files": [{"path": "a.py", "sha256": disk_hash}],
+        })
+
+        # d_no_checklist is newer by mtime but has no checklist → stale_count=1
+        result = _rank_candidates(
+            [d_no_checklist, d_with_checklist], str(target),
+        )
+        assert result == d_with_checklist
+
+
+# ---------------------------------------------------------------------------
+# raptor-prepare-understand script
+# ---------------------------------------------------------------------------
+
+class TestPrepareUnderstandScript:
+    def test_inventory_creates_checklist(self, tmp_path):
+        """inventory subcommand builds checklist and prints OUTPUT_DIR."""
+        import subprocess
+        target = tmp_path / "src"
+        target.mkdir()
+        (target / "hello.c").write_text("int main() { return 0; }\n")
+
+        # Temporarily hide the active project symlink so get_output_dir
+        # doesn't reject our temp target as outside the project.
+        active_link = Path.home() / ".raptor" / "projects" / ".active"
+        hidden_link = active_link.with_suffix(".active.bak")
+        active_existed = active_link.is_symlink()
+        if active_existed:
+            active_link.rename(hidden_link)
+
+        repo_root = Path(__file__).parents[2]
+        try:
+            result = subprocess.run(
+                ["libexec/raptor-prepare-understand", "inventory", str(target)],
+                capture_output=True, text=True, cwd=repo_root,
+            )
+            assert result.returncode == 0, result.stderr
+            assert "OUTPUT_DIR=" in result.stdout
+            output_dir = result.stdout.strip().split("OUTPUT_DIR=")[1]
+            assert (Path(output_dir) / "checklist.json").exists()
+
+            import shutil
+            shutil.rmtree(output_dir, ignore_errors=True)
+        finally:
+            if active_existed and hidden_link.exists():
+                hidden_link.rename(active_link)
+
+    def test_coverage_reads_file_and_deletes(self, tmp_path):
+        """coverage subcommand reads coverage-input.json and deletes it."""
+        from core.json import load_json
+
+        workdir = tmp_path / "workdir"
+        workdir.mkdir()
+        _write_json(workdir / "checklist.json", {
+            "generated_at": "2026-01-01",
+            "target_path": "/tmp/test",
+            "total_files": 1, "total_items": 1, "total_functions": 1,
+            "files": [{
+                "path": "main.c",
+                "language": "c",
+                "lines": 5,
+                "sha256": "abc",
+                "items": [{"name": "main", "kind": "function",
+                           "line_start": 1, "line_end": 5, "checked_by": []}],
+            }],
+        })
+        _write_json(workdir / "coverage-input.json", [
+            {"file": "main.c", "function": "main"},
+        ])
+
+        import subprocess
+        result = subprocess.run(
+            ["libexec/raptor-prepare-understand", "coverage", str(workdir)],
+            capture_output=True, text=True, cwd=Path(__file__).parents[2],
+        )
+        assert result.returncode == 0
+        assert "Recorded 1 functions" in result.stdout
+        assert not (workdir / "coverage-input.json").exists()
+
+        inv = load_json(workdir / "checklist.json")
+        main_func = inv["files"][0]["items"][0]
+        assert "understand:map" in main_func["checked_by"]
+
+    def test_coverage_rejects_missing_file(self, tmp_path):
+        """coverage fails gracefully when coverage-input.json doesn't exist."""
+        workdir = tmp_path / "workdir"
+        workdir.mkdir()
+        _write_json(workdir / "checklist.json", {"files": []})
+
+        import subprocess
+        result = subprocess.run(
+            ["libexec/raptor-prepare-understand", "coverage", str(workdir)],
+            capture_output=True, text=True, cwd=Path(__file__).parents[2],
+        )
+        assert result.returncode != 0
+        assert "coverage-input.json not found" in result.stderr
+
+    def test_coverage_rejects_bad_entries(self, tmp_path):
+        """coverage validates that each entry has file and function keys."""
+        workdir = tmp_path / "workdir"
+        workdir.mkdir()
+        _write_json(workdir / "checklist.json", {"files": []})
+        _write_json(workdir / "coverage-input.json", [
+            {"file": "a.py"},  # missing "function"
+        ])
+
+        import subprocess
+        result = subprocess.run(
+            ["libexec/raptor-prepare-understand", "coverage", str(workdir)],
+            capture_output=True, text=True, cwd=Path(__file__).parents[2],
+        )
+        assert result.returncode != 0
+        assert "missing" in result.stderr.lower()

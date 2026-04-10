@@ -35,6 +35,47 @@ from packages.exploitability_validation.schemas import (
 
 STAGE_LETTERS = "ABCDEF"
 
+# Schema hints printed at end of each prep so the LLM knows the required
+# output shape before writing.  Keep compact — these go to stdout.
+STAGE_SCHEMA_HINTS = {
+    "A": '''\
+Output: stage-a.json  {"stage":"A", "target_path":"...", "findings":[...]}
+  Each finding requires: id, file, function, line, vuln_type, status, confidence,
+    cwe_id, candidate_reasoning, dataflow_summary, proof_lines, proof_source,
+    proof_sink, origin ("claude_native"|"sarif_import"|"pre_existing"),
+    stage_a_summary: {confidence, status, candidate_reasoning}
+  status: "poc_success"|"not_disproven"|"disproven"
+  confidence: "high"|"medium"|"low"
+  If disproven: disproved_because: {investigated, conclusion, would_reconsider_if}''',
+
+    "B": '''\
+Output: stage-b.json  {"stage":"B", "updates":{"FIND-XXXX": {"stage_b_summary":{...}}, ...}}
+  stage_b_summary: {hypothesis_id, hypothesis_status, proximity (0-10), attack_path_id}
+  Also write: attack-tree.json, hypotheses.json, disproven.json, attack-paths.json, attack-surface.json''',
+
+    "C": '''\
+Output: stage-c.json  {"stage":"C", "updates":{"FIND-XXXX": {sanity_check:{...}, stage_c_summary:{...}}, ...}}
+  sanity_check: {code_verified:bool, flow_confirmed:bool, reachable:bool, notes:str}
+  stage_c_summary: {passed:bool, checks:{file_exists:bool, code_verbatim:bool, flow_real:bool, reachable:bool}}''',
+
+    "D": '''\
+Output: stage-d.json  {"stage":"D", "updates":{"FIND-XXXX": {ruling:{...}, cvss_vector:str, stage_d_summary:{...}}, ...}}
+  ruling: {status:"confirmed"|"ruled_out"|"exploitable", disqualifier:str|null, reason:str|null}
+  cvss_vector: "CVSS:3.1/AV:.../AC:.../PR:.../UI:.../S:.../C:.../I:.../A:..."
+  stage_d_summary: {status, disqualifiers_checked:[], disqualifiers_failed:[], evidence:str}''',
+
+    "F": '''\
+Output: stage-f.json  {"stage":"F", "updates":{"FIND-XXXX": {"stage_f_summary":{...}}, ...}}
+  stage_f_summary: {corrections:[], notes:str}
+  Corrections (if any): {field:str, old_value:str, new_value:str, reason:str}''',
+}
+
+
+def _print_schema_hint(stage):
+    hint = STAGE_SCHEMA_HINTS.get(stage)
+    if hint:
+        print(hint)
+
 
 def _is_validated(workdir, filename):
     """Check if a file was already validated (hash matches .validated record)."""
@@ -282,6 +323,13 @@ def prepare_A(workdir, target=None):
     else:
         print("No pre-existing findings")
 
+    # Surface priority targets from /understand bridge
+    priority_targets = checklist.get("priority_targets", [])
+    if priority_targets:
+        print(f"Priority targets from /understand: {len(priority_targets)} unchecked flows")
+        for pt in priority_targets:
+            print(f"  {pt.get('entry_point')} → {pt.get('sink')}: {pt.get('missing_boundary')}")
+
     # Discover existing binaries and build PoCs for standalone C files
     if target:
         build_dir = Path(workdir) / "build"
@@ -306,6 +354,7 @@ def prepare_A(workdir, target=None):
                     print(f"  {src}: {', '.join(parts)}")
                 else:
                     print(f"  {src}: no binary")
+    _print_schema_hint("A")
 
 
 # ---------------------------------------------------------------------------
@@ -449,6 +498,7 @@ def prepare_B(workdir, target=None):
         print(f"  {len(deduped)} findings flagged as potential duplicates — review during analysis")
 
     _report_workdir_files(workdir, "existing")
+    _print_schema_hint("B")
 
 
 # ---------------------------------------------------------------------------
@@ -510,6 +560,7 @@ def prepare_C(workdir, target=None):
     _save_findings(workdir, findings_data)
     failed = sum(1 for f in findings_data["findings"] if f.get("checklist_verified") is False)
     print(f"Inventory check: {failed} failed, {len(findings_data['findings']) - failed} passed")
+    _print_schema_hint("C")
 
 
 # ---------------------------------------------------------------------------
@@ -581,6 +632,7 @@ def prepare_D(workdir, target=None):
     _save_findings(workdir, data)
     flagged = sum(1 for f in data["findings"] if f.get("test_code_flag"))
     print(f"Test filter: {flagged} flagged, evidence cards assembled")
+    _print_schema_hint("D")
 
 
 # ---------------------------------------------------------------------------
@@ -794,6 +846,7 @@ def prepare_F(workdir, target=None):
 
     _report_workdir_files(workdir, "available for review")
 
+    _print_schema_hint("F")
     print("Stage F prep complete")
 
 
@@ -801,7 +854,53 @@ def prepare_F(workdir, target=None):
 # 0: Start run + build inventory
 # ---------------------------------------------------------------------------
 
-def prepare_0(workdir_unused, target=None):
+def _bridge_understand_output(out_dir, checklist, target):
+    """Import /understand output into the validate run if available.
+
+    Searches three tiers: local co-location, project siblings, global out/.
+    Candidates are ranked by hash freshness (files unchanged since understand
+    ran) then by modification time. Populates attack-surface.json, imports
+    flow traces into attack-paths.json, and enriches the checklist with
+    priority markers for entry points and sinks.
+    """
+    from core.understand_bridge import (
+        find_understand_output, load_understand_context, enrich_checklist,
+    )
+
+    understand_dir = find_understand_output(
+        out_dir, target_path=target,
+    )
+    if not understand_dir:
+        return
+
+    # When understand_dir IS validate_dir (shared --out), skip
+    # load_understand_context since it would read/write the same files.
+    # Just enrich the checklist from the co-located context-map.
+    if understand_dir == out_dir:
+        context_map_path = out_dir / "context-map.json"
+        if context_map_path.exists():
+            from core.json import load_json
+            context_map = load_json(context_map_path)
+            if context_map:
+                enrich_checklist(checklist, context_map, str(out_dir))
+                n_targets = len(checklist.get("priority_targets", []))
+                print(f"  Bridge: enriched checklist from co-located context-map.json"
+                      f" ({n_targets} priority targets)")
+        return
+
+    bridge = load_understand_context(understand_dir, out_dir)
+    if bridge.get("context_map_loaded"):
+        enrich_checklist(checklist, bridge["context_map"], str(out_dir))
+        n_sources = bridge["attack_surface"]["sources"]
+        n_sinks = bridge["attack_surface"]["sinks"]
+        n_traces = bridge["flow_traces"]["imported_as_paths"]
+        n_targets = len(checklist.get("priority_targets", []))
+        print(f"  Bridge: loaded {understand_dir.name}"
+              f" — {n_sources} sources, {n_sinks} sinks,"
+              f" {n_traces} traces, {n_targets} priority targets")
+
+
+def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False):
     if not target:
         print("ERROR: --target is required for stage 0", file=sys.stderr)
         sys.exit(1)
@@ -810,7 +909,8 @@ def prepare_0(workdir_unused, target=None):
     from core.run.metadata import start_run
 
     try:
-        out_dir = get_output_dir("validate", target_path=target)
+        out_dir = get_output_dir("validate", target_path=target,
+                                 explicit_out=explicit_out)
     except TargetMismatchError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
@@ -822,6 +922,10 @@ def prepare_0(workdir_unused, target=None):
 
     # Create build directory for PoC compilation
     (out_dir / "build").mkdir(exist_ok=True)
+
+    # Bridge: import /understand output if available
+    if not no_bridge:
+        _bridge_understand_output(out_dir, checklist, target)
 
     print(f"Checklist: {checklist['total_files']} files, {checklist['total_items']} items")
     print(f"OUTPUT_DIR={out_dir}")
@@ -879,19 +983,25 @@ STAGES = {
 def main():
     args = sys.argv[1:]
     if not args or args[0] not in STAGES:
-        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>]")
+        print(f"Usage: {sys.argv[0]} <0|A|B|C|D|E|F|1> [workdir] [--target <path>] [--out <dir>] [--no-bridge]")
         sys.exit(1)
 
     stage = args[0]
     target = None
+    explicit_out = None
     if "--target" in args:
         idx = args.index("--target")
         if idx + 1 < len(args):
             target = args[idx + 1]
+    if "--out" in args:
+        idx = args.index("--out")
+        if idx + 1 < len(args):
+            explicit_out = args[idx + 1]
+    no_bridge = "--no-bridge" in args
 
     # Stage 0 doesn't need a workdir (it creates one)
     if stage == "0":
-        prepare_0(None, target)
+        prepare_0(None, target, explicit_out=explicit_out, no_bridge=no_bridge)
         return
 
     # All other stages need a workdir

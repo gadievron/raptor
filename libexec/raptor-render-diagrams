@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""Render Mermaid diagrams from JSON outputs in a directory.
+
+Usage: raptor-render-diagrams <output_dir> [--target <name>]
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: raptor-render-diagrams <output_dir> [--target <name>]",
+              file=sys.stderr)
+        sys.exit(1)
+
+    out_dir = Path(sys.argv[1])
+    target = None
+    if "--target" in sys.argv:
+        idx = sys.argv.index("--target")
+        if idx + 1 < len(sys.argv):
+            target = sys.argv[idx + 1]
+
+    if not out_dir.exists():
+        print(f"ERROR: directory not found: {out_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        from packages.diagram import render_and_write
+        output_file = render_and_write(out_dir, target=target)
+        print(f"Diagrams: {output_file}")
+    except Exception as e:
+        print(f"Diagram error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

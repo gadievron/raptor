@@ -203,30 +203,6 @@ class TestProjectManager(unittest.TestCase):
         self.mgr.rename("old", "new")
         self.assertEqual(os.readlink(active), "new.json")
 
-    def test_set_active_does_not_modify_env_file(self):
-        """set_active only sets the symlink — no env file modifications."""
-        with TemporaryDirectory() as env_dir:
-            env_file = Path(env_dir) / "claude_env"
-            env_file.write_text('export PATH="$PATH:/something"\n')
-            with patch.dict(os.environ, {"CLAUDE_ENV_FILE": str(env_file)}):
-                self.mgr.create("myapp", "/tmp/code")
-                self.mgr.set_active("myapp")
-                content = env_file.read_text()
-                # Env file should NOT be modified by set_active
-                self.assertNotIn("RAPTOR_PROJECT", content)
-                self.assertIn("/something", content)
-
-    def test_set_active_none_does_not_modify_env_file(self):
-        """Clearing active project only removes symlink — no env file touch."""
-        with TemporaryDirectory() as env_dir:
-            env_file = Path(env_dir) / "claude_env"
-            original = 'export PATH="$PATH:/something"\nexport RAPTOR_PROJECT_DIR="/old"\n'
-            env_file.write_text(original)
-            with patch.dict(os.environ, {"CLAUDE_ENV_FILE": str(env_file)}):
-                self.mgr.set_active(None)
-                # Env file should NOT be modified
-                self.assertEqual(env_file.read_text(), original)
-
     def test_update_notes(self):
         self.mgr.create("myapp", "/tmp/code")
         p = self.mgr.update_notes("myapp", "new notes")
@@ -265,17 +241,6 @@ class TestProjectManager(unittest.TestCase):
         self.mgr.create("myapp", "/tmp/code")
         with self.assertRaises(ValueError):
             self.mgr.remove_run("myapp", "scan-20260406")
-
-
-class TestOutputDirResolution(unittest.TestCase):
-
-    def test_raptor_project_dir_env(self):
-        """RAPTOR_PROJECT_DIR env var should be readable."""
-        os.environ["RAPTOR_PROJECT_DIR"] = "/tmp/test_project"
-        try:
-            self.assertEqual(os.environ.get("RAPTOR_PROJECT_DIR"), "/tmp/test_project")
-        finally:
-            del os.environ["RAPTOR_PROJECT_DIR"]
 
 
 if __name__ == "__main__":

@@ -39,7 +39,7 @@ Modes can be combined. Map → Trace → Hunt is the natural attack progression.
 ## [CONFIG] Configuration
 
 ```yaml
-output_dir: resolved by libexec/raptor-run-lifecycle start understand
+output_dir: resolved by libexec/raptor-prepare-understand inventory
 confidence_levels:
   high: "Direct code evidence — quote the line"
   medium: "Inferred from context — state the assumption"
@@ -57,6 +57,7 @@ flow_format: source → transform(s) → sink
 4. When hunting variants, search the full codebase. Do not stop at the first match.
 5. When teaching, explain the mechanism, not just the name. Show the code that implements it.
 6. Produce structured output (context-map.json, flow-trace.json, variants.json) for integration with validation pipeline.
+7. **libexec scripts:** Run `libexec/` scripts exactly as shown in the prompts — do not prepend `bash`, `export` commands, absolute paths, or additional shell logic. The permission system auto-approves `libexec/raptor-*` commands only when run in this exact form.
 
 ---
 
