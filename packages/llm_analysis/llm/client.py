@@ -214,7 +214,12 @@ class LLMClient:
 
         # Initialize cache
         if self.config.enable_caching:
-            self.config.cache_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                self.config.cache_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                self.config.enable_caching = False
+                logger.warning("Cannot create cache dir %s — caching disabled",
+                               self.config.cache_dir)
 
         logger.info("LLM Client initialized")
         if self.config.primary_model:
