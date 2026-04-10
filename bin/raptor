@@ -26,16 +26,119 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 1
 fi
 
-# Project subcommands don't need Claude Code — skip the check for those
-if [[ "${1:-}" != "project" ]]; then
-    if ! command -v claude >/dev/null 2>&1; then
-        echo "raptor: claude not found. Install Claude Code:" >&2
-        echo "  https://docs.anthropic.com/en/docs/claude-code/overview" >&2
-        exit 1
-    fi
+# Help
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${1:-}" == "help" ]]; then
+    cat <<'USAGE'
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣠⣤⣤⣀⣀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣾⣿⣿⠿⠿⠟
+⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⣀⣀⣀⣀⣀⣤⣴⣶⣶⣶⣤⣿⡿⠁
+⣀⠤⠴⠒⠒⠛⠛⠛⠛⠛⠿⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⠁
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠛⣿⣿⣿⡟⠻⢿⡀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣾⢿⣿⠟⠀⠸⣊⡽
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢸⡇⣿⡁⠀⠀⠀⠉⠁
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠻⠿⣿⣧
+
+Usage: raptor [options] [target]
+       raptor project <subcommand> [args]
+
+Arguments:
+  target             Path or URL to scan (optional)
+
+Options:
+  -c, --continue     Resume last RAPTOR session
+  -m, --model MODEL  Choose model (opus, sonnet, haiku)
+  -p, --project NAME Set the active project
+  -v, --verbose      Verbose output
+  -h, --help         Show this help
+
+Projects:
+  raptor project none              Clear the active project
+  raptor project list              Show all projects
+  raptor project create <name>     Create a new project
+  raptor project status [<name>]   Show project summary
+  raptor project use [<name>]      Set/show active project
+  raptor project help              Full subcommand list
+
+Any additional flags are passed through to Claude Code.
+USAGE
+    exit 0
 fi
 
+# Route project subcommands directly (no Claude needed)
+if [[ "${1:-}" == "project" ]]; then
+    shift
+    cd "$RAPTOR_DIR" || exit 1
+    exec "$RAPTOR_DIR/libexec/raptor-project-manager" "$@"
+fi
+
+# Claude required for everything else
+if ! command -v claude >/dev/null 2>&1; then
+    echo "raptor: claude not found. Install Claude Code:" >&2
+    echo "  https://docs.anthropic.com/en/docs/claude-code/overview" >&2
+    exit 1
+fi
+
+# Export static env vars
 export RAPTOR_CALLER_DIR="$(pwd)"
 export RAPTOR_DIR
+
+# Parse RAPTOR-specific args, collect Claude args
+STARTUP_ARGS=("--caller-dir" "$RAPTOR_CALLER_DIR")
+CLAUDE_ARGS=("-n" "RAPTOR")
+INITIAL_PROMPT="/raptor"
+TARGET=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -p|--project)
+            [[ $# -ge 2 ]] || { echo "raptor: $1 requires a value" >&2; exit 1; }
+            STARTUP_ARGS+=("-p" "$2")
+            shift 2
+            ;;
+        -c|--continue)
+            CLAUDE_ARGS+=("--continue")
+            INITIAL_PROMPT=""
+            shift
+            ;;
+        -m|--model)
+            [[ $# -ge 2 ]] || { echo "raptor: $1 requires a value" >&2; exit 1; }
+            CLAUDE_ARGS+=("--model" "$2")
+            shift 2
+            ;;
+        -v|--verbose)
+            CLAUDE_ARGS+=("--verbose")
+            shift
+            ;;
+        -*)
+            CLAUDE_ARGS+=("$1")
+            shift
+            ;;
+        *)
+            # Positional arg = target path
+            TARGET="$1"
+            shift
+            ;;
+    esac
+done
+
+# Build initial prompt: /raptor [target]
+if [[ -n "$TARGET" && -n "$INITIAL_PROMPT" ]]; then
+    INITIAL_PROMPT="/raptor $TARGET"
+fi
+
 cd "$RAPTOR_DIR" || { echo "raptor: cannot cd to $RAPTOR_DIR" >&2; exit 1; }
-exec python3 -m core.startup.launcher "$@"
+
+# Pre-flight: auto-detect project, -p flag, mismatch prompt
+"$RAPTOR_DIR/libexec/raptor-startup-check" "${STARTUP_ARGS[@]}"
+
+# Load coverage tracking plugin if available
+PLUGIN_ARGS=()
+if [ -d "$RAPTOR_DIR/plugins/coverage" ]; then
+    PLUGIN_ARGS+=(--plugin-dir "$RAPTOR_DIR/plugins/coverage")
+fi
+
+clear
+if [[ -n "$INITIAL_PROMPT" ]]; then
+    exec claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}" "$INITIAL_PROMPT"
+else
+    exec claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}"
+fi

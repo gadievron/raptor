@@ -79,8 +79,8 @@ class TestTargetMismatch(unittest.TestCase):
                 with self.assertRaises(TargetMismatchError) as ctx:
                     get_output_dir("scan", target_path="/tmp/other")
                 self.assertIn("outside project", str(ctx.exception))
-                self.assertIn("raptor project create", str(ctx.exception))
-                self.assertIn("raptor project use none", str(ctx.exception))
+                self.assertIn("/project create", str(ctx.exception))
+                self.assertIn("/project use none", str(ctx.exception))
 
     def test_no_project_target_skips_check(self):
         with TemporaryDirectory() as d:

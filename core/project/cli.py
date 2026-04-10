@@ -54,6 +54,9 @@ def main():
                            usage="raptor project use [<name>]", **_F)
     p_use.add_argument("name", nargs="?", help="Project name, 'none' to clear")
 
+    # none (alias for "use none")
+    sub.add_parser("none", help="Clear the active project (alias for 'use none')", **_F)
+
     # list
     sub.add_parser("list", help="Show all projects",
                    usage="raptor project list", **_F)
@@ -158,6 +161,11 @@ def main():
         parser.print_help()
         return
 
+    # Alias: "project none" → "project use none"
+    if args.subcommand == "none":
+        args.subcommand = "use"
+        args.name = "none"
+
     mgr = ProjectManager()
 
     try:
@@ -217,14 +225,6 @@ def main():
             if args.name == "none":
                 prev = mgr.get_active()
                 mgr.set_active(None)
-                # Clear env vars so sync_project_env_file removes them from CLAUDE_ENV_FILE
-                for key in ("RAPTOR_PROJECT_DIR", "RAPTOR_PROJECT_NAME", "RAPTOR_PROJECT_TARGET"):
-                    os.environ.pop(key, None)
-                try:
-                    from core.startup import sync_project_env_file
-                    sync_project_env_file()
-                except Exception:
-                    pass
                 if prev:
                     print(f"Cleared active project: {prev}")
                 else:
@@ -431,27 +431,7 @@ def main():
 def _get_active_project():
     """Get the active project name from .active symlink or env var."""
     mgr = ProjectManager()
-
-    # 1. .active symlink (current truth — reflects mid-session `use` changes)
-    active = mgr.get_active()
-    if active:
-        return active
-
-    # 2. RAPTOR_PROJECT_NAME env var (launch-time, from bin/raptor -p)
-    name = os.environ.get("RAPTOR_PROJECT_NAME", "")
-    if name:
-        return name
-
-    # 3. RAPTOR_PROJECT_DIR reverse-lookup (legacy/manual use)
-    project_dir = os.environ.get("RAPTOR_PROJECT_DIR", "")
-    if project_dir:
-        resolved = str(Path(project_dir).resolve())
-        for p in mgr.list_projects():
-            if str(Path(p.output_dir).resolve()) == resolved:
-                return p.name
-        return Path(project_dir).name
-
-    return None
+    return mgr.get_active()
 
 
 def _print_status(project):

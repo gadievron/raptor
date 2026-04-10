@@ -9,10 +9,8 @@ Dangerous operations (apply patches, delete, git push): ASK FIRST.
 
 **On first message:**
 VERY IMPORTANT: follow these steps in order.
-1. Run `python3 -m core.startup.init` via the Bash tool (suppress output with `>/dev/null 2>&1`)
-2. Read `.startup-output` using the Read tool (NOT cat, NOT in the same Bash call), then output its contents verbatim as a fenced code block (``` with no language tag). Do NOT paraphrase or reformat.
-3. **UNLOAD:** Remove `.startup-output` contents from context (do not retain in conversation history)
-4. On a single line, output "Quick commands:" then list the /agentic, /scan, /fuzz, /web commands (don't explain what they do) and note /commands for the full list.
+1. Read `.startup-output` using the Read tool, then output its contents verbatim as a fenced code block (``` with no language tag). Do NOT paraphrase or reformat. (The SessionStart hook generates this file automatically before your first message.)
+2. On a single line, output "Quick commands:" then list the /agentic, /scan, /fuzz, /web commands (don't explain what they do) and note /commands for the full list.
 
 ---
 
@@ -43,6 +41,7 @@ Projects are opt-in named workspaces that corral analysis runs into a shared dir
 /project status                # shows all runs and findings
 /project report                # merged view across all runs
 /project clean --keep 3        # delete old runs
+/project none                  # clear active project
 ```
 
 See `/project help` for full command list.
@@ -53,7 +52,7 @@ See `/project help` for full command list.
 
 When a command like `/scan`, `/agentic`, `/validate`, `/codeql`, or `/fuzz` is run **without a path argument**, resolve the default target in this order:
 
-1. **Active project target:** if `$RAPTOR_PROJECT_TARGET` is set, use it
+1. **Active project target:** the run lifecycle script reads the `.active` symlink to find the project target automatically
 2. **Caller's directory:** if `$RAPTOR_CALLER_DIR` is set (launcher saves the user's cwd before switching to the RAPTOR repo dir), use it
 3. **Ask the user** for the target path
 
@@ -67,24 +66,25 @@ When running any analysis command (`/scan`, `/validate`, `/understand`, `/codeql
 
 **Before starting work:**
 ```bash
-OUTPUT_DIR=$(python3 -m core.run start <command> --target <resolved_target> [--out <dir>])
+libexec/raptor-run-lifecycle start <command> --target <resolved_target> [--out <dir>]
 ```
-Always pass `--target` with the resolved target path (see DEFAULT TARGET DIRECTORY for resolution order). Optionally pass `--out <dir>` to use a specific output directory (bypasses project/default resolution — useful for sharing a directory between `/understand` and `/validate` without a project). This creates the output directory, writes `.raptor-run.json` with `status: running`, and prints the path.
-**Use `$OUTPUT_DIR` for all output files.** Do not construct output paths manually.
+Always pass `--target` with the resolved target path (see DEFAULT TARGET DIRECTORY for resolution order). Optionally pass `--out <dir>` to use a specific output directory. The last line of output is `OUTPUT_DIR=<path>` — use that path for all subsequent output files.
 
 **After successful completion:**
 ```bash
-python3 -m core.run complete "$OUTPUT_DIR"
+libexec/raptor-run-lifecycle complete "$OUTPUT_DIR"
 ```
 
 **On failure:**
 ```bash
-python3 -m core.run fail "$OUTPUT_DIR" "error description"
+libexec/raptor-run-lifecycle fail "$OUTPUT_DIR" "error description"
 ```
 
-The `start` command automatically resolves the output directory using the active project (if any) or the default `out/` directory. Do not construct output paths manually.
+The `start` command automatically resolves the output directory using the active project (via `.active` symlink) or the default `out/` directory. Do not construct output paths manually.
 
 **If `start` fails (non-zero exit):** STOP. Report the error to the user. Do not proceed with the command.
+
+**Note:** `/validate` uses `libexec/raptor-prepare-validation-stage 0` instead of `raptor-run-lifecycle` — it bundles lifecycle management with inventory building.
 
 Commands run via `python3 raptor.py` (scan, agentic, codeql, fuzz, web) manage lifecycle internally — do not call the stubs separately for those.
 
@@ -208,9 +208,9 @@ The `/understand` command provides deep, adversarial code comprehension for secu
 - `hunt.md` — Structural, semantic, and root-cause variant analysis
 - `teach.md` — Framework/pattern explanation with security conclusion
 
-**Output:** `.out/code-understanding-<timestamp>/`
+**Output:** Resolved by `libexec/raptor-run-lifecycle start understand` (project dir or `out/understand_<timestamp>/`)
 
-**Pipeline integration:** Planned — output schemas are aligned with validation pipeline formats for future integration.
+**Pipeline integration:** Output schemas are aligned with validation pipeline formats. Use `--out` to share a directory with `/validate`.
 
 ---
 

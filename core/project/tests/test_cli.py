@@ -89,14 +89,13 @@ class TestGetActiveProject(unittest.TestCase):
             # Symlink wins over env var
             self.assertEqual(result, "myapp")
 
-    def test_env_var_used_when_no_symlink(self):
+    def test_no_symlink_returns_none(self):
         with TemporaryDirectory() as d:
             projects_dir = Path(d)
-            # No .active symlink
+            # No .active symlink — should return None (no env var fallback)
             with patch("core.project.project.PROJECTS_DIR", projects_dir):
-                with patch.dict(os.environ, {"RAPTOR_PROJECT_NAME": "fromenv"}):
-                    result = _get_active_project()
-            self.assertEqual(result, "fromenv")
+                result = _get_active_project()
+            self.assertIsNone(result)
 
 
 if __name__ == "__main__":

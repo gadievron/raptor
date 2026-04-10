@@ -327,18 +327,16 @@ class ProjectManager:
         logger.info(f"Moved '{run_name}' to {to_path}")
 
     def set_active(self, name: str = None) -> None:
-        """Set the active project symlink and update CLAUDE_ENV_FILE.
+        """Set the active project symlink. Pass None to clear.
 
-        Pass None to clear.
+        The symlink is the single source of truth for project state.
+        No env vars are set or cleared.
         """
         active_link = self.projects_dir / ".active"
         if active_link.is_symlink() or active_link.exists():
             active_link.unlink()
         if name is not None:
             active_link.symlink_to(f"{name}.json")
-
-        # Update CLAUDE_ENV_FILE so env vars stay in sync mid-session
-        self._update_env_file(name)
 
     def get_active(self) -> Optional[str]:
         """Get the active project name from the .active symlink."""
@@ -352,39 +350,6 @@ class ProjectManager:
                 # Dangling — clean up
                 active_link.unlink(missing_ok=True)
         return None
-
-    def _update_env_file(self, name: str = None) -> None:
-        """Update CLAUDE_ENV_FILE with project env vars.
-
-        Writes project vars directly to the env file without modifying
-        os.environ (the launcher manages process env vars).
-        """
-        env_file = os.environ.get("CLAUDE_ENV_FILE")
-        if not env_file:
-            return
-
-        env_path = Path(env_file)
-        try:
-            existing = env_path.read_text() if env_path.exists() else ""
-        except OSError:
-            return
-
-        lines = [l for l in existing.splitlines()
-                 if not l.startswith("export RAPTOR_PROJECT_")]
-
-        if name:
-            project = self.load(name)
-            if project:
-                def _sh(v):
-                    return v.replace('\\', '\\\\').replace('"', '\\"')
-                lines.append(f'export RAPTOR_PROJECT_DIR="{_sh(project.output_dir)}"')
-                lines.append(f'export RAPTOR_PROJECT_NAME="{_sh(project.name)}"')
-                lines.append(f'export RAPTOR_PROJECT_TARGET="{_sh(project.target)}"')
-
-        try:
-            env_path.write_text("\n".join(lines) + "\n" if lines else "")
-        except OSError:
-            pass
 
     def find_project_for_target(self, target: str) -> Optional[Project]:
         """Auto-detect: find a project whose target matches the given path."""

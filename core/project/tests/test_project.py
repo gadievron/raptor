@@ -203,7 +203,8 @@ class TestProjectManager(unittest.TestCase):
         self.mgr.rename("old", "new")
         self.assertEqual(os.readlink(active), "new.json")
 
-    def test_set_active_updates_env_file(self):
+    def test_set_active_does_not_modify_env_file(self):
+        """set_active only sets the symlink — no env file modifications."""
         with TemporaryDirectory() as env_dir:
             env_file = Path(env_dir) / "claude_env"
             env_file.write_text('export PATH="$PATH:/something"\n')
@@ -211,27 +212,20 @@ class TestProjectManager(unittest.TestCase):
                 self.mgr.create("myapp", "/tmp/code")
                 self.mgr.set_active("myapp")
                 content = env_file.read_text()
-                self.assertIn("RAPTOR_PROJECT_DIR", content)
-                self.assertIn("RAPTOR_PROJECT_NAME", content)
-                self.assertIn("RAPTOR_PROJECT_TARGET", content)
-                # PATH line should be preserved
+                # Env file should NOT be modified by set_active
+                self.assertNotIn("RAPTOR_PROJECT", content)
                 self.assertIn("/something", content)
 
-    def test_set_active_none_clears_env_file(self):
+    def test_set_active_none_does_not_modify_env_file(self):
+        """Clearing active project only removes symlink — no env file touch."""
         with TemporaryDirectory() as env_dir:
             env_file = Path(env_dir) / "claude_env"
-            env_file.write_text(
-                'export PATH="$PATH:/something"\n'
-                'export RAPTOR_PROJECT_DIR="/old/path"\n'
-                'export RAPTOR_PROJECT_NAME="old"\n'
-            )
+            original = 'export PATH="$PATH:/something"\nexport RAPTOR_PROJECT_DIR="/old"\n'
+            env_file.write_text(original)
             with patch.dict(os.environ, {"CLAUDE_ENV_FILE": str(env_file)}):
                 self.mgr.set_active(None)
-                content = env_file.read_text()
-                self.assertNotIn("RAPTOR_PROJECT_DIR", content)
-                self.assertNotIn("RAPTOR_PROJECT_NAME", content)
-                # PATH preserved
-                self.assertIn("/something", content)
+                # Env file should NOT be modified
+                self.assertEqual(env_file.read_text(), original)
 
     def test_update_notes(self):
         self.mgr.create("myapp", "/tmp/code")

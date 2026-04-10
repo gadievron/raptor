@@ -20,6 +20,7 @@ Manage projects — named workspaces that corral analysis runs into one director
 | `create <name> --target <path> [-d <desc>]` | Create a new project |
 | `list` | Show all projects (* marks active) |
 | `status [<name>]` | Show project summary with run history |
+| `none` | Clear the active project |
 | `use [<name>]` | Set active project (no arg = show current, `none` = clear) |
 | `delete <name> [--purge] [--yes]` | Remove project (--purge also deletes output) |
 | `rename <old> <new>` | Rename a project |
@@ -39,11 +40,7 @@ Manage projects — named workspaces that corral analysis runs into one director
 Run project commands via the Bash tool:
 
 ```bash
-cd "$RAPTOR_DIR" && python3 -c "
-import sys, os; sys.path.insert(0, os.environ['RAPTOR_DIR'])
-from core.project.cli import main
-main()
-" <subcommand> [args]
+libexec/raptor-project-manager <subcommand> [args]
 ```
 
 For destructive commands (`merge`, `clean`, `delete --purge`), confirm with the user before running with `--yes`.

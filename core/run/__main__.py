@@ -6,7 +6,7 @@ Usage:
     python3 -m core.run fail <path> [message]
     python3 -m core.run cancel <path>
 
-Reads RAPTOR_PROJECT_DIR from env or .active symlink to determine
+Reads .active symlink to determine
 where to create the run directory. Prints the output path to stdout
 for the caller to capture.
 """

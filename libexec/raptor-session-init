@@ -1,36 +1,54 @@
 #!/usr/bin/env python3
-"""SessionStart hook: ensure RAPTOR env vars are in CLAUDE_ENV_FILE.
+"""SessionStart hook: env file setup and startup banner.
 
 Called automatically by Claude Code on session start (via .claude/settings.json).
-Sets RAPTOR_DIR, PATH, and syncs project vars from the .active symlink.
+Writes RAPTOR_DIR + PATH to the env file (overwrite, not append) and generates
+the startup banner in .startup-output.
+
+No project env vars are set — the .active symlink is the only source of truth.
 """
 import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 
-from core.startup.init import setup_env_file
-from core.startup import get_active_name, sync_project_env_file
 
-# Write RAPTOR_DIR and PATH
-setup_env_file()
+def write_env_file():
+    """Write the env file with static vars. Overwrites to ensure clean state."""
+    env_file = os.environ.get("CLAUDE_ENV_FILE")
+    if not env_file:
+        return
 
-# Sync project vars from symlink (not from stale env vars)
-active = get_active_name()
-if active:
-    from core.project.project import ProjectManager
-    mgr = ProjectManager()
-    project = mgr.load(active)
-    if project:
-        os.environ["RAPTOR_PROJECT_DIR"] = project.output_dir
-        os.environ["RAPTOR_PROJECT_NAME"] = project.name
-        os.environ["RAPTOR_PROJECT_TARGET"] = project.target
-    else:
-        for key in ("RAPTOR_PROJECT_DIR", "RAPTOR_PROJECT_NAME", "RAPTOR_PROJECT_TARGET"):
-            os.environ.pop(key, None)
-else:
-    for key in ("RAPTOR_PROJECT_DIR", "RAPTOR_PROJECT_NAME", "RAPTOR_PROJECT_TARGET"):
-        os.environ.pop(key, None)
+    repo_root = str(REPO_ROOT)
+    bin_dir = str(REPO_ROOT / "bin")
 
-sync_project_env_file()
+    content = (
+        f'export RAPTOR_DIR="{repo_root}"\n'
+        f'export PATH="$PATH:{bin_dir}"\n'
+    )
+
+    try:
+        Path(env_file).write_text(content)
+    except OSError:
+        pass
+
+
+def generate_banner():
+    """Generate the startup banner and write to .startup-output."""
+    try:
+        from core.startup.init import main as init_main
+        init_main()
+    except Exception as e:
+        # Non-fatal — write a minimal banner
+        output_file = REPO_ROOT / ".startup-output"
+        try:
+            output_file.write_text(f"RAPTOR startup error: {e}\n")
+        except OSError:
+            pass
+
+
+if __name__ == "__main__":
+    write_env_file()
+    generate_banner()

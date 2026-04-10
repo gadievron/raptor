@@ -39,7 +39,7 @@ Modes can be combined. Map → Trace → Hunt is the natural attack progression.
 ## [CONFIG] Configuration
 
 ```yaml
-output_dir: .out/code-understanding-<timestamp>/
+output_dir: resolved by libexec/raptor-run-lifecycle start understand
 confidence_levels:
   high: "Direct code evidence — quote the line"
   medium: "Inferred from context — state the assumption"
@@ -86,7 +86,7 @@ flow_format: source → transform(s) → sink
 
 ## Integration with Validation Pipeline
 
-**Shared inventory:** MAP-0 runs `build_inventory.py` to produce `checklist.json` with SHA-256 checksums per file. This is the same inventory used by `/validate` Stage 0. Coverage tracking (`checked_by` per function) is cumulative across both skills.
+**Shared inventory:** MAP-0 runs `build_checklist()` to produce `checklist.json` with SHA-256 checksums per file. This is the same inventory used by `/validate` Stage 0. Coverage tracking (`checked_by` per function) is cumulative across both skills.
 
 Output schemas are aligned with the validation pipeline's formats (`attack-surface.json`, `attack-paths.json`, `findings.json`).
 

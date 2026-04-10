@@ -65,48 +65,85 @@ def check_tools() -> tuple[list, list, set]:
 
 
 def check_llm() -> tuple[list, list]:
-    """Check LLM availability and configuration.
+    """Check LLM availability via config file + lightweight key validation.
+
+    Reads ~/.config/raptor/models.json directly and tests API keys with
+    simple HTTP requests — avoids importing heavy SDKs (~4.5s of imports).
 
     Returns (lines, warnings).
     """
+    import json
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     lines = []
     warnings = []
 
     try:
-        from packages.llm_analysis.llm.detection import (
-            detect_llm_availability, OPENAI_SDK_AVAILABLE, ANTHROPIC_SDK_AVAILABLE,
-        )
-        from packages.llm_analysis.llm.model_data import PROVIDER_ENV_KEYS
+        # Read config
+        config_path = Path.home() / ".config/raptor/models.json"
+        models = []
+        if config_path.exists():
+            try:
+                data = json.loads(config_path.read_text())
+                models = data.get("models", []) if isinstance(data, dict) else data
+            except (json.JSONDecodeError, OSError):
+                pass
 
-        avail = detect_llm_availability()
-
-        # SDK mismatch warnings
-        sdk_reqs = {
-            "anthropic": ("anthropic", ANTHROPIC_SDK_AVAILABLE or OPENAI_SDK_AVAILABLE),
-            "openai": ("openai", OPENAI_SDK_AVAILABLE),
-            "gemini": ("openai", OPENAI_SDK_AVAILABLE),
-            "mistral": ("openai", OPENAI_SDK_AVAILABLE),
+        # Also check env vars for providers not in models.json
+        env_keys = {
+            "anthropic": "ANTHROPIC_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "gemini": "GEMINI_API_KEY",
+            "mistral": "MISTRAL_API_KEY",
         }
-        for provider, env_var in PROVIDER_ENV_KEYS.items():
-            if os.getenv(env_var):
-                sdk_name, ok = sdk_reqs.get(provider, ("openai", OPENAI_SDK_AVAILABLE))
-                if not ok:
-                    warnings.append(f"{env_var} set but {sdk_name} SDK missing \u2014 pip install {sdk_name}")
+        config_providers = {m.get("provider") for m in models}
+        for provider, env_var in env_keys.items():
+            key = os.getenv(env_var)
+            if key and provider not in config_providers:
+                models.append({"provider": provider, "model": "default", "api_key": key, "_from_env": True})
 
-        if avail.external_llm:
-            from packages.llm_analysis.llm.config import LLMConfig
-            cfg = LLMConfig()
-            if cfg.primary_model:
-                pm = cfg.primary_model
-                src = _key_source(pm.provider, PROVIDER_ENV_KEYS)
-                lines.append(f"   llm: {pm.provider}/{pm.model_name} (primary, {src})")
-                for fm in cfg.fallback_models[:3]:
-                    if f"{fm.provider}/{fm.model_name}" != f"{pm.provider}/{pm.model_name}":
-                        lines.append(f"        {fm.provider}/{fm.model_name} (fallback, {_key_source(fm.provider, PROVIDER_ENV_KEYS)})")
+        if models:
+            # Validate keys in parallel
+            key_status = {}
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                futures = {}
+                seen = set()
+                for m in models:
+                    provider = m.get("provider", "unknown")
+                    api_key = m.get("api_key") or os.getenv(env_keys.get(provider, ""))
+                    if not api_key or provider in seen:
+                        continue
+                    seen.add(provider)
+                    futures[pool.submit(_test_key, provider, api_key, m.get("api_base"))] = provider
+                for future in as_completed(futures, timeout=5):
+                    provider = futures[future]
+                    try:
+                        key_status[provider] = future.result()
+                    except Exception:
+                        key_status[provider] = False
+
+            # Build output lines (same format as before)
+            primary = models[0]
+            provider = primary.get("provider", "unknown")
+            model = primary.get("model", primary.get("model_name", "unknown"))
+            src = _key_source(provider, primary)
+            lines.append(f"   llm: {provider}/{model} (primary, {src})")
+
+            if key_status.get(provider) is False:
+                warnings.append(f"{provider} API key validation failed")
+
+            for fm in models[1:4]:
+                fp = fm.get("provider", "unknown")
+                fn = fm.get("model", fm.get("model_name", "unknown"))
+                if f"{fp}/{fn}" != f"{provider}/{model}":
+                    role = fm.get("role", "fallback")
+                    lines.append(f"        {fp}/{fn} ({role}, {_key_source(fp, fm)})")
+                    if key_status.get(fp) is False:
+                        warnings.append(f"{fp} API key validation failed")
         else:
             lines.append("   llm: no external LLM configured")
 
-        if avail.claude_code:
+        if shutil.which("claude"):
             lines.append("        claude code \u2713")
 
     except Exception as e:
@@ -116,9 +153,61 @@ def check_llm() -> tuple[list, list]:
     return lines, warnings
 
 
-def _key_source(provider: str, env_keys: dict) -> str:
+def _test_key(provider: str, api_key: str, api_base: str = None) -> bool:
+    """Lightweight API key smoke test — no SDK imports."""
+    import requests
+
+    timeout = 3
+    try:
+        if provider == "gemini":
+            r = requests.get(
+                f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
+                timeout=timeout,
+            )
+            return r.status_code == 200
+        elif provider == "openai":
+            base = (api_base or "https://api.openai.com").rstrip("/")
+            r = requests.get(
+                f"{base}/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=timeout,
+            )
+            return r.status_code == 200
+        elif provider == "anthropic":
+            r = requests.get(
+                "https://api.anthropic.com/v1/models",
+                headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+                timeout=timeout,
+            )
+            return r.status_code == 200
+        elif provider == "mistral":
+            r = requests.get(
+                "https://api.mistral.ai/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=timeout,
+            )
+            return r.status_code == 200
+        elif provider == "ollama":
+            base = (api_base or "http://localhost:11434").rstrip("/")
+            r = requests.get(f"{base}/api/tags", timeout=timeout)
+            return r.status_code == 200
+        else:
+            return True  # Unknown provider — can't test, assume OK
+    except requests.RequestException:
+        return False
+
+
+def _key_source(provider: str, model_entry: dict = None) -> str:
     if provider == "ollama":
         return "local"
+    env_keys = {
+        "anthropic": "ANTHROPIC_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "gemini": "GEMINI_API_KEY",
+        "mistral": "MISTRAL_API_KEY",
+    }
+    if model_entry and model_entry.get("_from_env"):
+        return f"via {env_keys.get(provider, 'env')}"
     env_var = env_keys.get(provider, "")
     if env_var and os.getenv(env_var):
         return f"via {env_var}"
@@ -185,9 +274,7 @@ def check_active_project() -> str | None:
         if not data:
             return None
         proj_target = data.get("target", "")
-        if os.environ.get("RAPTOR_PROJECT_AUTO"):
-            return f"Auto-activated project: {name} ({proj_target}) \u2014 `raptor project use none` to clear"
-        return f"Project: {name} ({proj_target}) \u2014 `raptor project use none` to clear"
+        return f"Project: {name} ({proj_target}) \u2014 `/project none` to clear"
     except Exception:
         return None
 
@@ -249,7 +336,6 @@ def main():
 
     OUTPUT_FILE.write_text(output)
     print(output)
-    setup_env_file()
 
 
 if __name__ == "__main__":

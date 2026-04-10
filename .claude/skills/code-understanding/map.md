@@ -24,8 +24,12 @@ This is not documentation generation. It is adversarial reconnaissance at the so
 
 Before any manual enumeration, run the inventory builder to get a reliable file and function list:
 
-```
-python3 build_inventory.py --repo <target> --out $WORKDIR
+```bash
+python3 -c "
+import sys; sys.path.insert(0, '.')
+from packages.exploitability_validation import build_checklist
+build_checklist('<target>', '$WORKDIR')
+"
 ```
 
 Read the resulting `checklist.json`. It provides every source file with language, line count, SHA-256 checksum, and every function with name, line number, and signature. Excluded files are recorded with reasons.

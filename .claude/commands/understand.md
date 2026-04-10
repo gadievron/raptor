@@ -16,6 +16,24 @@ It is a work in progress, remember that.
 
 If no mode flag is given, default to `--map`.
 
+## Execution
+
+**Before starting work**, create the output directory via the run lifecycle:
+```bash
+libexec/raptor-run-lifecycle start understand --target <resolved_target> [--out <dir>]
+```
+The last line of output is `OUTPUT_DIR=<path>` — use that path as `$WORKDIR` for all subsequent output files.
+
+**After successful completion:**
+```bash
+libexec/raptor-run-lifecycle complete "$OUTPUT_DIR"
+```
+
+**On failure:**
+```bash
+libexec/raptor-run-lifecycle fail "$OUTPUT_DIR" "error description"
+```
+
 ## Modes
 
 | Flag | What it does |
@@ -51,7 +69,7 @@ Modes combine and run in order: map → trace → hunt → teach. This matches t
 
 ## Integration with Validation Pipeline
 
-**Shared inventory:** `--map` runs `build_inventory.py` first (MAP-0 step) to produce `checklist.json` with SHA-256 checksums. This is the same inventory used by `/validate` Stage 0. Coverage tracking is cumulative across both skills.
+**Shared inventory:** `--map` runs `build_checklist()` first (MAP-0 step) to produce `checklist.json` with SHA-256 checksums. This is the same inventory used by `/validate` Stage 0. Coverage tracking is cumulative across both skills.
 
 Understanding output feeds into Gadi & JC's epic exploitability validation:
 
@@ -84,7 +102,7 @@ Load before executing:
 
 ## Output
 
-All JSON outputs write to `$WORKDIR` (`.out/code-understanding-<timestamp>/` by default, or `--out <dir>`).
+All JSON outputs write to `$WORKDIR` (resolved by `raptor-run-lifecycle start`, or `--out <dir>`).
 
 | File | Mode | Contents |
 |------|------|----------|

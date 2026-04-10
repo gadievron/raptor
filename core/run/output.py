@@ -21,15 +21,13 @@ class TargetMismatchError(ValueError):
 
 
 def _resolve_active_project() -> Optional[Tuple[str, str, str]]:
-    """Resolve the current active project, checking symlink first.
+    """Resolve the current active project from the .active symlink.
 
     Returns (output_dir, name, target) or None if no project is active.
-    The .active symlink is checked first (reflects mid-session changes),
-    falling back to env vars (set at launch).
+    The symlink is the single source of truth — no env var fallback.
     """
-    # 1. Check .active symlink (current truth — survives `project use` mid-session)
     try:
-        from core.project.project import PROJECTS_DIR, ProjectManager
+        from core.project.project import ProjectManager
         mgr = ProjectManager()
         active_name = mgr.get_active()
         if active_name:
@@ -38,15 +36,6 @@ def _resolve_active_project() -> Optional[Tuple[str, str, str]]:
                 return project.output_dir, project.name, project.target
     except Exception:
         pass
-
-    # 2. Fall back to env vars (set at launch by bin/raptor)
-    project_dir = os.environ.get("RAPTOR_PROJECT_DIR")
-    if project_dir:
-        return (
-            project_dir,
-            os.environ.get("RAPTOR_PROJECT_NAME", ""),
-            os.environ.get("RAPTOR_PROJECT_TARGET", ""),
-        )
 
     return None
 
@@ -119,6 +108,6 @@ def _check_target_mismatch(target_path: str, project_name: str,
     raise TargetMismatchError(
         f"target {resolved} is outside project {project_name} ({project_resolved})\n"
         f"  A project tracks one target. To analyze a different codebase:\n"
-        f"    raptor project create <name> --target {resolved}\n"
-        f"    raptor project use none"
+        f"    /project create <name> --target {resolved}\n"
+        f"    /project use none"
     )

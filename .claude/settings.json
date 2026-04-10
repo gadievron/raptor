@@ -9,6 +9,8 @@
       "Bash(libexec/raptor-prepare-validation-stage *)",
       "Bash(libexec/raptor-run-feasibility *)",
       "Bash(libexec/raptor-validate-schema *)",
+      "Bash(libexec/raptor-project-manager *)",
+      "Bash(libexec/raptor-run-lifecycle *)",
       "Write(/out/**)",
       "Edit(/out/**)"
     ]
@@ -16,7 +18,7 @@
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "",
+        "matcher": "startup",
         "hooks": [
           {
             "type": "command",

@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""Pre-Claude startup check — project auto-detect and mismatch prompt.
+
+Usage: raptor-startup-check [--caller-dir <dir>] [-p <project>]
+
+Called by bin/raptor before exec claude. Handles:
+  - -p <project> flag: activate the named project
+  - Auto-detect: if caller dir matches a project target, activate it
+  - Mismatch: if active project target differs from caller dir, prompt
+
+All project operations go through the .active symlink. No env vars set.
+Exit 0 on success (continue to claude), non-zero on abort.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+def _find_project_for(directory, exclude=None):
+    """Find a project whose target matches directory."""
+    from core.project import ProjectManager
+    project = ProjectManager().find_project_for_target(directory)
+    if project and project.name != exclude:
+        return project.name
+    return None
+
+
+def _load_active():
+    """Load active project name, target, output_dir from symlink. Returns dict or None."""
+    from core.startup import get_active_name, PROJECTS_DIR
+    from core.json import load_json
+    name = get_active_name()
+    if not name:
+        return None
+    data = load_json(PROJECTS_DIR / f"{name}.json")
+    if not data:
+        return None
+    return {
+        "name": name,
+        "target": data.get("target", ""),
+        "output_dir": data.get("output_dir", ""),
+    }
+
+
+def _activate(name):
+    """Activate a project by setting the .active symlink."""
+    from core.project import ProjectManager
+    mgr = ProjectManager()
+    project = mgr.load(name)
+    if not project:
+        return False
+    mgr.set_active(name)
+    return True
+
+
+def _deactivate():
+    """Clear the active project."""
+    from core.project import ProjectManager
+    ProjectManager().set_active(None)
+
+
+def _check_mismatch(caller_dir):
+    """If active project target doesn't match caller dir, prompt user."""
+    active = _load_active()
+    if not active or not active["target"]:
+        return
+
+    try:
+        resolved_caller = Path(caller_dir).resolve()
+        resolved_target = Path(active["target"]).resolve()
+    except OSError:
+        return
+
+    if resolved_caller == resolved_target:
+        return
+
+    # Check if caller dir matches a different project
+    other = _find_project_for(caller_dir, exclude=active["name"])
+    if not other:
+        return
+
+    print(f"""
+  Active project is {active['name']} ({active['target']})
+  You are in {other}'s target directory ({caller_dir})
+
+  Continue with:
+    1) {active['name']}
+    2) {other}
+    3) no project
+
+  or enter anything else to quit
+""")
+    try:
+        choice = input("  Choice [1]: ").strip() or "1"
+    except (EOFError, KeyboardInterrupt):
+        sys.exit(0)
+
+    if choice == "1":
+        pass
+    elif choice == "2":
+        if _activate(other):
+            print(f"  Switched to {other}")
+    elif choice == "3":
+        _deactivate()
+        print("  No active project")
+    else:
+        sys.exit(0)
+
+
+def main():
+    caller_dir = None
+    project_flag = None
+    i = 1
+    while i < len(sys.argv):
+        arg = sys.argv[i]
+        if arg == "--caller-dir" and i + 1 < len(sys.argv):
+            caller_dir = sys.argv[i + 1]
+            i += 2
+        elif arg in ("-p", "--project") and i + 1 < len(sys.argv):
+            project_flag = sys.argv[i + 1]
+            i += 2
+        else:
+            i += 1
+
+    try:
+        # Handle -p flag
+        if project_flag:
+            if not _activate(project_flag):
+                print(f"  Project '{project_flag}' not found", file=sys.stderr)
+                sys.exit(1)
+            return
+
+        # Auto-detect from caller dir
+        active = _load_active()
+        if not active and caller_dir:
+            auto_name = _find_project_for(caller_dir)
+            if auto_name and _activate(auto_name):
+                print(f"  Auto-activated project: {auto_name}")
+                return
+
+        # Mismatch check
+        if active and caller_dir:
+            _check_mismatch(caller_dir)
+
+    except Exception as e:
+        # Non-fatal — continue to Claude without project
+        print(f"  Startup check warning: {e}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Run lifecycle management — start, complete, fail.
+
+Usage:
+  raptor-run-lifecycle start <command> --target <path> [--out <dir>]
+  raptor-run-lifecycle complete <output_dir>
+  raptor-run-lifecycle fail <output_dir> [message]
+
+start: creates output directory, writes .raptor-run.json, prints OUTPUT_DIR=<path>
+complete: marks run as completed
+fail: marks run as failed with optional error message
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.run.output import get_output_dir, TargetMismatchError
+from core.run.metadata import start_run, complete_run, fail_run
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__.strip(), file=sys.stderr)
+        sys.exit(1)
+
+    action = sys.argv[1]
+
+    if action == "start":
+        if len(sys.argv) < 3:
+            print("Usage: raptor-run-lifecycle start <command> --target <path> [--out <dir>]",
+                  file=sys.stderr)
+            sys.exit(1)
+        command = sys.argv[2]
+        target_path = None
+        explicit_out = None
+        i = 3
+        while i < len(sys.argv):
+            if sys.argv[i] == "--target" and i + 1 < len(sys.argv):
+                target_path = sys.argv[i + 1]
+                i += 2
+            elif sys.argv[i] == "--out" and i + 1 < len(sys.argv):
+                explicit_out = sys.argv[i + 1]
+                i += 2
+            elif not sys.argv[i].startswith("--"):
+                target_path = target_path or sys.argv[i]
+                i += 1
+            else:
+                i += 1
+
+        try:
+            out_dir = get_output_dir(command, target_path=target_path,
+                                     explicit_out=explicit_out)
+        except TargetMismatchError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        start_run(out_dir, command)
+        print(f"OUTPUT_DIR={out_dir}")
+
+    elif action == "complete":
+        if len(sys.argv) < 3:
+            print("Usage: raptor-run-lifecycle complete <output_dir>", file=sys.stderr)
+            sys.exit(1)
+        output_dir = Path(sys.argv[2])
+        try:
+            complete_run(output_dir)
+        except Exception as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    elif action == "fail":
+        if len(sys.argv) < 3:
+            print("Usage: raptor-run-lifecycle fail <output_dir> [message]", file=sys.stderr)
+            sys.exit(1)
+        output_dir = Path(sys.argv[2])
+        message = sys.argv[3] if len(sys.argv) > 3 else "unknown error"
+        try:
+            fail_run(output_dir, message)
+        except Exception as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    else:
+        print(f"Unknown action: {action}", file=sys.stderr)
+        print("Actions: start, complete, fail", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
