@@ -37,7 +37,7 @@ The modular architecture refactors the original monolithic structure into a clea
 
 ```
 raptor/
-├── core/                  # Shared utilities (config, logging, progress, SARIF parsing)
+├── core/                  # Shared utilities (config, logging, exec, git, hash, semgrep, SARIF)
 ├── packages/              # Independent security capabilities
 │   ├── static-analysis/   # Semgrep scanning
 │   ├── codeql/            # CodeQL deep analysis and dataflow validation
@@ -69,8 +69,12 @@ raptor/
 ├── core/                           # Shared utilities layer
 │   ├── __init__.py
 │   ├── config.py                   # RaptorConfig (paths, settings)
+│   ├── exec.py                     # Subprocess execution (run())
+│   ├── git.py                      # Git operations (clone_repository, validate_repo_url)
+│   ├── hash.py                     # Directory tree hashing (sha256_tree)
 │   ├── logging.py                  # Structured logging with JSONL audit trail
 │   ├── progress.py                 # Progress tracking utilities
+│   ├── semgrep.py                  # Semgrep scanning (parallel/sequential orchestration)
 │   ├── sarif/
 │   │   ├── __init__.py
 │   │   └── parser.py               # SARIF 2.1.0 parsing utilities
@@ -88,7 +92,7 @@ raptor/
 │   │
 │   ├── static-analysis/            # Static code scanning
 │   │   ├── __init__.py
-│   │   ├── scanner.py              # Main: Semgrep orchestrator
+│   │   ├── scanner.py              # Main: scan entry point (delegates to core/semgrep)
 │   │   └── codeql/
 │   │       └── env.py              # CodeQL environment setup
 │   │
@@ -286,6 +290,49 @@ def get_logger(name: str = "raptor") -> logging.Logger:
 - (Additional utilities as needed)
 
 **Why Separate Module**: SARIF parsing is shared by scanner, llm-analysis, and reporting. Centralization prevents duplication.
+
+#### `core/exec.py` - Subprocess Execution
+**Responsibility**: Safe list-based subprocess wrapper
+
+**Functions**:
+- `run(cmd, cwd, timeout, env)`: Execute a command and return `(returncode, stdout, stderr)`
+
+**Key Decisions**:
+- Always uses list-based arguments (no shell injection)
+- Merges custom env with `os.environ` copy
+
+#### `core/git.py` - Git Operations
+**Responsibility**: Safe git repository operations
+
+**Functions**:
+- `clone_repository(url, target, depth)`: Clone with URL validation and safe env
+- `validate_repo_url(url)`: Validate against allowed GitHub/GitLab patterns
+- `get_safe_git_env()`: Return env with `GIT_TERMINAL_PROMPT=0`, `GIT_ASKPASS=true`
+
+#### `core/hash.py` - Directory Hashing
+**Responsibility**: Deterministic directory tree hashing
+
+**Functions**:
+- `sha256_tree(root, max_file_size, chunk_size)`: SHA-256 hash of sorted file paths + contents
+
+**Key Decisions**:
+- Uses relative paths (hash is location-independent)
+- Configurable size limit to skip large files
+- Chunk size affects only read efficiency, not hash result
+
+#### `core/semgrep.py` - Semgrep Scanning
+**Responsibility**: Semgrep scan orchestration
+
+**Functions**:
+- `run_semgrep(config, target, output, timeout)`: Single scan with SARIF output
+- `run_single_semgrep(name, config, repo_path, out_dir, timeout)`: Named scan with logging
+- `semgrep_scan_parallel(repo_path, rules_dirs, out_dir)`: Parallel multi-pack scanning
+- `semgrep_scan_sequential(repo_path, rules_dirs, out_dir)`: Sequential fallback
+
+**Key Decisions**:
+- Strips venv from PATH/env before calling semgrep
+- Baseline packs always included; category packs added per policy group
+- Deduplicates pack IDs across categories
 
 
 ## Packages Layer
@@ -666,7 +713,7 @@ python3 packages/web/scanner.py \
 - `semgrep.yaml` - Semgrep configuration file
 - `tools/` - Utilities for rule development and testing
 
-**Usage**: Consumed by `packages/static-analysis/scanner.py` for Semgrep scanning
+**Usage**: Consumed by `core/semgrep.py` for Semgrep scanning
 
 **Design Rationale**: Separating analysis engines from packages allows for centralized rule management and easier rule updates without modifying package code.
 

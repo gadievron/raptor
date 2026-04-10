@@ -157,7 +157,7 @@ export RAPTOR_OUT_DIR="/custom/output/path"
 - `crypto` - Cryptographic weaknesses
 - `all` - All policy groups (default)
 
-Custom groups can be added in `packages/static-analysis/scanner.py`.
+Custom groups can be configured in `core/config.py` (`RaptorConfig`) and pack mappings in `core/semgrep.py`.
 
 ---
 

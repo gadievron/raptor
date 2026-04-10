@@ -5,37 +5,22 @@
 - Produces out/recon.json with simple inventory: file counts, languages by extension
 - Produces scan-manifest.json (input_hash, timestamp, agent meta)
 """
-import argparse, json, os, shutil, subprocess, sys, tempfile, time, hashlib
+import argparse, json, os, shutil, sys, tempfile, time
 from pathlib import Path
+
+# Setup path for core module imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from core.json import save_json
+from core.git import clone_repository
+from core.hash import sha256_tree
 
 
 def get_out_dir() -> Path:
     base = os.environ.get("RAPTOR_OUT_DIR")
     return Path(base).resolve() if base else Path("out").resolve()
 
-def sha256_tree(root: Path) -> str:
-    h = hashlib.sha256()
-    for p in sorted(root.rglob("*")):
-        if p.is_file():
-            h.update(p.relative_to(root).as_posix().encode())
-            with p.open("rb") as f:
-                for chunk in iter(lambda: f.read(8192), b""):
-                    h.update(chunk)
-    return h.hexdigest()
-
 def safe_clone(url: str, dest: Path):
-    env = os.environ.copy()
-    env.update({
-        "GIT_TERMINAL_PROMPT": "0",
-        "GIT_ASKPASS": "true",
-    })
-    for k in ["HTTP_PROXY","HTTPS_PROXY","NO_PROXY","http_proxy","https_proxy","no_proxy"]:
-        env.pop(k, None)
-    cmd = ["git","clone","--depth","1","--no-tags",url,str(dest)]
-    p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=600)
-    if p.returncode != 0:
-        raise RuntimeError(f"git clone failed: {p.stderr.strip()}")
+    clone_repository(url, dest, depth=1)
     return dest
 
 def inventory(path: Path):
@@ -86,7 +71,9 @@ def main():
             'version': '1.0.0',
             'repo_path': str(repo_path),
             'timestamp_utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-            'input_hash': sha256_tree(repo_path)
+            # Use very large max_file_size to disable limit (backward compatibility with old behavior)
+            # Chunk size doesn't affect hash result, only reading efficiency
+            'input_hash': sha256_tree(repo_path, max_file_size=10**12, chunk_size=8192)
         }
         save_json(out_dir / 'scan-manifest.json', manifest)
 
