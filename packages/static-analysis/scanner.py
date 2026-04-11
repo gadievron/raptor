@@ -102,6 +102,7 @@ def run_single_semgrep(
 
     suffix = sanitize_name(name)
     sarif = out_dir / f"semgrep_{suffix}.sarif"
+    json_out = out_dir / f"semgrep_{suffix}.json"
     stderr_log = out_dir / f"semgrep_{suffix}.stderr.log"
     exit_file = out_dir / f"semgrep_{suffix}.exit"
 
@@ -121,6 +122,7 @@ def run_single_semgrep(
         "--metrics", "off",
         "--error",
         "--sarif",
+        "--json-output", str(json_out),
         "--timeout", str(RaptorConfig.SEMGREP_RULE_TIMEOUT),
         str(repo_path),
     ]
@@ -446,7 +448,7 @@ def main():
         codeql_sarifs = []
         if args.codeql:
             # Basic language guess; you can make this dynamic later
-            codeql_sarifs = run_codeql(repo_path, out_dir, languages=["java", "python", "go"])
+            codeql_sarifs = run_codeql(repo_path, out_dir, languages=["cpp", "java", "python", "go"])
 
         # Merge SARIFs if more than one
         sarif_inputs = semgrep_sarifs + codeql_sarifs
@@ -470,6 +472,32 @@ def main():
 
         logger.info(f"Scan complete: {metrics['total_findings']} findings in {metrics['total_files_scanned']} files")
 
+        # Write coverage records
+        try:
+            from core.coverage.record import (
+                build_from_semgrep, build_from_codeql, write_record,
+            )
+            # Semgrep coverage — find JSON outputs alongside SARIFs
+            for sarif_path in semgrep_sarifs:
+                json_path = Path(sarif_path).with_suffix(".json")
+                if json_path.exists():
+                    record = build_from_semgrep(
+                        out_dir, json_path,
+                        rules_applied=groups if groups else [str(Path(r).name) for r in rules_dirs],
+                    )
+                    if record:
+                        write_record(out_dir, record, tool_name="semgrep")
+                        break  # one record covers all (paths.scanned is cumulative)
+
+            # CodeQL coverage — from SARIF artifacts
+            for sarif_path in codeql_sarifs:
+                record = build_from_codeql(Path(sarif_path))
+                if record:
+                    write_record(out_dir, record, tool_name="codeql")
+                    break  # one record per run
+        except Exception as e:
+            logger.debug(f"Coverage record write failed (non-fatal): {e}")
+
         # Verification plan
         verification = {
             "verify": ["sarif_schema", "manifest_hash", "semgrep_exit_check"],
@@ -480,6 +508,17 @@ def main():
 
         duration = time.time() - start_time
         logger.info(f"Total scan duration: {duration:.2f}s")
+
+        # Print coverage summary if checklist exists
+        try:
+            from core.coverage.summary import compute_summary, format_summary
+            cov = compute_summary(out_dir)
+            if cov:
+                print()
+                print(format_summary(cov))
+                print()
+        except Exception:
+            pass
 
         result = {
             "status": "ok",

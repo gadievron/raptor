@@ -1,20 +1,14 @@
 #!/usr/bin/env python3
-"""Prepare a validation pipeline stage by running all mechanical checks.
+"""Validation pipeline helper — per-stage mechanical work.
 
 Usage:
-  raptor-prepare-validation-stage 0 --target <path>     # start run + inventory
-  raptor-prepare-validation-stage <A|B|C|D|E|F> <workdir> [--target <path>]
-  raptor-prepare-validation-stage 1 <workdir>            # report + complete
+  raptor-validation-helper 0 --target <path>              # start + inventory + bridge
+  raptor-validation-helper <A|B|C|D|E|F> <workdir> [--target <path>]
+  raptor-validation-helper 1 <workdir>                    # report + coverage + complete
 
-Stages:
-  0  Start run lifecycle, build checklist (prints workdir to stdout)
-  A  Load checklist and pre-existing findings
-  B  Validate Stage A output, dedup flag, load attack surface
-  C  Validate Stage B output (5 docs), pre-check findings against inventory
-  D  Validate Stage C output, test/mock path filter, evidence card assembly
-  E  Validate Stage D output, discover binaries (requires --target)
-  F  Map Stage E verdicts, compute CVSS scores, consistency checks
-  1  Generate report + diagrams, complete run lifecycle
+Stages 0 and 1 compose generic tools (lifecycle, checklist, coverage, diagrams)
+with validation-specific logic (bridge, stage merging, report generation).
+Stages A-F do per-stage merging, validation, and schema hints.
 """
 import re
 import sys
@@ -900,13 +894,26 @@ def _bridge_understand_output(out_dir, checklist, target):
               f" {n_traces} traces, {n_targets} priority targets")
 
 
+def prepare_bridge(workdir, target=None):
+    """Import /understand output into the validate run."""
+    from core.json import load_json
+    checklist = load_json(Path(workdir) / "checklist.json")
+    if not checklist:
+        print("ERROR: checklist.json not found — run raptor-build-checklist first",
+              file=sys.stderr)
+        sys.exit(1)
+    _bridge_understand_output(Path(workdir), checklist, target)
+
+
 def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False):
+    """Stage 0: start lifecycle, build checklist, bridge understand output."""
     if not target:
         print("ERROR: --target is required for stage 0", file=sys.stderr)
         sys.exit(1)
 
     from core.run.output import get_output_dir, TargetMismatchError
     from core.run.metadata import start_run
+    from packages.exploitability_validation import build_checklist
 
     try:
         out_dir = get_output_dir("validate", target_path=target,
@@ -916,14 +923,10 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False):
         sys.exit(1)
 
     start_run(out_dir, "validate")
-
-    from packages.exploitability_validation import build_checklist
     checklist = build_checklist(target, str(out_dir))
 
-    # Create build directory for PoC compilation
     (out_dir / "build").mkdir(exist_ok=True)
 
-    # Bridge: import /understand output if available
     if not no_bridge:
         _bridge_understand_output(out_dir, checklist, target)
 
@@ -931,20 +934,37 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False):
     print(f"OUTPUT_DIR={out_dir}")
 
 
-# ---------------------------------------------------------------------------
-# 1: Generate report + complete run
-# ---------------------------------------------------------------------------
-
 def prepare_1(workdir, target=None):
+    """Stage 1: report, coverage, diagrams, complete lifecycle."""
     _apply_stage_file(workdir, "F")
 
-    from packages.exploitability_validation.report import write_validation_report
+    # Report
+    from packages.exploitability_validation.report import write_validation_report, generate_summary
     try:
         write_validation_report(workdir)
         print("Report generated")
     except Exception as e:
         print(f"Report error: {e}")
 
+    print(generate_summary(workdir))
+
+    # Coverage record from findings + reads manifest
+    try:
+        from core.coverage.record import build_from_findings, write_record, cleanup_manifest, READS_MANIFEST
+        findings_path = Path(workdir) / "findings.json"
+        manifest_path = Path(workdir) / READS_MANIFEST
+        record = build_from_findings(
+            findings_path,
+            reads_manifest_path=manifest_path if manifest_path.exists() else None,
+            tool="llm",
+        )
+        if record:
+            write_record(Path(workdir), record, tool_name="llm")
+            cleanup_manifest(Path(workdir))
+    except Exception:
+        pass
+
+    # Diagrams
     try:
         from packages.diagram import render_and_write
         render_and_write(Path(workdir))
@@ -952,11 +972,17 @@ def prepare_1(workdir, target=None):
     except Exception as e:
         print(f"Diagram error: {e}")
 
-    # Print summary
-    from packages.exploitability_validation.report import generate_summary
-    print(generate_summary(workdir))
+    # Coverage summary
+    try:
+        from core.coverage.summary import compute_summary, format_summary
+        cov = compute_summary(workdir)
+        if cov:
+            print()
+            print(format_summary(cov))
+    except Exception:
+        pass
 
-    # Complete run lifecycle
+    # Complete lifecycle
     from core.run.metadata import complete_run
     try:
         complete_run(Path(workdir))
@@ -999,7 +1025,7 @@ def main():
             explicit_out = args[idx + 1]
     no_bridge = "--no-bridge" in args
 
-    # Stage 0 doesn't need a workdir (it creates one)
+    # Stage 0 creates its own workdir
     if stage == "0":
         prepare_0(None, target, explicit_out=explicit_out, no_bridge=no_bridge)
         return

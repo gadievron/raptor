@@ -381,6 +381,7 @@ class TestCumulativeCoverage:
 
         The checklist is a snapshot — hashes record state at inventory time.
         Consumers detect staleness by comparing hashes to disk, not the builder.
+        Pass force_rebuild=True to rehash and rebuild.
         """
         import hashlib
         src = tmp_path / "src"
@@ -398,7 +399,7 @@ class TestCumulativeCoverage:
         # Modify source — disk hash now differs from checklist hash
         (src / "app.py").write_text("def main():\n    print('changed')\n")
 
-        # Second call reuses existing inventory (snapshot preserved)
+        # Default: reuses existing inventory (snapshot preserved)
         inv2 = build_inventory(str(src), str(out))
         assert inv2["files"][0]["sha256"] == original_hash
         assert inv2["files"][0]["items"][0]["checked_by"] == ["validate:stage-a"]
@@ -407,10 +408,32 @@ class TestCumulativeCoverage:
         disk_hash = hashlib.sha256((src / "app.py").read_bytes()).hexdigest()
         assert disk_hash != original_hash
 
+    def test_force_rebuild_rehashes(self, tmp_path):
+        """force_rebuild=True rebuilds the checklist even when one exists."""
+        import hashlib
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "app.py").write_text("def main(): pass\n")
+
+        out = tmp_path / "out"
+
+        inv1 = build_inventory(str(src), str(out))
+        original_hash = inv1["files"][0]["sha256"]
+
+        # Modify source
+        (src / "app.py").write_text("def main():\n    print('changed')\n")
+
+        # force_rebuild picks up the change
+        inv2 = build_inventory(str(src), str(out), force_rebuild=True)
+        assert inv2["files"][0]["sha256"] != original_hash
+        disk_hash = hashlib.sha256((src / "app.py").read_bytes()).hexdigest()
+        assert inv2["files"][0]["sha256"] == disk_hash
+
     def test_reuse_when_file_added(self, tmp_path):
         """New files on disk don't trigger a rebuild — checklist is a snapshot.
 
         Consumers discover new files by comparing checklist paths to disk.
+        Use force_rebuild=True to pick up new files.
         """
         src = tmp_path / "src"
         src.mkdir()
@@ -421,10 +444,16 @@ class TestCumulativeCoverage:
         inv1 = build_inventory(str(src), str(out))
         (src / "new.py").write_text("def new_func(): pass\n")
 
-        # Second call reuses — new.py is not in the snapshot
+        # Default: reuses — new.py is not in the snapshot
         inv2 = build_inventory(str(src), str(out))
         assert len(inv2["files"]) == 1
         assert inv2["files"][0]["path"] == "app.py"
+
+        # force_rebuild picks up new.py
+        inv3 = build_inventory(str(src), str(out), force_rebuild=True)
+        assert len(inv3["files"]) == 2
+        paths = {f["path"] for f in inv3["files"]}
+        assert "new.py" in paths
 
 
 # ── Coverage Stats ──────────────────────────────────────────────────

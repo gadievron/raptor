@@ -20,6 +20,7 @@ Manage projects — named workspaces that corral analysis runs into one director
 | `create <name> --target <path> [-d <desc>]` | Create a new project |
 | `list` | Show all projects (* marks active) |
 | `status [<name>]` | Show project summary with run history |
+| `coverage [<name>] [--detailed]` | Show tool coverage summary (or per-file table) |
 | `none` | Clear the active project |
 | `use [<name>]` | Set active project (no arg = show current, `none` = clear) |
 | `delete <name> [--purge] [--yes]` | Remove project (--purge also deletes output) |

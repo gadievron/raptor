@@ -9,8 +9,11 @@ from tempfile import TemporaryDirectory
 from core.coverage.record import (
     build_from_manifest,
     build_from_semgrep,
+    build_from_codeql,
+    build_from_findings,
     write_record,
     load_record,
+    load_records,
     cleanup_manifest,
     READS_MANIFEST,
     COVERAGE_RECORD_FILE,
@@ -88,6 +91,110 @@ class TestBuildFromSemgrep(unittest.TestCase):
             self.assertIsNone(build_from_semgrep(Path(d), semgrep_json))
 
 
+class TestBuildFromCodeQL(unittest.TestCase):
+
+    def test_builds_from_sarif(self):
+        with TemporaryDirectory() as d:
+            sarif = Path(d) / "codeql.sarif"
+            sarif.write_text(json.dumps({
+                "runs": [{
+                    "tool": {
+                        "driver": {"name": "CodeQL", "version": "2.16.0",
+                                   "rules": [{"id": "cpp/overflow"}, {"id": "cpp/injection"}]},
+                        "extensions": [{"name": "codeql/cpp-queries", "version": "1.0.0"}],
+                    },
+                    "artifacts": [
+                        {"location": {"uri": "src/main.c"}},
+                        {"location": {"uri": "src/util.c"}},
+                    ],
+                    "invocations": [],
+                }]
+            }))
+            record = build_from_codeql(sarif)
+            self.assertEqual(record["tool"], "codeql")
+            self.assertEqual(record["version"], "2.16.0")
+            self.assertEqual(len(record["files_examined"]), 2)
+            self.assertIn("src/main.c", record["files_examined"])
+            self.assertEqual(record["packs"], ["codeql/cpp-queries@1.0.0"])
+            self.assertEqual(len(record["rules_applied"]), 2)
+
+    def test_captures_failures(self):
+        with TemporaryDirectory() as d:
+            sarif = Path(d) / "codeql.sarif"
+            sarif.write_text(json.dumps({
+                "runs": [{
+                    "tool": {"driver": {"name": "CodeQL", "rules": []}, "extensions": []},
+                    "artifacts": [{"location": {"uri": "src/ok.c"}}],
+                    "invocations": [{
+                        "toolExecutionNotifications": [{
+                            "level": "error",
+                            "message": {"text": "extraction failed"},
+                            "locations": [{"physicalLocation": {
+                                "artifactLocation": {"uri": "src/bad.c"}
+                            }}],
+                        }]
+                    }],
+                }]
+            }))
+            record = build_from_codeql(sarif)
+            self.assertEqual(len(record["files_failed"]), 1)
+            self.assertEqual(record["files_failed"][0]["path"], "src/bad.c")
+
+    def test_returns_none_without_artifacts(self):
+        with TemporaryDirectory() as d:
+            sarif = Path(d) / "codeql.sarif"
+            sarif.write_text(json.dumps({"runs": [{"tool": {"driver": {}}, "artifacts": []}]}))
+            self.assertIsNone(build_from_codeql(sarif))
+
+
+class TestBuildFromFindings(unittest.TestCase):
+
+    def test_builds_from_findings_and_manifest(self):
+        with TemporaryDirectory() as d:
+            findings = Path(d) / "findings.json"
+            findings.write_text(json.dumps({
+                "findings": [
+                    {"id": "F1", "file": "src/auth.c", "function": "check_pw", "line": 10},
+                    {"id": "F2", "file": "src/db.c", "function": "query", "line": 20},
+                ]
+            }))
+            manifest = Path(d) / READS_MANIFEST
+            manifest.write_text("src/auth.c\nsrc/db.c\nsrc/util.c\n")
+            record = build_from_findings(findings, reads_manifest_path=manifest)
+            self.assertEqual(record["tool"], "llm")
+            self.assertEqual(len(record["files_examined"]), 3)  # auth, db, util
+            self.assertEqual(len(record["functions_analysed"]), 2)
+            self.assertIn("src/util.c", record["files_examined"])
+
+    def test_findings_only(self):
+        with TemporaryDirectory() as d:
+            findings = Path(d) / "findings.json"
+            findings.write_text(json.dumps({
+                "findings": [
+                    {"id": "F1", "file": "src/vuln.c", "function": "main", "line": 5},
+                ]
+            }))
+            record = build_from_findings(findings)
+            self.assertEqual(len(record["files_examined"]), 1)
+            self.assertEqual(len(record["functions_analysed"]), 1)
+
+    def test_manifest_only(self):
+        with TemporaryDirectory() as d:
+            findings = Path(d) / "findings.json"
+            findings.write_text(json.dumps({"findings": []}))
+            manifest = Path(d) / READS_MANIFEST
+            manifest.write_text("src/auth.c\n")
+            record = build_from_findings(findings, reads_manifest_path=manifest)
+            self.assertEqual(len(record["files_examined"]), 1)
+            self.assertNotIn("functions_analysed", record)
+
+    def test_returns_none_without_data(self):
+        with TemporaryDirectory() as d:
+            findings = Path(d) / "findings.json"
+            findings.write_text(json.dumps({"findings": []}))
+            self.assertIsNone(build_from_findings(findings))
+
+
 class TestWriteAndLoad(unittest.TestCase):
 
     def test_roundtrip(self):
@@ -97,6 +204,29 @@ class TestWriteAndLoad(unittest.TestCase):
             loaded = load_record(Path(d))
             self.assertEqual(loaded["tool"], "test")
             self.assertEqual(loaded["files_examined"], ["a.py"])
+
+    def test_per_tool_write(self):
+        with TemporaryDirectory() as d:
+            record = {"tool": "semgrep", "files_examined": ["a.py"]}
+            path = write_record(Path(d), record, tool_name="semgrep")
+            self.assertEqual(path.name, "coverage-semgrep.json")
+            self.assertTrue(path.exists())
+
+    def test_load_records_multiple(self):
+        with TemporaryDirectory() as d:
+            write_record(Path(d), {"tool": "semgrep"}, tool_name="semgrep")
+            write_record(Path(d), {"tool": "codeql"}, tool_name="codeql")
+            write_record(Path(d), {"tool": "llm"}, tool_name="llm")
+            records = load_records(Path(d))
+            tools = {r["tool"] for r in records}
+            self.assertEqual(tools, {"semgrep", "codeql", "llm"})
+
+    def test_load_records_falls_back_to_legacy(self):
+        with TemporaryDirectory() as d:
+            write_record(Path(d), {"tool": "legacy"})
+            records = load_records(Path(d))
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["tool"], "legacy")
 
     def test_load_missing(self):
         with TemporaryDirectory() as d:

@@ -15,7 +15,7 @@ Validates that vulnerability findings are real, reachable, and exploitable befor
 **Prep script:** Before each LLM stage, run the prep script which merges the previous stage's output, validates, and sets up the current stage:
 
 ```bash
-libexec/raptor-prepare-validation-stage <A|B|C|D|E|F> "$OUTPUT_DIR" [--target "$TARGET_PATH"]
+libexec/raptor-validation-helper <A|B|C|D|E|F> "$OUTPUT_DIR" [--target "$TARGET_PATH"]
 ```
 
 **All stages are mandatory. Execute in sequence: 0 → A → B → C → D → E → F → 1.**
@@ -24,16 +24,16 @@ Stage E only applies to memory corruption vulnerabilities. All others are mandat
 ### Stage 0 (Python): Inventory
 
 ```bash
-libexec/raptor-prepare-validation-stage 0 --target "$TARGET_PATH"
+libexec/raptor-validation-helper 0 --target "$TARGET_PATH"
 ```
 
-This starts the run lifecycle and builds the checklist. The last line of output is `OUTPUT_DIR=<path>` — use that path for all subsequent stages.
+This starts the run lifecycle, builds the checklist, and imports any /understand output. The last line of output is `OUTPUT_DIR=<path>` — use that path for all subsequent stages.
 
 ### Stage A (Claude): One-Shot Assessment
 
 **Load:** `.claude/skills/exploitability-validation/stage-a-oneshot.md`
 
-1. **Prep:** `libexec/raptor-prepare-validation-stage A "$OUTPUT_DIR" --target "$TARGET_PATH"`
+1. **Prep:** `libexec/raptor-validation-helper A "$OUTPUT_DIR" --target "$TARGET_PATH"`
    Discovers binaries, builds PoCs for standalone C files (mitigations disabled, in `$OUTPUT_DIR/build/`).
 2. **Reasoning:** Read source files, assess each function for vulnerabilities. If binaries are available (from prep output), run them for PoC evidence. If no binaries, do source-only analysis.
 3. **Output:** Write `stage-a.json` — full findings array with origin + stage_a_summary
@@ -44,7 +44,7 @@ This starts the run lifecycle and builds the checklist. The last line of output 
 
 **Load:** `.claude/skills/exploitability-validation/stage-b-process.md`
 
-1. **Prep:** `libexec/raptor-prepare-validation-stage B "$OUTPUT_DIR" --target "$TARGET_PATH"`
+1. **Prep:** `libexec/raptor-validation-helper B "$OUTPUT_DIR" --target "$TARGET_PATH"`
    Merges stage-a.json into findings.json. Fast-paths poc_success findings. Reports how many need full analysis.
 2. **Reasoning:** Build attack surface, form hypotheses with value-level predictions, test them, track proximity (0-10 scale). Only analyse findings without `stage_b_summary` (fast-pathed findings already have it).
 3. **Output:** Write 5 working docs directly + `stage-b.json` (per-finding updates with stage_b_summary)
@@ -55,7 +55,7 @@ This starts the run lifecycle and builds the checklist. The last line of output 
 
 **Load:** `.claude/skills/exploitability-validation/stage-c-sanity.md`
 
-1. **Prep:** `libexec/raptor-prepare-validation-stage C "$OUTPUT_DIR" --target "$TARGET_PATH"`
+1. **Prep:** `libexec/raptor-validation-helper C "$OUTPUT_DIR" --target "$TARGET_PATH"`
    Merges stage-b.json, validates 6 working docs, pre-checks findings against inventory.
 2. **Reasoning:** Open each file, verify code verbatim, confirm source→sink flows are real, confirm reachability
 3. **Output:** Write `stage-c.json` (per-finding sanity_check + stage_c_summary)
@@ -64,7 +64,7 @@ This starts the run lifecycle and builds the checklist. The last line of output 
 
 **Load:** `.claude/skills/exploitability-validation/stage-d-ruling.md`
 
-1. **Prep:** `libexec/raptor-prepare-validation-stage D "$OUTPUT_DIR" --target "$TARGET_PATH"`
+1. **Prep:** `libexec/raptor-validation-helper D "$OUTPUT_DIR" --target "$TARGET_PATH"`
    Merges stage-c.json, flags test/mock paths, assembles evidence cards from carry-forward.
 2. **Reasoning:** Synthesize evidence from A/B/C, apply disqualifier checks (D-0 through D-4), assign CVSS vectors
 3. **Output:** Write `stage-d.json` (per-finding ruling, cvss_vector, stage_d_summary)
@@ -75,7 +75,7 @@ This starts the run lifecycle and builds the checklist. The last line of output 
 
 **Display rule:** When displaying Stage E verdicts or final statuses in chat, use Title Case (e.g., "Confirmed (Constrained)" not `confirmed_constrained`). snake_case is for JSON only.
 
-1. **Prep:** `libexec/raptor-prepare-validation-stage E "$OUTPUT_DIR" --target "$TARGET_PATH"`
+1. **Prep:** `libexec/raptor-validation-helper E "$OUTPUT_DIR" --target "$TARGET_PATH"`
    Merges stage-d.json, validates Stage D output, auto-discovers binaries in the target directory.
 2. **Analysis:** For each binary group found by prep, run feasibility:
    ```bash
@@ -99,7 +99,7 @@ Skip Stage E if `--skip-feasibility` or no memory corruption findings.
 
 **Load:** `.claude/skills/exploitability-validation/stage-f-review.md`
 
-1. **Prep:** `libexec/raptor-prepare-validation-stage F "$OUTPUT_DIR"`
+1. **Prep:** `libexec/raptor-validation-helper F "$OUTPUT_DIR"`
    Merges stage-e.json, maps verdicts to final_status, computes CVSS scores, checks consistency.
 2. **Reasoning:** Review all findings — misclassifications, weak evidence, CVSS accuracy, missed instances. Ask: "What did I get wrong?"
 3. **Output:** Write `stage-f.json` (per-finding corrections + stage_f_summary). **Do not write validation-report.md** — Stage 1 generates it.
@@ -107,10 +107,10 @@ Skip Stage E if `--skip-feasibility` or no memory corruption findings.
 ### Stage 1 (Python): Report Generation
 
 ```bash
-libexec/raptor-prepare-validation-stage 1 "$OUTPUT_DIR"
+libexec/raptor-validation-helper 1 "$OUTPUT_DIR"
 ```
 
-This generates the validation report, diagrams, CVSS scores, and completes the run lifecycle. The summary table is printed to stdout.
+This merges stage-f.json, generates the validation report, diagrams, coverage records, and completes the run lifecycle. The findings summary and coverage summary are printed to stdout.
 
 Then read `{output_dir}/validation-report.md` and add a 1-2 sentence summary paragraph
 after the `# Exploitability Validation Report` header — e.g., "All 3 buffer overflows are

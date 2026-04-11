@@ -39,7 +39,7 @@ Modes can be combined. Map → Trace → Hunt is the natural attack progression.
 ## [CONFIG] Configuration
 
 ```yaml
-output_dir: resolved by libexec/raptor-prepare-understand inventory
+output_dir: resolved by raptor-run-lifecycle start understand
 confidence_levels:
   high: "Direct code evidence — quote the line"
   medium: "Inferred from context — state the assumption"

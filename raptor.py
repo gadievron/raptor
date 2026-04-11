@@ -79,6 +79,26 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     print(f"\n[*] {label}\n")
     rc = _run_script(script_path, args)
 
+    # Write coverage records from tool outputs (before lifecycle complete)
+    try:
+        from core.coverage.record import (
+            build_from_semgrep, build_from_codeql, write_record,
+        )
+        if not (out_dir / "coverage-semgrep.json").exists():
+            for json_path in out_dir.glob("semgrep_*.json"):
+                record = build_from_semgrep(out_dir, json_path)
+                if record:
+                    write_record(out_dir, record, tool_name="semgrep")
+                    break
+        if not (out_dir / "coverage-codeql.json").exists():
+            for sarif_path in out_dir.glob("codeql_*.sarif"):
+                record = build_from_codeql(sarif_path)
+                if record:
+                    write_record(out_dir, record, tool_name="codeql")
+                    break
+    except Exception:
+        pass
+
     if rc == 0:
         complete_run(out_dir)
     else:

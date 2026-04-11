@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+"""Coverage query and update tool.
+
+Usage:
+  raptor-coverage-summary [<dir>] [--detailed]          Show coverage summary
+  raptor-coverage-summary [<dir>] --gaps                List unreviewed items
+  raptor-coverage-summary [<dir>] --mark <file:item>    Mark item(s) as reviewed
+  raptor-coverage-summary [<dir>] --mark-file <json>    Mark functions from JSON file
+  raptor-coverage-summary [<dir>] --unmark <file:item>  Remove item from reviewed
+
+If <dir> is omitted, uses the active project.
+Accepts: project output dir, run dir, target path, or project name.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+def _is_project_dir(d: Path) -> bool:
+    if not (d / "checklist.json").exists():
+        return False
+    for child in d.iterdir():
+        if child.is_dir() and (child / ".raptor-run.json").exists():
+            return True
+    return False
+
+
+def _is_run_dir(d: Path) -> bool:
+    return (d / ".raptor-run.json").exists() or (d / "checklist.json").exists()
+
+
+def _resolve_dir(path_arg: str):
+    """Resolve to (Project, None) or (None, run_dir) or (None, None)."""
+    from core.project.project import Project, ProjectManager
+
+    target_dir = Path(path_arg).resolve()
+
+    if target_dir.exists() and _is_project_dir(target_dir):
+        return Project(name="", target="", output_dir=str(target_dir)), None
+
+    if target_dir.exists() and _is_run_dir(target_dir):
+        return None, target_dir
+
+    # Try project name
+    try:
+        mgr = ProjectManager()
+        p = mgr.load(path_arg)
+        if p:
+            return p, None
+    except Exception:
+        pass
+
+    # Try target path → project
+    try:
+        mgr = ProjectManager()
+        project = mgr.find_project_for_target(str(target_dir))
+        if project:
+            return project, None
+    except Exception:
+        pass
+
+    if target_dir.exists():
+        return None, None
+    return None, None
+
+
+def _resolve_active_project():
+    try:
+        from core.project.project import ProjectManager
+        mgr = ProjectManager()
+        name = mgr.get_active()
+        if name:
+            return mgr.load(name)
+    except Exception:
+        pass
+    return None
+
+
+def _get_summary(args):
+    """Resolve dir and compute summary. Returns (summary, run_dir_for_mark)."""
+    from core.coverage.summary import compute_summary, compute_project_summary
+
+    project = None
+    run_dir = None
+
+    if args:
+        project, run_dir = _resolve_dir(args[0])
+        if not project and not run_dir:
+            d = Path(args[0])
+            if d.exists():
+                run_dir = d
+            else:
+                print(f"ERROR: could not resolve '{args[0]}'.", file=sys.stderr)
+                sys.exit(1)
+    else:
+        project = _resolve_active_project()
+        if not project:
+            print("No directory specified and no active project.", file=sys.stderr)
+            sys.exit(1)
+
+    if project:
+        summary = compute_project_summary(project)
+        # For --mark, find the most recent run dir
+        mark_dir = None
+        try:
+            dirs = project.get_run_dirs(sweep=False)
+            if dirs:
+                mark_dir = dirs[0]
+        except Exception:
+            pass
+        return summary, mark_dir
+    else:
+        return compute_summary(run_dir), run_dir
+
+
+def _cmd_gaps(summary):
+    """Print unreviewed items."""
+    if not summary:
+        print("No coverage data.")
+        return
+
+    per_file = summary.get("per_file", [])
+    gaps = []
+    for pf in per_file:
+        for func in pf.get("unreviewed_functions", []):
+            gaps.append((pf["path"], func))
+
+    if not gaps:
+        print("All items reviewed.")
+        return
+
+    print(f"{len(gaps)} unreviewed item{'s' if len(gaps) != 1 else ''}:")
+    for file_path, func in gaps:
+        print(f"  {file_path}:{func}")
+
+
+def _cmd_mark(mark_targets, run_dir):
+    """Mark items as reviewed in the coverage record."""
+    if not run_dir:
+        print("ERROR: cannot determine run directory for --mark.", file=sys.stderr)
+        print("Specify a run directory explicitly.", file=sys.stderr)
+        sys.exit(1)
+
+    from core.coverage.record import load_records, write_record
+    from core.json import load_json
+
+    # Load existing LLM record or create new
+    records = load_records(run_dir)
+    llm_record = None
+    for r in records:
+        if r.get("tool") == "llm":
+            llm_record = r
+            break
+
+    if not llm_record:
+        from datetime import datetime, timezone
+        llm_record = {
+            "tool": "llm",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "files_examined": [],
+            "functions_analysed": [],
+        }
+
+    existing_funcs = {
+        (fa.get("file"), fa.get("function"))
+        for fa in llm_record.get("functions_analysed", [])
+    }
+    existing_files = set(llm_record.get("files_examined", []))
+
+    added = 0
+    for target in mark_targets:
+        if ":" not in target:
+            print(f"WARNING: skipping '{target}' (expected file:function)", file=sys.stderr)
+            continue
+        file_path, func_name = target.rsplit(":", 1)
+        if (file_path, func_name) not in existing_funcs:
+            llm_record.setdefault("functions_analysed", []).append(
+                {"file": file_path, "function": func_name}
+            )
+            existing_funcs.add((file_path, func_name))
+            added += 1
+        if file_path not in existing_files:
+            llm_record.setdefault("files_examined", []).append(file_path)
+            existing_files.add(file_path)
+
+    llm_record["files_examined"] = sorted(set(llm_record.get("files_examined", [])))
+    write_record(run_dir, llm_record, tool_name="llm")
+    print(f"Marked {added} item{'s' if added != 1 else ''} as reviewed in {run_dir.name}")
+
+
+def _cmd_unmark(unmark_targets, run_dir):
+    """Remove functions from the LLM coverage record."""
+    if not run_dir:
+        print("ERROR: cannot determine run directory for --unmark.", file=sys.stderr)
+        sys.exit(1)
+
+    from core.coverage.record import load_records, write_record
+
+    records = load_records(run_dir)
+    llm_record = None
+    for r in records:
+        if r.get("tool") == "llm":
+            llm_record = r
+            break
+
+    if not llm_record:
+        print("No LLM coverage record found.")
+        return
+
+    to_remove = set()
+    for target in unmark_targets:
+        if ":" not in target:
+            print(f"WARNING: skipping '{target}' (expected file:function)", file=sys.stderr)
+            continue
+        file_path, func_name = target.rsplit(":", 1)
+        to_remove.add((file_path, func_name))
+
+    original = len(llm_record.get("functions_analysed", []))
+    llm_record["functions_analysed"] = [
+        fa for fa in llm_record.get("functions_analysed", [])
+        if (fa.get("file"), fa.get("function")) not in to_remove
+    ]
+    removed = original - len(llm_record["functions_analysed"])
+
+    write_record(run_dir, llm_record, tool_name="llm")
+    print(f"Removed {removed} item{'s' if removed != 1 else ''} from reviewed in {run_dir.name}")
+
+
+def main():
+    argv = sys.argv[1:]
+    detailed = "--detailed" in argv
+    show_gaps = "--gaps" in argv
+
+    # Extract --mark, --mark-file, --unmark targets
+    mark_targets = []
+    unmark_targets = []
+    if "--mark-file" in argv:
+        idx = argv.index("--mark-file")
+        if idx + 1 < len(argv):
+            mark_file = Path(argv[idx + 1])
+            if not mark_file.exists():
+                print(f"ERROR: file not found: {mark_file}", file=sys.stderr)
+                sys.exit(1)
+            from core.json import load_json
+            entries = load_json(mark_file)
+            if not isinstance(entries, list):
+                print("ERROR: mark file must be a JSON array of {file, item} objects",
+                      file=sys.stderr)
+                sys.exit(1)
+            for e in entries:
+                f = e.get("file", "")
+                name = e.get("item") or e.get("function") or e.get("global") or e.get("macro", "")
+                if f and name:
+                    mark_targets.append(f"{f}:{name}")
+            argv = argv[:idx] + argv[idx + 2:]
+    if "--mark" in argv:
+        idx = argv.index("--mark")
+        mark_targets.extend(a for a in argv[idx + 1:] if not a.startswith("--"))
+        argv = argv[:idx]
+    if "--unmark" in argv:
+        idx = argv.index("--unmark")
+        unmark_targets = [a for a in argv[idx + 1:] if not a.startswith("--")]
+        argv = argv[:idx]
+
+    # Remaining positional args (after removing flags)
+    args = [a for a in argv if not a.startswith("--")]
+
+    if mark_targets or unmark_targets:
+        _, run_dir = _get_summary(args) if not args else (None, None)
+        if not run_dir and args:
+            _, run_dir = _resolve_dir(args[0])
+            if not run_dir:
+                d = Path(args[0])
+                if d.exists() and _is_run_dir(d):
+                    run_dir = d
+        if not run_dir:
+            # Use most recent run from active project
+            p = _resolve_active_project()
+            if p:
+                try:
+                    dirs = p.get_run_dirs(sweep=False)
+                    if dirs:
+                        run_dir = dirs[0]
+                except Exception:
+                    pass
+        if mark_targets:
+            _cmd_mark(mark_targets, run_dir)
+        if unmark_targets:
+            _cmd_unmark(unmark_targets, run_dir)
+        return
+
+    summary, _ = _get_summary(args)
+
+    if not summary:
+        print("No coverage data (missing checklist.json or coverage records).")
+        return
+
+    if show_gaps:
+        _cmd_gaps(summary)
+    elif detailed:
+        from core.coverage.summary import format_detailed
+        print(format_detailed(summary))
+    else:
+        from core.coverage.summary import format_summary
+        print(format_summary(summary))
+
+
+if __name__ == "__main__":
+    main()

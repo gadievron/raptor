@@ -18,23 +18,44 @@ If no mode flag is given, default to `--map`.
 
 ## Execution
 
-**Before starting work**, build the inventory and create the output directory:
+**Step 1: Start the run and build inventory:**
 ```bash
-libexec/raptor-prepare-understand inventory <resolved_target>
+libexec/raptor-run-lifecycle start understand --target <resolved_target>
 ```
-This starts the run lifecycle and builds `checklist.json`. The last line of output is `OUTPUT_DIR=<path>` — use that path as `$WORKDIR` for all subsequent output files.
+The last line of output is `OUTPUT_DIR=<path>` — use that for all subsequent steps.
 
-**After writing JSON outputs** (for `--map` or `--trace`), generate diagrams:
+```bash
+libexec/raptor-build-checklist <resolved_target> "$OUTPUT_DIR" --fix
+```
+
+**Step 2: Do the analysis** (map, trace, hunt, teach — see skill files).
+
+**Step 3: Record coverage** (for `--map` — list every item you examined):
+
+Write a JSON file listing every function, global, struct, and macro you analysed, then pass it to the coverage tool:
+```json
+// $OUTPUT_DIR/reviewed-items.json
+[
+  {"file": "src/auth.c", "item": "check_pw"},
+  {"file": "src/auth.c", "item": "credentials"},
+  {"file": "src/db.c", "item": "query"}
+]
+```
+```bash
+libexec/raptor-coverage-summary "$OUTPUT_DIR" --mark-file "$OUTPUT_DIR/reviewed-items.json"
+```
+
+**Step 4: Generate diagrams** (for `--map` or `--trace`):
 ```bash
 libexec/raptor-render-diagrams "$OUTPUT_DIR"
 ```
 
-**After all work is done:**
+**Step 5: Complete the run:**
 ```bash
 libexec/raptor-run-lifecycle complete "$OUTPUT_DIR"
 ```
 
-**On failure:**
+**On failure** (at any point):
 ```bash
 libexec/raptor-run-lifecycle fail "$OUTPUT_DIR" "error description"
 ```

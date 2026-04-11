@@ -66,6 +66,12 @@ def main():
                               usage="raptor project status [<name>]", **_F)
     p_status.add_argument("name", nargs="?", help="Project name")
 
+    # coverage
+    p_cov = sub.add_parser("coverage", help="Show coverage summary",
+                           usage="raptor project coverage [<name>] [--detailed]", **_F)
+    p_cov.add_argument("name", nargs="?", help="Project name")
+    p_cov.add_argument("--detailed", action="store_true", help="Per-file breakdown")
+
     # delete
     p_delete = sub.add_parser("delete", help="Delete a project",
                               usage="raptor project delete <name> [--purge] [--yes]", **_F)
@@ -208,6 +214,17 @@ def main():
                 print(f"Project '{name}' not found.")
                 return
             _print_status(p)
+
+        elif args.subcommand == "coverage":
+            name = args.name or _get_active_project()
+            if not name:
+                print("No project specified.")
+                return
+            p = mgr.load(name)
+            if not p:
+                print(f"Project '{name}' not found.")
+                return
+            _print_coverage(p, detailed=args.detailed)
 
         elif args.subcommand == "use":
             if args.name is None:
@@ -435,6 +452,19 @@ def _get_active_project():
     return mgr.get_active()
 
 
+def _count_sarif_results(run_dir):
+    """Count total results across all SARIF files in a run directory."""
+    from core.json import load_json
+    count = 0
+    for sarif_path in run_dir.glob("*.sarif"):
+        data = load_json(sarif_path)
+        if not data or not isinstance(data, dict):
+            continue
+        for run in data.get("runs", []):
+            count += len(run.get("results", []))
+    return count
+
+
 def _print_status(project):
     """Print project status."""
     from core.run import load_run_metadata
@@ -458,7 +488,12 @@ def _print_status(project):
             cmd = meta.get("command", "?") if meta else "?"
             status = meta.get("status", "?") if meta else "?"
             findings = load_findings_from_dir(d)
-            findings_str = f"{len(findings)} findings" if findings else ""
+            if findings:
+                findings_str = f"{len(findings)} findings"
+            else:
+                # Count SARIF results for scan/codeql runs
+                sarif_count = _count_sarif_results(d)
+                findings_str = f"{sarif_count} results" if sarif_count else ""
             if status == "completed":
                 status_str = _green(status)
             elif status == "failed":
@@ -483,8 +518,24 @@ def _print_status(project):
             print(f"\nDisk usage: {total_size / 1024:.1f}KB")
         else:
             print(f"\nDisk usage: {total_size}B")
+
     else:
         print("\nNo runs.")
+
+
+def _print_coverage(project, detailed=False):
+    """Print project coverage summary or detailed view."""
+    from core.coverage.summary import (
+        compute_project_summary, format_summary, format_detailed,
+    )
+    summary = compute_project_summary(project)
+    if not summary:
+        print("No coverage data (no checklist or coverage records found).")
+        return
+    if detailed:
+        print(format_detailed(summary))
+    else:
+        print(format_summary(summary))
 
 
 def _print_diff(result):

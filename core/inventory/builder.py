@@ -37,6 +37,7 @@ def build_inventory(
     extensions: Optional[Set[str]] = None,
     skip_generated: bool = True,
     parallel: bool = True,
+    force_rebuild: bool = False,
 ) -> Dict[str, Any]:
     """Build a source inventory of all files and functions in the target path.
 
@@ -53,6 +54,9 @@ def build_inventory(
         extensions: File extensions to include (defaults to LANGUAGE_MAP keys).
         skip_generated: Skip auto-generated files.
         parallel: Use parallel processing for large codebases.
+        force_rebuild: Always rehash and rebuild, even if a checklist exists
+            for this target.  Individual unchanged files (SHA-256 match) still
+            reuse their old parsed entries.
 
     Returns:
         Inventory dict (also saved to output_dir/checklist.json).
@@ -75,16 +79,15 @@ def build_inventory(
     file_list = _collect_source_files(target, extensions)
     logger.info(f"Found {len(file_list)} source files to process")
 
-    # Reuse existing inventory when one exists for the same target.
-    # The checklist is a snapshot: hashes record the state at inventory time.
-    # Consumers (bridge, validation stages) detect staleness by comparing
-    # checklist hashes to current disk — the builder never silently updates them.
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     checklist_file = output_path / 'checklist.json'
     old_inventory = load_json(checklist_file)
 
-    if old_inventory and old_inventory.get('target_path') == str(target_path):
+    # When not force-rebuilding, reuse the existing inventory wholesale if
+    # the target path matches.  Consumers detect per-file staleness by
+    # comparing checklist hashes to current disk.
+    if not force_rebuild and old_inventory and old_inventory.get('target_path') == str(target_path):
         logger.info("Reusing existing inventory for %s", target_path)
         return old_inventory
 

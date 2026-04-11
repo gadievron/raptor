@@ -23,6 +23,8 @@ VERY IMPORTANT: follow these steps in order.
 /understand - Code understanding: map attack surface, trace flows, hunt variants (see below)
 /diagram - Generate Mermaid visual maps from /understand or /validate output (see below)
 
+**Coverage:** When asked about coverage, run `libexec/raptor-coverage-summary` (no args = active project). Use `--detailed` for per-file table, `--gaps` for unreviewed functions. See `.claude/skills/coverage.md` for mark/unmark and the full API.
+
 **Note:** `/agentic` runs scan → dedup → prep → analysis (with validation methodology). Use `--sequential` to bypass parallel orchestration.
 /crash-analysis - Autonomous crash root-cause analysis (see below)
 /oss-forensics - GitHub forensic investigation (see below)
@@ -84,7 +86,7 @@ The `start` command automatically resolves the output directory using the active
 
 **If `start` fails (non-zero exit):** STOP. Report the error to the user. Do not proceed with the command.
 
-**Note:** `/validate` uses `libexec/raptor-prepare-validation-stage 0` instead of `raptor-run-lifecycle` — it bundles lifecycle management with inventory building.
+**Note:** `/validate` uses `libexec/raptor-validation-helper 0` instead of `raptor-run-lifecycle` — it bundles lifecycle management with inventory building.
 
 Commands run via `python3 raptor.py` (scan, agentic, codeql, fuzz, web) manage lifecycle internally — do not call the stubs separately for those.
 
@@ -303,3 +305,4 @@ See `tiers/exploit-guidance.md` for detailed constraint tables and technique alt
 Python orchestrates everything. Claude shows results concisely.
 Never circumvent Python execution flow.
 - never disclose remote OLLAMA server location in code, comments, logs etc
+- **Python path safety:** Never add anything to `sys.path` except `os.environ["RAPTOR_DIR"]`. Use the hard lookup (KeyError if unset) — no fallbacks, no `'.'`, no `os.getcwd()`, no hardcoded paths. The `libexec/` scripts handle their own path setup via `Path(__file__).resolve().parents[1]` and do not need `RAPTOR_DIR`.

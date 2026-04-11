@@ -733,105 +733,24 @@ class TestEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# raptor-prepare-understand script
+# raptor-build-checklist script
 # ---------------------------------------------------------------------------
 
-class TestPrepareUnderstandScript:
-    def test_inventory_creates_checklist(self, tmp_path):
-        """inventory subcommand builds checklist and prints OUTPUT_DIR."""
+class TestBuildChecklistScript:
+    def test_creates_checklist(self, tmp_path):
+        """raptor-build-checklist creates checklist.json."""
         import subprocess
         target = tmp_path / "src"
         target.mkdir()
         (target / "hello.c").write_text("int main() { return 0; }\n")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
 
-        # Temporarily hide the active project symlink so get_output_dir
-        # doesn't reject our temp target as outside the project.
-        active_link = Path.home() / ".raptor" / "projects" / ".active"
-        hidden_link = active_link.with_suffix(".active.bak")
-        active_existed = active_link.is_symlink()
-        if active_existed:
-            active_link.rename(hidden_link)
-
-        repo_root = Path(__file__).parents[2]
-        try:
-            result = subprocess.run(
-                ["libexec/raptor-prepare-understand", "inventory", str(target)],
-                capture_output=True, text=True, cwd=repo_root,
-            )
-            assert result.returncode == 0, result.stderr
-            assert "OUTPUT_DIR=" in result.stdout
-            output_dir = result.stdout.strip().split("OUTPUT_DIR=")[1]
-            assert (Path(output_dir) / "checklist.json").exists()
-
-            import shutil
-            shutil.rmtree(output_dir, ignore_errors=True)
-        finally:
-            if active_existed and hidden_link.exists():
-                hidden_link.rename(active_link)
-
-    def test_coverage_reads_file_and_deletes(self, tmp_path):
-        """coverage subcommand reads coverage-input.json and deletes it."""
-        from core.json import load_json
-
-        workdir = tmp_path / "workdir"
-        workdir.mkdir()
-        _write_json(workdir / "checklist.json", {
-            "generated_at": "2026-01-01",
-            "target_path": "/tmp/test",
-            "total_files": 1, "total_items": 1, "total_functions": 1,
-            "files": [{
-                "path": "main.c",
-                "language": "c",
-                "lines": 5,
-                "sha256": "abc",
-                "items": [{"name": "main", "kind": "function",
-                           "line_start": 1, "line_end": 5, "checked_by": []}],
-            }],
-        })
-        _write_json(workdir / "coverage-input.json", [
-            {"file": "main.c", "function": "main"},
-        ])
-
-        import subprocess
+        repo_root = Path(__file__).parents[2]  # core/tests -> repo root
         result = subprocess.run(
-            ["libexec/raptor-prepare-understand", "coverage", str(workdir)],
-            capture_output=True, text=True, cwd=Path(__file__).parents[2],
+            ["libexec/raptor-build-checklist", str(target), str(out_dir)],
+            capture_output=True, text=True, cwd=repo_root,
         )
-        assert result.returncode == 0
-        assert "Recorded 1 functions" in result.stdout
-        assert not (workdir / "coverage-input.json").exists()
-
-        inv = load_json(workdir / "checklist.json")
-        main_func = inv["files"][0]["items"][0]
-        assert "understand:map" in main_func["checked_by"]
-
-    def test_coverage_rejects_missing_file(self, tmp_path):
-        """coverage fails gracefully when coverage-input.json doesn't exist."""
-        workdir = tmp_path / "workdir"
-        workdir.mkdir()
-        _write_json(workdir / "checklist.json", {"files": []})
-
-        import subprocess
-        result = subprocess.run(
-            ["libexec/raptor-prepare-understand", "coverage", str(workdir)],
-            capture_output=True, text=True, cwd=Path(__file__).parents[2],
-        )
-        assert result.returncode != 0
-        assert "coverage-input.json not found" in result.stderr
-
-    def test_coverage_rejects_bad_entries(self, tmp_path):
-        """coverage validates that each entry has file and function keys."""
-        workdir = tmp_path / "workdir"
-        workdir.mkdir()
-        _write_json(workdir / "checklist.json", {"files": []})
-        _write_json(workdir / "coverage-input.json", [
-            {"file": "a.py"},  # missing "function"
-        ])
-
-        import subprocess
-        result = subprocess.run(
-            ["libexec/raptor-prepare-understand", "coverage", str(workdir)],
-            capture_output=True, text=True, cwd=Path(__file__).parents[2],
-        )
-        assert result.returncode != 0
-        assert "missing" in result.stderr.lower()
+        assert result.returncode == 0, result.stderr
+        assert "Checklist:" in result.stdout
+        assert (out_dir / "checklist.json").exists()

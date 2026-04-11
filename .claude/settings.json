@@ -6,8 +6,9 @@
   },
   "permissions": {
     "allow": [
-      "Bash(libexec/raptor-prepare-understand *)",
-      "Bash(libexec/raptor-prepare-validation-stage *)",
+      "Bash(libexec/raptor-build-checklist *)",
+      "Bash(libexec/raptor-coverage-summary *)",
+      "Bash(libexec/raptor-validation-helper *)",
       "Bash(libexec/raptor-project-manager *)",
       "Bash(libexec/raptor-render-diagrams *)",
       "Bash(libexec/raptor-run-feasibility *)",

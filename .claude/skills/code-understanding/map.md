@@ -22,13 +22,7 @@ This is not documentation generation. It is adversarial reconnaissance at the so
 
 **[MAP-0] Source Inventory**
 
-Before any manual enumeration, run the inventory builder to get a reliable file and function list:
-
-```bash
-libexec/raptor-prepare-understand inventory <target>
-```
-
-The last line of output is `OUTPUT_DIR=<path>` — use that as `$WORKDIR`.
+Before any manual enumeration, build the source inventory (the understand command's Step 1 already did this — `$WORKDIR/checklist.json` should exist).
 
 Read the resulting `checklist.json`. It provides every source file with language, line count, SHA-256 checksum, and every function with name, line number, and signature. Excluded files are recorded with reasons.
 
@@ -175,22 +169,14 @@ Do not populate `sources`, `sinks`, or `entry_points` from file names or common 
 
 After writing `context-map.json`, update the inventory with which functions you examined.
 Write a JSON array of every function you read and analysed (entry points, sinks, trust boundary
-checks) to `$WORKDIR/coverage-input.json`, then run the coverage recorder:
+checks) to `$WORKDIR/reviewed-items.json`, then run the coverage recorder:
 
-```json
-// $WORKDIR/coverage-input.json
-[
-    {"file": "src/routes/query.py", "function": "handle_query"},
-    {"file": "src/db/query.py", "function": "run_query"}
-]
-```
-
+Record coverage using the understand command's Step 3:
 ```bash
-libexec/raptor-prepare-understand coverage "$WORKDIR"
+libexec/raptor-coverage-summary "$WORKDIR" --mark src/routes/query.py:handle_query src/db/query.py:run_query
 ```
 
-The script reads `coverage-input.json`, updates the checklist, and deletes the input file.
-This ensures coverage tracking is cumulative across `/understand` and `/validate` runs.
+This updates the coverage record so `/project coverage` reflects what was examined.
 
 ## Output
 

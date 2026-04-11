@@ -1,14 +1,17 @@
-"""Coverage tracking — records what tools examined during analysis.
+"""Coverage tracking and reporting.
 
-Provides coverage record building (from hook manifests and tool output)
-and file read tracking. Phase 2 will add coverage computation and reporting.
+Provides coverage record building (from hook manifests and tool output),
+file read tracking, and Phase 2 coverage summary reporting.
 """
 
 from .record import (
     build_from_manifest,
     build_from_semgrep,
+    build_from_codeql,
+    build_from_findings,
     write_record,
     load_record,
+    load_records,
     cleanup_manifest,
     COVERAGE_RECORD_FILE,
     READS_MANIFEST,
@@ -17,8 +20,11 @@ from .record import (
 __all__ = [
     "build_from_manifest",
     "build_from_semgrep",
+    "build_from_codeql",
+    "build_from_findings",
     "write_record",
     "load_record",
+    "load_records",
     "cleanup_manifest",
     "COVERAGE_RECORD_FILE",
     "READS_MANIFEST",

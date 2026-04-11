@@ -58,8 +58,13 @@ def _extract_date_from_dir(run_dir: Path) -> str:
     return run_dir.name
 
 
+def _finding_key(finding: Dict[str, Any]) -> tuple:
+    """Dedup key for a finding: (file, function, line). More stable than ID."""
+    return (finding.get("file", ""), finding.get("function", ""), finding.get("line", 0))
+
+
 def merge_findings(run_dirs: List[Path]) -> List[Dict[str, Any]]:
-    """Merge findings from multiple runs. Deduplicate by finding ID, latest wins.
+    """Merge findings from multiple runs. Deduplicate by (file, function, line), latest wins.
 
     Args:
         run_dirs: Ordered list of run directories (later entries override earlier).
@@ -67,19 +72,15 @@ def merge_findings(run_dirs: List[Path]) -> List[Dict[str, Any]]:
     Returns:
         Deduplicated list of findings.
     """
-    merged: Dict[str, Dict[str, Any]] = {}
-    no_id_findings: List[Dict[str, Any]] = []
+    merged: Dict[tuple, Dict[str, Any]] = {}
 
     for run_dir in run_dirs:
         findings = _load_findings_from_dir(Path(run_dir))
         for finding in findings:
-            fid = _get_finding_id(finding)
-            if fid:
-                merged[fid] = finding
-            else:
-                no_id_findings.append(finding)
+            key = _finding_key(finding)
+            merged[key] = finding
 
-    return list(merged.values()) + no_id_findings
+    return list(merged.values())
 
 
 def verify_merge(merged_findings: List, source_findings_count: int,
@@ -121,17 +122,15 @@ def merge_runs(run_dirs: List[Path], output_dir: Path) -> Dict[str, Any]:
 
     # --- Merge findings ---
     total_findings = 0
-    all_ids: set = set()
+    all_keys: set = set()
     for run_dir in run_dirs:
         findings = _load_findings_from_dir(run_dir)
         total_findings += len(findings)
         for f in findings:
-            fid = _get_finding_id(f)
-            if fid:
-                all_ids.add(fid)
+            all_keys.add(_finding_key(f))
 
     merged = merge_findings(run_dirs)
-    unique_count = len(all_ids)
+    unique_count = len(all_keys)
 
     if not verify_merge(merged, total_findings, unique_count):
         logger.warning(
