@@ -52,12 +52,17 @@ Options:
   -h, --help         Show this help
 
 Projects:
-  raptor project none              Clear the active project
-  raptor project list              Show all projects
-  raptor project create <name>     Create a new project
-  raptor project status [<name>]   Show project summary
-  raptor project use [<name>]      Set/show active project
-  raptor project help              Full subcommand list
+  raptor project create <name>         Create a new project
+  raptor project list                  Show all projects
+  raptor project status [<name>]       Show project summary
+  raptor project findings [<name>]     Show merged findings
+  raptor project findings --detailed   Per-finding detail
+  raptor project coverage [<name>]     Show coverage summary
+  raptor project coverage --detailed   Per-file breakdown
+  raptor project diff <n> <a> <b>      Compare two runs
+  raptor project use [<name>]          Set/show active project
+  raptor project none                  Clear the active project
+  raptor project help                  Full subcommand list
 
 Any additional flags are passed through to Claude Code.
 USAGE

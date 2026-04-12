@@ -1,5 +1,5 @@
 ---
-description: Manage RAPTOR projects — create, list, status, diff, merge, report, clean, export
+description: Manage RAPTOR projects — create, list, status, coverage, findings, diff, merge, report, clean, export
 ---
 
 # /project — Project Management
