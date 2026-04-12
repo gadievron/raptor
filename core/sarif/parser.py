@@ -379,7 +379,6 @@ def generate_scan_metrics(sarif_paths: List[str]) -> Dict[str, Any]:
     Returns:
         Dictionary containing scan metrics
     """
-    all_files: set = set()
     metrics: Dict[str, Any] = {
         "total_files_scanned": 0,
         "total_findings": 0,
@@ -403,27 +402,12 @@ def generate_scan_metrics(sarif_paths: List[str]) -> Dict[str, Any]:
             if tool_name not in metrics["tools_used"]:
                 metrics["tools_used"].append(tool_name)
 
-            # Count artifacts (files) — try artifacts array first,
-            # fall back to extracting unique URIs from result locations
-            # (Semgrep doesn't populate the artifacts array)
+            # Count artifacts (files)
             artifacts = run.get("artifacts", [])
-            results = run.get("results", [])
-
-            if artifacts:
-                all_files.update(
-                    a.get("location", {}).get("uri", "")
-                    for a in artifacts if a.get("location", {}).get("uri")
-                )
-            else:
-                for result in results:
-                    for loc in result.get("locations", []):
-                        uri = (loc.get("physicalLocation", {})
-                               .get("artifactLocation", {})
-                               .get("uri", ""))
-                        if uri:
-                            all_files.add(uri)
+            metrics["total_files_scanned"] += len(artifacts)
 
             # Count findings
+            results = run.get("results", [])
             metrics["total_findings"] += len(results)
 
             for result in results:
@@ -438,7 +422,6 @@ def generate_scan_metrics(sarif_paths: List[str]) -> Dict[str, Any]:
                     metrics["findings_by_rule"].get(rule_id, 0) + 1
                 )
 
-    metrics["total_files_scanned"] = len(all_files)
     return metrics
 
 
