@@ -137,14 +137,28 @@ def compute_summary(run_dir: Path) -> Optional[Dict[str, Any]]:
             path = _match_to_inventory(fa.get("file", ""), inventory_paths) or fa.get("file", "")
             analysed_funcs_by_file.add((path, fa.get("function", "")))
 
-    # Count findings per file from findings.json
+    # Count findings and vulns per file from findings.json
     findings_by_file = {}
+    vulns_by_file = {}
     findings_data = load_json(run_dir / "findings.json")
-    if findings_data and isinstance(findings_data, dict):
-        for finding in findings_data.get("findings", []):
+    if findings_data:
+        if isinstance(findings_data, list):
+            findings_list = findings_data
+        elif isinstance(findings_data, dict):
+            findings_list = findings_data.get("findings", findings_data.get("results", []))
+        else:
+            findings_list = []
+        # Group findings per file for vuln counting
+        from collections import defaultdict
+        per_file_findings = defaultdict(list)
+        for finding in findings_list:
             fpath = finding.get("file", "")
             matched = _match_to_inventory(fpath, inventory_paths) or fpath
             findings_by_file[matched] = findings_by_file.get(matched, 0) + 1
+            per_file_findings[matched].append(finding)
+        from core.project.findings_utils import count_vulns
+        for fpath, flist in per_file_findings.items():
+            vulns_by_file[fpath] = count_vulns(flist)
 
     per_file = []
     for f in files:
@@ -169,6 +183,7 @@ def compute_summary(run_dir: Path) -> Optional[Dict[str, Any]]:
             "pct": reviewed / total * 100,
             "sloc": f.get("sloc", 0),
             "findings": findings_by_file.get(path, 0),
+            "vulns": vulns_by_file.get(path, 0),
             "unreviewed_functions": unreviewed_names if unreviewed_names else [],
         }
         # Per-tool scan flags for detailed view
@@ -252,9 +267,9 @@ def format_summary(summary: Dict[str, Any]) -> str:
         if pf.get("findings", 0) > 0 and pf["reviewed"] == 0
     ]
     if unreviewed_with_findings:
-        total_findings = sum(pf["findings"] for pf in unreviewed_with_findings)
+        total_vulns = sum(pf.get("vulns", pf["findings"]) for pf in unreviewed_with_findings)
         actions.append(
-            f"{_pl(total_findings, 'finding')} in {_pl(len(unreviewed_with_findings), 'file')} not yet reviewed"
+            f"{_pl(total_vulns, 'finding')} in {_pl(len(unreviewed_with_findings), 'file')} not yet reviewed"
         )
 
     if actions:
@@ -324,9 +339,9 @@ def format_detailed(summary: Dict[str, Any]) -> str:
                 scanned_flags.append(" ")
         scanned_str = " ".join(scanned_flags) if scanned_flags else "-"
 
-        # Findings
-        findings = pf.get("findings", 0)
-        findings_str = str(findings) if findings else "-"
+        # Findings (grouped — one logical finding may span multiple lines)
+        vulns = pf.get("vulns", pf.get("findings", 0))
+        findings_str = str(vulns) if vulns else "-"
 
         # Reviewed
         if pf["total"] == 0:
@@ -431,8 +446,14 @@ def compute_project_summary(project) -> Optional[Dict[str, Any]]:
     seen = set()
     for d in project.get_run_dirs(sweep=False):
         fdata = load_json(d / "findings.json")
-        if fdata and isinstance(fdata, dict):
-            for f in fdata.get("findings", []):
+        if fdata:
+            if isinstance(fdata, list):
+                flist = fdata
+            elif isinstance(fdata, dict):
+                flist = fdata.get("findings", fdata.get("results", []))
+            else:
+                flist = []
+            for f in flist:
                 key = (f.get("file", ""), f.get("function", ""), f.get("line", 0))
                 if key not in seen:
                     all_findings.append(f)

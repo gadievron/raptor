@@ -377,12 +377,7 @@ class TestCumulativeCoverage:
         assert inv2["files"][0]["items"][0]["checked_by"] == ["validate:stage-a"]
 
     def test_reuse_when_source_modified(self, tmp_path):
-        """build_inventory returns existing checklist even if source changed.
-
-        The checklist is a snapshot — hashes record state at inventory time.
-        Consumers detect staleness by comparing hashes to disk, not the builder.
-        Pass force_rebuild=True to rehash and rebuild.
-        """
+        """build_inventory picks up source changes and clears stale coverage."""
         import hashlib
         src = tmp_path / "src"
         src.mkdir()
@@ -399,42 +394,16 @@ class TestCumulativeCoverage:
         # Modify source — disk hash now differs from checklist hash
         (src / "app.py").write_text("def main():\n    print('changed')\n")
 
-        # Default: reuses existing inventory (snapshot preserved)
+        # Rebuild picks up the change and clears stale coverage
         inv2 = build_inventory(str(src), str(out))
-        assert inv2["files"][0]["sha256"] == original_hash
-        assert inv2["files"][0]["items"][0]["checked_by"] == ["validate:stage-a"]
-
-        # Consumer can detect staleness by hashing disk
-        disk_hash = hashlib.sha256((src / "app.py").read_bytes()).hexdigest()
-        assert disk_hash != original_hash
-
-    def test_force_rebuild_rehashes(self, tmp_path):
-        """force_rebuild=True rebuilds the checklist even when one exists."""
-        import hashlib
-        src = tmp_path / "src"
-        src.mkdir()
-        (src / "app.py").write_text("def main(): pass\n")
-
-        out = tmp_path / "out"
-
-        inv1 = build_inventory(str(src), str(out))
-        original_hash = inv1["files"][0]["sha256"]
-
-        # Modify source
-        (src / "app.py").write_text("def main():\n    print('changed')\n")
-
-        # force_rebuild picks up the change
-        inv2 = build_inventory(str(src), str(out), force_rebuild=True)
-        assert inv2["files"][0]["sha256"] != original_hash
         disk_hash = hashlib.sha256((src / "app.py").read_bytes()).hexdigest()
         assert inv2["files"][0]["sha256"] == disk_hash
+        assert inv2["files"][0]["sha256"] != original_hash
+        # Coverage marks cleared for changed file
+        assert inv2["files"][0]["items"][0].get("checked_by", []) == []
 
-    def test_reuse_when_file_added(self, tmp_path):
-        """New files on disk don't trigger a rebuild — checklist is a snapshot.
-
-        Consumers discover new files by comparing checklist paths to disk.
-        Use force_rebuild=True to pick up new files.
-        """
+    def test_rebuild_picks_up_new_files(self, tmp_path):
+        """New files on disk are included in the next rebuild."""
         src = tmp_path / "src"
         src.mkdir()
         (src / "app.py").write_text("def main(): pass\n")
@@ -442,17 +411,13 @@ class TestCumulativeCoverage:
         out = tmp_path / "out"
 
         inv1 = build_inventory(str(src), str(out))
+        assert len(inv1["files"]) == 1
+
         (src / "new.py").write_text("def new_func(): pass\n")
 
-        # Default: reuses — new.py is not in the snapshot
         inv2 = build_inventory(str(src), str(out))
-        assert len(inv2["files"]) == 1
-        assert inv2["files"][0]["path"] == "app.py"
-
-        # force_rebuild picks up new.py
-        inv3 = build_inventory(str(src), str(out), force_rebuild=True)
-        assert len(inv3["files"]) == 2
-        paths = {f["path"] for f in inv3["files"]}
+        assert len(inv2["files"]) == 2
+        paths = {f["path"] for f in inv2["files"]}
         assert "new.py" in paths
 
 

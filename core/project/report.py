@@ -20,7 +20,7 @@ def generate_project_report(project) -> Dict[str, Any]:
 
     # Merge findings
     merged = merge_findings(run_dirs)
-    save_json(report_dir / "findings.json", merged)
+    save_json(report_dir / "findings.json", {"findings": merged})
 
     return {
         "findings": len(merged),

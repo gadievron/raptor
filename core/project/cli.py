@@ -9,7 +9,6 @@ import os
 import sys
 from pathlib import Path
 
-from .findings_utils import get_finding_id
 from .project import ProjectManager
 
 
@@ -71,6 +70,12 @@ def main():
                            usage="raptor project coverage [<name>] [--detailed]", **_F)
     p_cov.add_argument("name", nargs="?", help="Project name")
     p_cov.add_argument("--detailed", action="store_true", help="Per-file breakdown")
+
+    # findings
+    p_findings = sub.add_parser("findings", help="Show merged findings across all runs",
+                                usage="raptor project findings [<name>] [--detailed]", **_F)
+    p_findings.add_argument("name", nargs="?", help="Project name")
+    p_findings.add_argument("--detailed", action="store_true", help="Per-finding detail (reasoning, proof, PoC)")
 
     # delete
     p_delete = sub.add_parser("delete", help="Delete a project",
@@ -225,6 +230,17 @@ def main():
                 print(f"Project '{name}' not found.")
                 return
             _print_coverage(p, detailed=args.detailed)
+
+        elif args.subcommand == "findings":
+            name = args.name or _get_active_project()
+            if not name:
+                print("No project specified.")
+                return
+            p = mgr.load(name)
+            if not p:
+                print(f"Project '{name}' not found.")
+                return
+            _print_findings(p, detailed=args.detailed)
 
         elif args.subcommand == "use":
             if args.name is None:
@@ -489,7 +505,12 @@ def _print_status(project):
             status = meta.get("status", "?") if meta else "?"
             findings = load_findings_from_dir(d)
             if findings:
-                findings_str = f"{len(findings)} findings"
+                from core.project.findings_utils import count_vulns
+                vuln_count = count_vulns(findings)
+                if vuln_count != len(findings):
+                    findings_str = f"{vuln_count} findings"
+                else:
+                    findings_str = f"{len(findings)} findings"
             else:
                 # Count SARIF results for scan/codeql runs
                 sarif_count = _count_sarif_results(d)
@@ -502,7 +523,7 @@ def _print_status(project):
                 status_str = _yellow(status)
             else:
                 status_str = status
-            print(f"  {d.name:<{name_col}s}  {cmd:12s}  {findings_str:15s}  {status_str}")
+            print(f"  {d.name:<{name_col}s}  {cmd:12s}  {findings_str:24s}  {status_str}")
         # Disk usage — skip symlinks to avoid following outside the project
         total_size = 0
         for d in runs:
@@ -538,23 +559,125 @@ def _print_coverage(project, detailed=False):
         print(format_summary(summary))
 
 
+def _print_findings(project, detailed=False):
+    """Print merged findings across all runs, grouped by vuln."""
+    from .merge import merge_findings
+    from .findings_utils import count_vulns, group_findings
+    from core.reporting.findings import build_findings_summary, findings_summary_line
+    from core.reporting.formatting import get_display_status, title_case_type, truncate_path
+
+    run_dirs = project.get_run_dirs(sweep=False)
+    merged = merge_findings(run_dirs)
+
+    if not merged:
+        print("No findings.")
+        return
+
+    vuln_count = count_vulns(merged)
+    counts = build_findings_summary(merged)
+    groups = group_findings(merged)
+
+    # Summary line
+    print(findings_summary_line(counts, vuln_count).replace("**", ""))
+    print()
+
+    # Build grouped rows: one row per vuln
+    grouped_rows = []  # (file_loc, type, status, cvss, findings_list)
+    for key, findings in groups.items():
+        # Use the first finding for display, pick best status/cvss across group
+        rep = findings[0]  # representative finding
+        fpath = rep.get("file", "")
+        fname = fpath.rsplit("/", 1)[-1] if "/" in fpath else fpath
+
+        # Lines: show all lines in the group
+        lines_in_group = sorted(set(f.get("line", 0) for f in findings))
+        if len(lines_in_group) == 1:
+            loc = f"{fname}:{lines_in_group[0]}"
+        else:
+            loc = f"{fname}:{','.join(str(l) for l in lines_in_group)}"
+        loc = truncate_path(loc) if loc else "—"
+
+        vtype = title_case_type(rep.get("vuln_type", ""))
+        status = get_display_status(rep)
+
+        cvss = rep.get("cvss_score_estimate")
+        cvss_str = str(cvss) if cvss is not None else "—"
+
+        grouped_rows.append((loc, vtype, status, cvss_str, findings, fpath))
+
+    grouped_rows.sort(key=lambda r: (r[5], min(f.get("line", 0) for f in r[4])))
+
+    # Compact table
+    headers = ("File", "Type", "Status", "CVSS")
+    widths = [len(h) for h in headers]
+    for row in grouped_rows:
+        for i, cell in enumerate(row[:4]):
+            widths[i] = max(widths[i], len(cell))
+
+    fmt = f"  {{:<{widths[0]}s}}  {{:<{widths[1]}s}}  {{:<{widths[2]}s}}  {{:>{widths[3]}s}}"
+    print(fmt.format(*headers))
+    print(f"  {'-' * widths[0]}  {'-' * widths[1]}  {'-' * widths[2]}  {'-' * widths[3]}")
+    for row in grouped_rows:
+        print(fmt.format(*row[:4]))
+
+    if not detailed:
+        return
+
+    # Detailed view: per-vuln reasoning, proof, PoC
+    print()
+    pad = len(str(len(grouped_rows)))
+    indent = " " * (pad + 5)  # aligns with text after "  [XX] "
+    for i, (loc, vtype, status, cvss_str, findings, _) in enumerate(grouped_rows, 1):
+        print(f"  [{i:0{pad}d}] {loc} — {vtype} ({status})")
+
+        # Use representative finding for details
+        rep = findings[0]
+
+        # Reasoning (stage summaries or analysis)
+        reasoning = (
+            rep.get("stage_d_summary")
+            or rep.get("stage_b_summary")
+            or rep.get("candidate_reasoning")
+            or rep.get("reasoning")
+        )
+        if reasoning and isinstance(reasoning, str):
+            rlines = reasoning.strip().split("\n")[:2]
+            for ln in rlines:
+                print(f"{indent}{ln.strip()}")
+
+        # Proof
+        proof_source = rep.get("proof_source")
+        proof_sink = rep.get("proof_sink")
+        if proof_source or proof_sink:
+            parts = []
+            if proof_source:
+                parts.append(f"source: {proof_source}")
+            if proof_sink:
+                parts.append(f"sink: {proof_sink}")
+            print(f"{indent}Proof: {', '.join(parts)}")
+
+        print()
+
+
+def _finding_label(f):
+    """Location-based label for a finding."""
+    return f"{f.get('file', '?')}:{f.get('function', '?')}:{f.get('line', '?')}"
+
+
 def _print_diff(result):
     """Print diff results."""
     if result["new"]:
         print(f"New ({len(result['new'])}):")
         for f in result["new"]:
-            fid = get_finding_id(f) or "?"
-            print(_green(f"  + {fid}"))
+            print(_green(f"  + {_finding_label(f)}"))
     if result["removed"]:
         print(f"Removed ({len(result['removed'])}):")
         for f in result["removed"]:
-            fid = get_finding_id(f) or "?"
-            print(_red(f"  - {fid}"))
+            print(_red(f"  - {_finding_label(f)}"))
     if result["changed"]:
         print(f"Changed ({len(result['changed'])}):")
         for c in result["changed"]:
-            # Changed entries have their own "id" field from the diff wrapper
-            print(_yellow(f"  ~ {c['id']} ({c.get('status_before', '?')} → {c.get('status_after', '?')})"))
+            print(_yellow(f"  ~ {c['label']} ({c.get('status_before', '?')} → {c.get('status_after', '?')})"))
     print(f"Unchanged: {result['unchanged']}")
 
 
@@ -660,5 +783,9 @@ def _do_merge(project, merge_type, yes):
             for msg in failed_deletes:
                 print(f"  {cmd_type}: warning — failed to delete {msg}")
 
-        print(f"  {cmd_type}: merged {stats['runs_merged']} runs "
-              f"({stats['unique_findings']} findings)")
+        vuln_count = stats.get("unique_vulns", stats["unique_findings"])
+        if vuln_count != stats["unique_findings"]:
+            findings_label = f"{vuln_count} findings"
+        else:
+            findings_label = f"{stats['unique_findings']} findings"
+        print(f"  {cmd_type}: merged {stats['runs_merged']} runs ({findings_label})")

@@ -21,6 +21,7 @@ Manage projects — named workspaces that corral analysis runs into one director
 | `list` | Show all projects (* marks active) |
 | `status [<name>]` | Show project summary with run history |
 | `coverage [<name>] [--detailed]` | Show tool coverage summary (or per-file table) |
+| `findings [<name>] [--detailed]` | Show merged findings (or per-finding detail) |
 | `none` | Clear the active project |
 | `use [<name>]` | Set active project (no arg = show current, `none` = clear) |
 | `delete <name> [--purge] [--yes]` | Remove project (--purge also deletes output) |

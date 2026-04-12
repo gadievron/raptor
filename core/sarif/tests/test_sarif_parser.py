@@ -127,24 +127,39 @@ class TestLoadSarif(unittest.TestCase):
 class TestMergeSarif(unittest.TestCase):
     """Test merge_sarif — combines multiple SARIF files."""
 
-    def test_merges_runs(self):
+    def test_merges_different_tools(self):
         from core.sarif.parser import merge_sarif
 
         with tempfile.TemporaryDirectory() as tmpdir:
             p1 = Path(tmpdir) / "a.sarif"
             p2 = Path(tmpdir) / "b.sarif"
-            p1.write_text(json.dumps({"runs": [{"results": [{"ruleId": "r1"}]}]}))
-            p2.write_text(json.dumps({"runs": [{"results": [{"ruleId": "r2"}]}]}))
+            p1.write_text(json.dumps({"runs": [{"tool": {"driver": {"name": "ToolA"}}, "results": [{"ruleId": "r1"}]}]}))
+            p2.write_text(json.dumps({"runs": [{"tool": {"driver": {"name": "ToolB"}}, "results": [{"ruleId": "r2"}]}]}))
 
             merged = merge_sarif([str(p1), str(p2)])
             self.assertEqual(len(merged["runs"]), 2)
+
+    def test_dedup_same_tool(self):
+        from core.sarif.parser import merge_sarif
+
+        result = {"ruleId": "r1", "locations": [{"physicalLocation": {
+            "artifactLocation": {"uri": "a.c"}, "region": {"startLine": 10}}}]}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p1 = Path(tmpdir) / "a.sarif"
+            p2 = Path(tmpdir) / "b.sarif"
+            p1.write_text(json.dumps({"runs": [{"tool": {"driver": {"name": "Semgrep"}}, "results": [result]}]}))
+            p2.write_text(json.dumps({"runs": [{"tool": {"driver": {"name": "Semgrep"}}, "results": [result]}]}))
+
+            merged = merge_sarif([str(p1), str(p2)])
+            self.assertEqual(len(merged["runs"]), 1)
+            self.assertEqual(len(merged["runs"][0]["results"]), 1)
 
     def test_skips_invalid_files(self):
         from core.sarif.parser import merge_sarif
 
         with tempfile.TemporaryDirectory() as tmpdir:
             good = Path(tmpdir) / "good.sarif"
-            good.write_text(json.dumps({"runs": [{"results": []}]}))
+            good.write_text(json.dumps({"runs": [{"tool": {"driver": {"name": "T"}}, "results": []}]}))
 
             merged = merge_sarif([str(good), "/nonexistent.sarif"])
             self.assertEqual(len(merged["runs"]), 1)

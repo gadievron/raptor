@@ -2,13 +2,14 @@
 
 Compares findings.json from two runs and reports what changed:
 new findings, removed findings, changed rulings, and unchanged count.
+Matches findings by (file, function, line) — stable across runs.
 """
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.logging import get_logger
-from core.project.findings_utils import get_finding_id as _get_finding_id
+from core.project.findings_utils import dedup_key as _dedup_key
 from core.project.findings_utils import load_findings_from_dir as _load_findings
 
 logger = get_logger()
@@ -27,13 +28,19 @@ def _get_status(finding: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _index_by_id(findings: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """Index findings by their ID. Skips findings without an ID."""
+def _finding_label(finding: Dict[str, Any]) -> str:
+    """Human-readable label for a finding: file:function:line."""
+    f = finding.get("file", "?")
+    fn = finding.get("function", "?")
+    line = finding.get("line", "?")
+    return f"{f}:{fn}:{line}"
+
+
+def _index_by_location(findings: List[Dict[str, Any]]) -> Dict[tuple, Dict[str, Any]]:
+    """Index findings by (file, function, line). Stable across runs."""
     indexed = {}
     for f in findings:
-        fid = _get_finding_id(f)
-        if fid:
-            indexed[fid] = f
+        indexed[_dedup_key(f)] = f
     return indexed
 
 
@@ -46,7 +53,7 @@ def diff_runs(run_dir_a: Path, run_dir_b: Path) -> Dict[str, Any]:
 
     Returns:
         Dict with keys:
-            new: findings in B but not A (by finding ID)
+            new: findings in B but not A (by location)
             removed: findings in A but not B
             changed: findings in both but with different status/ruling
             unchanged: count of identical findings
@@ -57,26 +64,26 @@ def diff_runs(run_dir_a: Path, run_dir_b: Path) -> Dict[str, Any]:
     findings_a = _load_findings(run_dir_a)
     findings_b = _load_findings(run_dir_b)
 
-    index_a = _index_by_id(findings_a)
-    index_b = _index_by_id(findings_b)
+    index_a = _index_by_location(findings_a)
+    index_b = _index_by_location(findings_b)
 
-    ids_a = set(index_a.keys())
-    ids_b = set(index_b.keys())
+    keys_a = set(index_a.keys())
+    keys_b = set(index_b.keys())
 
-    new = [index_b[fid] for fid in sorted(ids_b - ids_a)]
-    removed = [index_a[fid] for fid in sorted(ids_a - ids_b)]
+    new = [index_b[k] for k in sorted(keys_b - keys_a)]
+    removed = [index_a[k] for k in sorted(keys_a - keys_b)]
 
     changed = []
     unchanged = 0
 
-    for fid in sorted(ids_a & ids_b):
-        status_a = _get_status(index_a[fid])
-        status_b = _get_status(index_b[fid])
+    for key in sorted(keys_a & keys_b):
+        status_a = _get_status(index_a[key])
+        status_b = _get_status(index_b[key])
         if status_a != status_b:
             changed.append({
-                "id": fid,
-                "before": index_a[fid],
-                "after": index_b[fid],
+                "label": _finding_label(index_b[key]),
+                "before": index_a[key],
+                "after": index_b[key],
                 "status_before": status_a,
                 "status_after": status_b,
             })

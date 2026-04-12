@@ -37,15 +37,16 @@ def build_inventory(
     extensions: Optional[Set[str]] = None,
     skip_generated: bool = True,
     parallel: bool = True,
-    force_rebuild: bool = False,
 ) -> Dict[str, Any]:
     """Build a source inventory of all files and functions in the target path.
 
     Enumerates source files, detects languages, extracts functions via
     AST/regex, computes SHA-256 per file, and records exclusions.
 
-    If an existing checklist.json is found in output_dir, cumulative
-    coverage (checked_by) is carried forward for unchanged files.
+    Always rehashes files on disk.  Unchanged files (SHA-256 match with
+    a previous checklist) reuse their old parsed entries, including
+    coverage marks.  Changed files are re-parsed and their coverage
+    marks cleared.
 
     Args:
         target_path: Directory or file to analyze.
@@ -54,9 +55,6 @@ def build_inventory(
         extensions: File extensions to include (defaults to LANGUAGE_MAP keys).
         skip_generated: Skip auto-generated files.
         parallel: Use parallel processing for large codebases.
-        force_rebuild: Always rehash and rebuild, even if a checklist exists
-            for this target.  Individual unchanged files (SHA-256 match) still
-            reuse their old parsed entries.
 
     Returns:
         Inventory dict (also saved to output_dir/checklist.json).
@@ -83,13 +81,6 @@ def build_inventory(
     output_path.mkdir(parents=True, exist_ok=True)
     checklist_file = output_path / 'checklist.json'
     old_inventory = load_json(checklist_file)
-
-    # When not force-rebuilding, reuse the existing inventory wholesale if
-    # the target path matches.  Consumers detect per-file staleness by
-    # comparing checklist hashes to current disk.
-    if not force_rebuild and old_inventory and old_inventory.get('target_path') == str(target_path):
-        logger.info("Reusing existing inventory for %s", target_path)
-        return old_inventory
 
     old_files_by_path = {}
     if old_inventory:

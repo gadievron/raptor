@@ -4,7 +4,7 @@ Translates vulnerability findings into ReportSpec for rendering.
 Used by both /validate and /agentic pipelines.
 """
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .formatting import get_display_status, title_case_type, truncate_path
 from .spec import ReportSpec, ReportSection
@@ -87,7 +87,7 @@ def build_findings_summary(findings: List[Dict[str, Any]]) -> Dict[str, int]:
     return counts
 
 
-def findings_summary_line(counts: Dict[str, int]) -> str:
+def findings_summary_line(counts: Dict[str, int], vuln_count: Optional[int] = None) -> str:
     """Build the one-line status summary from counts."""
     parts = []
     if counts["exploitable"]:
@@ -102,9 +102,14 @@ def findings_summary_line(counts: Dict[str, int]) -> str:
         parts.append(f"{counts['error']} Error")
     if counts.get("other"):
         parts.append(f"{counts['other']} Uncategorised")
+    total = counts['total']
+    if vuln_count is not None and vuln_count != total:
+        label = f"{vuln_count} findings"
+    else:
+        label = f"{total} findings"
     if not parts:
-        return f"0 out of {counts['total']} findings categorised."
-    return f"**{', '.join(parts)}** out of {counts['total']} findings."
+        return f"0 out of {label} categorised."
+    return f"**{', '.join(parts)}** out of {label}."
 
 
 def build_finding_detail(finding: Dict[str, Any], index: int) -> ReportSection:
@@ -253,12 +258,18 @@ def findings_summary(findings: List[Dict[str, Any]]) -> str:
     rows = _markdown_rows(build_findings_rows(findings))
     counts = build_findings_summary(findings)
 
+    try:
+        from core.project.findings_utils import count_vulns
+        vuln_count = count_vulns(findings)
+    except Exception:
+        vuln_count = None
+
     lines = []
     lines.append("| " + " | ".join(FINDINGS_COLUMNS) + " |")
     lines.append("|" + "|".join("---" for _ in FINDINGS_COLUMNS) + "|")
     for row in rows:
         lines.append("| " + " | ".join(str(c) for c in row) + " |")
     lines.append("")
-    lines.append(findings_summary_line(counts))
+    lines.append(findings_summary_line(counts, vuln_count))
 
     return "\n".join(lines)

@@ -25,11 +25,17 @@ class TestProjectReport(unittest.TestCase):
     def test_merged_findings(self):
         with TemporaryDirectory() as d:
             p = self._make_project(d, {
-                "scan-20260401": [{"id": "F-001"}, {"id": "F-002"}],
-                "scan-20260402": [{"id": "F-002"}, {"id": "F-003"}],
+                "scan-20260401": [
+                    {"id": "F-001", "file": "a.c", "function": "main", "line": 10},
+                    {"id": "F-002", "file": "b.c", "function": "foo", "line": 20},
+                ],
+                "scan-20260402": [
+                    {"id": "F-002", "file": "b.c", "function": "foo", "line": 20},
+                    {"id": "F-003", "file": "c.c", "function": "bar", "line": 30},
+                ],
             })
             stats = generate_project_report(p)
-            self.assertEqual(stats["findings"], 3)  # F-001, F-002, F-003
+            self.assertEqual(stats["findings"], 3)  # a.c, b.c, c.c
             self.assertEqual(stats["runs"], 2)
 
     def test_report_dir_created(self):

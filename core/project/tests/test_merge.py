@@ -77,6 +77,82 @@ class TestMergeFindings(unittest.TestCase):
             self.assertEqual(len(merged), 2)
 
 
+    def test_higher_status_wins_over_later_run(self):
+        """A confirmed finding from an older run beats not_disproven from a newer run."""
+        with TemporaryDirectory() as d:
+            old = self._make_run(d, "old", [
+                {"id": "F-001", "file": "a.c", "function": "main", "line": 10,
+                 "status": "confirmed", "final_status": "confirmed"},
+            ])
+            new = self._make_run(d, "new", [
+                {"id": "F-001", "file": "a.c", "function": "main", "line": 10,
+                 "status": "not_disproven"},
+            ])
+            merged = merge_findings([old, new])
+            self.assertEqual(len(merged), 1)
+            self.assertEqual(merged[0]["final_status"], "confirmed")
+
+    def test_equal_status_latest_wins(self):
+        """Same status rank — later run's finding is used."""
+        with TemporaryDirectory() as d:
+            old = self._make_run(d, "old", [
+                {"id": "F-001", "file": "a.c", "function": "main", "line": 10,
+                 "status": "confirmed", "detail": "from_old"},
+            ])
+            new = self._make_run(d, "new", [
+                {"id": "F-001", "file": "a.c", "function": "main", "line": 10,
+                 "status": "confirmed", "detail": "from_new"},
+            ])
+            merged = merge_findings([old, new])
+            self.assertEqual(len(merged), 1)
+            self.assertEqual(merged[0]["detail"], "from_new")
+
+    def test_findings_without_status_rank_zero(self):
+        """Findings with no status (e.g. from scan/codeql) don't override validated findings."""
+        with TemporaryDirectory() as d:
+            validated = self._make_run(d, "validated", [
+                {"id": "F-001", "file": "a.c", "function": "main", "line": 10,
+                 "status": "confirmed", "final_status": "confirmed"},
+            ])
+            scan = self._make_run(d, "scan", [
+                {"id": "SARIF-001", "file": "a.c", "function": "main", "line": 10,
+                 "description": "scan finding with no status"},
+            ])
+            merged = merge_findings([validated, scan])
+            self.assertEqual(len(merged), 1)
+            self.assertEqual(merged[0]["final_status"], "confirmed")
+
+    def test_exploitable_beats_confirmed(self):
+        """Exploitable (rank 7) beats confirmed (rank 5)."""
+        with TemporaryDirectory() as d:
+            a = self._make_run(d, "a", [
+                {"id": "F-001", "file": "a.c", "function": "main", "line": 10,
+                 "final_status": "exploitable"},
+            ])
+            b = self._make_run(d, "b", [
+                {"id": "F-001", "file": "a.c", "function": "main", "line": 10,
+                 "final_status": "confirmed"},
+            ])
+            merged = merge_findings([a, b])
+            self.assertEqual(len(merged), 1)
+            self.assertEqual(merged[0]["final_status"], "exploitable")
+
+    def test_ruled_out_beats_not_disproven(self):
+        """ruled_out (rank 4) beats not_disproven (rank 2)."""
+        with TemporaryDirectory() as d:
+            a = self._make_run(d, "a", [
+                {"id": "F-001", "file": "a.c", "function": "main", "line": 10,
+                 "final_status": "ruled_out"},
+            ])
+            b = self._make_run(d, "b", [
+                {"id": "F-001", "file": "a.c", "function": "main", "line": 10,
+                 "status": "not_disproven"},
+            ])
+            merged = merge_findings([a, b])
+            self.assertEqual(len(merged), 1)
+            self.assertEqual(merged[0]["final_status"], "ruled_out")
+
+
 class TestVerifyMerge(unittest.TestCase):
 
     def test_valid_merge(self):

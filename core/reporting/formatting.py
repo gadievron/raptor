@@ -44,6 +44,8 @@ def get_display_status(finding: Dict[str, Any]) -> str:
         "confirmed_blocked": "Confirmed (Blocked)",
         "ruled_out": "Ruled Out",
         "false_positive": "False Positive",
+        "poc_success": "Exploitable",
+        "not_disproven": "Unconfirmed",
         "disproven": "Ruled Out",
         "validated": "Confirmed",
         "test_code": "Ruled Out",

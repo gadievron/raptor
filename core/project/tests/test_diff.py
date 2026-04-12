@@ -19,55 +19,75 @@ class TestDiffRuns(unittest.TestCase):
 
     def test_new_findings(self):
         with TemporaryDirectory() as d:
-            a = self._make_run(d, "a", [{"id": "F-001", "ruling": {"status": "confirmed"}}])
+            a = self._make_run(d, "a", [
+                {"id": "F-001", "file": "a.c", "function": "main", "line": 10, "ruling": {"status": "confirmed"}},
+            ])
             b = self._make_run(d, "b", [
-                {"id": "F-001", "ruling": {"status": "confirmed"}},
-                {"id": "F-002", "ruling": {"status": "exploitable"}},
+                {"id": "F-001", "file": "a.c", "function": "main", "line": 10, "ruling": {"status": "confirmed"}},
+                {"id": "F-002", "file": "b.c", "function": "foo", "line": 20, "ruling": {"status": "exploitable"}},
             ])
             result = diff_runs(a, b)
             self.assertEqual(len(result["new"]), 1)
-            self.assertEqual(result["new"][0]["id"], "F-002")
+            self.assertEqual(result["new"][0]["file"], "b.c")
 
     def test_removed_findings(self):
         with TemporaryDirectory() as d:
             a = self._make_run(d, "a", [
-                {"id": "F-001", "ruling": {"status": "confirmed"}},
-                {"id": "F-002", "ruling": {"status": "exploitable"}},
+                {"id": "F-001", "file": "a.c", "function": "main", "line": 10, "ruling": {"status": "confirmed"}},
+                {"id": "F-002", "file": "b.c", "function": "foo", "line": 20, "ruling": {"status": "exploitable"}},
             ])
-            b = self._make_run(d, "b", [{"id": "F-001", "ruling": {"status": "confirmed"}}])
+            b = self._make_run(d, "b", [
+                {"id": "F-100", "file": "a.c", "function": "main", "line": 10, "ruling": {"status": "confirmed"}},
+            ])
             result = diff_runs(a, b)
             self.assertEqual(len(result["removed"]), 1)
-            self.assertEqual(result["removed"][0]["id"], "F-002")
+            self.assertEqual(result["removed"][0]["file"], "b.c")
 
     def test_changed_findings(self):
         with TemporaryDirectory() as d:
-            a = self._make_run(d, "a", [{"id": "F-001", "ruling": {"status": "confirmed"}}])
-            b = self._make_run(d, "b", [{"id": "F-001", "ruling": {"status": "exploitable"}}])
+            a = self._make_run(d, "a", [
+                {"id": "F-001", "file": "a.c", "function": "main", "line": 10, "ruling": {"status": "confirmed"}},
+            ])
+            b = self._make_run(d, "b", [
+                {"id": "F-100", "file": "a.c", "function": "main", "line": 10, "ruling": {"status": "exploitable"}},
+            ])
             result = diff_runs(a, b)
             self.assertEqual(len(result["changed"]), 1)
-            self.assertEqual(result["changed"][0]["id"], "F-001")
+            self.assertEqual(result["changed"][0]["label"], "a.c:main:10")
+            self.assertEqual(result["changed"][0]["status_before"], "confirmed")
+            self.assertEqual(result["changed"][0]["status_after"], "exploitable")
+
+    def test_matches_by_location_not_id(self):
+        """Same location with different IDs should match as same finding."""
+        with TemporaryDirectory() as d:
+            a = self._make_run(d, "a", [
+                {"id": "F-001", "file": "a.c", "function": "main", "line": 10, "ruling": {"status": "confirmed"}},
+            ])
+            b = self._make_run(d, "b", [
+                {"id": "F-999", "file": "a.c", "function": "main", "line": 10, "ruling": {"status": "confirmed"}},
+            ])
+            result = diff_runs(a, b)
+            self.assertEqual(result["unchanged"], 1)
+            self.assertEqual(len(result["new"]), 0)
+            self.assertEqual(len(result["removed"]), 0)
 
     def test_unchanged_count(self):
         with TemporaryDirectory() as d:
-            findings = [
-                {"id": "F-001", "ruling": {"status": "confirmed"}},
-                {"id": "F-002", "ruling": {"status": "exploitable"}},
+            findings_a = [
+                {"id": "F-001", "file": "a.c", "function": "main", "line": 10, "ruling": {"status": "confirmed"}},
+                {"id": "F-002", "file": "b.c", "function": "foo", "line": 20, "ruling": {"status": "exploitable"}},
             ]
-            a = self._make_run(d, "a", findings)
-            b = self._make_run(d, "b", findings)
+            findings_b = [
+                {"id": "F-100", "file": "a.c", "function": "main", "line": 10, "ruling": {"status": "confirmed"}},
+                {"id": "F-200", "file": "b.c", "function": "foo", "line": 20, "ruling": {"status": "exploitable"}},
+            ]
+            a = self._make_run(d, "a", findings_a)
+            b = self._make_run(d, "b", findings_b)
             result = diff_runs(a, b)
             self.assertEqual(result["unchanged"], 2)
             self.assertEqual(len(result["new"]), 0)
             self.assertEqual(len(result["removed"]), 0)
             self.assertEqual(len(result["changed"]), 0)
-
-    def test_finding_id_field(self):
-        """Agentic findings use finding_id instead of id."""
-        with TemporaryDirectory() as d:
-            a = self._make_run(d, "a", [{"finding_id": "SARIF-001", "is_exploitable": True}])
-            b = self._make_run(d, "b", [{"finding_id": "SARIF-001", "is_exploitable": False}])
-            result = diff_runs(a, b)
-            self.assertEqual(len(result["changed"]), 1)
 
     def test_empty_runs(self):
         with TemporaryDirectory() as d:
@@ -81,7 +101,7 @@ class TestDiffRuns(unittest.TestCase):
         with TemporaryDirectory() as d:
             a = Path(d) / "a"
             a.mkdir()
-            b = self._make_run(d, "b", [{"id": "F-001"}])
+            b = self._make_run(d, "b", [{"id": "F-001", "file": "a.c", "function": "main", "line": 10}])
             result = diff_runs(a, b)
             self.assertEqual(len(result["new"]), 1)
 
@@ -91,13 +111,29 @@ class TestDiffRuns(unittest.TestCase):
             a = Path(d) / "a"
             a.mkdir()
             (a / "findings.json").write_text(json.dumps({
-                "stage": "D", "findings": [{"id": "F-001", "ruling": {"status": "confirmed"}}]
+                "stage": "D", "findings": [
+                    {"id": "F-001", "file": "a.c", "function": "main", "line": 10, "ruling": {"status": "confirmed"}}
+                ]
             }))
             b = Path(d) / "b"
             b.mkdir()
             (b / "findings.json").write_text(json.dumps({
-                "stage": "D", "findings": [{"id": "F-001", "ruling": {"status": "exploitable"}}]
+                "stage": "D", "findings": [
+                    {"id": "F-100", "file": "a.c", "function": "main", "line": 10, "ruling": {"status": "exploitable"}}
+                ]
             }))
+            result = diff_runs(a, b)
+            self.assertEqual(len(result["changed"]), 1)
+
+    def test_agentic_format(self):
+        """Agentic findings use is_exploitable boolean."""
+        with TemporaryDirectory() as d:
+            a = self._make_run(d, "a", [
+                {"finding_id": "SARIF-001", "file": "a.c", "function": "main", "line": 5, "is_exploitable": True},
+            ])
+            b = self._make_run(d, "b", [
+                {"finding_id": "SARIF-002", "file": "a.c", "function": "main", "line": 5, "is_exploitable": False},
+            ])
             result = diff_runs(a, b)
             self.assertEqual(len(result["changed"]), 1)
 

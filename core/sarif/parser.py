@@ -109,26 +109,60 @@ def deduplicate_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     return unique
 
 
+def _result_key(result: Dict[str, Any]) -> Tuple[str, str, int]:
+    """Dedup key for a SARIF result: (ruleId, uri, startLine)."""
+    rule_id = result.get("ruleId", "")
+    locs = result.get("locations", [{}])
+    phys = locs[0].get("physicalLocation", {}) if locs else {}
+    uri = phys.get("artifactLocation", {}).get("uri", "")
+    line = phys.get("region", {}).get("startLine", 0)
+    return (rule_id, uri, line)
+
+
 def merge_sarif(sarif_paths: List[str]) -> Dict[str, Any]:
     """
-    Merge multiple SARIF files into a single SARIF dict with combined runs.
+    Merge multiple SARIF files into a single SARIF dict.
+
+    Groups runs by tool name, deduplicates results within each tool by
+    (ruleId, uri, startLine). Latest occurrence wins on collision.
 
     Args:
         sarif_paths: List of paths to SARIF files
 
     Returns:
-        Merged SARIF dict with all runs combined
+        Merged SARIF dict with deduplicated results per tool
     """
-    merged: Dict[str, Any] = {
-        "version": "2.1.0",
-        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
-        "runs": [],
-    }
+    # Group runs by tool name so same-tool runs get their results merged
+    tool_runs: Dict[str, Dict[str, Any]] = {}  # tool_name -> merged run
+
     for sarif_path in sarif_paths:
         sarif_data = load_sarif(Path(sarif_path))
-        if sarif_data:
-            merged["runs"].extend(sarif_data.get("runs", []))
-    return merged
+        if not sarif_data:
+            continue
+        for run in sarif_data.get("runs", []):
+            tool_name = run.get("tool", {}).get("driver", {}).get("name", "unknown")
+            if tool_name not in tool_runs:
+                tool_runs[tool_name] = {
+                    "tool": run.get("tool", {}),
+                    "results": {},  # keyed by _result_key for dedup
+                }
+            for result in run.get("results", []):
+                key = _result_key(result)
+                tool_runs[tool_name]["results"][key] = result
+
+    # Build final SARIF with one run per tool
+    merged_runs = []
+    for tool_name, run_data in tool_runs.items():
+        merged_runs.append({
+            "tool": run_data["tool"],
+            "results": list(run_data["results"].values()),
+        })
+
+    return {
+        "version": "2.1.0",
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "runs": merged_runs,
+    }
 
 
 def _extract_cwe_from_rule(rule: Dict[str, Any]) -> Optional[str]:

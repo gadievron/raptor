@@ -18,7 +18,7 @@ from core.understand_bridge import (
     enrich_checklist,
     TRACE_SOURCE_LABEL,
     _extract_hashes,
-    _count_stale_on_disk,
+    _find_stale_files,
     _rank_candidates,
 )
 
@@ -177,8 +177,9 @@ class TestFindUnderstandOutput:
         validate_dir.mkdir()
         _write_json(validate_dir / "context-map.json", {"sources": []})
 
-        result = find_understand_output(validate_dir)
-        assert result == validate_dir
+        result_dir, stale = find_understand_output(validate_dir)
+        assert result_dir == validate_dir
+        assert stale == set()
 
     def test_tier2_project_sibling(self, tmp_path):
         """Tier 2: understand run as sibling in same project dir."""
@@ -188,8 +189,8 @@ class TestFindUnderstandOutput:
 
         _make_understand_dir(project_dir)
 
-        result = find_understand_output(validate_dir)
-        assert result == project_dir / "understand-20260401-120000"
+        result_dir, stale = find_understand_output(validate_dir)
+        assert result_dir == project_dir / "understand-20260401-120000"
 
     def test_tier2_picks_newest_sibling(self, tmp_path):
         project_dir = tmp_path / "project"
@@ -200,8 +201,8 @@ class TestFindUnderstandOutput:
         time.sleep(0.01)
         new = _make_understand_dir(project_dir, "understand-20260402-120000")
 
-        result = find_understand_output(validate_dir)
-        assert result == new
+        result_dir, stale = find_understand_output(validate_dir)
+        assert result_dir == new
 
     def test_tier3_global_out_by_target_path(self, tmp_path, monkeypatch):
         """Tier 3: scan out/ matching by checklist target_path."""
@@ -221,8 +222,8 @@ class TestFindUnderstandOutput:
         validate_dir = tmp_path / "validate-run"
         validate_dir.mkdir()
 
-        result = find_understand_output(validate_dir, target_path="/tmp/vulns")
-        assert result == out_root / "understand_20260401_120000"
+        result_dir, stale = find_understand_output(validate_dir, target_path="/tmp/vulns")
+        assert result_dir == out_root / "understand_20260401_120000"
 
     def test_tier3_no_match_for_wrong_target(self, tmp_path, monkeypatch):
         out_root = tmp_path / "out"
@@ -239,8 +240,8 @@ class TestFindUnderstandOutput:
         validate_dir = tmp_path / "validate-run"
         validate_dir.mkdir()
 
-        result = find_understand_output(validate_dir, target_path="/tmp/other")
-        assert result is None
+        result_dir, stale = find_understand_output(validate_dir, target_path="/tmp/other")
+        assert result_dir is None
 
     def test_returns_none_when_no_candidates(self, tmp_path, monkeypatch):
         out_root = tmp_path / "empty-out"
@@ -251,8 +252,8 @@ class TestFindUnderstandOutput:
         validate_dir = tmp_path / "validate-run"
         validate_dir.mkdir()
 
-        result = find_understand_output(validate_dir, target_path="/tmp/vulns")
-        assert result is None
+        result_dir, stale = find_understand_output(validate_dir, target_path="/tmp/vulns")
+        assert result_dir is None
 
     def test_ignores_dirs_without_context_map(self, tmp_path):
         project_dir = tmp_path / "project"
@@ -264,7 +265,8 @@ class TestFindUnderstandOutput:
         empty.mkdir()
         _write_json(empty / ".raptor-run.json", {"version": 1, "command": "understand"})
 
-        assert find_understand_output(validate_dir) is None
+        result_dir, stale = find_understand_output(validate_dir)
+        assert result_dir is None
 
     def test_ignores_non_understand_dirs(self, tmp_path):
         project_dir = tmp_path / "project"
@@ -276,7 +278,8 @@ class TestFindUnderstandOutput:
         _write_json(scan / "context-map.json", {"sources": []})
         _write_json(scan / ".raptor-run.json", {"version": 1, "command": "scan"})
 
-        assert find_understand_output(validate_dir) is None
+        result_dir, stale = find_understand_output(validate_dir)
+        assert result_dir is None
 
 
 # ---------------------------------------------------------------------------
@@ -288,8 +291,8 @@ class TestHashFreshness:
         hashes = _extract_hashes(MINIMAL_CHECKLIST)
         assert hashes == {"src/routes/query.py": "aaa", "src/db/query.py": "bbb"}
 
-    def test_count_stale_zero_when_matching(self, tmp_path):
-        """On-disk files matching understand hashes → 0 stale."""
+    def test_stale_empty_when_matching(self, tmp_path):
+        """On-disk files matching understand hashes → no stale files."""
         import hashlib
         target = tmp_path / "target"
         target.mkdir()
@@ -299,10 +302,10 @@ class TestHashFreshness:
             "a.py": hashlib.sha256(b"aaa").hexdigest(),
             "b.py": hashlib.sha256(b"bbb").hexdigest(),
         }
-        assert _count_stale_on_disk(h1, str(target)) == 0
+        assert _find_stale_files(h1, str(target)) == set()
 
-    def test_count_stale_detects_changed_files(self, tmp_path):
-        """On-disk file differs from understand hash → 1 stale."""
+    def test_stale_detects_changed_files(self, tmp_path):
+        """On-disk file differs from understand hash → returned in stale set."""
         import hashlib
         target = tmp_path / "target"
         target.mkdir()
@@ -312,10 +315,10 @@ class TestHashFreshness:
             "a.py": hashlib.sha256(b"aaa").hexdigest(),
             "b.py": hashlib.sha256(b"bbb").hexdigest(),  # original content
         }
-        assert _count_stale_on_disk(h1, str(target)) == 1
+        assert _find_stale_files(h1, str(target)) == {"b.py"}
 
-    def test_count_stale_deleted_file_is_stale(self, tmp_path):
-        """File in understand checklist but deleted from disk → stale."""
+    def test_stale_deleted_file_is_stale(self, tmp_path):
+        """File in understand checklist but deleted from disk → in stale set."""
         import hashlib
         target = tmp_path / "target"
         target.mkdir()
@@ -324,7 +327,7 @@ class TestHashFreshness:
             "a.py": hashlib.sha256(b"aaa").hexdigest(),
             "gone.py": hashlib.sha256(b"xyz").hexdigest(),
         }
-        assert _count_stale_on_disk(h1, str(target)) == 1
+        assert _find_stale_files(h1, str(target)) == {"gone.py"}
 
     def test_rank_prefers_fresh_over_newest(self, tmp_path):
         """A fresh older candidate beats a stale newer one."""
@@ -348,8 +351,26 @@ class TestHashFreshness:
             "files": [{"path": "a.py", "sha256": "STALE"}],
         })
 
-        result = _rank_candidates([new_dir, old_dir], str(target))
-        assert result == old_dir
+        best_dir, stale = _rank_candidates([new_dir, old_dir], str(target))
+        assert best_dir == old_dir
+        assert stale == set()
+
+    def test_rank_returns_stale_set(self, tmp_path):
+        """When best candidate has stale files, they are returned."""
+        import hashlib
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "a.py").write_text("current")
+
+        d1 = tmp_path / "d1"
+        d1.mkdir()
+        _write_json(d1 / "checklist.json", {
+            "files": [{"path": "a.py", "sha256": "STALE"}],
+        })
+
+        best_dir, stale = _rank_candidates([d1], str(target))
+        assert best_dir == d1
+        assert stale == {"a.py"}
 
     def test_rank_falls_back_to_newest_when_all_fresh(self, tmp_path):
         import hashlib
@@ -369,8 +390,9 @@ class TestHashFreshness:
                 "files": [{"path": "a.py", "sha256": disk_hash}],
             })
 
-        result = _rank_candidates([d1, d2], str(target))
-        assert result == d2  # newer
+        best_dir, stale = _rank_candidates([d1, d2], str(target))
+        assert best_dir == d2  # newer
+        assert stale == set()
 
     def test_rank_without_target_picks_newest(self, tmp_path):
         d1 = tmp_path / "d1"
@@ -379,8 +401,9 @@ class TestHashFreshness:
         time.sleep(0.01)
         d2.mkdir()
 
-        result = _rank_candidates([d1, d2], target_path=None)
-        assert result == d2
+        best_dir, stale = _rank_candidates([d1, d2], target_path=None)
+        assert best_dir == d2
+        assert stale == set()
 
     def test_rank_empty_candidates(self):
         assert _rank_candidates([], None) is None
@@ -666,10 +689,10 @@ class TestEdgeCases:
         monkeypatch.setattr("core.config.RaptorConfig.get_out_dir",
                             staticmethod(lambda: project_dir))
 
-        result = find_understand_output(
+        result_dir, stale = find_understand_output(
             validate_dir, target_path=str(target_dir),
         )
-        assert result == understand
+        assert result_dir == understand
 
     def test_staleness_warning_logged(self, tmp_path):
         """When best candidate has stale files, _rank_candidates logs a warning."""
@@ -684,9 +707,10 @@ class TestEdgeCases:
         })
 
         with unittest.mock.patch("core.understand_bridge.logger") as mock_logger:
-            result = _rank_candidates([stale_dir], str(target))
+            best_dir, stale = _rank_candidates([stale_dir], str(target))
 
-        assert result == stale_dir
+        assert best_dir == stale_dir
+        assert stale == {"a.py"}
         mock_logger.warning.assert_called_once()
         assert "stale" in mock_logger.warning.call_args[0][0].lower()
 
@@ -702,8 +726,9 @@ class TestEdgeCases:
         # Tier 2: sibling that's newer
         _make_understand_dir(project_dir, "understand-20260403-120000")
 
-        result = find_understand_output(validate_dir)
-        assert result == validate_dir  # tier 1 wins
+        result_dir, stale = find_understand_output(validate_dir)
+        assert result_dir == validate_dir  # tier 1 wins
+        assert stale == set()
 
     def test_candidate_without_checklist_ranked_lowest(self, tmp_path):
         """Candidate missing checklist.json treated as stale."""
@@ -726,10 +751,10 @@ class TestEdgeCases:
         })
 
         # d_no_checklist is newer by mtime but has no checklist → stale_count=1
-        result = _rank_candidates(
+        best_dir, stale = _rank_candidates(
             [d_no_checklist, d_with_checklist], str(target),
         )
-        assert result == d_with_checklist
+        assert best_dir == d_with_checklist
 
 
 # ---------------------------------------------------------------------------

@@ -20,9 +20,9 @@ Usage (from Stage 0 in /validate):
 
     from core.understand_bridge import find_understand_output, load_understand_context, enrich_checklist
 
-    understand_dir = find_understand_output(validate_dir, target_path=target)
+    understand_dir, stale_files = find_understand_output(validate_dir, target_path=target)
     if understand_dir:
-        bridge = load_understand_context(understand_dir, validate_dir)
+        bridge = load_understand_context(understand_dir, validate_dir, stale_files)
         if bridge["context_map_loaded"]:
             enrich_checklist(checklist, bridge["context_map"], str(validate_dir))
 
@@ -35,7 +35,7 @@ The three-tier search in find_understand_output() covers:
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from core.json import load_json, save_json
 
@@ -54,7 +54,7 @@ TRACE_SOURCE_LABEL = "understand:trace"
 def find_understand_output(
     validate_dir: Path,
     target_path: str = None,
-) -> Optional[Path]:
+) -> Tuple[Optional[Path], Set[str]]:
     """Find the best /understand output for a validate run.
 
     Three-tier search eliminates the need for --out alignment:
@@ -78,26 +78,36 @@ def find_understand_output(
             global out/ search, and on-disk hash freshness checks).
 
     Returns:
-        Path to the understand output directory, or None.
-        When tier 1 matches, returns validate_dir itself.
+        (path, stale_files) — path to the understand output directory and
+        set of relative file paths whose hashes no longer match disk.
+        Returns (None, set()) when no understand output is found.
+        When tier 1 matches, returns (validate_dir, empty set) since
+        co-located data is assumed fresh.
     """
     validate_dir = Path(validate_dir)
+    empty: Set[str] = set()
 
-    # Tier 1: context-map.json co-located (shared --out directory)
+    # Tier 1: context-map.json co-located (shared --out directory).
+    # Staleness can't be checked here — the validate rebuild overwrites
+    # the understand checklist before the bridge runs.  The caller
+    # (validation helper) snapshots the pre-rebuild checklist and handles
+    # tier 1 staleness separately.
     if (validate_dir / "context-map.json").exists():
         logger.debug("understand output: tier 1 (local) — %s", validate_dir)
-        return validate_dir
+        return validate_dir, empty
 
     # Collect candidates from tiers 2 and 3
     candidates = _collect_candidates(validate_dir, target_path)
     if not candidates:
-        return None
+        return None, empty
 
     # Rank: fresh hashes beat stale, then newest wins
-    best = _rank_candidates(candidates, target_path)
-    if best:
-        logger.debug("understand output: selected %s", best)
-    return best
+    result = _rank_candidates(candidates, target_path)
+    if result is None:
+        return None, empty
+    best_dir, stale_files = result
+    logger.debug("understand output: selected %s", best_dir)
+    return best_dir, stale_files
 
 
 def _collect_candidates(
@@ -133,7 +143,7 @@ def _collect_candidates(
 def _rank_candidates(
     candidates: List[Path],
     target_path: str = None,
-) -> Optional[Path]:
+) -> Optional[Tuple[Path, Set[str]]]:
     """Pick the best candidate: fresh hashes > stale, then newest first.
 
     Freshness is checked by hashing the current files on disk under
@@ -142,7 +152,7 @@ def _rank_candidates(
     share a single file and the validate rebuild overwrites understand
     hashes.
 
-    Returns None if candidates is empty.
+    Returns (path, stale_files) or None if candidates is empty.
     """
     if not candidates:
         return None
@@ -150,32 +160,33 @@ def _rank_candidates(
     if not target_path:
         # No target — can't hash on disk, just pick newest
         candidates.sort(key=lambda d: d.stat().st_mtime, reverse=True)
-        return candidates[0]
+        return candidates[0], set()
 
     scored = []
     for d in candidates:
         u_checklist = load_json(d / "checklist.json")
         if not u_checklist:
-            # No checklist — treat as stale (can't verify)
-            scored.append((1, d.stat().st_mtime, d))
+            # No checklist — treat as fully stale (can't verify any file)
+            scored.append((1, d.stat().st_mtime, d, set()))
             continue
         u_hashes = _extract_hashes(u_checklist)
-        stale_count = _count_stale_on_disk(u_hashes, target_path)
+        stale = _find_stale_files(u_hashes, target_path)
         # fresh = 0 stale files → sort key 0 (best)
-        scored.append((stale_count, d.stat().st_mtime, d))
+        scored.append((len(stale), d.stat().st_mtime, d, stale))
 
     # Sort: fewest stale first, then newest mtime first (negate for descending)
     scored.sort(key=lambda t: (t[0], -t[1]))
-    best_stale, _, best_dir = scored[0]
+    best_stale_count, _, best_dir, best_stale_files = scored[0]
 
-    if best_stale > 0:
+    if best_stale_count > 0:
         logger.warning(
             "understand_bridge: best candidate %s has %d stale file(s)"
-            " — importing anyway, Stage C will catch stale refs",
-            best_dir.name, best_stale,
+            " — data for these files will be excluded: %s",
+            best_dir.name, best_stale_count,
+            ", ".join(sorted(best_stale_files)),
         )
 
-    return best_dir
+    return best_dir, best_stale_files
 
 
 def _extract_hashes(checklist: Dict[str, Any]) -> Dict[str, str]:
@@ -187,11 +198,11 @@ def _extract_hashes(checklist: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
-def _count_stale_on_disk(
+def _find_stale_files(
     understand_hashes: Dict[str, str],
     target_path: str,
-) -> int:
-    """Count files whose on-disk SHA-256 differs from the understand checklist.
+) -> Set[str]:
+    """Return relative paths whose on-disk SHA-256 differs from the understand checklist.
 
     Hashes the actual files under target_path rather than comparing against
     another checklist. This is immune to the project-mode symlink problem
@@ -200,16 +211,16 @@ def _count_stale_on_disk(
     import hashlib
 
     target = Path(target_path)
-    stale = 0
+    stale: Set[str] = set()
     for rel_path, u_hash in understand_hashes.items():
         full_path = target / rel_path
         if not full_path.is_file():
-            # File deleted since understand ran — counts as stale
-            stale += 1
+            # File deleted since understand ran
+            stale.add(rel_path)
             continue
         disk_hash = hashlib.sha256(full_path.read_bytes()).hexdigest()
         if disk_hash != u_hash:
-            stale += 1
+            stale.add(rel_path)
     return stale
 
 
@@ -269,15 +280,19 @@ def _search_understand_dirs(
 def load_understand_context(
     understand_dir: Path,
     validate_dir: Path,
+    stale_files: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     #Import /understand outputs as /validate starting state.
     understand_dir = Path(understand_dir)
     validate_dir = Path(validate_dir)
     validate_dir.mkdir(parents=True, exist_ok=True)
+    if stale_files is None:
+        stale_files = set()
 
     summary: Dict[str, Any] = {
         "understand_dir": str(understand_dir),
         "context_map_loaded": False,
+        "stale_files_excluded": sorted(stale_files),
         "attack_surface": {
             "sources": 0,
             "sinks": 0,
@@ -298,6 +313,11 @@ def load_understand_context(
         logger.warning("understand_bridge: no context-map.json found in %s", understand_dir)
         return summary
 
+    # --- Filter entries referencing stale files ---
+    filtered = _filter_context_map(context_map, stale_files)
+    if filtered:
+        logger.info("understand_bridge: excluded %d entries referencing stale files", filtered)
+
     summary["context_map_loaded"] = True
     summary["context_map"] = context_map
 
@@ -306,7 +326,7 @@ def load_understand_context(
     summary["attack_surface"] = surface_stats
 
     # --- Import flow-trace-*.json into attack-paths.json ---
-    trace_stats = _import_flow_traces(understand_dir, validate_dir)
+    trace_stats = _import_flow_traces(understand_dir, validate_dir, stale_files)
     summary["flow_traces"] = trace_stats
 
     logger.info(
@@ -387,6 +407,82 @@ def enrich_checklist(checklist: Dict[str, Any], context_map: Dict[str, Any],
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _references_file(entry: Dict[str, Any], stale_files: Set[str]) -> bool:
+    """Check if a context-map entry references any stale file.
+
+    Entries use different formats:
+    - entry_points/sink_details: {"file": "foo.c", ...}
+    - sources: {"entry": "argv[1] @ foo.c:6"}
+    - sinks: {"location": "foo.c:6 — strcpy(...)"}
+    - trust_boundaries: {"boundary": "...", "check": "..."}
+    """
+    import re
+
+    # Direct file field (entry_points, sink_details, trust_boundaries)
+    f = entry.get("file", "")
+    if f and f in stale_files:
+        return True
+
+    # Embedded in string fields — extract filename before ":"
+    # Patterns: "... @ file.c:N", "file.c:N — ...", "src/auth.py:12"
+    for field in ("entry", "location", "check"):
+        val = entry.get(field, "")
+        if not val:
+            continue
+        # Extract all "word.ext:digits" tokens (filenames with line numbers)
+        for match in re.findall(r'[\w./+-]+\.\w+(?=:\d)', val):
+            if match in stale_files:
+                return True
+
+    return False
+
+
+def _filter_context_map(context_map: Dict[str, Any], stale_files: Set[str]) -> int:
+    """Remove entries referencing stale files from the context map. Mutates in place.
+
+    Returns the number of entries removed.
+    """
+    if not stale_files:
+        return 0
+
+    removed = 0
+
+    # Filter list-of-dict fields
+    for key in ("entry_points", "sources", "sinks", "sink_details",
+                "trust_boundaries", "boundary_details"):
+        items = context_map.get(key)
+        if not isinstance(items, list):
+            continue
+        clean = [e for e in items if not _references_file(e, stale_files)]
+        removed += len(items) - len(clean)
+        context_map[key] = clean
+
+    # Filter unchecked_flows — references entry_points/sinks by ID, so
+    # resolve IDs to files first, then drop flows touching stale files.
+    stale_ep_ids: Set[str] = set()
+    stale_sink_ids: Set[str] = set()
+
+    # We need the original entry_points/sink_details to know which IDs
+    # were removed. But we already filtered those lists above. Instead,
+    # collect IDs from the entries we kept and drop flows referencing
+    # any ID that's NOT in the kept set.
+    kept_ep_ids = {ep.get("id") for ep in context_map.get("entry_points", []) if ep.get("id")}
+    kept_sink_ids = {s.get("id") for s in context_map.get("sink_details", []) if s.get("id")}
+
+    flows = context_map.get("unchecked_flows", [])
+    if isinstance(flows, list):
+        clean = [
+            f for f in flows
+            if f.get("entry_point") in kept_ep_ids
+            and f.get("sink") in kept_sink_ids
+        ]
+        removed += len(flows) - len(clean)
+        context_map["unchecked_flows"] = clean
+
+    return removed
+
 
 def _load_context_map(understand_dir: Path) -> Optional[Dict[str, Any]]:
     #Load context-map.json from an understand output directory.
@@ -475,14 +571,37 @@ def _merge_attack_surface(
     }
 
 
+def _trace_references_stale(trace: Dict[str, Any], stale_files: Set[str]) -> bool:
+    """Check if a flow trace references any stale file via its steps."""
+    import re
+
+    for step in trace.get("steps", []):
+        # Direct file field — exact match
+        f = step.get("file", "")
+        if f and f in stale_files:
+            return True
+        # Embedded in action/result strings — extract filenames via regex
+        for field in ("action", "result"):
+            val = step.get(field, "")
+            if val:
+                for match in re.findall(r'[\w./+-]+\.\w+(?=:\d)', val):
+                    if match in stale_files:
+                        return True
+    return False
+
+
 def _import_flow_traces(
     understand_dir: Path,
     validate_dir: Path,
+    stale_files: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     # Import flow-trace-*.json files as initial entries in attack-paths.json.
     trace_files = sorted(understand_dir.glob("flow-trace-*.json"))
     if not trace_files:
-        return {"count": 0, "imported_as_paths": 0}
+        return {"count": 0, "imported_as_paths": 0, "skipped_stale": 0}
+
+    if stale_files is None:
+        stale_files = set()
 
     paths_path = validate_dir / "attack-paths.json"
     existing_paths: List[Dict[str, Any]] = []
@@ -495,6 +614,7 @@ def _import_flow_traces(
     existing_ids = {p.get("id") for p in existing_paths if p.get("id")}
 
     imported = 0
+    skipped_stale = 0
     for trace_file in trace_files:
         trace = load_json(trace_file)
         if not isinstance(trace, dict):
@@ -506,6 +626,11 @@ def _import_flow_traces(
             logger.debug("understand_bridge: skipping already-imported trace %s", path_id)
             continue
 
+        if stale_files and _trace_references_stale(trace, stale_files):
+            logger.info("understand_bridge: skipping stale trace %s", path_id)
+            skipped_stale += 1
+            continue
+
         attack_path = _trace_to_attack_path(trace, trace_file)
         existing_paths.append(attack_path)
         existing_ids.add(path_id)
@@ -514,7 +639,7 @@ def _import_flow_traces(
     if imported > 0:
         save_json(paths_path, existing_paths)
 
-    return {"count": len(trace_files), "imported_as_paths": imported}
+    return {"count": len(trace_files), "imported_as_paths": imported, "skipped_stale": skipped_stale}
 
 
 def _trace_to_attack_path(trace: Dict[str, Any], trace_file: Path) -> Dict[str, Any]:

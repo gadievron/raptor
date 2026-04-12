@@ -761,8 +761,12 @@ VERDICT_MAP = {
 
 
 def prepare_F(workdir, target=None):
-    _apply_stage_file(workdir, "E")
-
+    merged_e = _apply_stage_file(workdir, "E")
+    if not merged_e:
+        # Stage E may have been skipped (no memory-corruption findings).
+        # Merge stage-d.json here so the ruling data is not lost.
+        if _apply_stage_file(workdir, "D"):
+            print("  (Stage E skipped — merged stage-d.json directly)")
 
     data = _findings(workdir)
 
@@ -780,17 +784,23 @@ def prepare_F(workdir, target=None):
             else:
                 print(f"  {finding['id']}: {verdict} -> {mapped}")
 
-    # --- Set final_status for non-memory-corruption findings ---
+    # --- Set final_status for findings not handled by Stage E verdict mapping ---
+    # Covers two cases: (1) final_status never set, (2) final_status is stale
+    # (e.g. still "not_disproven" after Stage D promoted status to "confirmed").
+    PRE_RULING_STATUSES = {"not_disproven", "poc_success"}
     for finding in data.get("findings", []):
-        if not finding.get("final_status") and finding.get("status"):
-            finding["final_status"] = finding["status"]
+        fs = finding.get("final_status", "")
+        status = finding.get("status", "")
+        if status and (not fs or fs in PRE_RULING_STATUSES):
+            finding["final_status"] = status
 
     # --- Derive is_exploitable from final_status ---
     for finding in data.get("findings", []):
         fs = finding.get("final_status", "")
         if fs in ("exploitable",):
             finding["is_exploitable"] = True
-        elif fs in ("confirmed_constrained", "confirmed_blocked", "confirmed", "confirmed_unverified"):
+        elif fs in ("confirmed_constrained", "confirmed_blocked", "confirmed",
+                    "confirmed_unverified", "ruled_out", "disproven"):
             finding["is_exploitable"] = False
 
     # --- Carry-forward check (Stage E) ---
@@ -848,7 +858,8 @@ def prepare_F(workdir, target=None):
 # 0: Start run + build inventory
 # ---------------------------------------------------------------------------
 
-def _bridge_understand_output(out_dir, checklist, target):
+def _bridge_understand_output(out_dir, checklist, target,
+                              pre_rebuild_checklist=None):
     """Import /understand output into the validate run if available.
 
     Searches three tiers: local co-location, project siblings, global out/.
@@ -856,33 +867,62 @@ def _bridge_understand_output(out_dir, checklist, target):
     ran) then by modification time. Populates attack-surface.json, imports
     flow traces into attack-paths.json, and enriches the checklist with
     priority markers for entry points and sinks.
+
+    pre_rebuild_checklist: The checklist.json snapshot taken before
+        build_checklist overwrote it. Used for tier 1 (shared --out) to
+        detect stale files by comparing the understand run's hashes
+        against current disk.
     """
     from core.understand_bridge import (
         find_understand_output, load_understand_context, enrich_checklist,
+        _extract_hashes, _find_stale_files, _filter_context_map,
     )
 
-    understand_dir = find_understand_output(
+    understand_dir, stale_files = find_understand_output(
         out_dir, target_path=target,
     )
     if not understand_dir:
         return
 
-    # When understand_dir IS validate_dir (shared --out), skip
-    # load_understand_context since it would read/write the same files.
-    # Just enrich the checklist from the co-located context-map.
+    # Tier 1 (shared --out): find_understand_output can't detect stale files
+    # because the checklist was already overwritten by the validate rebuild.
+    # Use the pre-rebuild snapshot to compute staleness now.
+    if understand_dir == out_dir and not stale_files and pre_rebuild_checklist:
+        old_hashes = _extract_hashes(pre_rebuild_checklist)
+        if old_hashes and target:
+            stale_files = _find_stale_files(old_hashes, target)
+
+    if stale_files:
+        print(f"  Bridge: {len(stale_files)} stale file(s) — excluding"
+              f" understand data for: {', '.join(sorted(stale_files))}")
+
+    # When understand_dir IS validate_dir (shared --out), skip the full
+    # load_understand_context (which would re-import traces from itself).
+    # Instead: filter the co-located context-map, write attack-surface.json
+    # from the filtered data, and enrich the checklist.
     if understand_dir == out_dir:
         context_map_path = out_dir / "context-map.json"
         if context_map_path.exists():
-            from core.json import load_json
+            from core.json import load_json, save_json
             context_map = load_json(context_map_path)
             if context_map:
+                if stale_files:
+                    _filter_context_map(context_map, stale_files)
+                # Write attack-surface.json from (filtered) context-map so
+                # Stage B has consistent data.  Matches tier 2/3 behavior
+                # where load_understand_context always writes this file.
+                save_json(out_dir / "attack-surface.json", {
+                    "sources": context_map.get("sources", []),
+                    "sinks": context_map.get("sinks", []),
+                    "trust_boundaries": context_map.get("trust_boundaries", []),
+                })
                 enrich_checklist(checklist, context_map, str(out_dir))
                 n_targets = len(checklist.get("priority_targets", []))
                 print(f"  Bridge: enriched checklist from co-located context-map.json"
                       f" ({n_targets} priority targets)")
         return
 
-    bridge = load_understand_context(understand_dir, out_dir)
+    bridge = load_understand_context(understand_dir, out_dir, stale_files)
     if bridge.get("context_map_loaded"):
         enrich_checklist(checklist, bridge["context_map"], str(out_dir))
         n_sources = bridge["attack_surface"]["sources"]
@@ -923,12 +963,24 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False):
         sys.exit(1)
 
     start_run(out_dir, "validate")
+
+    # Snapshot understand hashes before the rebuild overwrites checklist.json.
+    # In the shared --out case (tier 1), the understand run's checklist is in
+    # the same directory.  build_checklist will overwrite it with current hashes,
+    # so we capture the old hashes now for stale-file detection.
+    pre_rebuild_checklist = None
+    checklist_path = out_dir / "checklist.json"
+    if checklist_path.exists() and (out_dir / "context-map.json").exists():
+        from core.json import load_json
+        pre_rebuild_checklist = load_json(checklist_path)
+
     checklist = build_checklist(target, str(out_dir))
 
     (out_dir / "build").mkdir(exist_ok=True)
 
     if not no_bridge:
-        _bridge_understand_output(out_dir, checklist, target)
+        _bridge_understand_output(out_dir, checklist, target,
+                                  pre_rebuild_checklist=pre_rebuild_checklist)
 
     print(f"Checklist: {checklist['total_files']} files, {checklist['total_items']} items")
     print(f"OUTPUT_DIR={out_dir}")

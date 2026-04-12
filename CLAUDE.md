@@ -16,7 +16,7 @@ VERY IMPORTANT: follow these steps in order.
 
 ## COMMANDS
 
-/project - Project management: create, list, status, diff, merge, report, clean, export
+/project - Project management: create, list, status, coverage, findings, diff, merge, report, clean, export
 /scan /fuzz /web /agentic /codeql /analyze - Security testing
 /exploit /patch - Generate PoCs and fixes (beta)
 /validate - Exploitability validation pipeline (see below)
@@ -40,7 +40,9 @@ Projects are opt-in named workspaces that corral analysis runs into a shared dir
 /project create myapp --target /path/to/code -d "Description"
 /project use myapp
 /scan                          # output goes to project dir
-/project status                # shows all runs and findings
+/project status                # shows all runs
+/project findings              # shows merged findings across runs
+/project coverage              # shows tool coverage summary
 /project report                # merged view across all runs
 /project clean --keep 3        # delete old runs
 /project none                  # clear active project

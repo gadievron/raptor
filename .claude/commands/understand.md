@@ -25,7 +25,7 @@ libexec/raptor-run-lifecycle start understand --target <resolved_target>
 The last line of output is `OUTPUT_DIR=<path>` — use that for all subsequent steps.
 
 ```bash
-libexec/raptor-build-checklist <resolved_target> "$OUTPUT_DIR" --fix
+libexec/raptor-build-checklist <resolved_target> "$OUTPUT_DIR"
 ```
 
 **Step 2: Do the analysis** (map, trace, hunt, teach — see skill files).
