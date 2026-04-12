@@ -151,6 +151,16 @@ RUN pip install --no-cache-dir -r /tmp/packages-web-requirements.txt
 RUN python -m playwright install
 
 # ============================================================================
+# CLAUDE CLI (claude-code npm package)
+# Required to run RAPTOR via bin/raptor
+# ============================================================================
+
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && npm install -g @anthropic-ai/claude-code
+
+# ============================================================================
 # ENVIRONMENT CONFIGURATION
 # ============================================================================
 
