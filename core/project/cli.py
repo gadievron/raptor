@@ -481,6 +481,44 @@ def _count_sarif_results(run_dir):
     return count
 
 
+def _get_output_summary(run_dir, meta):
+    """Get findings/results string for a run, using cached summary when available.
+
+    On first access for a completed run, computes the summary and writes it
+    back to .raptor-run.json so subsequent calls are instant.
+    """
+    from core.json import save_json
+    from core.run.metadata import RUN_METADATA_FILE
+
+    # Use cached summary if present
+    cached = (meta or {}).get("output_summary")
+    if cached:
+        return cached
+
+    # Compute from findings or SARIF
+    from .findings_utils import load_findings_from_dir, count_vulns
+    findings = load_findings_from_dir(run_dir)
+    if findings:
+        vuln_count = count_vulns(findings)
+        if vuln_count != len(findings):
+            result = f"{vuln_count} findings"
+        else:
+            result = f"{len(findings)} findings"
+    else:
+        sarif_count = _count_sarif_results(run_dir)
+        result = f"{sarif_count} results" if sarif_count else ""
+
+    # Cache in metadata for completed/failed runs (won't change)
+    status = (meta or {}).get("status", "")
+    if result and status in ("completed", "failed"):
+        meta_path = run_dir / RUN_METADATA_FILE
+        if meta_path.exists() and meta:
+            meta["output_summary"] = result
+            save_json(meta_path, meta)
+
+    return result
+
+
 def _print_status(project):
     """Print project status."""
     from core.run import load_run_metadata
@@ -495,7 +533,7 @@ def _print_status(project):
     if project.notes:
         print(f"Notes: {project.notes}")
 
-    runs = project.get_run_dirs()
+    runs = project.get_run_dirs(sweep=False)
     if runs:
         print(f"\nRuns: {len(runs)}")
         name_col = max(max(len(d.name) for d in runs) + 2, 20)
@@ -503,18 +541,7 @@ def _print_status(project):
             meta = load_run_metadata(d)
             cmd = meta.get("command", "?") if meta else "?"
             status = meta.get("status", "?") if meta else "?"
-            findings = load_findings_from_dir(d)
-            if findings:
-                from core.project.findings_utils import count_vulns
-                vuln_count = count_vulns(findings)
-                if vuln_count != len(findings):
-                    findings_str = f"{vuln_count} findings"
-                else:
-                    findings_str = f"{len(findings)} findings"
-            else:
-                # Count SARIF results for scan/codeql runs
-                sarif_count = _count_sarif_results(d)
-                findings_str = f"{sarif_count} results" if sarif_count else ""
+            findings_str = _get_output_summary(d, meta)
             if status == "completed":
                 status_str = _green(status)
             elif status == "failed":

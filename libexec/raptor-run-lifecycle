@@ -60,7 +60,7 @@ def main():
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)
 
-        start_run(out_dir, command)
+        start_run(out_dir, command, target=target_path)
         print(f"OUTPUT_DIR={out_dir}")
 
     elif action == "complete":

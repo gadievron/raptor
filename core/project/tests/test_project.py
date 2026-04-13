@@ -53,38 +53,63 @@ class TestProject(unittest.TestCase):
             self.assertEqual(dirs[0].name, "scan-20260401")
 
     def test_sweep_marks_stale_running_as_failed(self):
-        """sweep_stale_runs marks 'running' dirs as failed."""
-        from core.run.metadata import start_run, RUN_METADATA_FILE
-        from core.json import load_json
+        """sweep_stale_runs marks 'running' dirs with dead session_pid as failed."""
+        from core.run.metadata import RUN_METADATA_FILE
+        from core.json import load_json, save_json
         with TemporaryDirectory() as d:
-            run1 = Path(d) / "scan-20260401"
-            run1.mkdir()
-            start_run(run1, "scan")
-            run2 = Path(d) / "scan-20260402"
-            run2.mkdir()
-            start_run(run2, "scan")
+            # Simulate runs from a dead session (PID 99999999)
+            for name in ["scan-20260401", "scan-20260402"]:
+                run = Path(d) / name
+                run.mkdir()
+                save_json(run / RUN_METADATA_FILE, {
+                    "version": 1, "command": "scan",
+                    "timestamp": "2026-04-01T00:00:00+00:00",
+                    "status": "running", "extra": {},
+                    "session_pid": 99999999,
+                })
             p = Project(name="test", target="/tmp", output_dir=d)
             count = p.sweep_stale_runs(keep_latest=False)
             self.assertEqual(count, 2)
-            self.assertEqual(load_json(run1 / RUN_METADATA_FILE)["status"], "failed")
-            self.assertEqual(load_json(run2 / RUN_METADATA_FILE)["status"], "failed")
+            self.assertEqual(load_json(Path(d) / "scan-20260401" / RUN_METADATA_FILE)["status"], "failed")
+            self.assertEqual(load_json(Path(d) / "scan-20260402" / RUN_METADATA_FILE)["status"], "failed")
 
-    def test_sweep_keep_latest_preserves_newest(self):
-        """sweep with keep_latest=True skips the newest running dir."""
-        from core.run.metadata import start_run, RUN_METADATA_FILE
-        from core.json import load_json
+    def test_sweep_skips_alive_session(self):
+        """sweep skips runs whose session PID is still alive."""
+        from core.run.metadata import RUN_METADATA_FILE
+        from core.json import load_json, save_json
+        import os
         with TemporaryDirectory() as d:
-            old = Path(d) / "scan-20260401"
-            old.mkdir()
-            start_run(old, "scan")
-            new = Path(d) / "scan-20260402"
-            new.mkdir()
-            start_run(new, "scan")
+            run = Path(d) / "scan-20260401"
+            run.mkdir()
+            save_json(run / RUN_METADATA_FILE, {
+                "version": 1, "command": "scan",
+                "timestamp": "2026-04-01T00:00:00+00:00",
+                "status": "running", "extra": {},
+                "session_pid": os.getpid(),  # our PID — definitely alive
+            })
+            p = Project(name="test", target="/tmp", output_dir=d)
+            count = p.sweep_stale_runs(keep_latest=False)
+            self.assertEqual(count, 0)
+            self.assertEqual(load_json(run / RUN_METADATA_FILE)["status"], "running")
+
+    def test_sweep_keep_latest_legacy_runs(self):
+        """sweep with keep_latest=True skips newest legacy run (no session_pid)."""
+        from core.run.metadata import RUN_METADATA_FILE
+        from core.json import load_json, save_json
+        with TemporaryDirectory() as d:
+            for name, ts in [("scan-20260401", "2026-04-01"), ("scan-20260402", "2026-04-02")]:
+                run = Path(d) / name
+                run.mkdir()
+                save_json(run / RUN_METADATA_FILE, {
+                    "version": 1, "command": "scan",
+                    "timestamp": f"{ts}T00:00:00+00:00",
+                    "status": "running", "extra": {},
+                })
             p = Project(name="test", target="/tmp", output_dir=d)
             count = p.sweep_stale_runs(keep_latest=True)
             self.assertEqual(count, 1)
-            self.assertEqual(load_json(old / RUN_METADATA_FILE)["status"], "failed")
-            self.assertEqual(load_json(new / RUN_METADATA_FILE)["status"], "running")
+            self.assertEqual(load_json(Path(d) / "scan-20260401" / RUN_METADATA_FILE)["status"], "failed")
+            self.assertEqual(load_json(Path(d) / "scan-20260402" / RUN_METADATA_FILE)["status"], "running")
 
     def test_sweep_ignores_completed(self):
         """sweep doesn't touch completed/failed dirs."""

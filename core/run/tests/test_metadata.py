@@ -81,6 +81,54 @@ class TestRunLifecycle(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 fail_run(out, error="test")
 
+    def test_start_records_session_pid(self):
+        """start_run records session_pid when CLAUDECODE is set."""
+        import os
+        with TemporaryDirectory() as d:
+            out = Path(d) / "project" / "scan-20260406"
+            # CLAUDECODE is set in our test env (running inside CC)
+            if os.environ.get("CLAUDECODE"):
+                start_run(out, "scan")
+                meta = load_json(out / RUN_METADATA_FILE)
+                self.assertIn("session_pid", meta)
+                self.assertIsInstance(meta["session_pid"], int)
+
+    def test_start_cleanup_abandoned(self):
+        """start_run marks same-session same-type abandoned runs as failed."""
+        import os
+        if not os.environ.get("CLAUDECODE"):
+            self.skipTest("Requires CLAUDECODE environment")
+        with TemporaryDirectory() as d:
+            project = Path(d) / "project"
+            project.mkdir()
+            # First run
+            run1 = project / "validate-20260401"
+            start_run(run1, "validate")
+            meta1 = load_json(run1 / RUN_METADATA_FILE)
+            self.assertEqual(meta1["status"], "running")
+            # Second run of same type — should mark first as failed
+            run2 = project / "validate-20260402"
+            start_run(run2, "validate")
+            meta1 = load_json(run1 / RUN_METADATA_FILE)
+            self.assertEqual(meta1["status"], "failed")
+            meta2 = load_json(run2 / RUN_METADATA_FILE)
+            self.assertEqual(meta2["status"], "running")
+
+    def test_start_no_cleanup_different_type(self):
+        """start_run does not mark runs of a different command type."""
+        import os
+        if not os.environ.get("CLAUDECODE"):
+            self.skipTest("Requires CLAUDECODE environment")
+        with TemporaryDirectory() as d:
+            project = Path(d) / "project"
+            project.mkdir()
+            run1 = project / "validate-20260401"
+            start_run(run1, "validate")
+            run2 = project / "scan-20260402"
+            start_run(run2, "scan")
+            meta1 = load_json(run1 / RUN_METADATA_FILE)
+            self.assertEqual(meta1["status"], "running")  # untouched
+
 
 class TestIsRunDirectory(unittest.TestCase):
 

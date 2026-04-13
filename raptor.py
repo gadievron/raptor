@@ -70,7 +70,7 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
         print(f"✗ {e}", file=sys.stderr)
         return 1
 
-    start_run(out_dir, command)
+    start_run(out_dir, command, target=target)
 
     # Inject --out so the downstream script uses the lifecycle directory
     if "--out" not in args:

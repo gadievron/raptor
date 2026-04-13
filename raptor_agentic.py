@@ -341,7 +341,7 @@ Examples:
 
     try:
         from core.run import start_run
-        start_run(out_dir, "agentic")
+        start_run(out_dir, "agentic", target=str(repo_path))
     except Exception as e:
         logger.debug(f"Run metadata: {e}")  # Optional — don't fail the pipeline
 

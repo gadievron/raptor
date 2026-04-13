@@ -962,7 +962,7 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False):
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
-    start_run(out_dir, "validate")
+    start_run(out_dir, "validate", target=target)
 
     # Snapshot understand hashes before the rebuild overwrites checklist.json.
     # In the shared --out case (tier 1), the understand run's checklist is in

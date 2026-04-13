@@ -68,14 +68,16 @@ class Project:
         return [d for d in self.output_path.iterdir()
                 if d.is_dir() and not d.name.startswith((".", "_"))]
 
-    def get_run_dirs(self, sweep=True) -> List[Path]:
+    def get_run_dirs(self, sweep=False) -> List[Path]:
         """List run directories sorted newest-first.
 
         Uses the timestamp embedded in the directory name when available
         (deterministic), falls back to mtime for non-standard names.
-        When sweep=True (default), marks stale 'running' dirs as failed.
+        When sweep=True, marks stale 'running' dirs as failed.
         Inside Claude Code (CLAUDECODE=1), keeps the newest running dir
         (may be active). Outside Claude Code, sweeps all.
+        Default is sweep=False to avoid damaging active runs from read-only
+        commands (status, findings, coverage).
         """
         from core.run.metadata import parse_timestamp_from_name
 
@@ -104,11 +106,21 @@ class Project:
         return self._sweep_stale(self._list_run_dirs(), keep_latest)
 
     def _sweep_stale(self, dirs: list, keep_latest=False) -> int:
-        """Mark 'running' dirs as failed, optionally keeping the newest."""
-        from core.run.metadata import RUN_METADATA_FILE, fail_run
+        """Mark 'running' dirs as failed if their session is dead.
+
+        Checks session_pid in metadata — if the PID is still alive, the
+        session that started the run is still running and will clean up
+        its own runs. Only sweeps runs whose session has died.
+
+        Args:
+            keep_latest: if True, skip the most recent 'running' dir even
+                         if its session is dead (legacy fallback for runs
+                         without session_pid).
+        """
+        from core.run.metadata import RUN_METADATA_FILE, fail_run, _pid_alive
         from core.json import load_json
 
-        # Find all running dirs with their timestamps
+        # Find all running dirs with their timestamps and PIDs
         running = []
         for d in dirs:
             meta_file = d / RUN_METADATA_FILE
@@ -116,19 +128,27 @@ class Project:
                 continue
             meta = load_json(meta_file)
             if meta and meta.get("status") == "running":
-                running.append((meta.get("timestamp", ""), d))
+                running.append((meta.get("timestamp", ""), d, meta.get("session_pid")))
 
         if not running:
             return 0
 
-        # Sort newest first; optionally skip the newest
+        swept = 0
+        # Sort newest first for keep_latest
         running.sort(reverse=True)
-        to_sweep = running[1:] if keep_latest else running
 
-        for _, d in to_sweep:
-            fail_run(d, "stale — session ended without completion")
+        for i, (ts, d, pid) in enumerate(running):
+            # If session_pid is recorded and alive, skip — session will clean up
+            if pid is not None and _pid_alive(pid):
+                continue
+            # No PID (legacy run) — use keep_latest heuristic
+            if pid is None and keep_latest and i == 0:
+                continue
+            fail_run(d, "stale — session ended without completion",
+                     record_timing=False)
+            swept += 1
 
-        return len(to_sweep)
+        return swept
 
     def get_run_dirs_by_type(self) -> Dict[str, List[Path]]:
         """Group run directories by command type.

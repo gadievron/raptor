@@ -14,7 +14,7 @@ def generate_project_report(project) -> Dict[str, Any]:
     report_dir = project.output_path / "_report"
     report_dir.mkdir(parents=True, exist_ok=True)
 
-    run_dirs = project.get_run_dirs()
+    run_dirs = project.get_run_dirs(sweep=True)
     if not run_dirs:
         return {"findings": 0, "runs": 0}
 
