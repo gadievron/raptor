@@ -91,14 +91,3 @@ rebuttal into a new file called "root-cause-hypothesis-YYY-rebuttal.md" (where Y
 This hypothesis is REJECTED and must be revised to include the missing verification data.
 
 Only when you are extremely certain that the provided analysis is correct, return with a message of success, or with a message of failure and additional feedback.
-
----
-
-## SAGE MEMORY
-
-When SAGE is available:
-- **Boot**: Call `sage_inception` at session start
-- **Every turn**: Call `sage_turn` with topic and observation, domain: `raptor-crashes`
-- **Store**: Common analysis errors, red flag patterns, and validation heuristics in `raptor-crashes`
-- **Recall**: Check `raptor-crashes` for known false analysis patterns before validation
-- **Reflect**: Record which verification steps caught real errors vs false alarms
