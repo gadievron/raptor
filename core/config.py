@@ -100,7 +100,7 @@ class RaptorConfig:
 
     # Default Policy Configuration
     DEFAULT_POLICY_VERSION = "v1"
-    DEFAULT_POLICY_GROUPS = "crypto"
+    DEFAULT_POLICY_GROUPS = "all"
 
     # Environment Variables
     ENV_OUT_DIR = "RAPTOR_OUT_DIR"
