@@ -106,14 +106,3 @@ Before you return with success, you MUST verify your document contains:
 If ANY of these checks fail, your report is incomplete. Fix it before returning.
 
 Only when you are extremely certain that your analysis is correct, return with a message of success, or with a message of failure and additional feedback.
-
----
-
-## SAGE MEMORY
-
-When SAGE is available:
-- **Boot**: Call `sage_inception` at session start
-- **Every turn**: Call `sage_turn` with topic and observation, domain: `raptor-crashes`
-- **Store**: Root-cause chains, pointer analysis patterns, and common crash signatures in `raptor-crashes`
-- **Recall**: Before analysis, check `raptor-crashes` for similar crash patterns that were previously analyzed
-- **Reflect**: After analysis, call `sage_reflect` with what worked and what didn't

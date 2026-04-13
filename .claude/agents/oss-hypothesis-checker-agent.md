@@ -129,13 +129,3 @@ REJECTED - Revise and resubmit
 Report to orchestrator:
 - ACCEPTED or REJECTED
 - If rejected: key issues to address
-
----
-
-## SAGE MEMORY
-
-When SAGE is available:
-- **Boot**: Call `sage_inception` at session start
-- **Every turn**: Call `sage_turn` with topic and observation, domain: `raptor-forensics`
-- **Store**: Common hypothesis validation failures and citation patterns in `raptor-forensics`
-- **Recall**: Check for known logical fallacies and weak evidence patterns before validation

@@ -51,7 +51,7 @@ pip install sage-agent-sdk httpx
 ### 3. Seed institutional knowledge
 
 ```bash
-python3 scripts/seed_sage_knowledge.py --sage-url http://localhost:8090
+python3 core/sage/scripts/seed_sage_knowledge.py --sage-url http://localhost:8090
 ```
 
 This extracts and stores:
@@ -66,7 +66,7 @@ This extracts and stores:
 ### 4. Register agents
 
 ```bash
-python3 scripts/register_agents.py --sage-url http://localhost:8090
+python3 core/sage/scripts/register_agents.py --sage-url http://localhost:8090
 ```
 
 Registers all 16 RAPTOR agents on the SAGE network with role definitions.
@@ -141,7 +141,7 @@ similar = await memory.recall_similar("heap overflow strategies for ASLR binarie
 
 ### Claude Code Agents (MCP)
 
-All 16 agents have SAGE memory instructions in their `.md` definitions:
+SAGE instructions live in `CLAUDE.md` (single source of truth) — all agents inherit them automatically:
 
 ```
 sage_inception          # Boot persistent memory

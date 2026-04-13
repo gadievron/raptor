@@ -6,7 +6,7 @@ Each agent gets a registered identity and role definition stored
 as consensus-validated fact memories in the raptor-agents domain.
 
 Usage:
-    python3 scripts/register_agents.py [--sage-url http://localhost:8090] [--dry-run]
+    python3 core/sage/scripts/register_agents.py [--sage-url http://localhost:8090] [--dry-run]
 
 Requires:
     pip install sage-agent-sdk
@@ -17,7 +17,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 try:
     from sage_sdk.async_client import AsyncSageClient

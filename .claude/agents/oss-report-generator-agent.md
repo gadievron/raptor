@@ -143,14 +143,3 @@ All evidence was verified against original sources before inclusion.
 Report to orchestrator:
 - Report generated at `forensic-report.md`
 - Summary statistics (evidence count, IOC count, confidence levels)
-
----
-
-## SAGE MEMORY
-
-When SAGE is available:
-- **Boot**: Call `sage_inception` at session start
-- **Every turn**: Call `sage_turn` with topic and observation, domain: `raptor-forensics`
-- **Store**: Effective report structures, presentation patterns, and narrative techniques in `raptor-reports`
-- **Recall**: Check `raptor-reports` for successful report templates and formats
-- **Reflect**: Record feedback on report quality and completeness

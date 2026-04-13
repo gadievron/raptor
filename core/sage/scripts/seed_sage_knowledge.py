@@ -6,7 +6,7 @@ Extracts hardcoded expert knowledge from Raptor's codebase and stores it
 in SAGE for persistent, consensus-validated memory that improves over time.
 
 Usage:
-    python3 scripts/seed_sage_knowledge.py [--sage-url http://localhost:8090] [--dry-run]
+    python3 core/sage/scripts/seed_sage_knowledge.py [--sage-url http://localhost:8090] [--dry-run]
 
 Requires:
     pip install sage-agent-sdk
@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 # Add repo root to path
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
 
 try:
