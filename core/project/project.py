@@ -397,14 +397,20 @@ class ProjectManager:
         """Set the active project symlink. Pass None to clear.
 
         The symlink is the single source of truth for project state.
+        Uses atomic create-temp-then-rename to avoid TOCTOU races.
         """
+        import os
         active_link = self.projects_dir / ".active"
         auto_marker = self.projects_dir / ".auto"
-        if active_link.is_symlink() or active_link.exists():
-            active_link.unlink()
         auto_marker.unlink(missing_ok=True)
         if name is not None:
-            active_link.symlink_to(f"{name}.json")
+            # Atomic swap: create temp symlink then rename over the active link
+            tmp_link = self.projects_dir / ".active.tmp"
+            tmp_link.unlink(missing_ok=True)
+            tmp_link.symlink_to(f"{name}.json")
+            os.rename(str(tmp_link), str(active_link))
+        else:
+            active_link.unlink(missing_ok=True)
 
     def get_active(self) -> Optional[str]:
         """Get the active project name from the .active symlink."""

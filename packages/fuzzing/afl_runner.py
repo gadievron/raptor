@@ -516,7 +516,8 @@ class AFLRunner:
                 return {}
 
         try:
-            env = os.environ.copy()
+            from core.config import RaptorConfig
+            env = RaptorConfig.get_safe_env()
             if self.input_mode == "file" and test_input:
                 env['AFL_INPUT_FILE'] = str(test_input)
 
@@ -525,6 +526,7 @@ class AFLRunner:
                 capture_output=True,
                 text=True,
                 stdin=stdin_input,
+                close_fds=True,
                 cwd=str(self.output_dir),
                 env=env,
             )

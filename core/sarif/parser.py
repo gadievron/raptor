@@ -208,16 +208,19 @@ def load_sarif(sarif_path: Path) -> Optional[Dict[str, Any]]:
         return None
 
     max_size = 100 * 1024 * 1024  # 100 MiB
-    try:
-        file_size = sarif_path.stat().st_size
-        if file_size > max_size:
-            print(f"[SARIF] ERROR: File too large ({file_size / 1024 / 1024:.0f} MiB): {sarif_path}")
-            return None
-    except OSError as e:
-        print(f"[SARIF] WARNING: Could not stat {sarif_path}: {e}")
 
     try:
-        data = json.loads(sarif_path.read_text() or "{}")
+        # Read then check size — avoids TOCTOU between stat() and read()
+        content = sarif_path.read_text()
+        if len(content) > max_size:
+            print(f"[SARIF] ERROR: File too large ({len(content) / 1024 / 1024:.0f} MiB): {sarif_path}")
+            return None
+    except OSError as e:
+        print(f"[SARIF] WARNING: Could not read {sarif_path}: {e}")
+        return None
+
+    try:
+        data = json.loads(content or "{}")
     except json.JSONDecodeError as e:
         print(f"[SARIF] ERROR: Invalid JSON in {sarif_path}: {e}")
         return None

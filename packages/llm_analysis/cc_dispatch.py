@@ -78,10 +78,11 @@ def write_debug(
     try:
         debug_dir = out_dir / "debug"
         debug_dir.mkdir(parents=True, exist_ok=True)
-        debug_file = debug_dir / f"cc_{finding_id}.txt"
+        safe_id = Path(finding_id).name.replace("..", "_") if finding_id else "unknown"
+        debug_file = debug_dir / f"cc_{safe_id}.txt"
         debug_file.write_text(f"STDOUT:\n{stdout or '(empty)'}\n\nSTDERR:\n{stderr or '(empty)'}")
         # Relative path so it works regardless of output dir location
-        result["cc_debug_file"] = f"debug/cc_{finding_id}.txt"
+        result["cc_debug_file"] = f"debug/cc_{safe_id}.txt"
     except OSError:
         pass  # Best effort — don't fail the finding over a debug file
 

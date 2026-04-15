@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from core.json import load_json
-from .sanitize import sanitize as _sanitize
+from .sanitize import sanitize as _sanitize, sanitize_id as _sid
 
 
 _PROXIMITY_LABEL = {
@@ -162,13 +162,16 @@ def generate(
     disproven: list[dict] | None = None,
     hypotheses: list[dict] | None = None,
 ) -> str:
-    root_id = data.get("root")
+    root_id = _sid(data.get("root", "ROOT"))
     nodes: list[dict] = data.get("nodes", [])
 
     if not nodes:
         return 'flowchart TD\n    EMPTY["No attack tree nodes"]'
 
-    node_map = {n.get("id"): n for n in nodes}
+    # Sanitize all node IDs upfront to prevent Mermaid markup injection
+    for n in nodes:
+        n["id"] = _sid(n.get("id", "?"))
+    node_map = {n["id"]: n for n in nodes}
 
     # Build enrichment indexes
     proximity_idx = _build_proximity_index(attack_paths or [])
@@ -236,13 +239,13 @@ def generate(
                 continue
             nid = node.get("id", "?")
             leads_to_raw = node.get("leads_to", "") or ""
-            targets = [t.strip() for t in leads_to_raw.split(",") if t.strip() and t.strip() in node_map]
+            targets = [_sid(t.strip()) for t in leads_to_raw.split(",") if t.strip() and _sid(t.strip()) in node_map]
             for target in targets:
                 if target != root_id:  # root edge already drawn above
                     lines.append(f"    {nid} --> {target}")
 
     else:
-        # Flat rendering,original approach
+        # Flat rendering, original approach
         lines.append("")
         lines.append("    %% Nodes")
         for node in nodes:
@@ -257,7 +260,7 @@ def generate(
         for node in nodes:
             nid = node.get("id", "?")
             leads_to_raw = node.get("leads_to", "") or ""
-            targets = [t.strip() for t in leads_to_raw.split(",") if t.strip() and t.strip() in node_map]
+            targets = [_sid(t.strip()) for t in leads_to_raw.split(",") if t.strip() and _sid(t.strip()) in node_map]
             for target in targets:
                 lines.append(f"    {nid} --> {target}")
 

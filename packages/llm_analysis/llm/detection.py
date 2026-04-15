@@ -210,10 +210,9 @@ def _try_auto_migrate(old_config: Path, new_config: Path) -> bool:
         if not models:
             return False
 
-        # Write new config
+        # Write new config with restrictive permissions atomically
         from core.json import save_json
-        save_json(new_config, {"models": models})
-        os.chmod(new_config, 0o600)
+        save_json(new_config, {"models": models}, mode=0o600)
 
         # Check if any keys need attention
         needs_keys = any(

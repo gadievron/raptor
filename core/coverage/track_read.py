@@ -87,9 +87,16 @@ def main():
     if dot == -1 or file_path[dot:].lower() not in _SOURCE_EXTENSIONS:
         return
 
-    # Skip files outside the target directory
-    if target and not file_path.startswith(target):
-        return
+    # Skip files outside the target directory (path-level check, not string prefix)
+    if target:
+        try:
+            # Resolve symlinks and check proper path containment
+            resolved = os.path.realpath(file_path)
+            resolved_target = os.path.realpath(target)
+            if not resolved.startswith(resolved_target + os.sep) and resolved != resolved_target:
+                return
+        except (OSError, ValueError):
+            return
 
     # Append to manifest
     try:

@@ -237,11 +237,16 @@ def _collect_source_files(target: Path, extensions: Set[str]) -> List[Path]:
 
     file_list = []
     for root, dirs, files in os.walk(target):
-        dirs[:] = [d for d in dirs if not d.startswith('.')]
+        # Skip hidden directories and symlinked directories
+        dirs[:] = [d for d in dirs
+                   if not d.startswith('.') and not (Path(root) / d).is_symlink()]
         for filename in files:
+            filepath = Path(root) / filename
+            if filepath.is_symlink():
+                continue  # Don't follow symlinks into files outside the repo
             ext = Path(filename).suffix.lower()
             if ext in extensions:
-                file_list.append(Path(root) / filename)
+                file_list.append(filepath)
 
     return file_list
 

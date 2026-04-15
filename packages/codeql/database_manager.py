@@ -341,7 +341,12 @@ class DatabaseManager:
         working_dir = build_system.working_dir if build_system else repo_path
         env = RaptorConfig.get_safe_env()
         if build_system and build_system.env_vars:
-            env.update(build_system.env_vars)
+            # Filter build env vars through the same blocklist — a malicious
+            # repo's build config could try to re-inject LD_PRELOAD, BASH_ENV, etc.
+            blocked = set(RaptorConfig.DANGEROUS_ENV_VARS + RaptorConfig.PROXY_ENV_VARS)
+            for k, v in build_system.env_vars.items():
+                if k not in blocked:
+                    env[k] = v
 
         # Add build command if provided.
         # CodeQL splits --command on whitespace without shell interpretation,

@@ -58,9 +58,8 @@ def _sanitize_log_message(msg: str) -> str:
     msg = re.sub(r'pk-[a-zA-Z0-9-_]{20,}', '[REDACTED-API-KEY]', msg)
     # Redact Google API keys (AIza*)
     msg = re.sub(r'AIza[a-zA-Z0-9-_]{30,}', '[REDACTED-API-KEY]', msg)
-    # Redact Bearer tokens (Mistral and others in error messages)
+    # Redact Bearer tokens (Mistral and others in auth headers/error messages)
     msg = re.sub(r'Bearer [a-zA-Z0-9-_]{20,}', 'Bearer [REDACTED]', msg)
-    # TODO: Add patterns for other providers as needed (new key formats, etc.)
     return msg
 
 

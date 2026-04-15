@@ -60,8 +60,10 @@ case "$FILE_PATH" in
     *$'\n'*|*$'\r'*) exit 0 ;;
 esac
 
-# Skip files outside the target directory
+# Resolve symlinks before prefix check to prevent traversal
+FILE_PATH=$(realpath "$FILE_PATH" 2>/dev/null) || exit 0
 if [ -n "$PROJECT_TARGET" ]; then
+    PROJECT_TARGET=$(realpath "$PROJECT_TARGET" 2>/dev/null) || exit 0
     case "$FILE_PATH" in
         "$PROJECT_TARGET"*) ;;
         *) exit 0 ;;

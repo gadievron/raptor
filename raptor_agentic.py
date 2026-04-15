@@ -76,7 +76,8 @@ def run_command_streaming(cmd: list, description: str) -> tuple[int, str, str]:
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,  # Line buffered
-            universal_newlines=True
+            universal_newlines=True,
+            env=RaptorConfig.get_safe_env()
         )
 
         stdout_lines = []
@@ -276,60 +277,71 @@ Examples:
         print(f"Error: Repository not found: {repo_path}")
         sys.exit(1)
 
+    # Track temp git copy for cleanup
+    _git_temp_dir = None
+    # Keep original target path for metadata/findings (even if we scan a temp copy)
+    original_repo_path = repo_path
+
     # Check for .git directory (required for semgrep)
     git_dir = repo_path / ".git"
     if not git_dir.exists():
         print(f"\n  No .git directory found in {repo_path}")
-        print(f"    Semgrep requires the directory to be a git repository.")
-        print(f"\n[*] Initializing git repository...")
-        logger.info(f"Initializing git repository in {repo_path}")
-        
+        print(f"    Semgrep requires a git repository. Creating a temporary copy...")
+        logger.info(f"Target {repo_path} is not a git repo — creating temp copy")
+
         try:
-            # Initialize git repo
+            import shutil
+            import tempfile
+            temp_dir = Path(tempfile.mkdtemp(prefix="raptor_git_"))
+            _git_temp_dir = temp_dir
+            temp_repo = temp_dir / repo_path.name
+            # Copy symlinks as-is, don't follow them into files outside the repo
+            shutil.copytree(str(repo_path), str(temp_repo), symlinks=True)
+
+            env = RaptorConfig.get_safe_env()
+            env.update({
+                "GIT_TERMINAL_PROMPT": "0",
+                # Prevent git hooks and filters from executing on untrusted content
+                "GIT_CONFIG_GLOBAL": "/dev/null",
+                "GIT_CONFIG_SYSTEM": "/dev/null",
+            })
+            # Disable hooks and filters — a malicious .gitattributes filter
+            # directive would otherwise execute arbitrary commands during git add
+            git_safe = ["-c", "core.hooksPath=/dev/null",
+                        "-c", "filter.lfs.clean=true",
+                        "-c", "filter.lfs.smudge=true",
+                        "-c", "filter.lfs.process=true"]
             result = subprocess.run(
-                ["git", "init"],
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-                timeout=30
+                ["git"] + git_safe + ["init"], cwd=temp_repo,
+                capture_output=True, text=True, timeout=30, env=env
             )
-            
             if result.returncode == 0:
-                print(f"✓ Git repository initialized successfully")
-                logger.info("Git repository initialized")
-                
-                # Add all files to git
                 subprocess.run(
-                    ["git", "add", "."],
-                    cwd=repo_path,
-                    capture_output=True,
-                    timeout=60
+                    ["git"] + git_safe + ["add", "."], cwd=temp_repo,
+                    capture_output=True, timeout=60, env=env
                 )
-                
-                # Create initial commit
                 subprocess.run(
-                    ["git", "commit", "-m", "Initial commit for RAPTOR scan"],
-                    cwd=repo_path,
-                    capture_output=True,
-                    timeout=60
+                    ["git"] + git_safe + ["commit", "-m", "RAPTOR scan snapshot"],
+                    cwd=temp_repo, capture_output=True, timeout=60, env=env
                 )
-                print(f"✓ Initial commit created")
-                logger.info("Initial commit created")
+                repo_path = temp_repo
+                print(f"  Temporary git repo created at {temp_repo}")
+                logger.info(f"Using temp git repo: {temp_repo}")
             else:
-                print(f" Failed to initialize git repository: {result.stderr}")
+                print(f"  Failed to initialize git repository: {result.stderr}")
                 logger.error(f"Git init failed: {result.stderr}")
                 sys.exit(1)
-                
+
         except subprocess.TimeoutExpired:
-            print(f" Git initialization timed out")
+            print(f"  Git initialization timed out")
             logger.error("Git init timeout")
             sys.exit(1)
         except FileNotFoundError:
-            print(f" Git is not installed. Please install git and try again.")
+            print(f"  Git is not installed. Please install git and try again.")
             logger.error("Git not found in PATH")
             sys.exit(1)
         except Exception as e:
-            print(f" Error initializing git: {e}")
+            print(f"  Error initializing git: {e}")
             logger.error(f"Git init error: {e}")
             sys.exit(1)
 
@@ -341,7 +353,7 @@ Examples:
 
     try:
         from core.run import start_run
-        start_run(out_dir, "agentic", target=str(repo_path))
+        start_run(out_dir, "agentic", target=str(original_repo_path))
     except Exception as e:
         logger.debug(f"Run metadata: {e}")  # Optional — don't fail the pipeline
 
@@ -349,7 +361,7 @@ Examples:
     logger.info("RAPTOR AGENTIC WORKFLOW STARTED")
     logger.info("=" * 70)
     logger.info(f"Repository: {repo_name}")
-    logger.info(f"Full path: {repo_path}")
+    logger.info(f"Full path: {original_repo_path}")
     logger.info(f"Output: {out_dir}")
     logger.info(f"Policy groups: {args.policy_groups}")
     logger.info(f"Max findings: {args.max_findings}")
@@ -409,7 +421,7 @@ Examples:
     # ========================================================================
     # PRE-SCAN: Check target repo for malicious Claude Code settings
     # ========================================================================
-    block_cc_dispatch = _check_repo_claude_settings(repo_path)
+    block_cc_dispatch = _check_repo_claude_settings(original_repo_path)
 
     # ========================================================================
     # PHASE 1: CODE SCANNING (Semgrep + CodeQL)
@@ -422,7 +434,7 @@ Examples:
     try:
         from core.inventory import build_inventory
         if not (out_dir / "checklist.json").exists():
-            build_inventory(str(repo_path), str(out_dir))
+            build_inventory(str(original_repo_path), str(out_dir))
             logger.info(f"Inventory checklist built: {out_dir / 'checklist.json'}")
     except Exception as e:
         logger.warning(f"Inventory build failed (continuing without metadata): {e}")
@@ -451,6 +463,7 @@ Examples:
         logger.info(f"Running: Scanning code with Semgrep")
         semgrep_proc = subprocess.Popen(
             semgrep_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env=RaptorConfig.get_safe_env(),
         )
 
     if run_codeql:
@@ -464,6 +477,8 @@ Examples:
         if args.languages:
             codeql_cmd.extend(["--languages", args.languages])
         if args.build_command:
+            # SECURITY: build_command is shell-evaluated. Must be operator-supplied,
+            # never derived from repo content (malicious Makefiles, etc.)
             codeql_cmd.extend(["--build-command", args.build_command])
         if args.extended:
             codeql_cmd.append("--extended")
@@ -472,6 +487,7 @@ Examples:
         logger.info(f"Running: Scanning code with CodeQL")
         codeql_proc = subprocess.Popen(
             codeql_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env=RaptorConfig.get_safe_env(),
         )
 
     # ---- Collect Semgrep results ----
@@ -587,7 +603,7 @@ Examples:
     from packages.exploitability_validation import run_validation_phase
 
     validation_result, validated_findings = run_validation_phase(
-        repo_path=str(repo_path),
+        repo_path=str(original_repo_path),
         out_dir=out_dir,
         sarif_files=sarif_files,
         total_findings=total_findings,
@@ -695,7 +711,7 @@ Examples:
             from packages.llm_analysis.orchestrator import orchestrate
             orchestration_result = orchestrate(
                 prep_report_path=analysis_report,
-                repo_path=repo_path,
+                repo_path=original_repo_path,
                 out_dir=out_dir,
                 max_parallel=args.max_parallel,
                 max_findings=args.max_findings,
@@ -721,7 +737,7 @@ Examples:
 
     final_report = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "repository": str(repo_path),
+        "repository": str(original_repo_path),
         "duration_seconds": workflow_duration,
         "tools_used": {
             "semgrep": not args.codeql_only,
@@ -1063,6 +1079,15 @@ Examples:
         })
     except Exception as e:
         logger.debug(f"Run metadata: {e}")  # Optional — don't fail the pipeline
+
+    # Clean up temporary git copy (if we created one for a non-git target)
+    if _git_temp_dir and _git_temp_dir.exists():
+        import shutil
+        try:
+            shutil.rmtree(str(_git_temp_dir))
+            logger.debug(f"Cleaned up temp git dir: {_git_temp_dir}")
+        except Exception as e:
+            logger.debug(f"Failed to clean temp git dir: {e}")
 
 
 from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE

@@ -11,7 +11,7 @@ from core.json import load_json
 from pathlib import Path
 from typing import Any
 
-from .sanitize import sanitize as _sanitize
+from .sanitize import sanitize as _sanitize, sanitize_id as _sid
 
 
 def _node_id(prefix: str, index: int) -> str:
@@ -48,7 +48,7 @@ def generate(data: dict[str, Any]) -> str:
         lines.append("")
         lines.append("    %% Entry Points")
     for ep in entry_points:
-        ep_id = ep.get("id", "EP-?")
+        ep_id = _sid(ep.get("id", "EP-?"))
         method = ep.get("method", "")
         path = ep.get("path", ep.get("entry", "?"))
         file_ref = ep.get("file", "")
@@ -63,7 +63,7 @@ def generate(data: dict[str, Any]) -> str:
         lines.append("")
         lines.append("    %% Trust Boundaries")
     for tb in boundary_details:
-        tb_id = tb.get("id", "TB-?")
+        tb_id = _sid(tb.get("id", "TB-?"))
         boundary = _sanitize(tb.get("boundary", tb.get("type", "?")))
         file_ref = tb.get("file", "")
         line_ref = tb.get("line", "")
@@ -76,7 +76,7 @@ def generate(data: dict[str, Any]) -> str:
         lines.append("")
         lines.append("    %% Sinks")
     for sink in sink_details:
-        sink_id = sink.get("id", "SINK-?")
+        sink_id = _sid(sink.get("id", "SINK-?"))
         op = sink.get("operation", sink.get("type", "?"))
         file_ref = sink.get("file", "")
         line_ref = sink.get("line", "")
@@ -89,25 +89,25 @@ def generate(data: dict[str, Any]) -> str:
     lines.append("    %% Flows")
     covered_eps: set[str] = set()
     for tb in boundary_details:
-        tb_id = tb.get("id", "TB-?")
-        for ep_id in tb.get("covers", []):
+        tb_id = _sid(tb.get("id", "TB-?"))
+        for ep_id in [_sid(e) for e in tb.get("covers", [])]:
             lines.append(f"    {ep_id} --> {tb_id}")
             covered_eps.add(ep_id)
 
     # -- Edges: TB → SINK (reaches_from) --
     for sink in sink_details:
-        sink_id = sink.get("id", "SINK-?")
-        for ep_id in sink.get("reaches_from", []):
+        sink_id = _sid(sink.get("id", "SINK-?"))
+        for ep_id in [_sid(e) for e in sink.get("reaches_from", [])]:
             # Find which TB covers this EP
             tb_for_ep = [
-                tb.get("id") for tb in boundary_details
-                if ep_id in tb.get("covers", [])
+                _sid(tb.get("id")) for tb in boundary_details
+                if ep_id in [_sid(e) for e in tb.get("covers", [])]
             ]
             if tb_for_ep:
                 for tb_id in tb_for_ep:
                     lines.append(f"    {tb_id} --> {sink_id}")
             else:
-                # No TB,direct edge (will also appear as unchecked)
+                # No TB, direct edge (will also appear as unchecked)
                 lines.append(f"    {ep_id} --> {sink_id}")
 
     # -- Unchecked flows: dashed red edges --
@@ -115,8 +115,8 @@ def generate(data: dict[str, Any]) -> str:
         lines.append("")
         lines.append("    %% Unchecked Flows (no trust boundary)")
     for flow in unchecked_flows:
-        ep_id = flow.get("entry_point", "?")
-        sink_id = flow.get("sink", "?")
+        ep_id = _sid(flow.get("entry_point", "?"))
+        sink_id = _sid(flow.get("sink", "?"))
         reason = _sanitize(flow.get("missing_boundary", "no check"))
         lines.append(f"    {ep_id} -. \"{reason}\" .-> {sink_id}")
 

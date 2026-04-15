@@ -83,6 +83,13 @@ def check_llm() -> tuple[list, list]:
         config_path = Path.home() / ".config/raptor/models.json"
         models = []
         if config_path.exists():
+            # Warn if models.json is readable by others (contains API keys)
+            try:
+                mode = config_path.stat().st_mode
+                if mode & 0o077:
+                    warnings.append(f"⚠ {config_path} is accessible by other users (mode {oct(mode)[-3:]}). Run: chmod 600 {config_path}")
+            except OSError:
+                pass
             try:
                 data = json.loads(config_path.read_text())
                 models = data.get("models", []) if isinstance(data, dict) else data

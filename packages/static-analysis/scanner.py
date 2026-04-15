@@ -38,7 +38,7 @@ def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None):
     p = subprocess.run(
         cmd,
         cwd=cwd,
-        env=env or os.environ.copy(),
+        env=env or RaptorConfig.get_safe_env(),
         text=True,
         capture_output=True,
         timeout=timeout,
@@ -127,8 +127,8 @@ def run_single_semgrep(
         str(repo_path),
     ]
 
-    # Create clean environment without venv contamination
-    clean_env = os.environ.copy()
+    # Create clean environment without venv contamination or dangerous vars
+    clean_env = RaptorConfig.get_safe_env()
     clean_env.pop('VIRTUAL_ENV', None)
     clean_env.pop('PYTHONPATH', None)
     # Remove venv from PATH

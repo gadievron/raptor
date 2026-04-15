@@ -123,11 +123,22 @@ class RaptorConfig:
     # tool-specific vars). Needs testing of what semgrep, codeql, git, gdb,
     # afl-fuzz each require.
     DANGEROUS_ENV_VARS = [
-        "TERMINAL",       # Shell-evaluated by command lookup utilities
-        "BROWSER",        # Shell-evaluated by open/xdg-open
-        "PAGER",          # Shell-evaluated by less/more invocation
-        "VISUAL",         # Shell-evaluated by editor invocation
-        "EDITOR",         # Shell-evaluated by editor invocation
+        "TERMINAL",        # Shell-evaluated by command lookup utilities
+        "BROWSER",         # Shell-evaluated by open/xdg-open
+        "PAGER",           # Shell-evaluated by less/more invocation
+        "VISUAL",          # Shell-evaluated by editor invocation
+        "EDITOR",          # Shell-evaluated by editor invocation
+        "IFS",             # Changes shell word splitting — classic injection vector
+        "CDPATH",          # Alters cd behaviour, can redirect working directory
+        "BASH_ENV",        # Executed by bash on startup in non-interactive mode
+        "ENV",             # Executed by sh/dash on startup
+        "PROMPT_COMMAND",  # Executed before every bash prompt (if child is interactive)
+        "LD_PRELOAD",      # Injects shared libraries into child processes
+        "LD_LIBRARY_PATH", # Redirects shared library resolution
+        "PYTHONSTARTUP",   # Executed by Python on startup
+        "PERL5OPT",        # Injects Perl command-line options
+        "RUBYOPT",         # Injects Ruby command-line options
+        "NODE_OPTIONS",    # Injects Node.js command-line options
         # Note: TERM is NOT stripped — it's read as a string (terminfo lookup),
         # not shell-evaluated. Stripping it breaks colour output in git/grep/etc.
     ]
@@ -152,11 +163,24 @@ class RaptorConfig:
         """
         Resolve the output directory, honoring RAPTOR_OUT_DIR environment variable.
 
+        Warns if the output directory is a system path that could be dangerous.
+
         Returns:
             Path: Resolved output directory path
         """
         base = os.environ.get(RaptorConfig.ENV_OUT_DIR)
-        return Path(base).resolve() if base else RaptorConfig.BASE_OUT_DIR
+        if not base:
+            return RaptorConfig.BASE_OUT_DIR
+        resolved = Path(base).resolve()
+        forbidden = ("/etc", "/usr", "/bin", "/sbin", "/boot", "/dev", "/proc", "/sys")
+        for prefix in forbidden:
+            if str(resolved).startswith(prefix):
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"RAPTOR_OUT_DIR points to system path {resolved} — this is likely a misconfiguration"
+                )
+                break
+        return resolved
 
     @staticmethod
     def get_job_out_dir(job_id: str) -> Path:

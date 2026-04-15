@@ -17,6 +17,8 @@ def get_out_dir() -> Path:
 def sha256_tree(root: Path) -> str:
     h = hashlib.sha256()
     for p in sorted(root.rglob("*")):
+        if p.is_symlink():
+            continue
         if p.is_file():
             h.update(p.relative_to(root).as_posix().encode())
             with p.open("rb") as f:
@@ -25,13 +27,12 @@ def sha256_tree(root: Path) -> str:
     return h.hexdigest()
 
 def safe_clone(url: str, dest: Path):
-    env = os.environ.copy()
+    from core.config import RaptorConfig
+    env = RaptorConfig.get_safe_env()
     env.update({
         "GIT_TERMINAL_PROMPT": "0",
         "GIT_ASKPASS": "true",
     })
-    for k in ["HTTP_PROXY","HTTPS_PROXY","NO_PROXY","http_proxy","https_proxy","no_proxy"]:
-        env.pop(k, None)
     cmd = ["git","clone","--depth","1","--no-tags",url,str(dest)]
     p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=600)
     if p.returncode != 0:

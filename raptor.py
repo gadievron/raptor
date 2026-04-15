@@ -120,7 +120,8 @@ def _run_script(script_path: Path, args: list) -> int:
     cmd = [sys.executable, str(script_path)] + args
     
     try:
-        result = subprocess.run(cmd)
+        from core.config import RaptorConfig
+        result = subprocess.run(cmd, env=RaptorConfig.get_safe_env())
         return result.returncode
     except KeyboardInterrupt:
         print("\n\nInterrupted by user")

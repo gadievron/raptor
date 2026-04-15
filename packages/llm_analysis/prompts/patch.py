@@ -37,7 +37,7 @@ def build_patch_prompt(
 - Description: {message}
 
 **Analysis:**
-{json.dumps(analysis, indent=2)}
+{json.dumps(analysis, indent=2)[:10000]}
 """
 
     if feasibility:

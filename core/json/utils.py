@@ -6,6 +6,7 @@ serialization of Path/datetime objects.
 """
 
 import json
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -68,12 +69,17 @@ class _RaptorEncoder(json.JSONEncoder):
             return str(obj)
 
 
-def save_json(path: Union[str, Path], data: Any) -> None:
+def save_json(path: Union[str, Path], data: Any, mode: int = None) -> None:
     """Save data as pretty-printed JSON. Handles Path/datetime serialization.
 
     Creates parent directories if needed. Uses atomic write (write to temp
     file then rename) to prevent corruption if the process is killed mid-write.
     Raises on write failure — a failed save should not be silent.
+
+    Args:
+        mode: Optional POSIX file permission bits (e.g. 0o600). When set,
+              the temp file is created with these permissions atomically —
+              no window where the file exists with default permissions.
     """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -83,7 +89,13 @@ def save_json(path: Union[str, Path], data: Any) -> None:
     # .~ prefix makes stale temps visually obvious and excluded by get_run_dirs.
     tmp = p.with_name(f".~{p.name}.tmp")
     try:
-        tmp.write_text(content, encoding="utf-8")
+        if mode is not None:
+            # Create temp file with explicit permissions — no race window
+            fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(content)
+        else:
+            tmp.write_text(content, encoding="utf-8")
         tmp.replace(p)
     except BaseException:
         # Clean up temp file on any failure
