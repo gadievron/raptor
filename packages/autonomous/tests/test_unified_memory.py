@@ -34,7 +34,7 @@ def test_secret_redaction_happens_before_persist(tmp_path: Path):
 
 
 def test_fuzzing_memory_adapter_round_trip(tmp_path: Path):
-    adapter = FuzzingMemory(memory_file=tmp_path / "fuzzing_memory.json")
+    adapter = FuzzingMemory(db_path=tmp_path / "memory.db")
     knowledge = FuzzingKnowledge(
         knowledge_type="strategy",
         key="strategy_a",

@@ -56,7 +56,7 @@ def main() -> None:
     ap.add_argument("--recompile-guide", action="store_true", help="Show guide for recompiling binary with AFL instrumentation and sanitizers")
     ap.add_argument("--use-showmap", action="store_true", help="Run afl-showmap after fuzzing for coverage analysis")
     ap.add_argument("--autonomous", action="store_true", help="Enable autonomous mode with intelligent decision-making and learning")
-    ap.add_argument("--memory-file", help="Path to memory file for learning persistence (default: ~/.raptor/fuzzing_memory.json)")
+    ap.add_argument("--memory-db", help="Path to SQLite memory DB (default: ~/.raptor/memory.db)")
     ap.add_argument("--goal", help="High-level goal to achieve (e.g., 'find heap overflow', 'target parser code')")
 
     args = ap.parse_args()
@@ -109,8 +109,8 @@ def main() -> None:
         logger.info("=" * 70)
 
         # Initialize fuzzing memory for learning
-        memory_file = Path(args.memory_file) if args.memory_file else None
-        memory = FuzzingMemory(memory_file)
+        memory_db = Path(args.memory_db) if args.memory_db else None
+        memory = FuzzingMemory(db_path=memory_db)
 
         # Initialize autonomous planner
         planner = FuzzingPlanner(memory=memory)

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Fuzzing Memory - Learning and Knowledge Persistence
+
 This module enables RAPTOR to learn from past fuzzing campaigns and
 improve over time through persistent knowledge storage.
 """
@@ -11,10 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core.json import load_json
 from core.logging import get_logger
-from .memory_exports import export_memory_views
-from .memory_store import Memory
+from .unified_memory import UnifiedMemory
 
 logger = get_logger()
 
@@ -71,78 +70,34 @@ class FuzzingKnowledge:
 
 class FuzzingMemory:
     """
-    Persistent memory system for fuzzing knowledge.
-    Enables RAPTOR to:
-    - Remember what worked in past campaigns
-    - Learn from successes and failures
-    - Improve strategies over time
-    - Share knowledge between fuzzing sessions
+    Fuzzing Memory - Learning and Knowledge Persistence
+
+    This module enables RAPTOR to learn from past fuzzing campaigns and
+    improve over time through persistent knowledge storage.
     """
 
-    def __init__(self, memory_file: Optional[Path] = None):
+    def __init__(self, db_path: Optional[Path] = None):
         """
-        Initialise fuzzing memory backed by shared SQLite storage.
-
-        `memory_file` remains as a legacy JSON import/export anchor so older runs can
-        be migrated automatically, while new writes go to the central memory database.
+        Initialise fuzzing memory.
+        Persistence is SQLite-only via UnifiedMemory.
 
         Args:
-            memory_file: Path to legacy JSON memory file used for migration/snapshots.
+            db_path: Optional SQLite database path (default: ~/.raptor/memory.db)
         """
-        self.memory_file = Path(memory_file or (Path.home() / ".raptor" / "fuzzing_memory.json"))
-        self.memory_file.parent.mkdir(parents=True, exist_ok=True)
-        self.memory = Memory()
+        if db_path:
+            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        self.unified = UnifiedMemory(db_path=db_path)
         self.knowledge: Dict[str, FuzzingKnowledge] = {}
         self.campaigns: List[Dict[str, Any]] = []
-        self._migrate_legacy_file()
         self.load()
-        logger.info("Fuzzing memory initialized via shared SQLite backend")
-
-    def _migrate_legacy_file(self) -> None:
-        """
-        Import legacy JSON knowledge/campaign records into SQLite once.
-
-        We keep the migration local to this adapter so existing users can upgrade
-        in place without running a separate data conversion step.
-        """
-        if not self.memory_file.exists():
-            return
-        data = load_json(self.memory_file) or {}
-        legacy = data.get("knowledge", {})
-        for entry in legacy.values():
-            self.memory.upsert_knowledge(
-                domain="fuzzing",
-                knowledge_type=entry.get("knowledge_type", "unknown"),
-                key=entry.get("key", "unknown"),
-                value=entry.get("value", {}),
-                confidence=float(entry.get("confidence", 0.5)),
-                success_count=int(entry.get("success_count", 0)),
-                failure_count=int(entry.get("failure_count", 0)),
-                context={
-                    "binary_hash": entry.get("binary_hash"),
-                    "campaign_id": entry.get("campaign_id"),
-                    "legacy_source": str(self.memory_file),
-                },
-            )
-        for campaign in data.get("campaigns", []):
-            self.memory.record_event("fuzzing", "campaign_legacy_import", campaign)
-        if legacy or data.get("campaigns"):
-            migrated = self.memory_file.with_suffix(".migrated.json")
-            if not migrated.exists():
-                self.memory_file.rename(migrated)
-                logger.info(f"Migrated legacy fuzzing memory to SQLite: {migrated}")
+        logger.info("Fuzzing memory initialized via unified SQLite backend")
 
     def load(self):
-        """
-        Refresh in-process fuzzing knowledge from persistent storage.
-
-        This rebuilds dataclass objects from normalized SQLite rows so call sites
-        can keep using typed `FuzzingKnowledge` without SQL concerns.
-        """
+        """Load memory from persistent storage."""
         self.knowledge.clear()
         self.campaigns = []
         try:
-            entries = self.memory.query_knowledge(domain="fuzzing")
+            entries = self.unified.query_knowledge(domain="fuzzing")
             for e in entries:
                 mem_key = f"{e['knowledge_type']}:{e['key']}"
                 self.knowledge[mem_key] = FuzzingKnowledge(
@@ -157,19 +112,13 @@ class FuzzingMemory:
                     campaign_id=e.get("context", {}).get("campaign_id"),
                 )
         except Exception as e:
-            logger.error(f"Failed to load memory entries: {e}")
+            logger.error(f"Failed to load unified memory: {e}")
 
     def save(self):
-        """
-        Export compatibility JSON views from SQLite-backed memory.
-
-        The database is already authoritative; this method exists to keep
-        downstream tooling that expects JSON memory snapshots working.
-        """
-        try:
-            export_memory_views(self.memory, self.memory_file.parent)
-        except Exception as e:
-            logger.error(f"Failed to export memory snapshots: {e}")
+        """Save memory to persistent storage."""
+        # UnifiedMemory writes through on each upsert/event, so there is no
+        # additional flush/export work needed here.
+        return
 
     def remember(self, knowledge: FuzzingKnowledge):
         """
@@ -180,7 +129,7 @@ class FuzzingMemory:
         """
         key = f"{knowledge.knowledge_type}:{knowledge.key}"
         self.knowledge[key] = knowledge
-        self.memory.upsert_knowledge(
+        self.unified.upsert_knowledge(
             domain="fuzzing",
             knowledge_type=knowledge.knowledge_type,
             key=knowledge.key,
@@ -418,7 +367,7 @@ class FuzzingMemory:
         campaign_data["date"] = datetime.now().isoformat()
 
         self.campaigns.append(campaign_data)
-        self.memory.record_event("fuzzing", "campaign_recorded", campaign_data)
+        self.unified.record_event("fuzzing", "campaign_recorded", campaign_data)
         self.save()
 
         logger.info(f"Recorded campaign: {campaign_data.get('binary_name', 'unknown')}")
@@ -459,5 +408,5 @@ class FuzzingMemory:
         pruned = before_count - len(self.knowledge)
         if pruned > 0:
             logger.info(f"Pruned {pruned} low-confidence knowledge entries")
-            self.memory.compact(stale_days=30)
+            self.unified.compact(stale_days=30)
             self.save()
