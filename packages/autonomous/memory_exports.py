@@ -1,13 +1,27 @@
 #!/usr/bin/env python3
 """Export helpers for memory snapshots."""
 
+import os
 from pathlib import Path
 from typing import Dict
 
 from .memory_store import Memory
 
 
-def export_memory_views(memory: Memory, base_dir: Path | None = None) -> Dict[str, str]:
+def _exports_enabled() -> bool:
+    value = os.environ.get("RAPTOR_EXPORT_MEMORY_SNAPSHOTS", "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def export_memory_views(
+    memory: Memory,
+    base_dir: Path | None = None,
+    enabled: bool | None = None,
+) -> Dict[str, str]:
+    """Export JSON snapshot views when explicitly enabled."""
+    should_export = _exports_enabled() if enabled is None else enabled
+    if not should_export:
+        return {}
     out_base = base_dir or (Path.home() / ".raptor")
     out_base.mkdir(parents=True, exist_ok=True)
 
