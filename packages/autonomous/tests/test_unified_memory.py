@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from packages.autonomous.memory import FuzzingKnowledge, FuzzingMemory
 from packages.autonomous.memory_exports import export_memory_views
 from packages.autonomous.unified_memory import SecretScanPolicy, UnifiedMemory
@@ -46,5 +48,14 @@ def test_fuzzing_memory_adapter_round_trip(tmp_path: Path):
     assert recalled is not None
     assert recalled.value["name"] == "strategy_a"
     exports = export_memory_views(adapter.unified, base_dir=tmp_path)
+    assert exports == {}
+    assert not (tmp_path / "unified_knowledge.json").exists()
+
+    exports = export_memory_views(adapter.unified, base_dir=tmp_path, enabled=True)
     assert (tmp_path / "unified_knowledge.json").exists()
     assert "fuzzing_memory" in exports
+
+
+def test_legacy_memory_file_arg_is_rejected(tmp_path: Path):
+    with pytest.raises(TypeError):
+        FuzzingMemory(memory_file=tmp_path / "fuzzing_memory.json")
