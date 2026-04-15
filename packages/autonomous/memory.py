@@ -1,20 +1,16 @@
 #!/usr/bin/env python3
-"""
-Fuzzing Memory - Learning and Knowledge Persistence
-
-This module enables RAPTOR to learn from past fuzzing campaigns and
-improve over time through persistent knowledge storage.
-"""
+"""Fuzzing memory compatibility layer backed by unified SQLite memory."""
 
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
-from core.json import load_json, save_json
-
+from core.json import load_json
 from core.logging import get_logger
+from .memory_exports import export_memory_views
+from .unified_memory import UnifiedMemory
 
 logger = get_logger()
 
@@ -70,15 +66,7 @@ class FuzzingKnowledge:
 
 
 class FuzzingMemory:
-    """
-    Persistent memory system for fuzzing knowledge.
-
-    Enables RAPTOR to:
-    - Remember what worked in past campaigns
-    - Learn from successes and failures
-    - Improve strategies over time
-    - Share knowledge between fuzzing sessions
-    """
+    """Backwards-compatible fuzzing memory API."""
 
     def __init__(self, memory_file: Optional[Path] = None):
         """
@@ -88,85 +76,71 @@ class FuzzingMemory:
         Args:
             memory_file: Path to JSON file for persistent storage
         """
-        if memory_file is None:
-            memory_file = Path.home() / ".raptor" / "fuzzing_memory.json"
-
-        self.memory_file = Path(memory_file)
+        self.memory_file = Path(memory_file or (Path.home() / ".raptor" / "fuzzing_memory.json"))
         self.memory_file.parent.mkdir(parents=True, exist_ok=True)
-
-        # In-memory knowledge store
+        self.unified = UnifiedMemory()
         self.knowledge: Dict[str, FuzzingKnowledge] = {}
-
-        # Campaign history
-        self.campaigns: List[Dict] = []
-
-        # Load existing memory
+        self.campaigns: List[Dict[str, Any]] = []
+        self._migrate_legacy_file()
         self.load()
+        logger.info("Fuzzing memory initialized via unified SQLite backend")
 
-        logger.info(f"Fuzzing memory initialised: {len(self.knowledge)} knowledge entries loaded")
+    def _migrate_legacy_file(self) -> None:
+        if not self.memory_file.exists():
+            return
+        data = load_json(self.memory_file) or {}
+        legacy = data.get("knowledge", {})
+        for entry in legacy.values():
+            self.unified.upsert_knowledge(
+                domain="fuzzing",
+                knowledge_type=entry.get("knowledge_type", "unknown"),
+                key=entry.get("key", "unknown"),
+                value=entry.get("value", {}),
+                confidence=float(entry.get("confidence", 0.5)),
+                success_count=int(entry.get("success_count", 0)),
+                failure_count=int(entry.get("failure_count", 0)),
+                context={
+                    "binary_hash": entry.get("binary_hash"),
+                    "campaign_id": entry.get("campaign_id"),
+                    "legacy_source": str(self.memory_file),
+                },
+            )
+        for campaign in data.get("campaigns", []):
+            self.unified.record_event("fuzzing", "campaign_legacy_import", campaign)
+        if legacy or data.get("campaigns"):
+            migrated = self.memory_file.with_suffix(".migrated.json")
+            if not migrated.exists():
+                self.memory_file.rename(migrated)
+                logger.info(f"Migrated legacy fuzzing memory to SQLite: {migrated}")
 
     def load(self):
         """Load memory from persistent storage."""
-        if not self.memory_file.exists():
-            logger.info(f"No existing memory file at {self.memory_file}")
-            return
-
+        self.knowledge.clear()
+        self.campaigns = []
         try:
-            data = load_json(self.memory_file)
-            if data is None:
-                logger.warning(f"Failed to parse memory file: {self.memory_file}")
-                return
-
-            # Load knowledge entries
-            for key, k_dict in data.get("knowledge", {}).items():
-                self.knowledge[key] = FuzzingKnowledge(
-                    knowledge_type=k_dict["knowledge_type"],
-                    key=k_dict["key"],
-                    value=k_dict["value"],
-                    confidence=k_dict.get("confidence", 0.5),
-                    success_count=k_dict.get("success_count", 0),
-                    failure_count=k_dict.get("failure_count", 0),
-                    last_updated=k_dict.get("last_updated", time.time()),
-                    binary_hash=k_dict.get("binary_hash"),
-                    campaign_id=k_dict.get("campaign_id"),
+            entries = self.unified.query_knowledge(domain="fuzzing")
+            for e in entries:
+                mem_key = f"{e['knowledge_type']}:{e['key']}"
+                self.knowledge[mem_key] = FuzzingKnowledge(
+                    knowledge_type=e["knowledge_type"],
+                    key=e["key"],
+                    value=e["value"],
+                    confidence=float(e.get("confidence", 0.5)),
+                    success_count=int(e.get("success_count", 0)),
+                    failure_count=int(e.get("failure_count", 0)),
+                    last_updated=float(e.get("updated_at", time.time())),
+                    binary_hash=e.get("context", {}).get("binary_hash"),
+                    campaign_id=e.get("context", {}).get("campaign_id"),
                 )
-
-            # Load campaign history
-            self.campaigns = data.get("campaigns", [])
-
-            logger.info(f"Loaded {len(self.knowledge)} knowledge entries, {len(self.campaigns)} past campaigns")
-
         except Exception as e:
-            logger.error(f"Failed to load memory: {e}")
+            logger.error(f"Failed to load unified memory: {e}")
 
     def save(self):
         """Save memory to persistent storage."""
         try:
-            data = {
-                "knowledge": {
-                    key: {
-                        "knowledge_type": k.knowledge_type,
-                        "key": k.key,
-                        "value": k.value,
-                        "confidence": k.confidence,
-                        "success_count": k.success_count,
-                        "failure_count": k.failure_count,
-                        "last_updated": k.last_updated,
-                        "binary_hash": k.binary_hash,
-                        "campaign_id": k.campaign_id,
-                    }
-                    for key, k in self.knowledge.items()
-                },
-                "campaigns": self.campaigns,
-                "last_saved": time.time(),
-            }
-
-            save_json(self.memory_file, data)
-
-            logger.debug(f"Memory saved to {self.memory_file}")
-
+            export_memory_views(self.unified, self.memory_file.parent)
         except Exception as e:
-            logger.error(f"Failed to save memory: {e}")
+            logger.error(f"Failed to export memory snapshots: {e}")
 
     def remember(self, knowledge: FuzzingKnowledge):
         """
@@ -176,18 +150,21 @@ class FuzzingMemory:
             knowledge: Knowledge to remember
         """
         key = f"{knowledge.knowledge_type}:{knowledge.key}"
-
-        if key in self.knowledge:
-            # Update existing knowledge
-            existing = self.knowledge[key]
-            existing.value = knowledge.value
-            existing.last_updated = time.time()
-            logger.debug(f"Updated knowledge: {key}")
-        else:
-            # Store new knowledge
-            self.knowledge[key] = knowledge
-            logger.info(f"Learned new knowledge: {key}")
-
+        self.knowledge[key] = knowledge
+        self.unified.upsert_knowledge(
+            domain="fuzzing",
+            knowledge_type=knowledge.knowledge_type,
+            key=knowledge.key,
+            value=knowledge.value,
+            confidence=knowledge.confidence,
+            success_count=knowledge.success_count,
+            failure_count=knowledge.failure_count,
+            context={
+                "binary_hash": knowledge.binary_hash,
+                "campaign_id": knowledge.campaign_id,
+                "last_updated": knowledge.last_updated,
+            },
+        )
         self.save()
 
     def recall(self, knowledge_type: str, key: str) -> Optional[FuzzingKnowledge]:
@@ -412,6 +389,7 @@ class FuzzingMemory:
         campaign_data["date"] = datetime.now().isoformat()
 
         self.campaigns.append(campaign_data)
+        self.unified.record_event("fuzzing", "campaign_recorded", campaign_data)
         self.save()
 
         logger.info(f"Recorded campaign: {campaign_data.get('binary_name', 'unknown')}")
@@ -425,7 +403,7 @@ class FuzzingMemory:
             "average_confidence": 0.0,
         }
 
-        # Count by type
+        self.load()
         for k in self.knowledge.values():
             k_type = k.knowledge_type
             if k_type not in stats["knowledge_by_type"]:
@@ -448,13 +426,9 @@ class FuzzingMemory:
             threshold: Minimum confidence to keep
         """
         before_count = len(self.knowledge)
-
-        self.knowledge = {
-            key: k for key, k in self.knowledge.items()
-            if k.confidence >= threshold
-        }
-
+        self.knowledge = {key: k for key, k in self.knowledge.items() if k.confidence >= threshold}
         pruned = before_count - len(self.knowledge)
         if pruned > 0:
             logger.info(f"Pruned {pruned} low-confidence knowledge entries")
+            self.unified.compact(stale_days=30)
             self.save()
