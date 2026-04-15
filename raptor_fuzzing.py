@@ -32,7 +32,8 @@ from packages.binary_analysis import CrashAnalyser
 from packages.llm_analysis.crash_agent import CrashAnalysisAgent
 from packages.autonomous import (
     FuzzingPlanner, FuzzingState, FuzzingMemory,
-    MultiTurnAnalyser, ExploitValidator, GoalPlanner, CorpusGenerator
+    MultiTurnAnalyser, ExploitValidator, GoalPlanner, CorpusGenerator,
+    UnifiedMemory, export_memory_views
 )
 
 logger = get_logger()
@@ -163,6 +164,11 @@ def main() -> None:
         best_strategy = memory.get_best_strategy(binary_hash)
         if best_strategy:
             logger.info(f"✨ Found best strategy from memory: {best_strategy}")
+            UnifiedMemory().record_event(
+                "fuzzing",
+                "best_strategy_recalled",
+                {"binary_hash": binary_hash, "strategy": best_strategy},
+            )
 
         # Generate autonomous corpus if no corpus provided
         if not corpus_dir:
@@ -215,6 +221,11 @@ def main() -> None:
         print(f"  - Crashes dir: {crashes_dir}")
 
         if num_crashes == 0:
+            UnifiedMemory().record_event(
+                "fuzzing",
+                "fuzzing_completed",
+                {"binary": str(binary_path), "duration": args.duration, "crashes": 0},
+            )
             print("\nNo crashes found. Try:")
             print("    - Increasing duration (--duration)")
             print("    - Better seed corpus (--corpus)")
@@ -509,6 +520,29 @@ def main() -> None:
 
     report_file = out_dir / "fuzzing_report.json"
     save_json(report_file, report)
+    unified = UnifiedMemory()
+    unified.record_event(
+        "fuzzing",
+        "run_summary",
+        {
+            "binary": str(binary_path),
+            "crashes": num_crashes,
+            "analysed": analysed,
+            "exploitable": exploitable,
+            "exploits_generated": exploits_generated,
+        },
+    )
+    unified.upsert_knowledge(
+        domain="fuzzing",
+        knowledge_type="strategy_outcome",
+        key=f"default:{binary_path.name}",
+        value={"crashes": num_crashes, "exploitable": exploitable},
+        confidence=0.6 if num_crashes > 0 else 0.3,
+        success_count=num_crashes,
+        failure_count=0 if num_crashes > 0 else 1,
+        context={"binary_path": str(binary_path)},
+    )
+    export_memory_views(unified)
 
     print(f"   Report: {report_file}")
 

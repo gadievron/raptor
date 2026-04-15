@@ -28,6 +28,7 @@ from core.json import save_json
 from core.config import RaptorConfig
 from core.logging import get_logger
 from core.sarif.parser import load_sarif
+from packages.autonomous import UnifiedMemory, export_memory_views
 from packages.codeql.agent import CodeQLAgent
 from packages.codeql.autonomous_analyzer import AutonomousCodeQLAnalyzer
 
@@ -237,6 +238,34 @@ def run_autonomous_workflow(args):
 
     summary_file = agent.out_dir / "autonomous_summary.json"
     save_json(summary_file, summary)
+    unified = UnifiedMemory()
+    unified.record_event(
+        "codeql",
+        "workflow_summary",
+        {
+            "repo": args.repo,
+            "findings_total": scan_result.total_findings,
+            "analysed": total_analyzed,
+            "exploitable": total_exploitable,
+            "exploits_generated": total_exploits_generated,
+            "exploits_compiled": total_exploits_compiled,
+        },
+    )
+    unified.upsert_knowledge(
+        domain="codeql",
+        knowledge_type="build_reliability",
+        key=f"{Path(args.repo).name}:default-build",
+        value={
+            "languages": languages or [],
+            "build_command": args.build_command or "auto",
+            "analyses_completed": total_analyzed,
+        },
+        confidence=0.8 if total_analyzed > 0 else 0.4,
+        success_count=1 if total_analyzed > 0 else 0,
+        failure_count=0 if total_analyzed > 0 else 1,
+        context={"repo": args.repo},
+    )
+    export_memory_views(unified)
 
     logger.info(f"\n✓ Autonomous analysis summary saved: {summary_file}")
 
