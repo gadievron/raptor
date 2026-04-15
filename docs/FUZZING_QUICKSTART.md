@@ -357,6 +357,7 @@ python3 raptor_fuzzing.py \
 | `--max-crashes` | 10 | Max crashes to analyse |
 | `--timeout` | 1000 | Timeout per execution (ms) |
 | `--out` | auto | Output directory |
+| `--memory-db` | `~/.raptor/memory.db` | SQLite path for autonomous learning memory |
 
 ### Goal Options
 
