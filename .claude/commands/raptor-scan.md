@@ -51,10 +51,3 @@ python3 raptor.py scan --repo /path/to/code --policy_groups secrets,owasp
 Be helpful and explain security concepts clearly!
 
 ---
-
-## SAGE MEMORY
-
-When SAGE is available:
-- **Before scan**: Call `sage_recall` with domain `raptor-findings` to check for known patterns in similar code
-- **After scan**: Store significant findings via `sage_remember` in domain `raptor-findings` — include rule IDs, vulnerability types, and file patterns
-- **If SAGE is unavailable, skip — purely additive**

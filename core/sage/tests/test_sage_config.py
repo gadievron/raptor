@@ -15,7 +15,7 @@ class TestSageConfig(unittest.TestCase):
 
         config = SageConfig()
         self.assertFalse(config.enabled)
-        self.assertEqual(config.url, "http://localhost:8080")
+        self.assertEqual(config.url, "http://localhost:8090")
         self.assertIsNone(config.identity_path)
         self.assertEqual(config.timeout, 15.0)
         self.assertTrue(config.fallback_json)

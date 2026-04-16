@@ -5,7 +5,6 @@ Drop-in replacement for FuzzingMemory that stores knowledge in SAGE
 for consensus-validated persistence while keeping JSON as local cache.
 """
 
-import asyncio
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,6 +13,7 @@ from core.logging import get_logger
 
 from .client import SageClient
 from .config import SageConfig
+from .hooks import _run_async
 
 logger = get_logger()
 
@@ -107,12 +107,10 @@ class SageFuzzingMemory(FuzzingMemory):
         if not self._sage_available:
             return
 
-        # Fire-and-forget async push to SAGE
+        # Sync push to SAGE
         try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self._sync_to_sage())
-        except RuntimeError:
-            # No running event loop — skip SAGE sync
+            _run_async(self._sync_to_sage())
+        except Exception:
             pass
 
     async def _sync_to_sage(self):
@@ -149,9 +147,8 @@ class SageFuzzingMemory(FuzzingMemory):
             return
 
         try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self._remember_in_sage(knowledge))
-        except RuntimeError:
+            _run_async(self._remember_in_sage(knowledge))
+        except Exception:
             pass
 
     async def _remember_in_sage(self, knowledge: FuzzingKnowledge):
@@ -179,9 +176,8 @@ class SageFuzzingMemory(FuzzingMemory):
             return
 
         try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self._store_campaign_in_sage(campaign_data))
-        except RuntimeError:
+            _run_async(self._store_campaign_in_sage(campaign_data))
+        except Exception:
             pass
 
     async def _store_campaign_in_sage(self, campaign_data: Dict):

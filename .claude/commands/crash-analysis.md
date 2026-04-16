@@ -57,10 +57,3 @@ This command invokes the `crash-analysis-agent` which orchestrates:
 The analysis follows a hypothesis-validation loop - if the checker rejects a hypothesis, the analyzer is re-invoked with feedback until a valid root cause is confirmed.
 
 ---
-
-## SAGE MEMORY
-
-When SAGE is available:
-- **Before analysis**: Call `sage_recall` with domain `raptor-crashes` to check for similar crash patterns in previous analyses
-- **After analysis**: Store the root cause and crash signature via `sage_remember` in domain `raptor-crashes`
-- **If SAGE is unavailable, skip — purely additive**
