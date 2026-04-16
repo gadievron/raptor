@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from core.json import load_json, save_json
 from core.config import RaptorConfig
 from core.logging import get_logger
+from packages.autonomous import Memory, export_memory_views
 
 logger = get_logger()
 
@@ -775,7 +776,6 @@ Examples:
 
     report_file = out_dir / "raptor_agentic_report.json"
     save_json(report_file, final_report)
-
     print(f"\n📊 Summary:")
     print(f"   Total findings: {scan_metrics.get('total_findings', 0)}")
     if semgrep_metrics:
@@ -887,6 +887,36 @@ Examples:
             if len(by_model) > 1:
                 for model, mcost in by_model.items():
                     print(f"     {model}: ${mcost:.2f}")
+
+    memory_store = Memory()
+    memory_store.record_event(
+        "agentic",
+        "workflow_summary",
+        {
+            "repo": str(repo_path),
+            "total_findings": scan_metrics.get("total_findings", 0),
+            "validated_findings": validated_findings,
+            "analysed": analysed_count,
+            "exploitable": exploitable_count,
+            "duration_seconds": workflow_duration,
+        },
+    )
+    memory_store.upsert_knowledge(
+        domain="agentic",
+        knowledge_type="finding_quality",
+        key=f"{repo_name}:summary",
+        value={
+            "validated_findings": validated_findings,
+            "true_positives": true_positives,
+            "false_positives": false_positives,
+            "exploitable": exploitable_count,
+        },
+        confidence=0.7 if analysed_count > 0 else 0.3,
+        success_count=true_positives,
+        failure_count=false_positives,
+        context={"repository": str(repo_path)},
+    )
+    export_memory_views(memory_store)
 
     print(f"\n📁 Outputs:")
     print(f"   Main report: {report_file}")
