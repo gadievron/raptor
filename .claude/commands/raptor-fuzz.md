@@ -70,11 +70,3 @@ sudo afl-system-config
 Be patient and explain fuzzing concepts clearly!
 
 ---
-
-## SAGE MEMORY
-
-When SAGE is available:
-- **Before fuzzing**: Call `sage_recall` with domain `raptor-fuzzing` to check for best strategies for similar binary types
-- **After fuzzing**: Store campaign results via `sage_remember` in domain `raptor-fuzzing` — include strategy used, crashes found, exploitability rate
-- **After crash analysis**: Store crash patterns in domain `raptor-crashes` — signal type, function, exploitability
-- **If SAGE is unavailable, skip — purely additive**

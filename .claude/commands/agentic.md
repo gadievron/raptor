@@ -93,17 +93,3 @@ and command injections; 2 were ruled out as false positives." Use only facts fro
 report data. The report should stand on its own without this paragraph.
 
 ---
-
-## SAGE MEMORY
-
-When SAGE is available, use it to improve analysis quality:
-
-**Before scanning:**
-- Call `sage_recall` with domain `raptor-findings` and the target path/language to check for known vulnerability patterns in similar projects
-- Call `sage_recall` with domain `raptor-methodology` for analysis methodology insights
-
-**After pipeline completes:**
-- Store key findings via `sage_remember` in domain `raptor-findings` — include vulnerability types, severity, and whether they were confirmed exploitable
-- Call `sage_reflect` with what worked (e.g., "CodeQL caught the SQL injection that Semgrep missed") and what didn't
-
-**If SAGE is unavailable, skip these steps — they are purely additive.**

@@ -17,7 +17,7 @@ class SageConfig:
         default_factory=lambda: os.getenv("SAGE_ENABLED", "false").lower() in ("true", "1", "yes")
     )
     url: str = field(
-        default_factory=lambda: os.getenv("SAGE_URL", "http://localhost:8080")
+        default_factory=lambda: os.getenv("SAGE_URL", "http://localhost:8090")
     )
     identity_path: Optional[str] = field(
         default_factory=lambda: os.getenv("SAGE_IDENTITY_PATH")

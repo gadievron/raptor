@@ -134,10 +134,3 @@ All JSON outputs write to `$WORKDIR` (resolved by `raptor-run-lifecycle start`, 
 | *(none)* | `--teach` | Inline explanation — no file written |
 
 ---
-
-## SAGE MEMORY
-
-When SAGE is available:
-- **Before analysis**: Call `sage_recall` with domain `raptor-findings` to check for known attack surface patterns in similar frameworks/languages
-- **After mapping**: Store entry points, trust boundaries, and sink patterns via `sage_remember` in domain `raptor-findings`
-- **If SAGE is unavailable, skip — purely additive**
