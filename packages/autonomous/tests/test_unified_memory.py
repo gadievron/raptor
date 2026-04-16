@@ -49,10 +49,10 @@ def test_fuzzing_memory_adapter_round_trip(tmp_path: Path):
     assert recalled.value["name"] == "strategy_a"
     exports = export_memory_views(adapter.unified, base_dir=tmp_path)
     assert exports == {}
-    assert not (tmp_path / "unified_knowledge.json").exists()
+    assert not (tmp_path / "memory_knowledge.json").exists()
 
     exports = export_memory_views(adapter.unified, base_dir=tmp_path, enabled=True)
-    assert (tmp_path / "unified_knowledge.json").exists()
+    assert (tmp_path / "memory_knowledge.json").exists()
     assert "fuzzing_memory" in exports
 
 

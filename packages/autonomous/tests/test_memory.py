@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from core.json import save_json
+import pytest
 from packages.autonomous.memory import FuzzingKnowledge, FuzzingMemory
 from packages.autonomous.memory_exports import export_memory_views
 from packages.autonomous.memory_store import SecretScanPolicy, Memory
@@ -35,7 +35,7 @@ def test_secret_redaction_happens_before_persist(tmp_path: Path):
 
 
 def test_fuzzing_memory_adapter_round_trip(tmp_path: Path):
-    adapter = FuzzingMemory(memory_file=tmp_path / "fuzzing_memory.json")
+    adapter = FuzzingMemory(db_path=tmp_path / "memory.db")
     knowledge = FuzzingKnowledge(
         knowledge_type="strategy",
         key="strategy_a",
@@ -46,46 +46,22 @@ def test_fuzzing_memory_adapter_round_trip(tmp_path: Path):
     recalled = adapter.recall("strategy", "strategy_a")
     assert recalled is not None
     assert recalled.value["name"] == "strategy_a"
-    exports = export_memory_views(adapter.memory, base_dir=tmp_path)
+    exports = export_memory_views(adapter.unified, base_dir=tmp_path)
+    assert exports == {}
+    assert not (tmp_path / "memory_knowledge.json").exists()
+
+    exports = export_memory_views(adapter.unified, base_dir=tmp_path, enabled=True)
     assert (tmp_path / "memory_knowledge.json").exists()
     assert "fuzzing_memory" in exports
 
 
-def test_fuzzing_memory_migrates_legacy_json_to_sqlite(tmp_path: Path):
-    legacy_file = tmp_path / "fuzzing_memory.json"
-    save_json(
-        legacy_file,
-        {
-            "knowledge": {
-                "strategy:legacy": {
-                    "knowledge_type": "strategy",
-                    "key": "legacy",
-                    "value": {"name": "legacy_strategy"},
-                    "confidence": 0.7,
-                    "success_count": 2,
-                    "failure_count": 1,
-                    "binary_hash": "abc123",
-                    "campaign_id": "camp-1",
-                }
-            },
-            "campaigns": [{"binary_name": "demo-bin"}],
-        },
-    )
-
-    adapter = FuzzingMemory(memory_file=legacy_file)
-    recalled = adapter.recall("strategy", "legacy")
-    assert recalled is not None
-    assert recalled.value["name"] == "legacy_strategy"
-    assert recalled.success_count == 2
-    assert recalled.failure_count == 1
-    assert recalled.binary_hash == "abc123"
-    assert not legacy_file.exists()
-    assert (tmp_path / "fuzzing_memory.migrated.json").exists()
+def test_legacy_memory_file_arg_is_rejected(tmp_path: Path):
+    with pytest.raises(TypeError):
+        FuzzingMemory(memory_file=tmp_path / "fuzzing_memory.json")
 
 
 def test_fuzzing_memory_persists_knowledge_in_sqlite_store(tmp_path: Path):
-    memory_file = tmp_path / "fuzzing_memory.json"
-    adapter = FuzzingMemory(memory_file=memory_file)
+    adapter = FuzzingMemory(db_path=tmp_path / "memory.db")
     adapter.remember(
         FuzzingKnowledge(
             knowledge_type="strategy",
@@ -96,7 +72,7 @@ def test_fuzzing_memory_persists_knowledge_in_sqlite_store(tmp_path: Path):
         )
     )
 
-    rows = adapter.memory.query_knowledge(domain="fuzzing", knowledge_type="strategy")
+    rows = adapter.unified.query_knowledge(domain="fuzzing", knowledge_type="strategy")
     persisted = [row for row in rows if row["key"] == "persisted_strategy"]
     assert len(persisted) == 1
     assert persisted[0]["value"]["name"] == "persisted_strategy"
