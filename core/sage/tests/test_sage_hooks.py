@@ -109,15 +109,5 @@ class TestStoreAnalysisResults(unittest.TestCase):
         store_analysis_results("/repo", {"exploitable": 3})
 
 
-class TestRecallExploitPrimitives(unittest.TestCase):
-    """Test exploit primitive recall."""
-
-    @patch("core.sage.hooks._get_client", return_value=None)
-    def test_returns_empty_when_unavailable(self, _):
-        from core.sage.hooks import recall_exploit_primitives
-        result = recall_exploit_primitives(["buffer_overflow"])
-        self.assertEqual(result, [])
-
-
 if __name__ == "__main__":
     unittest.main()

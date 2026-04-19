@@ -9,7 +9,7 @@
 
 services:
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.21.0
     ports:
       - "11435:11434"
     volumes:
@@ -30,7 +30,7 @@ services:
     #           capabilities: [gpu]
 
   ollama-init:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.21.0
     depends_on:
       ollama:
         condition: service_healthy
@@ -40,7 +40,7 @@ services:
       - OLLAMA_HOST=http://ollama:11434
 
   sage:
-    image: ghcr.io/l33tdawg/sage:latest
+    image: ghcr.io/l33tdawg/sage:6.5.5
     ports:
       - "8090:8080"
     volumes:
