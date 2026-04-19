@@ -16,6 +16,7 @@ from typing import Dict, Optional
 import platform
 
 from core.logging import get_logger
+from packages.binary_analysis._validators import is_valid_hex_address
 
 logger = get_logger()
 
@@ -186,7 +187,7 @@ class CrashAnalyser:
 
     def _resolve_address_to_function(self, address: str) -> str:
         """Resolve a hex address to function name using symbol table."""
-        if not address or not address.startswith("0x"):
+        if not is_valid_hex_address(address):
             return "unknown"
             
         try:
@@ -211,8 +212,8 @@ class CrashAnalyser:
         if not self._available_tools.get("addr2line", False):
             logger.debug("addr2line not available - skipping address resolution")
             return "unknown", "unknown"
-            
-        if not address or not address.startswith("0x"):
+
+        if not is_valid_hex_address(address):
             return "unknown", "unknown"
             
         try:

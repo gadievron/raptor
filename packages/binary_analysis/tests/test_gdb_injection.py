@@ -137,6 +137,60 @@ class TestExamineMemoryAddressValidation:
         with pytest.raises(ValueError, match="Invalid address"):
             debugger.examine_memory(input_file, "1234567890")
 
+    def test_overlong_address_rejected(self, debugger, tmp_path):
+        """Addresses over 16 hex digits (64-bit max) are rejected."""
+        input_file = tmp_path / "crash.bin"
+        input_file.write_text("data")
+        with pytest.raises(ValueError, match="Invalid address"):
+            debugger.examine_memory(input_file, "0x" + "f" * 17)
+
+    def test_non_string_address_rejected(self, debugger, tmp_path):
+        """Non-str addresses raise ValueError, not TypeError."""
+        input_file = tmp_path / "crash.bin"
+        input_file.write_text("data")
+        with pytest.raises(ValueError, match="Invalid address"):
+            debugger.examine_memory(input_file, 0xdeadbeef)
+        with pytest.raises(ValueError, match="Invalid address"):
+            debugger.examine_memory(input_file, None)
+
+
+class TestExamineMemoryByteCountValidation:
+    """num_bytes is embedded verbatim into the GDB script. Guard it."""
+
+    @pytest.fixture
+    def debugger(self, tmp_path):
+        from packages.binary_analysis.debugger import GDBDebugger
+        binary = tmp_path / "test_binary"
+        binary.write_text("fake")
+        return GDBDebugger(binary)
+
+    def test_newline_in_num_bytes_rejected(self, debugger, tmp_path):
+        """A str num_bytes with a newline would inject — reject."""
+        input_file = tmp_path / "crash.bin"
+        input_file.write_text("data")
+        with pytest.raises(ValueError, match="Invalid num_bytes"):
+            debugger.examine_memory(input_file, "0xdead", "64\nshell id")
+
+    def test_non_positive_rejected(self, debugger, tmp_path):
+        input_file = tmp_path / "crash.bin"
+        input_file.write_text("data")
+        for bad in [0, -1, -64]:
+            with pytest.raises(ValueError, match="Invalid num_bytes"):
+                debugger.examine_memory(input_file, "0xdead", bad)
+
+    def test_over_cap_rejected(self, debugger, tmp_path):
+        input_file = tmp_path / "crash.bin"
+        input_file.write_text("data")
+        with pytest.raises(ValueError, match="Invalid num_bytes"):
+            debugger.examine_memory(input_file, "0xdead", 4097)
+
+    def test_bool_rejected(self, debugger, tmp_path):
+        """bool is an int subclass; explicit reject."""
+        input_file = tmp_path / "crash.bin"
+        input_file.write_text("data")
+        with pytest.raises(ValueError, match="Invalid num_bytes"):
+            debugger.examine_memory(input_file, "0xdead", True)
+
 
 class TestDebuggerTempFile:
     """Verify debugger.py uses random temp files and cleans them up."""

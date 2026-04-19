@@ -8,10 +8,12 @@ Security: Input files are passed via subprocess stdin, NOT via GDB's
 `run < path` in-script redirection. This prevents CWE-78 command injection
 through crafted filenames (GDB's parser interprets shell metacharacters).
 
-Address validation: examine_memory() checks the address against
-0x[0-9a-fA-F]+ before writing it into the GDB script. GDB scripts are
-newline-delimited, so a \n injects a second command. GDB has a `shell`
-builtin. That's the bug.
+Address/size validation: examine_memory() routes `address` and `num_bytes`
+through packages.binary_analysis._validators before they land in a GDB
+script. GDB scripts are newline-delimited, so a \n in either field injects
+a second command. GDB has a `shell` builtin. That's the bug. The same
+validators are reused by crash_analyser.py's addr2line path so the two
+sinks can't drift apart.
 
 Not an active issue in RAPTOR right now. CrashAnalyser validates upstream
 and there's no call site that takes unvalidated input. But this is a public
@@ -19,15 +21,14 @@ export and doing it right costs nothing.
 """
 
 import os
-import re
 import subprocess
 from pathlib import Path
 from typing import List, Optional
 
-# Strict hex address pattern. Rejects anything that could inject GDB commands.
-# GDB scripts are newline-delimited, so a \n in an address is the injection vector.
-_HEX_ADDRESS_RE = re.compile(r'^0x[0-9a-fA-F]+$')
-
+from packages.binary_analysis._validators import (
+    validate_byte_count,
+    validate_hex_address,
+)
 from core.logging import get_logger
 
 logger = get_logger()
@@ -121,20 +122,18 @@ class GDBDebugger:
 
         Args:
             input_file: Crash input file fed to the binary via stdin.
-            address: Hex address to examine, e.g. "0xdeadbeef". Must match
-                     0x[0-9a-fA-F]+. GDB scripts are newline-delimited so a \\n
-                     in here injects a second command. GDB has a `shell` builtin.
-                     Yeah, not an issue today, but doing it right costs nothing.
-            num_bytes: Number of bytes to display.
+            address: Hex address, 0x<1-16 hex digits>. See _validators for
+                     the full threat model (GDB scripts are newline-delimited,
+                     so \\n here injects a second command).
+            num_bytes: Byte count, 1..4096. Embedded verbatim into the GDB
+                     script; validated to block str-disguised-as-int inputs
+                     like "64\\nshell id".
 
         Raises:
-            ValueError: If address does not match the expected hex pattern.
+            ValueError: If address or num_bytes fails validation.
         """
-        if not _HEX_ADDRESS_RE.match(address):
-            raise ValueError(
-                f"Invalid address {address!r}: expected 0x<hex digits>. "
-                "Arbitrary strings are rejected to prevent GDB script injection."
-            )
+        validate_hex_address(address)
+        validate_byte_count(num_bytes)
 
         commands = [
             "set pagination off",
