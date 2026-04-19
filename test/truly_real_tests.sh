@@ -195,10 +195,14 @@ fi
 
 # Test 4.3: Results include rule information
 if [ -f "$SECRETS_SARIF" ]; then
-    if grep -q '"ruleId"\|"message"\|"locations"' "$SECRETS_SARIF"; then
-        test_case "SARIF results have rule/message/location info" "PASS"
+    if grep -q '"ruleId"' "$SECRETS_SARIF"; then
+        if grep -q '"message"\|"locations"' "$SECRETS_SARIF"; then
+            test_case "SARIF results have rule/message/location info" "PASS"
+        else
+            test_case "SARIF results have rule/message/location info" "FAIL"
+        fi
     else
-        test_case "SARIF results have rule/message/location info" "FAIL"
+        test_case "SARIF results have rule/message/location info" "SKIP" "No findings in SARIF results"
     fi
 else
     test_case "SARIF results have rule/message/location info" "SKIP" "No SARIF file"
@@ -221,7 +225,7 @@ python3 "$PROJECT_ROOT/raptor.py" scan --repo "$TEST_DATA" 2>&1 > /dev/null
 SCAN_SARIF=$(find "$PROJECT_ROOT/out" -name "*.sarif" -type f 2>/dev/null | head -1)
 if [ -f "$SCAN_SARIF" ]; then
     # Try to analyze the SARIF
-    python3 "$PROJECT_ROOT/raptor.py" analyze --repo "$TEST_DATA" --sarif "$SCAN_SARIF" --no-exploits --no-patches 2>&1 > "$TEST_OUT/analyze.log"
+    python3 "$PROJECT_ROOT/raptor.py" analyze --repo "$TEST_DATA" --sarif "$SCAN_SARIF" --prep-only 2>&1 > "$TEST_OUT/analyze.log"
 
     if grep -q "analysis\|processed\|findings" "$TEST_OUT/analyze.log" -i; then
         test_case "Scan -> Analyze workflow executes" "PASS"

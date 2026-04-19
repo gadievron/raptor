@@ -30,7 +30,8 @@ from packages.binary_analysis import CrashAnalyser
 from packages.llm_analysis.crash_agent import CrashAnalysisAgent
 from packages.autonomous import (
     FuzzingPlanner, FuzzingState, FuzzingMemory,
-    MultiTurnAnalyser, ExploitValidator, GoalPlanner, CorpusGenerator
+    MultiTurnAnalyser, ExploitValidator, GoalPlanner, CorpusGenerator,
+    Memory, export_memory_views
 )
 
 logger = get_logger()
@@ -55,7 +56,7 @@ def main() -> None:
     ap.add_argument("--recompile-guide", action="store_true", help="Show guide for recompiling binary with AFL instrumentation and sanitizers")
     ap.add_argument("--use-showmap", action="store_true", help="Run afl-showmap after fuzzing for coverage analysis")
     ap.add_argument("--autonomous", action="store_true", help="Enable autonomous mode with intelligent decision-making and learning")
-    ap.add_argument("--memory-file", help="Path to memory file for learning persistence (default: ~/.raptor/fuzzing_memory.json)")
+    ap.add_argument("--memory-db", help="Path to SQLite memory DB (default: ~/.raptor/memory.db)")
     ap.add_argument("--goal", help="High-level goal to achieve (e.g., 'find heap overflow', 'target parser code')")
 
     args = ap.parse_args()
@@ -108,8 +109,8 @@ def main() -> None:
         logger.info("=" * 70)
 
         # Initialize fuzzing memory for learning
-        memory_file = Path(args.memory_file) if args.memory_file else None
-        memory = FuzzingMemory(memory_file)
+        memory_db = Path(args.memory_db) if args.memory_db else None
+        memory = FuzzingMemory(db_path=memory_db)
 
         # Initialize autonomous planner
         planner = FuzzingPlanner(memory=memory)
@@ -137,6 +138,11 @@ def main() -> None:
         best_strategy = memory.get_best_strategy(binary_hash)
         if best_strategy:
             logger.info(f"✨ Found best strategy from memory: {best_strategy}")
+            Memory().record_event(
+                "fuzzing",
+                "best_strategy_recalled",
+                {"binary_hash": binary_hash, "strategy": best_strategy},
+            )
 
         # Generate autonomous corpus if no corpus provided
         if not corpus_dir:
@@ -189,6 +195,11 @@ def main() -> None:
         print(f"  - Crashes dir: {crashes_dir}")
 
         if num_crashes == 0:
+            Memory().record_event(
+                "fuzzing",
+                "fuzzing_completed",
+                {"binary": str(binary_path), "duration": args.duration, "crashes": 0},
+            )
             print("\nNo crashes found. Try:")
             print("    - Increasing duration (--duration)")
             print("    - Better seed corpus (--corpus)")
@@ -458,6 +469,29 @@ def main() -> None:
 
     report_file = out_dir / "fuzzing_report.json"
     save_json(report_file, report)
+    memory_store = Memory()
+    memory_store.record_event(
+        "fuzzing",
+        "run_summary",
+        {
+            "binary": str(binary_path),
+            "crashes": num_crashes,
+            "analysed": analysed,
+            "exploitable": exploitable,
+            "exploits_generated": exploits_generated,
+        },
+    )
+    memory_store.upsert_knowledge(
+        domain="fuzzing",
+        knowledge_type="strategy_outcome",
+        key=f"default:{binary_path.name}",
+        value={"crashes": num_crashes, "exploitable": exploitable},
+        confidence=0.6 if num_crashes > 0 else 0.3,
+        success_count=num_crashes,
+        failure_count=0 if num_crashes > 0 else 1,
+        context={"binary_path": str(binary_path)},
+    )
+    export_memory_views(memory_store)
 
     print(f"   Report: {report_file}")
 

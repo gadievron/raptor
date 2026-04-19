@@ -16,6 +16,8 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 from core.json import save_json
 
 from core.logging import get_logger
+from packages.autonomous.memory_exports import export_memory_views
+from packages.autonomous.memory_store import Memory
 from packages.llm_analysis.llm.providers import LLMProvider
 from packages.web.client import WebClient
 from packages.web.crawler import WebCrawler
@@ -90,6 +92,33 @@ class WebScanner:
 
         logger.info(f"Web scan complete. Found {len(fuzzing_findings)} potential vulnerabilities")
         logger.info(f"Report saved to {report_file}")
+        try:
+            memory = Memory()
+            memory.record_event(
+                "web",
+                "scan_completed",
+                {
+                    "target": self.base_url,
+                    "parameters_tested": crawl_results["stats"].get("total_parameters", 0),
+                    "vulnerabilities_found": len(fuzzing_findings),
+                },
+            )
+            memory.upsert_knowledge(
+                domain="web",
+                knowledge_type="payload_effectiveness",
+                key=f"{self.base_url}:summary",
+                value={
+                    "total_findings": len(fuzzing_findings),
+                    "vulnerability_types": sorted({f.get("type", "unknown") for f in fuzzing_findings}),
+                },
+                confidence=0.6 if fuzzing_findings else 0.4,
+                success_count=len(fuzzing_findings),
+                failure_count=0 if fuzzing_findings else 1,
+                context={"target": self.base_url},
+            )
+            export_memory_views(memory)
+        except Exception as exc:
+            logger.debug(f"Web memory write skipped: {exc}")
 
         return report
 

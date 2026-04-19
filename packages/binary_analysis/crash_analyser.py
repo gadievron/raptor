@@ -16,6 +16,7 @@ from typing import Dict, Optional
 import platform
 
 from core.logging import get_logger
+from packages.autonomous.memory_store import Memory
 
 logger = get_logger()
 
@@ -384,6 +385,36 @@ class CrashAnalyser:
         context.stack_hash = self._compute_stack_hash(context.stack_trace)
         if context.stack_hash:
             logger.info(f"  Stack hash: {context.stack_hash}")
+
+        try:
+            memory = Memory()
+            memory.record_event(
+                "crash_analysis",
+                "crash_analysed",
+                {
+                    "binary": str(self.binary),
+                    "crash_id": crash_id,
+                    "signal": context.signal,
+                    "function": context.function_name,
+                    "crash_type": context.crash_type,
+                },
+            )
+            memory.upsert_knowledge(
+                domain="crash_analysis",
+                knowledge_type="crash_pattern",
+                key=f"{context.signal}:{context.function_name}",
+                value={
+                    "crash_type": context.crash_type,
+                    "source_location": context.source_location,
+                    "stack_hash": context.stack_hash,
+                },
+                confidence=0.6,
+                success_count=1,
+                failure_count=0,
+                context={"binary": str(self.binary)},
+            )
+        except Exception as exc:
+            logger.debug(f"Crash memory write skipped: {exc}")
 
         return context
 
