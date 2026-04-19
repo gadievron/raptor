@@ -48,8 +48,6 @@ def _run_async(coro):
         return loop.run_until_complete(coro)
     finally:
         loop.close()
-        # Reset so the next call also gets a fresh loop
-        asyncio.set_event_loop(asyncio.new_event_loop())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -103,35 +101,6 @@ def recall_context_for_scan(
 
     except Exception as e:
         logger.debug(f"SAGE pre-scan recall failed: {e}")
-        return []
-
-
-def recall_exploit_primitives(vuln_types: List[str]) -> List[Dict[str, Any]]:
-    """
-    Recall exploitation primitives relevant to the detected vulnerability types.
-
-    Args:
-        vuln_types: List of vulnerability type strings (e.g., ["sql_injection", "xss"])
-
-    Returns:
-        List of recalled primitive memories.
-    """
-    client = _get_client()
-    if client is None:
-        return []
-
-    try:
-        query = f"exploitation primitives and techniques for {', '.join(vuln_types)}"
-        results = _run_async(client.query(
-            text=query,
-            domain_tag="raptor-primitives",
-            top_k=5,
-        ))
-        if results:
-            logger.info(f"SAGE: Recalled {len(results)} exploit primitives")
-        return results
-    except Exception as e:
-        logger.debug(f"SAGE primitive recall failed: {e}")
         return []
 
 

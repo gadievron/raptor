@@ -5,6 +5,7 @@ Drop-in replacement for FuzzingMemory that stores knowledge in SAGE
 for consensus-validated persistence while keeping JSON as local cache.
 """
 
+import asyncio
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
