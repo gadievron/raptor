@@ -9,6 +9,7 @@ Entry point: `python3 -m core.startup.init`
 import logging
 import os
 import shutil
+import stat
 import sys
 from pathlib import Path
 
@@ -64,6 +65,53 @@ def check_tools() -> tuple[list, list, set]:
     return results, warnings, unavailable_features
 
 
+def _tighten_config_perms(path: Path) -> str | None:
+    """Ensure `path` is 0o600. Returns a one-line notice or None.
+
+    Only acts on regular files owned by the current user. Symlinks are
+    flagged but never chmod'd through (chmod follows links; we refuse to
+    touch something we may not own). chmod failures fall back to the
+    pre-existing warning form.
+
+    Returns:
+        - None if nothing to say (already tight, missing, symlink target OK).
+        - A notice starting with "tightened …" on successful fix.
+        - A warning starting with "⚠ …" on anything we can't fix.
+
+    The caller routes the string; this helper does not log or print.
+    """
+    try:
+        st = path.lstat()
+    except OSError:
+        return None
+
+    if stat.S_ISLNK(st.st_mode):
+        try:
+            tgt_mode = path.stat().st_mode
+        except OSError:
+            return None
+        if tgt_mode & 0o077:
+            return (f"⚠ {path} is a symlink to a permissive target "
+                    f"(mode {oct(tgt_mode)[-3:]}). Fix target perms manually.")
+        return None
+
+    if not (st.st_mode & 0o077):
+        return None
+
+    if st.st_uid != os.getuid():
+        return (f"⚠ {path} not owned by current user "
+                f"(mode {oct(st.st_mode)[-3:]}). Fix perms manually.")
+
+    try:
+        os.chmod(path, 0o600)
+    except OSError as e:
+        return (f"⚠ {path} mode {oct(st.st_mode)[-3:]} and chmod failed: {e}. "
+                f"Run: chmod 600 {path}")
+
+    return (f"tightened {path} permissions to 600 "
+            f"(was {oct(st.st_mode)[-3:]}; contains API keys)")
+
+
 def check_llm() -> tuple[list, list]:
     """Check LLM availability via config file + lightweight key validation.
 
@@ -83,13 +131,10 @@ def check_llm() -> tuple[list, list]:
         config_path = Path.home() / ".config/raptor/models.json"
         models = []
         if config_path.exists():
-            # Warn if models.json is readable by others (contains API keys)
-            try:
-                mode = config_path.stat().st_mode
-                if mode & 0o077:
-                    warnings.append(f"⚠ {config_path} is accessible by other users (mode {oct(mode)[-3:]}). Run: chmod 600 {config_path}")
-            except OSError:
-                pass
+            # Auto-tighten if readable by others (contains API keys).
+            notice = _tighten_config_perms(config_path)
+            if notice:
+                warnings.append(notice)
             try:
                 data = json.loads(config_path.read_text())
                 models = data.get("models", []) if isinstance(data, dict) else data
