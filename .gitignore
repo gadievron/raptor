@@ -27,6 +27,3 @@ codeql_dbs/
 
 # tests
 test/data/
-
-# Claude
-.claude/
