@@ -205,6 +205,26 @@ class DataflowValidator:
         """
         self.logger.info(f"Validating dataflow path: {dataflow.rule_id}")
 
+        # SMT ADD-ON: pre-analyze sanitizer constraints before the LLM call.
+        # Proven bypasses are injected into the prompt; proven-effective sanitizers
+        # allow the LLM to skip re-checking them.  Failures are non-fatal.
+        # No kittens get harmed if you don't use advanced SMT analysis here...
+        # But the Mathsy Baby Jebus might shed a logical tear. -MC
+        _smt_note = ""
+        _smt_sanitizers_proven_effective = False
+        try:
+            from .smt_sanitizer import analyze_sanitizers as _smt_analyze
+            _smt = _smt_analyze(dataflow, repo_path)
+            if _smt.smt_available:
+                _smt_note = f"\nSMT PRE-ANALYSIS: {_smt.reasoning}"
+                if _smt.bypass_found is True and _smt.bypass_input:
+                    _smt_note += f"\nSMT bypass input values: {_smt.bypass_input}"
+                elif _smt.bypass_found is False:
+                    _smt_sanitizers_proven_effective = True
+                self.logger.info(f"SMT sanitizer analysis: bypass_found={_smt.bypass_found}")
+        except Exception as _smt_err:
+            self.logger.debug(f"SMT add-on skipped: {_smt_err}")
+
         # Read source context for key locations
         source_context = self.read_source_context(
             str(repo_path / dataflow.source.file_path),
@@ -249,12 +269,12 @@ Line: {dataflow.sink.line}
 
 {sink_context}
 
-SANITIZERS DETECTED: {', '.join(dataflow.sanitizers) if dataflow.sanitizers else 'None'}
+SANITIZERS DETECTED: {', '.join(dataflow.sanitizers) if dataflow.sanitizers else 'None'}{_smt_note}
 
 Analyze this dataflow path and determine:
 
 1. **Exploitability**: Can an attacker actually control data flowing from source to sink?
-2. **Sanitization**: Are there effective sanitizers in the path? Can they be bypassed?
+2. **Sanitization**: {'SMT analysis has already proven the modeled sanitizers CANNOT all be bypassed simultaneously — focus your analysis on any sanitizers NOT covered by SMT above and on overall reachability.' if _smt_sanitizers_proven_effective else 'Are there effective sanitizers in the path? Can they be bypassed?'}
 3. **Reachability**: Is this path reachable in real execution scenarios?
 4. **Attack Complexity**: How difficult is exploitation?
 5. **Bypass Strategy**: If there are barriers, how can they be bypassed?

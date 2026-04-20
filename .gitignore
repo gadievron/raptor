@@ -21,3 +21,5 @@ out/
 
 # Runtime artifacts
 codeql_dbs/
+*.log
+*.smt2

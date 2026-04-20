@@ -19,6 +19,11 @@ instructor>=1.0.0
 # Optional: For enhanced dataflow visualization (recommended)
 tabulate>=0.9.0
 
+# Optional: SMT add-ons — one-gadget constraint satisfaction + dataflow sanitizer bypass
+# pip install z3-solver
+# Enables: packages/exploit_feasibility/smt_onegadget.py
+#          packages/codeql/smt_sanitizer.py
+
 # Optional: For web scanning package
 # beautifulsoup4>=4.12.0
 # playwright>=1.40.0
