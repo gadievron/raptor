@@ -6,6 +6,7 @@
 __pycache__/
 .venv/
 .pytest_cache/
+venv/
 
 # RAPTOR startup
 .startup-output
@@ -23,3 +24,9 @@ out/
 codeql_dbs/
 *.log
 *.smt2
+
+# tests
+test/data/
+
+# Claude
+.claude/
