@@ -218,15 +218,13 @@ def mode_llm_analysis(args: list) -> int:
         print(f"✗ LLM analysis script not found: {llm_script}")
         return 1
 
-    # --smt / --no-smt: enable or disable SMT add-ons (z3-solver).
-    # Stripped here so agent.py doesn't see an unknown flag.
-    smt = True
+    # --smt: opt-in to SMT add-ons (z3-solver) running alongside the LLM.
+    # Off by default. Stripped here so agent.py doesn't see an unknown flag.
+    smt = False
     filtered = []
     for arg in args:
         if arg == "--smt":
             smt = True
-        elif arg == "--no-smt":
-            smt = False
         else:
             filtered.append(arg)
     os.environ["RAPTOR_SMT_ENABLED"] = "1" if smt else "0"

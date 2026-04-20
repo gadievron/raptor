@@ -46,7 +46,7 @@ except ImportError:
 
 def _smt_enabled() -> bool:
     """True if z3 is available AND RAPTOR_SMT_ENABLED is not '0'."""
-    return _Z3_Around and os.environ.get("RAPTOR_SMT_ENABLED", "1") != "0"
+    return _Z3_Around and os.environ.get("RAPTOR_SMT_ENABLED", "0") == "1"
 
 # DataflowPath is imported at function call time to avoid circular imports
 # (this module is in the same package as dataflow_validator)

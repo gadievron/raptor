@@ -206,12 +206,9 @@ class DataflowValidator:
         self.logger.info(f"Validating dataflow path: {dataflow.rule_id}")
 
         # SMT ADD-ON: pre-analyze sanitizer constraints before the LLM call.
-        # Proven bypasses are injected into the prompt; proven-effective sanitizers
-        # allow the LLM to skip re-checking them.  Failures are non-fatal.
-        # No kittens get harmed if you don't use advanced SMT analysis here...
-        # But the Mathsy Baby Jebus might shed a logical tear. -MC
+        # Results are injected into the prompt and later combined with the LLM verdict.
         _smt_note = ""
-        _smt_sanitizers_proven_effective = False
+        _smt = None
         try:
             from .smt_sanitizer import analyze_sanitizers as _smt_analyze
             _smt = _smt_analyze(dataflow, repo_path)
@@ -219,8 +216,6 @@ class DataflowValidator:
                 _smt_note = f"\nSMT PRE-ANALYSIS: {_smt.reasoning}"
                 if _smt.bypass_found is True and _smt.bypass_input:
                     _smt_note += f"\nSMT bypass input values: {_smt.bypass_input}"
-                elif _smt.bypass_found is False:
-                    _smt_sanitizers_proven_effective = True
                 self.logger.info(f"SMT sanitizer analysis: bypass_found={_smt.bypass_found}")
         except Exception as _smt_err:
             self.logger.debug(f"SMT add-on skipped: {_smt_err}")
@@ -274,7 +269,7 @@ SANITIZERS DETECTED: {', '.join(dataflow.sanitizers) if dataflow.sanitizers else
 Analyze this dataflow path and determine:
 
 1. **Exploitability**: Can an attacker actually control data flowing from source to sink?
-2. **Sanitization**: {'SMT analysis has already proven the modeled sanitizers CANNOT all be bypassed simultaneously — focus your analysis on any sanitizers NOT covered by SMT above and on overall reachability.' if _smt_sanitizers_proven_effective else 'Are there effective sanitizers in the path? Can they be bypassed?'}
+2. **Sanitization**: Are there effective sanitizers in the path? Can they be bypassed?
 3. **Reachability**: Is this path reachable in real execution scenarios?
 4. **Attack Complexity**: How difficult is exploitation?
 5. **Bypass Strategy**: If there are barriers, how can they be bypassed?
@@ -304,6 +299,24 @@ Respond in JSON format:
 
             # Parse response
             validation = DataflowValidation(**response_dict)
+
+            # SMT ADD-ON: combine SMT result with LLM verdict.
+            if _smt is not None and _smt.smt_available:
+                if _smt.bypass_found is True:
+                    # SMT found a concrete bypass — boost confidence and note it
+                    validation.confidence = min(1.0, validation.confidence + 0.10)
+                    validation.bypass_possible = True
+                    validation.reasoning += f" [SMT: bypass confirmed — {_smt.reasoning}]"
+                elif _smt.bypass_found is False:
+                    # SMT proved sanitizers hold — reduce confidence in exploitability
+                    validation.confidence = max(0.0, validation.confidence - 0.10)
+                    if not _smt.bypassable_sanitizers:
+                        # All modeled sanitizers proven effective
+                        validation.barriers.append(
+                            f"SMT: sanitizers formally proven effective ({_smt.reasoning})"
+                        )
+                    validation.reasoning += f" [SMT: bypass not found — {_smt.reasoning}]"
+                # bypass_found=None (unknown/unparsed) — no adjustment
 
             self.logger.info(
                 f"Dataflow validation: exploitable={validation.is_exploitable}, "
