@@ -11,6 +11,8 @@ FROM mcr.microsoft.com/devcontainers/python:1-3.12-bookworm
 # Organized by component that needs them
 # ============================================================================
 
+RUN rm -f /etc/apt/sources.list.d/yarn.list
+
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     && apt-get install -y --no-install-recommends \
     #
@@ -60,8 +62,7 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     libdbus-1-3 \
     libexpat1 \
     libfontconfig1 \
-    libgcc1 \
-    libgconf-2-4 \
+    libgcc-s1 \
     libgdk-pixbuf2.0-0 \
     libglib2.0-0 \
     libgtk-3-0 \
@@ -113,14 +114,26 @@ RUN echo "# To enable rr, the devcontainer needs --privileged flag" \
     && echo "# Or use devcontainer.json with: \"runArgs\": [\"--privileged\"]"
 
 # ============================================================================
-# AFL++ FUZZER (fuzzing package, fuzz/raptor-fuzz commands)
+# AFL++ FUZZER with QEMU mode (fuzzing package, fuzz/raptor-fuzz commands)
+# Built from source to include QEMU mode for non-instrumented binaries
 # ============================================================================
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    afl++ \
-    afl++-clang \
-    && apt-get clean && rm -rf /var/lib/apt/lists/* \
-    || echo "AFL++ not available - skipping"
+    ninja-build \
+    bison \
+    flex \
+    libglib2.0-dev \
+    libpixman-1-dev \
+    python3-dev \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 https://github.com/AFLplusplus/AFLplusplus /opt/aflplusplus \
+    && cd /opt/aflplusplus \
+    && make distrib \
+    && make install \
+    && cd qemu_mode \
+    && CPU_TARGET=x86_64 ./build_qemu_support.sh \
+    && rm -rf /opt/aflplusplus/.git
 
 # ============================================================================
 # CODEQL CLI (codeql package, codeql command)
