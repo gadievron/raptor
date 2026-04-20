@@ -120,19 +120,24 @@ RUN echo "# To enable rr, the devcontainer needs --privileged flag" \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ninja-build \
+    meson \
     bison \
     flex \
     libglib2.0-dev \
     libpixman-1-dev \
     python3-dev \
+    llvm \
+    llvm-dev \
+    clang \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 RUN git clone --depth 1 https://github.com/AFLplusplus/AFLplusplus /opt/aflplusplus \
     && cd /opt/aflplusplus \
-    && make distrib \
+    && make source-only \
     && make install \
     && cd qemu_mode \
     && CPU_TARGET=x86_64 ./build_qemu_support.sh \
+    && cp /opt/aflplusplus/afl-qemu-trace /usr/local/bin/ \
     && rm -rf /opt/aflplusplus/.git
 
 # ============================================================================
