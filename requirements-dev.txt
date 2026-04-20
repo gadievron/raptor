@@ -13,3 +13,6 @@ mypy>=1.0.0
 pytest>=7.0.0
 pytest-cov>=4.0.0
 gcovr>=5.1
+
+# SMT Solvering
+z3-solver>=4.16.0.0

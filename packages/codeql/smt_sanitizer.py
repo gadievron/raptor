@@ -31,6 +31,7 @@ Attestation - Written by Claude, prompted by Mark C.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,6 +42,11 @@ try:
     _Z3_Around = True
 except ImportError:
     _Z3_Around = False
+
+
+def _smt_enabled() -> bool:
+    """True if z3 is available AND RAPTOR_SMT_ENABLED is not '0'."""
+    return _Z3_Around and os.environ.get("RAPTOR_SMT_ENABLED", "1") != "0"
 
 # DataflowPath is imported at function call time to avoid circular imports
 # (this module is in the same package as dataflow_validator)
@@ -278,7 +284,7 @@ def analyze_sanitizers(
     Returns:
         SanitizerSMTResult.  bypass_found=None when z3 unavailable or no patterns found.
     """
-    if not _Z3_Around:
+    if not _smt_enabled():
         all_snippets = [s.snippet for s in path.intermediate_steps if s.snippet]
         return SanitizerSMTResult(
             bypass_found=None, bypass_input=None,

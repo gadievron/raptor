@@ -169,6 +169,16 @@ RUN pip install --no-cache-dir -r /tmp/packages-web-requirements.txt
 RUN python -m playwright install
 
 # ============================================================================
+# RUBY + ONE_GADGET (exploit_feasibility/smt_onegadget.py — one-gadget constraint analysis)
+# ============================================================================
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ruby \
+    ruby-dev \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && gem install one_gadget --no-document
+
+# ============================================================================
 # CLAUDE CLI (claude-code npm package)
 # Required to run RAPTOR via bin/raptor
 # ============================================================================

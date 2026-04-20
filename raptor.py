@@ -38,6 +38,7 @@ Examples:
 """
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -212,13 +213,26 @@ def mode_llm_analysis(args: list) -> int:
     """Run LLM-powered vulnerability analysis on existing SARIF files."""
     script_root = Path(__file__).parent
     llm_script = script_root / "packages/llm_analysis/agent.py"
-    
+
     if not llm_script.exists():
         print(f"✗ LLM analysis script not found: {llm_script}")
         return 1
-    
+
+    # --smt / --no-smt: enable or disable SMT add-ons (z3-solver).
+    # Stripped here so agent.py doesn't see an unknown flag.
+    smt = True
+    filtered = []
+    for arg in args:
+        if arg == "--smt":
+            smt = True
+        elif arg == "--no-smt":
+            smt = False
+        else:
+            filtered.append(arg)
+    os.environ["RAPTOR_SMT_ENABLED"] = "1" if smt else "0"
+
     print("\n[*] Running LLM-powered vulnerability analysis...\n")
-    return _run_script(llm_script, args)
+    return _run_script(llm_script, filtered)
 
 
 def show_mode_help(mode: str) -> None:

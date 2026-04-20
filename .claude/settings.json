@@ -16,7 +16,8 @@
       "Bash(libexec/raptor-startup-check *)",
       "Bash(libexec/raptor-validate-schema *)",
       "Write(/out/**)",
-      "Edit(/out/**)"
+      "Edit(/out/**)",
+      "Bash(docker *)"
     ]
   },
   "hooks": {
