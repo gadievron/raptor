@@ -10,9 +10,9 @@ Handles C/C++ and Python guard patterns.  Anything outside the supported
 subset is reported as unparsed - the LLM in DataflowValidator still handles
 those cases unchanged.
 
-Z3 is an OPTIONAL soft dependency.  If unavailable every function returns
-a SanitizerSMTResult with smt_available=False and bypass_found=None - no
-existing behaviour changes.
+Z3 is an OPTIONAL soft dependency, gated through ``core.smt_solver``.  If
+unavailable every function returns a SanitizerSMTResult with
+smt_available=False and bypass_found=None - no existing behaviour changes.
 
 Install: pip install z3-solver
 
@@ -38,71 +38,24 @@ Attestation - Written by Claude, prompted by Mark C.
 
 from __future__ import annotations
 
-import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-try:
-    import z3
-    _Z3_Around = True
-except ImportError:
-    _Z3_Around = False
-
-
-def _smt_enabled() -> bool:
-    """True if z3 is available AND RAPTOR_SMT_ENABLED is not '0'."""
-    return _Z3_Around and os.environ.get("RAPTOR_SMT_ENABLED", "0") == "1"
-
-
-# ---------------------------------------------------------------------------
-# Bitvector configuration
-# ---------------------------------------------------------------------------
-# All guard variables are modeled as BitVec(width). z3-py's Python comparison
-# operators on BitVecRef are signed (BVSLT/BVSLE/...); unsigned variants must
-# go through z3.ULT/ULE/UGT/UGE. Routing every compare through _lt/_le/_gt/_ge
-# keeps the signed/unsigned switch in one place.
-
-def _bv_width() -> int:
-    try:
-        w = int(os.environ.get("RAPTOR_SMT_WIDTH", "64"))
-    except ValueError:
-        return 64
-    return w if w in (32, 64) else 64
-
-
-def _is_signed() -> bool:
-    return os.environ.get("RAPTOR_SMT_SIGNED", "signed").lower() != "unsigned"
-
-
-def _mk_var(name: str) -> Any:
-    return z3.BitVec(name, _bv_width())
-
-
-def _mk_val(v: int) -> Any:
-    return z3.BitVecVal(v, _bv_width())
-
-
-def _le(a: Any, b: Any) -> Any:
-    return a <= b if _is_signed() else z3.ULE(a, b)
-
-
-def _lt(a: Any, b: Any) -> Any:
-    return a < b if _is_signed() else z3.ULT(a, b)
-
-
-def _ge(a: Any, b: Any) -> Any:
-    return a >= b if _is_signed() else z3.UGE(a, b)
-
-
-def _gt(a: Any, b: Any) -> Any:
-    return a > b if _is_signed() else z3.UGT(a, b)
-
-
-def _mode_tag() -> str:
-    return f"bv{_bv_width()}-{'signed' if _is_signed() else 'unsigned'}"
-
+from core.smt_solver import (
+    bv_width as _bv_width,
+    ge as _ge,
+    is_signed as _is_signed,
+    le as _le,
+    lt as _lt,
+    mk_val as _mk_val,
+    mk_var as _mk_var,
+    mode_tag as _mode_tag,
+    smt_enabled as _smt_enabled,
+    z3,
+)
+from core.smt_solver.witness import format_witness as _format_witness
 
 # DataflowPath is imported at function call time to avoid circular imports
 # (this module is in the same package as dataflow_validator)
@@ -273,9 +226,9 @@ def _constraint_to_bypass_z3(c: _Constraint, vars_: Dict[str, Any]) -> Optional[
     The guard fires (and rejects input) when its condition is True.
     Bypass = the guard's condition is False = attacker passes through.
 
-    Variables are modeled as fixed-width bitvectors so that wrap-around and
-    signed/unsigned coercion match C/C++ integer semantics.  See _bv_width
-    and _is_signed for configuration.
+    Variables are modeled as fixed-width bitvectors (see core.smt_solver) so
+    that wrap-around and signed/unsigned coercion match C/C++ integer
+    semantics.
 
     Example:
         Guard: if (len > 100) return error;
@@ -339,9 +292,9 @@ def analyze_sanitizers(
     handled by the LLM as before.
 
     Args:
-        path:      DataflowPath from 
+        path:      DataflowPath from
                     DataflowValidator.extract_dataflow_from_sarif().
-        repo_path: Repository root (unused currently; reserved 
+        repo_path: Repository root (unused currently; reserved
                     for future source reads).
 
     Returns:
@@ -430,20 +383,7 @@ def analyze_sanitizers(
     result = joint.check()
 
     if result == z3.sat:
-        m = joint.model()
-        bypass_vals: Dict[str, int] = {}
-        for decl in m.decls():
-            val = m[decl]
-            if z3.is_bv_value(val):
-                raw = val.as_long()
-                width = val.size()
-                # In signed mode, reinterpret the high-bit-set case as a
-                # negative integer so the reported bypass input matches how
-                # a human would read the C-level value.
-                if _is_signed() and width > 0 and raw >= (1 << (width - 1)):
-                    bypass_vals[str(decl)] = raw - (1 << width)
-                else:
-                    bypass_vals[str(decl)] = raw
+        bypass_vals = _format_witness(joint.model(), signed=_is_signed())
 
         return SanitizerSMTResult(
             bypass_found=True,

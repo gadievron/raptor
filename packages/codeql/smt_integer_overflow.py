@@ -8,9 +8,10 @@ BVMulNoOverflow and their Underflow siblings) to decide whether
 attacker input can wrap the expression past the fixed-width integer
 boundary under the upstream guards extracted by smt_sanitizer.
 
-Z3 is an OPTIONAL soft dependency.  If unavailable every function
-returns an IntegerOverflowSMTResult with smt_available=False and
-overflow_found=None — no existing behaviour changes.
+Z3 is an OPTIONAL soft dependency, gated through ``core.smt_solver``.
+If unavailable every function returns an IntegerOverflowSMTResult with
+smt_available=False and overflow_found=None — no existing behaviour
+changes.
 
 Install: pip install z3-solver
 
@@ -34,27 +35,27 @@ Attestation - Written by Claude, prompted by Mark C.
 
 from __future__ import annotations
 
-import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-try:
-    import z3
-    _Z3_Around = True
-except ImportError:
-    _Z3_Around = False
-
-# Reuse the shared bitvector configuration and pattern extractor from
-# smt_sanitizer so guard extraction stays identical across the two passes.
-from .smt_sanitizer import (
-    _smt_enabled,
-    _bv_width,
-    _is_signed,
-    _mode_tag,
-    _extract_from_snippet,
+from core.smt_solver import (
+    bv_width as _bv_width,
+    ge as _ge,
+    is_signed as _is_signed,
+    le as _le,
+    lt as _lt,
+    mode_tag as _mode_tag,
+    new_solver as _new_solver,
+    smt_enabled as _smt_enabled,
+    z3,
 )
+from core.smt_solver.witness import bv_to_int as _bv_to_int
+
+# Guard extraction is shared with the sanitizer pass so the two agree on
+# which constraints apply along the path.
+from .smt_sanitizer import _extract_from_snippet
 
 
 # ---------------------------------------------------------------------------
@@ -286,31 +287,28 @@ def _guard_to_z3(
     width: int,
     signed: bool,
 ) -> Optional[Any]:
-    """Width-parametric version of smt_sanitizer._constraint_to_bypass_z3.
+    """Width-parametric guard encoder.
 
     The overflow-session may run at a width that differs from the global
-    RAPTOR_SMT_WIDTH (e.g., a declared ``unsigned int`` sink at bv32
-    while the sanitizer pre-pass used bv64), so we re-encode guards here
-    at the session's width rather than reusing the global helper.
+    RAPTOR_SMT_WIDTH (e.g., a declared ``unsigned int`` sink at bv32 while
+    the sanitizer pre-pass used bv64), so guards are re-encoded here at
+    the session's width rather than reusing the sanitizer's default-width
+    helper.
     """
     if c.variable not in vars_:
         vars_[c.variable] = z3.BitVec(c.variable, width)
     v = vars_[c.variable]
 
-    def le(a, b): return a <= b if signed else z3.ULE(a, b)
-    def lt(a, b): return a < b if signed else z3.ULT(a, b)
-    def ge(a, b): return a >= b if signed else z3.UGE(a, b)
-
     if c.guard_type == "upper_bound":
-        return le(v, z3.BitVecVal(c.bound, width))
+        return _le(v, z3.BitVecVal(c.bound, width), signed=signed)
     if c.guard_type == "lower_bound":
-        return ge(v, z3.BitVecVal(c.bound, width))
+        return _ge(v, z3.BitVecVal(c.bound, width), signed=signed)
     if c.guard_type == "null":
         return v != z3.BitVecVal(0, width)
     if c.guard_type == "range":
         return z3.And(
-            ge(v, z3.BitVecVal(0, width)),
-            lt(v, z3.BitVecVal(c.bound_hi, width)),
+            _ge(v, z3.BitVecVal(0, width), signed=signed),
+            _lt(v, z3.BitVecVal(c.bound_hi, width), signed=signed),
         )
     return None
 
@@ -318,29 +316,6 @@ def _guard_to_z3(
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
-
-_SOLVER_TIMEOUT_MS = 5000
-
-
-def _format_witness(
-    model: Any,
-    width_by_var: Dict[str, int],
-    signed: bool,
-) -> Dict[str, int]:
-    """Render a Z3 model as a dict[var -> python int]."""
-    out: Dict[str, int] = {}
-    for decl in model.decls():
-        val = model[decl]
-        if not z3.is_bv_value(val):
-            continue
-        raw = val.as_long()
-        w = val.size()
-        if signed and w > 0 and raw >= (1 << (w - 1)):
-            out[str(decl)] = raw - (1 << w)
-        else:
-            out[str(decl)] = raw
-    return out
-
 
 def analyze_integer_overflow(
     path: Any,            # DataflowPath; typed Any to avoid import cycle
@@ -427,9 +402,6 @@ def analyze_integer_overflow(
     default_width = _bv_width()
     default_signed = _is_signed()
 
-    def _tag(w: int, s: bool) -> str:
-        return f"bv{w}-{'signed' if s else 'unsigned'}"
-
     for expr in arith:
         width = expr.width if expr.width is not None else default_width
         signed = expr.signed if expr.signed is not None else default_signed
@@ -448,8 +420,7 @@ def analyze_integer_overflow(
             unparsed.append(expr.snippet)
             continue
 
-        solver = z3.Solver()
-        solver.set("timeout", _SOLVER_TIMEOUT_MS)
+        solver = _new_solver()
         for clause in implicit:
             solver.add(clause)
         for c in guard_constraints:
@@ -469,23 +440,18 @@ def analyze_integer_overflow(
                 for v_name, v_obj in vars_.items():
                     val = model.eval(v_obj, model_completion=True)
                     if z3.is_bv_value(val):
-                        raw = val.as_long()
-                        w = val.size()
-                        if signed and w > 0 and raw >= (1 << (w - 1)):
-                            wmap[v_name] = raw - (1 << w)
-                        else:
-                            wmap[v_name] = raw
+                        wmap[v_name] = _bv_to_int(val.as_long(), val.size(), signed)
                 witness = wmap or None
                 witness_op = expr.op
                 witness_contexts = [expr.context]
-                witness_mode = _tag(width, signed)
+                witness_mode = _mode_tag(width, signed)
             else:
                 if expr.context not in witness_contexts:
                     witness_contexts.append(expr.context)
         elif result == z3.unsat:
             safe.append(expr.snippet)
             if safe_mode is None:
-                safe_mode = _tag(width, signed)
+                safe_mode = _mode_tag(width, signed)
         else:
             unknown_count += 1
             unparsed.append(expr.snippet)
