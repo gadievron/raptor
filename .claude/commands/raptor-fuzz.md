@@ -68,5 +68,3 @@ sudo afl-system-config
 - RAPTOR automatically analyzes crashes and generates exploits
 
 Be patient and explain fuzzing concepts clearly!
-
----

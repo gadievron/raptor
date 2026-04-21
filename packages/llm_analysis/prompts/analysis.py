@@ -152,15 +152,6 @@ You have the COMPLETE attack path from source to sink. Use this to make an infor
 
 """
 
-    # Enrich with SAGE historical context (cross-run learning)
-    try:
-        from core.sage.hooks import enrich_analysis_prompt
-        sage_context = enrich_analysis_prompt(rule_id, file_path)
-        if sage_context:
-            prompt += sage_context
-    except Exception:
-        pass  # SAGE unavailable — no enrichment
-
     prompt += """
 **Your Task — work through each stage in sequence:**
 

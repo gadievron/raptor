@@ -23,5 +23,3 @@ Generate secure patches to fix vulnerabilities.
 ```
 
 **Note:** Review patches before applying to production code.
-
----

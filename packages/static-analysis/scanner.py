@@ -472,10 +472,10 @@ def main():
 
         logger.info(f"Scan complete: {metrics['total_findings']} findings in {metrics['total_files_scanned']} files")
 
-        # Write coverage records and derive total_files_scanned from them
+        # Write coverage records
         try:
             from core.coverage.record import (
-                build_from_semgrep, build_from_codeql, write_record, load_records,
+                build_from_semgrep, build_from_codeql, write_record,
             )
             # Semgrep coverage — find JSON outputs alongside SARIFs
             for sarif_path in semgrep_sarifs:
@@ -495,16 +495,6 @@ def main():
                 if record:
                     write_record(out_dir, record, tool_name="codeql")
                     break  # one record per run
-
-            # Derive total_files_scanned from coverage records — these are
-            # the canonical source of what was examined (not SARIF artifacts,
-            # which Semgrep doesn't populate).
-            all_covered = set()
-            for rec in load_records(out_dir):
-                all_covered.update(rec.get("files_examined", []))
-            if all_covered:
-                metrics["total_files_scanned"] = len(all_covered)
-                save_json(out_dir / "scan_metrics.json", metrics)
         except Exception as e:
             logger.debug(f"Coverage record write failed (non-fatal): {e}")
 
