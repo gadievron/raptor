@@ -28,3 +28,37 @@ class TestSMTSolver:
         else:
             # If disabled, z3 should be None or a non-functional stub
             assert z3 is None or not hasattr(z3, 'BitVec')
+
+    def test_basic_arithmetic_sat(self):
+        """Verify Z3 can solve a basic bitvector arithmetic problem."""
+        if not smt_enabled():
+            pytest.skip("Z3 not installed, skipping SAT test")
+
+        from core.smt_solver import z3
+
+        solver = z3.Solver()
+        x = z3.BitVec('x', 64)
+        y = z3.BitVec('y', 64)
+
+        solver.add(x + y == 20)
+        solver.add(x == 10)
+
+        assert solver.check() == z3.sat
+        model = solver.model()
+        assert model[y].as_long() == 10
+
+    def test_basic_unsat(self):
+        """Verify Z3 correctly identifies an UNSAT problem."""
+        if not smt_enabled():
+            pytest.skip("Z3 not installed, skipping UNSAT test")
+
+        from core.smt_solver import z3
+
+        solver = z3.Solver()
+        x = z3.BitVec('x', 64)
+        
+        # These are 'impassable' constraints...
+        solver.add(x == 1)
+        solver.add(x == 2)
+
+        assert solver.check() == z3.unsat
