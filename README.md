@@ -115,10 +115,11 @@ RAPTOR now includes comprehensive GitHub forensics capabilities via the `/oss-fo
 
 ## Quick Start
 
-```bash
-You have two options, install on your own, or deploy the devcontainer.
+You have two options: install on your own, or deploy the devcontainer.
 
-**Install**
+### Install
+
+```bash
 # 1. Install Claude Code
 # Download from: https://claude.ai/download
 
@@ -131,8 +132,11 @@ claude
 "Install dependencies from requirements.txt"
 "Install semgrep"
 "Set my ANTHROPIC_API_KEY to [your-key]"
+```
 
-**devcontainer**
+### Devcontainer
+
+```bash
 # 4. Get the devcontainer
 A devcontainer with all prerequisites pre-installed is available. Open in VS Code or any of
 its forks with command Dev Container: Open Folder in Container, or build with docker:
@@ -365,7 +369,7 @@ Usage: "Use [persona name]"
 **Key features:**
 - **Adversarial thinking:** Prioritizes findings by Impact × Exploitability / Detection Time
 - **Decision templates:** 5 options after each scan
-- **Progressive disclosure:** 360t → 925t → up to 2,500t with personas
+- **Progressive disclosure:** 360t → 925t → up to 2,500t with personas (token context windows)
 - **Dual interface:** Claude Code (interactive) or Python CLI (scripting)
 
 **See:** `docs/ARCHITECTURE.md` for detailed technical documentation
@@ -468,7 +472,7 @@ Windsurf, Copilot, or Codex? Devin? Cline? Antigravity?
 Hacker poetry? :)
 
 Chat with us on the #raptor channel at the Prompt||GTFO Slack:
-<a href="https://join.slack.com/t/promptgtfo/shared_invite/zt-3ri5ndtkl-cXwvzcGAs~xdSqWi0e3BJg">https://join.slack.com/t/promptgtfo/shared_invite/zt-3kbaqgq2p-O8MAvwU1SPc10KjwJ8MN2w</a>
+<a href="https://join.slack.com/t/promptgtfo/shared_invite/zt-3kbaqgq2p-O8MAvwU1SPc10KjwJ8MN2w">https://join.slack.com/t/promptgtfo/shared_invite/zt-3kbaqgq2p-O8MAvwU1SPc10KjwJ8MN2w</a>
 
 **See:** `docs/EXTENDING_LAUNCHER.md` for developer guide
 
@@ -491,4 +495,4 @@ Make sure and review the licenses for the various tools. For example, CodeQL doe
 **Documentation:** See `docs/` directory
 
 Chat with us on the #raptor channel at the Prompt||GTFO Slack:
-<a href="https://join.slack.com/t/promptgtfo/shared_invite/zt-3ri5ndtkl-cXwvzcGAs~xdSqWi0e3BJg">https://join.slack.com/t/promptgtfo/shared_invite/zt-3kbaqgq2p-O8MAvwU1SPc10KjwJ8MN2w</a>
+<a href="https://join.slack.com/t/promptgtfo/shared_invite/zt-3kbaqgq2p-O8MAvwU1SPc10KjwJ8MN2w">https://join.slack.com/t/promptgtfo/shared_invite/zt-3kbaqgq2p-O8MAvwU1SPc10KjwJ8MN2w</a>
