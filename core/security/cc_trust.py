@@ -217,11 +217,15 @@ def _scan_settings(path: Path) -> Optional[FileScan]:
         if isinstance(env_cfg, dict):
             for env_key, env_val in env_cfg.items():
                 key_str = str(env_key)
-                # RAPTOR_* in a target repo's env dict is suspicious regardless
-                # of which specific var — targets have no business setting
-                # RAPTOR's own control env vars (RAPTOR_OUT_DIR, RAPTOR_CALLER_DIR,
-                # etc. could all subvert downstream behaviour if propagated).
-                if key_str in _DANGEROUS_ENV_VARS or key_str.startswith("RAPTOR_"):
+                # RAPTOR_* and SAGE_* in a target repo's env dict are suspicious
+                # regardless of the specific var — targets have no business
+                # setting RAPTOR's own control env vars (RAPTOR_OUT_DIR, etc.)
+                # nor SAGE's (SAGE_URL could redirect to a poisoned memory
+                # server, SAGE_ENABLED could silently turn on persistent
+                # memory the user didn't intend, etc.).
+                if (key_str in _DANGEROUS_ENV_VARS
+                        or key_str.startswith("RAPTOR_")
+                        or key_str.startswith("SAGE_")):
                     k = _truncate(key_str, limit=40)
                     fs.findings.append(Finding(f"env {k}", _truncate(str(env_val)), True))
     except Exception:
