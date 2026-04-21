@@ -16,6 +16,13 @@ existing behaviour changes.
 
 Install: pip install z3-solver
 
+Variables are modeled as fixed-width bitvectors (default 64-bit signed) so
+that integer overflow, wrap-around, and signed/unsigned comparison
+mismatches in C/C++ sinks are handled correctly rather than silently
+ignored (as the previous z3.Int model did).  Tunables:
+  RAPTOR_SMT_WIDTH   - 32 or 64         (default 64)
+  RAPTOR_SMT_SIGNED  - signed|unsigned  (default signed)
+
 Integration point (do not call from outside this location):
   - packages/codeql/dataflow_validator.py
     DataflowValidator.validate_dataflow_path()  - pre-pass before LLM call
@@ -47,6 +54,55 @@ except ImportError:
 def _smt_enabled() -> bool:
     """True if z3 is available AND RAPTOR_SMT_ENABLED is not '0'."""
     return _Z3_Around and os.environ.get("RAPTOR_SMT_ENABLED", "0") == "1"
+
+
+# ---------------------------------------------------------------------------
+# Bitvector configuration
+# ---------------------------------------------------------------------------
+# All guard variables are modeled as BitVec(width). z3-py's Python comparison
+# operators on BitVecRef are signed (BVSLT/BVSLE/...); unsigned variants must
+# go through z3.ULT/ULE/UGT/UGE. Routing every compare through _lt/_le/_gt/_ge
+# keeps the signed/unsigned switch in one place.
+
+def _bv_width() -> int:
+    try:
+        w = int(os.environ.get("RAPTOR_SMT_WIDTH", "64"))
+    except ValueError:
+        return 64
+    return w if w in (32, 64) else 64
+
+
+def _is_signed() -> bool:
+    return os.environ.get("RAPTOR_SMT_SIGNED", "signed").lower() != "unsigned"
+
+
+def _mk_var(name: str) -> Any:
+    return z3.BitVec(name, _bv_width())
+
+
+def _mk_val(v: int) -> Any:
+    return z3.BitVecVal(v, _bv_width())
+
+
+def _le(a: Any, b: Any) -> Any:
+    return a <= b if _is_signed() else z3.ULE(a, b)
+
+
+def _lt(a: Any, b: Any) -> Any:
+    return a < b if _is_signed() else z3.ULT(a, b)
+
+
+def _ge(a: Any, b: Any) -> Any:
+    return a >= b if _is_signed() else z3.UGE(a, b)
+
+
+def _gt(a: Any, b: Any) -> Any:
+    return a > b if _is_signed() else z3.UGT(a, b)
+
+
+def _mode_tag() -> str:
+    return f"bv{_bv_width()}-{'signed' if _is_signed() else 'unsigned'}"
+
 
 # DataflowPath is imported at function call time to avoid circular imports
 # (this module is in the same package as dataflow_validator)
@@ -217,26 +273,33 @@ def _constraint_to_bypass_z3(c: _Constraint, vars_: Dict[str, Any]) -> Optional[
     The guard fires (and rejects input) when its condition is True.
     Bypass = the guard's condition is False = attacker passes through.
 
+    Variables are modeled as fixed-width bitvectors so that wrap-around and
+    signed/unsigned coercion match C/C++ integer semantics.  See _bv_width
+    and _is_signed for configuration.
+
     Example:
         Guard: if (len > 100) return error;
-        Bypass: len <= 100  →  z3: Int('len') <= 100
+        Bypass: len <= 100  →  z3: BitVec('len', 64) <= 100  (signed compare)
     """
     if c.variable not in vars_:
-        vars_[c.variable] = z3.Int(c.variable)
+        vars_[c.variable] = _mk_var(c.variable)
     v = vars_[c.variable]
 
     if c.guard_type == "upper_bound":
         # Guard fires when v > bound; bypass when v <= bound
-        return v <= c.bound
+        return _le(v, _mk_val(c.bound))
     elif c.guard_type == "lower_bound":
         # Guard fires when v < bound; bypass when v >= bound
-        return v >= c.bound
+        return _ge(v, _mk_val(c.bound))
     elif c.guard_type == "null":
         # Guard fires when v is null/falsy; bypass when v != 0
-        return v != 0
+        return v != _mk_val(0)
     elif c.guard_type == "range":
-        # Guard fires when v < 0 or v >= bound_hi; bypass when 0 <= v < bound_hi
-        return z3.And(v >= 0, v < c.bound_hi)
+        # Guard fires when v < 0 or v >= bound_hi; bypass when 0 <= v < bound_hi.
+        # Under unsigned mode the "v >= 0" clause is trivially true and the
+        # upper bound carries all the information, which is the correct
+        # semantics for size_t-typed inputs.
+        return z3.And(_ge(v, _mk_val(0)), _lt(v, _mk_val(c.bound_hi)))
     return None
 
 
@@ -371,8 +434,16 @@ def analyze_sanitizers(
         bypass_vals: Dict[str, int] = {}
         for decl in m.decls():
             val = m[decl]
-            if z3.is_int_value(val):
-                bypass_vals[str(decl)] = val.as_long()
+            if z3.is_bv_value(val):
+                raw = val.as_long()
+                width = val.size()
+                # In signed mode, reinterpret the high-bit-set case as a
+                # negative integer so the reported bypass input matches how
+                # a human would read the C-level value.
+                if _is_signed() and width > 0 and raw >= (1 << (width - 1)):
+                    bypass_vals[str(decl)] = raw - (1 << width)
+                else:
+                    bypass_vals[str(decl)] = raw
 
         return SanitizerSMTResult(
             bypass_found=True,
@@ -382,7 +453,7 @@ def analyze_sanitizers(
             unparsed_sanitizers=unparsed + local_unparsed,
             smt_available=True,
             reasoning=(
-                f"SMT bypass found: all {len(bypass_pairs)} modeled sanitizer(s) can be bypassed "
+                f"SMT bypass found ({_mode_tag()}): all {len(bypass_pairs)} modeled sanitizer(s) can be bypassed "
                 f"simultaneously with input {bypass_vals}"
                 + (f"; {len(unparsed + local_unparsed)} snippet(s) not modeled by SMT" if unparsed or local_unparsed else "")
             ),
@@ -397,7 +468,7 @@ def analyze_sanitizers(
             unparsed_sanitizers=unparsed + local_unparsed,
             smt_available=True,
             reasoning=(
-                f"SMT proves sanitizers effective: modeled constraints cannot all be bypassed "
+                f"SMT proves sanitizers effective ({_mode_tag()}): modeled constraints cannot all be bypassed "
                 f"simultaneously ({len(bypass_pairs)} checked)"
                 + (f"; {len(unparsed + local_unparsed)} snippet(s) not modeled - LLM should verify those" if unparsed or local_unparsed else "")
             ),
@@ -411,5 +482,5 @@ def analyze_sanitizers(
             bypassable_sanitizers=[],
             unparsed_sanitizers=unparsed + local_unparsed + [c.raw_snippet for c, _ in bypass_pairs],
             smt_available=True,
-            reasoning="Z3 returned unknown for joint satisfiability check",
+            reasoning=f"Z3 returned unknown for joint satisfiability check ({_mode_tag()})",
         )
