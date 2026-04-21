@@ -220,6 +220,21 @@ class DataflowValidator:
         except Exception as _smt_err:
             self.logger.debug(f"SMT add-on skipped: {_smt_err}")
 
+        # SMT ADD-ON: CWE-190 integer overflow reachability at the sink.
+        # Independent of the sanitizer pass above; advisory context for the LLM.
+        try:
+            from .smt_integer_overflow import analyze_integer_overflow as _smt_ovf_analyze
+            _smt_ovf = _smt_ovf_analyze(dataflow, repo_path)
+            if _smt_ovf.smt_available:
+                _smt_note += f"\nSMT INTEGER OVERFLOW: {_smt_ovf.reasoning}"
+                if _smt_ovf.overflow_found is True and _smt_ovf.overflow_input:
+                    _smt_note += f"\nSMT overflow input values: {_smt_ovf.overflow_input}"
+                self.logger.info(
+                    f"SMT overflow analysis: overflow_found={_smt_ovf.overflow_found}"
+                )
+        except Exception as _smt_ovf_err:
+            self.logger.debug(f"SMT overflow add-on skipped: {_smt_ovf_err}")
+
         # Read source context for key locations
         source_context = self.read_source_context(
             str(repo_path / dataflow.source.file_path),
