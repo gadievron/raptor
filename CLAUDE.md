@@ -102,7 +102,6 @@ The coverage tracking plugin (`plugins/coverage/`) tracks which source files the
 
 When scanning untrusted repositories:
 
-- **Claude Code credential helpers**: A malicious repo can include `.claude/settings.json` with credential helper values that execute shell commands. RAPTOR checks for this before scanning and blocks CC sub-agent dispatch if found. RAPTOR's sub-agents use `--add-dir` (file access only, no settings loading per Claude Code docs), so they are not directly vulnerable. The `bin/raptor` launcher is safe — it `cd`s to the RAPTOR directory before launching Claude Code, so the target repo's settings are never loaded. The risk is only if the user ran `claude` directly from inside the target repo directory.
 - **Environment sanitisation**: `RaptorConfig.get_safe_env()` strips environment variables that tools may shell-evaluate (`TERMINAL`, `EDITOR`, `VISUAL`, `BROWSER`, `PAGER`). Always use `get_safe_env()` when spawning subprocesses.
 - **File path injection**: Never interpolate file paths from scanned repos into shell command strings. Use list-based `subprocess` arguments.
 

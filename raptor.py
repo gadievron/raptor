@@ -250,6 +250,15 @@ def show_mode_help(mode: str) -> None:
 
 def main():
     """Main entry point for unified RAPTOR launcher."""
+    # Pre-process --trust-repo at the top level so it works in any position
+    # (`raptor --trust-repo scan /x` or `raptor scan /x --trust-repo`).
+    # Sets the module-level flag in core.security.cc_trust; mode handlers
+    # don't need to know about it.
+    if "--trust-repo" in sys.argv:
+        from core.security.cc_trust import set_trust_override
+        set_trust_override(True)
+        sys.argv = [a for a in sys.argv if a != "--trust-repo"]
+
     # If no arguments provided, show help
     if len(sys.argv) == 1:
         parser = argparse.ArgumentParser(

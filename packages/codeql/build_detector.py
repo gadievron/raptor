@@ -683,6 +683,13 @@ Rules:
 - Paths should be relative to the project root
 """
 
+        from core.security.cc_trust import check_repo_claude_trust
+        if check_repo_claude_trust(str(self.repo_path)):
+            logger.info("  Skipping CC flag inference — target repo has dangerous "
+                        "Claude Code config (see earlier warning). "
+                        "Pass --trust-repo to override.")
+            return None
+
         try:
             logger.info("  Asking Claude Code for additional compiler flags...")
             result = subprocess.run(

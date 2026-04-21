@@ -275,8 +275,14 @@ Examples:
     parser.add_argument("--scan-only", action="store_true", help="Scan only (skip autonomous analysis)")
     parser.add_argument("--max-findings", type=int, default=20, help="Max findings to analyze")
     parser.add_argument("--no-visualizations", action="store_true", help="Disable dataflow visualizations")
+    parser.add_argument("--trust-repo", action="store_true",
+                        help="Trust the target repo's config and skip safety checks "
+                             "(core/security/cc_trust.py).")
 
     args = parser.parse_args()
+    if getattr(args, "trust_repo", False):
+        from core.security.cc_trust import set_trust_override
+        set_trust_override(True)
 
     try:
         run_autonomous_workflow(args)

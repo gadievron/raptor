@@ -49,6 +49,7 @@ Options:
   -m, --model MODEL  Choose model (opus, sonnet, haiku)
   -p, --project NAME Set the active project
   -v, --verbose      Verbose output
+  --trust-repo       Trust target repo's config (skip safety checks)
   -h, --help         Show this help
 
 Projects:
@@ -92,6 +93,7 @@ STARTUP_ARGS=("--caller-dir" "$RAPTOR_CALLER_DIR")
 CLAUDE_ARGS=("-n" "RAPTOR")
 INITIAL_PROMPT="/raptor"
 TARGET=""
+TRUST_REPO_ARG=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -p|--project)
@@ -113,6 +115,10 @@ while [[ $# -gt 0 ]]; do
             CLAUDE_ARGS+=("--verbose")
             shift
             ;;
+        --trust-repo)
+            TRUST_REPO_ARG="--trust"
+            shift
+            ;;
         -*)
             CLAUDE_ARGS+=("$1")
             shift
@@ -128,6 +134,32 @@ done
 # Build initial prompt: /raptor [target]
 if [[ -n "$TARGET" && -n "$INITIAL_PROMPT" ]]; then
     INITIAL_PROMPT="/raptor $TARGET"
+fi
+
+# Resolve which directory the trust check should scan
+CHECK_TARGET=""
+if [ -n "$TARGET" ] && [ -d "$TARGET" ]; then
+    CHECK_TARGET="$(cd "$TARGET" && pwd)"
+elif [ -d "$RAPTOR_CALLER_DIR" ]; then
+    CHECK_TARGET="$RAPTOR_CALLER_DIR"
+fi
+
+# Pre-flight: target-repo trust check (core/security/cc_trust.py).
+# Same policy shared with raptor_agentic.py + build_detector.py.
+if [ -n "$CHECK_TARGET" ]; then
+    set +e
+    if [ -n "$TRUST_REPO_ARG" ]; then
+        "$RAPTOR_DIR/libexec/raptor-cc-trust-check" "$TRUST_REPO_ARG" "$CHECK_TARGET"
+    else
+        "$RAPTOR_DIR/libexec/raptor-cc-trust-check" "$CHECK_TARGET"
+    fi
+    trust_rc=$?
+    set -e
+    if [ "$trust_rc" = "2" ]; then
+        echo "raptor: refusing to launch. Override: --trust-repo" >&2
+        exit 2
+    fi
+    # rc=3 = internal error; already logged to stderr. Don't block the launcher.
 fi
 
 cd "$RAPTOR_DIR" || { echo "raptor: cannot cd to $RAPTOR_DIR" >&2; exit 1; }

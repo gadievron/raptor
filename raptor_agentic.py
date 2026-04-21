@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from core.json import load_json, save_json
 from core.config import RaptorConfig
 from core.logging import get_logger
+from core.security.cc_trust import check_repo_claude_trust, set_trust_override
 
 logger = get_logger()
 
@@ -118,79 +119,6 @@ def run_command_streaming(cmd: list, description: str) -> tuple[int, str, str]:
         return -1, "", str(e)
 
 
-def _check_repo_claude_settings(repo_path: str) -> bool:
-    """Check target repo for malicious .claude/settings.json.
-
-    Claude Code's credential helpers execute shell commands from settings.
-    A malicious repo could contain .claude/settings.json with injected
-    helper values that exfiltrate credentials when Claude Code processes
-    the workspace.
-    Ref: CVE-2026-21852, Phoenix Security CWE-78 disclosure (2026-03-31).
-
-    Returns True if dangerous helpers found (CC dispatch should be blocked).
-    """
-    # Don't flag RAPTOR's own settings when scanning ourselves
-    raptor_dir = Path(__file__).resolve().parent
-    target = Path(repo_path).resolve()
-    if target == raptor_dir:
-        return False
-
-    claude_dir = target / ".claude"
-    settings_files = [claude_dir / name for name in ("settings.json", "settings.local.json")
-                      if (claude_dir / name).exists()]
-    if not settings_files:
-        return False
-
-    try:
-        import json
-
-        print(f"\n{'=' * 70}")
-        print("⚠️  TARGET REPO CONTAINS CLAUDE CODE SETTINGS")
-        print(f"{'=' * 70}")
-
-        # Check for known credential helper keys (shell-executed by Claude Code).
-        # List based on Claude Code source (2026-03-31). May need updating.
-        dangerous_keys = [
-            "apiKeyHelper", "awsAuthHelper", "awsAuthRefresh", "gcpAuthRefresh",
-        ]
-
-        for settings_path in settings_files:
-            print(f"   File: {settings_path}")
-            if settings_path.stat().st_size > 1_000_000:
-                print("   (skipped — file too large)")
-                continue
-            try:
-                data = json.loads(settings_path.read_text())
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                print("   (malformed — could not parse)")
-                continue
-            if isinstance(data, dict):
-                for key in dangerous_keys:
-                    val = data.get(key)
-                    if val and isinstance(val, str):
-                        display = val[:60] + "..." if len(val) > 60 else val
-                        print(f"   ⚠️  {key}: {display}  (executed as shell command)")
-
-        print()
-        print("   A .claude/ directory in a third-party repo can configure Claude")
-        print("   Code's behaviour in ways that may not be safe.")
-        print()
-        print("   RAPTOR's sub-agents use --add-dir (file access only, no settings")
-        print("   loading), so RAPTOR's own dispatch is not directly vulnerable.")
-        print("   If you used `bin/raptor` to launch, you are safe — it sets the")
-        print("   working directory to the RAPTOR repo, not the target.")
-        print("   If you ran `claude` directly from inside this repo, Claude Code")
-        print("   may have already loaded these settings.")
-        print()
-        print("   RAPTOR will not dispatch Claude Code sub-agents for this repo")
-        print("   as a precaution. Scanning and external LLM analysis proceed normally.")
-        print("   Review and remove the files to enable CC dispatch.")
-        print(f"{'=' * 70}\n")
-        return True
-    except Exception:
-        pass
-    return False
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -263,7 +191,21 @@ Examples:
     parser.add_argument("--sequential", action="store_true",
                        help="Sequential analysis in Phase 3 instead of parallel Phase 4 orchestration")
 
+    parser.add_argument(
+        "--trust-repo",
+        action="store_true",
+        help="Trust the target repo's config and skip safety checks. Currently "
+             "covers the Claude Code config check in core/security/cc_trust.py "
+             "(credential helpers, hooks, dangerous env vars, stdio MCP servers). "
+             "Future trust checks read the same signal.",
+    )
+
     args = parser.parse_args()
+
+    # Propagate --trust-repo via a module-level flag in cc_trust so every
+    # in-process trust check (this module, build_detector, ...) agrees.
+    if getattr(args, "trust_repo", False):
+        set_trust_override(True)
 
     if not args.repo:
         parser.error("--repo is required (or launch via `raptor` from the target directory)")
@@ -421,7 +363,7 @@ Examples:
     # ========================================================================
     # PRE-SCAN: Check target repo for malicious Claude Code settings
     # ========================================================================
-    block_cc_dispatch = _check_repo_claude_settings(original_repo_path)
+    block_cc_dispatch = check_repo_claude_trust(original_repo_path)
 
     # ========================================================================
     # PHASE 1: CODE SCANNING (Semgrep + CodeQL)

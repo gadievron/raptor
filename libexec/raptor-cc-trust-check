@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+#
+# raptor-cc-trust-check — pre-flight check for dangerous Claude Code config
+#                        in the target repo before `exec claude`.
+#
+# Invoked by bin/raptor before launching Claude Code. Delegates to
+# core/security/cc_trust.py so the same logic runs from the launcher and
+# from Python entry points (raptor_agentic.py, build_detector.py).
+#
+# Usage:
+#   libexec/raptor-cc-trust-check [--dry-run] [--trust] <target_path>
+#
+# --trust: set the module-level trust override before scanning. bin/raptor
+#          passes this when the user gave --trust-repo. Not driven by env
+#          var — deliberately, to close an injection path where a target
+#          repo's settings.json `env` dict could forge the override.
+#
+# --dry-run: still scan and print findings, but always exit 0. Useful for
+#   debugging ("what would this flag?") without actually blocking the caller.
+#
+# Exit codes:
+#   0  no target, target safe, --trust, or --dry-run
+#   2  target has dangerous CC config (caller should not launch)
+#   3  internal error (missing python, module import failure)
+#
+# Security note: the target repo may contain a hostile `core/` directory or
+# other Python modules that could shadow RAPTOR's imports. The Python child
+# below runs with `cwd=RAPTOR_DIR` and `-I` (isolated: ignore env/user site
+# and don't add cwd to sys.path) so only files under RAPTOR_DIR — passed in
+# via an explicit sys.path entry inside the script — can be imported.
+
+set -euo pipefail
+
+DRY_RUN=0
+TRUST=0
+TARGET=""
+TARGET_SET=0
+# Accept --dry-run / --trust in any position; first positional is TARGET;
+# unknown flags and extra positionals are rejected loudly so typos don't
+# silently change which path we check.
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run)
+            DRY_RUN=1
+            ;;
+        --trust)
+            TRUST=1
+            ;;
+        -*)
+            echo "raptor-cc-trust-check: unknown flag: $arg" >&2
+            echo "  usage: raptor-cc-trust-check [--dry-run] [--trust] <target_path>" >&2
+            exit 3
+            ;;
+        *)
+            if [ "$TARGET_SET" = "0" ]; then
+                TARGET="$arg"
+                TARGET_SET=1
+            else
+                echo "raptor-cc-trust-check: unexpected extra argument: $arg" >&2
+                echo "  usage: raptor-cc-trust-check [--dry-run] [--trust] <target_path>" >&2
+                exit 3
+            fi
+            ;;
+    esac
+done
+
+if [ -z "$TARGET" ]; then
+    exit 0
+fi
+
+# Resolve symlinks to find the real script location — matches bin/raptor's pattern
+# so packagers can safely symlink this wrapper from PATH locations.
+SCRIPT="$0"
+while [ -L "$SCRIPT" ]; do
+    DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+    SCRIPT="$(readlink "$SCRIPT")"
+    [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
+done
+RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "raptor-cc-trust-check: python3 not found" >&2
+    exit 3
+fi
+
+# -I = isolated mode: strips PYTHONPATH and PYTHONHOME, doesn't add user site,
+#      and does not prepend cwd to sys.path. Prevents the target repo from
+#      smuggling a shadowing `core/` via PYTHONPATH, ~/.local, or cwd.
+cd "$RAPTOR_DIR"
+set +e
+python3 -I - "$RAPTOR_DIR" "$TARGET" "$TRUST" <<'PY'
+import sys
+raptor_dir, target, trust_arg = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.path.insert(0, raptor_dir)
+try:
+    from core.security.cc_trust import check_repo_claude_trust, set_trust_override
+except Exception as e:
+    print(f"raptor-cc-trust-check: import failed: {e}", file=sys.stderr)
+    sys.exit(3)
+
+if trust_arg == "1":
+    set_trust_override(True)
+blocked = check_repo_claude_trust(target)
+sys.exit(2 if blocked else 0)
+PY
+rc=$?
+set -e
+
+# --dry-run: surface findings but never block the caller.
+if [ "$DRY_RUN" = "1" ] && [ "$rc" = "2" ]; then
+    echo "raptor-cc-trust-check: --dry-run suppressed the block (would have exited 2)" >&2
+    exit 0
+fi
+exit "$rc"
