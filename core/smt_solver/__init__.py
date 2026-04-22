@@ -13,7 +13,8 @@ and import primitives from here.
 from .availability import z3, z3_available
 from .bitvec import ge, gt, le, lt, mk_val, mk_var
 from .config import bv_width, is_signed, mode_tag
-from .session import DEFAULT_TIMEOUT_MS, new_solver
+from .explain import core_names, track
+from .session import DEFAULT_TIMEOUT_MS, new_solver, scoped
 from .witness import bv_to_int, format_vars, format_witness
 
 __all__ = [
@@ -33,4 +34,7 @@ __all__ = [
     "format_witness",
     "DEFAULT_TIMEOUT_MS",
     "new_solver",
+    "scoped",
+    "track",
+    "core_names",
 ]
