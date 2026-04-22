@@ -19,7 +19,7 @@ class SMTSolverBVConfig:
 
     def __post_init__(self):
         if self.width not in (32, 64):
-            raise ValueError(f"width must be 32 or 64, got {self.size}")
+            raise ValueError(f"width must be 32 or 64, got {self.width}")
 
 
 _Z3_BVConfig = SMTSolverBVConfig()
