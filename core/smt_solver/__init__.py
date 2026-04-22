@@ -10,7 +10,7 @@ one-gadget constraints, ...) live in their respective ``packages/`` modules
 and import primitives from here.
 """
 
-from .availability import smt_enabled, z3, z3_available
+from .availability import z3, z3_available
 from .bitvec import ge, gt, le, lt, mk_val, mk_var
 from .config import bv_width, is_signed, mode_tag
 from .session import DEFAULT_TIMEOUT_MS, new_solver
