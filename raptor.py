@@ -182,6 +182,11 @@ def mode_agentic(args: list) -> int:
         print(f"✗ Agentic workflow script not found: {agentic_script}")
         return 1
 
+    # --understand and --validate are consumed by the Claude Code agentic
+    # command and never reach this function. Strip them here as a safety net
+    # so raptor_agentic.py doesn't receive unknown flags.
+    args = [a for a in args if a not in ('--understand', '--validate')]
+
     # Enable CodeQL by default for comprehensive agentic mode
     # unless user explicitly specifies --codeql-only or --no-codeql
     if '--codeql' not in args and '--codeql-only' not in args and '--no-codeql' not in args:

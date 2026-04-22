@@ -9,15 +9,71 @@ description: Full autonomous security workflow — scan, dedup, prep, analyse, c
 2. Deduplicate findings
 3. Prep findings (read code, extract dataflow)
 4. **Validate + analyse** each finding (exploitation-validator methodology, Stages A-D)
-5. **Self-review** — catch contradictions, retry low confidence (Stage F)
-6. **Consensus** — multi-model second opinion (if configured)
+5. **Self-review**: catch contradictions, retry low confidence (Stage F)
+6. **Consensus**: multi-model second opinion (if configured)
 7. **Generate exploit PoCs** for exploitable findings
 8. **Generate secure patches** for confirmed vulnerabilities
 9. **Cross-finding analysis** (structural grouping, shared root causes)
 
-Nothing will be applied to your code - only generated in out/ directory.
+Nothing will be applied to your code - only generated in the out/ directory.
 
 Execute: `python3 raptor.py agentic --repo <path>`
+
+## Optional enrichment flags
+
+By default, `/agentic` scans and analyses findings in isolation. Two optional flags add richer context for more thorough results. They are opt-in because they add time and cost, but if you are doing a proper security review rather than a quick scan, they are well worth it.
+
+| Flag | What it does |
+|------|-------------|
+| `--understand` | Runs `/understand --map` before scanning to build a full context map: entry points, trust boundaries, sinks. This feeds directly into the analysis so findings are evaluated with architectural knowledge rather than in isolation. |
+| `--validate` | After the agentic pipeline completes, runs `/validate` on all findings that came back exploitable or confirmed. Uses the full 8-stage pipeline (Stages 0 through F) for a thorough second pass. |
+
+You can use either flag on its own or combine them:
+
+```bash
+# Recommended for thorough reviews
+python3 raptor.py agentic --repo /path/to/code --understand --validate
+
+# Just pre-scan context mapping, no post-validate
+python3 raptor.py agentic --repo /path/to/code --understand
+
+# Just validate the findings that look exploitable
+python3 raptor.py agentic --repo /path/to/code --validate
+```
+
+## How to handle --understand
+
+Before firing the Python scan, run the understand lifecycle steps as described in the `/understand` skill. Strip `--understand` from the args before passing to `python3 raptor.py agentic`.
+
+**Step 1:** Start the understand run:
+```bash
+libexec/raptor-run-lifecycle start understand --target <resolved_target>
+```
+Use the `OUTPUT_DIR` from this for all subsequent understand steps.
+
+**Step 2:** Build the source inventory:
+```bash
+libexec/raptor-build-checklist <resolved_target> "$OUTPUT_DIR"
+```
+
+**Step 3:** Load `.claude/skills/code-understanding/SKILL.md` and `.claude/skills/code-understanding/map.md`, then perform the `--map` analysis (MAP-0 through MAP-5). Write `context-map.json` to `$OUTPUT_DIR`.
+
+**Step 4:** Record coverage and render diagrams:
+```bash
+libexec/raptor-coverage-summary "$OUTPUT_DIR" --mark-file "$OUTPUT_DIR/reviewed-items.json"
+libexec/raptor-render-diagrams "$OUTPUT_DIR"
+libexec/raptor-run-lifecycle complete "$OUTPUT_DIR"
+```
+
+**Step 5:** Now run the Python scan as normal. The `/validate` bridge will automatically pick up `context-map.json` from the project directory when validate runs later.
+
+## How to handle --validate
+
+After the agentic Python pipeline completes, strip `--validate` from the args and run `/validate` on findings where `is_exploitable` is true or confidence is high. Load `.claude/skills/exploitability-validation/SKILL.md` and follow the full pipeline.
+
+The bridge will automatically find and import the `context-map.json` from the understand run (if `--understand` was also used), pre-populating the attack surface for Stage B. No extra flags needed.
+
+If `--validate` is used without `--understand`, validate still runs normally using whatever context is available in the project directory.
 
 ## How analysis works
 
