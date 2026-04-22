@@ -1,0 +1,79 @@
+rules:
+  # V11.4.1 extended: weak hash detection for languages not covered in weak-hash.yaml
+  # (Java and Python are handled there; JS, Go, Ruby, PHP, Rust, and C are here)
+
+  - id: raptor.crypto.weak-hash.js
+    message: Weak hash function. Use SHA-256 or better for cryptographic purposes.
+    languages: [javascript, typescript]
+    severity: HIGH
+    pattern-either:
+      - pattern: crypto.createHash('md5')
+      - pattern: crypto.createHash('sha1')
+      - pattern: crypto.createHash("md5")
+      - pattern: crypto.createHash("sha1")
+    metadata:
+      cwe: ["CWE-328"]
+      asvs: ["V11.4.1"]
+
+  - id: raptor.crypto.weak-hash.go
+    message: Weak hash function. Use SHA-256 or SHA-3 for cryptographic purposes.
+    languages: [go]
+    severity: HIGH
+    pattern-either:
+      - pattern: md5.New()
+      - pattern: md5.Sum(...)
+      - pattern: sha1.New()
+      - pattern: sha1.Sum(...)
+    metadata:
+      cwe: ["CWE-328"]
+      asvs: ["V11.4.1"]
+
+  - id: raptor.crypto.weak-hash.ruby
+    message: Weak hash function. Use SHA-256 or better for cryptographic purposes.
+    languages: [ruby]
+    severity: HIGH
+    pattern-either:
+      - pattern: Digest::MD5.hexdigest(...)
+      - pattern: Digest::MD5.digest(...)
+      - pattern: Digest::SHA1.hexdigest(...)
+      - pattern: Digest::SHA1.digest(...)
+      - pattern: OpenSSL::Digest.new("MD5")
+      - pattern: OpenSSL::Digest.new("SHA1")
+    metadata:
+      cwe: ["CWE-328"]
+      asvs: ["V11.4.1"]
+
+  - id: raptor.crypto.weak-hash.php
+    message: Weak hash function. Use hash('sha256', ...) or better for cryptographic purposes.
+    languages: [php]
+    severity: HIGH
+    pattern-either:
+      - pattern: md5(...)
+      - pattern: sha1(...)
+    metadata:
+      cwe: ["CWE-328"]
+      asvs: ["V11.4.1"]
+
+  - id: raptor.crypto.weak-hash.rust
+    message: Weak hash function. Use SHA-256 or better for cryptographic purposes.
+    languages: [rust]
+    severity: HIGH
+    pattern-either:
+      - pattern: Md5::new()
+      - pattern: Sha1::new()
+    metadata:
+      cwe: ["CWE-328"]
+      asvs: ["V11.4.1"]
+
+  - id: raptor.crypto.weak-hash.c
+    message: Weak hash function. Avoid MD5 and SHA-1 for security purposes. Use SHA-256 or better.
+    languages: [c, cpp]
+    severity: HIGH
+    pattern-either:
+      - pattern: MD5_Init(...)
+      - pattern: MD5(...)
+      - pattern: SHA1_Init(...)
+      - pattern: SHA1(...)
+    metadata:
+      cwe: ["CWE-328"]
+      asvs: ["V11.4.1"]

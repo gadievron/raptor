@@ -1,0 +1,59 @@
+rules:
+  # V11.3.1: PKCS#1 v1.5 padding is vulnerable to Bleichenbacher oracle attacks.
+  # Use OAEP for encryption and PSS for signatures.
+
+  - id: raptor.crypto.rsa.pkcs1v15-encrypt.java
+    message: >
+      RSA with PKCS#1 v1.5 padding is vulnerable to Bleichenbacher oracle attacks.
+      Use RSA/ECB/OAEPWithSHA-256AndMGF1Padding instead.
+    languages: [java, kotlin]
+    severity: HIGH
+    pattern-either:
+      - pattern: Cipher.getInstance("RSA/ECB/PKCS1Padding")
+      - pattern: Cipher.getInstance("RSA")
+    metadata:
+      cwe: ["CWE-780", "CWE-327"]
+      asvs: ["V11.3.1"]
+      references: ["https://link.springer.com/chapter/10.1007/BFb0055716"]
+
+  - id: raptor.crypto.rsa.pkcs1v15-encrypt.python
+    message: >
+      PKCS1_v1_5 encryption is vulnerable to Bleichenbacher oracle attacks.
+      Use Crypto.Cipher.PKCS1_OAEP instead.
+    languages: [python]
+    severity: HIGH
+    pattern-either:
+      - pattern: Crypto.Cipher.PKCS1_v1_5.new(...)
+      - pattern: PKCS1_v1_5.new(...)
+    metadata:
+      cwe: ["CWE-780", "CWE-327"]
+      asvs: ["V11.3.1"]
+
+  - id: raptor.crypto.rsa.pkcs1v15.go
+    message: >
+      PKCS#1 v1.5 RSA operations are vulnerable to oracle attacks. Use
+      rsa.EncryptOAEP / rsa.DecryptOAEP for encryption and rsa.SignPSS /
+      rsa.VerifyPSS for signatures.
+    languages: [go]
+    severity: HIGH
+    pattern-either:
+      - pattern: rsa.DecryptPKCS1v15(...)
+      - pattern: rsa.EncryptPKCS1v15(...)
+      - pattern: rsa.SignPKCS1v15(...)
+      - pattern: rsa.VerifyPKCS1v15(...)
+    metadata:
+      cwe: ["CWE-780", "CWE-327"]
+      asvs: ["V11.3.1"]
+
+  - id: raptor.crypto.rsa.pkcs1v15.node
+    message: >
+      RSA_PKCS1_PADDING is vulnerable to Bleichenbacher oracle attacks.
+      Use RSA_PKCS1_OAEP_PADDING instead.
+    languages: [javascript, typescript]
+    severity: HIGH
+    pattern-either:
+      - pattern: "crypto.privateDecrypt({padding: crypto.constants.RSA_PKCS1_PADDING, ...}, ...)"
+      - pattern: "crypto.publicEncrypt({padding: crypto.constants.RSA_PKCS1_PADDING, ...}, ...)"
+    metadata:
+      cwe: ["CWE-780", "CWE-327"]
+      asvs: ["V11.3.1"]

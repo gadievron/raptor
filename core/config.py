@@ -41,6 +41,7 @@ class RaptorConfig:
     TOOLS_DIR = MCP_DIR / "tools"
     BASE_OUT_DIR = REPO_ROOT / "out"
     SEMGREP_RULES_DIR = ENGINE_DIR / "semgrep" / "rules"
+    SEMGREP_REGISTRY_CACHE_DIR = SEMGREP_RULES_DIR / "registry-cache"
     SCHEMAS_DIR = ENGINE_DIR / "schemas"
 
     # CodeQL Configuration
@@ -85,14 +86,13 @@ class RaptorConfig:
     # Mapping of policy groups to their corresponding semgrep registry packs
     # Format: {local_dir_name: (pack_name, pack_identifier)}
     POLICY_GROUP_TO_SEMGREP_PACK: Dict[str, Tuple[str, str]] = {
-        "crypto": ("semgrep_crypto", "category/crypto"),  # p/crypto deprecated, use category/crypto
-        "secrets": ("semgrep_secrets", "p/secrets"),  # Already in baseline but include for completeness
+        # Only packs that exist on semgrep.dev and are cached in registry-cache/
+        # deserialisation, filesystem, logging: no registry pack exists, local rules only
+        # crypto: p/crypto and category/crypto both 404 — local rules only
+        # ssrf: p/ssrf 404 and no local rules dir — no coverage until custom rules are added
+        "secrets": ("semgrep_secrets", "p/secrets"),
         "injection": ("semgrep_injection", "p/command-injection"),
         "auth": ("semgrep_auth", "p/jwt"),
-        "ssrf": ("semgrep_ssrf", "p/ssrf"),
-        "deserialisation": ("semgrep_deserialization", "p/insecure-deserialization"),
-        "logging": ("semgrep_logging", "p/logging"),
-        "filesystem": ("semgrep_filesystem", "p/path-traversal"),
         "flows": ("semgrep_dataflow", "p/default"),
         "sinks": ("semgrep_sinks", "p/xss"),
         "best-practices": ("semgrep_best_practices", "p/default"),
@@ -157,6 +157,18 @@ class RaptorConfig:
     LOG_DIR = BASE_OUT_DIR / "logs"
     LOG_FORMAT_CONSOLE = "[%(levelname)s] %(message)s"
     LOG_FORMAT_FILE = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+    @classmethod
+    def get_semgrep_config(cls, pack_id: str) -> str:
+        """Return local cached path for a registry pack if available, else the registry ID.
+
+        Naming: p/secrets -> c.p.secrets.json (mirrors semgrep.dev /c/p/ URL path).
+        Falls back to the registry identifier so online scans still work.
+        """
+        cache_file = cls.SEMGREP_REGISTRY_CACHE_DIR / ("c." + pack_id.replace("/", ".") + ".json")
+        if cache_file.exists():
+            return str(cache_file)
+        return pack_id
 
     @staticmethod
     def get_out_dir() -> Path:

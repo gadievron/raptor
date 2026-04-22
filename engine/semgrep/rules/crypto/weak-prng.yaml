@@ -1,0 +1,81 @@
+rules:
+  # V11.5.1: All security-sensitive random values must use a CSPRNG with >= 128 bits of entropy.
+
+  - id: raptor.crypto.prng.math-random.js
+    message: >
+      Math.random() is not cryptographically secure. Use crypto.getRandomValues()
+      or crypto.randomBytes() for tokens, keys, and secrets.
+    languages: [javascript, typescript]
+    severity: HIGH
+    pattern: Math.random()
+    metadata:
+      cwe: ["CWE-338"]
+      asvs: ["V11.5.1"]
+
+  - id: raptor.crypto.prng.random-module.python
+    message: >
+      Python's random module is not cryptographically secure. Use secrets or
+      os.urandom() for tokens, keys, nonces, and passwords.
+    languages: [python]
+    severity: MEDIUM
+    pattern-either:
+      - pattern: random.random()
+      - pattern: random.randint(...)
+      - pattern: random.choice(...)
+      - pattern: random.randbytes(...)
+      - pattern: random.randrange(...)
+      - pattern: random.shuffle(...)
+      - pattern: random.sample(...)
+    metadata:
+      cwe: ["CWE-338"]
+      asvs: ["V11.5.1"]
+
+  - id: raptor.crypto.prng.java-random.java
+    message: >
+      java.util.Random is not cryptographically secure. Use java.security.SecureRandom
+      for tokens, keys, and secrets.
+    languages: [java, kotlin]
+    severity: HIGH
+    pattern: new Random()
+    metadata:
+      cwe: ["CWE-338"]
+      asvs: ["V11.5.1"]
+
+  - id: raptor.crypto.prng.math-rand.go
+    message: >
+      math/rand is not cryptographically secure. Use crypto/rand for tokens, keys,
+      and security-sensitive values.
+    languages: [go]
+    severity: HIGH
+    pattern-either:
+      - pattern: rand.Intn(...)
+      - pattern: rand.Int63n(...)
+      - pattern: rand.Float64()
+      - pattern: rand.Read(...)
+    metadata:
+      cwe: ["CWE-338"]
+      asvs: ["V11.5.1"]
+
+  - id: raptor.crypto.prng.rand.c
+    message: >
+      rand() is not cryptographically secure. Use getrandom() or read from
+      /dev/urandom for security-sensitive values.
+    languages: [c, cpp]
+    severity: HIGH
+    pattern: rand()
+    metadata:
+      cwe: ["CWE-338"]
+      asvs: ["V11.5.1"]
+
+  - id: raptor.crypto.prng.rand.ruby
+    message: >
+      Ruby's rand is not cryptographically secure. Use SecureRandom for tokens,
+      keys, and security-sensitive values.
+    languages: [ruby]
+    severity: HIGH
+    pattern-either:
+      - pattern: rand(...)
+      - pattern: Random.rand(...)
+    metadata:
+      cwe: ["CWE-338"]
+      asvs: ["V11.5.1"]

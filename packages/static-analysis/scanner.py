@@ -207,16 +207,17 @@ def semgrep_scan_parallel(
             if category_name in RaptorConfig.POLICY_GROUP_TO_SEMGREP_PACK:
                 pack_name, pack_id = RaptorConfig.POLICY_GROUP_TO_SEMGREP_PACK[category_name]
                 if pack_id not in added_packs:
-                    configs.append((pack_name, pack_id))
+                    resolved = RaptorConfig.get_semgrep_config(pack_id)
+                    configs.append((pack_name, resolved))
                     added_packs.add(pack_id)
-                    logger.debug(f"Added standard pack for {category_name}: {pack_id}")
+                    logger.debug(f"Added standard pack for {category_name}: {resolved}")
         else:
             logger.warning(f"Rule directory not found: {rd_path}")
 
     # Add baseline packs (unless already added)
     for pack_name, pack_identifier in RaptorConfig.BASELINE_SEMGREP_PACKS:
         if pack_identifier not in added_packs:
-            configs.append((pack_name, pack_identifier))
+            configs.append((pack_name, RaptorConfig.get_semgrep_config(pack_identifier)))
             added_packs.add(pack_identifier)
 
     logger.info(f"Starting {len(configs)} Semgrep scans in parallel (max {RaptorConfig.MAX_SEMGREP_WORKERS} workers)")
@@ -296,13 +297,14 @@ def semgrep_scan_sequential(
             if category_name in RaptorConfig.POLICY_GROUP_TO_SEMGREP_PACK:
                 pack_name, pack_id = RaptorConfig.POLICY_GROUP_TO_SEMGREP_PACK[category_name]
                 if pack_id not in added_packs:
-                    configs.append((pack_name, pack_id))
+                    resolved = RaptorConfig.get_semgrep_config(pack_id)
+                    configs.append((pack_name, resolved))
                     added_packs.add(pack_id)
 
     # Add baseline packs (unless already added)
     for pack_name, pack_identifier in RaptorConfig.BASELINE_SEMGREP_PACKS:
         if pack_identifier not in added_packs:
-            configs.append((pack_name, pack_identifier))
+            configs.append((pack_name, RaptorConfig.get_semgrep_config(pack_identifier)))
             added_packs.add(pack_identifier)
 
     for idx, (name, config) in enumerate(configs, 1):
@@ -403,10 +405,25 @@ def main():
         # Determine local rule directories
         groups = [g.strip() for g in args.policy_groups.split(",") if g.strip()]
         rules_base = RaptorConfig.SEMGREP_RULES_DIR
+        _EXCLUDED_RULE_DIRS = {"registry-cache"}
         if "all" in groups:
-            rules_dirs = [str(p) for p in sorted(rules_base.iterdir()) if p.is_dir()]
+            rules_dirs = [
+                str(p) for p in sorted(rules_base.iterdir())
+                if p.is_dir() and p.name not in _EXCLUDED_RULE_DIRS
+            ]
         else:
-            rules_dirs = [str(rules_base / g) for g in groups]
+            valid, unknown = [], []
+            for g in groups:
+                p = rules_base / g
+                if g in _EXCLUDED_RULE_DIRS:
+                    logger.warning(f"Policy group '{g}' is reserved and cannot be used directly")
+                elif p.is_dir():
+                    valid.append(str(p))
+                else:
+                    unknown.append(g)
+            if unknown:
+                logger.warning(f"Unknown policy groups (no rule directory found): {', '.join(unknown)}")
+            rules_dirs = valid
 
         logger.info(f"Using {len(rules_dirs)} rule directories")
 
