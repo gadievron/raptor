@@ -17,7 +17,6 @@ from .session import DEFAULT_TIMEOUT_MS, new_solver
 from .witness import bv_to_int, format_vars, format_witness
 
 __all__ = [
-    "smt_enabled",
     "z3_available",
     "z3",
     "bv_width",
