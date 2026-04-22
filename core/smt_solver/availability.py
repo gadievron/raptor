@@ -6,7 +6,7 @@ installed, the ``z3`` module attribute exported from here is ``None`` and
 
 """
 from __future__ import annotations
-from core.logging import get_logger as logger
+from core.logging import get_logger
 
 import os
 
@@ -16,11 +16,11 @@ try:
 except ImportError as i:
     z3 = None  # type: ignore[assignment]
     _Z3_AVAILABLE = False
-    logger.debug(f"An import error occurred: {i}")
+    get_logger().debug(f"An import error occurred: {i}")
 except Exception as e:
     z3 = None
     _Z3_AVAILABLE = False
-    logger.debug(f"An Exception occurred: {e}")
+    get_logger().debug(f"An Exception occurred: {e}")
 
 
 def z3_available() -> bool:
