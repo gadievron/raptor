@@ -50,9 +50,9 @@ class TestStoreScanResults(unittest.TestCase):
         from core.sage.hooks import store_scan_results
         self.assertEqual(store_scan_results("/repo", [], {"total_findings": 0}), 0)
 
-    @patch("core.sage.hooks.time.sleep")
+    @patch("core.sage.hooks._throttle")
     @patch("core.sage.hooks._get_client")
-    def test_stores_findings_when_available(self, mock_get_client, _sleep):
+    def test_stores_findings_when_available(self, mock_get_client, mock_throttle):
         mock_client = MagicMock()
         mock_client.propose.return_value = True
         mock_get_client.return_value = mock_client
@@ -68,6 +68,8 @@ class TestStoreScanResults(unittest.TestCase):
         self.assertEqual(stored, 2)
         # Two findings + one summary
         self.assertEqual(mock_client.propose.call_count, 3)
+        # One throttle call per finding-propose (not after the summary).
+        self.assertEqual(mock_throttle.call_count, 2)
 
 
 class TestEnrichAnalysisPrompt(unittest.TestCase):
@@ -110,6 +112,40 @@ class TestStoreAnalysisResults(unittest.TestCase):
         from core.sage.hooks import store_analysis_results
         # Should not raise
         store_analysis_results("/repo", {"exploitable": 3})
+
+
+class TestThrottle(unittest.TestCase):
+    """SAGE_PROPOSE_DELAY_MS behaviour (default 0, no sleep)."""
+
+    @patch.dict("os.environ", {}, clear=False)
+    @patch("core.sage.hooks.time.sleep")
+    def test_noop_when_env_unset(self, mock_sleep):
+        import os
+        os.environ.pop("SAGE_PROPOSE_DELAY_MS", None)
+        from core.sage.hooks import _throttle
+        _throttle()
+        mock_sleep.assert_not_called()
+
+    @patch.dict("os.environ", {"SAGE_PROPOSE_DELAY_MS": "0"}, clear=False)
+    @patch("core.sage.hooks.time.sleep")
+    def test_noop_when_env_zero(self, mock_sleep):
+        from core.sage.hooks import _throttle
+        _throttle()
+        mock_sleep.assert_not_called()
+
+    @patch.dict("os.environ", {"SAGE_PROPOSE_DELAY_MS": "50"}, clear=False)
+    @patch("core.sage.hooks.time.sleep")
+    def test_sleeps_when_env_set(self, mock_sleep):
+        from core.sage.hooks import _throttle
+        _throttle()
+        mock_sleep.assert_called_once_with(0.05)
+
+    @patch.dict("os.environ", {"SAGE_PROPOSE_DELAY_MS": "not-a-number"}, clear=False)
+    @patch("core.sage.hooks.time.sleep")
+    def test_invalid_value_is_noop(self, mock_sleep):
+        from core.sage.hooks import _throttle
+        _throttle()
+        mock_sleep.assert_not_called()
 
 
 if __name__ == "__main__":

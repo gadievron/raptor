@@ -8,6 +8,7 @@ scan 1 stores findings, scan 2 recalls them as context.
 All hooks are no-ops when SAGE is unavailable.
 """
 
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -21,6 +22,26 @@ logger = get_logger()
 
 # Singleton client — created on first use
 _client: Optional[SageClient] = None
+
+
+def _throttle() -> None:
+    """Optional delay between SAGE proposes. Default 0.
+
+    CometBFT's `broadcast_tx_commit` — used by `POST /v1/memory/submit` —
+    already blocks until the block containing the tx is finalised
+    (1s personal / 3s quorum cadence), so additional client-side throttling
+    buys nothing. The previous hardcoded 300ms was inherited verbatim from
+    the async-bridge era via 5c5238b and protects nothing in the sync path.
+
+    Retained as `SAGE_PROPOSE_DELAY_MS` env knob purely as a safety valve
+    for unusual deployments. Invalid values silently become 0.
+    """
+    try:
+        ms = float(os.getenv("SAGE_PROPOSE_DELAY_MS", "0"))
+    except (TypeError, ValueError):
+        return
+    if ms > 0:
+        time.sleep(ms / 1000)
 
 
 def _get_client() -> Optional[SageClient]:
@@ -142,8 +163,7 @@ def store_scan_results(
             ):
                 stored += 1
 
-            # Small delay to avoid overwhelming single-node consensus
-            time.sleep(0.3)
+            _throttle()
         except Exception as e:
             logger.debug(f"SAGE finding store failed: {e}")
 
@@ -222,7 +242,7 @@ def store_analysis_results(
                         domain_tag="raptor-exploits",
                         confidence=0.90,
                     )
-                    time.sleep(0.3)
+                    _throttle()
     except Exception as e:
         logger.debug(f"SAGE analysis store failed: {e}")
 
