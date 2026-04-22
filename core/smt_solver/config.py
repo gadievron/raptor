@@ -1,10 +1,9 @@
 """Bitvector width/signedness configuration for RAPTOR's SMT harness.
 
-Dataclass:
+Dataclass - SMTSolverBVConfig is the base bitvector config class. This
+    gets passed around and is referenced by bv_width and is_signed. 
 
-
-These are read each call so width/signedness can change between test cases
-or validator passes without module reload.
+mode_tag returns bv(32|64)(u|s) in line with onegadgets format e.g. 'bv64u'
 """
 from __future__ import annotations
 
