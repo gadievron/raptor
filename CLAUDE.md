@@ -11,40 +11,7 @@ Dangerous operations (apply patches, delete, git push): ASK FIRST.
 VERY IMPORTANT: follow these steps in order.
 1. Read `.startup-output` using the Read tool, then output its contents verbatim as a fenced code block (``` with no language tag). Do NOT paraphrase or reformat. (The SessionStart hook generates this file automatically before your first message.)
 2. On a single line, output "Quick commands:" then list the /agentic, /scan, /fuzz, /web commands (don't explain what they do) and note /commands for the full list.
-
----
-
-## SAGE MEMORY (Optional)
-
-RAPTOR can use SAGE — a consensus-validated persistent memory system — to learn across sessions.
-
-**Boot sequence (when SAGE is available):**
-1. Call `sage_inception` to initialize persistent memory
-2. Call `sage_turn` every turn with the current topic + observation
-3. Call `sage_reflect` after significant tasks with dos and don'ts
-
-**Domains:**
-- `raptor-findings` — Vulnerability findings and analysis results
-- `raptor-fuzzing` — Fuzzing strategies, crash patterns, exploit techniques
-- `raptor-crashes` — Crash analysis patterns and root causes
-- `raptor-forensics` — OSS forensics evidence and investigation patterns
-- `raptor-exploits` — Exploit development patterns and constraints
-- `raptor-methodology` — Analysis methodology and expert reasoning
-- `raptor-campaigns` — Campaign history and outcomes
-- `raptor-reports` — Report structures and templates
-- `raptor-agents` — Agent role definitions and capabilities
-- `raptor-primitives` — Exploitation primitives and dependency graphs
-- `raptor-prompts` — LLM system prompts and personas
-
-**When scanning:** After analysis, store key findings via `sage_remember` in `raptor-findings`.
-**When fuzzing:** Record strategy outcomes and crash patterns in `raptor-fuzzing`.
-**When developing exploits:** Record technique success/failure in `raptor-exploits`.
-**Before destructive actions:** Call `sage_recall` with `raptor-methodology` for known pitfalls.
-
-**Setup:** `docker compose -f docker-compose.sage.yml up -d`
-MCP config is in `.mcp.json`. Restart Claude Code session after starting SAGE.
-
-**If SAGE is not available:** All commands work normally — SAGE is purely additive.
+3. If the `sage_inception` tool is present in your available MCP tools, load `core/sage/CLAUDE.md` (persistent-memory workflow). If absent, SAGE is not installed — skip silently and do not mention it.
 
 ---
 

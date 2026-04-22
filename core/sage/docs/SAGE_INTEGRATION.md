@@ -32,48 +32,52 @@ RAPTOR
 
 ## Quick Start
 
-### 1. Start SAGE sidecar
+SAGE is opt-in. If you don't set it up, `.mcp.json` stays absent, nothing
+connects to port 8090, and RAPTOR runs exactly as before with zero SAGE
+context loaded into Claude Code.
 
-```bash
-docker compose -f docker-compose.sage.yml up -d
-```
-
-This starts:
-- **SAGE** on port 8090 (consensus-validated memory)
-- **Ollama** on port 11435 (embedding model: nomic-embed-text)
-
-### 2. Install SDK (optional, for Python integration)
+### 1. Install the SDK
 
 ```bash
 pip install sage-agent-sdk httpx
 ```
 
-### 3. Seed institutional knowledge
+### 2. Run the setup script
 
 ```bash
-python3 core/sage/scripts/seed_sage_knowledge.py --sage-url http://localhost:8090
+libexec/raptor-sage-setup
 ```
 
-This extracts and stores:
-- 30+ exploitation primitives with dependency graphs
-- 25+ mitigation identifiers
-- LLM system prompts (analysis, exploit, patch)
-- 10 expert personas (~1,748 lines of domain expertise)
-- Analysis/exploit/validation methodology
-- Signal exploitability heuristics
-- Semgrep configuration knowledge
+Idempotent. One command does everything:
 
-### 4. Register agents
+- Verifies `sage-agent-sdk` is importable by `python3`.
+- Merges the SAGE entry from `core/sage/mcp-entry.json` into `./.mcp.json`
+  (creates the file if absent, deep-merges if you already have other MCP
+  servers registered).
+- Sets `SAGE_ENABLED=true` in `.claude/settings.local.json` so Claude Code
+  propagates the flag into RAPTOR subprocesses (Python-pipeline opt-in —
+  the MCP side is `.mcp.json`).
+- `docker compose -f docker-compose.sage.yml up -d` — starts SAGE (port
+  8090) and Ollama (port 11435, model `nomic-embed-text`).
+- Waits for SAGE health.
+- Seeds institutional knowledge (30+ primitives, 25+ mitigations, system
+  prompts, 10 expert personas, methodology, exploitability heuristics).
+- Registers all 16 RAPTOR agents on the SAGE network.
+
+### 3. Restart Claude Code
+
+So it picks up the MCP registration.
+
+### Tear down
 
 ```bash
-python3 core/sage/scripts/register_agents.py --sage-url http://localhost:8090
+libexec/raptor-sage-setup --uninstall
 ```
 
-Registers all 16 RAPTOR agents on the SAGE network with role definitions.
-
-### 5. Restart Claude Code
-
-Restart your Claude Code session so it picks up the `.mcp.json` config and connects to SAGE MCP.
+Stops the docker sidecar, removes the SAGE entry from `.mcp.json` and the
+`SAGE_ENABLED` key from `.claude/settings.local.json` (deletes either file
+if it becomes empty). Data volumes are preserved — use `docker compose -f
+docker-compose.sage.yml down -v` to wipe them.
 
 ## SAGE Domains
 
@@ -100,14 +104,15 @@ Restart your Claude Code session so it picks up the `.mcp.json` config and conne
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SAGE_ENABLED` | `false` | Enable SAGE integration |
-| `SAGE_URL` | `http://localhost:8080` | SAGE API URL |
+| `SAGE_URL` | `http://localhost:8090` | SAGE API URL |
 | `SAGE_IDENTITY_PATH` | auto | Path to agent key file |
 | `SAGE_TIMEOUT` | `15.0` | API request timeout (seconds) |
 | `SAGE_FALLBACK_JSON` | `true` | Fall back to JSON when SAGE unavailable |
 
 ### MCP Configuration
 
-The `.mcp.json` file configures Claude Code to connect to SAGE:
+`.mcp.json` is `.gitignore`d and managed by `libexec/raptor-sage-setup`.
+The template fragment lives at `core/sage/mcp-entry.json`:
 
 ```json
 {
@@ -119,6 +124,10 @@ The `.mcp.json` file configures Claude Code to connect to SAGE:
   }
 }
 ```
+
+The setup script deep-merges this fragment into `./.mcp.json`, preserving
+any other MCP servers you've registered. Uninstall removes only the SAGE
+entry and leaves everything else in place.
 
 ## How It Works
 
@@ -141,7 +150,10 @@ similar = await memory.recall_similar("heap overflow strategies for ASLR binarie
 
 ### Claude Code Agents (MCP)
 
-SAGE instructions live in `CLAUDE.md` (single source of truth) — all agents inherit them automatically:
+SAGE usage instructions live in `core/sage/CLAUDE.md` and are conditionally
+loaded by RAPTOR's root `CLAUDE.md` only when the `sage_inception` tool is
+present (i.e. when `.mcp.json` registers SAGE, i.e. only when a user has
+actually run `libexec/raptor-sage-setup`). The tools exposed via MCP:
 
 ```
 sage_inception          # Boot persistent memory
@@ -167,7 +179,7 @@ All SAGE operations are wrapped in try/except. If SAGE is unavailable:
 docker compose -f docker-compose.sage.yml ps
 
 # Check SAGE health
-curl http://localhost:8090/v1/health
+curl http://localhost:8090/health
 
 # Check logs
 docker compose -f docker-compose.sage.yml logs sage
