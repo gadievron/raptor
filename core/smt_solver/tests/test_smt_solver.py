@@ -8,20 +8,20 @@ import pytest
 # core/smt_solver/tests/ -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
-from core.smt_solver import smt_enabled
+from core.smt_solver import z3_available
 
 class TestSMTSolver:
     """Basic tests for SMT solver availability checking."""
 
-    def test_smt_enabled_is_boolean(self):
-        """Ensure smt_enabled returns a boolean value."""
-        enabled = smt_enabled()
+    def test_z3_available_is_boolean(self):
+        """Ensure z3_available returns a boolean value."""
+        enabled = z3_available()
         assert isinstance(enabled, bool)
 
     def test_z3_import_exposure(self):
         """Verify that z3 is either the module or None."""
         from core.smt_solver import z3
-        if smt_enabled():
+        if z3_available():
             assert z3 is not None
             # Basic check to confirm it's actually the Z3 library
             assert hasattr(z3, 'BitVec')
@@ -31,7 +31,7 @@ class TestSMTSolver:
 
     def test_basic_arithmetic_sat(self):
         """Verify Z3 can solve a basic bitvector arithmetic problem."""
-        if not smt_enabled():
+        if not z3_available():
             pytest.skip("Z3 not installed, skipping SAT test")
 
         from core.smt_solver import z3
@@ -49,7 +49,7 @@ class TestSMTSolver:
 
     def test_basic_unsat(self):
         """Verify Z3 correctly identifies an UNSAT problem."""
-        if not smt_enabled():
+        if not z3_available():
             pytest.skip("Z3 not installed, skipping UNSAT test")
 
         from core.smt_solver import z3
