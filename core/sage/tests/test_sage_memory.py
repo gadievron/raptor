@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Tests for SAGE-backed fuzzing memory."""
 
-import asyncio
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 
 
 class TestSageFuzzingMemoryInit(unittest.TestCase):
@@ -234,44 +233,29 @@ class TestCampaignToNaturalLanguage(unittest.TestCase):
 class TestSageRecallMethods(unittest.TestCase):
     """Test SAGE recall methods return empty when SAGE unavailable."""
 
-    def _run(self, coro):
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_closed():
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        return loop.run_until_complete(coro)
-
     def test_recall_similar_no_sage(self):
         from core.sage.config import SageConfig
         from core.sage.memory import SageFuzzingMemory
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            config = SageConfig(enabled=False)
             memory = SageFuzzingMemory(
                 memory_file=Path(tmpdir) / "mem.json",
-                sage_config=config,
+                sage_config=SageConfig(enabled=False),
             )
-            results = self._run(memory.recall_similar("heap overflow"))
-            self.assertEqual(results, [])
+            self.assertEqual(memory.recall_similar("heap overflow"), [])
 
     def test_recall_exploit_patterns_no_sage(self):
         from core.sage.config import SageConfig
         from core.sage.memory import SageFuzzingMemory
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            config = SageConfig(enabled=False)
             memory = SageFuzzingMemory(
                 memory_file=Path(tmpdir) / "mem.json",
-                sage_config=config,
+                sage_config=SageConfig(enabled=False),
             )
-            results = self._run(
-                memory.recall_exploit_patterns("heap_overflow", {"aslr": True})
+            self.assertEqual(
+                memory.recall_exploit_patterns("heap_overflow", {"aslr": True}), []
             )
-            self.assertEqual(results, [])
 
 
 if __name__ == "__main__":

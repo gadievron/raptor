@@ -1,30 +1,9 @@
 #!/usr/bin/env python3
 """Tests for SAGE client wrapper."""
 
-import asyncio
-import sys
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
-
-
-def _mock_sage_sdk():
-    """Create mock sage_sdk modules."""
-    mock_client_cls = MagicMock()
-    mock_identity_cls = MagicMock()
-    mock_memory_type = SimpleNamespace(
-        observation="observation",
-        fact="fact",
-        inference="inference",
-    )
-
-    mocks = {
-        "sage_sdk": MagicMock(),
-        "sage_sdk.async_client": MagicMock(AsyncSageClient=mock_client_cls),
-        "sage_sdk.auth": MagicMock(AgentIdentity=mock_identity_cls),
-        "sage_sdk.models": MagicMock(MemoryType=mock_memory_type),
-    }
-    return mocks, mock_client_cls, mock_identity_cls, mock_memory_type
+from unittest.mock import MagicMock, patch
 
 
 class TestSageClientHealthCheck(unittest.TestCase):
@@ -60,8 +39,7 @@ class TestSageClientHealthCheck(unittest.TestCase):
         mock_resp.json.return_value = {"status": "healthy"}
 
         with patch("httpx.get", return_value=mock_resp) as mock_get:
-            result = client.is_available()
-            self.assertTrue(result)
+            self.assertTrue(client.is_available())
             mock_get.assert_called_once()
 
     @patch("core.sage.client._ensure_sdk", return_value=True)
@@ -69,122 +47,159 @@ class TestSageClientHealthCheck(unittest.TestCase):
         from core.sage.config import SageConfig
         from core.sage.client import SageClient
 
-        config = SageConfig(enabled=True)
-        client = SageClient(config)
+        client = SageClient(SageConfig(enabled=True))
 
         with patch("httpx.get", side_effect=ConnectionError("refused")):
-            result = client.is_available()
-            self.assertFalse(result)
+            self.assertFalse(client.is_available())
 
     @patch("core.sage.client._ensure_sdk", return_value=True)
     def test_health_check_bad_status(self, _):
         from core.sage.config import SageConfig
         from core.sage.client import SageClient
 
-        config = SageConfig(enabled=True)
-        client = SageClient(config)
+        client = SageClient(SageConfig(enabled=True))
 
         mock_resp = MagicMock()
         mock_resp.status_code = 503
         mock_resp.json.return_value = {}
 
         with patch("httpx.get", return_value=mock_resp):
-            result = client.is_available()
-            self.assertFalse(result)
+            self.assertFalse(client.is_available())
 
 
-class TestSageClientAsync(unittest.TestCase):
-    """Test async methods."""
-
-    def _run(self, coro):
-        """Run async test."""
-        return asyncio.get_event_loop().run_until_complete(coro)
+class TestSageClientNoSDK(unittest.TestCase):
+    """Test graceful degradation when the SDK isn't importable."""
 
     def test_embed_no_client(self):
         from core.sage.client import SageClient
-
-        client = SageClient()  # SDK not available
-        result = self._run(client.embed("test"))
-        self.assertIsNone(result)
+        self.assertIsNone(SageClient().embed("test"))
 
     def test_query_no_client(self):
         from core.sage.client import SageClient
-
-        client = SageClient()
-        result = self._run(client.query("test", "domain"))
-        self.assertEqual(result, [])
+        self.assertEqual(SageClient().query("test", "domain"), [])
 
     def test_propose_no_client(self):
         from core.sage.client import SageClient
-
-        client = SageClient()
-        result = self._run(client.propose("test content"))
-        self.assertFalse(result)
+        self.assertFalse(SageClient().propose("test content"))
 
     def test_register_no_client(self):
         from core.sage.client import SageClient
-
-        client = SageClient()
-        result = self._run(client.register("test-agent"))
-        self.assertFalse(result)
+        self.assertFalse(SageClient().register("test-agent"))
 
 
-class TestSageClientQueryWithMock(unittest.TestCase):
-    """Test query with mocked SDK."""
+def _install_mock_sdk(client_mod):
+    """Install mock SDK bindings in the client module. Returns (cls, instance)."""
+    mock_instance = MagicMock()
+    mock_cls = MagicMock(return_value=mock_instance)
+    mock_identity_cls = MagicMock()
+    mock_identity_cls.default.return_value = MagicMock()
 
-    def _run(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+    client_mod._SAGE_SDK_AVAILABLE = True
+    client_mod._SyncSageClient = mock_cls
+    client_mod._AgentIdentity = mock_identity_cls
+    client_mod._MemoryType = SimpleNamespace(
+        observation="observation", fact="fact", inference="inference"
+    )
+    return mock_cls, mock_instance
+
+
+def _snapshot_sdk(client_mod):
+    return (
+        client_mod._SAGE_SDK_AVAILABLE,
+        client_mod._SyncSageClient,
+        client_mod._AgentIdentity,
+        client_mod._MemoryType,
+    )
+
+
+def _restore_sdk(client_mod, snapshot):
+    (
+        client_mod._SAGE_SDK_AVAILABLE,
+        client_mod._SyncSageClient,
+        client_mod._AgentIdentity,
+        client_mod._MemoryType,
+    ) = snapshot
+
+
+class TestSageClientWithMock(unittest.TestCase):
+    """Test async methods with mocked sync SDK."""
 
     def test_query_returns_results(self):
         import core.sage.client as client_mod
 
-        # Save originals
-        orig_available = client_mod._SAGE_SDK_AVAILABLE
-        orig_client = client_mod._AsyncSageClient
-        orig_identity = client_mod._AgentIdentity
-        orig_mt = client_mod._MemoryType
-
+        snapshot = _snapshot_sdk(client_mod)
         try:
-            # Mock SDK
-            mock_client_instance = AsyncMock()
-            mock_client_cls = MagicMock(return_value=mock_client_instance)
-            mock_identity_cls = MagicMock()
-            mock_identity_cls.default.return_value = MagicMock()
-
-            client_mod._SAGE_SDK_AVAILABLE = True
-            client_mod._AsyncSageClient = mock_client_cls
-            client_mod._AgentIdentity = mock_identity_cls
-            client_mod._MemoryType = SimpleNamespace(
-                observation="observation", fact="fact", inference="inference"
-            )
+            _, mock_instance = _install_mock_sdk(client_mod)
 
             from core.sage.config import SageConfig
             from core.sage.client import SageClient
 
-            config = SageConfig(enabled=True)
-            sc = SageClient(config)
+            sc = SageClient(SageConfig(enabled=True))
 
-            # Mock embed + query responses
-            mock_client_instance.embed.return_value = [0.1, 0.2, 0.3]
+            mock_instance.embed.return_value = [0.1, 0.2, 0.3]
             mock_record = SimpleNamespace(
                 content="heap overflow pattern",
                 confidence_score=0.92,
                 domain_tag="raptor-fuzzing",
             )
-            mock_client_instance.query.return_value = SimpleNamespace(
-                results=[mock_record]
-            )
+            mock_instance.query.return_value = SimpleNamespace(results=[mock_record])
 
-            results = self._run(sc.query("heap overflow", "raptor-fuzzing"))
+            results = sc.query("heap overflow", "raptor-fuzzing")
             self.assertEqual(len(results), 1)
             self.assertEqual(results[0]["content"], "heap overflow pattern")
             self.assertEqual(results[0]["confidence"], 0.92)
             self.assertEqual(results[0]["domain"], "raptor-fuzzing")
         finally:
-            client_mod._SAGE_SDK_AVAILABLE = orig_available
-            client_mod._AsyncSageClient = orig_client
-            client_mod._AgentIdentity = orig_identity
-            client_mod._MemoryType = orig_mt
+            _restore_sdk(client_mod, snapshot)
+
+    def test_query_back_to_back_uses_cached_sdk_client(self):
+        """Regression: two queries in the same process must both succeed.
+
+        The original async-based wrapper silently failed on the second
+        call because httpx.AsyncClient was bound to a now-closed event
+        loop. The sync SDK client has no such loop affinity — prove it
+        stays the same instance across calls.
+        """
+        import core.sage.client as client_mod
+
+        snapshot = _snapshot_sdk(client_mod)
+        try:
+            mock_cls, mock_instance = _install_mock_sdk(client_mod)
+
+            from core.sage.config import SageConfig
+            from core.sage.client import SageClient
+
+            sc = SageClient(SageConfig(enabled=True))
+            mock_instance.embed.return_value = [0.1]
+            mock_instance.query.return_value = SimpleNamespace(results=[])
+
+            sc.query("first")
+            sc.query("second")
+
+            # SDK client constructed once, reused for both queries
+            self.assertEqual(mock_cls.call_count, 1)
+            self.assertEqual(mock_instance.query.call_count, 2)
+        finally:
+            _restore_sdk(client_mod, snapshot)
+
+    def test_propose_auto_embeds(self):
+        import core.sage.client as client_mod
+
+        snapshot = _snapshot_sdk(client_mod)
+        try:
+            _, mock_instance = _install_mock_sdk(client_mod)
+
+            from core.sage.config import SageConfig
+            from core.sage.client import SageClient
+
+            sc = SageClient(SageConfig(enabled=True))
+            mock_instance.embed.return_value = [0.1, 0.2]
+
+            self.assertTrue(sc.propose("hello", domain_tag="raptor-findings"))
+            mock_instance.embed.assert_called_once_with("hello")
+            mock_instance.propose.assert_called_once()
+        finally:
+            _restore_sdk(client_mod, snapshot)
 
 
 if __name__ == "__main__":

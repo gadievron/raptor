@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Tests for SAGE pipeline hooks."""
 
-import asyncio
 import unittest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 
 
 class TestRecallContextForScan(unittest.TestCase):
@@ -12,36 +11,30 @@ class TestRecallContextForScan(unittest.TestCase):
     @patch("core.sage.hooks._get_client", return_value=None)
     def test_returns_empty_when_unavailable(self, _):
         from core.sage.hooks import recall_context_for_scan
-        result = recall_context_for_scan("/path/to/repo")
-        self.assertEqual(result, [])
+        self.assertEqual(recall_context_for_scan("/path/to/repo"), [])
 
     @patch("core.sage.hooks._get_client")
     def test_returns_results_when_available(self, mock_get_client):
         mock_client = MagicMock()
-
-        async def mock_query(text, domain_tag, top_k=5):
-            return [{"content": "test finding", "confidence": 0.9, "domain": domain_tag}]
-
-        mock_client.query = mock_query
+        mock_client.query.return_value = [
+            {"content": "test finding", "confidence": 0.9, "domain": "raptor-findings"}
+        ]
         mock_get_client.return_value = mock_client
 
         from core.sage.hooks import recall_context_for_scan
         results = recall_context_for_scan("/path/to/repo", languages=["python"])
         self.assertGreater(len(results), 0)
+        # Should have called both findings + methodology queries
+        self.assertEqual(mock_client.query.call_count, 2)
 
     @patch("core.sage.hooks._get_client")
     def test_handles_error_gracefully(self, mock_get_client):
         mock_client = MagicMock()
-
-        async def mock_query(text, domain_tag, top_k=5):
-            raise ConnectionError("SAGE down")
-
-        mock_client.query = mock_query
+        mock_client.query.side_effect = ConnectionError("SAGE down")
         mock_get_client.return_value = mock_client
 
         from core.sage.hooks import recall_context_for_scan
-        results = recall_context_for_scan("/path/to/repo")
-        self.assertEqual(results, [])
+        self.assertEqual(recall_context_for_scan("/path/to/repo"), [])
 
 
 class TestStoreScanResults(unittest.TestCase):
@@ -50,14 +43,31 @@ class TestStoreScanResults(unittest.TestCase):
     @patch("core.sage.hooks._get_client", return_value=None)
     def test_returns_zero_when_unavailable(self, _):
         from core.sage.hooks import store_scan_results
-        result = store_scan_results("/repo", [], {})
-        self.assertEqual(result, 0)
+        self.assertEqual(store_scan_results("/repo", [], {}), 0)
 
     @patch("core.sage.hooks._get_client", return_value=None)
     def test_returns_zero_for_empty_findings(self, _):
         from core.sage.hooks import store_scan_results
-        result = store_scan_results("/repo", [], {"total_findings": 0})
-        self.assertEqual(result, 0)
+        self.assertEqual(store_scan_results("/repo", [], {"total_findings": 0}), 0)
+
+    @patch("core.sage.hooks.time.sleep")
+    @patch("core.sage.hooks._get_client")
+    def test_stores_findings_when_available(self, mock_get_client, _sleep):
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_scan_results
+        findings = [
+            {"rule_id": "javascript.express.xss", "level": "error",
+             "file_path": "a.js", "message": "reflected xss"},
+            {"rule_id": "javascript.db.sqli", "level": "warning",
+             "file_path": "b.js", "message": "concat'd query"},
+        ]
+        stored = store_scan_results("/repo", findings, {"total_findings": 2})
+        self.assertEqual(stored, 2)
+        # Two findings + one summary
+        self.assertEqual(mock_client.propose.call_count, 3)
 
 
 class TestEnrichAnalysisPrompt(unittest.TestCase):
@@ -66,17 +76,15 @@ class TestEnrichAnalysisPrompt(unittest.TestCase):
     @patch("core.sage.hooks._get_client", return_value=None)
     def test_returns_empty_when_unavailable(self, _):
         from core.sage.hooks import enrich_analysis_prompt
-        result = enrich_analysis_prompt("rule-123", "src/app.py", "python")
-        self.assertEqual(result, "")
+        self.assertEqual(enrich_analysis_prompt("rule-123", "src/app.py", "python"), "")
 
     @patch("core.sage.hooks._get_client")
     def test_returns_context_when_available(self, mock_get_client):
         mock_client = MagicMock()
-
-        async def mock_query(text, domain_tag, top_k=5):
-            return [{"content": "SQL injection pattern", "confidence": 0.92, "domain": "raptor-findings"}]
-
-        mock_client.query = mock_query
+        mock_client.query.return_value = [
+            {"content": "SQL injection pattern", "confidence": 0.92,
+             "domain": "raptor-findings"}
+        ]
         mock_get_client.return_value = mock_client
 
         from core.sage.hooks import enrich_analysis_prompt
@@ -87,16 +95,11 @@ class TestEnrichAnalysisPrompt(unittest.TestCase):
     @patch("core.sage.hooks._get_client")
     def test_returns_empty_on_no_results(self, mock_get_client):
         mock_client = MagicMock()
-
-        async def mock_query(text, domain_tag, top_k=5):
-            return []
-
-        mock_client.query = mock_query
+        mock_client.query.return_value = []
         mock_get_client.return_value = mock_client
 
         from core.sage.hooks import enrich_analysis_prompt
-        result = enrich_analysis_prompt("rule-123", "src/app.py")
-        self.assertEqual(result, "")
+        self.assertEqual(enrich_analysis_prompt("rule-123", "src/app.py"), "")
 
 
 class TestStoreAnalysisResults(unittest.TestCase):

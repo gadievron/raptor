@@ -8,8 +8,6 @@ scan 1 stores findings, scan 2 recalls them as context.
 All hooks are no-ops when SAGE is unavailable.
 """
 
-import asyncio
-import json
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -37,19 +35,6 @@ def _get_client() -> Optional[SageClient]:
     return _client
 
 
-def _run_async(coro):
-    """Run an async coroutine from sync code safely.
-
-    Always creates a fresh event loop to avoid 'Event loop is closed'
-    errors when called from subprocesses or after asyncio.run().
-    """
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Pre-analysis hook
 # ─────────────────────────────────────────────────────────────────────────────
@@ -62,13 +47,8 @@ def recall_context_for_scan(
     Recall relevant historical findings and methodology from SAGE
     before starting a scan.
 
-    Args:
-        repo_path: Path to the repository being scanned
-        languages: Detected programming languages
-
-    Returns:
-        List of recalled memories (content, confidence, domain).
-        Empty list if SAGE unavailable.
+    Returns a list of recalled memories (content, confidence, domain).
+    Empty list if SAGE unavailable.
     """
     client = _get_client()
     if client is None:
@@ -77,20 +57,17 @@ def recall_context_for_scan(
     try:
         repo_name = Path(repo_path).name
         lang_str = ", ".join(languages) if languages else "unknown"
-        query = f"security findings and vulnerability patterns for {lang_str} project {repo_name}"
 
-        results = _run_async(client.query(
-            text=query,
+        results = client.query(
+            text=f"security findings and vulnerability patterns for {lang_str} project {repo_name}",
             domain_tag="raptor-findings",
             top_k=5,
-        ))
-
-        # Also recall methodology
-        methodology = _run_async(client.query(
+        )
+        methodology = client.query(
             text=f"analysis methodology and best practices for {lang_str} security scanning",
             domain_tag="raptor-methodology",
             top_k=3,
-        ))
+        )
 
         all_results = results + methodology
         if all_results:
@@ -116,41 +93,12 @@ def store_scan_results(
 ) -> int:
     """
     Store scan results in SAGE for cross-run learning.
-
-    Args:
-        repo_path: Path to the scanned repository
-        findings: List of finding dicts (from SARIF or analysis report)
-        scan_metrics: Scan metrics dict
-        languages: Detected languages
-
-    Returns:
-        Number of findings stored. 0 if SAGE unavailable.
+    Returns number of findings stored (0 if SAGE unavailable or no findings).
     """
     client = _get_client()
-    if client is None:
+    if client is None or not findings:
         return 0
 
-    if not findings:
-        return 0
-
-    try:
-        stored = _run_async(_store_findings_async(
-            client, repo_path, findings, scan_metrics, languages
-        ))
-        return stored
-    except Exception as e:
-        logger.debug(f"SAGE post-scan store failed: {e}")
-        return 0
-
-
-async def _store_findings_async(
-    client: SageClient,
-    repo_path: str,
-    findings: List[Dict[str, Any]],
-    scan_metrics: Dict[str, Any],
-    languages: Optional[List[str]],
-) -> int:
-    """Async implementation of findings storage."""
     repo_name = Path(repo_path).name
     lang_str = ", ".join(languages) if languages else "unknown"
     stored = 0
@@ -186,16 +134,16 @@ async def _store_findings_async(
 
             confidence = {"error": 0.95, "warning": 0.85, "note": 0.75}.get(level, 0.70)
 
-            success = await client.propose(
+            if client.propose(
                 content=content,
                 memory_type="observation",
                 domain_tag="raptor-findings",
                 confidence=confidence,
-            )
-            if success:
+            ):
                 stored += 1
 
-            await asyncio.sleep(0.3)
+            # Small delay to avoid overwhelming single-node consensus
+            time.sleep(0.3)
         except Exception as e:
             logger.debug(f"SAGE finding store failed: {e}")
 
@@ -211,7 +159,7 @@ async def _store_findings_async(
             f"note={by_sev.get('note', 0)}). "
             f"Tools: {', '.join(scan_metrics.get('tools_used', ['Semgrep']))}."
         )
-        await client.propose(
+        client.propose(
             content=summary,
             memory_type="observation",
             domain_tag="raptor-findings",
@@ -230,74 +178,53 @@ def store_analysis_results(
     analysis: Dict[str, Any],
     orchestration: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """
-    Store analysis/orchestration results in SAGE.
-
-    Args:
-        repo_path: Repository path
-        analysis: Analysis report dict
-        orchestration: Orchestration result dict (optional)
-    """
+    """Store analysis/orchestration results in SAGE."""
     client = _get_client()
     if client is None:
         return
 
     try:
-        _run_async(_store_analysis_async(client, repo_path, analysis, orchestration))
+        repo_name = Path(repo_path).name
+
+        exploitable = analysis.get("exploitable", 0)
+        exploits = analysis.get("exploits_generated", 0)
+        patches = analysis.get("patches_generated", 0)
+        analyzed = analysis.get("analyzed", analysis.get("processed", 0))
+
+        summary = (
+            f"Analysis results for project {repo_name}: "
+            f"{analyzed} findings analyzed, "
+            f"{exploitable} confirmed exploitable, "
+            f"{exploits} exploits generated, "
+            f"{patches} patches generated."
+        )
+
+        client.propose(
+            content=summary,
+            memory_type="observation",
+            domain_tag="raptor-findings",
+            confidence=0.85,
+        )
+
+        if orchestration:
+            results = orchestration.get("results", [])
+            for r in results[:10]:
+                if r.get("is_exploitable"):
+                    rule_id = r.get("rule_id", "unknown")
+                    reasoning = r.get("reasoning", "")[:200]
+                    content = (
+                        f"Confirmed exploitable: {rule_id} in {repo_name}. "
+                        f"Reasoning: {reasoning}"
+                    )
+                    client.propose(
+                        content=content,
+                        memory_type="fact",
+                        domain_tag="raptor-exploits",
+                        confidence=0.90,
+                    )
+                    time.sleep(0.3)
     except Exception as e:
         logger.debug(f"SAGE analysis store failed: {e}")
-
-
-async def _store_analysis_async(
-    client: SageClient,
-    repo_path: str,
-    analysis: Dict[str, Any],
-    orchestration: Optional[Dict[str, Any]],
-) -> None:
-    """Async implementation of analysis storage."""
-    repo_name = Path(repo_path).name
-
-    exploitable = analysis.get("exploitable", 0)
-    exploits = analysis.get("exploits_generated", 0)
-    patches = analysis.get("patches_generated", 0)
-    analyzed = analysis.get("analyzed", analysis.get("processed", 0))
-
-    summary = (
-        f"Analysis results for project {repo_name}: "
-        f"{analyzed} findings analyzed, "
-        f"{exploitable} confirmed exploitable, "
-        f"{exploits} exploits generated, "
-        f"{patches} patches generated."
-    )
-
-    await client.propose(
-        content=summary,
-        memory_type="observation",
-        domain_tag="raptor-findings",
-        confidence=0.85,
-    )
-
-    # Store orchestration details if available
-    if orchestration:
-        orch = orchestration.get("orchestration", {})
-        results = orchestration.get("results", [])
-
-        # Extract and store notable findings
-        for r in results[:10]:
-            if r.get("is_exploitable"):
-                rule_id = r.get("rule_id", "unknown")
-                reasoning = r.get("reasoning", "")[:200]
-                content = (
-                    f"Confirmed exploitable: {rule_id} in {repo_name}. "
-                    f"Reasoning: {reasoning}"
-                )
-                await client.propose(
-                    content=content,
-                    memory_type="fact",
-                    domain_tag="raptor-exploits",
-                    confidence=0.90,
-                )
-                await asyncio.sleep(0.3)
 
 
 def enrich_analysis_prompt(
@@ -307,29 +234,19 @@ def enrich_analysis_prompt(
 ) -> str:
     """
     Generate additional context from SAGE to enrich an analysis prompt.
-
-    Args:
-        rule_id: The rule/check ID being analyzed
-        file_path: The file being analyzed
-        language: Programming language
-
-    Returns:
-        Additional context string to append to analysis prompt.
-        Empty string if SAGE unavailable or no relevant memories.
+    Returns context string, or empty if SAGE unavailable / no matches.
     """
     client = _get_client()
     if client is None:
         return ""
 
     try:
-        # Extract human-readable vuln type for better semantic matching
         vuln_type = rule_id.rsplit(".", 1)[-1].replace("-", " ").replace("_", " ")
-        query = f"{vuln_type} vulnerability findings and exploitability in {language} code"
-        results = _run_async(client.query(
-            text=query,
+        results = client.query(
+            text=f"{vuln_type} vulnerability findings and exploitability in {language} code",
             domain_tag="raptor-findings",
             top_k=3,
-        ))
+        )
 
         if not results:
             return ""

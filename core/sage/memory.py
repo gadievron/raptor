@@ -5,7 +5,6 @@ Drop-in replacement for FuzzingMemory that stores knowledge in SAGE
 for consensus-validated persistence while keeping JSON as local cache.
 """
 
-import asyncio
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -14,7 +13,6 @@ from core.logging import get_logger
 
 from .client import SageClient
 from .config import SageConfig
-from .hooks import _run_async
 
 logger = get_logger()
 
@@ -29,7 +27,6 @@ def _knowledge_to_natural_language(k: FuzzingKnowledge) -> str:
     ]
 
     if isinstance(k.value, dict):
-        # Extract meaningful fields from the value dict
         for vk, vv in k.value.items():
             if vv is not None and vv != "" and vv != 0:
                 parts.append(f"{vk}: {vv}.")
@@ -68,15 +65,10 @@ class SageFuzzingMemory(FuzzingMemory):
 
     Usage::
 
-        # With SAGE enabled
         memory = SageFuzzingMemory()
-
-        # Same API as FuzzingMemory
         memory.record_strategy_success("AFL_CMPLOG", hash, 5, 2)
         best = memory.get_best_strategy(hash)
-
-        # New: semantic recall from SAGE
-        similar = await memory.recall_similar("heap overflow strategies")
+        similar = memory.recall_similar("heap overflow strategies")
     """
 
     def __init__(
@@ -84,7 +76,6 @@ class SageFuzzingMemory(FuzzingMemory):
         memory_file: Optional[Path] = None,
         sage_config: Optional[SageConfig] = None,
     ):
-        # Initialise the base JSON-backed memory
         super().__init__(memory_file=memory_file)
 
         self._sage_config = sage_config or SageConfig.from_env()
@@ -96,49 +87,30 @@ class SageFuzzingMemory(FuzzingMemory):
         else:
             logger.info("SAGE unavailable — using JSON fallback only")
 
-    # ------------------------------------------------------------------
-    # Override save() to also push to SAGE
-    # ------------------------------------------------------------------
-
     def save(self):
-        """Save to JSON (always) and SAGE (when available, async fire-and-forget)."""
-        # Always save to JSON for local cache
+        """Save to JSON (always) and SAGE (when available)."""
         super().save()
 
         if not self._sage_available:
             return
 
-        # Sync push to SAGE
-        try:
-            _run_async(self._sync_to_sage())
-        except Exception:
-            pass
-
-    async def _sync_to_sage(self):
-        """Push current knowledge to SAGE."""
         stored = 0
         for key, k in self.knowledge.items():
             try:
-                content = _knowledge_to_natural_language(k)
-                success = await self._sage_client.propose(
-                    content=content,
+                if self._sage_client.propose(
+                    content=_knowledge_to_natural_language(k),
                     memory_type="observation",
                     domain_tag="raptor-fuzzing",
                     confidence=k.confidence,
-                )
-                if success:
+                ):
                     stored += 1
                 # Small delay to avoid overwhelming single-node consensus
-                await asyncio.sleep(0.3)
+                time.sleep(0.3)
             except Exception as e:
                 logger.debug(f"SAGE sync failed for {key}: {e}")
 
         if stored > 0:
             logger.debug(f"Synced {stored}/{len(self.knowledge)} knowledge entries to SAGE")
-
-    # ------------------------------------------------------------------
-    # Override remember() to immediately push to SAGE
-    # ------------------------------------------------------------------
 
     def remember(self, knowledge: FuzzingKnowledge):
         """Store knowledge locally and in SAGE."""
@@ -148,26 +120,14 @@ class SageFuzzingMemory(FuzzingMemory):
             return
 
         try:
-            _run_async(self._remember_in_sage(knowledge))
-        except Exception:
-            pass
-
-    async def _remember_in_sage(self, knowledge: FuzzingKnowledge):
-        """Push a single knowledge entry to SAGE."""
-        try:
-            content = _knowledge_to_natural_language(knowledge)
-            await self._sage_client.propose(
-                content=content,
+            self._sage_client.propose(
+                content=_knowledge_to_natural_language(knowledge),
                 memory_type="observation",
                 domain_tag="raptor-fuzzing",
                 confidence=knowledge.confidence,
             )
         except Exception as e:
             logger.debug(f"SAGE remember failed: {e}")
-
-    # ------------------------------------------------------------------
-    # Override record_campaign() to also push to SAGE
-    # ------------------------------------------------------------------
 
     def record_campaign(self, campaign_data: Dict):
         """Record campaign locally and in SAGE."""
@@ -177,16 +137,8 @@ class SageFuzzingMemory(FuzzingMemory):
             return
 
         try:
-            _run_async(self._store_campaign_in_sage(campaign_data))
-        except Exception:
-            pass
-
-    async def _store_campaign_in_sage(self, campaign_data: Dict):
-        """Push a campaign record to SAGE."""
-        try:
-            content = _campaign_to_natural_language(campaign_data)
-            await self._sage_client.propose(
-                content=content,
+            self._sage_client.propose(
+                content=_campaign_to_natural_language(campaign_data),
                 memory_type="observation",
                 domain_tag="raptor-campaigns",
                 confidence=0.85,
@@ -195,53 +147,32 @@ class SageFuzzingMemory(FuzzingMemory):
             logger.debug(f"SAGE campaign store failed: {e}")
 
     # ------------------------------------------------------------------
-    # New: semantic recall from SAGE
+    # Semantic recall from SAGE
     # ------------------------------------------------------------------
 
-    async def recall_similar(
+    def recall_similar(
         self,
         query_text: str,
         domain: str = "raptor-fuzzing",
         top_k: int = 5,
     ) -> List[Dict[str, Any]]:
-        """
-        Recall semantically similar fuzzing knowledge from SAGE.
-
-        Args:
-            query_text: Natural language query (e.g. "heap overflow strategies for ASLR binaries")
-            domain: SAGE domain to search
-            top_k: Max results to return
-
-        Returns:
-            List of dicts with content, confidence, and domain keys.
-            Empty list if SAGE is unavailable.
-        """
+        """Recall semantically similar fuzzing knowledge from SAGE."""
         if not self._sage_available:
             return []
 
-        return await self._sage_client.query(
+        return self._sage_client.query(
             text=query_text,
             domain_tag=domain,
             top_k=top_k,
         )
 
-    async def recall_exploit_patterns(
+    def recall_exploit_patterns(
         self,
         crash_type: str,
         binary_characteristics: Optional[Dict] = None,
         top_k: int = 5,
     ) -> List[Dict[str, Any]]:
-        """
-        Recall exploit technique patterns relevant to a crash type.
-
-        Args:
-            crash_type: e.g. "heap_overflow", "format_string"
-            binary_characteristics: e.g. {"aslr": True, "nx": True}
-            top_k: Max results
-
-        Returns:
-            Matching SAGE memories about exploit techniques.
-        """
+        """Recall exploit technique patterns relevant to a crash type."""
         if not self._sage_available:
             return []
 
@@ -251,9 +182,8 @@ class SageFuzzingMemory(FuzzingMemory):
             if active:
                 mitigations = f" with mitigations: {', '.join(active)}"
 
-        query = f"exploit techniques for {crash_type}{mitigations}"
-        return await self._sage_client.query(
-            text=query,
+        return self._sage_client.query(
+            text=f"exploit techniques for {crash_type}{mitigations}",
             domain_tag="raptor-fuzzing",
             top_k=top_k,
         )
