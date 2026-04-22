@@ -15,4 +15,4 @@ pytest-cov>=4.0.0
 gcovr>=5.1
 
 # test for Z3 solver
-z3-solver>=4.16.0.0
+z3-solver==4.16.0.0
