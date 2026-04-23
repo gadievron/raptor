@@ -8,8 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
-# tests/test_security_mitigations.py -> repo root
-sys.path.insert(0, str(Path(__file__).parents[1]))
+# core/security/tests/test_security_mitigations.py -> repo root
+sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from core.config import RaptorConfig
 
