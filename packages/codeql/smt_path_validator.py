@@ -24,8 +24,9 @@ Accepted condition forms (case-insensitive):
   flags & 0x80000000 == 0
   value == 42
 
-Variables are created as 64-bit bitvectors.  Signed comparisons are used
-by default; pass signed=False for address/pointer predicates.
+Variables are created as 64-bit bitvectors.  Unsigned comparisons are used
+by default (e.g. 0 <= index < size is encoded as index >= 0 and index < size) since
+most dataflow-relevant variables are sizes, offsets, counts, and bitmasks.
 
 Limitations:
   - Negative integer literals (e.g. != -1) go to the unknown list.
