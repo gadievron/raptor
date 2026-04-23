@@ -374,10 +374,12 @@ class DatabaseManager:
         logger.info(f"Executing: {' '.join(cmd)}")
         logger.info(f"Timeout: {RaptorConfig.CODEQL_TIMEOUT}s")
 
-        # Execute database creation
+        # Execute database creation in sandbox (network blocked — packs pre-fetched)
         try:
-            result = subprocess.run(
+            from core.sandbox import run as sandbox_run
+            result = sandbox_run(
                 cmd,
+                block_network=True,
                 cwd=working_dir,
                 env=env,
                 capture_output=True,

@@ -9,6 +9,11 @@ build commands for CodeQL database creation.
 import os
 import re
 import subprocess
+from core.sandbox import run as _sandbox_run, run_trusted as _run_trusted
+# _run_trusted: read-only tools (--version checks) — no namespace overhead.
+# Build-detection work compiles/executes untrusted content: each call site
+# passes target=output=<repo_path> so Landlock engages alongside seccomp +
+# namespace net block (full sandbox).
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -369,7 +374,7 @@ class BuildDetector:
             return True  # Assume it's OK if we can't validate
 
         try:
-            result = subprocess.run(
+            result = _run_trusted(  # --version checks only
                 validation_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -623,8 +628,11 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
     def _dry_run(self, script_path) -> list:
         """Run the build script and return compilation failures."""
         try:
-            result = subprocess.run(
+            repo_path = str(self.repo_path)
+            result = _sandbox_run(
                 [sys.executable, str(script_path)],
+                block_network=True,
+                target=repo_path, output=repo_path,
                 cwd=self.repo_path,
                 capture_output=True, text=True, timeout=300,
             )
@@ -692,12 +700,21 @@ Rules:
 
         try:
             logger.info("  Asking Claude Code for additional compiler flags...")
-            result = subprocess.run(
+            # Route through the RAPTOR-local egress proxy: hostname
+            # allowlist pins outbound to api.anthropic.com only, seccomp
+            # blocks UDP (no DNS exfil), proxy event log captures every
+            # CONNECT attempt in sandbox_info["proxy_events"].
+            repo_path = str(self.repo_path)
+            result = _sandbox_run(
                 [claude_bin, "-p",
                  "--no-session-persistence",
                  "--allowed-tools", "Read,Grep,Glob",
                  "--add-dir", str(self.repo_path),
                  "--max-budget-usd", "2.00"],
+                target=repo_path, output=repo_path,
+                use_egress_proxy=True,
+                proxy_hosts=["api.anthropic.com"],
+                caller_label="codeql-build-detect",
                 input=prompt, capture_output=True, text=True, timeout=180,
             )
             if result.returncode != 0 or not result.stdout.strip():

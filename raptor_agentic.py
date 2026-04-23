@@ -200,7 +200,10 @@ Examples:
              "Future trust checks read the same signal.",
     )
 
+    from core.sandbox import add_cli_args, apply_cli_args
+    add_cli_args(parser)
     args = parser.parse_args()
+    apply_cli_args(args)
 
     # Propagate --trust-repo via a module-level flag in cc_trust so every
     # in-process trust check (this module, build_detector, ...) agrees.
@@ -252,20 +255,22 @@ Examples:
             git_safe = ["-c", "core.hooksPath=/dev/null",
                         "-c", "filter.lfs.clean=true",
                         "-c", "filter.lfs.smudge=true",
-                        "-c", "filter.lfs.process=true",                   
-                        "-c", "user.name=raptor",                                
-                        "-c", "user.email=raptor@local"] 
-            result = subprocess.run(
-                ["git"] + git_safe + ["init"], cwd=temp_repo,
-                capture_output=True, text=True, timeout=30, env=env
+                        "-c", "filter.lfs.process=true",
+                        "-c", "user.name=raptor",
+                        "-c", "user.email=raptor@local"]
+            from core.sandbox import run as sandbox_run
+            result = sandbox_run(
+                ["git"] + git_safe + ["init"], block_network=True,
+                cwd=temp_repo, capture_output=True, text=True, timeout=30, env=env
             )
             if result.returncode == 0:
-                subprocess.run(
-                    ["git"] + git_safe + ["add", "."], cwd=temp_repo,
-                    capture_output=True, timeout=60, env=env
+                sandbox_run(
+                    ["git"] + git_safe + ["add", "."], block_network=True,
+                    cwd=temp_repo, capture_output=True, timeout=60, env=env
                 )
-                subprocess.run(
+                sandbox_run(
                     ["git"] + git_safe + ["commit", "-m", "RAPTOR scan snapshot"],
+                    block_network=True,
                     cwd=temp_repo, capture_output=True, timeout=60, env=env
                 )
                 repo_path = temp_repo

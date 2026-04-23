@@ -33,15 +33,42 @@ from core.sarif.parser import generate_scan_metrics, validate_sarif
 logger = get_logger()
 
 
-def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None):
-    """Execute a command and return results."""
-    p = subprocess.run(
+def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None,
+        target=None, output=None, proxy_hosts=None, caller_label=None):
+    """Execute a command in a network-isolated sandbox and return results.
+
+    When `target` and `output` are supplied, Landlock is engaged — the
+    child may read anywhere (Landlock default) but may only write to
+    `output` and `/tmp`.
+
+    Network policy:
+      - Default (proxy_hosts=None): block_network=True at the user-ns
+        layer. Child sees no interfaces at all.
+      - proxy_hosts=[...] set: route outbound via the RAPTOR egress
+        proxy with a hostname allowlist. Caller specifies which hosts
+        are needed (`semgrep.dev` for registry pack fetches,
+        `github.com`/`gitlab.com` for git clone, etc.). UDP blocked,
+        DNS resolution delegated to the proxy. Net surface is strictly
+        narrower than plain block_network=False and strictly wider
+        than block_network=True.
+    """
+    from core.sandbox import run as sandbox_run
+    net_kwargs = (
+        {"use_egress_proxy": True, "proxy_hosts": list(proxy_hosts),
+         "caller_label": caller_label or "scanner"}
+        if proxy_hosts else
+        {"block_network": True}
+    )
+    p = sandbox_run(
         cmd,
+        target=target,
+        output=output,
         cwd=cwd,
         env=env or RaptorConfig.get_safe_env(),
         text=True,
         capture_output=True,
         timeout=timeout,
+        **net_kwargs,
     )
     return p.returncode, p.stdout, p.stderr
 
@@ -72,10 +99,17 @@ def safe_clone(url: str, workdir: Path) -> Path:
     env = RaptorConfig.get_git_env()
 
     logger.info(f"Cloning repository: {url}")
+    # git clone needs network; route via the egress proxy pinned to the
+    # hostnames that `validate_repo_url` already allowlists. UDP is
+    # blocked by the proxy-mode seccomp filter, DNS is resolved by the
+    # proxy, and the allowlist prevents redirect-chasing off-host.
     rc, so, se = run(
         ["git", "clone", "--depth", "1", "--no-tags", url, str(repo_dir)],
         timeout=RaptorConfig.GIT_CLONE_TIMEOUT,
         env=env,
+        proxy_hosts=["github.com", "gitlab.com",
+                     "codeload.github.com", "objects.githubusercontent.com"],
+        caller_label="scanner-git-clone",
     )
     if rc != 0:
         raise RuntimeError(f"git clone failed: {se.strip() or so.strip()}")
@@ -137,6 +171,21 @@ def run_single_semgrep(
         path_parts = [p for p in path_parts if 'venv' not in p.lower() and '/bin/pysemgrep' not in p]
         clean_env['PATH'] = ':'.join(path_parts)
 
+    # Redirect HOME into the run's out_dir so semgrep's two stateful
+    # files — semgrep.log (operational log) and settings.yml (metrics
+    # opt-in, empty after first write) — land inside the sandbox
+    # output rather than polluting the user's real ~/.semgrep.
+    # semgrep 1.79.0 does NOT persistently cache registry packs on
+    # disk — every invocation fetches the pack YAML from semgrep.dev
+    # regardless of HOME / cache dir — so the redirect costs us
+    # nothing (there's no cache to lose across scans). PR #196 ships
+    # pack YAMLs under engine/semgrep/rules/registry-cache/ and
+    # rewrites `p/security-audit` → local path BEFORE semgrep's
+    # registry client runs — post-#196 the fetch path is cold.
+    semgrep_home = out_dir / ".semgrep_home"
+    semgrep_home.mkdir(parents=True, exist_ok=True)
+    clean_env['HOME'] = str(semgrep_home)
+
     # Registry packs ("p/xxx", "category/xxx") fetch YAML from semgrep.dev
     # on every invocation — semgrep has no persistent on-disk cache. A slow
     # or stalled registry fetch otherwise consumes the full SEMGREP_TIMEOUT
@@ -149,7 +198,19 @@ def run_single_semgrep(
     effective_timeout = min(timeout, RaptorConfig.SEMGREP_PACK_TIMEOUT) if is_registry_pack else timeout
 
     try:
-        rc, so, se = run(cmd, timeout=effective_timeout, env=clean_env)
+        # Engage Landlock via target + output. Writes pinned to out_dir
+        # and /tmp. Reads Landlock-default-wide (semgrep is a
+        # RAPTOR-chosen trusted tool, not attacker-controlled code).
+        # Network: route via the egress proxy with semgrep.dev on the
+        # allowlist — UDP blocked, hostname-allowlisted, resolved-IP-
+        # screened by the proxy's is_global check.
+        rc, so, se = run(
+            cmd, timeout=effective_timeout, env=clean_env,
+            target=str(repo_path), output=str(out_dir),
+            proxy_hosts=["semgrep.dev", "registry.semgrep.dev",
+                         "semgrep.app", "api.semgrep.dev"],
+            caller_label="scanner-semgrep",
+        )
 
         # Validate output
         if not so or not so.strip():
@@ -393,7 +454,11 @@ def main():
     ap.add_argument("--keep", action="store_true", help="Keep temp working directory")
     ap.add_argument("--sequential", action="store_true", help="Disable parallel scanning (for debugging)")
     ap.add_argument("--out", default=None, help="Output directory (from lifecycle). Overrides auto-generated path.")
+
+    from core.sandbox import add_cli_args, apply_cli_args
+    add_cli_args(ap)
     args = ap.parse_args()
+    apply_cli_args(args)
 
     start_time = time.time()
     tmp = Path(tempfile.mkdtemp(prefix="raptor_auto_"))

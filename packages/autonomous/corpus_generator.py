@@ -10,7 +10,7 @@ Instead of hardcoded seeds, this module:
 """
 
 import json
-import subprocess
+from core.sandbox import run_trusted as _run_trusted  # read-only tools only (strings)
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -63,7 +63,7 @@ class CorpusGenerator:
 
         try:
             # Extract strings from binary
-            result = subprocess.run(
+            result = _run_trusted(
                 ["strings", str(self.binary_path)],
                 capture_output=True,
                 text=True,

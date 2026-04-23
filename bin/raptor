@@ -21,6 +21,31 @@ if [ ! -d "$RAPTOR_DIR/core" ]; then
     exit 1
 fi
 
+# Strip env vars that would inject code into the launcher's own exec
+# chain — the Python parent (libseccomp/ctypes loads) and the Claude
+# Code Node process that replaces this bash shell via exec. A hostile
+# parent env (malicious .envrc + direnv, compromised shell rc) could
+# otherwise inject a fake shared library or Python module BEFORE any
+# RAPTOR code runs, silently defeating the sandbox at the parent level.
+#
+# Narrowed on purpose: this list is only names that execute attacker
+# code INSIDE the launcher→Python→Claude Code chain. Variables that
+# only affect *subprocesses* (git config, JAVA_TOOL_OPTIONS, shell rc
+# vars, editor/pager, Kerberos, etc.) are handled by
+# core.config.get_safe_env() when we spawn children — stripping them
+# here would needlessly break the user's legitimate environment.
+for _var in \
+    LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT \
+    GCONV_PATH \
+    PYTHONSTARTUP PYTHONPATH PYTHONHOME PYTHONUSERBASE \
+    PYTHONBREAKPOINT PYTHONINSPECT \
+    OPENSSL_CONF SSLKEYLOGFILE \
+    NODE_OPTIONS NODE_PATH NODE_EXTRA_CA_CERTS \
+    BASH_ENV ENV ; do
+    unset "$_var"
+done
+unset _var
+
 if ! command -v python3 >/dev/null 2>&1; then
     echo "raptor: python3 not found" >&2
     exit 1

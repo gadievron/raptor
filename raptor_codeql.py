@@ -279,7 +279,10 @@ Examples:
                         help="Trust the target repo's config and skip safety checks "
                              "(core/security/cc_trust.py).")
 
+    from core.sandbox import add_cli_args, apply_cli_args
+    add_cli_args(parser)
     args = parser.parse_args()
+    apply_cli_args(args)
     if getattr(args, "trust_repo", False):
         from core.security.cc_trust import set_trust_override
         set_trust_override(True)
