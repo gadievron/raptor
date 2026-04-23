@@ -8,6 +8,7 @@ scan 1 stores findings, scan 2 recalls them as context.
 All hooks are no-ops when SAGE is unavailable.
 """
 
+import hashlib
 import os
 import time
 from pathlib import Path
@@ -56,6 +57,22 @@ def _get_client() -> Optional[SageClient]:
     return _client
 
 
+def _repo_key(repo_path: str) -> str:
+    # Resolve before hashing so that different paths that reach the same repo
+    # (symlinks, relative paths) collapse to the same key, and same-basename
+    # repos at different locations stay distinct.
+    resolved = str(Path(repo_path).resolve()) if repo_path else ""
+    return hashlib.sha256(resolved.encode()).hexdigest()[:12]
+
+
+def _findings_domain(repo_path: str) -> str:
+    return f"raptor-findings-{_repo_key(repo_path)}"
+
+
+def _exploits_domain(repo_path: str) -> str:
+    return f"raptor-exploits-{_repo_key(repo_path)}"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Pre-analysis hook
 # ─────────────────────────────────────────────────────────────────────────────
@@ -81,7 +98,7 @@ def recall_context_for_scan(
 
         results = client.query(
             text=f"security findings and vulnerability patterns for {lang_str} project {repo_name}",
-            domain_tag="raptor-findings",
+            domain_tag=_findings_domain(repo_path),
             top_k=5,
         )
         methodology = client.query(
@@ -158,7 +175,7 @@ def store_scan_results(
             if client.propose(
                 content=content,
                 memory_type="observation",
-                domain_tag="raptor-findings",
+                domain_tag=_findings_domain(repo_path),
                 confidence=confidence,
             ):
                 stored += 1
@@ -182,7 +199,7 @@ def store_scan_results(
         client.propose(
             content=summary,
             memory_type="observation",
-            domain_tag="raptor-findings",
+            domain_tag=_findings_domain(repo_path),
             confidence=0.85,
         )
     except Exception:
@@ -222,7 +239,7 @@ def store_analysis_results(
         client.propose(
             content=summary,
             memory_type="observation",
-            domain_tag="raptor-findings",
+            domain_tag=_findings_domain(repo_path),
             confidence=0.85,
         )
 
@@ -239,7 +256,7 @@ def store_analysis_results(
                     client.propose(
                         content=content,
                         memory_type="fact",
-                        domain_tag="raptor-exploits",
+                        domain_tag=_exploits_domain(repo_path),
                         confidence=0.90,
                     )
                     _throttle()
@@ -251,20 +268,27 @@ def enrich_analysis_prompt(
     rule_id: str,
     file_path: str,
     language: str = "",
+    repo_path: Optional[str] = None,
 ) -> str:
     """
     Generate additional context from SAGE to enrich an analysis prompt.
-    Returns context string, or empty if SAGE unavailable / no matches.
+    Returns context string, or empty if SAGE unavailable / no matches /
+    no repo_path supplied.
+
+    repo_path is required to scope the recall to this repo's findings;
+    without it we'd query an empty domain (findings live under
+    raptor-findings-<repo_key>) and can't safely fall back to cross-repo
+    recall because same-basename repos would contaminate each other.
     """
     client = _get_client()
-    if client is None:
+    if client is None or not repo_path:
         return ""
 
     try:
         vuln_type = rule_id.rsplit(".", 1)[-1].replace("-", " ").replace("_", " ")
         results = client.query(
             text=f"{vuln_type} vulnerability findings and exploitability in {language} code",
-            domain_tag="raptor-findings",
+            domain_tag=_findings_domain(repo_path),
             top_k=3,
         )
 

@@ -90,7 +90,9 @@ class TestEnrichAnalysisPrompt(unittest.TestCase):
         mock_get_client.return_value = mock_client
 
         from core.sage.hooks import enrich_analysis_prompt
-        result = enrich_analysis_prompt("sql-injection", "src/db.py", "python")
+        result = enrich_analysis_prompt(
+            "sql-injection", "src/db.py", "python", repo_path="/path/to/repo"
+        )
         self.assertIn("Historical Context from SAGE", result)
         self.assertIn("SQL injection pattern", result)
 
@@ -101,7 +103,20 @@ class TestEnrichAnalysisPrompt(unittest.TestCase):
         mock_get_client.return_value = mock_client
 
         from core.sage.hooks import enrich_analysis_prompt
+        self.assertEqual(
+            enrich_analysis_prompt("rule-123", "src/app.py", repo_path="/repo"), ""
+        )
+
+    @patch("core.sage.hooks._get_client")
+    def test_returns_empty_without_repo_path(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import enrich_analysis_prompt
+        # No repo_path → skip query entirely (unscoped recall would leak
+        # cross-repo since same-basename repos now live under distinct domains).
         self.assertEqual(enrich_analysis_prompt("rule-123", "src/app.py"), "")
+        mock_client.query.assert_not_called()
 
 
 class TestStoreAnalysisResults(unittest.TestCase):
