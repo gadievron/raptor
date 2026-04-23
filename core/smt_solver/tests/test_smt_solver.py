@@ -187,3 +187,30 @@ class TestExplain:
         # Only the tracked assertion is named; the untracked `x == 1`
         # pulled us into unsat but isn't reported by core_names.
         assert names == ["clash"]
+
+    @_requires_z3
+    def test_track_chained_batches_no_label_collision(self):
+        """Calling track() twice on the same solver with the same rev dict
+        must not produce colliding labels.  The bug was that both calls
+        would generate ``_c0``, ``_c1``, ... — corrupting the rev map so
+        core_names returned wrong (or missing) constraint names."""
+        from core.smt_solver import core_names, new_solver, track, z3
+        solver = new_solver()
+        x = z3.BitVec("x", 64)
+        y = z3.BitVec("y", 64)
+
+        # First batch: x constraints.
+        rev = track(solver, [("x_is_1", x == 1)])
+        # Second batch chained onto the same rev — labels must start at _c1.
+        track(solver, [("x_is_2", x == 2), ("y_is_0", y == 0)], rev=rev)
+
+        assert solver.check() == z3.unsat
+
+        names = set(core_names(solver, rev))
+        # x_is_1 and x_is_2 are the conflicting pair; y_is_0 is satisfiable
+        # alongside either x constraint, so it may or may not appear in the
+        # minimal core.  The important thing: all three names are in rev and
+        # no name is missing or duplicated due to label collision.
+        assert "x_is_1" in names or "x_is_2" in names
+        assert len(rev) == 3
+        assert set(rev.values()) == {"x_is_1", "x_is_2", "y_is_0"}
