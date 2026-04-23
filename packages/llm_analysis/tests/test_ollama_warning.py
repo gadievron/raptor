@@ -11,6 +11,7 @@ from pathlib import Path
 # packages/llm_analysis/tests/test_ollama_warning.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
+from core.config import RaptorConfig
 from packages.llm_analysis.llm.client import LLMClient
 from packages.llm_analysis.llm.config import ModelConfig, LLMConfig
 
@@ -18,21 +19,11 @@ from packages.llm_analysis.llm.config import ModelConfig, LLMConfig
 class TestOllamaWarning:
     """Test 10: Verify warning appears when using Ollama for exploit generation."""
 
-    def test_ollama_warning_on_init(self):
+    def test_ollama_warning_on_init(self, caplog):
         """Test warning appears when LLMClient initialized with Ollama model."""
-        # SKIP: Warning verified working (visible in test output stderr)
-        # Other tests verify warning functionality:
-        # - test_ollama_warning_message_content (PASSES - verifies content)
-        # - test_warning_format (PASSES - verifies format)
-        # This specific test has capsys timing/capture issues with RaptorLogger
-        pytest.skip("Redundant - warning verified by message_content and format tests")
-
-    def test_ollama_warning_message_content(self, caplog):
-        """Test warning message contains specific guidance."""
-        # Check if Ollama is available
         import requests
         try:
-            response = requests.get("http://localhost:11434/api/tags", timeout=2)
+            response = requests.get(f"{RaptorConfig.OLLAMA_HOST}/api/tags", timeout=2)
             if response.status_code != 200:
                 pytest.skip("Ollama not available")
         except Exception:
@@ -44,7 +35,35 @@ class TestOllamaWarning:
         config.primary_model = ModelConfig(
             provider="ollama",
             model_name="mistral",
-            api_base="http://localhost:11434"
+            api_base=RaptorConfig.OLLAMA_HOST,
+        )
+
+        LLMClient(config)
+
+        ollama_warnings = [
+            record for record in caplog.records
+            if record.levelname == "WARNING" and "ollama" in record.message.lower()
+        ]
+        assert ollama_warnings, "Expected an Ollama warning at LLMClient init"
+
+    def test_ollama_warning_message_content(self, caplog):
+        """Test warning message contains specific guidance."""
+        # Check if Ollama is available
+        import requests
+        try:
+            response = requests.get(f"{RaptorConfig.OLLAMA_HOST}/api/tags", timeout=2)
+            if response.status_code != 200:
+                pytest.skip("Ollama not available")
+        except Exception:
+            pytest.skip("Ollama not available")
+
+        caplog.set_level(logging.WARNING)
+
+        config = LLMConfig()
+        config.primary_model = ModelConfig(
+            provider="ollama",
+            model_name="mistral",
+            api_base=RaptorConfig.OLLAMA_HOST
         )
 
         client = LLMClient(config)
@@ -104,21 +123,11 @@ class TestOllamaWarning:
             "Should not warn about Ollama when using cloud providers"
         print("\n✅ No Ollama warning for cloud provider (correct)")
 
-    def test_warning_appears_once(self):
+    def test_warning_appears_once(self, caplog):
         """Test warning appears only once per client initialization."""
-        # SKIP: Warning verified working (visible in test output - appears once)
-        # Other tests verify warning functionality:
-        # - test_ollama_warning_message_content (PASSES)
-        # - test_warning_format (PASSES)
-        # This specific test has capsys timing/capture issues with RaptorLogger
-        pytest.skip("Redundant - warning verified by other tests")
-
-    def test_warning_format(self, caplog):
-        """Test warning uses proper logging format."""
-        # Check if Ollama is available
         import requests
         try:
-            response = requests.get("http://localhost:11434/api/tags", timeout=2)
+            response = requests.get(f"{RaptorConfig.OLLAMA_HOST}/api/tags", timeout=2)
             if response.status_code != 200:
                 pytest.skip("Ollama not available")
         except Exception:
@@ -130,7 +139,37 @@ class TestOllamaWarning:
         config.primary_model = ModelConfig(
             provider="ollama",
             model_name="mistral",
-            api_base="http://localhost:11434"
+            api_base=RaptorConfig.OLLAMA_HOST,
+        )
+
+        LLMClient(config)
+
+        ollama_warnings = [
+            record for record in caplog.records
+            if record.levelname == "WARNING" and "ollama" in record.message.lower()
+        ]
+        assert len(ollama_warnings) == 1, (
+            f"Expected exactly one Ollama warning per client init, got {len(ollama_warnings)}"
+        )
+
+    def test_warning_format(self, caplog):
+        """Test warning uses proper logging format."""
+        # Check if Ollama is available
+        import requests
+        try:
+            response = requests.get(f"{RaptorConfig.OLLAMA_HOST}/api/tags", timeout=2)
+            if response.status_code != 200:
+                pytest.skip("Ollama not available")
+        except Exception:
+            pytest.skip("Ollama not available")
+
+        caplog.set_level(logging.WARNING)
+
+        config = LLMConfig()
+        config.primary_model = ModelConfig(
+            provider="ollama",
+            model_name="mistral",
+            api_base=RaptorConfig.OLLAMA_HOST
         )
 
         client = LLMClient(config)
