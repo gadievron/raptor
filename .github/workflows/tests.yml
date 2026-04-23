@@ -71,10 +71,15 @@ jobs:
       - name: Restore venv permissions
         run: chmod +x $VENV_PATH/bin/*
 
+      - name: Compile Python sources
+        run: |
+          source $VENV_PATH/bin/activate
+          python -m compileall -q core packages raptor.py raptor_agentic.py raptor_codeql.py raptor_fuzzing.py
+
       - name: Run unit tests
         run: |
           source $VENV_PATH/bin/activate
-          pytest packages/*/tests
+          pytest core packages/*/tests
 
   test-workflows:
     needs: deps

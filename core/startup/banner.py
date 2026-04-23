@@ -50,7 +50,7 @@ def format_banner(logo, quote, tool_results, tool_warnings, llm_lines,
         lines.append("")
 
     # Tools
-    tool_parts = [f"{name} {'\u2713' if ok else '\u2717'}" for name, ok in tool_results]
+    tool_parts = [f"{name} {'✓' if ok else '✗'}" for name, ok in tool_results]
     lines.append(f" tools: {'  '.join(tool_parts)}")
 
     # Env
