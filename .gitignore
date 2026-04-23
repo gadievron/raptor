@@ -21,6 +21,3 @@ out/
 
 # Runtime artifacts
 codeql_dbs/
-
-# Testbench data to ignore
-test/data/testbench
