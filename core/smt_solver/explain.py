@@ -15,12 +15,16 @@ Usage::
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .availability import z3
 
 
-def track(solver: Any, labeled: Sequence[Tuple[str, Any]]) -> Dict[str, str]:
+def track(
+        solver: Any, 
+        labeled: Sequence[Tuple[str, Any]],
+        rev: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
     """Assert each labelled expression via ``assert_and_track``.
 
     Returns a mapping from the generated Z3 label identifier back to the
@@ -28,14 +32,18 @@ def track(solver: Any, labeled: Sequence[Tuple[str, Any]]) -> Dict[str, str]:
     ``solver.unsat_core()`` output.  Existing (non-tracked) assertions on
     the solver are unaffected and will not appear in the unsat core.
 
-    One-shot per solver: labels are generated as ``_c0``, ``_c1``, ... so
-    calling ``track`` twice on the same solver will collide.  If you need
-    to probe multiple batches, use a fresh solver (or merge the batches
-    into one call).
+    Pass an existing ``rev`` dict to chain multiple batches on 
+    the same solver safely — the label counter is derived from 
+    ``len(rev)`` so new labels never collide with previously 
+    tracked ones.  When ``rev`` is ``None`` (default) a fresh
+    dict is created, matching the original single-call behaviour.
     """
-    rev: Dict[str, str] = {}
+
+    if rev is None:
+        rev = {}
+    offset = len(rev)
     for i, (name, expr) in enumerate(labeled):
-        label = z3.Bool(f"_c{i}")
+        label = z3.Bool(f"_c{offset+i}")
         solver.assert_and_track(expr, label)
         rev[str(label)] = name
     return rev
