@@ -270,11 +270,24 @@ class AFLRunner:
             logger.info(f"Starting AFL instance: {instance_name}")
             logger.debug(f"Command: {' '.join(cmd)}")
 
+            # AFL refuses to run if the host's core_pattern pipes cores (apport,
+            # systemd-coredump) or the CPU governor is not 'performance'. Both
+            # are the default on modern Linux desktops, and both are outside
+            # RAPTOR's control — asking the operator to tune them for every
+            # fuzzing run is not realistic. Setting these env vars tells AFL
+            # to tolerate both: we lose a small amount of speed and the
+            # guarantee that external cores are captured (AFL still writes its
+            # own crash artefacts under crashes/).
+            afl_env = os.environ.copy()
+            afl_env.setdefault("AFL_SKIP_CPUFREQ", "1")
+            afl_env.setdefault("AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES", "1")
+
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                env=afl_env,
             )
             processes.append((instance_name, proc))
 

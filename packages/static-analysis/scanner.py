@@ -137,8 +137,19 @@ def run_single_semgrep(
         path_parts = [p for p in path_parts if 'venv' not in p.lower() and '/bin/pysemgrep' not in p]
         clean_env['PATH'] = ':'.join(path_parts)
 
+    # Registry packs ("p/xxx", "category/xxx") fetch YAML from semgrep.dev
+    # on every invocation — semgrep has no persistent on-disk cache. A slow
+    # or stalled registry fetch otherwise consumes the full SEMGREP_TIMEOUT
+    # (15 min) per pack, and at MAX_SEMGREP_WORKERS=4 can eat the whole
+    # 30-min agentic budget for one bad network moment. Bound the per-pack
+    # cost with a tighter ceiling so a stuck fetch drops that pack and the
+    # remaining packs still run. Local rule directories keep the longer
+    # timeout because they do real scan work without network.
+    is_registry_pack = config.startswith("p/") or config.startswith("category/")
+    effective_timeout = min(timeout, RaptorConfig.SEMGREP_PACK_TIMEOUT) if is_registry_pack else timeout
+
     try:
-        rc, so, se = run(cmd, timeout=timeout, env=clean_env)
+        rc, so, se = run(cmd, timeout=effective_timeout, env=clean_env)
 
         # Validate output
         if not so or not so.strip():
