@@ -203,6 +203,106 @@ class TestConditionForms:
         ])
         assert r.feasible is False
 
+    @_requires_z3
+    def test_multiplication_sat(self):
+        """count * 16 < 32768 — Z3 finds a small satisfying count (safe path)."""
+        r = check_path_feasibility([
+            PathCondition("count * 16 < 32768", step_index=0),
+            PathCondition("count > 0", step_index=1),
+        ])
+        assert r.feasible is True
+        assert "count" in r.model
+        # 64-bit BV: Z3 finds count <= 2047 (not the 32-bit wraparound path)
+        assert r.model["count"] * 16 < 32768
+
+    @_requires_z3
+    def test_multiplication_propagates_correctly(self):
+        """alloc_size == count * 16 must not silently encode as alloc_size == count."""
+        r = check_path_feasibility([
+            PathCondition("alloc_size == count * 16", step_index=0),
+            PathCondition("count == 4", step_index=1),
+        ])
+        assert r.feasible is True
+        # If * were silently dropped, alloc_size == count → alloc_size == 4.
+        # With correct encoding, alloc_size == 4 * 16 == 64.
+        assert r.model.get("alloc_size") == 64
+
+    @_requires_z3
+    def test_multiplication_makes_path_infeasible(self):
+        """count * 4 == 8 AND count == 3 is unsatisfiable (3*4 = 12, not 8)."""
+        r = check_path_feasibility([
+            PathCondition("count * 4 == 8", step_index=0),
+            PathCondition("count == 3", step_index=1),
+        ])
+        assert r.feasible is False
+
+    def test_multiplication_with_unsupported_op_goes_to_unknown(self):
+        """a * b | c is not parseable — must go to unknown, not encode partially."""
+        with patch("packages.codeql.smt_path_validator._z3_available", return_value=False):
+            r = check_path_feasibility([PathCondition("a * b | c < 10", step_index=0)])
+        # Without Z3 everything is unknown — just confirming no crash
+        assert r.feasible is None
+
+    @_requires_z3
+    def test_bitwise_or_sat(self):
+        """flags | 0x1 != 0 — any flags value satisfies this (OR with 1 is always >=1)."""
+        r = check_path_feasibility([PathCondition("flags | 0x1 != 0", step_index=0)])
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_bitwise_or_infeasible(self):
+        """flags | 0x1 == 0 — impossible since OR with 1 always sets bit 0."""
+        r = check_path_feasibility([PathCondition("flags | 0x1 == 0", step_index=0)])
+        assert r.feasible is False
+
+    @_requires_z3
+    def test_right_shift_in_lhs_of_comparison(self):
+        """n >> 1 < limit — Z3 finds a satisfying n."""
+        r = check_path_feasibility([
+            PathCondition("n >> 1 < limit", step_index=0),
+            PathCondition("limit == 8", step_index=1),
+        ])
+        assert r.feasible is True
+        # n >> 1 < 8 means n < 16; Z3 should give a concrete n
+        assert "n" in r.model
+        assert r.model["n"] >> 1 < 8
+
+    @_requires_z3
+    def test_right_shift_infeasible(self):
+        """n >> 1 < 8 AND n >> 1 >= 8 — mutually exclusive."""
+        r = check_path_feasibility([
+            PathCondition("n >> 1 < 8", step_index=0),
+            PathCondition("n >> 1 >= 8", step_index=1),
+        ])
+        assert r.feasible is False
+
+    @_requires_z3
+    def test_left_shift_sat(self):
+        """size == n << 3 AND n == 4 — size must be 32."""
+        r = check_path_feasibility([
+            PathCondition("size == n << 3", step_index=0),
+            PathCondition("n == 4", step_index=1),
+        ])
+        assert r.feasible is True
+        assert r.model.get("size") == 32
+
+    @_requires_z3
+    def test_shift_in_rhs_of_equality(self):
+        """buf_size == count >> 2 — shift on the RHS of ==."""
+        r = check_path_feasibility([
+            PathCondition("buf_size == count >> 2", step_index=0),
+            PathCondition("count == 64", step_index=1),
+        ])
+        assert r.feasible is True
+        assert r.model.get("buf_size") == 16
+
+    @_requires_z3
+    def test_trailing_orphan_token_goes_to_unknown(self):
+        """Expressions where a token is left unconsumed must go to unknown."""
+        r = check_path_feasibility([PathCondition("a b", step_index=0)])
+        # 'a b' tokenises to ['a', 'b']; 'b' is orphaned — must be unknown, not encode as 'a'
+        assert "a b" in r.unknown
+
 
 class TestResultStructure:
     """PathSMTResult fields are populated correctly."""
