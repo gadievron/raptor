@@ -92,7 +92,9 @@ demonstrates how Claude Code can be adapted for **any purpose**, with RAPTOR pac
 - **Cost Management:** Budget enforcement, real-time callbacks, and intelligent quota detection
 - **Enhanced Reliability:** Multiple bug fixes improving robustness across CodeQL, static analysis, and LLM providers
 - **Code Understanding** We wanted to build more adversarial code comprehension, which allows you to map attack surface, trace those vital data flows &amp; hunt for vulnerability variants
-- **Z3 SMT Engine:** Two-layer SMT integration, both optional (`pip install z3-solver`) and gracefully absent-safe. (1) **Dataflow pre-screening:** CodeQL path conditions are checked for joint satisfiability before any LLM call — provably unreachable paths are discarded, satisfiable paths get concrete candidate inputs injected into the prompt. (2) **One-gadget constraint analysis:** during binary feasibility assessment, Z3 checks whether a one-gadget's register/memory constraints are satisfiable given the concrete crash state, ranking gadgets by actual reachability rather than heuristics alone.
+- **Z3 SMT Engine:** Two-layer SMT integration, both optional (`pip install z3-solver`) and gracefully absent-safe.
+  - **Dataflow pre-screening:** CodeQL path conditions are checked for joint satisfiability before any LLM call — provably unreachable paths are discarded, satisfiable paths get concrete candidate inputs injected into the prompt.
+  - **One-gadget constraint analysis:** during binary feasibility assessment, Z3 checks whether a one-gadget's register/memory constraints are satisfiable given the concrete crash state, ranking gadgets by actual reachability rather than heuristics alone.
 
 ---
 
