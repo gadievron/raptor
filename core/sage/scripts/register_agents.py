@@ -296,7 +296,7 @@ async def register_agents(sage_url: str, dry_run: bool = False):
 
     # Register the registrar agent first
     try:
-        await client.register("raptor-registrar")
+        await client.register_agent("raptor-registrar")
         print("Registered as raptor-registrar\n")
     except Exception as e:
         print(f"Registration note: {e}\n")
