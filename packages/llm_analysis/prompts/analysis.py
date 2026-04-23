@@ -44,6 +44,7 @@ def build_analysis_prompt(
     dataflow_sink: Optional[Dict[str, Any]] = None,
     dataflow_steps: Optional[list] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    repo_path: Optional[str] = None,
 ) -> str:
     """Build the vulnerability analysis prompt.
 
@@ -155,7 +156,7 @@ You have the COMPLETE attack path from source to sink. Use this to make an infor
     # Enrich with SAGE historical context (cross-run learning)
     try:
         from core.sage.hooks import enrich_analysis_prompt
-        sage_context = enrich_analysis_prompt(rule_id, file_path)
+        sage_context = enrich_analysis_prompt(rule_id, file_path, repo_path=repo_path)
         if sage_context:
             prompt += sage_context
     except Exception:
@@ -232,4 +233,5 @@ def build_analysis_prompt_from_finding(finding: Dict[str, Any]) -> str:
         dataflow_sink=dataflow.get("sink") if dataflow else None,
         dataflow_steps=dataflow.get("steps") if dataflow else None,
         metadata=finding.get("metadata"),
+        repo_path=finding.get("repo_path"),
     )

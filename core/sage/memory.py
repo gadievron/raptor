@@ -5,7 +5,6 @@ Drop-in replacement for FuzzingMemory that stores knowledge in SAGE
 for consensus-validated persistence while keeping JSON as local cache.
 """
 
-import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -13,6 +12,7 @@ from core.logging import get_logger
 
 from .client import SageClient
 from .config import SageConfig
+from .hooks import _throttle
 
 logger = get_logger()
 
@@ -104,8 +104,7 @@ class SageFuzzingMemory(FuzzingMemory):
                     confidence=k.confidence,
                 ):
                     stored += 1
-                # Small delay to avoid overwhelming single-node consensus
-                time.sleep(0.3)
+                _throttle()
             except Exception as e:
                 logger.debug(f"SAGE sync failed for {key}: {e}")
 
