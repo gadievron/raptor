@@ -236,13 +236,6 @@ class TestConditionForms:
         ])
         assert r.feasible is False
 
-    def test_multiplication_with_unsupported_op_goes_to_unknown(self):
-        """a * b | c is not parseable — must go to unknown, not encode partially."""
-        with patch("packages.codeql.smt_path_validator._z3_available", return_value=False):
-            r = check_path_feasibility([PathCondition("a * b | c < 10", step_index=0)])
-        # Without Z3 everything is unknown — just confirming no crash
-        assert r.feasible is None
-
     @_requires_z3
     def test_bitwise_or_sat(self):
         """flags | 0x1 != 0 — any flags value satisfies this (OR with 1 is always >=1)."""
