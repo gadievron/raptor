@@ -3,13 +3,12 @@
  *
  * Organised into three groups:
  *
- *   GROUP 1 — SAT with non-obvious PoC values (ASPIRATIONAL)
+ *   GROUP 1 — SAT with non-obvious PoC values
  *     Z3 finds a concrete satisfying assignment that a human (or LLM) would
  *     likely miss because it requires reasoning about unsigned bitvector
- *     wraparound or compound inequality constraints.
- *
- *     NOTE: Current SMT encoder is fixed at 64-bit. These cases rely on 32-bit
- *     wraparound and will be fully supported once width-parametric encoding is added.
+ *     wraparound or compound inequality constraints.  ALLOC/SUM/MASK depend
+ *     on 32-bit unsigned wraparound — pass ``profile=BV_C_UINT32`` to
+ *     ``check_path_feasibility`` for those.  OBO is profile-agnostic.
  *
  *   GROUP 2 — UNSAT (provably dead paths)
  *     CodeQL reports a flow to a dangerous sink, but the path conditions are
@@ -50,15 +49,13 @@
 /* -------------------------------------------------------------------------
  * CASE 1a — allocation size overflow (CWE-190 → CWE-122)
  *
- * [ASPIRATIONAL] Requires 32-bit width encoding.
+ * Invoke check_path_feasibility with profile=BV_C_UINT32.
  *
  * Guard:    count < MAX_RECORDS  (looks protective)
  * Bug:      count * sizeof(record) overflows to a small value
- * Z3 (32-bit) finds: count = (UINT32_MAX / 16) + 1 = 0x10000001
+ * Z3 finds: count = (UINT32_MAX / 16) + 1 = 0x10000001
  *           0x10000001 * 16 = 0x100000010 truncated to 32 bits = 0x10
  *           0x10 < MAX_ALLOC=0x8000 ✓ — malloc gets 16 bytes
- *
- * Z3 (64-bit) sees 0x100000010 > 0x8000 and picks an innocuous count (e.g., 1).
  *           then loop writes count*16 = 2GB+ into it
  *
  * Path conditions for SMT:
@@ -107,7 +104,7 @@ void case_alloc_overflow(unsigned int count) {
 /* -------------------------------------------------------------------------
  * CASE 1b — compound bounds check bypass (CWE-190 → CWE-120)
  *
- * [ASPIRATIONAL] Requires 32-bit width encoding.
+ * Invoke check_path_feasibility with profile=BV_C_UINT32.
  *
  * This mimics the classic safe-looking copy guard:
  *   if (offset + length <= buffer_size) { memcpy(...) }
@@ -178,7 +175,7 @@ void case_offbyone(int index, char value) {
 /* -------------------------------------------------------------------------
  * CASE 1d — bitmask check bypass (alignment constraint + wraparound)
  *
- * [ASPIRATIONAL] Requires 32-bit width encoding.
+ * Invoke check_path_feasibility with profile=BV_C_UINT32.
  *
  * Guard:  flags & PRIV_FLAG == 0   ("unprivileged request only")
  *         size < MAX_SIZE

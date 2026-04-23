@@ -15,8 +15,9 @@ Accepted condition forms (case-insensitive):
   size > 0
   size < 1024
   offset + length <= buffer_size
-  count * 16 < max_alloc       (bitvector mul — wraparound at 2^64, not 2^32)
-  n >> 1 < limit               (logical right shift)
+  count * 16 < max_alloc       (bitvector mul — wraps at the chosen width)
+  n >> 1 < limit               (arithmetic right shift when the profile is
+                               signed; logical right shift when unsigned)
   n << 3 == buf_size           (left shift)
   flags | 0x1 != 0             (bitwise OR)
   ptr != NULL  /  ptr == NULL
@@ -24,21 +25,30 @@ Accepted condition forms (case-insensitive):
   flags & 0x80000000 == 0
   value == 42
 
-Variables are created as 64-bit bitvectors.  Unsigned comparisons are used
-by default (e.g. 0 <= index < size is encoded as index >= 0 and index < size) since
-most dataflow-relevant variables are sizes, offsets, counts, and bitmasks.
+Width and signedness are carried by a ``BVProfile`` (from
+``core.smt_solver``).  Default is ``BV_C_UINT64`` — 64-bit unsigned,
+matching sizes / offsets / counts which dominate dataflow path
+conditions.  Pass ``BV_C_UINT32`` to detect 32-bit unsigned wraparound
+(CWE-190); pass ``BV_C_INT32`` for signed-integer path conditions.
+Pre-made profiles are importable from ``core.smt_solver``.
 
-Limitations:
-  - Negative integer literals (e.g. != -1) go to the unknown list.
-  - Bitvector width is 64 bits.  Multiplication overflow wraps at 2^64, not
-    at the C type width (32-bit unsigned int overflows are invisible unless
-    the LLM separates the already-computed result as a distinct variable).
-  - Unary NOT (~) is not supported; conditions using it fall through to unknown.
-  - No operator precedence (expressions are evaluated strictly left-to-right).
-    Mixed-operator expressions (e.g. `a + b * c`) are rejected to avoid
-    mis-encoding; full precedence support is planned for a follow-up.
-  - Bitmask form (flags & MASK == val) requires both MASK and val to be
-    integer literals.
+Known limitations:
+  - Negative integer literals (e.g. ``!= -1``) go to the unknown list.
+  - Unary NOT (``~``) is not supported; conditions using it fall through
+    to unknown.
+  - No operator precedence — expressions are evaluated strictly
+    left-to-right.  Mixed-operator expressions (e.g. ``a + b * c``) are
+    rejected to avoid mis-encoding; full precedence support is planned
+    for a follow-up.
+  - Bitmask form (``flags & MASK == val``) requires both ``MASK`` and
+    ``val`` to be integer literals.
+  - Profile-level signedness conflates two concerns: comparison
+    signedness (``<``/``<=``/``>``/``>=`` routed through ``lt``/``le``)
+    AND ``>>`` arithmetic-vs-logical shift.  In real C these can
+    decouple (``(int)x >> 1`` is always arithmetic regardless of the
+    comparison's signedness).  Single-profile-per-path is the first-cut
+    design; per-variable typing is the next step when a real case
+    demands it.
 
 Integration: packages/codeql/dataflow_validator.py :: DataflowValidator
 """
@@ -46,11 +56,13 @@ Integration: packages/codeql/dataflow_validator.py :: DataflowValidator
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.logging import get_logger as _get_logger
 from core.smt_solver import (
+    BV_C_UINT64,
+    BVProfile,
     DEFAULT_TIMEOUT_MS as _DEFAULT_TIMEOUT_MS,
     core_names as _core_names,
     mk_val as _mk_val,
@@ -62,10 +74,9 @@ from core.smt_solver import (
     z3_available as _z3_available,
 )
 from core.smt_solver.bitvec import ge, gt, le, lt
+from core.smt_solver.csem import ashr as _ashr, lshr as _lshr
 from core.smt_solver.witness import format_witness as _format_witness
 
-_WIDTH = 64
-_SIGNED = False
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -109,46 +120,43 @@ _TOKEN_RE = re.compile(
 )
 
 
-def _parse_expr(text: str, vars_: Dict[str, Any]) -> Optional[Any]:
-    """Parse an arithmetic expression into a Z3 bitvector.
+def _parse_expr(text: str, vars_: Dict[str, Any], *, profile: BVProfile) -> Optional[Any]:
+    """Parse an arithmetic expression into a Z3 bitvector at the given profile.
 
-    Handles: identifier, NULL, hex literal, decimal literal,
-    and binary +/- /* between those terms (left-to-right, no precedence).
+    Handles: identifier, NULL, hex literal, decimal literal, and binary
+    +/-/* /|/shifts between those terms (left-to-right, no precedence).
+    Right-shift is routed through ``csem.ashr`` / ``csem.lshr`` by
+    signedness so the same ``>>`` source form encodes differently for
+    signed vs unsigned path conditions.
 
-    Returns None — rather than a partial result — when an unsupported token
-    is encountered mid-expression.  This prevents conditions like
-    ``count * 16 < MAX`` from being silently mis-encoded as ``count < MAX``.
+    Returns None — rather than a partial result — when an unsupported
+    token is encountered mid-expression, so the whole condition falls
+    through to the unknown list rather than being silently mis-encoded.
     """
     tokens = [t for t in _TOKEN_RE.findall(text.strip()) if t not in ('(', ')')]
     if not tokens:
         return None
 
-    # Reject mixed-operator expressions to avoid silent mis-encoding due to 
+    # Reject mixed-operator expressions to avoid silent mis-encoding due to
     # the lack of operator precedence (currently strictly left-to-right).
     if {'+', '-'} & set(tokens[1::2]) and {'*', '>>', '<<', '|'} & set(tokens[1::2]):
         return None
 
     def atom(tok: str) -> Optional[Any]:
         if _NULL_RE.match(tok):
-            return _mk_val(0, width=_WIDTH)
+            return _mk_val(0, profile.width)
         if _HEX_RE.match(tok):
-            return _mk_val(int(tok, 16), width=_WIDTH)
+            return _mk_val(int(tok, 16), profile.width)
         if _INT_RE.match(tok):
-            return _mk_val(int(tok), width=_WIDTH)
+            return _mk_val(int(tok), profile.width)
         if _IDENT_RE.match(tok):
             if tok.lower() not in vars_:
-                vars_[tok.lower()] = _mk_var(tok.lower(), width=_WIDTH)
+                vars_[tok.lower()] = _mk_var(tok.lower(), profile.width)
             return vars_[tok.lower()]
         return None
 
     # Left-to-right accumulation of arithmetic and bitwise operators.
-    # Any unsupported operator causes an immediate None return so the
-    # condition falls through to the unknown list rather than encoding
-    # a silently truncated (and incorrect) expression.
-    #
-    # '>>' is logical right shift (z3.LShR) — correct for unsigned values.
-    # '<<' is left shift; '*' and '+'/'-' are standard bitvector arithmetic.
-    # '|' is bitwise OR.
+    # Any unsupported operator causes an immediate None return.
     result = atom(tokens[0])
     if result is None:
         return None
@@ -169,20 +177,21 @@ def _parse_expr(text: str, vars_: Dict[str, Any]) -> Optional[Any]:
         elif op == '|':
             result = result | right
         elif op == '>>':
-            result = z3.LShR(result, right)  # logical (unsigned) right shift
+            # Route right-shift through csem so signedness picks the
+            # correct arithmetic vs logical variant.
+            result = _ashr(result, right) if profile.signed else _lshr(result, right)
         else:  # '<<'
             result = result << right
         i += 2
 
-    # Reject orphaned trailing tokens (e.g. 'flags' when '| 0x1' was silently
-    # dropped by the tokeniser before this fix).
+    # Reject orphaned trailing tokens.
     if i != len(tokens):
         return None
 
     return result
 
 
-def _parse_condition(text: str, vars_: Dict[str, Any]) -> Optional[Any]:
+def _parse_condition(text: str, vars_: Dict[str, Any], *, profile: BVProfile) -> Optional[Any]:
     """Parse a single condition string into a Z3 boolean expression.
 
     Recognised forms:
@@ -205,25 +214,24 @@ def _parse_condition(text: str, vars_: Dict[str, Any]) -> Optional[Any]:
         t, re.IGNORECASE,
     )
     if m:
-        lhs = _parse_expr(m.group(1).strip(), vars_)
+        lhs = _parse_expr(m.group(1).strip(), vars_, profile=profile)
         if lhs is None:
             return None
-        masked = lhs & _mk_val(int(m.group(2), 0), width=_WIDTH)
-        rhs = _mk_val(int(m.group(4), 0), width=_WIDTH)
+        masked = lhs & _mk_val(int(m.group(2), 0), profile.width)
+        rhs = _mk_val(int(m.group(4), 0), profile.width)
         return (masked == rhs) if m.group(3) == '==' else (masked != rhs)
 
     # Relational: lhs OP rhs
     # The LHS pattern consumes '>>' and '<<' as atomic units so the regex
-    # doesn't split inside a shift operator (e.g. 'n >> 1 < limit' must
-    # not split as lhs='n', op='>', rhs='> 1 < limit').
+    # doesn't split inside a shift operator.
     m = re.fullmatch(
         r'((?:>>|<<|[^<>]|(?<![<>])[<>](?![<>]))+?)'
         r'\s*(<=|>=|!=|==|<(?!<)|>(?!>))\s*(.+)',
         t,
     )
     if m:
-        lhs = _parse_expr(m.group(1).strip(), vars_)
-        rhs = _parse_expr(m.group(3).strip(), vars_)
+        lhs = _parse_expr(m.group(1).strip(), vars_, profile=profile)
+        rhs = _parse_expr(m.group(3).strip(), vars_, profile=profile)
         if lhs is None or rhs is None:
             return None
         op = m.group(2)
@@ -232,13 +240,13 @@ def _parse_condition(text: str, vars_: Dict[str, Any]) -> Optional[Any]:
         if op == '!=':
             return lhs != rhs
         if op == '<':
-            return lt(lhs, rhs, signed=_SIGNED)
+            return lt(lhs, rhs, signed=profile.signed)
         if op == '<=':
-            return le(lhs, rhs, signed=_SIGNED)
+            return le(lhs, rhs, signed=profile.signed)
         if op == '>':
-            return gt(lhs, rhs, signed=_SIGNED)
+            return gt(lhs, rhs, signed=profile.signed)
         if op == '>=':
-            return ge(lhs, rhs, signed=_SIGNED)
+            return ge(lhs, rhs, signed=profile.signed)
 
     return None
 
@@ -249,20 +257,29 @@ def _parse_condition(text: str, vars_: Dict[str, Any]) -> Optional[Any]:
 
 def check_path_feasibility(
     conditions: List[PathCondition],
+    *,
+    profile: BVProfile = BV_C_UINT64,
 ) -> PathSMTResult:
     """
     Check whether a set of path conditions are jointly satisfiable.
 
     Args:
-        conditions: Conditions extracted from a dataflow path.  Each has a
-                    ``text`` field (e.g. ``"size < 1024"``) and an optional
-                    ``negated`` flag for conditions that must be *false* for
-                    the path to proceed.
+        conditions: Conditions extracted from a dataflow path.  Each has
+                    a ``text`` field (e.g. ``"size < 1024"``) and an
+                    optional ``negated`` flag for conditions that must
+                    be *false* for the path to proceed.
+        profile:    BVProfile setting bitvector width, relational-operator
+                    signedness, right-shift semantics, and witness
+                    rendering.  Defaults to BV_C_UINT64 (64-bit unsigned).
+                    Use BV_C_UINT32 for CWE-190 32-bit wraparound paths;
+                    BV_C_INT32 for signed-integer path conditions; etc.
 
     Returns:
         PathSMTResult.  feasible=None when Z3 is unavailable or every
         condition was unparseable.
     """
+    mode = profile.describe()
+
     if not _z3_available():
         return PathSMTResult(
             feasible=None,
@@ -277,7 +294,7 @@ def check_path_feasibility(
             feasible=True,
             satisfied=[], unsatisfied=[], unknown=[],
             model={}, smt_available=True,
-            reasoning="no conditions — path is unconditionally reachable",
+            reasoning=f"no conditions ({mode}) — path is unconditionally reachable",
         )
 
     vars_: Dict[str, Any] = {}
@@ -288,7 +305,7 @@ def check_path_feasibility(
     pending: List[Tuple[str, Any]] = []
 
     for cond in conditions:
-        expr = _parse_condition(cond.text, vars_)
+        expr = _parse_condition(cond.text, vars_, profile=profile)
         if expr is None:
             _get_logger().debug(f"smt_path_validator: unparseable condition: {cond.text!r}")
             unknown.append(cond.text)
@@ -313,7 +330,7 @@ def check_path_feasibility(
                 satisfied=satisfied, unsatisfied=[], unknown=unknown,
                 model={}, smt_available=True,
                 reasoning=(
-                    f"indeterminate: {len(satisfied)} trivially satisfied, "
+                    f"indeterminate ({mode}): {len(satisfied)} trivially satisfied, "
                     f"{len(unknown)} unparseable — LLM analysis required"
                 ),
             )
@@ -321,20 +338,20 @@ def check_path_feasibility(
             feasible=True,
             satisfied=satisfied, unsatisfied=[], unknown=[],
             model={}, smt_available=True,
-            reasoning=f"all {len(satisfied)} condition(s) trivially satisfied",
+            reasoning=f"all {len(satisfied)} condition(s) trivially satisfied ({mode})",
         )
 
     label_map = _track(solver, pending)
     result = solver.check()
 
     if result == z3.sat:
-        model_dict = _format_witness(solver.model(), signed=_SIGNED)
+        model_dict = _format_witness(solver.model(), signed=profile.signed)
         return PathSMTResult(
             feasible=True,
             satisfied=satisfied, unsatisfied=[], unknown=unknown,
             model=model_dict, smt_available=True,
             reasoning=(
-                f"feasible: {len(pending)} condition(s) are jointly satisfiable"
+                f"feasible ({mode}): {len(pending)} condition(s) are jointly satisfiable"
                 + (f"; {len(satisfied)} trivially satisfied" if satisfied else "")
                 + (f"; {len(unknown)} unparsed" if unknown else "")
             ),
@@ -343,7 +360,7 @@ def check_path_feasibility(
     if result == z3.unsat:
         conflicts = _core_names(solver, label_map)
         conflict_set = conflicts if conflicts else [t for t, _ in pending]
-        reasoning = f"infeasible: path conditions are mutually exclusive"
+        reasoning = f"infeasible ({mode}): path conditions are mutually exclusive"
         if conflicts:
             reasoning += f"; conflict: {' ⊥ '.join(conflicts[:3])}"
         return PathSMTResult(
@@ -360,7 +377,7 @@ def check_path_feasibility(
         unknown=unknown + [t for t, _ in pending],
         model={}, smt_available=True,
         reasoning=(
-            f"Z3 returned unknown — likely the {_DEFAULT_TIMEOUT_MS}ms timeout "
+            f"Z3 returned unknown ({mode}) — likely the {_DEFAULT_TIMEOUT_MS}ms timeout "
             f"or conditions outside the bitvector fragment"
         ),
     )

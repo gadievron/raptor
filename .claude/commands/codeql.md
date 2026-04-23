@@ -40,9 +40,10 @@ pre-check before the full LLM analysis (`packages/codeql/smt_path_validator.py`)
 
 Requires `z3-solver` (`pip install z3-solver`). Degrades gracefully when absent.
 
-**Best coverage:** CWE-190 (integer overflow), CWE-120/122 (buffer size checks),
-CWE-193 (off-by-one), CWE-476 (null deref). String-based findings (CWE-89) fall
-through to LLM analysis.
+**Best coverage:** CWE-190 (integer overflow, **including 32-bit wraparound** —
+the extraction LLM emits per-path width/signedness hints so Z3 models the right
+C type semantics), CWE-120/122 (buffer size checks), CWE-193 (off-by-one),
+CWE-476 (null deref). String-based findings (CWE-89) fall through to LLM analysis.
 
 ## Examples
 

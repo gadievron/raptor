@@ -2,11 +2,11 @@
 
 Cases designed to exercise Z3 path condition analysis in CodeQL dataflow findings.
 
-## Group 1 — SAT with non-obvious PoC values (ASPIRATIONAL)
+## Group 1 — SAT with non-obvious PoC values
 
-Aspirational cases where Z3 finds concrete satisfying assignments that require reasoning about unsigned bitvector wraparound or compound inequality constraints.
+Z3 finds concrete satisfying assignments that require reasoning about unsigned bitvector wraparound or compound inequality constraints.
 
-**NOTE:** Current SMT encoder is fixed at 64-bit. These cases rely on 32-bit wraparound and will be fully supported once width-parametric encoding is added.
+**Profile:** `ALLOC`, `SUM`, and `MASK` rely on 32-bit unsigned wraparound — invoke `check_path_feasibility(..., profile=BV_C_UINT32)` on their conditions (import from `core.smt_solver`). `OBO` is profile-agnostic. The dataflow validator auto-selects `BV_C_UINT32` when the CodeQL rule id mentions CWE-190 / overflow / wraparound; the LLM extractor can also override via `path_width` / `path_signed` hints in the extracted-conditions JSON.
 
 | Case | File | Sink line | Guard (visible) | Bug | Z3 PoC value |
 |------|------|-----------|-----------------|-----|--------------|

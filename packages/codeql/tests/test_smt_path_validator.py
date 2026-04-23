@@ -322,3 +322,142 @@ class TestResultStructure:
         r = check_path_feasibility([PathCondition("x == 1", step_index=0)])
         assert isinstance(r.reasoning, str)
         assert len(r.reasoning) > 0
+
+    @_requires_z3
+    def test_reasoning_spells_out_profile(self):
+        """Reasoning should describe the modelled type in plain text so
+        the security researcher reading a validation report doesn't have
+        to decode ``bvNN{s,u}`` shorthand."""
+        from core.smt_solver import BV_C_INT32
+        r_default = check_path_feasibility([PathCondition("x == 1", step_index=0)])
+        r_int32 = check_path_feasibility(
+            [PathCondition("x == 1", step_index=0)],
+            profile=BV_C_INT32,
+        )
+        assert "64-bit unsigned" in r_default.reasoning
+        assert "32-bit signed" in r_int32.reasoning
+
+
+class TestParametricProfile:
+    """Profiles control width, comparison signedness, shift semantics,
+    and witness rendering.  The CodeQL testbench's Group 1 cases (CWE-190)
+    need BV_C_UINT32 to detect 32-bit wraparound; these tests pin that."""
+
+    @_requires_z3
+    def test_default_profile_rejects_32bit_overflow_witness(self):
+        """With the realistic upper bound (MAX_RECORDS=0x40000000), 64-bit
+        math can't wrap at small counts — the 32-bit-vulnerable range is
+        correctly reported infeasible.  The 32-bit variant below proves
+        the same conditions DO wrap under BV_C_UINT32."""
+        r = check_path_feasibility([
+            PathCondition("alloc_size == count * 16", step_index=0),
+            PathCondition("alloc_size < 0x8000", step_index=1),
+            PathCondition("count > 0x10000000", step_index=2),
+            PathCondition("count < 0x40000000", step_index=3),
+        ])
+        assert r.feasible is False
+
+    @_requires_z3
+    def test_uint32_profile_catches_alloc_wraparound(self):
+        """ALLOC testbench case: under BV_C_UINT32, Z3 finds the
+        wraparound witness where count * 16 overflows modulo 2^32 to a
+        small value satisfying alloc_size < MAX_ALLOC."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            [
+                PathCondition("alloc_size == count * 16", step_index=0),
+                PathCondition("alloc_size < 0x8000", step_index=1),
+                PathCondition("count > 0x10000000", step_index=2),
+                PathCondition("count < 0x40000000", step_index=3),
+            ],
+            profile=BV_C_UINT32,
+        )
+        assert r.feasible is True
+        assert "count" in r.model
+        count = r.model["count"]
+        assert 0x10000000 < count < 0x40000000
+        # alloc_size is count * 16 mod 2^32 (that's the wraparound bug).
+        assert r.model.get("alloc_size") == (count * 16) & 0xFFFFFFFF
+
+    @_requires_z3
+    def test_int32_profile_right_shift_is_arithmetic(self):
+        """BV_C_INT32 (signed) routes '>>' through csem.ashr so the high
+        bit propagates.  BV_C_UINT32 uses csem.lshr — zero fill."""
+        from core.smt_solver import BV_C_INT32, BV_C_UINT32
+
+        # x = 0x80000000 (32-bit): signed = -2^31, unsigned = 2^31.
+        # x >> 1:
+        #   signed (ashr)  = 0xC0000000 (= -2^30 = -1073741824)
+        #   unsigned (lshr) = 0x40000000 (=  2^30 =  1073741824)
+        r_signed = check_path_feasibility(
+            [
+                PathCondition("x == 0x80000000", step_index=0),
+                PathCondition("y == x >> 1", step_index=1),
+            ],
+            profile=BV_C_INT32,
+        )
+        assert r_signed.feasible is True
+        # Witness renders under signed semantics, so compare the raw bit
+        # pattern: `y mod 2^32` should be 0xC0000000 regardless of whether
+        # the witness came back as unsigned 3221225472 or signed -1073741824.
+        assert (r_signed.model.get("y") % (1 << 32)) == 0xC0000000
+
+        r_unsigned = check_path_feasibility(
+            [
+                PathCondition("x == 0x80000000", step_index=0),
+                PathCondition("y == x >> 1", step_index=1),
+            ],
+            profile=BV_C_UINT32,
+        )
+        assert r_unsigned.feasible is True
+        assert r_unsigned.model.get("y") == 0x40000000
+
+    @_requires_z3
+    def test_ad_hoc_16bit_profile(self):
+        """Ad-hoc BVProfile(width=16) works for non-standard widths."""
+        from core.smt_solver import BVProfile
+        r = check_path_feasibility(
+            [PathCondition("x == 0x7FFF", step_index=0)],
+            profile=BVProfile(width=16, signed=False),
+        )
+        assert r.feasible is True
+        assert r.model.get("x") == 0x7FFF
+
+    @_requires_z3
+    def test_uint32_profile_catches_sum_wraparound(self):
+        """SUM testbench case: offset + length <= buffer_size guard is
+        bypassable when the unsigned 32-bit sum wraps to a small value."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            [
+                PathCondition("sum == offset + length", step_index=0),
+                PathCondition("sum <= buffer_size", step_index=1),
+                PathCondition("buffer_size == 64", step_index=2),
+                PathCondition("offset > 0x10000", step_index=3),
+                PathCondition("length > 0x10000", step_index=4),
+            ],
+            profile=BV_C_UINT32,
+        )
+        assert r.feasible is True
+        offset, length = r.model["offset"], r.model["length"]
+        # The wraparound is the whole point: (offset + length) mod 2^32 ≤ 64.
+        assert (offset + length) & 0xFFFFFFFF <= 64
+        assert offset > 0x10000 and length > 0x10000
+
+    @_requires_z3
+    def test_uint32_profile_catches_mask_wraparound(self):
+        """MASK testbench case: base + size <= HEAP_SIZE with wraparound."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            [
+                PathCondition("flags & 0x80000000 == 0", step_index=0),
+                PathCondition("size < 4096", step_index=1),
+                PathCondition("base + size <= 8192", step_index=2),
+                PathCondition("base > 0x80000000", step_index=3),
+            ],
+            profile=BV_C_UINT32,
+        )
+        assert r.feasible is True
+        base, size = r.model["base"], r.model["size"]
+        assert (base + size) & 0xFFFFFFFF <= 8192
+        assert base > 0x80000000
