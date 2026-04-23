@@ -12,6 +12,12 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from packages.codeql.smt_path_validator import (
+    PathCondition,
+    PathSMTResult,
+    check_path_feasibility,
+)
+
 # Add parent directory to path for imports
 # packages/codeql/dataflow_validator.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[2]))
@@ -55,6 +61,11 @@ class DataflowValidation:
     barriers: List[str]
     prerequisites: List[str]
 
+
+PATH_CONDITIONS_SCHEMA = {
+    "path_conditions": "list of {step_index: int, condition: str, negated: bool}",
+    "unparseable": "list of strings — conditions too complex to express as simple predicates",
+}
 
 # Dict schema for LLM structured generation (consistent with other callers)
 DATAFLOW_VALIDATION_SCHEMA = {
@@ -188,6 +199,68 @@ class DataflowValidator:
             self.logger.warning(f"Failed to read source context: {e}")
             return ""
 
+    def _extract_path_conditions(
+        self,
+        dataflow: DataflowPath,
+        repo_path: Path,
+    ) -> List[PathCondition]:
+        """Ask the LLM to extract branch conditions from the dataflow path.
+
+        Returns a (possibly empty) list of PathCondition objects.  Failures
+        are non-fatal — an empty list causes SMT to return feasible=True and
+        the full LLM validation still runs.
+        """
+        path_summary = []
+        for i, step in enumerate([dataflow.source] + dataflow.intermediate_steps + [dataflow.sink]):
+            ctx = self.read_source_context(str(repo_path / step.file_path), step.line, context_lines=5)
+            path_summary.append(f"STEP {i} ({step.label}) — {step.file_path}:{step.line}\n{ctx}")
+
+        prompt = f"""You are analysing a CodeQL dataflow path for exploitability.
+
+RULE: {dataflow.rule_id}
+MESSAGE: {dataflow.message}
+
+DATAFLOW STEPS:
+{chr(10).join(path_summary)}
+
+Extract every branch condition or guard that must hold for execution to
+reach the sink. Express each as a simple predicate over named variables,
+for example:
+  "size > 0", "offset + length <= buffer_size", "ptr != NULL",
+  "flags & 0x80000000 == 0"
+
+Set negated=true if the condition must be FALSE for the path to proceed
+(i.e. a check that was bypassed).
+
+Respond in JSON:
+{{
+  "path_conditions": [
+    {{"step_index": 0, "condition": "size > 0", "negated": false}},
+    ...
+  ],
+  "unparseable": ["any condition too complex to express as a simple predicate"]
+}}
+"""
+        try:
+            response, _ = self.llm.generate_structured(
+                prompt=prompt,
+                schema=PATH_CONDITIONS_SCHEMA,
+                system_prompt="You are an expert security researcher extracting path conditions from code.",
+            )
+            conditions = [
+                PathCondition(
+                    text=c.get("condition", ""),
+                    step_index=c.get("step_index", 0),
+                    negated=bool(c.get("negated", False)),
+                )
+                for c in response.get("path_conditions", [])
+                if c.get("condition")
+            ]
+            return conditions
+        except Exception as e:
+            self.logger.debug(f"Path condition extraction failed: {e}")
+            return []
+
     def validate_dataflow_path(
         self,
         dataflow: DataflowPath,
@@ -204,6 +277,35 @@ class DataflowValidator:
             DataflowValidation result
         """
         self.logger.info(f"Validating dataflow path: {dataflow.rule_id}")
+
+        # SMT pre-check: extract path conditions and test joint satisfiability.
+        # If unsat, the path is provably unreachable — skip the expensive LLM call.
+        conditions = self._extract_path_conditions(dataflow, repo_path)
+        smt_result = check_path_feasibility(conditions)
+
+        if smt_result.feasible is False:
+            self.logger.info(
+                f"SMT: path infeasible — {smt_result.reasoning}"
+            )
+            return DataflowValidation(
+                is_exploitable=False,
+                confidence=0.9,
+                sanitizers_effective=True,
+                bypass_possible=False,
+                bypass_strategy=None,
+                attack_complexity="high",
+                reasoning=f"SMT analysis: {smt_result.reasoning}",
+                barriers=smt_result.unsatisfied,
+                prerequisites=[],
+            )
+
+        # Path is sat or indeterminate — run full LLM analysis.
+        # Pass the SMT model (concrete variable values) as 
+        # candidate inputs. Skip if no Z3.
+        smt_hint = (
+            f"\nSMT pre-analysis: {smt_result.reasoning}"
+            + (f"\nCandidate input values: {smt_result.model}" if smt_result.model else "")
+        ) if smt_result.smt_available else ""
 
         # Read source context for key locations
         source_context = self.read_source_context(
@@ -249,7 +351,7 @@ Line: {dataflow.sink.line}
 
 {sink_context}
 
-SANITIZERS DETECTED: {', '.join(dataflow.sanitizers) if dataflow.sanitizers else 'None'}
+SANITIZERS DETECTED: {', '.join(dataflow.sanitizers) if dataflow.sanitizers else 'None'}{smt_hint}
 
 Analyze this dataflow path and determine:
 
