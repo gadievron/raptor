@@ -245,7 +245,7 @@ class TestEnvInjection:
 
     @pytest.mark.parametrize("key", [
         "SAGE_URL", "SAGE_ENABLED", "SAGE_IDENTITY_PATH",
-        "SAGE_TIMEOUT", "SAGE_FALLBACK_JSON",
+        "SAGE_TIMEOUT",
     ])
     def test_sage_star_env_blocks(self, tmp_path, key):
         """env.SAGE_* — targets manipulating RAPTOR's SAGE config (e.g.

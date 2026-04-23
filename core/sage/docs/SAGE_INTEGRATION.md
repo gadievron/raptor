@@ -107,7 +107,6 @@ docker-compose.sage.yml down -v` to wipe them.
 | `SAGE_URL` | `http://localhost:8090` | SAGE API URL |
 | `SAGE_IDENTITY_PATH` | auto | Path to agent key file |
 | `SAGE_TIMEOUT` | `15.0` | API request timeout (seconds) |
-| `SAGE_FALLBACK_JSON` | `true` | Fall back to JSON when SAGE unavailable |
 
 ### MCP Configuration
 

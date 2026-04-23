@@ -25,9 +25,6 @@ class SageConfig:
     timeout: float = field(
         default_factory=lambda: float(os.getenv("SAGE_TIMEOUT", "15.0"))
     )
-    fallback_json: bool = field(
-        default_factory=lambda: os.getenv("SAGE_FALLBACK_JSON", "true").lower() in ("true", "1", "yes")
-    )
 
     @staticmethod
     def from_env() -> "SageConfig":

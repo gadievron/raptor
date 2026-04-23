@@ -18,7 +18,6 @@ class TestSageConfig(unittest.TestCase):
         self.assertEqual(config.url, "http://localhost:8090")
         self.assertIsNone(config.identity_path)
         self.assertEqual(config.timeout, 15.0)
-        self.assertTrue(config.fallback_json)
 
     @patch.dict(os.environ, {"SAGE_ENABLED": "true"})
     def test_enabled_from_env(self):
@@ -54,13 +53,6 @@ class TestSageConfig(unittest.TestCase):
 
         config = SageConfig()
         self.assertEqual(config.identity_path, "/tmp/agent.key")
-
-    @patch.dict(os.environ, {"SAGE_FALLBACK_JSON": "false"})
-    def test_fallback_json_disabled(self):
-        from core.sage.config import SageConfig
-
-        config = SageConfig()
-        self.assertFalse(config.fallback_json)
 
     def test_from_env_factory(self):
         from core.sage.config import SageConfig
