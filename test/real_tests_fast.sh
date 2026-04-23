@@ -145,7 +145,12 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 # Test 3.1: scan --policy_groups (underscore) is recognized
 # Note: argparse uses underscores, not hyphens
-SCAN_OUT=$(python3 "$PROJECT_ROOT/raptor.py" scan --repo /tmp --policy_groups secrets 2>&1)
+# Wrap slow-path commands with `timeout 10s`: argparse rejects unknown flags
+# at startup (<100ms), so a genuine "unrecognized argument" is always
+# captured well before the timeout fires. When the args DO parse, the command
+# starts scanning /tmp (large on CI runners); killing it after 10s preserves
+# the test's semantic — we only grep the output for "unrecognized argument".
+SCAN_OUT=$(timeout 10s python3 "$PROJECT_ROOT/raptor.py" scan --repo /tmp --policy_groups secrets 2>&1)
 if ! echo "$SCAN_OUT" | grep -q "unrecognized argument"; then
     test_case "scan --policy_groups recognized" "PASS"
 else
@@ -158,7 +163,7 @@ else
 fi
 
 # Test 3.2: agentic --codeql is recognized
-AGENTIC_OUT=$(python3 "$PROJECT_ROOT/raptor.py" agentic --repo /tmp --codeql 2>&1)
+AGENTIC_OUT=$(timeout 10s python3 "$PROJECT_ROOT/raptor.py" agentic --repo /tmp --codeql 2>&1)
 if ! echo "$AGENTIC_OUT" | grep -q "unrecognized argument"; then
     test_case "agentic --codeql recognized" "PASS"
 else
@@ -166,7 +171,7 @@ else
 fi
 
 # Test 3.3: agentic --no-codeql is recognized
-AGENTIC_OUT=$(python3 "$PROJECT_ROOT/raptor.py" agentic --repo /tmp --no-codeql 2>&1)
+AGENTIC_OUT=$(timeout 10s python3 "$PROJECT_ROOT/raptor.py" agentic --repo /tmp --no-codeql 2>&1)
 if ! echo "$AGENTIC_OUT" | grep -q "unrecognized argument"; then
     test_case "agentic --no-codeql recognized" "PASS"
 else
@@ -174,7 +179,7 @@ else
 fi
 
 # Test 3.4: agentic --max-findings takes integer
-AGENTIC_OUT=$(python3 "$PROJECT_ROOT/raptor.py" agentic --repo /tmp --max-findings 10 2>&1)
+AGENTIC_OUT=$(timeout 10s python3 "$PROJECT_ROOT/raptor.py" agentic --repo /tmp --max-findings 10 2>&1)
 if ! echo "$AGENTIC_OUT" | grep -q "unrecognized argument"; then
     test_case "agentic --max-findings <int> recognized" "PASS"
 else
