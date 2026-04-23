@@ -16,6 +16,19 @@ from packages.llm_analysis.llm.client import LLMClient
 from packages.llm_analysis.llm.config import ModelConfig, LLMConfig
 
 
+@pytest.fixture(autouse=True)
+def _attach_caplog_to_raptor_logger(caplog):
+    """RaptorLogger sets propagate=False, so caplog (attached to root) misses
+    its records. Attach caplog's handler directly to the 'raptor' logger for
+    the duration of each test in this module."""
+    raptor_logger = logging.getLogger("raptor")
+    raptor_logger.addHandler(caplog.handler)
+    try:
+        yield
+    finally:
+        raptor_logger.removeHandler(caplog.handler)
+
+
 class TestOllamaWarning:
     """Test 10: Verify warning appears when using Ollama for exploit generation."""
 
