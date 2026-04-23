@@ -74,12 +74,12 @@ jobs:
       - name: Compile Python sources
         run: |
           source $VENV_PATH/bin/activate
-          python -m compileall -q core packages raptor.py raptor_agentic.py raptor_codeql.py raptor_fuzzing.py
+          python -m compileall -q core packages *.py
 
       - name: Run unit tests
         run: |
           source $VENV_PATH/bin/activate
-          pytest core packages/*/tests
+          pytest core packages
 
   test-workflows:
     needs: deps

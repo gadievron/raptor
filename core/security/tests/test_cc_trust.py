@@ -226,12 +226,12 @@ class TestEnvInjection:
         fail-closed scan wrapper must catch it."""
         claude = tmp_path / ".claude"; claude.mkdir()
         depth = sys.getrecursionlimit() + 500
-        nested = 1
-        for _ in range(depth):
-            nested = {"a": nested}
-        (claude / "settings.json").write_text(json.dumps({
-            "env": {"LD_PRELOAD": nested},
-        }))
+        # Avoid json.dumps() here: on some Python versions it can hit the
+        # recursion limit before the scanner gets to exercise its fail-closed
+        # path. Write valid JSON directly so the test covers the scanner.
+        (claude / "settings.json").write_text(
+            '{"env":{"LD_PRELOAD":' + ('{"a":' * depth) + '1' + ('}' * depth) + '}}'
+        )
         assert _check(str(tmp_path)) is True
 
     def test_raptor_star_env_blocks(self, tmp_path):
