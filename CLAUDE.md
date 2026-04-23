@@ -275,6 +275,20 @@ print(format_analysis_summary(result, verbose=True))
 
 **The `exploitation_paths` section tells you if code execution is actually possible** given the system's mitigations (glibc version, RELRO, etc.).
 
+**SMT integration (optional, requires `pip install z3-solver`):**
+
+Two places Z3 is used — both degrade gracefully when absent:
+
+1. **Binary / one-gadget** (`packages/exploit_feasibility/smt_onegadget.py`): checks
+   whether a one-gadget's register/memory constraints are satisfiable given a crash
+   state. Result in `exploitation_paths[vuln].one_gadget_info.smt_feasibility`.
+
+2. **CodeQL dataflow** (`packages/codeql/smt_path_validator.py`): checks whether the
+   branch conditions along a dataflow path are jointly satisfiable. `unsat` → false
+   positive, skip LLM. `sat` → concrete input values fed into the LLM prompt and
+   `DataflowValidation.prerequisites`. Best coverage: CWE-190, CWE-120/122,
+   CWE-193, CWE-476.
+
 ---
 
 ## EXPLOIT DEVELOPMENT
