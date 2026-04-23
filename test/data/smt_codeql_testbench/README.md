@@ -2,9 +2,11 @@
 
 Cases designed to exercise Z3 path condition analysis in CodeQL dataflow findings.
 
-## Group 1 — SAT with non-obvious PoC values
+## Group 1 — SAT with non-obvious PoC values (ASPIRATIONAL)
 
-Z3 finds concrete satisfying assignments that require reasoning about unsigned bitvector wraparound or compound inequality constraints.
+Aspirational cases where Z3 finds concrete satisfying assignments that require reasoning about unsigned bitvector wraparound or compound inequality constraints.
+
+**NOTE:** Current SMT encoder is fixed at 64-bit. These cases rely on 32-bit wraparound and will be fully supported once width-parametric encoding is added.
 
 | Case | File | Sink line | Guard (visible) | Bug | Z3 PoC value |
 |------|------|-----------|-----------------|-----|--------------|
