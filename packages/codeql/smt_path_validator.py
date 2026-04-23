@@ -15,6 +15,10 @@ Accepted condition forms (case-insensitive):
   size > 0
   size < 1024
   offset + length <= buffer_size
+  count * 16 < max_alloc       (bitvector mul — wraparound at 2^64, not 2^32)
+  n >> 1 < limit               (logical right shift)
+  n << 3 == buf_size           (left shift)
+  flags | 0x1 != 0             (bitwise OR)
   ptr != NULL  /  ptr == NULL
   index >= 0
   flags & 0x80000000 == 0
@@ -22,6 +26,15 @@ Accepted condition forms (case-insensitive):
 
 Variables are created as 64-bit bitvectors.  Signed comparisons are used
 by default; pass signed=False for address/pointer predicates.
+
+Limitations:
+  - Negative integer literals (e.g. != -1) go to the unknown list.
+  - Bitvector width is 64 bits.  Multiplication overflow wraps at 2^64, not
+    at the C type width (32-bit unsigned int overflows are invisible unless
+    the LLM separates the already-computed result as a distinct variable).
+  - Unary NOT (~) is not supported; conditions using it fall through to unknown.
+  - Bitmask form (flags & MASK == val) requires both MASK and val to be
+    integer literals.
 
 Integration: packages/codeql/dataflow_validator.py :: DataflowValidator
 """
@@ -83,9 +96,11 @@ _INT_RE = re.compile(r'^\d+$')
 _IDENT_RE = re.compile(r'^[a-z_][a-z0-9_]*$', re.IGNORECASE)
 _NULL_RE = re.compile(r'^NULL$', re.IGNORECASE)
 
-# Tokenise: identifiers, hex literals, decimal literals, operators
+# Tokenise: identifiers, hex literals, decimal literals, operators.
+# '>>' and '<<' appear before '[<>&|]' so they are matched as two-char tokens
+# rather than as two separate single-char tokens.
 _TOKEN_RE = re.compile(
-    r'(0x[0-9a-f]+|\d+|[a-z_][a-z0-9_]*|[+\-*]|<=|>=|!=|==|[<>&])',
+    r'(0x[0-9a-f]+|\d+|[a-z_][a-z0-9_]*|[+\-*]|<=|>=|!=|==|>>|<<|[<>&|])',
     re.IGNORECASE,
 )
 
@@ -94,8 +109,11 @@ def _parse_expr(text: str, vars_: Dict[str, Any]) -> Optional[Any]:
     """Parse an arithmetic expression into a Z3 bitvector.
 
     Handles: identifier, NULL, hex literal, decimal literal,
-    and binary +/- between those terms.
-    Does NOT handle precedence beyond left-to-right +/-.
+    and binary +/- /* between those terms (left-to-right, no precedence).
+
+    Returns None — rather than a partial result — when an unsupported token
+    is encountered mid-expression.  This prevents conditions like
+    ``count * 16 < MAX`` from being silently mis-encoded as ``count < MAX``.
     """
     tokens = [t for t in _TOKEN_RE.findall(text.strip()) if t not in ('(', ')')]
     if not tokens:
@@ -114,20 +132,43 @@ def _parse_expr(text: str, vars_: Dict[str, Any]) -> Optional[Any]:
             return vars_[tok.lower()]
         return None
 
-    # Left-to-right accumulation of +/-
+    # Left-to-right accumulation of arithmetic and bitwise operators.
+    # Any unsupported operator causes an immediate None return so the
+    # condition falls through to the unknown list rather than encoding
+    # a silently truncated (and incorrect) expression.
+    #
+    # '>>' is logical right shift (z3.LShR) — correct for unsigned values.
+    # '<<' is left shift; '*' and '+'/'-' are standard bitvector arithmetic.
+    # '|' is bitwise OR.
     result = atom(tokens[0])
     if result is None:
         return None
     i = 1
     while i < len(tokens) - 1:
         op = tokens[i]
-        if op not in ('+', '-'):
-            break
+        if op not in ('+', '-', '*', '|', '>>', '<<'):
+            return None  # unsupported op — reject cleanly
         right = atom(tokens[i + 1])
         if right is None:
             return None
-        result = (result + right) if op == '+' else (result - right)
+        if op == '+':
+            result = result + right
+        elif op == '-':
+            result = result - right
+        elif op == '*':
+            result = result * right
+        elif op == '|':
+            result = result | right
+        elif op == '>>':
+            result = z3.LShR(result, right)  # logical (unsigned) right shift
+        else:  # '<<'
+            result = result << right
         i += 2
+
+    # Reject orphaned trailing tokens (e.g. 'flags' when '| 0x1' was silently
+    # dropped by the tokeniser before this fix).
+    if i != len(tokens):
+        return None
 
     return result
 
@@ -163,7 +204,14 @@ def _parse_condition(text: str, vars_: Dict[str, Any]) -> Optional[Any]:
         return (masked == rhs) if m.group(3) == '==' else (masked != rhs)
 
     # Relational: lhs OP rhs
-    m = re.fullmatch(r'(.+?)\s*(<=|>=|!=|==|<|>)\s*(.+)', t)
+    # The LHS pattern consumes '>>' and '<<' as atomic units so the regex
+    # doesn't split inside a shift operator (e.g. 'n >> 1 < limit' must
+    # not split as lhs='n', op='>', rhs='> 1 < limit').
+    m = re.fullmatch(
+        r'((?:>>|<<|[^<>]|(?<![<>])[<>](?![<>]))+?)'
+        r'\s*(<=|>=|!=|==|<(?!<)|>(?!>))\s*(.+)',
+        t,
+    )
     if m:
         lhs = _parse_expr(m.group(1).strip(), vars_)
         rhs = _parse_expr(m.group(3).strip(), vars_)
