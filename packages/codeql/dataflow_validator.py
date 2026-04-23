@@ -289,12 +289,16 @@ Respond in JSON:
             )
             return DataflowValidation(
                 is_exploitable=False,
-                confidence=0.9,
+                confidence=0.7,  # Some confidence since SMT is a strong signal, but not perfect
                 sanitizers_effective=True,
                 bypass_possible=False,
                 bypass_strategy=None,
                 attack_complexity="high",
-                reasoning=f"SMT analysis: {smt_result.reasoning}",
+                reasoning=(
+                    f"SMT analysis: {smt_result.reasoning}. Path conditions are mutually exclusive. "
+                    "Confidence is capped at 0.7 because this formal verdict depends on "
+                    "LLM-extracted predicates which may have parsing or coverage limitations."
+                ),
                 barriers=smt_result.unsatisfied,
                 prerequisites=[],
             )
