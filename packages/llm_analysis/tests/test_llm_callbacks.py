@@ -185,27 +185,71 @@ class TestIsQuotaError:
 
 
 class TestSanitizeLogMessage:
-    """Verify _sanitize_log_message redacts API keys."""
+    """Verify _sanitize_log_message redacts secrets from logs."""
 
     def test_redacts_openai_api_key(self):
         """OpenAI-style sk-* keys are redacted."""
-        msg = "Error with key sk-abcdefghijklmnopqrstuvwxyz1234567890"
-        result = _sanitize_log_message(msg)
-        assert "sk-abcdefghijklmnopqrstuvwxyz" not in result
+        key = "sk-proj-" + "a" * 48
+        result = _sanitize_log_message(f"Error with key {key}")
+        assert key not in result
         assert "[REDACTED-API-KEY]" in result
 
     def test_redacts_anthropic_api_key(self):
         """Anthropic-style sk-ant-* keys are redacted."""
-        msg = "Auth failed: sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234567890"
-        result = _sanitize_log_message(msg)
-        assert "sk-ant-api03" not in result
+        key = "sk-" + "ant-api03-" + "b" * 48
+        result = _sanitize_log_message(f"Auth failed: {key}")
+        assert key not in result
         assert "[REDACTED-API-KEY]" in result
 
     def test_redacts_google_api_key(self):
         """Google-style AIza* keys are redacted."""
-        msg = "Invalid key: AIzaSyA1234567890abcdefghijklmnopqrstuvwxyz"
-        result = _sanitize_log_message(msg)
-        assert "AIzaSyA1234567890" not in result
+        key = "AIza" + "c" * 36
+        result = _sanitize_log_message(f"Invalid key: {key}")
+        assert key not in result
+        assert "[REDACTED-API-KEY]" in result
+
+    def test_redacts_bearer_token(self):
+        """Bearer tokens in auth headers or SDK errors are redacted."""
+        bearer = "Bearer " + "d" * 48
+        result = _sanitize_log_message(f"Authorization failed for {bearer}")
+        assert bearer not in result
+        assert "Bearer [REDACTED]" in result
+
+    def test_redacts_dotted_bearer_jwt(self):
+        """JWT-shaped bearer values are fully redacted, not only the first segment."""
+        bearer = "Bearer " + ".".join(["a" * 24, "b" * 24, "c" * 24])
+        result = _sanitize_log_message(f"Authorization failed for {bearer}")
+        assert bearer not in result
+        assert "a" * 24 not in result
+        assert "b" * 24 not in result
+        assert "c" * 24 not in result
+        assert "Bearer [REDACTED]" in result
+
+    def test_redacts_lowercase_bearer_jwt(self):
+        """HTTP auth scheme casing should not prevent bearer redaction."""
+        bearer = "bearer " + ".".join(["a" * 24, "b" * 24, "c" * 24])
+        result = _sanitize_log_message(f"Authorization failed for {bearer}")
+        assert bearer not in result
+        assert "b" * 24 not in result
+        assert "Bearer [REDACTED]" in result
+
+    def test_redacts_github_tokens(self):
+        """GitHub tokens can appear in tool errors and should not be logged."""
+        tokens = [
+            "gh" + "p_" + "e" * 36,
+            "gh" + "r_" + "e" * 36,
+            "github" + "_pat_" + "f" * 82,
+        ]
+        result = _sanitize_log_message("Tokens: " + " ".join(tokens))
+        for token in tokens:
+            assert token not in result
+        assert result.count("[REDACTED-API-KEY]") == len(tokens)
+
+    def test_redacts_aws_access_key_id(self):
+        """AWS access key IDs are redacted from command/tool output."""
+        key = "AKIA" + "IOSFODNN7EXAMPLE"
+        result = _sanitize_log_message(f"AWS key leaked in trace: {key}")
+        assert key not in result
         assert "[REDACTED-API-KEY]" in result
 
     def test_preserves_non_key_content(self):
@@ -214,11 +258,18 @@ class TestSanitizeLogMessage:
         result = _sanitize_log_message(msg)
         assert result == msg
 
-    def test_redacts_multiple_keys(self):
-        """Multiple keys in one message are all redacted."""
-        msg = "Tried sk-abcdefghijklmnopqrstuvwxyz then AIzaSyA1234567890abcdefghijklmnopqrstuvwxyz"
-        result = _sanitize_log_message(msg)
-        assert result.count("[REDACTED-API-KEY]") == 2
+    def test_redacts_multiple_secret_types(self):
+        """Multiple secret types in one message are all redacted."""
+        openai_key = "sk-" + "a" * 48
+        google_key = "AIza" + "b" * 36
+        github_key = "gh" + "o_" + "c" * 36
+        result = _sanitize_log_message(
+            f"Tried {openai_key} then {google_key} then {github_key}"
+        )
+        assert openai_key not in result
+        assert google_key not in result
+        assert github_key not in result
+        assert result.count("[REDACTED-API-KEY]") == 3
 
 
 class TestBudgetChecking:

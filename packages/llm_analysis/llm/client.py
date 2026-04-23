@@ -59,7 +59,17 @@ def _sanitize_log_message(msg: str) -> str:
     # Redact Google API keys (AIza*)
     msg = re.sub(r'AIza[a-zA-Z0-9-_]{30,}', '[REDACTED-API-KEY]', msg)
     # Redact Bearer tokens (Mistral and others in auth headers/error messages)
-    msg = re.sub(r'Bearer [a-zA-Z0-9-_]{20,}', 'Bearer [REDACTED]', msg)
+    msg = re.sub(
+        r'Bearer [a-zA-Z0-9._~+/-]{20,}={0,2}',
+        'Bearer [REDACTED]',
+        msg,
+        flags=re.IGNORECASE,
+    )
+    # Redact GitHub tokens that may appear in git/gh subprocess output
+    msg = re.sub(r'gh[oprsu]_[a-zA-Z0-9_]{36,}', '[REDACTED-API-KEY]', msg)
+    msg = re.sub(r'github_pat_[a-zA-Z0-9_]{20,}', '[REDACTED-API-KEY]', msg)
+    # Redact AWS access key IDs that commonly appear in tool output/traces
+    msg = re.sub(r'\b(?:AKIA|ASIA)[A-Z0-9]{16}\b', '[REDACTED-API-KEY]', msg)
     return msg
 
 
