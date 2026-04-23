@@ -50,7 +50,8 @@ class RaptorConfig:
 
     # Timeout Configuration (seconds)
     DEFAULT_TIMEOUT = 1800          # 30 minutes
-    SEMGREP_TIMEOUT = 900            # 15 minutes
+    SEMGREP_TIMEOUT = 900            # 15 minutes (scan over local rule dirs)
+    SEMGREP_PACK_TIMEOUT = 300       # 5 minutes (registry pack: fetch + scan)
     SEMGREP_RULE_TIMEOUT = 120       # 2 minutes per rule
     CODEQL_TIMEOUT = 1800            # 30 minutes (database creation)
     CODEQL_ANALYZE_TIMEOUT = 2400    # 40 minutes (query execution)
