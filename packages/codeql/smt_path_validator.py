@@ -34,6 +34,9 @@ Limitations:
     at the C type width (32-bit unsigned int overflows are invisible unless
     the LLM separates the already-computed result as a distinct variable).
   - Unary NOT (~) is not supported; conditions using it fall through to unknown.
+  - No operator precedence (expressions are evaluated strictly left-to-right).
+    Mixed-operator expressions (e.g. `a + b * c`) are rejected to avoid
+    mis-encoding; full precedence support is planned for a follow-up.
   - Bitmask form (flags & MASK == val) requires both MASK and val to be
     integer literals.
 
@@ -118,6 +121,11 @@ def _parse_expr(text: str, vars_: Dict[str, Any]) -> Optional[Any]:
     """
     tokens = [t for t in _TOKEN_RE.findall(text.strip()) if t not in ('(', ')')]
     if not tokens:
+        return None
+
+    # Reject mixed-operator expressions to avoid silent mis-encoding due to 
+    # the lack of operator precedence (currently strictly left-to-right).
+    if {'+', '-'} & set(tokens[1::2]) and {'*', '>>', '<<', '|'} & set(tokens[1::2]):
         return None
 
     def atom(tok: str) -> Optional[Any]:
