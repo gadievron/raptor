@@ -48,7 +48,7 @@ pip install sage-agent-sdk httpx
 libexec/raptor-sage-setup
 ```
 
-Idempotent. One command does everything:
+One command does everything; re-runs are safe (see *Reinstall / re-seed* below):
 
 - Verifies `sage-agent-sdk` is importable by `python3`.
 - Merges the SAGE entry from `core/sage/mcp-entry.json` into `./.mcp.json`
@@ -66,7 +66,30 @@ Idempotent. One command does everything:
 
 ### 3. Restart Claude Code
 
-So it picks up the MCP registration.
+Restart so Claude Code picks up the new MCP registration.
+
+### Reinstall / re-seed
+
+`libexec/raptor-sage-setup` is safe to re-run at any time. The seed and
+register steps query SAGE for each item's tag (`primitive:rop-chain`,
+`agent:raptor-scan`, etc.) before proposing, so re-runs skip entries
+already present and only propose what's missing. Output tells you
+which category each item fell into:
+
+```
+stored:  primitive:rop-chain
+skipped: primitive:stack-canary (already seeded)
+partial: raptor-scan (filled in missing half from a prior partial run)
+```
+
+To deliberately re-propose everything — e.g. after a SAGE volume wipe,
+schema migration, or knowledge-base refresh — use `--force` on the
+underlying scripts directly:
+
+```bash
+python3 core/sage/scripts/seed_sage_knowledge.py --force
+python3 core/sage/scripts/register_agents.py --force
+```
 
 ### Tear down
 
