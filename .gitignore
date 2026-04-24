@@ -46,3 +46,10 @@ tuning.json
 # Rendered per-checkout AppArmor profile (make apparmor-profile output;
 # the tracked source is the .template)
 core/sandbox/helpers/raptor-coord-launcher.apparmor
+
+# raptor-studio test venv (local only — not checked in)
+.venv-studio/
+packages/studio/__pycache__/
+packages/studio/**/__pycache__/
+packages/studio/.pytest_cache/
+packages/studio/**/.pytest_cache/

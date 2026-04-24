@@ -98,6 +98,17 @@ packaging==25.0
 # Optional: Faster JSON parse/serialise (transparent fallback to stdlib json)
 # orjson==3.11.9
 
+
+# Required by packages/studio (web UI). Runtime-only. Plain uvicorn is
+# enough: studio has no websocket routes, the [standard] extras (uvloop,
+# httptools, websockets, watchfiles) are perf/dev niceties a localhost
+# single-user UI doesn't need, and --reload falls back to StatReload.
+fastapi==0.141.1
+uvicorn==0.52.4
+jinja2==3.1.6
+python-multipart==0.0.32
+markdown==3.10.2
+nh3==0.3.6
 # ELF metadata (core/symbolic load_binary fallback when angr absent).
 pyelftools==0.33
 

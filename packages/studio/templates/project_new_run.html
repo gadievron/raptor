@@ -1,0 +1,136 @@
+{% extends "project_base.html" %}
+{% block title %}New {{ spec.kind }} run — {{ project.name }} — {{ app_title }}{% endblock %}
+{% block breadcrumb_tail %}
+  <span class="sep">›</span>
+  <a href="/projects/{{ project.name }}/{{ spec.kind }}">{{ spec.label }}</a>
+  <span class="sep">›</span>
+  <span class="current">New run</span>
+{% endblock %}
+{% block project_content %}
+
+<h1 style="margin: 0; font-size: 22px;">{{ spec.label }}</h1>
+<div style="color: var(--fg2); font-size: 13px; margin: 4px 0 8px;">{{ spec.description }}</div>
+{% if spec.requires_claude %}
+<div style="margin-bottom: 16px;">
+  <span class="badge" style="background: rgba(37,99,235,0.15); color: var(--info);">requires Claude Code</span>
+  <span style="font-size: 11px; color: var(--fg3); margin-left: 6px;">
+    The worker will shell out to <code class="mono">claude -p</code> — make sure <code class="mono">claude</code> is in your <code class="mono">$PATH</code>.
+  </span>
+</div>
+{% endif %}
+
+{% if error %}
+<div class="card" style="border-color: var(--crit); background: rgba(211,47,47,0.08); margin-bottom: 16px;">
+  <strong style="color: var(--crit);">Error:</strong> {{ error }}
+</div>
+{% endif %}
+
+<div class="card" style="max-width: 720px;">
+<form method="post" action="/projects/{{ project.name }}/{{ spec.kind }}/new" style="display: flex; flex-direction: column; gap: 14px;">
+
+  <label>
+    <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; margin-bottom: 4px;">
+      Target {% if spec.target_arg == "--binary" %}(binary){% else %}(repo){% endif %}
+    </div>
+    <input name="target" type="text" required
+           value="{{ form.target or project.target }}"
+           placeholder="{% if spec.target_arg == '--binary' %}/absolute/path/to/binary{% else %}/absolute/path/to/repo{% endif %}"
+           style="width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 12px;">
+    <div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">
+      {% if spec.target_arg == "--binary" %}Path to the compiled binary to fuzz. The project's <code class="mono">target</code> points at source, which is probably what you want to build first.{% else %}Defaults to the project's target path.{% endif %}
+    </div>
+  </label>
+
+  {#- Field macro reused for both Essentials and Advanced. -#}
+  {%- macro render_field(f) -%}
+  <label>
+    <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; margin-bottom: 4px;">
+      {{ f.label }}{% if f.required %} *{% endif %}
+    </div>
+    {% set val = form.get(f.name, f.default) %}
+    {% if f.kind == "select" %}
+      <select name="{{ f.name }}"
+              style="width: 100%; padding: 7px 8px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: inherit; font-size: 13px;">
+        {% for opt in f.options %}
+          <option value="{{ opt }}" {% if opt == val %}selected{% endif %}>{{ opt or "(auto)" }}</option>
+        {% endfor %}
+      </select>
+    {% elif f.kind == "checkbox" %}
+      <input name="{{ f.name }}" type="checkbox" value="on" {% if val %}checked{% endif %}>
+      <span style="font-size: 12px; color: var(--fg2); margin-left: 6px;">enabled</span>
+    {% elif f.kind == "number" %}
+      <input name="{{ f.name }}" type="number" value="{{ val }}" {% if f.required %}required{% endif %}
+             style="width: 160px; padding: 7px 8px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">
+    {% else %}
+      <input name="{{ f.name }}" type="text" value="{{ val }}"
+             placeholder="{{ f.placeholder }}" {% if f.required %}required{% endif %}
+             style="width: 100%; padding: 7px 8px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">
+    {% endif %}
+    {% if f.help %}<div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">{{ f.help }}</div>{% endif %}
+  </label>
+  {%- endmacro -%}
+
+  {#- Split fields into Essentials (required OR only field) and Advanced (everything else). -#}
+  {%- set essentials = spec.fields | selectattr("required") | list -%}
+  {%- if spec.fields | length == 1 -%}
+    {%- set essentials = spec.fields -%}
+  {%- endif -%}
+  {%- set advanced = spec.fields | rejectattr("required") | list -%}
+  {%- if spec.fields | length == 1 -%}
+    {%- set advanced = [] -%}
+  {%- endif -%}
+
+  {% for f in essentials %}
+    {{ render_field(f) }}
+  {% endfor %}
+
+  {% if advanced %}
+  {#- Advanced options: default-collapsed for newcomers, localStorage-sticky for returners. -#}
+  <details class="run-advanced" data-kind="{{ spec.kind }}"
+           style="margin-top: 4px; padding: 10px 14px; border: 1px solid var(--border-l); border-radius: 8px; background: var(--bg);">
+    <summary style="cursor: pointer; font-size: 12px; color: var(--fg2); font-weight: 600;">
+      Advanced options <span style="font-weight: 400; color: var(--fg3);">· {{ advanced|length }}</span>
+    </summary>
+    <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 12px;">
+    {% for f in advanced %}
+      {{ render_field(f) }}
+    {% endfor %}
+    </div>
+  </details>
+  {% endif %}
+
+  <div style="display: flex; gap: 10px; margin-top: 6px;">
+    <button type="submit" class="btn btn-p">Start run</button>
+    <a href="/projects/{{ project.name }}/{{ spec.kind }}" class="btn">Cancel</a>
+  </div>
+
+  <div style="margin-top: 10px; padding: 10px 12px; background: var(--bg3); border-radius: 6px; border: 1px solid var(--border);">
+    <div style="font-size: 10px; color: var(--fg3); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 6px;">
+      Equivalent CLI
+    </div>
+    <pre class="mono" style="margin: 0; padding: 0; background: transparent; font-size: 11px; white-space: pre-wrap; word-break: break-all;">{% if spec.requires_claude %}{{ preview_flags }}{% else %}python3 {{ spec.script }} {{ spec.target_arg }} {{ form.target or project.target }} {{ preview_flags }}{% endif %}</pre>
+    <div style="font-size: 11px; color: var(--fg3); margin-top: 6px;">
+      {% if spec.requires_claude %}
+        Spawned from <code class="mono">{{ raptor_home }}</code> under <code class="mono">bash -c</code>. Needs <code class="mono">claude</code> on <code class="mono">$PATH</code>.
+      {% else %}
+        Runs from <code class="mono">{{ raptor_home }}</code>. Must have raptor's Python dependencies installed.
+      {% endif %}
+    </div>
+  </div>
+</form>
+</div>
+
+<script>
+(function() {
+  // Sticky Advanced open/closed per kind.
+  const d = document.querySelector('details.run-advanced');
+  if (!d) return;
+  const key = 'rs-advanced-open-' + (d.dataset.kind || 'default');
+  try { if (localStorage.getItem(key) === '1') d.open = true; } catch(e) {}
+  d.addEventListener('toggle', () => {
+    try { localStorage.setItem(key, d.open ? '1' : '0'); } catch(e) {}
+  });
+})();
+</script>
+
+{% endblock %}
