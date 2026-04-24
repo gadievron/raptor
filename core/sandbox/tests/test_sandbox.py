@@ -675,14 +675,27 @@ class TestPidNamespace(unittest.TestCase):
         self.assertIn("errno 3", r.stdout)
 
     def test_sandboxed_process_is_pid_1(self):
-        """With --pid --fork, the sandboxed command runs as PID 1 in the ns."""
+        """With --pid --fork, the sandboxed command runs at a low pid
+        in the new pid-ns.
+
+        Exact pid depends on the sandbox layout:
+        - pid=1 if the target is exec'd directly as pid-ns init
+        - pid=3 when wrapped by libexec/raptor-pid1-shim (shim=pid-1,
+          intermediate=pid-2, target=pid-3). The shim exists to avoid
+          the kernel's pid-ns signal filter swallowing raise()/abort()
+          from the target — see docs/sandbox.md for why.
+        Either way, the pid is a small single-digit value and definitely
+        not a host pid (which would be in the thousands).
+        """
         with TemporaryDirectory() as d:
             r = sandbox_run(
                 ["python3", "-c", "import os; print(os.getpid())"],
                 block_network=True, target=d, output=d,
                 capture_output=True, text=True, timeout=5,
             )
-        self.assertEqual(r.stdout.strip(), "1")
+        self.assertIn(r.stdout.strip(), ("1", "2", "3"),
+                      f"target pid should be 1–3 (pid-ns root or shim "
+                      f"grandchild), got: {r.stdout!r}")
 
 
 class TestFdIsolation(unittest.TestCase):

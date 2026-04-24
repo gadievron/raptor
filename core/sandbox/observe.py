@@ -82,8 +82,29 @@ def _interpret_result(result: subprocess.CompletedProcess, cmd_display: str) -> 
         result.sandbox_info = info  # type: ignore[attr-defined]
         return
 
+    # Two routes to "died by signal":
+    #   1. subprocess.run convention: rc < 0, where sig = -rc.
+    #      Happens when the direct child of Popen dies by signal and
+    #      the parent's waitpid sees WIFSIGNALED.
+    #   2. 128+sig convention: rc in [129, 128 + NSIG). Used when
+    #      something between Popen and the target (e.g. the pid-1
+    #      shim at libexec/raptor-pid1-shim) caught the signal via
+    #      waitpid + WIFSIGNALED and exited with 128+WTERMSIG because
+    #      it couldn't re-raise the signal on itself (the pid-ns
+    #      filter blocks pid-1 from raise()ing signals without an
+    #      installed handler — the very filter the shim exists to
+    #      keep AWAY from the target). Standard unix shell
+    #      convention; bash's $? uses it too. Decode identically.
+    # SIGKILL (9) via 128+9=137 is a genuine ambiguity vs. a program
+    # that legitimately exits 137 — accepted as a negligible risk,
+    # the 128+sig range is almost never an honest exit code.
+    sig_num = 0
     if rc < 0:
         sig_num = -rc
+    elif 128 < rc < 128 + signal.NSIG:
+        sig_num = rc - 128
+
+    if sig_num:
         try:
             sig_name = signal.Signals(sig_num).name
         except (ValueError, AttributeError):

@@ -470,6 +470,18 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             "/usr", "/lib", "/lib64", "/bin", "/sbin",
             "/etc", "/proc", "/sys",
         ]
+        # The pid-1 shim file ONLY (not the whole libexec/ dir).
+        # Without this, execvp of the shim fails with EACCES (rc=126)
+        # and every run_untrusted() call under restrict_reads=True
+        # errors out before the target even starts. Narrowing to the
+        # single file keeps the rest of libexec/ (other RAPTOR
+        # helpers that have no business being visible to a sandboxed
+        # target) out of the read allowlist. Landlock supports
+        # file-granularity rules via path_beneath with an O_PATH fd.
+        from pathlib import Path as _Path
+        _shim = _Path(__file__).resolve().parents[2] / "libexec" / "raptor-pid1-shim"
+        if _shim.is_file():
+            effective_read_paths.append(str(_shim))
         if target:
             effective_read_paths.append(target)
         if readable_paths:
@@ -742,7 +754,28 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             # Landlock-only is the right construction.
             if map_root:
                 unshare_cmd.append("--map-root-user")
-            full_cmd = unshare_cmd + ["--"] + prlimit_wrapper + cmd
+            # pid-1 shim: unshare --fork makes the forked child pid-1
+            # of the new pid-ns and that child execs whatever argv
+            # comes next. If we put the user's cmd there directly,
+            # the target IS pid-1 — and Linux's pid-ns policy drops
+            # signals sent to pid-1 via raise() / kill(self,...)
+            # without an installed handler (man pid_namespaces).
+            # Nested-ns setups (Docker-in-CI, systemd-nspawn) can
+            # also drop synchronous-exception signals to pid-1 in
+            # some kernel/util-linux combinations, breaking crash
+            # observability. Interpose libexec/raptor-pid1-shim so
+            # the TARGET runs as pid-3 (via a double-fork for setsid
+            # permission) and only the shim is pid-1; the shim reaps,
+            # forwards signals, and mirrors the target's exit via
+            # the 128+sig convention (the same pid-1 filter prevents
+            # the shim re-raising the signal on itself, so we exit
+            # with 128+WTERMSIG — observe._interpret_result decodes
+            # both rc<0 and 128+sig to the same crashed=True state).
+            from pathlib import Path as _Path
+            shim_path = str(
+                _Path(__file__).resolve().parents[2] / "libexec" / "raptor-pid1-shim"
+            )
+            full_cmd = unshare_cmd + ["--"] + prlimit_wrapper + [shim_path] + cmd
         else:
             full_cmd = cmd
 

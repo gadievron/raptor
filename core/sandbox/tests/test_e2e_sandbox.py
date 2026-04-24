@@ -304,6 +304,40 @@ class TestE2ECrashObservability(unittest.TestCase):
             self.assertTrue(result.sandbox_info["crashed"])
             self.assertEqual(result.sandbox_info["signal"], "SIGFPE")
 
+    def test_sigabrt_detected(self):
+        """abort() captured — THE shim regression test.
+
+        abort() self-sends SIGABRT via `raise(SIGABRT)`. Without the
+        pid-1 shim, the target is pid-1 of the new pid-ns and the
+        kernel silently drops raise() from pid-1 (no default handler
+        → pid-ns init-signal filter applies). Result: target exits
+        rc=0 and observability loses the crash entirely.
+
+        With the shim (`libexec/raptor-pid1-shim`), the target runs
+        as pid-3 so raise() goes through normally. The intermediate
+        process encodes signal-death as rc=128+6=134 (can't re-raise
+        on pid-1 either), and observe._interpret_result decodes both
+        rc<0 and 128+sig to the same crashed=True state.
+
+        Unlike SIGFPE (x86-only synchronous trap), SIGABRT is
+        portable, so this test runs everywhere.
+        """
+        with TemporaryDirectory() as d:
+            src = Path(d) / "abrt.c"
+            src.write_text('#include <stdlib.h>\nint main(){abort();return 0;}')
+            binary = Path(d) / "abrt"
+            subprocess.run(["gcc", "-o", str(binary), str(src)],
+                           capture_output=True, timeout=10)
+
+            result = sandbox_run(
+                [str(binary)], block_network=True,
+                capture_output=True, text=True, timeout=5,
+            )
+            self.assertTrue(result.sandbox_info["crashed"],
+                            f"abort() should be detected as a crash; "
+                            f"got rc={result.returncode} info={result.sandbox_info}")
+            self.assertEqual(result.sandbox_info["signal"], "SIGABRT")
+
     def test_normal_exit_no_crash(self):
         """Clean exit has no crash evidence."""
         result = sandbox_run(
@@ -846,31 +880,44 @@ class TestE2EEgressProxy(unittest.TestCase):
         READS aren't. setsid() promotes the child to session leader
         with no controlling tty; subsequent /dev/tty opens return ENXIO.
 
-        We assert the signature of a session leader: `os.getsid(0) ==
-        os.getpid()`. Without start_new_session this is False (child
-        inherits parent's session id). With start_new_session (our
-        default) it's True.
+        Direct check: try to open /dev/tty and verify the kernel returns
+        ENXIO (errno 6). This is the actual defence we care about and
+        works regardless of whether the target runs under the pid-1 shim
+        (pid=3, grandchild's setsid) or directly (pid=1 + Popen's
+        start_new_session). Using a proxy like `pid==sid via ps` is
+        unreliable because the subprocess sandbox path inherits the
+        host's /proc mount, so /proc/<innerpid>/stat shows host-pid
+        data (sid=0 for pids not present in the inner ns).
         """
         from core.sandbox import run_untrusted as _run_untrusted
-        # /bin/ps reads /proc — enough under restrict_reads. Use `ps` to
-        # report the child's session id. `ps -o pid=,sid= -p $$` prints
-        # pid and sid with no headers. Session-leader signature: pid==sid.
+        # `sh -c` + redirect from /dev/tty fails with ENXIO when there is
+        # no controlling tty. Print errno name via python -c? No — python
+        # isn't in restrict_reads default paths. Use /dev/tty open via sh
+        # redirection; the shell's error message includes "No such device
+        # or address" (ENXIO strerror) on Linux.
         with TemporaryDirectory() as out:
             r = _run_untrusted(
-                ["sh", "-c", "ps -o pid=,sid= -p $$"],
+                # `exec 2>&1` at the start of sh -c redirects ALL later
+                # output (including sh's own "cannot open" redirection
+                # errors) to stdout, so we see the ENXIO strerror even
+                # though cat never runs (sh fails the redirect before
+                # execve'ing cat).
+                ["sh", "-c", "exec 2>&1; cat </dev/tty; echo rc=$?"],
                 target=out, output=out,
                 capture_output=True, text=True, timeout=5,
             )
-            self.assertEqual(r.returncode, 0,
-                             f"probe failed: {r.stderr[:200]!r}")
-            parts = r.stdout.split()
-            self.assertEqual(len(parts), 2,
-                             f"unexpected ps output: {r.stdout!r}")
-            pid_str, sid_str = parts
-            self.assertEqual(pid_str, sid_str,
-                             f"child is not a session leader "
-                             f"(pid={pid_str} sid={sid_str}) — "
-                             f"start_new_session=True was not applied")
+            combined = (r.stdout or "") + (r.stderr or "")
+            # Accept either strerror form: "No such device or address"
+            # (ENXIO — the success signal — setsid detached the tty)
+            # or "No such file" if /dev/tty is absent from the minimal
+            # mount-ns. Either way, the child cannot read the operator's
+            # tty — the sandbox's intent is upheld.
+            self.assertTrue(
+                "No such device" in combined
+                or "No such file" in combined,
+                f"child appears to have a controlling tty "
+                f"(setsid not applied): {combined[:200]!r}",
+            )
 
     def test_rejects_shell_true(self):
         """shell=True must be rejected — sandbox bootstrap silently
