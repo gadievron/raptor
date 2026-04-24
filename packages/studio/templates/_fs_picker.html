@@ -1,0 +1,307 @@
+{# Reusable server-side filesystem picker.
+
+  Any input tagged with `data-fs-picker` gets a Browse button injected after it
+  on DOMContentLoaded. Clicking the button opens a modal that navigates the
+  server's filesystem (via /api/fs/list) and writes the selected path back
+  into the input on "Use this directory". Set `data-fs-picker="files"` to
+  allow file selection in addition to directories.
+#}
+
+<style>
+  .fs-browse-btn {
+    flex: 0 0 auto;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--fg2);
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 13px;
+    line-height: 1;
+    transition: border-color 0.1s, color 0.1s;
+  }
+  .fs-browse-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .fs-input-row { display: flex; gap: 6px; align-items: stretch; }
+  .fs-input-row > input[data-fs-picker] { flex: 1 1 auto; min-width: 0; }
+
+  #fs-picker-modal {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+    display: none; align-items: center; justify-content: center; z-index: 1000;
+  }
+  #fs-picker-modal.open { display: flex; }
+  #fs-picker-card {
+    width: min(720px, 92vw); max-height: 82vh; display: flex; flex-direction: column;
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+    overflow: hidden;
+  }
+  #fs-picker-head {
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  }
+  #fs-picker-head h3 { margin: 0; font-size: 14px; font-weight: 700; color: var(--fg); }
+  #fs-picker-close {
+    background: none; border: none; color: var(--fg2); cursor: pointer;
+    font-size: 20px; line-height: 1; padding: 2px 6px;
+  }
+  #fs-picker-close:hover { color: var(--fg); }
+  #fs-picker-shortcuts {
+    display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 16px 0 16px;
+  }
+  .fs-shortcut {
+    padding: 4px 10px; font-size: 11px; border: 1px solid var(--border-l);
+    border-radius: 999px; background: var(--bg); color: var(--fg2); cursor: pointer;
+  }
+  .fs-shortcut:hover { border-color: var(--accent); color: var(--accent); }
+  #fs-picker-path {
+    padding: 10px 16px 8px 16px;
+    font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--fg2);
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  }
+  #fs-picker-path .crumb {
+    color: var(--accent); cursor: pointer; text-decoration: none;
+  }
+  #fs-picker-path .crumb:hover { text-decoration: underline; }
+  #fs-picker-path .sep { color: var(--fg3); }
+  #fs-picker-list {
+    flex: 1 1 auto; overflow-y: auto; padding: 4px 8px 8px 8px; min-height: 240px;
+  }
+  .fs-entry {
+    display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+    border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--fg);
+  }
+  .fs-entry:hover { background: var(--bg3); }
+  .fs-entry.selected { background: var(--accent-r); color: var(--accent); }
+  .fs-entry .icon { font-size: 14px; width: 16px; text-align: center; color: var(--fg3); }
+  .fs-entry.dir .icon { color: var(--accent); }
+  #fs-picker-foot {
+    padding: 10px 16px; border-top: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  }
+  #fs-picker-current {
+    flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; color: var(--fg3);
+  }
+  #fs-picker-actions { display: flex; gap: 8px; flex: 0 0 auto; }
+</style>
+
+<div id="fs-picker-modal" role="dialog" aria-modal="true" aria-labelledby="fs-picker-title">
+  <div id="fs-picker-card">
+    <div id="fs-picker-head">
+      <h3 id="fs-picker-title">Choose a path</h3>
+      <button type="button" id="fs-picker-close" aria-label="Close">×</button>
+    </div>
+    <div id="fs-picker-shortcuts"></div>
+    <div id="fs-picker-path"></div>
+    <div id="fs-picker-list">Loading…</div>
+    <div id="fs-picker-foot">
+      <div id="fs-picker-current">—</div>
+      <div id="fs-picker-actions">
+        <button type="button" class="btn" id="fs-picker-cancel">Cancel</button>
+        <button type="button" class="btn btn-p" id="fs-picker-use">Use this path</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  const modal    = document.getElementById('fs-picker-modal');
+  const listEl   = document.getElementById('fs-picker-list');
+  const pathEl   = document.getElementById('fs-picker-path');
+  const scutsEl  = document.getElementById('fs-picker-shortcuts');
+  const currentEl = document.getElementById('fs-picker-current');
+  const useBtn   = document.getElementById('fs-picker-use');
+  const cancelBtn = document.getElementById('fs-picker-cancel');
+  const closeBtn = document.getElementById('fs-picker-close');
+
+  let activeInput = null;    // the <input> currently being populated
+  let mode = 'dirs';         // 'dirs' or 'files'
+  let currentPath = '';      // the directory currently being listed
+  let selectedPath = '';     // the user's current selection (dir or file)
+
+  async function loadPath(path, selectAfter) {
+    listEl.textContent = 'Loading…';
+    const url = new URL('/api/fs/list', window.location.origin);
+    if (path) url.searchParams.set('path', path);
+    if (mode === 'files') url.searchParams.set('include_files', '1');
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      const body = await resp.text();
+      listEl.innerHTML = '<div style="padding: 24px; color: var(--crit); font-size: 12px;">' + body + '</div>';
+      return;
+    }
+    const data = await resp.json();
+    currentPath = data.path;
+    selectedPath = data.path;
+    renderBreadcrumb(data);
+    renderShortcuts(data);
+    renderList(data);
+    updateCurrent();
+    if (selectAfter) highlightEntry(selectAfter);
+  }
+
+  function renderBreadcrumb(data) {
+    pathEl.innerHTML = '';
+    const home = data.home;
+    const parts = [];
+    let running = '';
+    if (data.path.startsWith(home)) {
+      parts.push({ label: '~', path: home });
+      const rest = data.path.slice(home.length).split('/').filter(Boolean);
+      running = home;
+      for (const seg of rest) {
+        running = running.replace(/\/$/, '') + '/' + seg;
+        parts.push({ label: seg, path: running });
+      }
+    } else {
+      const rest = data.path.split('/').filter(Boolean);
+      running = '';
+      parts.push({ label: '/', path: '/' });
+      for (const seg of rest) {
+        running += '/' + seg;
+        parts.push({ label: seg, path: running });
+      }
+    }
+    parts.forEach((p, i) => {
+      if (i > 0) {
+        const sep = document.createElement('span');
+        sep.className = 'sep';
+        sep.textContent = '/';
+        pathEl.appendChild(sep);
+      }
+      const a = document.createElement('a');
+      a.className = 'crumb';
+      a.href = '#';
+      a.textContent = p.label;
+      a.addEventListener('click', (e) => { e.preventDefault(); loadPath(p.path); });
+      pathEl.appendChild(a);
+    });
+  }
+
+  function renderShortcuts(data) {
+    scutsEl.innerHTML = '';
+    (data.shortcuts || []).forEach(s => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'fs-shortcut';
+      btn.textContent = s.label;
+      btn.addEventListener('click', () => loadPath(s.path));
+      scutsEl.appendChild(btn);
+    });
+  }
+
+  function renderList(data) {
+    listEl.innerHTML = '';
+    if (data.parent && data.parent !== data.path) {
+      const up = document.createElement('div');
+      up.className = 'fs-entry dir';
+      up.innerHTML = '<span class="icon">↑</span><span>..</span>';
+      up.addEventListener('click', () => loadPath(data.parent));
+      listEl.appendChild(up);
+    }
+    data.entries.forEach(e => {
+      const row = document.createElement('div');
+      row.className = 'fs-entry' + (e.is_dir ? ' dir' : '');
+      row.dataset.path = e.path;
+      row.dataset.isDir = e.is_dir ? '1' : '0';
+      row.innerHTML = '<span class="icon">' + (e.is_dir ? '📁' : '📄') + '</span><span></span>';
+      row.querySelector('span:last-child').textContent = e.name;
+      row.addEventListener('click', () => {
+        selectedPath = e.path;
+        updateCurrent();
+        listEl.querySelectorAll('.fs-entry.selected').forEach(x => x.classList.remove('selected'));
+        row.classList.add('selected');
+      });
+      row.addEventListener('dblclick', () => {
+        if (e.is_dir) loadPath(e.path);
+        else { selectedPath = e.path; commit(); }
+      });
+      listEl.appendChild(row);
+    });
+    if (data.entries.length === 0) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'padding: 24px; color: var(--fg3); font-size: 12px; text-align: center;';
+      empty.textContent = mode === 'files' ? '(empty directory)' : '(no subdirectories — toggle "Files" to see files)';
+      listEl.appendChild(empty);
+    }
+  }
+
+  function highlightEntry(path) {
+    const row = listEl.querySelector('.fs-entry[data-path="' + CSS.escape(path) + '"]');
+    if (row) { row.classList.add('selected'); row.scrollIntoView({block:'center'}); }
+  }
+
+  function updateCurrent() {
+    currentEl.textContent = selectedPath || '—';
+    useBtn.disabled = !selectedPath;
+  }
+
+  function commit() {
+    if (activeInput && selectedPath) {
+      activeInput.value = selectedPath;
+      activeInput.dispatchEvent(new Event('input', {bubbles: true}));
+      activeInput.dispatchEvent(new Event('change', {bubbles: true}));
+    }
+    close();
+  }
+
+  function open(input) {
+    activeInput = input;
+    mode = (input.dataset.fsPicker || 'dirs').toLowerCase() === 'files' ? 'files' : 'dirs';
+    selectedPath = '';
+    // Seed with current value if it looks like an absolute path, else $HOME
+    const seed = (input.value || '').trim();
+    const start = seed.startsWith('/') ? seed : '';
+    modal.classList.add('open');
+    document.body.style.overflow = 'hidden';
+    loadPath(start);
+  }
+
+  function close() {
+    modal.classList.remove('open');
+    document.body.style.overflow = '';
+    activeInput = null;
+    selectedPath = '';
+  }
+
+  useBtn.addEventListener('click', commit);
+  cancelBtn.addEventListener('click', close);
+  closeBtn.addEventListener('click', close);
+  modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.classList.contains('open')) close();
+  });
+
+  function wire(input) {
+    if (input.dataset.fsPickerWired === '1') return;
+    input.dataset.fsPickerWired = '1';
+
+    // Wrap in a flex row so the Browse button sits next to the input.
+    const row = document.createElement('div');
+    row.className = 'fs-input-row';
+    const parent = input.parentNode;
+    parent.insertBefore(row, input);
+    row.appendChild(input);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'fs-browse-btn';
+    btn.textContent = '📂 Browse';
+    btn.setAttribute('aria-label', 'Browse filesystem');
+    btn.addEventListener('click', () => open(input));
+    row.appendChild(btn);
+  }
+
+  function wireAll(root) {
+    (root || document).querySelectorAll('input[data-fs-picker]').forEach(wire);
+  }
+
+  window.raptorStudioFsPicker = { wire, wireAll, open };
+  document.addEventListener('DOMContentLoaded', () => wireAll());
+  // Also wire immediately if already past DOMContentLoaded
+  if (document.readyState !== 'loading') wireAll();
+})();
+</script>

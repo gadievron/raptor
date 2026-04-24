@@ -519,6 +519,65 @@ def job_cancel(request: Request, job_id: str):
     return RedirectResponse(url=f"/jobs/{job_id}", status_code=303)
 
 
+@app.get("/api/fs/list")
+def api_fs_list(path: str = "", include_files: int = 0):
+    """Browse the local filesystem for the file-picker widget.
+
+    Single-user localhost tool — exposes the process owner's filesystem.
+    No multi-tenant threat model. We only normalize the path and skip
+    entries we can't stat (e.g. permission denied on system dirs).
+    """
+    home = Path.home()
+    if not path:
+        target = home
+    else:
+        try:
+            target = Path(path).expanduser().resolve()
+        except (OSError, RuntimeError) as exc:
+            raise HTTPException(400, f"invalid path: {exc}")
+    if not target.exists():
+        raise HTTPException(404, f"path not found: {target}")
+    if not target.is_dir():
+        raise HTTPException(400, f"not a directory: {target}")
+
+    entries: list[dict] = []
+    try:
+        for child in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+            if child.name.startswith("."):
+                continue
+            try:
+                is_dir = child.is_dir()
+            except OSError:
+                continue
+            if not include_files and not is_dir:
+                continue
+            entries.append({
+                "name": child.name,
+                "is_dir": is_dir,
+                "path": str(child),
+            })
+    except PermissionError as exc:
+        raise HTTPException(403, f"permission denied: {exc}")
+
+    shortcuts = [
+        {"label": "Home", "path": str(home)},
+        {"label": "Projects", "path": str(home / "Projects")},
+        {"label": "Downloads", "path": str(home / "Downloads")},
+        {"label": "Desktop", "path": str(home / "Desktop")},
+        {"label": "/tmp", "path": "/tmp"},
+    ]
+    shortcuts = [s for s in shortcuts if Path(s["path"]).is_dir()]
+
+    return JSONResponse({
+        "ok": True,
+        "path": str(target),
+        "parent": str(target.parent) if target != target.parent else None,
+        "home": str(home),
+        "entries": entries,
+        "shortcuts": shortcuts,
+    })
+
+
 @app.get("/api/jobs/{job_id}/log")
 def api_job_log(job_id: str):
     job = jobs_service.get(job_id)
