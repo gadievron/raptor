@@ -1,0 +1,88 @@
+{% extends "project_base.html" %}
+{% block title %}Findings — {{ project.name }}/{{ run.name }} — {{ app_title }}{% endblock %}
+{% block breadcrumb_tail %}
+  <span class="sep">›</span>
+  <a href="/projects/{{ project.name }}/runs">Runs</a>
+  <span class="sep">›</span>
+  <span class="current mono" style="font-size: 11px;">{{ run.name }}</span>
+{% endblock %}
+{% block project_content %}
+
+<div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;">
+  <div>
+    <h1 style="margin: 0; font-size: 22px;">Findings</h1>
+    <div style="color: var(--fg2); font-size: 13px; margin-top: 4px;">
+      <span class="mono">{{ run.name }}</span>
+      · <span class="badge b-neutral">{{ run.kind }}</span>
+      {% if run.status == "completed" %}<span class="badge b-ok">complete</span>
+      {% elif run.status == "running" %}<span class="badge b-running">running</span>
+      {% elif run.status == "failed" %}<span class="badge b-failed">failed</span>
+      {% else %}<span class="badge b-neutral">{{ run.status }}</span>{% endif %}
+    </div>
+    <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--fg3); margin-top: 4px;">
+      {{ run.command }}
+    </div>
+  </div>
+  <span class="badge b-neutral">{{ findings|length }} finding{{ 's' if findings|length != 1 else '' }}</span>
+</div>
+
+{% if findings %}
+<div class="card" style="padding: 0;">
+  <table>
+    <thead>
+      <tr>
+        <th>Status</th>
+        <th>Verdict · Impact</th>
+        <th>Type</th>
+        <th>CWE</th>
+        <th>Location</th>
+        <th style="width: 40px;"></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for f in findings %}
+      {% set fs = f.final_status or f.status or "pending" %}
+      {% set verdict = (f.feasibility or {}).get("verdict") or f.verdict or "unknown" %}
+      {% set impact = f.impact or "unknown" %}
+      <tr class="expander" onclick="toggleRow('f{{ loop.index }}')">
+        <td>
+          {% if fs == "exploitable" %}<span class="badge b-critical">exploitable</span>
+          {% elif fs == "likely_exploitable" %}<span class="badge b-high">likely</span>
+          {% elif fs == "confirmed_constrained" %}<span class="badge b-medium">constrained</span>
+          {% elif fs == "confirmed_blocked" %}<span class="badge b-low">blocked</span>
+          {% elif fs == "confirmed_unverified" %}<span class="badge b-neutral">unverified</span>
+          {% elif fs == "confirmed" %}<span class="badge b-high">confirmed</span>
+          {% elif fs == "ruled_out" %}<span class="badge b-neutral">ruled out</span>
+          {% else %}<span class="badge b-neutral">{{ fs }}</span>{% endif %}
+        </td>
+        <td class="mono" style="font-size: 11px; color: var(--fg2);">
+          <span style="color: var(--fg);">{{ verdict }}</span>
+          <span style="color: var(--fg3);"> · </span>{{ impact }}
+        </td>
+        <td class="mono" style="font-size: 12px;">{{ f.vuln_type or f.type or "—" }}</td>
+        <td class="mono" style="font-size: 11px; color: var(--fg3);">{{ f.cwe_id or f.cwe or "" }}</td>
+        <td class="mono" style="font-size: 11px;">{{ f.file or "" }}{% if f.line %}:{{ f.line }}{% endif %}</td>
+        <td style="color: var(--fg3);">▶</td>
+      </tr>
+      <tr class="detail" id="f{{ loop.index }}">
+        <td colspan="6">
+          {% include "_finding_detail.html" %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="card empty">
+  <div class="icon">∅</div>
+  <p>No findings parsed from this run.</p>
+  <p style="font-size: 12px; color: var(--fg3);">
+    Raptor stores findings in <code class="mono">findings.json</code>, <code class="mono">findings_validated.json</code>,
+    <code class="mono">findings_agentic.json</code>, or <code class="mono">findings_merged.json</code>. SARIF is also emitted but not yet
+    rendered here.
+  </p>
+</div>
+{% endif %}
+
+{% endblock %}
