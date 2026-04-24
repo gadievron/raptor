@@ -163,5 +163,60 @@ class TestThrottle(unittest.TestCase):
         mock_sleep.assert_not_called()
 
 
+class TestGetClientThreadSafety(unittest.TestCase):
+    """Singleton init is guarded by _client_lock and _client_initialised.
+
+    The orchestrator dispatches via ThreadPoolExecutor, so two workers can
+    call _get_client() before either has finished initialising. Without the
+    lock, both would construct SageClient (wasteful) and one could briefly
+    see a non-None _client while the other resets it to None.
+    """
+
+    def setUp(self):
+        import core.sage.hooks as hooks
+        # Reset module state so each test starts from a cold singleton.
+        hooks._client = None
+        hooks._client_initialised = False
+
+    def tearDown(self):
+        import core.sage.hooks as hooks
+        hooks._client = None
+        hooks._client_initialised = False
+
+    @patch("core.sage.hooks.SageClient")
+    def test_concurrent_first_call_constructs_client_once(self, mock_cls):
+        from concurrent.futures import ThreadPoolExecutor
+        import core.sage.hooks as hooks
+
+        mock_instance = MagicMock()
+        mock_instance.is_available.return_value = True
+        mock_cls.return_value = mock_instance
+
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            results = list(pool.map(lambda _: hooks._get_client(), range(16)))
+
+        self.assertEqual(mock_cls.call_count, 1)
+        self.assertTrue(all(r is mock_instance for r in results))
+
+    @patch("core.sage.hooks.SageClient")
+    def test_unavailable_at_init_sticks(self, mock_cls):
+        """Once SAGE is decided unavailable, don't re-probe on every call."""
+        import core.sage.hooks as hooks
+
+        mock_instance = MagicMock()
+        mock_instance.is_available.return_value = False
+        mock_cls.return_value = mock_instance
+
+        self.assertIsNone(hooks._get_client())
+        self.assertIsNone(hooks._get_client())
+        self.assertIsNone(hooks._get_client())
+
+        # SageClient ctor and is_available each ran exactly once across
+        # three hook calls — cached init prevents the probe-storm the
+        # old code would cause when SAGE is down for the whole run.
+        self.assertEqual(mock_cls.call_count, 1)
+        self.assertEqual(mock_instance.is_available.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

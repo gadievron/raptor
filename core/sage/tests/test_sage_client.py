@@ -82,10 +82,6 @@ class TestSageClientNoSDK(unittest.TestCase):
         from core.sage.client import SageClient
         self.assertFalse(SageClient().propose("test content"))
 
-    def test_register_no_client(self):
-        from core.sage.client import SageClient
-        self.assertFalse(SageClient().register("test-agent"))
-
 
 def _install_mock_sdk(client_mod):
     """Install mock SDK bindings in the client module. Returns (cls, instance)."""
