@@ -46,8 +46,7 @@ class ProjectExtras:
     type: Optional[str] = None
     # Path to a secondary source repository, used by binary-type projects that
     # also want to run source analysis against the source tree the binary was
-    # built from. Field was previously named ``binary`` (misleading) — the
-    # reader accepts either on load for backward compatibility.
+    # built from.
     source_repo: str = ""
     # Forensics-type extras
     focus: str = ""
@@ -76,12 +75,6 @@ class ProjectExtras:
             self.language, self.corpus_dir, self.created_via,
         ])
 
-    # Backward-compat alias so existing call sites that read ``.binary``
-    # keep working while we migrate. Do not use in new code.
-    @property
-    def binary(self) -> str:
-        return self.source_repo
-
 
 def _sidecar_path(name: str, studio_dir: Path = STUDIO_DATA_DIR) -> Path:
     return studio_dir / "project-extras" / f"{name}.json"
@@ -97,12 +90,9 @@ def load(name: str, studio_dir: Path = STUDIO_DATA_DIR) -> ProjectExtras:
         return ProjectExtras()
     if not isinstance(data, dict):
         return ProjectExtras()
-    # Back-compat: the sidecar used to write ``binary`` for what is really a
-    # secondary source-repo path. Prefer the new key; fall back to the old.
-    source_repo = data.get("source_repo") or data.get("binary") or ""
     return ProjectExtras(
         type=data.get("type") or None,
-        source_repo=source_repo,
+        source_repo=data.get("source_repo", "") or "",
         focus=data.get("focus", "") or "",
         vendor_report_url=data.get("vendor_report_url", "") or "",
         language=data.get("language", "") or "",

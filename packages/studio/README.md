@@ -57,9 +57,11 @@ packages/studio/
 ├── tests/                  # 17 test modules (161 tests, incl. live-subprocess worker)
 ├── scripts/                # seed_demo.py, process_avatar.py
 ├── docs/
-│   ├── PRD.md              # product requirements (why, who, what's in / out of scope)
-│   ├── CHANGELOG.md        # commit-by-commit narrative
-│   └── UX_RECONCILIATION.md    # design narrative: vulngraph patterns + raptor data model
+│   ├── PRD.md              # product requirements — scope, invariants, non-goals
+│   ├── FAQ.md               # pre-answers to likely maintainer questions
+│   ├── ARCHITECTURE.md      # one-page call-flow + request lifecycles + state locations
+│   ├── UX_RECONCILIATION.md # design narrative: vulngraph patterns + raptor data model
+│   └── CHANGELOG.md        # commit-by-commit narrative
 └── fixtures/               # test inputs
 ```
 
@@ -71,7 +73,7 @@ pip install pytest httpx
 python -m pytest packages/studio/tests/
 ```
 
-Expect 161 passed, 1 skipped.
+Expect 160 passed, 1 skipped.
 
 ## Design thesis
 
@@ -81,7 +83,7 @@ Raptor's reasoning quality (Semgrep + CodeQL + Stage A–F validation + AFL++ + 
 
 The UX borrows idioms from [vulngraph](https://github.com/yesnet0/vulngraph) (project-centric navigation, pipeline-status sidebar, evidence-inline findings, Mermaid graphs) and serves raptor's actual data model (SARIF, Stage A–F validation, verdict × impact, feasibility, chain-breaks, OSS-forensics artifacts, expert personas).
 
-See `docs/PRD.md` and `docs/UX_RECONCILIATION.md` for the full rationale.
+Full rationale: [`docs/PRD.md`](docs/PRD.md) · anticipated maintainer questions: [`docs/FAQ.md`](docs/FAQ.md) · call-flow: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · design narrative: [`docs/UX_RECONCILIATION.md`](docs/UX_RECONCILIATION.md).
 
 ## License
 

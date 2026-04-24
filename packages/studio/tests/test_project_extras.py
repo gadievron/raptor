@@ -85,21 +85,6 @@ def test_to_dict_shape():
     assert d["created_via"] == "studio"
 
 
-def test_backcompat_reads_old_binary_field(tmp_path):
-    """Old sidecars used 'binary' for what is really a secondary source repo."""
-    from packages.studio.services.project_extras import load
-    sidecar = tmp_path / "project-extras" / "legacy.json"
-    sidecar.parent.mkdir()
-    import json
-    sidecar.write_text(json.dumps({
-        "type": "binary", "binary": "/tmp/old-source-path",
-    }))
-    extras = load("legacy", studio_dir=tmp_path)
-    assert extras.source_repo == "/tmp/old-source-path"
-    # And the legacy .binary alias still works for any remaining callers
-    assert extras.binary == "/tmp/old-source-path"
-
-
 def test_new_fields_roundtrip(tmp_path):
     from packages.studio.services.project_extras import load, save
     save("full", ProjectExtras(

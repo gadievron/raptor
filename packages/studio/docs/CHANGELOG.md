@@ -1,10 +1,23 @@
 # Changelog
 
-Reverse-chronological. Each entry is one commit on `main`. Test counts are cumulative (pytest).
+Reverse-chronological. Each entry corresponds to a commit in the companion repo [yesnet0/raptor-studio](https://github.com/yesnet0/raptor-studio). This file is the full development narrative; the in-tree commit in raptor squashes all of it for reviewability. Test counts are cumulative (pytest).
+
+## 2026-04-24
+
+### In-tree under `packages/studio/` (this PR)
+
+- Moved `studio/` → `packages/studio/`; rewrote all `studio.*` imports to `packages.studio.*`.
+- Simplified `services/raptor_version.py` from regex-scrape of `core/config.py` to a direct `from core.config import RaptorConfig` — in-tree has no bootstrapping problem.
+- Dropped the legacy `binary=` kwarg alias on `create_project()` and the `ProjectExtras.binary` property. No existing callers to maintain on a fresh merge; cleaner diff for reviewers.
+- Added `raptor_studio.py` launcher at repo root, mirroring `raptor_agentic.py` / `raptor_codeql.py` / `raptor_fuzzing.py` pattern.
+- Added 5 deps to raptor's `requirements.txt`: `fastapi`, `uvicorn[standard]`, `jinja2`, `python-multipart`, `markdown`.
+- New docs: `FAQ.md` (pre-answers maintainer questions), `ARCHITECTURE.md` (one-page call-flow).
+- Updated `PRD.md` + `UX_RECONCILIATION.md` to reflect the in-tree context.
+- Tests: 161 → 160 (dropped 1 back-compat test that no longer applies). All pass via `python -m pytest packages/studio/tests/` from raptor root.
 
 ## 2026-04-23
 
-### (next) — Version pill reads raptor's live version
+### Version pill reads raptor's live version
 
 - New `services/raptor_version.py` regex-scrapes `VERSION = "..."` from `$RAPTOR_HOME/core/config.py`. Fallback: `git describe --tags --always` inside the raptor checkout. `lru_cache`d per process.
 - `_ctx()` in `app.py` exposes the scraped string to every template.
