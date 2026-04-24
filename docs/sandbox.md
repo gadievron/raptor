@@ -289,6 +289,46 @@ set — useful for post-run auditing. Each sandbox's buffer grows independently
 for its lifetime (no fixed cap, no ring-buffer eviction); the buffer is
 discarded when the sandbox context exits.
 
+### Crash signals across the pid-ns boundary
+
+`unshare --pid --fork` makes the forked child pid-1 of the new pid-ns.
+Linux's pid-ns policy drops signals sent to pid-1 via `raise()` /
+`kill(self, ...)` unless the process has installed a handler (see
+`man 7 pid_namespaces`). If the target runs directly as pid-1, a
+self-signalled crash — `abort()`, explicit `raise(SIGFPE)` — exits
+`rc=0` and the sandbox sees a clean return where the target actually
+crashed. Nested-ns environments (Docker-in-CI, systemd-nspawn) can
+extend the filter to synchronous CPU exceptions too in some kernel
+combinations.
+
+The subprocess-path sandbox interposes `libexec/raptor-pid1-shim` so
+the target runs as **pid-3** of the new pid-ns, not pid-1:
+
+- shim (`/usr/bin/python3 -I`, pid-1) — reaps, forwards termination
+  signals (`SIGTERM`/`SIGINT`/`SIGHUP`/`SIGQUIT`) to the target,
+  mirrors exit status.
+- intermediate (pid-2) — exists only to escape process-group
+  leadership so the grandchild can `setsid()`.
+- target (pid-3) — executes the caller's command, session leader,
+  no controlling tty (so `open("/dev/tty")` returns ENXIO).
+
+Because the shim is itself pid-1 it can't `raise()` the target's
+signal on itself either, so signal death is encoded using the
+standard unix `128+sig` exit-code convention. `observe._interpret_result`
+decodes both `rc<0` (direct-child signal death) and `128<rc<128+NSIG`
+(shim-mirrored signal death) to the same `sandbox_info["crashed"] = True`
+state, so downstream consumers don't need to know which path fired.
+
+Side-effect of the `-I` shebang on the shim interpreter: `PYTHONPATH`,
+`PYTHONHOME`, and `PYTHONSTARTUP` in the child env are ignored at
+interpreter startup, blocking a `sitecustomize.py` injection surface
+should a caller-supplied `env=` pass those names through (the default
+`get_safe_env()` strips them already — `-I` is belt-and-braces for
+callers that supply their own env).
+
+The mount-ns path (`core/sandbox/_spawn.py`) handles pid-ns setup via
+its own `os.fork()` after `unshare(NEWPID)`, so the grandchild target
+is pid-2 of the new ns and this shim isn't required there.
 ## Toolchain env for builds
 
 The sandbox's `get_safe_env()` keeps a tight allowlist and deliberately
