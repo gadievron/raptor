@@ -1,0 +1,42 @@
+{% extends "project_base.html" %}
+{% block breadcrumb_tail %}
+  <span class="sep">›</span>
+  <span class="current">Reports</span>
+{% endblock %}
+{% block project_content %}
+
+<h1 style="margin: 0; font-size: 22px;">Reports</h1>
+<div style="color: var(--fg2); font-size: 13px; margin-top: 4px; margin-bottom: 16px;">Merged project reports and per-run markdown summaries.</div>
+
+{% if reports %}
+<div class="card" style="padding: 0;">
+  <table>
+    <thead><tr><th>Report</th><th>Run</th><th>Size</th><th>Modified</th></tr></thead>
+    <tbody>
+    {% for r in reports %}
+      <tr>
+        <td class="mono" style="font-size: 12px;">{{ r.filename }}</td>
+        <td class="mono" style="font-size: 11px; color: var(--fg3);">{{ r.run_name|truncate(26, True, "…") }}</td>
+        <td class="mono" style="font-size: 11px; color: var(--fg3);">{{ r.size_bytes }}b</td>
+        <td class="mono" style="font-size: 11px; color: var(--fg3);">{{ r.modified }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="card" style="padding: 32px; text-align: center;">
+  <div class="icon" style="font-size: 32px; opacity: 0.5;">∅</div>
+  <h2 style="margin: 6px 0 4px; font-size: 16px;">No reports yet</h2>
+  <p style="color: var(--fg2); font-size: 13px; margin: 0 0 16px;">
+    Reports are markdown summaries emitted at the end of runs (e.g. <code class="mono">validation-report.md</code>,
+    <code class="mono">forensic-report.md</code>) or produced by <code class="mono">raptor project report</code> from the CLI.
+  </p>
+  <a href="/projects/{{ project.name }}/validate/new" class="btn btn-p">Run validation →</a>
+  <div style="font-size: 11px; color: var(--fg3); margin-top: 14px;">
+    Picks up every <code class="mono">*.md</code> file in each run directory.
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}

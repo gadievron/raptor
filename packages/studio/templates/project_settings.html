@@ -1,0 +1,38 @@
+{% extends "project_base.html" %}
+{% block breadcrumb_tail %}
+  <span class="sep">›</span>
+  <span class="current">Settings</span>
+{% endblock %}
+{% block project_content %}
+
+<h1 style="margin: 0; font-size: 22px;">Project settings</h1>
+<div style="color: var(--fg2); font-size: 13px; margin-top: 4px; margin-bottom: 16px;">
+  Project metadata. For model / budget config, see
+  <a href="/settings">global settings</a>.
+</div>
+
+<div class="card" style="max-width: 640px;">
+  <dl style="margin: 0; display: grid; grid-template-columns: 120px 1fr; gap: 10px 16px; font-size: 13px;">
+    <dt style="color: var(--fg3); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600;">Name</dt>
+    <dd style="margin: 0; font-weight: 600;">{{ project.name }}</dd>
+
+    <dt style="color: var(--fg3); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600;">Target</dt>
+    <dd class="mono" style="margin: 0; font-size: 12px; word-break: break-all;">{{ project.target }}</dd>
+
+    <dt style="color: var(--fg3); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600;">Output</dt>
+    <dd class="mono" style="margin: 0; font-size: 12px; word-break: break-all;">{{ project.output_dir }}</dd>
+
+    <dt style="color: var(--fg3); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600;">Description</dt>
+    <dd style="margin: 0; color: {{ 'var(--fg3)' if not project.description else 'var(--fg)' }};">{{ project.description or "(none)" }}</dd>
+
+    <dt style="color: var(--fg3); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600;">Created</dt>
+    <dd class="mono" style="margin: 0; font-size: 12px; color: var(--fg2);">{{ project.created or "unknown" }}</dd>
+  </dl>
+</div>
+
+<p style="margin-top: 20px; font-size: 12px; color: var(--fg3);">
+  Editable project metadata (description, notes, rename, delete) is on the roadmap.
+  Today, use the raptor CLI: <code class="mono">raptor project description &lt;name&gt; "new description"</code>.
+</p>
+
+{% endblock %}
