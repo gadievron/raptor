@@ -36,9 +36,12 @@ class ValidationBundle:
 
     @property
     def has_any(self) -> bool:
+        # A checklist alone is inconclusive — understand runs also write one.
+        # Require at least one validate-specific artifact before we label this
+        # a "validation bundle" in the UI.
         return any([
-            self.checklist, self.findings, self.attack_tree, self.hypotheses,
-            self.disproven, self.attack_paths, self.attack_surface, self.report_md,
+            self.findings, self.attack_tree, self.hypotheses,
+            self.disproven, self.attack_paths, self.report_md,
         ])
 
     @property

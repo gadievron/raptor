@@ -26,7 +26,10 @@
           {% elif e.level == "INFO" %}<span class="badge b-neutral">info</span>
           {% else %}<span class="badge b-neutral">{{ e.level|lower }}</span>{% endif %}
         </td>
-        <td class="mono" style="font-size: 11px; color: var(--fg3);">{{ (e.run or "")|truncate(20, True, "…") }}</td>
+        <td class="mono" style="font-size: 11px; color: var(--fg3);">
+          {% if e.run %}<a href="/projects/{{ project.name }}/runs/{{ e.run }}" style="color: var(--accent);">{{ e.run|truncate(24, True, "…") }}</a>
+          {% else %}<span style="color: var(--fg3);">project</span>{% endif %}
+        </td>
         <td style="font-size: 12px;">{{ e.message|truncate(140, True, "…") }}</td>
       </tr>
     {% endfor %}

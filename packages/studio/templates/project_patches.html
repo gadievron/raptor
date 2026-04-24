@@ -27,8 +27,12 @@
     <tbody>
     {% for p in patches %}
       <tr>
-        <td class="mono" style="font-size: 12px;">{{ p.filename }}</td>
-        <td class="mono" style="font-size: 11px; color: var(--fg3);">{{ p.run_name|truncate(26, True, "…") }}</td>
+        <td class="mono" style="font-size: 12px;">
+          <a href="/projects/{{ project.name }}/runs/{{ p.run_name }}/files/{{ p.rel_path }}" target="_blank" style="color: var(--accent);">{{ p.filename }}</a>
+        </td>
+        <td class="mono" style="font-size: 11px; color: var(--fg3);">
+          <a href="/projects/{{ project.name }}/runs/{{ p.run_name }}">{{ p.run_name|truncate(26, True, "…") }}</a>
+        </td>
         <td class="mono" style="font-size: 11px; color: var(--fg3);">{{ p.size_bytes }}b</td>
         <td class="mono" style="font-size: 11px; color: var(--fg3);">{{ p.modified }}</td>
       </tr>

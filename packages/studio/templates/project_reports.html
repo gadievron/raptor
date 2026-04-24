@@ -15,8 +15,12 @@
     <tbody>
     {% for r in reports %}
       <tr>
-        <td class="mono" style="font-size: 12px;">{{ r.filename }}</td>
-        <td class="mono" style="font-size: 11px; color: var(--fg3);">{{ r.run_name|truncate(26, True, "…") }}</td>
+        <td class="mono" style="font-size: 12px;">
+          <a href="/projects/{{ project.name }}/runs/{{ r.run_name }}/files/{{ r.rel_path }}" target="_blank" style="color: var(--accent);">{{ r.filename }}</a>
+        </td>
+        <td class="mono" style="font-size: 11px; color: var(--fg3);">
+          <a href="/projects/{{ project.name }}/runs/{{ r.run_name }}">{{ r.run_name|truncate(26, True, "…") }}</a>
+        </td>
         <td class="mono" style="font-size: 11px; color: var(--fg3);">{{ r.size_bytes }}b</td>
         <td class="mono" style="font-size: 11px; color: var(--fg3);">{{ r.modified }}</td>
       </tr>

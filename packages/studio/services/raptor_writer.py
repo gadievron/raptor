@@ -52,6 +52,7 @@ def create_project(
     vendor_report_url: str = "",
     language: str = "",
     corpus_dir: str = "",
+    binary: str = "",  # deprecated alias for source_repo; kept for backward compat
     projects_dir: Path = RAPTOR_PROJECTS_DIR,
     output_base: Path = RAPTOR_OUTPUT_BASE,
     studio_dir: Optional[Path] = None,
@@ -60,10 +61,9 @@ def create_project(
 
     Mirrors raptor.core.project.ProjectManager.create for the canonical
     raptor schema (version, name, target, output_dir, created, description,
-    notes). Studio-side extras (type, source_repo, focus, language,
-    vendor_report_url, corpus_dir) are persisted to a sidecar at
-    $STUDIO_DATA_DIR/project-extras/<name>.json — raptor's CLI ignores them,
-    which is intentional.
+    notes). Studio-side extras (type, binary, focus, language) are persisted
+    to a sidecar at $STUDIO_DATA_DIR/project-extras/<name>.json — raptor's
+    CLI ignores them, which is intentional.
 
     For ``project_type == 'forensics'``, ``target`` is treated as a URL and
     is NOT path-resolved — URLs mangle under ``Path.resolve()``.
@@ -119,10 +119,12 @@ def create_project(
     project_file.write_text(json.dumps(data, indent=2) + "\n")
 
     # Studio sidecar — optional extras that don't fit raptor's schema.
+    # source_repo supersedes the legacy ``binary`` alias.
+    effective_source_repo = source_repo or binary
     extras = extras_service.ProjectExtras(
         type=project_type,
-        source_repo=(str(Path(source_repo).expanduser().resolve())
-                     if source_repo else ""),
+        source_repo=(str(Path(effective_source_repo).expanduser().resolve())
+                     if effective_source_repo else ""),
         focus=focus or "",
         vendor_report_url=vendor_report_url or "",
         language=language or "",
@@ -147,3 +149,29 @@ def create_project(
 
 def _looks_like_url(s: str) -> bool:
     return s.startswith(("http://", "https://", "git@", "ssh://"))
+
+
+def update_project_metadata(
+    name: str,
+    description: Optional[str] = None,
+    notes: Optional[str] = None,
+    projects_dir: Path = RAPTOR_PROJECTS_DIR,
+) -> None:
+    """Update editable fields on an existing project.json.
+
+    Preserves every other key (version, target, output_dir, created) so the
+    file still round-trips through raptor's ``validate_project`` check.
+    Only ``description`` and ``notes`` are writable from the UI today —
+    renaming and deleting remain CLI-only.
+    """
+    projects_dir = Path(projects_dir)
+    project_file = projects_dir / f"{name}.json"
+    if not project_file.is_file():
+        raise ProjectCreateError(f"Project '{name}' not found at {project_file}.")
+
+    data = json.loads(project_file.read_text())
+    if description is not None:
+        data["description"] = description
+    if notes is not None:
+        data["notes"] = notes
+    project_file.write_text(json.dumps(data, indent=2) + "\n")
