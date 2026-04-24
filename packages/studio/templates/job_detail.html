@@ -1,0 +1,120 @@
+{% extends "project_base.html" %}
+{% block title %}Job {{ job.id[:8] }} — {{ project.name }} — {{ app_title }}{% endblock %}
+{% block breadcrumb_tail %}
+  <span class="sep">›</span>
+  <a href="/projects/{{ project.name }}/jobs">Jobs</a>
+  <span class="sep">›</span>
+  <span class="current mono" style="font-size: 11px;">{{ job.id[:8] }}</span>
+{% endblock %}
+{% block project_content %}
+
+<div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;">
+  <div style="flex: 1; min-width: 0;">
+    <h1 style="margin: 0; font-size: 22px;">Job detail</h1>
+    <div class="mono" style="font-size: 12px; color: var(--fg3); margin-top: 4px; word-break: break-all;">{{ job.id }}</div>
+  </div>
+  <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center;">
+    <span class="badge b-neutral">{{ job.kind }}</span>
+    {% if job.status.value == "completed" %}<span class="badge b-ok">complete</span>
+    {% elif job.status.value == "running" %}<span class="badge b-running">running</span>
+    {% elif job.status.value == "failed" %}<span class="badge b-failed">failed</span>
+    {% elif job.status.value == "queued" %}<span class="badge b-medium">queued</span>
+    {% elif job.status.value == "cancelled" %}<span class="badge b-neutral">cancelled</span>
+    {% else %}<span class="badge b-neutral">{{ job.status.value }}</span>{% endif %}
+    {% if job.status.value == "running" %}
+    <form method="post" action="/jobs/{{ job.id }}/cancel" style="margin: 0;">
+      <button type="submit" class="btn btn-d" style="background: var(--crit); color: white; border-color: var(--crit);">Cancel</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card" style="margin-bottom: 16px;">
+  <dl style="display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; margin: 0; font-size: 13px;">
+    <dt style="color: var(--fg3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">Command</dt>
+    <dd class="mono" style="margin: 0; font-size: 12px; word-break: break-all; color: var(--fg);">{{ job.argv|join(' ') }}</dd>
+
+    <dt style="color: var(--fg3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">Target</dt>
+    <dd class="mono" style="margin: 0; font-size: 12px; color: var(--fg2); word-break: break-all;">{{ job.target }}</dd>
+
+    <dt style="color: var(--fg3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">Created</dt>
+    <dd class="mono" style="margin: 0; font-size: 12px; color: var(--fg2);">{{ job.created_at }}</dd>
+
+    {% if job.started_at %}
+    <dt style="color: var(--fg3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">Started</dt>
+    <dd class="mono" style="margin: 0; font-size: 12px; color: var(--fg2);">{{ job.started_at }}</dd>
+    {% endif %}
+
+    {% if job.finished_at %}
+    <dt style="color: var(--fg3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">Finished</dt>
+    <dd class="mono" style="margin: 0; font-size: 12px; color: var(--fg2);">{{ job.finished_at }}</dd>
+    {% endif %}
+
+    {% if job.elapsed_seconds is not none %}
+    <dt style="color: var(--fg3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">Elapsed</dt>
+    <dd class="mono" style="margin: 0; font-size: 12px; color: var(--fg2);">{{ job.elapsed_seconds }}s</dd>
+    {% endif %}
+
+    {% if job.exit_code is not none %}
+    <dt style="color: var(--fg3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">Exit code</dt>
+    <dd class="mono" style="margin: 0; font-size: 12px; color: {{ 'var(--low)' if job.exit_code == 0 else 'var(--crit)' }};">{{ job.exit_code }}</dd>
+    {% endif %}
+
+    {% if job.pid %}
+    <dt style="color: var(--fg3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">PID</dt>
+    <dd class="mono" style="margin: 0; font-size: 12px; color: var(--fg3);">{{ job.pid }}</dd>
+    {% endif %}
+
+    {% if job.run_dir %}
+    <dt style="color: var(--fg3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">Output dir</dt>
+    <dd class="mono" style="margin: 0; font-size: 12px; word-break: break-all;"><a href="/projects/{{ project.name }}/runs">{{ job.run_dir }}</a></dd>
+    {% endif %}
+
+    {% if job.error %}
+    <dt style="color: var(--crit); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">Error</dt>
+    <dd class="mono" style="margin: 0; font-size: 12px; color: var(--crit);">{{ job.error }}</dd>
+    {% endif %}
+  </dl>
+</div>
+
+<div class="card" style="padding: 0;">
+  <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-bottom: 1px solid var(--border);">
+    <h2 style="margin: 0; font-size: 14px;">Log</h2>
+    <div style="display: flex; gap: 10px; align-items: center;">
+      <span id="log-status" style="font-size: 11px; color: var(--fg3); font-family: 'JetBrains Mono', monospace;">
+        {% if job.status.value == "running" %}streaming…{% elif job.status.value == "queued" %}waiting for worker{% else %}finished{% endif %}
+      </span>
+    </div>
+  </div>
+  <pre id="log-output" style="margin: 0; padding: 14px 20px; max-height: 560px; overflow: auto; background: var(--bg); border: none; font-size: 11px; line-height: 1.45;">{{ log_tail or "(no output yet)" }}</pre>
+</div>
+
+{% if job.status.value in ("queued", "running") %}
+<script>
+(function() {
+  const stream = new EventSource("/api/jobs/{{ job.id }}/stream");
+  const out = document.getElementById("log-output");
+  const stat = document.getElementById("log-status");
+  // If we already have content that's not the placeholder, leave it.
+  if (out.textContent.trim() === "(no output yet)") { out.textContent = ""; }
+
+  stream.addEventListener("log", function(e) {
+    out.textContent += e.data + "\n";
+    out.scrollTop = out.scrollHeight;
+  });
+  stream.addEventListener("status", function(e) {
+    stat.textContent = e.data;
+    if (e.data !== "running" && e.data !== "queued") {
+      stream.close();
+      setTimeout(() => window.location.reload(), 1200);
+    }
+  });
+  stream.onerror = function() {
+    stat.textContent = "(stream closed)";
+    stream.close();
+  };
+})();
+</script>
+{% endif %}
+
+{% endblock %}

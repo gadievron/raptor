@@ -1,0 +1,49 @@
+{% extends "project_base.html" %}
+{% block breadcrumb_tail %}
+  <span class="sep">›</span>
+  <span class="current">Activity</span>
+{% endblock %}
+{% block project_content %}
+
+<h1 style="margin: 0; font-size: 22px;">Activity</h1>
+<div style="color: var(--fg2); font-size: 13px; margin-top: 4px; margin-bottom: 16px;">
+  Raptor's JSONL audit trail across every run.
+</div>
+
+{% if activity %}
+<div class="card" style="padding: 0;">
+  <table>
+    <thead>
+      <tr><th>When</th><th>Level</th><th>Run</th><th>Message</th></tr>
+    </thead>
+    <tbody>
+    {% for e in activity %}
+      <tr>
+        <td class="mono" style="font-size: 11px; color: var(--fg3); white-space: nowrap;">{{ e.timestamp }}</td>
+        <td>
+          {% if e.level == "ERROR" %}<span class="badge b-failed">error</span>
+          {% elif e.level == "WARNING" %}<span class="badge b-medium">warn</span>
+          {% elif e.level == "INFO" %}<span class="badge b-neutral">info</span>
+          {% else %}<span class="badge b-neutral">{{ e.level|lower }}</span>{% endif %}
+        </td>
+        <td class="mono" style="font-size: 11px; color: var(--fg3);">{{ (e.run or "")|truncate(20, True, "…") }}</td>
+        <td style="font-size: 12px;">{{ e.message|truncate(140, True, "…") }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div style="text-align: center; color: var(--fg3); font-size: 11px; margin-top: 12px;">
+  Showing last {{ activity|length }} entries.
+</div>
+{% else %}
+<div class="card empty">
+  <div class="icon">○</div>
+  <p>No audit entries yet.</p>
+  <p style="font-size: 12px; color: var(--fg3);">
+    Raptor logs to <code class="mono">{{ project.output_dir }}/logs/raptor_*.jsonl</code> when runs execute.
+  </p>
+</div>
+{% endif %}
+
+{% endblock %}

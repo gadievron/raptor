@@ -1,0 +1,313 @@
+{% extends "project_base.html" %}
+{% block title %}{{ run.name }} — {{ project.name }} — {{ app_title }}{% endblock %}
+{% block breadcrumb_tail %}
+  <span class="sep">›</span>
+  <a href="/projects/{{ project.name }}/runs">Runs</a>
+  <span class="sep">›</span>
+  <span class="current mono" style="font-size: 11px;">{{ run.name }}</span>
+{% endblock %}
+{% block project_content %}
+
+<div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; flex-wrap: wrap;">
+  <div style="flex: 1; min-width: 0;">
+    <h1 style="margin: 0; font-size: 22px;">Run detail</h1>
+    <div style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--fg3); margin-top: 4px; word-break: break-all;">
+      {{ run.name }}
+    </div>
+  </div>
+  <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+    <span class="badge b-neutral">{{ run.kind }}</span>
+    {% if run.status == "completed" %}<span class="badge b-ok">complete</span>
+    {% elif run.status == "running" %}<span class="badge b-running">running</span>
+    {% elif run.status == "failed" %}<span class="badge b-failed">failed</span>
+    {% else %}<span class="badge b-neutral">{{ run.status }}</span>{% endif %}
+  </div>
+</div>
+
+<div class="card" style="margin-bottom: 16px;">
+  <dl style="display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; margin: 0; font-size: 13px;">
+    <dt style="color: var(--fg3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">Command</dt>
+    <dd class="mono" style="margin: 0; font-size: 12px; word-break: break-all; color: var(--fg);">{{ run.command }}</dd>
+
+    <dt style="color: var(--fg3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">Started</dt>
+    <dd class="mono" style="margin: 0; font-size: 12px; color: var(--fg2);">{{ run.timestamp }}</dd>
+
+    <dt style="color: var(--fg3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;">Directory</dt>
+    <dd class="mono" style="margin: 0; font-size: 11px; word-break: break-all; color: var(--fg3);">{{ run.directory }}</dd>
+  </dl>
+</div>
+
+<div class="grid g3" style="margin-bottom: 20px;">
+  <a href="/projects/{{ project.name }}/runs/{{ run.name }}/findings"
+     class="card" style="text-decoration: none; color: inherit; display: block;">
+    <div style="font-size: 11px; color: var(--fg3); text-transform: uppercase; letter-spacing: 0.05em;">Findings</div>
+    <div style="font-size: 28px; font-weight: 600; font-family: 'JetBrains Mono', monospace; margin-top: 4px;">
+      {{ summary.findings_count or 0 }}
+    </div>
+    <div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">
+      {% if summary.has_findings_json %}raptor findings.json
+      {% elif summary.has_sarif %}SARIF ({{ summary.sarif_files|length }})
+      {% else %}<span style="color: var(--fg3);">(none)</span>{% endif %}
+    </div>
+  </a>
+
+  <a href="/projects/{{ project.name }}/exploits"
+     class="card" style="text-decoration: none; color: inherit; display: block;">
+    <div style="font-size: 11px; color: var(--fg3); text-transform: uppercase; letter-spacing: 0.05em;">Exploits</div>
+    <div style="font-size: 28px; font-weight: 600; font-family: 'JetBrains Mono', monospace; margin-top: 4px;">
+      {{ summary.exploits_count }}
+    </div>
+    <div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">
+      {% if not summary.has_exploits %}<span style="color: var(--fg3);">(none)</span>{% else %}generated{% endif %}
+    </div>
+  </a>
+
+  <a href="/projects/{{ project.name }}/patches"
+     class="card" style="text-decoration: none; color: inherit; display: block;">
+    <div style="font-size: 11px; color: var(--fg3); text-transform: uppercase; letter-spacing: 0.05em;">Patches</div>
+    <div style="font-size: 28px; font-weight: 600; font-family: 'JetBrains Mono', monospace; margin-top: 4px;">
+      {{ summary.patches_count }}
+    </div>
+    <div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">
+      {% if not summary.has_patches %}<span style="color: var(--fg3);">(none)</span>{% else %}proposed{% endif %}
+    </div>
+  </a>
+</div>
+
+{% if summary.has_scan_metrics and summary.scan_metrics %}
+<div class="card" style="margin-bottom: 16px;">
+  <h2 style="margin: 0 0 10px; font-size: 14px;">Scan metrics</h2>
+  <pre style="margin: 0; font-size: 12px; max-height: 260px; overflow: auto;">{{ summary.scan_metrics | tojson(indent=2) }}</pre>
+</div>
+{% endif %}
+
+{% if summary.fuzzing_report %}
+<div class="card" style="margin-bottom: 16px;">
+  <h2 style="margin: 0 0 10px; font-size: 14px;">Fuzzing report</h2>
+  {% if summary.afl_crashes_count %}
+  <div style="font-size: 13px; margin-bottom: 10px;">
+    <strong style="font-family: 'JetBrains Mono', monospace;">{{ summary.afl_crashes_count }}</strong> crashes under <code class="mono">afl_output/main/crashes/</code>
+  </div>
+  {% endif %}
+  <pre style="margin: 0; font-size: 12px; max-height: 300px; overflow: auto;">{{ summary.fuzzing_report | tojson(indent=2) }}</pre>
+</div>
+{% endif %}
+
+{% if summary.has_validation_bundle %}
+<div class="card" style="margin-bottom: 16px;">
+  <h2 style="margin: 0 0 10px; font-size: 14px;">Validation bundle</h2>
+  <div style="font-size: 12px; color: var(--fg2); margin-bottom: 10px;">
+    Structured artifacts from <code class="mono">/validate</code>:
+  </div>
+  <div class="grid g3">
+  {% for key, count in summary.validation_counts.items() %}
+    <div style="padding: 10px; border: 1px solid var(--border-l); border-radius: 6px;">
+      <div style="font-size: 11px; color: var(--fg3); text-transform: uppercase; letter-spacing: 0.04em;">{{ key|replace('_', ' ') }}</div>
+      <div style="font-size: 18px; font-weight: 600; font-family: 'JetBrains Mono', monospace;">{{ count }}</div>
+    </div>
+  {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% if bundle and bundle.attack_surface %}
+<div class="card" style="margin-bottom: 16px;">
+  <h2 style="margin: 0 0 10px; font-size: 14px;">Attack surface</h2>
+  <div style="font-size: 12px; color: var(--fg2); margin-bottom: 12px;">
+    Sources, sinks, and trust boundaries discovered during validation.
+  </div>
+
+  {% set surf = bundle.attack_surface %}
+  {% if surf.sources or surf.sinks %}
+  <div class="mermaid" style="background: var(--bg); padding: 12px; border-radius: 6px; border: 1px solid var(--border-l); margin-bottom: 16px;">
+flowchart LR
+{% for s in (surf.sources or [])[:8] %}
+    src{{ loop.index }}["{{ s|replace('"', '&quot;')|truncate(36, True, '…') }}"]
+{% endfor %}
+{% for b in (surf.trust_boundaries or [])[:8] %}
+    tb{{ loop.index }}{{ "{" }}{{ b|replace('"', '&quot;')|truncate(36, True, '…') }}{{ "}" }}
+{% endfor %}
+{% for k in (surf.sinks or [])[:8] %}
+    snk{{ loop.index }}[("{{ k|replace('"', '&quot;')|truncate(36, True, '…') }}")]
+{% endfor %}
+{% for s in (surf.sources or [])[:8] %}
+{% for b in (surf.trust_boundaries or [])[:8] %}
+    src{{ loop.index }} --> tb{{ loop.index }}
+{% endfor %}
+{% endfor %}
+{% for b in (surf.trust_boundaries or [])[:8] %}
+{% for k in (surf.sinks or [])[:8] %}
+    tb{{ loop.index }} --> snk{{ loop.index }}
+{% endfor %}
+{% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="grid g3">
+    <div>
+      <div style="font-size: 11px; color: var(--fg3); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 6px;">Sources ({{ (surf.sources or [])|length }})</div>
+      <ul style="margin: 0; padding-left: 20px; font-size: 12px;">
+      {% for s in (surf.sources or [])[:12] %}<li class="mono">{{ s }}</li>{% endfor %}
+      </ul>
+    </div>
+    <div>
+      <div style="font-size: 11px; color: var(--fg3); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 6px;">Sinks ({{ (surf.sinks or [])|length }})</div>
+      <ul style="margin: 0; padding-left: 20px; font-size: 12px;">
+      {% for s in (surf.sinks or [])[:12] %}<li class="mono">{{ s }}</li>{% endfor %}
+      </ul>
+    </div>
+    <div>
+      <div style="font-size: 11px; color: var(--fg3); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 6px;">Trust boundaries ({{ (surf.trust_boundaries or [])|length }})</div>
+      <ul style="margin: 0; padding-left: 20px; font-size: 12px;">
+      {% for b in (surf.trust_boundaries or [])[:12] %}<li class="mono">{{ b }}</li>{% endfor %}
+      </ul>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if bundle and bundle.report_md %}
+<div class="card md-report" style="margin-bottom: 16px;">
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+    <h2 style="margin: 0; font-size: 14px;">validation-report.md</h2>
+    <a href="/projects/{{ project.name }}/runs/{{ run.name }}/files/validation-report.md"
+       target="_blank" style="font-size: 11px; color: var(--fg3);">view raw →</a>
+  </div>
+  <div class="markdown-body" style="max-height: 420px; overflow: auto;">{{ bundle.report_md | md | safe }}</div>
+</div>
+{% endif %}
+
+{% if forensics and forensics.has_any %}
+<div class="card" style="margin-bottom: 16px;">
+  <h2 style="margin: 0 0 12px; font-size: 14px;">Forensic investigation walkthrough</h2>
+
+  {% if forensics.research_question %}
+  <div style="margin-bottom: 16px; padding: 12px; background: var(--accent-r); border-radius: 6px;">
+    <div style="font-size: 10px; color: var(--fg3); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 4px;">Research question</div>
+    <div style="font-size: 14px; font-weight: 500;">{{ forensics.research_question }}</div>
+  </div>
+  {% endif %}
+
+  {% if forensics.evidence_summary %}
+  <div style="margin-bottom: 16px;">
+    <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 6px;">Evidence collected</div>
+    <table style="font-size: 12px;">
+      <thead><tr><th>Source</th><th>Count</th></tr></thead>
+      <tbody>
+      {% for source, count in forensics.evidence_summary %}
+        <tr>
+          <td class="mono">{{ source }}</td>
+          <td class="mono" style="font-family: 'JetBrains Mono', monospace;">{{ count }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if forensics.hypotheses %}
+  <div style="margin-bottom: 16px;">
+    <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 6px;">Hypothesis iterations ({{ forensics.hypotheses|length }})</div>
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+    {% for h in forensics.hypotheses %}
+      <details style="border: 1px solid var(--border-l); border-radius: 6px; padding: 8px 12px; background: var(--bg);">
+        <summary style="cursor: pointer; display: flex; gap: 8px; align-items: center;">
+          <span class="mono" style="font-size: 11px; color: var(--fg3); width: 24px;">#{{ h.order or "?" }}</span>
+          <span style="flex: 1; font-size: 13px;">{{ h.title }}</span>
+          {% if h.status == "confirmed" %}<span class="badge b-ok">confirmed</span>
+          {% elif h.status == "rejected" %}<span class="badge b-failed">rejected</span>
+          {% else %}<span class="badge b-neutral">{{ h.status }}</span>{% endif %}
+        </summary>
+        <div class="markdown-body" style="margin-top: 10px; max-height: 360px; overflow: auto;">{{ h.content | md | safe }}</div>
+      </details>
+    {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if forensics.evidence_verification %}
+  <div style="margin-bottom: 16px;">
+    <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 6px;">Evidence verification</div>
+    <details>
+      <summary style="cursor: pointer; font-size: 12px;">Show verification report</summary>
+      <div class="markdown-body" style="margin-top: 8px; max-height: 340px; overflow: auto;">{{ forensics.evidence_verification | md | safe }}</div>
+    </details>
+  </div>
+  {% endif %}
+
+  {% if forensics.forensic_report %}
+  <div style="padding: 14px; background: var(--bg3); border-radius: 6px; border: 1px solid var(--border);">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+      <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Final forensic report</div>
+      <a href="/projects/{{ project.name }}/runs/{{ run.name }}/files/forensic-report.md"
+         target="_blank" style="font-size: 11px; color: var(--fg3);">view raw →</a>
+    </div>
+    <div class="markdown-body" style="max-height: 560px; overflow: auto;">{{ forensics.forensic_report | md | safe }}</div>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if summary.dataflow_diagrams %}
+<div class="card" style="margin-bottom: 16px;">
+  <h2 style="margin: 0 0 4px; font-size: 14px;">Dataflow diagrams</h2>
+  <div style="font-size: 12px; color: var(--fg2); margin-bottom: 14px;">
+    CodeQL-emitted flow visualizations — source to sink with each transformation step.
+    Click a thumbnail to open full-size.
+  </div>
+  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px;">
+  {% for df in summary.dataflow_diagrams %}
+    {% set svg_url = "/projects/" + project.name + "/runs/" + run.name + "/files/" + df.svg_filename %}
+    <div style="border: 1px solid var(--border-l); border-radius: 6px; padding: 10px; background: var(--bg);">
+      <div class="mono" style="font-size: 11px; color: var(--fg2); margin-bottom: 6px; word-break: break-all;">{{ df.name }}</div>
+      <a href="{{ svg_url }}" target="_blank" style="display: block; text-decoration: none;">
+        <div style="border: 1px solid var(--border-l); border-radius: 4px; background: white; padding: 8px; aspect-ratio: 16 / 9; overflow: hidden; display: flex; align-items: center; justify-content: center;">
+          <img src="{{ svg_url }}" alt="{{ df.name }}"
+               style="max-width: 100%; max-height: 100%; object-fit: contain; pointer-events: none;">
+        </div>
+      </a>
+      <div style="display: flex; justify-content: space-between; margin-top: 8px; font-size: 11px; color: var(--fg3);">
+        <span class="mono">{{ df.size_bytes }}b</span>
+        {% if df.json_filename %}
+          <a href="/projects/{{ project.name }}/runs/{{ run.name }}/files/{{ df.json_filename }}" target="_blank">paired JSON →</a>
+        {% else %}
+          <span>SVG only</span>
+        {% endif %}
+      </div>
+    </div>
+  {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% if summary.has_reports %}
+<div class="card" style="margin-bottom: 16px;">
+  <h2 style="margin: 0 0 10px; font-size: 14px;">Report files</h2>
+  <ul style="margin: 0; padding-left: 20px; font-size: 13px;">
+  {% for name in summary.report_files %}
+    <li class="mono" style="font-size: 12px;">{{ name }}</li>
+  {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if summary.has_sarif %}
+<div class="card" style="margin-bottom: 16px;">
+  <h2 style="margin: 0 0 10px; font-size: 14px;">SARIF files</h2>
+  <ul style="margin: 0; padding-left: 20px; font-size: 13px;">
+  {% for name in summary.sarif_files %}
+    <li class="mono" style="font-size: 12px;">{{ name }}</li>
+  {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if bundle and bundle.attack_surface %}
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+  const _theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default';
+  mermaid.initialize({ startOnLoad: true, theme: _theme, securityLevel: 'strict' });
+</script>
+{% endif %}
+
+{% endblock %}
