@@ -102,7 +102,7 @@ def _project_ctx(project: RaptorProject, active_stage: str, **extras) -> dict:
         project=project,
         runs=runs,
         lane_status=lane_status(runs),
-        next_action=next_action(runs),
+        next_action=next_action(runs, project_kind=project.kind),
         active_stage=active_stage,
         **extras,
     )
@@ -371,12 +371,29 @@ def project_activity(request: Request, name: str):
 
 
 @app.get("/projects/{name}/settings", response_class=HTMLResponse)
-def project_settings(request: Request, name: str):
+def project_settings(request: Request, name: str, save_ok: int = 0):
     proj = _require_project(name)
     return templates.TemplateResponse(
         request, "project_settings.html",
-        _project_ctx(proj, active_stage="settings"),
+        _project_ctx(proj, active_stage="settings",
+                     save_ok=bool(save_ok),
+                     projects_dir=str(RAPTOR_PROJECTS_DIR)),
     )
+
+
+@app.post("/projects/{name}/settings")
+def project_settings_save(
+    name: str,
+    description: str = Form(""),
+    notes: str = Form(""),
+):
+    """Update description/notes in raptor's project.json. Round-trips the schema."""
+    from packages.studio.services.raptor_writer import update_project_metadata
+    try:
+        update_project_metadata(name, description=description, notes=notes)
+    except Exception as exc:
+        raise HTTPException(400, f"failed to save: {exc}")
+    return RedirectResponse(url=f"/projects/{name}/settings?save_ok=1", status_code=303)
 
 
 # --- Jobs: trigger + list + detail + cancel + SSE stream -----------------
@@ -690,7 +707,13 @@ def run_detail(request: Request, name: str, run_name: str):
 
 # File types we'll serve from a run directory. Keep tight; add more only
 # when a new surface needs them.
-_ALLOWED_RUN_FILE_SUFFIXES = frozenset({".svg", ".png", ".md", ".json", ".sarif", ".txt"})
+_ALLOWED_RUN_FILE_SUFFIXES = frozenset({
+    ".svg", ".png", ".md", ".json", ".sarif", ".txt",
+    # Exploit / patch source + supporting files — read-only inline display
+    # on a single-user localhost tool; no execution path from here.
+    ".py", ".c", ".h", ".sh", ".rb", ".go", ".js", ".ts",
+    ".patch", ".diff", ".yaml", ".yml", ".toml", ".log",
+})
 
 
 @app.get("/projects/{name}/runs/{run_name}/files/{filename:path}")

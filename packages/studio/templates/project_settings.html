@@ -11,7 +11,14 @@
   <a href="/settings">global settings</a>.
 </div>
 
-<div class="card" style="max-width: 640px;">
+{% if save_ok %}
+<div class="card" style="max-width: 720px; border-color: var(--low); background: rgba(22,163,74,0.08); margin-bottom: 16px; padding: 10px 14px;">
+  <span style="color: var(--low); font-weight: 600;">Saved</span>
+  <span style="color: var(--fg2); font-size: 12px; margin-left: 8px;">Project metadata updated.</span>
+</div>
+{% endif %}
+
+<div class="card" style="max-width: 720px;">
   <dl style="margin: 0; display: grid; grid-template-columns: 120px 1fr; gap: 10px 16px; font-size: 13px;">
     <dt style="color: var(--fg3); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600;">Name</dt>
     <dd style="margin: 0; font-weight: 600;">{{ project.name }}</dd>
@@ -22,17 +29,37 @@
     <dt style="color: var(--fg3); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600;">Output</dt>
     <dd class="mono" style="margin: 0; font-size: 12px; word-break: break-all;">{{ project.output_dir }}</dd>
 
-    <dt style="color: var(--fg3); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600;">Description</dt>
-    <dd style="margin: 0; color: {{ 'var(--fg3)' if not project.description else 'var(--fg)' }};">{{ project.description or "(none)" }}</dd>
-
     <dt style="color: var(--fg3); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600;">Created</dt>
     <dd class="mono" style="margin: 0; font-size: 12px; color: var(--fg2);">{{ project.created or "unknown" }}</dd>
   </dl>
 </div>
 
-<p style="margin-top: 20px; font-size: 12px; color: var(--fg3);">
-  Editable project metadata (description, notes, rename, delete) is on the roadmap.
-  Today, use the raptor CLI: <code class="mono">raptor project description &lt;name&gt; "new description"</code>.
+<form method="post" action="/projects/{{ project.name }}/settings" class="card" style="max-width: 720px; margin-top: 16px; display: flex; flex-direction: column; gap: 12px;">
+  <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Editable metadata</div>
+
+  <label>
+    <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; margin-bottom: 4px;">Description</div>
+    <input name="description" type="text" value="{{ project.description or '' }}"
+           placeholder="One-line summary"
+           style="width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: inherit; font-size: 13px;">
+  </label>
+
+  <label>
+    <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; margin-bottom: 4px;">Notes</div>
+    <textarea name="notes" rows="4"
+              placeholder="Longer context, scope, caveats, links…"
+              style="width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: inherit; font-size: 13px; resize: vertical;">{{ project.notes or '' }}</textarea>
+  </label>
+
+  <div>
+    <button type="submit" class="btn btn-p">Save</button>
+    <span style="font-size: 11px; color: var(--fg3); margin-left: 10px;">Writes back to <code class="mono">{{ projects_dir }}/{{ project.name }}.json</code></span>
+  </div>
+</form>
+
+<p style="margin-top: 14px; font-size: 12px; color: var(--fg3);">
+  Renaming and deleting still go through the raptor CLI
+  (<code class="mono">raptor project rename</code> / <code class="mono">raptor project delete</code>).
 </p>
 
 {% endblock %}

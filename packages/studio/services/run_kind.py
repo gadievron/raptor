@@ -154,16 +154,27 @@ def lane_status(runs: Iterable) -> dict[str, dict[str, dict]]:
     return out
 
 
-def next_action(runs: Iterable) -> dict | None:
+def next_action(runs: Iterable, project_kind: str | None = None) -> dict | None:
     """Suggest the next stage the user should run.
 
-    Walks source-lane stages in order; returns the first pending one.
-    Returns None if all source stages have run. Binary/forensics lanes
-    are opt-in (don't auto-suggest).
+    Walks the lane matching ``project_kind`` and returns the first pending
+    stage. Falls back to the source lane when the project type is unknown.
+    Returns None if every stage in the chosen lane has run.
     """
+    lane_order: tuple[str, ...]
+    if project_kind == "binary":
+        lane_order = BINARY_STAGES
+        lane_key = "binary"
+    elif project_kind == "forensics":
+        lane_order = FORENSICS_STAGES
+        lane_key = "forensics"
+    else:
+        lane_order = SOURCE_STAGES
+        lane_key = "source"
+
     status = lane_status(runs)
-    for stage in SOURCE_STAGES:
-        entry = status["source"][stage]
+    for stage in lane_order:
+        entry = status[lane_key][stage]
         if entry["status"] == "pending":
             return {
                 "stage": stage,
