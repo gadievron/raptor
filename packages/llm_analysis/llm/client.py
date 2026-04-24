@@ -89,8 +89,9 @@ def _sanitize_log_message(msg: str) -> str:
     # such as PASSWORD_POLICY, SECRET_ROTATION_DAYS, MAX_API_KEY_LENGTH, or
     # pagination cursors like page_token/next_token.
     secret_field = (
-        r'(?:[A-Za-z0-9_-]*(?:API[_-]?KEY|PASSWORD|SECRET|'
+        r'(?:[A-Za-z0-9_-]*(?:API[_-]?KEY|PASSWORD|'
         r'SECRET[_-]?KEY|SECRET[_-]?ACCESS[_-]?KEY)'
+        r'|(?:CLIENT|APP|SHARED|API|CONSUMER)[_-]?SECRET'
         r'|(?:ACCESS|AUTH|BEARER|ID|REFRESH|SESSION|SERVICE)[_-]?TOKEN)'
     )
     # Quoted values may be short or contain spaces/commas; the field name marks them sensitive.

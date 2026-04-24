@@ -337,12 +337,12 @@ class TestSanitizeLogMessage:
         short_password = "short"
         punctuated_secret = "abc, def ghi"
         result = _sanitize_log_message(
-            f'DATABASE_PASSWORD="{short_password}" SERVICE_SECRET="{punctuated_secret}"'
+            f'DATABASE_PASSWORD="{short_password}" CLIENT_SECRET="{punctuated_secret}"'
         )
         assert short_password not in result
         assert punctuated_secret not in result
         assert 'DATABASE_PASSWORD="[REDACTED-API-KEY]"' in result
-        assert 'SERVICE_SECRET="[REDACTED-API-KEY]"' in result
+        assert 'CLIENT_SECRET="[REDACTED-API-KEY]"' in result
 
     def test_preserves_llm_token_usage_metrics(self):
         """Usage counters named *_tokens are telemetry, not credentials."""
@@ -352,7 +352,7 @@ class TestSanitizeLogMessage:
     def test_preserves_secret_metadata_and_pagination_fields(self):
         """Secret-related metadata and pagination cursors are not credential values."""
         message = (
-            "SECRET_ROTATION_DAYS=90 PASSWORD_POLICY=strong "
+            "SECRET_ROTATION_DAYS=90 PASSWORD_POLICY=strong IS_SECRET=false "
             "MAX_API_KEY_LENGTH=128 page_token=abc123 next_token=def456"
         )
         assert _sanitize_log_message(message) == message
