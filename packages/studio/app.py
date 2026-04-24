@@ -193,7 +193,7 @@ async def new_project_submit(request: Request):
     raw = {k: (form.get(k) or "").strip() for k in (
         "name", "target", "description", "output_dir", "notes",
         "project_type",
-        "source_repo", "binary",           # binary kept for back-compat
+        "source_repo",
         "focus", "vendor_report_url",
         "language", "corpus_dir",
     )}
@@ -206,7 +206,7 @@ async def new_project_submit(request: Request):
             output_dir=raw["output_dir"] or None,
             notes=raw["notes"],
             project_type=raw["project_type"] or None,
-            source_repo=raw["source_repo"] or raw["binary"],
+            source_repo=raw["source_repo"],
             focus=raw["focus"],
             vendor_report_url=raw["vendor_report_url"],
             language=raw["language"],
