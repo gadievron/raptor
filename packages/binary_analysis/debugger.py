@@ -57,12 +57,20 @@ class GDBDebugger:
         # Prepare GDB commands
         gdb_script = "\n".join(commands)
 
-        # Write to temp file (random name to prevent symlink attacks on multi-user systems)
+        # Write to temp file (random name to prevent symlink attacks on multi-user systems).
+        # mkstemp creates the on-disk stub before write_text runs, so a failing
+        # write (ENOSPC, I/O error, etc.) would leak /tmp/.raptor_gdb_*.txt
+        # unless we unlink on failure. Guard with try/except that re-raises
+        # after cleanup so the caller still sees the underlying error.
         import tempfile
         fd, script_name = tempfile.mkstemp(prefix=".raptor_gdb_", suffix=".txt")
         script_file = Path(script_name)
         os.close(fd)
-        script_file.write_text(gdb_script)
+        try:
+            script_file.write_text(gdb_script)
+        except BaseException:
+            script_file.unlink(missing_ok=True)
+            raise
 
         # Build GDB command
         cmd = ["gdb", "-batch", "-x", str(script_file), str(self.binary)]
