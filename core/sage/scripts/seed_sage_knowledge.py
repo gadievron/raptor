@@ -6,7 +6,7 @@ Extracts hardcoded expert knowledge from Raptor's codebase and stores it
 in SAGE for persistent, consensus-validated memory that improves over time.
 
 Usage:
-    python3 core/sage/scripts/seed_sage_knowledge.py [--sage-url http://localhost:8090] [--dry-run]
+    python3 core/sage/scripts/seed_sage_knowledge.py [--sage-url http://localhost:8090] [--dry-run] [--force]
 
 Requires:
     pip install sage-agent-sdk
@@ -29,6 +29,11 @@ except ImportError:
     print("ERROR: sage-agent-sdk not installed.")
     print("  pip install sage-agent-sdk")
     sys.exit(1)
+
+from core.sage.scripts._common import async_memory_exists
+
+# Parallelism cap — see register_agents.py for rationale.
+_PROPOSE_CONCURRENCY = 8
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -261,7 +266,39 @@ def _chunk_text(text: str, max_chars: int = 1500) -> list[str]:
 # Seeding
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def seed(sage_url: str, dry_run: bool = False):
+async def _seed_one(
+    client: AsyncSageClient,
+    mem: dict,
+    force: bool,
+    sem: asyncio.Semaphore,
+) -> tuple[str, str]:
+    """Propose a single knowledge memory. Returns (label, status).
+
+    status ∈ {"stored", "skipped", "failed: <err>"}.
+    """
+    async with sem:
+        label = mem["label"]
+        domain = mem["domain"]
+        try:
+            if not force and await async_memory_exists(client, domain, label):
+                return (label, "skipped")
+
+            embedding = await client.embed(mem["content"])
+            mt = getattr(MemoryType, mem["memory_type"], MemoryType.observation)
+            await client.propose(
+                content=mem["content"],
+                memory_type=mt,
+                domain_tag=domain,
+                confidence=mem["confidence"],
+                embedding=embedding,
+                tags=[label],
+            )
+            return (label, "stored")
+        except Exception as e:
+            return (label, f"failed: {e}")
+
+
+async def seed(sage_url: str, dry_run: bool = False, force: bool = False):
     """Extract all knowledge and seed into SAGE."""
 
     print("=" * 60)
@@ -328,47 +365,42 @@ async def seed(sage_url: str, dry_run: bool = False):
 
     # Register as raptor-seed agent
     try:
-        await client.register("raptor-seed")
-        print("Registered as raptor-seed")
+        # See register_agents.py for on_chain_height rationale — same
+        # SAGE 6.6.0 type-mismatch fix.
+        reg = await client.register_agent("raptor-seed")
+        height = getattr(reg, "on_chain_height", None)
+        print(f"Registered as raptor-seed (on-chain height {height})")
     except Exception as e:
         print(f"Registration note: {e}")
 
-    # Wake up consensus
+    # Warm the ollama embedding sidecar so the first real embed below
+    # doesn't pay cold-model-load latency. Best-effort; does NOT touch
+    # CometBFT consensus — /v1/embed is a local ollama roundtrip.
     try:
         await client.embed("wake")
     except Exception:
         pass
 
-    # Seed all knowledge
-    stored = 0
-    failed = 0
-    for i, mem in enumerate(all_memories, 1):
-        try:
-            print(f"Seeding [{i}/{len(all_memories)}]: {mem['label']}...", end=" ")
-            embedding = await client.embed(mem["content"])
+    sem = asyncio.Semaphore(_PROPOSE_CONCURRENCY)
+    results = await asyncio.gather(
+        *(_seed_one(client, mem, force, sem) for mem in all_memories)
+    )
 
-            mt = getattr(MemoryType, mem["memory_type"], MemoryType.observation)
-            await client.propose(
-                content=mem["content"],
-                memory_type=mt,
-                domain_tag=mem["domain"],
-                confidence=mem["confidence"],
-                embedding=embedding,
-            )
-            stored += 1
-            print("OK")
+    stored = sum(1 for _, status in results if status == "stored")
+    skipped = sum(1 for _, status in results if status == "skipped")
+    failed = [(label, status) for label, status in results if status.startswith("failed")]
 
-            # Delay between proposals for single-node consensus
-            await asyncio.sleep(0.5)
-        except Exception as e:
-            failed += 1
-            print(f"FAILED: {e}")
+    for label, status in results:
+        if status == "stored":
+            print(f"  stored:  {label}")
+        elif status == "skipped":
+            print(f"  skipped: {label} (already seeded)")
+        else:
+            print(f"  {status.upper()}: {label}")
 
     print()
     print("=" * 60)
-    print(f"Seeded {stored}/{len(all_memories)} knowledge entries")
-    if failed:
-        print(f"Failed: {failed}")
+    print(f"Stored: {stored}/{len(all_memories)}  Skipped: {skipped}  Failed: {len(failed)}")
     print("=" * 60)
 
 
@@ -386,9 +418,14 @@ def main():
         action="store_true",
         help="Print knowledge without storing in SAGE",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-propose even if memories with the same label are already seeded",
+    )
     args = parser.parse_args()
 
-    asyncio.run(seed(args.sage_url, args.dry_run))
+    asyncio.run(seed(args.sage_url, args.dry_run, args.force))
 
 
 if __name__ == "__main__":

@@ -180,30 +180,3 @@ class SageClient:
             logger.warning(f"SAGE query failed: {e}")
             return []
 
-    def register(self, name: str) -> bool:
-        """
-        Register this agent identity on the SAGE network.
-
-        Prefers the SDK's register_agent(); falls back to storing a
-        registration memory if the SDK method is unavailable.
-        """
-        client = self._get_client()
-        if client is None:
-            return False
-        try:
-            if hasattr(client, "register_agent"):
-                client.register_agent(name)
-            else:
-                content = f"Agent {name} registered on SAGE network."
-                embedding = client.embed(content)
-                client.propose(
-                    content=content,
-                    memory_type=_MemoryType.fact,
-                    domain_tag="raptor-agents",
-                    confidence=0.95,
-                    embedding=embedding,
-                )
-            return True
-        except Exception as e:
-            logger.warning(f"SAGE register failed: {e}")
-            return False

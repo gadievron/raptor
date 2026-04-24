@@ -6,7 +6,7 @@ Each agent gets a registered identity and role definition stored
 as consensus-validated fact memories in the raptor-agents domain.
 
 Usage:
-    python3 core/sage/scripts/register_agents.py [--sage-url http://localhost:8090] [--dry-run]
+    python3 core/sage/scripts/register_agents.py [--sage-url http://localhost:8090] [--dry-run] [--force]
 
 Requires:
     pip install sage-agent-sdk
@@ -27,6 +27,13 @@ except ImportError:
     print("ERROR: sage-agent-sdk not installed.")
     print("  pip install sage-agent-sdk")
     sys.exit(1)
+
+from core.sage.scripts._common import async_memory_exists
+
+# Parallelism cap for SAGE proposes. CometBFT batches concurrent txs into
+# the same block, so N sequential rounds collapse to ~1-2 blocks wall time.
+# 8 is conservative enough for 2-core laptops, aggressive enough to matter.
+_PROPOSE_CONCURRENCY = 8
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -264,12 +271,86 @@ RAPTOR_AGENTS = [
 # Registration
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def register_agents(sage_url: str, dry_run: bool = False):
+async def _register_one(
+    client: AsyncSageClient,
+    agent: dict,
+    force: bool,
+    sem: asyncio.Semaphore,
+) -> tuple[str, str]:
+    """Propose an agent's role + xref memories. Returns (name, status).
+
+    status ∈ {"stored", "skipped", "failed: <err>"}. Skipped when both
+    memories are already present in SAGE and --force isn't set.
+    """
+    async with sem:
+        name = agent["name"]
+        caps = ", ".join(agent["capabilities"])
+        domains = ", ".join(agent["domains"])
+        primary_domain = agent["domains"][0]
+        role_tag = f"agent:{name}"
+        xref_tag = f"agent-xref:{name}"
+
+        try:
+            # Check each memory independently so a previous partial failure
+            # (e.g. role stored, xref crashed) re-proposes only the missing
+            # half rather than duplicating what already landed.
+            if force:
+                role_exists = xref_exists = False
+            else:
+                role_exists = await async_memory_exists(client, "raptor-agents", role_tag)
+                xref_exists = await async_memory_exists(client, primary_domain, xref_tag)
+
+            if role_exists and xref_exists:
+                return (name, "skipped")
+
+            if not role_exists:
+                role_content = (
+                    f"RAPTOR agent: {name}. "
+                    f"Role: {agent['role']}. "
+                    f"Description: {agent['description']} "
+                    f"Domains: {domains}. "
+                    f"Capabilities: {caps}."
+                )
+                role_embedding = await client.embed(role_content)
+                await client.propose(
+                    content=role_content,
+                    memory_type=MemoryType.fact,
+                    domain_tag="raptor-agents",
+                    confidence=0.95,
+                    embedding=role_embedding,
+                    tags=[role_tag],
+                )
+
+            if not xref_exists:
+                xref_content = (
+                    f"Agent {name} ({agent['role']}) operates in this domain. "
+                    f"Capabilities: {caps}."
+                )
+                xref_embedding = await client.embed(xref_content)
+                await client.propose(
+                    content=xref_content,
+                    memory_type=MemoryType.fact,
+                    domain_tag=primary_domain,
+                    confidence=0.90,
+                    embedding=xref_embedding,
+                    tags=[xref_tag],
+                )
+
+            if role_exists or xref_exists:
+                return (name, "partial")  # one half was already present
+            return (name, "stored")
+        except Exception as e:
+            return (name, f"failed: {e}")
+
+
+async def register_agents(sage_url: str, dry_run: bool = False, force: bool = False):
     """Register all RAPTOR agents on the SAGE network."""
 
     print("=" * 60)
     print("RAPTOR Agent Registration for SAGE")
     print(f"Agents: {len(RAPTOR_AGENTS)}")
+    if force:
+        print("Mode: --force (re-propose even if memories already exist)")
     print("=" * 60)
     print()
 
@@ -296,74 +377,53 @@ async def register_agents(sage_url: str, dry_run: bool = False):
 
     # Register the registrar agent first
     try:
-        await client.register_agent("raptor-registrar")
-        print("Registered as raptor-registrar\n")
+        # AgentRegistration.on_chain_height (int64) was renamed from
+        # `registered_at` in SAGE 6.6.0 to fix a 3-way type mismatch
+        # (Go int64 vs OpenAPI date-time string vs SDK `str | None`).
+        # Surface it so a grep for "raptor-registrar" in debug logs
+        # confirms the registration actually landed on-chain.
+        reg = await client.register_agent("raptor-registrar")
+        height = getattr(reg, "on_chain_height", None)
+        print(f"Registered as raptor-registrar (on-chain height {height})\n")
     except Exception as e:
         print(f"Registration note: {e}\n")
 
-    # Wake up consensus
+    # Warm the ollama embedding sidecar so the first real embed below
+    # doesn't pay cold-model-load latency. Best-effort; ollama may not be
+    # reachable on some setups and that's fine — the first actual embed
+    # will cold-start normally. (Does NOT touch CometBFT consensus —
+    # /v1/embed is a local ollama roundtrip, nothing on-chain.)
     try:
         await client.embed("wake")
     except Exception:
         pass
 
-    registered = 0
-    failed = 0
+    sem = asyncio.Semaphore(_PROPOSE_CONCURRENCY)
+    results = await asyncio.gather(
+        *(_register_one(client, agent, force, sem) for agent in RAPTOR_AGENTS)
+    )
 
-    for i, agent in enumerate(RAPTOR_AGENTS, 1):
-        try:
-            name = agent["name"]
-            caps = ", ".join(agent["capabilities"])
-            domains = ", ".join(agent["domains"])
+    stored = sum(1 for _, status in results if status == "stored")
+    partial = sum(1 for _, status in results if status == "partial")
+    skipped = sum(1 for _, status in results if status == "skipped")
+    failed = [(name, status) for name, status in results if status.startswith("failed")]
 
-            print(f"[{i}/{len(RAPTOR_AGENTS)}] Registering {name}...", end=" ")
-
-            # Store role definition as a fact memory
-            role_content = (
-                f"RAPTOR agent: {name}. "
-                f"Role: {agent['role']}. "
-                f"Description: {agent['description']} "
-                f"Domains: {domains}. "
-                f"Capabilities: {caps}."
-            )
-
-            embedding = await client.embed(role_content)
-            await client.propose(
-                content=role_content,
-                memory_type=MemoryType.fact,
-                domain_tag="raptor-agents",
-                confidence=0.95,
-                embedding=embedding,
-            )
-
-            # Also store a cross-reference in each agent's primary domain
-            primary_domain = agent["domains"][0]
-            xref_content = (
-                f"Agent {name} ({agent['role']}) operates in this domain. "
-                f"Capabilities: {caps}."
-            )
-            xref_embedding = await client.embed(xref_content)
-            await client.propose(
-                content=xref_content,
-                memory_type=MemoryType.fact,
-                domain_tag=primary_domain,
-                confidence=0.90,
-                embedding=xref_embedding,
-            )
-
-            registered += 1
-            print("OK")
-
-            await asyncio.sleep(0.5)
-        except Exception as e:
-            failed += 1
-            print(f"FAILED: {e}")
+    for name, status in results:
+        if status == "stored":
+            print(f"  stored:  {name}")
+        elif status == "partial":
+            print(f"  partial: {name} (filled in missing half from a prior partial run)")
+        elif status == "skipped":
+            print(f"  skipped: {name} (already registered)")
+        else:
+            print(f"  {status.upper()}: {name}")
 
     print()
     print("=" * 60)
-    print(f"Registered {registered}/{len(RAPTOR_AGENTS)} agents")
-    if failed:
-        print(f"Failed: {failed}")
+    print(
+        f"Stored: {stored}/{len(RAPTOR_AGENTS)}  "
+        f"Partial: {partial}  Skipped: {skipped}  Failed: {len(failed)}"
+    )
     print("=" * 60)
 
 
@@ -381,9 +441,14 @@ def main():
         action="store_true",
         help="Print agent definitions without registering",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-propose even if the agent's memories are already present in SAGE",
+    )
     args = parser.parse_args()
 
-    asyncio.run(register_agents(args.sage_url, args.dry_run))
+    asyncio.run(register_agents(args.sage_url, args.dry_run, args.force))
 
 
 if __name__ == "__main__":

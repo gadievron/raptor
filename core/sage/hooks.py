@@ -10,6 +10,7 @@ All hooks are no-ops when SAGE is unavailable.
 
 import hashlib
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -21,8 +22,14 @@ from .config import SageConfig
 
 logger = get_logger()
 
-# Singleton client — created on first use
+# Singleton client — created on first use.
+# orchestrator.py dispatches via ThreadPoolExecutor, so the first-use
+# init must be guarded against concurrent first calls racing on the
+# `_client is None` check. Once the init decision is made, it sticks
+# for the process lifetime — no retry-storm if SAGE is down.
+_client_lock = threading.Lock()
 _client: Optional[SageClient] = None
+_client_initialised: bool = False
 
 
 def _throttle() -> None:
@@ -46,15 +53,30 @@ def _throttle() -> None:
 
 
 def _get_client() -> Optional[SageClient]:
-    """Get or create the SAGE client singleton."""
-    global _client
-    if _client is None:
-        config = SageConfig.from_env()
-        _client = SageClient(config)
-        if not _client.is_available():
-            logger.debug("SAGE unavailable — pipeline hooks disabled")
-            _client = None
-    return _client
+    """Get or create the SAGE client singleton.
+
+    Thread-safe: guarded by `_client_lock` because the orchestrator
+    dispatches into SAGE hooks from worker threads concurrently.
+    Without the lock, two threads can both see `_client is None` and
+    each run `is_available()` (duplicate network calls), and a thread
+    can briefly observe a non-None `_client` while another resets it.
+
+    The init decision is cached via `_client_initialised` so that a
+    down-at-first-use SAGE doesn't trigger an `is_available()` probe
+    on every subsequent hook call for the rest of the process lifetime.
+    """
+    global _client, _client_initialised
+    with _client_lock:
+        if not _client_initialised:
+            config = SageConfig.from_env()
+            candidate = SageClient(config)
+            if candidate.is_available():
+                _client = candidate
+            else:
+                logger.debug("SAGE unavailable — pipeline hooks disabled")
+                _client = None
+            _client_initialised = True
+        return _client
 
 
 def _repo_key(repo_path: str) -> str:
@@ -202,8 +224,8 @@ def store_scan_results(
             domain_tag=_findings_domain(repo_path),
             confidence=0.85,
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"SAGE scan summary store failed: {e}")
 
     if stored > 0:
         logger.info(f"SAGE: Stored {stored} findings from scan")
