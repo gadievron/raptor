@@ -185,6 +185,7 @@ def mode_agentic(args: list) -> int:
     # --understand and --validate are consumed by the Claude Code agentic
     # command and never reach this function. Strip them here as a safety net
     # so raptor_agentic.py doesn't receive unknown flags.
+    # These flags are boolean-only and must never take a value.
     args = [a for a in args if a not in ('--understand', '--validate')]
 
     # Enable CodeQL by default for comprehensive agentic mode

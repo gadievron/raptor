@@ -30,16 +30,18 @@ By default, `/agentic` scans and analyses findings in isolation. Two optional fl
 
 You can use either flag on its own or combine them:
 
-```bash
+```
 # Recommended for thorough reviews
-python3 raptor.py agentic --repo /path/to/code --understand --validate
+/agentic --understand --validate
 
 # Just pre-scan context mapping, no post-validate
-python3 raptor.py agentic --repo /path/to/code --understand
+/agentic --understand
 
 # Just validate the findings that look exploitable
-python3 raptor.py agentic --repo /path/to/code --validate
+/agentic --validate
 ```
+
+Note: `--understand` and `--validate` are consumed by the Claude Code `/agentic` skill before the Python layer runs. They have no effect if you invoke `python3 raptor.py agentic` directly.
 
 ## How to handle --understand
 
@@ -69,7 +71,13 @@ libexec/raptor-run-lifecycle complete "$OUTPUT_DIR"
 
 ## How to handle --validate
 
-After the agentic Python pipeline completes, strip `--validate` from the args and run `/validate` on findings where `is_exploitable` is true or confidence is high. Load `.claude/skills/exploitability-validation/SKILL.md` and follow the full pipeline.
+After the agentic Python pipeline completes, strip `--validate` from the args and run `/validate` on findings that meet either condition below. Load `.claude/skills/exploitability-validation/SKILL.md` and follow the full pipeline.
+
+Select findings from `results[]` in the agentic report where:
+- `is_exploitable === true` (boolean field, defined in `packages/llm_analysis/prompts/schemas.py`), **or**
+- `confidence === "high"` (string enum: `"high"` | `"medium"` | `"low"`, same schema file)
+
+Do not use fuzzy matching on these values -- both fields come directly from the LLM analysis schema. If a field is missing or null, skip that finding.
 
 The bridge will automatically find and import the `context-map.json` from the understand run (if `--understand` was also used), pre-populating the attack surface for Stage B. No extra flags needed.
 
