@@ -51,9 +51,10 @@ def _sanitize_log_message(msg: str) -> str:
     Searchable tags: #SECURITY #API_KEY_PROTECTION #LOG_SANITIZATION
     Related: Cursor Bot Bug #2, PR #32, defense-in-depth best practice
     """
-    # Redact multiline private key material before shorter generic patterns.
+    # Redact private key material before shorter generic patterns. If a log line
+    # is truncated before the END marker, redact through the end of the message.
     msg = re.sub(
-        r'-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----',
+        r'-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)',
         '[REDACTED-PRIVATE-KEY]',
         msg,
         flags=re.DOTALL,
@@ -73,7 +74,7 @@ def _sanitize_log_message(msg: str) -> str:
         flags=re.IGNORECASE,
     )
     msg = re.sub(
-        r'Basic\s+\S+',
+        r'Basic\s+[A-Za-z0-9+/]{8,}={0,2}',
         'Basic [REDACTED]',
         msg,
         flags=re.IGNORECASE,
@@ -83,10 +84,14 @@ def _sanitize_log_message(msg: str) -> str:
     msg = re.sub(r'github_pat_[a-zA-Z0-9_]{20,}', '[REDACTED-API-KEY]', msg)
     # Redact AWS access key IDs that commonly appear in tool output/traces
     msg = re.sub(r'\b(?:AKIA|ASIA)[A-Z0-9]{16}\b', '[REDACTED-API-KEY]', msg)
-    # Redact key/value or JSON-ish assignments such as API_KEY=... or "token": "...".
+    # Redact key/value or JSON-ish assignments such as API_KEY=*** or "token": "***".
+    # Keep these field names intentionally bounded to avoid redacting metadata
+    # such as PASSWORD_POLICY, SECRET_ROTATION_DAYS, MAX_API_KEY_LENGTH, or
+    # pagination cursors like page_token/next_token.
     secret_field = (
-        r'(?:[A-Za-z0-9_-]*(?:API[_-]?KEY|SECRET|PASSWORD)[A-Za-z0-9_-]*'
-        r'|[A-Za-z0-9_-]*TOKEN)'
+        r'(?:[A-Za-z0-9_-]*(?:API[_-]?KEY|PASSWORD|SECRET|'
+        r'SECRET[_-]?KEY|SECRET[_-]?ACCESS[_-]?KEY)'
+        r'|(?:ACCESS|AUTH|BEARER|ID|REFRESH|SESSION|SERVICE)[_-]?TOKEN)'
     )
     # Quoted values may be short or contain spaces/commas; the field name marks them sensitive.
     msg = re.sub(

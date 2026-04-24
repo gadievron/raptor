@@ -236,9 +236,9 @@ class TestSanitizeLogMessage:
     def test_redacts_github_tokens(self):
         """GitHub tokens can appear in tool errors and should not be logged."""
         tokens = [
-            "gh" + "p_" + "e" * 36,
-            "gh" + "r_" + "e" * 36,
-            "github" + "_pat_" + "f" * 82,
+            "ghp_" + "e" * 36,
+            "ghr_" + "e" * 36,
+            "github_pat_" + "f" * 82,
         ]
         result = _sanitize_log_message("Tokens: " + " ".join(tokens))
         for token in tokens:
@@ -252,6 +252,20 @@ class TestSanitizeLogMessage:
         assert key not in result
         assert "[REDACTED-API-KEY]" in result
 
+    def test_redacts_temporary_aws_access_key_id(self):
+        """Temporary AWS ASIA access key IDs are redacted too."""
+        key = "ASIA" + "IOSFODNN7EXAMPLE"
+        result = _sanitize_log_message(f"temporary AWS key leaked in trace: {key}")
+        assert key not in result
+        assert "[REDACTED-API-KEY]" in result
+
+    def test_preserves_boundary_length_non_tokens(self):
+        """Values below secret length thresholds should not be redacted."""
+        bearer = "Bearer " + "d" * 19
+        github_token = "ghp_" + "e" * 35
+        message = f"Authorization failed for {bearer}; token={github_token}"
+        assert _sanitize_log_message(message) == message
+
     def test_preserves_non_key_content(self):
         """Non-key content should be preserved."""
         msg = "Connection timeout after 30s to api.openai.com"
@@ -262,7 +276,7 @@ class TestSanitizeLogMessage:
         """Multiple secret types in one message are all redacted."""
         openai_key = "sk-" + "a" * 48
         google_key = "AIza" + "b" * 36
-        github_key = "gh" + "o_" + "c" * 36
+        github_key = "gho_" + "c" * 36
         result = _sanitize_log_message(
             f"Tried {openai_key} then {google_key} then {github_key}"
         )
@@ -313,6 +327,11 @@ class TestSanitizeLogMessage:
         assert tab_basic not in result
         assert result.count("Basic [REDACTED]") == 2
 
+    def test_preserves_basic_non_authorization_words(self):
+        """Plain-English uses of basic should not be treated as credentials."""
+        message = "basic error during basic setup"
+        assert _sanitize_log_message(message) == message
+
     def test_redacts_short_and_punctuated_named_secret_values(self):
         """Explicit secret fields are redacted even when values are short or punctuated."""
         short_password = "short"
@@ -330,6 +349,14 @@ class TestSanitizeLogMessage:
         message = "prompt_tokens=123456789012 completion_tokens=987654321098"
         assert _sanitize_log_message(message) == message
 
+    def test_preserves_secret_metadata_and_pagination_fields(self):
+        """Secret-related metadata and pagination cursors are not credential values."""
+        message = (
+            "SECRET_ROTATION_DAYS=90 PASSWORD_POLICY=strong "
+            "MAX_API_KEY_LENGTH=128 page_token=abc123 next_token=def456"
+        )
+        assert _sanitize_log_message(message) == message
+
     def test_redacts_private_key_blocks(self):
         """PEM private keys in multiline errors should never reach logs."""
         private_key = (
@@ -342,6 +369,14 @@ class TestSanitizeLogMessage:
         result = _sanitize_log_message(f"tool stderr:\n{private_key}\nfailed")
         assert private_key not in result
         assert "m" * 64 not in result
+        assert "[REDACTED-PRIVATE-KEY]" in result
+
+    def test_redacts_truncated_private_key_block(self):
+        """Truncated PEM private key logs are redacted through message end."""
+        private_key = "-----BEGIN " + "PRIVATE KEY-----\n" + "n" * 64
+        result = _sanitize_log_message(f"tool stderr:\n{private_key}")
+        assert private_key not in result
+        assert "n" * 64 not in result
         assert "[REDACTED-PRIVATE-KEY]" in result
 
 
