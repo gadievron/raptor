@@ -1,0 +1,229 @@
+{% extends "base.html" %}
+{% block title %}New project — {{ app_title }}{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>New project</h1>
+  <div class="sub">Writes to <code class="mono">{{ projects_dir }}</code>. Studio extras in <code class="mono">{{ studio_dir }}/project-extras/</code>.</div>
+</div>
+
+{% if error %}
+<div class="card" style="border-color: var(--crit); background: rgba(211,47,47,0.08); margin-bottom: 16px;">
+  <strong style="color: var(--crit);">Error:</strong> {{ error }}
+</div>
+{% endif %}
+
+<div class="card" style="max-width: 760px;">
+<form method="post" action="/projects/new" style="display: flex; flex-direction: column; gap: 14px;">
+
+  <div>
+    <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 8px;">Project type</div>
+    <div class="type-grid" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
+      {% for t in project_types %}
+      {% set checked = (form.project_type or 'source') == t.key %}
+      <label class="type-card" data-type="{{ t.key }}" style="
+          display: block; padding: 12px; border: 1px solid {% if checked %}var(--accent){% else %}var(--border){% endif %};
+          border-radius: 8px; cursor: pointer; background: {% if checked %}var(--accent-r){% else %}var(--bg){% endif %};
+          ">
+        <input type="radio" name="project_type" value="{{ t.key }}" {% if checked %}checked{% endif %} style="display: none;">
+        <div style="font-size: 13px; font-weight: 700; color: var(--fg);">{{ t.label }}</div>
+        <div style="font-size: 11px; color: var(--fg2); margin-top: 4px; line-height: 1.4;">{{ t.description }}</div>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+
+  <label>
+    <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 4px;">Name</div>
+    <input name="name" type="text" required pattern="[a-zA-Z0-9][a-zA-Z0-9._-]*" autofocus
+           value="{{ form.name or '' }}"
+           style="width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: inherit; font-size: 14px;">
+    <div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">Letters, numbers, hyphens, dots, underscores. Cannot start with <code class="mono">.</code> or <code class="mono">_</code>.</div>
+  </label>
+
+  <label>
+    <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 4px;">
+      <span data-target-label data-for-source="Repository path" data-for-binary="Binary path" data-for-forensics="GitHub URL">Repository path</span>
+    </div>
+    <input name="target" type="text" required
+           value="{{ form.target or '' }}"
+           data-target-input
+           data-placeholder-source="/absolute/path/to/code/repo"
+           data-placeholder-binary="/absolute/path/to/compiled/binary"
+           data-placeholder-forensics="https://github.com/owner/repo"
+           data-fs-picker="dirs"
+           placeholder="/absolute/path/to/code/repo"
+           style="width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">
+    <div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">
+      <span data-target-help data-for-source="Resolved to absolute; need not exist yet."
+                              data-for-binary="Compiled AFL-instrumented binary (or any binary — QEMU mode fallback)."
+                              data-for-forensics="Public GitHub repository URL; stored as-is (no path resolution).">
+        Resolved to absolute; need not exist yet.
+      </span>
+    </div>
+  </label>
+
+  <label>
+    <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 4px;">Description <span style="color: var(--fg3); font-weight: 400;">(optional)</span></div>
+    <input name="description" type="text"
+           value="{{ form.description or '' }}"
+           placeholder="One-line summary"
+           style="width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: inherit; font-size: 14px;">
+  </label>
+
+  <details class="advanced" {% if form.notes or form.output_dir or form.language or form.binary or form.focus %}open{% endif %}
+           style="margin-top: 4px; padding: 10px 14px; border: 1px solid var(--border-l); border-radius: 8px; background: var(--bg);">
+    <summary style="cursor: pointer; font-size: 12px; color: var(--fg2); font-weight: 600; letter-spacing: 0.02em;">Advanced options</summary>
+
+    <div style="display: flex; flex-direction: column; gap: 14px; margin-top: 14px;">
+
+      <label data-show-for="binary">
+        <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 4px;">Seed corpus directory <span style="color: var(--fg3); font-weight: 400;">(optional)</span></div>
+        <input name="corpus_dir" type="text"
+               value="{{ form.corpus_dir or '' }}"
+               data-fs-picker="dirs"
+               placeholder="/path/to/seed-inputs"
+               style="width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">
+        <div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">Directory of input files AFL++ starts from. If left blank, use <code class="mono">--autonomous</code> on the fuzz form to have raptor generate seeds from binary strings.</div>
+      </label>
+
+      <label data-show-for="binary">
+        <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 4px;">Secondary source repo <span style="color: var(--fg3); font-weight: 400;">(optional)</span></div>
+        <input name="source_repo" type="text"
+               value="{{ form.source_repo or form.binary or '' }}"
+               data-fs-picker="dirs"
+               placeholder="/path/to/source — only if you also want to run source scans against it"
+               style="width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">
+        <div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">Rarely needed. Set when the binary has corresponding source you also want CodeQL / Semgrep to analyse.</div>
+      </label>
+
+      <label data-show-for="forensics">
+        <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 4px;">Research question / focus <span style="color: var(--fg3); font-weight: 400;">(optional)</span></div>
+        <input name="focus" type="text"
+               value="{{ form.focus or '' }}"
+               placeholder='e.g. "What happened with the July 13 incident on this repo?"'
+               style="width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: inherit; font-size: 13px;">
+        <div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">Framing question for the forensic investigation. Passed through to <code class="mono">/oss-forensics</code> when you trigger it.</div>
+      </label>
+
+      <label data-show-for="forensics">
+        <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 4px;">Vendor report URL <span style="color: var(--fg3); font-weight: 400;">(optional)</span></div>
+        <input name="vendor_report_url" type="text"
+               value="{{ form.vendor_report_url or '' }}"
+               placeholder="https://example.com/vendor-report.html"
+               style="width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">
+        <div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">URL of a vendor's incident report you want to validate against independent evidence. Appended to the <code class="mono">/oss-forensics</code> prompt when set.</div>
+      </label>
+
+      <label data-show-for="source">
+        <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 4px;">CodeQL language <span style="color: var(--fg3); font-weight: 400;">(optional)</span></div>
+        <select name="language"
+                style="width: 100%; padding: 7px 8px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: inherit; font-size: 13px;">
+          {% for opt in ['', 'python', 'java', 'javascript', 'cpp', 'go', 'ruby', 'csharp', 'swift'] %}
+            <option value="{{ opt }}" {% if form.language == opt %}selected{% endif %}>{{ opt or "(auto-detect)" }}</option>
+          {% endfor %}
+        </select>
+        <div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">Skips CodeQL's language auto-detection. Only affects CodeQL runs.</div>
+      </label>
+
+      <label>
+        <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 4px;">Notes <span style="color: var(--fg3); font-weight: 400;">(optional, multiline)</span></div>
+        <textarea name="notes" rows="3"
+                  placeholder="Longer context, scope, caveats, links…"
+                  style="width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: inherit; font-size: 13px; resize: vertical;">{{ form.notes or '' }}</textarea>
+        <div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">Stored in raptor's <code class="mono">project.json</code> <code class="mono">notes</code> field.</div>
+      </label>
+
+      <label>
+        <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 4px;">Output directory <span style="color: var(--fg3); font-weight: 400;">(optional)</span></div>
+        <input name="output_dir" type="text"
+               value="{{ form.output_dir or '' }}"
+               data-fs-picker="dirs"
+               placeholder="{{ default_output }}"
+               style="width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">
+        <div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">Where raptor writes run outputs. Defaults to shown path (created if missing).</div>
+      </label>
+
+    </div>
+  </details>
+
+  <div style="display: flex; gap: 10px; margin-top: 10px;">
+    <button type="submit" class="btn btn-p">Create project</button>
+    <a href="/projects" class="btn">Cancel</a>
+  </div>
+</form>
+</div>
+
+<script>
+(function() {
+  const cards = document.querySelectorAll('.type-card');
+  const targetLabel = document.querySelector('[data-target-label]');
+  const targetInput = document.querySelector('[data-target-input]');
+  const targetHelp = document.querySelector('[data-target-help]');
+  const conditionalLabels = document.querySelectorAll('label[data-show-for]');
+
+  function setType(kind) {
+    cards.forEach(c => {
+      const selected = c.dataset.type === kind;
+      c.style.borderColor = selected ? 'var(--accent)' : 'var(--border)';
+      c.style.background = selected ? 'var(--accent-r)' : 'var(--bg)';
+      c.querySelector('input').checked = selected;
+    });
+    if (targetLabel) targetLabel.textContent = targetLabel.dataset['forSource' === '' ? '' : 'for' + kind.charAt(0).toUpperCase() + kind.slice(1)] || targetLabel.dataset.forSource;
+    // Simpler: look up the right data attribute
+    const mapLabel = {source: 'forSource', binary: 'forBinary', forensics: 'forForensics'};
+    if (targetLabel) targetLabel.textContent = targetLabel.dataset[mapLabel[kind]] || targetLabel.textContent;
+    if (targetInput) targetInput.placeholder = targetInput.dataset[kind === 'source' ? 'placeholderSource' : kind === 'binary' ? 'placeholderBinary' : 'placeholderForensics'] || '';
+    if (targetHelp) targetHelp.textContent = targetHelp.dataset[mapLabel[kind]] || targetHelp.textContent;
+    conditionalLabels.forEach(lbl => {
+      lbl.style.display = lbl.dataset.showFor === kind ? '' : 'none';
+    });
+    // Pick the right filesystem-picker mode for the target input, and hide
+    // the Browse button entirely for forensics (the target is a URL).
+    if (targetInput) {
+      if (kind === 'binary') targetInput.dataset.fsPicker = 'files';
+      else if (kind === 'source') targetInput.dataset.fsPicker = 'dirs';
+      else targetInput.dataset.fsPicker = '';  // forensics = URL
+      const row = targetInput.closest('.fs-input-row');
+      const btn = row ? row.querySelector('.fs-browse-btn') : null;
+      if (btn) btn.style.display = targetInput.dataset.fsPicker ? '' : 'none';
+    }
+  }
+
+  cards.forEach(card => {
+    card.addEventListener('click', () => setType(card.dataset.type));
+  });
+
+  // Initial state — respect the form value or default to 'source'
+  const initial = document.querySelector('input[name="project_type"]:checked')?.value || 'source';
+  setType(initial);
+
+  // Smart-default: set name from target basename when name is empty.
+  // Heuristic: take the last non-empty path segment (or host from a URL).
+  const nameInput = document.querySelector('input[name="name"]');
+  const targetInput2 = document.querySelector('input[name="target"]');
+  let userEditedName = false;
+  if (nameInput && targetInput2) {
+    nameInput.addEventListener('input', () => { userEditedName = nameInput.value.length > 0; });
+    targetInput2.addEventListener('input', () => {
+      if (userEditedName) return;
+      const t = targetInput2.value.trim();
+      if (!t) return;
+      let candidate = '';
+      if (t.startsWith('http://') || t.startsWith('https://') || t.startsWith('git@') || t.startsWith('ssh://')) {
+        // URL — take the last path segment minus trailing .git
+        const clean = t.replace(/\.git$/, '').replace(/[:]/g, '/');
+        candidate = clean.split('/').filter(Boolean).pop() || '';
+      } else {
+        // Local path — basename
+        candidate = t.replace(/\/+$/, '').split('/').filter(Boolean).pop() || '';
+      }
+      // Sanitize to raptor's name regex: letters/numbers/-/./_, first char alnum.
+      candidate = candidate.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/^[._-]+/, '');
+      if (candidate) nameInput.value = candidate;
+    });
+  }
+})();
+</script>
+
+{% endblock %}

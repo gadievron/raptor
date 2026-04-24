@@ -18,8 +18,12 @@ from core.logging import get_logger
 
 logger = get_logger()
 
-# Default locations
-PROJECTS_DIR = Path.home() / ".raptor" / "projects"
+# Default locations. Honors RAPTOR_PROJECTS_DIR env var for test harnesses
+# and companion tooling (e.g. raptor-studio) that need to point at a
+# non-default registry.
+PROJECTS_DIR = Path(
+    os.environ.get("RAPTOR_PROJECTS_DIR", str(Path.home() / ".raptor" / "projects"))
+)
 DEFAULT_OUTPUT_BASE = Path("out/projects")
 
 

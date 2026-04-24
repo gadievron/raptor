@@ -21,3 +21,10 @@ out/
 
 # Runtime artifacts
 codeql_dbs/
+
+# raptor-studio test venv (local only — not checked in)
+.venv-studio/
+packages/studio/__pycache__/
+packages/studio/**/__pycache__/
+packages/studio/.pytest_cache/
+packages/studio/**/.pytest_cache/
