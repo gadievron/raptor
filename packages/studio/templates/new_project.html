@@ -51,6 +51,7 @@
            data-placeholder-source="/absolute/path/to/code/repo"
            data-placeholder-binary="/absolute/path/to/compiled/binary"
            data-placeholder-forensics="https://github.com/owner/repo"
+           data-fs-picker="dirs"
            placeholder="/absolute/path/to/code/repo"
            style="width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">
     <div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">
@@ -80,6 +81,7 @@
         <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 4px;">Seed corpus directory <span style="color: var(--fg3); font-weight: 400;">(optional)</span></div>
         <input name="corpus_dir" type="text"
                value="{{ form.corpus_dir or '' }}"
+               data-fs-picker="dirs"
                placeholder="/path/to/seed-inputs"
                style="width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">
         <div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">Directory of input files AFL++ starts from. If left blank, use <code class="mono">--autonomous</code> on the fuzz form to have raptor generate seeds from binary strings.</div>
@@ -89,6 +91,7 @@
         <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 4px;">Secondary source repo <span style="color: var(--fg3); font-weight: 400;">(optional)</span></div>
         <input name="source_repo" type="text"
                value="{{ form.source_repo or form.binary or '' }}"
+               data-fs-picker="dirs"
                placeholder="/path/to/source — only if you also want to run source scans against it"
                style="width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">
         <div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">Rarely needed. Set when the binary has corresponding source you also want CodeQL / Semgrep to analyse.</div>
@@ -135,6 +138,7 @@
         <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-bottom: 4px;">Output directory <span style="color: var(--fg3); font-weight: 400;">(optional)</span></div>
         <input name="output_dir" type="text"
                value="{{ form.output_dir or '' }}"
+               data-fs-picker="dirs"
                placeholder="{{ default_output }}"
                style="width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">
         <div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">Where raptor writes run outputs. Defaults to shown path (created if missing).</div>
@@ -174,6 +178,16 @@
     conditionalLabels.forEach(lbl => {
       lbl.style.display = lbl.dataset.showFor === kind ? '' : 'none';
     });
+    // Pick the right filesystem-picker mode for the target input, and hide
+    // the Browse button entirely for forensics (the target is a URL).
+    if (targetInput) {
+      if (kind === 'binary') targetInput.dataset.fsPicker = 'files';
+      else if (kind === 'source') targetInput.dataset.fsPicker = 'dirs';
+      else targetInput.dataset.fsPicker = '';  // forensics = URL
+      const row = targetInput.closest('.fs-input-row');
+      const btn = row ? row.querySelector('.fs-browse-btn') : null;
+      if (btn) btn.style.display = targetInput.dataset.fsPicker ? '' : 'none';
+    }
   }
 
   cards.forEach(card => {

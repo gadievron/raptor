@@ -34,6 +34,7 @@
     </div>
     <input name="target" type="text" required
            value="{{ form.target or project.target }}"
+           data-fs-picker="{% if spec.target_arg == '--binary' %}files{% else %}dirs{% endif %}"
            placeholder="{% if spec.target_arg == '--binary' %}/absolute/path/to/binary{% else %}/absolute/path/to/repo{% endif %}"
            style="width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 12px;">
     <div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">
@@ -62,8 +63,12 @@
       <input name="{{ f.name }}" type="number" value="{{ val }}" {% if f.required %}required{% endif %}
              style="width: 160px; padding: 7px 8px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">
     {% else %}
+      {%- set picker_mode = "" -%}
+      {%- if f.name in ["corpus", "output_dir", "out_dir", "output"] -%}{% set picker_mode = "dirs" %}{%- endif -%}
+      {%- if f.name in ["binary", "input_file", "reproducer", "map"] -%}{% set picker_mode = "files" %}{%- endif -%}
       <input name="{{ f.name }}" type="text" value="{{ val }}"
              placeholder="{{ f.placeholder }}" {% if f.required %}required{% endif %}
+             {% if picker_mode %}data-fs-picker="{{ picker_mode }}"{% endif %}
              style="width: 100%; padding: 7px 8px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">
     {% endif %}
     {% if f.help %}<div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">{{ f.help }}</div>{% endif %}
