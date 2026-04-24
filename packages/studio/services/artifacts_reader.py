@@ -28,6 +28,7 @@ class Artifact:
     run_name: str
     size_bytes: int
     modified: str  # ISO-ish string
+    rel_path: str = ""  # path relative to the run directory, for /files/ URL
 
 
 _EXPLOIT_SUBDIRS = ("exploits", "analysis/exploits")
@@ -41,6 +42,7 @@ def _collect_files(
     extensions: tuple[str, ...] = (),
     names: tuple[str, ...] = (),
     run_name: str = "",
+    run_root: Path | None = None,
 ) -> list[Artifact]:
     out: list[Artifact] = []
     for d in dirs:
@@ -55,12 +57,19 @@ def _collect_files(
             try:
                 stat = f.stat()
                 mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(timespec="seconds")
+                rel = ""
+                if run_root is not None:
+                    try:
+                        rel = str(f.resolve().relative_to(run_root.resolve()))
+                    except ValueError:
+                        rel = f.name
                 out.append(Artifact(
                     filename=f.name,
                     path=f,
                     run_name=run_name,
                     size_bytes=stat.st_size,
                     modified=mtime,
+                    rel_path=rel or f.name,
                 ))
             except OSError:
                 continue
@@ -71,7 +80,7 @@ def list_exploits(project) -> list[Artifact]:
     out: list[Artifact] = []
     for run in project.runs():
         dirs = [run.directory / sub for sub in _EXPLOIT_SUBDIRS]
-        out.extend(_collect_files(dirs, run_name=run.name))
+        out.extend(_collect_files(dirs, run_name=run.name, run_root=run.directory))
     # Newest first
     out.sort(key=lambda a: a.modified, reverse=True)
     return out
@@ -81,7 +90,7 @@ def list_patches(project) -> list[Artifact]:
     out: list[Artifact] = []
     for run in project.runs():
         dirs = [run.directory / sub for sub in _PATCH_SUBDIRS]
-        out.extend(_collect_files(dirs, run_name=run.name))
+        out.extend(_collect_files(dirs, run_name=run.name, run_root=run.directory))
     out.sort(key=lambda a: a.modified, reverse=True)
     return out
 
@@ -95,6 +104,7 @@ def list_reports(project) -> list[Artifact]:
             extensions=_REPORT_SUFFIXES,
             names=_REPORT_FILENAMES,
             run_name=run.name,
+            run_root=run.directory,
         ))
     out.sort(key=lambda a: a.modified, reverse=True)
     return out

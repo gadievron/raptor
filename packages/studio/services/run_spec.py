@@ -244,6 +244,20 @@ def build_command(
         if values.get("corpus"):
             argv += ["--corpus", values["corpus"]]
 
+    # If the user triggered from a specific project, activate it before the
+    # pure-Python entry point runs — raptor resolves the output directory
+    # from the active project, so without this, artifacts land in whatever
+    # project was last active (often a different one).
+    if project_name:
+        import shlex
+        raptor_bin = raptor_home / "bin" / "raptor"
+        activate = (
+            f"bash {shlex.quote(str(raptor_bin))} "
+            f"project use {shlex.quote(project_name)}"
+        )
+        py_cmd = " ".join(shlex.quote(part) for part in argv)
+        return ["bash", "-c", f"{activate} && {py_cmd}"]
+
     return argv
 
 
