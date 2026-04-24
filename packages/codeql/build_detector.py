@@ -36,10 +36,15 @@ class BuildSystem:
     type: str  # maven, gradle, npm, etc.
     command: str  # Build command to use
     working_dir: Path  # Directory to run command in
-    env_vars: Dict[str, str]  # Environment variables needed
+    env_vars: Dict[str, str]  # Env vars we inject as-is (RAPTOR-chosen constants)
     confidence: float  # 0.0 - 1.0
     detected_files: List[str]  # Files that indicated this build system
     cleanup_paths: List[Path] = field(default_factory=list)  # Temp files/dirs to remove after CodeQL
+    # Env var NAMES to auto-detect at build time. Each name must have
+    # a corresponding detector in core.build.toolchain.DETECTORS. The
+    # detected value (if non-None) is merged into the build
+    # subprocess's env alongside env_vars. See ~/design/env-handling.md.
+    env_detect: List[str] = field(default_factory=list)
 
 
 class BuildDetector:
@@ -57,6 +62,7 @@ class BuildDetector:
                 "files": ["pom.xml"],
                 "command": "mvn clean compile -DskipTests -Dmaven.test.skip=true",
                 "env_vars": {"MAVEN_OPTS": "-Xmx2048m"},
+                "env_detect": ["JAVA_HOME"],
                 "priority": 1,
             },
             "gradle": {
@@ -64,12 +70,14 @@ class BuildDetector:
                 "command": "./gradlew build -x test --no-daemon",
                 "command_fallback": "gradle build -x test --no-daemon",
                 "env_vars": {"GRADLE_OPTS": "-Xmx2048m"},
+                "env_detect": ["JAVA_HOME"],
                 "priority": 2,
             },
             "ant": {
                 "files": ["build.xml"],
                 "command": "ant compile",
-                "env_vars": {},
+                "env_vars": {"ANT_OPTS": "-Xmx2048m"},
+                "env_detect": ["JAVA_HOME"],
                 "priority": 3,
             },
         },
@@ -137,6 +145,7 @@ class BuildDetector:
                 "files": ["go.mod"],
                 "command": "go build ./...",
                 "env_vars": {"CGO_ENABLED": "0"},
+                "env_detect": ["GOROOT"],
                 "priority": 1,
             },
         },
@@ -171,12 +180,14 @@ class BuildDetector:
                 "files": [".csproj", ".sln"],
                 "command": "dotnet build",
                 "env_vars": {},
+                "env_detect": ["DOTNET_ROOT"],
                 "priority": 1,
             },
             "msbuild": {
                 "files": [".csproj", ".sln"],
                 "command": "msbuild /t:Build",
                 "env_vars": {},
+                "env_detect": ["DOTNET_ROOT"],
                 "priority": 2,
             },
         },
@@ -307,6 +318,7 @@ class BuildDetector:
             env_vars=config.get("env_vars", {}),
             confidence=confidence,
             detected_files=detected_files,
+            env_detect=config.get("env_detect", []),
         )
 
     def _has_build_script(self, package_json: Path) -> bool:
@@ -467,7 +479,7 @@ class BuildDetector:
         logger.info(f"Synthesised build script for {language}: {script_path}")
         logger.info(f"  Source files: {len(source_files)}")
 
-        failures = self._dry_run(script_path)
+        failures = self._dry_run(script_path, language=language)
         build_type = "synthesised"
         confidence = 0.7
 
@@ -483,7 +495,7 @@ class BuildDetector:
                     include_flags + cc_flags.get("includes", []),
                     define_flags + cc_flags.get("defines", []),
                 )
-                cc_failures = self._dry_run(script_path)
+                cc_failures = self._dry_run(script_path, language=language)
                 cc_ok = len(source_files) - len(cc_failures)
                 if cc_ok > heuristic_ok:
                     logger.info(f"  CC improved: {heuristic_ok} → {cc_ok} compiled")
@@ -536,6 +548,32 @@ class BuildDetector:
         include_flags = self._validate_flags(include_flags)
         return source_files, compiler, include_flags, []
 
+    def _java_synthesised_classpath(self) -> List[str]:
+        """When we fall through to raw javac (no pom.xml/build.gradle/
+        build.xml), any external JARs the code depends on typically
+        live under `repo/lib/*.jar` by informal convention. Build a
+        classpath from that directory if it exists.
+
+        Returns an empty list on any of:
+         - no lib/ dir
+         - lib/ exists but has no .jar files
+         - repo_path doesn't resolve (shouldn't happen)
+
+        Rationale & edge cases in ~/design/env-handling.md (Q6).
+        Repo-scoped construction — does NOT inherit any host CLASSPATH.
+        """
+        lib_dir = self.repo_path / "lib"
+        if not lib_dir.is_dir():
+            return []
+        jars = sorted(str(p) for p in lib_dir.glob("*.jar"))
+        if jars:
+            logger.info(
+                f"  Java synthesised build: {len(jars)} jar(s) from "
+                f"lib/ added to classpath. If CodeQL semantics look "
+                f"wrong, inspect lib/ for stale/unused JARs."
+            )
+        return jars
+
     def _write_build_script(self, script_path, build_dir,
                             source_files, compiler, include_flags, define_flags):
         """Write a Python build script that compiles via subprocess.run.
@@ -565,6 +603,15 @@ class BuildDetector:
         repo_root = str(self.repo_path)
         is_java = compiler == "javac"
 
+        # Java-only: build classpath from repo/lib/*.jar if present.
+        # Repo-scoped; does NOT inherit any host CLASSPATH (see
+        # core.config.DANGEROUS_ENV_VARS for why CLASSPATH is stripped).
+        # Joined with `os.pathsep` inside the generated script so we
+        # don't need to know the host's separator at generation time.
+        java_classpath_jars: List[str] = (
+            self._java_synthesised_classpath() if is_java else []
+        )
+
         script_path.chmod(0o700)  # Temporarily writable for rewrites (CC path)
         # SECURITY: all data interpolated via {!r} (Python repr) — produces
         # valid Python literals, not executable code.
@@ -583,6 +630,11 @@ BUILD_DIR = {str(build_dir)!r}
 REPO_ROOT = os.path.realpath({repo_root!r})
 FILES = {files_list!r}
 IS_JAVA = {is_java!r}
+JAVA_CLASSPATH_JARS = {java_classpath_jars!r}
+
+# Java-only: compose classpath from repo-scoped jar list + build dir.
+# os.pathsep handles Linux vs Windows separators (Linux ":").
+JAVA_CP = os.pathsep.join(JAVA_CLASSPATH_JARS + [BUILD_DIR]) if IS_JAVA else None
 
 total = len(FILES)
 ok = 0
@@ -602,7 +654,10 @@ for i, src in enumerate(FILES):
     # SECURITY: subprocess.run with list args — no shell, no injection.
     # Filenames are list elements passed directly to execve.
     if IS_JAVA:
-        cmd = [COMPILER] + FLAGS + ["-d", BUILD_DIR, src]
+        cmd = [COMPILER] + FLAGS + ["-d", BUILD_DIR]
+        if JAVA_CP:
+            cmd += ["-cp", JAVA_CP]
+        cmd += [src]
     else:
         obj = os.path.join(BUILD_DIR, rel + ".o")
         obj_dir = os.path.dirname(obj)
@@ -625,8 +680,25 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
         script_path.chmod(0o500)
         return script_path
 
-    def _dry_run(self, script_path) -> list:
-        """Run the build script and return compilation failures."""
+    def _dry_run(self, script_path, language: Optional[str] = None) -> list:
+        """Run the build script and return compilation failures.
+
+        `language` is used to pick the env vars the build tool expects
+        — for Java synthesised builds we auto-detect JAVA_HOME and
+        inject it into the script's env. Without this, javac is found
+        via PATH but the JDK layout (tools.jar, rt.jar on older JDKs)
+        may not resolve. Scoped to this one subprocess — see
+        ~/design/env-handling.md.
+        """
+        # Build env: sanitised base + toolchain auto-detection for the
+        # language. For Java synthesised-build path, this is JAVA_HOME.
+        # For C/C++, nothing to detect (CC/CXX resolved via PATH).
+        from core.config import RaptorConfig
+        env = RaptorConfig.get_safe_env()
+        if language == "java":
+            from core.build.toolchain import apply_toolchain_env
+            apply_toolchain_env(env, ["JAVA_HOME"])
+
         try:
             repo_path = str(self.repo_path)
             result = _sandbox_run(
@@ -634,6 +706,7 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
                 block_network=True,
                 target=repo_path, output=repo_path,
                 cwd=self.repo_path,
+                env=env,
                 capture_output=True, text=True, timeout=300,
             )
             # Script crash (not compilation failure) — treat as unknown

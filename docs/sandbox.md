@@ -289,6 +289,27 @@ set — useful for post-run auditing. Each sandbox's buffer grows independently
 for its lifetime (no fixed cap, no ring-buffer eviction); the buffer is
 discarded when the sandbox context exits.
 
+## Toolchain env for builds
+
+The sandbox's `get_safe_env()` keeps a tight allowlist and deliberately
+strips language-specific vars like `JAVA_HOME`, `GOROOT`, `DOTNET_ROOT`,
+`RUSTUP_HOME` — adding them globally would broaden exposure for every
+non-that-language caller. Instead, each build-system entry in
+`packages/codeql/build_detector.BUILD_SYSTEMS` declares an
+`env_detect` list, and `core/build/toolchain.py` auto-resolves those
+vars from filesystem layout (e.g. `/usr/lib/jvm/default-java`, or
+`readlink -f $(which java)`) at build time.
+
+Scope: detected values land in the build subprocess's env ONLY —
+scanners, LLM sub-agents, the proxy thread, and other sandbox calls
+in the same context do not see them. See `~/design/env-handling.md`
+for the full design and deferred items (user-provided build env,
+target-runtime env, macOS detector paths).
+
+If the build tool still fails with "JDK not found" or similar:
+install the toolchain into a standard location, or expand the
+detector fallback chain in `core/build/toolchain.py` for your distro.
+
 ## Troubleshooting
 
 ### "Mount namespace unavailable" on Ubuntu 24.04
