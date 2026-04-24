@@ -271,6 +271,79 @@ class TestSanitizeLogMessage:
         assert github_key not in result
         assert result.count("[REDACTED-API-KEY]") == 3
 
+    def test_redacts_named_secret_assignments(self):
+        """Key/value log lines for secret-looking fields redact the value."""
+        values = [
+            ("OPENAI_API_KEY", "oa-" + "g" * 38),
+            ("AWS_SECRET_ACCESS_KEY", "h" * 40),
+            ("SERVICE_TOKEN", "tok_" + "i" * 36),
+            ("DATABASE_PASSWORD", "pw-" + "j" * 32),
+        ]
+        message = " ".join(f"{name}={value}" for name, value in values)
+        result = _sanitize_log_message(message)
+        for name, value in values:
+            assert value not in result
+            assert f"{name}=[REDACTED-API-KEY]" in result
+
+    def test_redacts_quoted_json_secret_fields(self):
+        """JSON-ish secret fields from SDK errors redact quoted values."""
+        api_value = "api-" + "k" * 36
+        session_value = "sess_" + "l" * 36
+        result = _sanitize_log_message(
+            f'{{"api_key": "{api_value}", "session_token": "{session_value}"}}'
+        )
+        assert api_value not in result
+        assert session_value not in result
+        assert '"api_key": "[REDACTED-API-KEY]"' in result
+        assert '"session_token": "[REDACTED-API-KEY]"' in result
+
+    def test_redacts_basic_authorization_header(self):
+        """Basic auth credentials in headers are redacted like bearer tokens."""
+        credentials = "Basic " + "b" * 44 + "=="
+        result = _sanitize_log_message(f"Authorization failed for {credentials}")
+        assert credentials not in result
+        assert "Basic [REDACTED]" in result
+
+    def test_redacts_short_basic_authorization_with_flexible_whitespace(self):
+        """Basic auth is sensitive by scheme, even when short or tab-separated."""
+        short_basic = "Basic " + "dXNlcjpwYXNz"
+        tab_basic = "Basic\t" + "b" * 24
+        result = _sanitize_log_message(f"Headers: {short_basic} and {tab_basic}")
+        assert short_basic not in result
+        assert tab_basic not in result
+        assert result.count("Basic [REDACTED]") == 2
+
+    def test_redacts_short_and_punctuated_named_secret_values(self):
+        """Explicit secret fields are redacted even when values are short or punctuated."""
+        short_password = "short"
+        punctuated_secret = "abc, def ghi"
+        result = _sanitize_log_message(
+            f'DATABASE_PASSWORD="{short_password}" SERVICE_SECRET="{punctuated_secret}"'
+        )
+        assert short_password not in result
+        assert punctuated_secret not in result
+        assert 'DATABASE_PASSWORD="[REDACTED-API-KEY]"' in result
+        assert 'SERVICE_SECRET="[REDACTED-API-KEY]"' in result
+
+    def test_preserves_llm_token_usage_metrics(self):
+        """Usage counters named *_tokens are telemetry, not credentials."""
+        message = "prompt_tokens=123456789012 completion_tokens=987654321098"
+        assert _sanitize_log_message(message) == message
+
+    def test_redacts_private_key_blocks(self):
+        """PEM private keys in multiline errors should never reach logs."""
+        private_key = (
+            "-----BEGIN "
+            + "PRIVATE KEY-----\n"
+            + "m" * 64
+            + "\n-----END "
+            + "PRIVATE KEY-----"
+        )
+        result = _sanitize_log_message(f"tool stderr:\n{private_key}\nfailed")
+        assert private_key not in result
+        assert "m" * 64 not in result
+        assert "[REDACTED-PRIVATE-KEY]" in result
+
 
 class TestBudgetChecking:
     """Verify budget checking works in LLMClient."""
