@@ -7,6 +7,7 @@ Run: python3 -m pytest core/sandbox/tests/test_e2e_sandbox.py -v
 """
 
 import os
+import platform
 import subprocess
 import unittest
 from pathlib import Path
@@ -275,8 +276,20 @@ class TestE2ECrashObservability(unittest.TestCase):
             self.assertEqual(result.sandbox_info["signal"], "SIGSEGV")
             self.assertIn("SIGSEGV", result.sandbox_info["evidence"])
 
+    @unittest.skipUnless(
+        platform.machine() == "x86_64",
+        "integer div-by-zero only traps as SIGFPE on x86/x64; on "
+        "ARM64/RISC-V the CPU silently returns an undefined value "
+        "and the process exits normally. raise(SIGFPE) from the "
+        "target would be portable but the pid-ns filter on our "
+        "subprocess-path sandbox drops raise()/kill(self,...) "
+        "from pid-1 when no handler is installed (see "
+        "`man pid_namespaces`). Synchronous CPU exceptions bypass "
+        "that filter, so div-by-zero works here on x86 — keep "
+        "scoped to that arch."
+    )
     def test_sigfpe_detected(self):
-        """Division by zero captured."""
+        """SIGFPE captured via x86 synchronous div-by-zero trap."""
         with TemporaryDirectory() as d:
             src = Path(d) / "fpe.c"
             src.write_text("int main(){volatile int x=0; return 1/x;}")
