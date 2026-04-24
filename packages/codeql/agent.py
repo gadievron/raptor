@@ -164,7 +164,8 @@ class CodeQLAgent:
         build_commands: Optional[Dict[str, str]] = None,
         force_db_creation: bool = False,
         use_extended: bool = False,
-        min_files: int = 3
+        min_files: int = 3,
+        no_build_langs: Optional[set] = None,
     ) -> CodeQLWorkflowResult:
         """
         Run complete autonomous CodeQL analysis workflow.
@@ -232,7 +233,10 @@ class CodeQLAgent:
 
             language_build_map = {}
             for lang in detected.keys():
-                if build_commands and lang in build_commands:
+                if no_build_langs and lang in no_build_langs:
+                    logger.info(f"{lang}: Using no-build mode (--no-build)")
+                    language_build_map[lang] = self.build_detector.generate_no_build_config(lang)
+                elif build_commands and lang in build_commands:
                     # Use custom build command
                     logger.info(f"{lang}: Using custom build command")
                     language_build_map[lang] = BuildSystem(

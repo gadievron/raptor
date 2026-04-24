@@ -84,6 +84,8 @@ def run_autonomous_workflow(args):
             sys.exit(1)
         build_commands = {languages[0]: args.build_command}
 
+    no_build_langs = set(languages) if args.no_build and languages else (set(languages) if args.no_build else set())
+
     # PHASE 1: CodeQL Scanning
     logger.info("\n" + "=" * 70)
     logger.info("PHASE 1: CODEQL SCANNING")
@@ -100,7 +102,8 @@ def run_autonomous_workflow(args):
         build_commands=build_commands,
         force_db_creation=args.force,
         use_extended=args.extended,
-        min_files=args.min_files
+        min_files=args.min_files,
+        no_build_langs=no_build_langs if no_build_langs else None,
     )
 
     if not scan_result.success:
@@ -274,6 +277,7 @@ Examples:
     parser.add_argument("--codeql-cli", help="Path to CodeQL CLI")
     parser.add_argument("--scan-only", action="store_true", help="Scan only (skip autonomous analysis)")
     parser.add_argument("--max-findings", type=int, default=20, help="Max findings to analyze")
+    parser.add_argument("--no-build", action="store_true", help="Skip build step — use CodeQL no-build mode (all languages, or just those in --languages)")
     parser.add_argument("--no-visualizations", action="store_true", help="Disable dataflow visualizations")
     parser.add_argument("--trust-repo", action="store_true",
                         help="Trust the target repo's config and skip safety checks "

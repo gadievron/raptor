@@ -352,8 +352,10 @@ class DatabaseManager:
         # CodeQL splits --command on whitespace without shell interpretation,
         # so shell operators (&&, ||, ;, |) break. Wrap in a script unless
         # the command is already a path to an executable (e.g. synthesised builds).
+        # For no-build mode, pass --build-mode=none so CodeQL doesn't invoke autobuild.
         build_script = None
-        if build_system and build_system.command:
+        has_build_cmd = build_system and build_system.command and build_system.type != "no-build"
+        if has_build_cmd:
             build_cmd = build_system.command
             if Path(build_cmd).is_file() or re.fullmatch(r'[a-zA-Z0-9._-]+', build_cmd):
                 cmd.extend(["--command", build_cmd])
@@ -369,6 +371,8 @@ class DatabaseManager:
             logger.info(f"Build command: {build_system.command}")
             logger.info(f"Working directory: {working_dir}")
         else:
+            # Explicitly pass --build-mode=none so CodeQL doesn't fall back to autobuild
+            cmd.append("--build-mode=none")
             logger.info("No build command (interpreted language or no-build mode)")
 
         logger.info(f"Executing: {' '.join(cmd)}")
