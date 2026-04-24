@@ -285,7 +285,9 @@ flowchart LR
   <h2 style="margin: 0 0 10px; font-size: 14px;">Report files</h2>
   <ul style="margin: 0; padding-left: 20px; font-size: 13px;">
   {% for name in summary.report_files %}
-    <li class="mono" style="font-size: 12px;">{{ name }}</li>
+    <li class="mono" style="font-size: 12px;">
+      <a href="/projects/{{ project.name }}/runs/{{ run.name }}/files/{{ name }}" target="_blank" style="color: var(--accent);">{{ name }}</a>
+    </li>
   {% endfor %}
   </ul>
 </div>
@@ -296,7 +298,8 @@ flowchart LR
   <h2 style="margin: 0 0 10px; font-size: 14px;">SARIF files</h2>
   <ul style="margin: 0; padding-left: 20px; font-size: 13px;">
   {% for name in summary.sarif_files %}
-    <li class="mono" style="font-size: 12px;">{{ name }}</li>
+    <li class="mono" style="font-size: 12px;">
+      <a href="/projects/{{ project.name }}/runs/{{ run.name }}/files/{{ name }}" target="_blank" style="color: var(--accent);">{{ name }}</a></li>
   {% endfor %}
   </ul>
 </div>
