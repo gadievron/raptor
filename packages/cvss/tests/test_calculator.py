@@ -19,6 +19,23 @@ class TestValidateVector:
     def test_valid_v30(self):
         assert validate_vector("CVSS:3.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H")
 
+    def test_valid_with_temporal_suffix(self):
+        # Log4Shell's OSV record carries `/E:H` after the base metrics.
+        assert validate_vector(
+            "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H/E:H"
+        )
+
+    def test_valid_with_full_temporal_chain(self):
+        assert validate_vector(
+            "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H/E:H/RL:O/RC:C"
+        )
+
+    def test_valid_with_environmental_metrics(self):
+        assert validate_vector(
+            "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+            "/CR:H/IR:H/AR:H/MAV:L"
+        )
+
     def test_invalid_prefix(self):
         assert not validate_vector("CVSS:2.0/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H")
 
@@ -44,6 +61,23 @@ class TestParseVector:
         with pytest.raises(ValueError):
             parse_vector("garbage")
 
+    def test_parse_with_temporal_suffix(self):
+        # OSV records routinely ship CVSS vectors with a temporal-score
+        # tail (e.g. Log4Shell's `/E:H`). The parser should accept the
+        # full vector and surface the extension keys alongside base.
+        m = parse_vector(
+            "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H/E:H"
+        )
+        assert m["AV"] == "N" and m["S"] == "C"
+        assert m["E"] == "H"
+
+    def test_parse_with_environmental_metrics(self):
+        m = parse_vector(
+            "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+            "/CR:H/IR:H/AR:H"
+        )
+        assert m["CR"] == "H"
+
 
 class TestComputeBaseScore:
     """Test against known CVSS v3.1 scores from NVD.
@@ -54,6 +88,15 @@ class TestComputeBaseScore:
     def test_critical_9_8(self):
         # CVE-2021-44228 (Log4Shell) - AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H = 10.0
         score, label = compute_base_score("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H")
+        assert score == 10.0
+        assert label == "Critical"
+
+    def test_temporal_suffix_does_not_affect_base_score(self):
+        # The base score is computed only from the eight base metrics;
+        # a `/E:H` tail must be ignored, returning the same 10.0.
+        score, label = compute_base_score(
+            "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H/E:H"
+        )
         assert score == 10.0
         assert label == "Critical"
 
