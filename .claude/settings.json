@@ -6,6 +6,7 @@
   },
   "permissions": {
     "allow": [
+      "Bash(libexec/raptor-agentic *)",
       "Bash(libexec/raptor-build-checklist *)",
       "Bash(libexec/raptor-coverage-summary *)",
       "Bash(libexec/raptor-validation-helper *)",

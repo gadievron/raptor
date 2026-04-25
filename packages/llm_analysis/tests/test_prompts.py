@@ -70,6 +70,28 @@ class TestAnalysisPrompt:
         assert "Stage D" in prompt
         assert "ruling" in prompt.lower()
 
+    def test_renders_priority_marker_from_understand_map(self):
+        # /understand --map can mark a function priority="high" with a
+        # constrained reason ("entry_point" or "sink"). The analysis prompt
+        # must surface that so the LLM knows the function's architectural role.
+        prompt = build_analysis_prompt(
+            rule_id="sqli", level="error", file_path="handler.py",
+            start_line=10, end_line=10, message="injection",
+            code="cursor.execute(query)",
+            metadata={"priority": "high", "priority_reason": "entry_point"},
+        )
+        assert "Architectural role" in prompt
+        assert "entry_point" in prompt
+
+    def test_no_priority_marker_when_priority_absent(self):
+        prompt = build_analysis_prompt(
+            rule_id="sqli", level="error", file_path="handler.py",
+            start_line=10, end_line=10, message="injection",
+            code="cursor.execute(query)",
+            metadata={"class_name": "DBHandler"},
+        )
+        assert "Architectural role" not in prompt
+
     def test_from_finding_dict(self):
         finding = {
             "rule_id": "sqli", "level": "error", "file_path": "db.py",
@@ -186,3 +208,34 @@ class TestFindingResultSchema:
         assert "is_true_positive" in props
         assert "is_exploitable" in props
         assert "reasoning" in props
+
+    def test_confidence_enum_accepts_canonical_values(self):
+        # FINDING_RESULT_SCHEMA tightens confidence to enum[high,medium,low,null].
+        # The post-pass selection logic relies on this — if jsonschema lets
+        # "High" or "HIGH" through, the strict-equality match would silently
+        # skip them.
+        import jsonschema
+        for value in ("high", "medium", "low", None):
+            valid_finding = {
+                "finding_id": "f1",
+                "is_true_positive": True,
+                "is_exploitable": True,
+                "reasoning": "test",
+                "confidence": value,
+            }
+            jsonschema.validate(valid_finding, FINDING_RESULT_SCHEMA)
+
+    def test_confidence_enum_rejects_drift(self):
+        # Schema must reject case-drifted or arbitrary string values that
+        # would otherwise slip past the per-record validator.
+        import jsonschema
+        for value in ("High", "HIGH", "very high", "exploitable"):
+            invalid_finding = {
+                "finding_id": "f1",
+                "is_true_positive": True,
+                "is_exploitable": True,
+                "reasoning": "test",
+                "confidence": value,
+            }
+            with pytest.raises(jsonschema.ValidationError):
+                jsonschema.validate(invalid_finding, FINDING_RESULT_SCHEMA)
