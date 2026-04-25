@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Stage E SMT path-feasibility entry point.
+
+Usage:
+  raptor-smt-validate-path [--profile <name>] <condition> [<condition> ...]
+  raptor-smt-validate-path [--profile <name>] --stdin
+
+Each ``<condition>`` is a single predicate string such as ``"size > 0"``
+or ``"alloc_size == count * 16"``.  Conditions must hold simultaneously
+for the path to be reachable; if a guard was bypassed (the condition
+must be FALSE for the dangerous path), pre-negate it manually
+(``ptr != NULL`` bypassed → ``ptr == NULL``).
+
+When ``--stdin`` is given, conditions are read as a JSON array.  Each
+element may be either a bare string or a ``{"text": ..., "negated":
+true}`` object — useful when conditions need explicit negation flags
+(e.g. piped from a tool that already extracts them).
+
+``--profile`` selects bitvector width and signedness:
+
+  uint64  64-bit unsigned (default — size_t / pointer arithmetic)
+  int64   64-bit signed
+  uint32  32-bit unsigned (CWE-190 32-bit wraparound paths)
+  int32   32-bit signed (signed-overflow UB reasoning)
+  uint16  int16  uint8  int8
+
+Output: JSON to stdout with keys
+
+  feasible        true | false | null
+  reasoning       human-readable explanation
+  model           concrete witness values (when feasible=true)
+  satisfied       conditions that are tautologies
+  unsatisfied     conditions in the unsat core (when feasible=false)
+  unknown         conditions the parser could not encode
+  smt_available   true if z3-solver is loaded
+
+Exit code: always 0 on a well-formed invocation.  A ``feasible: false``
+or ``feasible: null`` verdict is reported via the JSON body, not via
+exit status — the LLM caller inspects ``feasible``.
+"""
+import argparse
+import json
+import sys
+from pathlib import Path
+
+# libexec/<this> -> repo root
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from packages.exploit_feasibility.smt_path import validate_path
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(
+        prog="raptor-smt-validate-path",
+        description="SMT path-condition feasibility check for Stage E.",
+    )
+    p.add_argument(
+        "--profile",
+        default="uint64",
+        help="Bitvector profile name (default: uint64).",
+    )
+    p.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read conditions from stdin as a JSON array instead of "
+             "positional args.",
+    )
+    p.add_argument(
+        "conditions",
+        nargs="*",
+        help="Path-condition strings (each a single predicate).",
+    )
+    args = p.parse_args()
+
+    if args.stdin:
+        if args.conditions:
+            print(
+                "raptor-smt-validate-path: --stdin and positional conditions "
+                "are mutually exclusive",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            payload = json.load(sys.stdin)
+        except json.JSONDecodeError as e:
+            print(f"raptor-smt-validate-path: invalid JSON on stdin: {e}", file=sys.stderr)
+            return 2
+        if not isinstance(payload, list):
+            print(
+                "raptor-smt-validate-path: --stdin payload must be a JSON array",
+                file=sys.stderr,
+            )
+            return 2
+        conditions = payload
+    else:
+        if not args.conditions:
+            p.print_usage(sys.stderr)
+            print(
+                "raptor-smt-validate-path: at least one condition required "
+                "(or use --stdin)",
+                file=sys.stderr,
+            )
+            return 2
+        conditions = list(args.conditions)
+
+    try:
+        result = validate_path(conditions, profile=args.profile)
+    except (TypeError, ValueError) as e:
+        print(f"raptor-smt-validate-path: {e}", file=sys.stderr)
+        return 2
+
+    json.dump(result, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

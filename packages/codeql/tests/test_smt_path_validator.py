@@ -115,6 +115,131 @@ class TestFeasibility:
         assert r.feasible is None
 
     @_requires_z3
+    @pytest.mark.parametrize("expr", [
+        "~mask == 0xFFFFFFFF",  # unary NOT silently dropped → would become "mask == ..."
+        "a ^ b == 0",            # XOR silently dropped → "a b == 0" (orphan caught)
+        "a / b > 0",             # division silently dropped
+        "a % 16 == 0",           # modulo silently dropped
+        "x | ~y == 0",           # NOT inside expression
+        "p ? q : r == 0",        # ternary silently dropped
+    ])
+    def test_silently_dropped_chars_go_to_unknown(self, expr):
+        """The tokeniser only matches a fixed set of operator characters;
+        anything outside that set ('~', '^', '/', '%', '?', ':') would
+        otherwise vanish from the token stream and produce a wrong
+        encoding.  The full-input-consumed sanity check rejects these."""
+        r = check_path_feasibility([PathCondition(expr, step_index=0)])
+        assert expr in r.unknown, (
+            f"silently-dropped chars in {expr!r} were not rejected; "
+            f"this is the same class of bug as the operator-precedence "
+            f"silent mis-encoding caught in PR #206."
+        )
+
+    @_requires_z3
+    def test_literal_too_wide_for_profile_goes_to_unknown(self):
+        """``x == 0x100`` at uint8 would silently wrap to ``x == 0`` since
+        Z3's BitVecVal truncates modulo width.  The verdict ``feasible:
+        true with x=0`` would mislead the caller about what was checked.
+        Refuse instead — the profile is wrong for this literal."""
+        from core.smt_solver import BVProfile
+        r = check_path_feasibility(
+            [PathCondition("x == 0x100", step_index=0)],
+            profile=BVProfile(width=8, signed=False),
+        )
+        assert "x == 0x100" in r.unknown
+
+    @_requires_z3
+    def test_literal_at_width_boundary_fits(self):
+        """``x == 0xFF`` at uint8 is exactly the max — must still be accepted."""
+        from core.smt_solver import BVProfile
+        r = check_path_feasibility(
+            [PathCondition("x == 0xFF", step_index=0)],
+            profile=BVProfile(width=8, signed=False),
+        )
+        assert r.feasible is True
+        assert r.model["x"] == 0xFF
+
+    @_requires_z3
+    def test_leading_zero_decimal_goes_to_unknown(self):
+        """``01234`` looks decimal but in C is octal (=668).  Accepting as
+        base-10 silently mis-encodes; reject and let the caller use hex
+        instead."""
+        r = check_path_feasibility([PathCondition("x == 01234", step_index=0)])
+        assert "x == 01234" in r.unknown
+
+    @_requires_z3
+    def test_bare_zero_decimal_accepted(self):
+        """``0`` (single digit) is unambiguous — must still parse."""
+        r = check_path_feasibility([PathCondition("x == 0", step_index=0)])
+        assert r.feasible is True
+        assert r.model.get("x") == 0
+
+    @_requires_z3
+    def test_bitmask_mask_too_wide_for_profile_goes_to_unknown(self):
+        """The bitmask form (``flags & MASK == VAL``) extracts MASK and
+        VAL via its own regex rather than going through ``atom()`` — the
+        same width-range check must apply or 0x100 at uint8 silently
+        wraps to 0, producing a false tautology."""
+        from core.smt_solver import BVProfile
+        r = check_path_feasibility(
+            [PathCondition("flags & 0x100 == 0", step_index=0)],
+            profile=BVProfile(width=8, signed=False),
+        )
+        assert "flags & 0x100 == 0" in r.unknown
+
+    @_requires_z3
+    def test_bitmask_leading_zero_mask_goes_to_unknown(self):
+        """Leading-zero literals in the bitmask path used to crash
+        ``int(tok, 0)`` with a Python ValueError on tokens like '010';
+        now they're rejected cleanly to ``unknown``."""
+        r = check_path_feasibility([PathCondition("flags & 010 == 0", step_index=0)])
+        assert "flags & 010 == 0" in r.unknown
+
+    @_requires_z3
+    def test_bitmask_leading_zero_rhs_goes_to_unknown(self):
+        r = check_path_feasibility([PathCondition("flags & 0xff == 010", step_index=0)])
+        assert "flags & 0xff == 010" in r.unknown
+
+    @_requires_z3
+    def test_bitmask_normal_form_still_works(self):
+        """Regression check: the bitmask-path validation tightening
+        must not break valid bitmask conditions."""
+        r = check_path_feasibility([PathCondition("flags & 0xff == 0", step_index=0)])
+        assert r.feasible is True
+        assert (r.model.get("flags", 0) & 0xff) == 0
+
+
+class TestNegatedDisplay:
+    """When a condition has ``negated=True``, downstream display strings
+    (in ``satisfied`` / ``unsatisfied`` / unsat-core reasoning) must
+    reflect what was actually asserted.  Showing the un-negated text
+    confuses readers — ``"ptr != NULL ⊥ ptr > 0"`` looks consistent
+    until you realise the solver actually asserted ``ptr == 0``."""
+
+    @_requires_z3
+    def test_negated_condition_shown_with_NOT_prefix_in_unsat_core(self):
+        r = check_path_feasibility([
+            PathCondition("ptr != NULL", step_index=0, negated=True),  # asserts ptr == 0
+            PathCondition("ptr > 0", step_index=1),
+        ])
+        assert r.feasible is False
+        # The display reflects what was asserted, not the original text.
+        assert "NOT (ptr != NULL)" in r.unsatisfied
+        # And the un-negated text should NOT appear (it's misleading).
+        assert "ptr != NULL" not in r.unsatisfied
+
+    @_requires_z3
+    def test_non_negated_condition_displayed_as_written(self):
+        """Unmodified conditions still appear verbatim."""
+        r = check_path_feasibility([
+            PathCondition("x > 100", step_index=0),
+            PathCondition("x < 50", step_index=1),
+        ])
+        assert r.feasible is False
+        assert "x > 100" in r.unsatisfied
+        assert "x < 50" in r.unsatisfied
+
+    @_requires_z3
     def test_negated_condition(self):
         """negated=True means the guard was bypassed (condition is false on path)."""
         # ptr != NULL with negated=True means ptr IS NULL on this path
