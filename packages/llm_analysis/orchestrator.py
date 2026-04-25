@@ -192,6 +192,12 @@ def orchestrate(
         print("\n  No findings to analyse")
         return None
 
+    # Stamp repo_path so build_analysis_prompt_from_finding forwards it to
+    # enrich_analysis_prompt; without this SAGE per-repo scoping (#198) makes
+    # the enrichment a no-op for every finding on the dispatch path.
+    for f in findings:
+        f.setdefault("repo_path", str(repo_path))
+
     if max_findings > 0 and len(findings) > max_findings:
         logger.info(f"Capping at {max_findings} findings (of {len(findings)})")
         findings = findings[:max_findings]

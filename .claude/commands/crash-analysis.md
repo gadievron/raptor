@@ -55,3 +55,5 @@ This command invokes the `crash-analysis-agent` which orchestrates:
 4. **coverage-analyzer-agent**: Generates code coverage data
 
 The analysis follows a hypothesis-validation loop - if the checker rejects a hypothesis, the analyzer is re-invoked with feedback until a valid root cause is confirmed.
+
+---

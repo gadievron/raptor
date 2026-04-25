@@ -51,6 +51,14 @@ def _sanitize_log_message(msg: str) -> str:
     Searchable tags: #SECURITY #API_KEY_PROTECTION #LOG_SANITIZATION
     Related: Cursor Bot Bug #2, PR #32, defense-in-depth best practice
     """
+    # Redact private key material before shorter generic patterns. If a log line
+    # is truncated before the END marker, redact through the end of the message.
+    msg = re.sub(
+        r'-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)',
+        '[REDACTED-PRIVATE-KEY]',
+        msg,
+        flags=re.DOTALL,
+    )
     # Redact Anthropic API keys first (sk-ant-*) before general sk-* pattern
     msg = re.sub(r'sk-ant-[a-zA-Z0-9-_]{20,}', '[REDACTED-API-KEY]', msg)
     # Redact OpenAI-style API keys (sk-*, pk-*)
@@ -58,8 +66,48 @@ def _sanitize_log_message(msg: str) -> str:
     msg = re.sub(r'pk-[a-zA-Z0-9-_]{20,}', '[REDACTED-API-KEY]', msg)
     # Redact Google API keys (AIza*)
     msg = re.sub(r'AIza[a-zA-Z0-9-_]{30,}', '[REDACTED-API-KEY]', msg)
-    # Redact Bearer tokens (Mistral and others in auth headers/error messages)
-    msg = re.sub(r'Bearer [a-zA-Z0-9-_]{20,}', 'Bearer [REDACTED]', msg)
+    # Redact common authorization header schemes from SDK/tool errors.
+    msg = re.sub(
+        r'Bearer [a-zA-Z0-9._~+/-]{20,}={0,2}',
+        'Bearer [REDACTED]',
+        msg,
+        flags=re.IGNORECASE,
+    )
+    msg = re.sub(
+        r'Basic\s+[A-Za-z0-9+/]{8,}={0,2}',
+        'Basic [REDACTED]',
+        msg,
+        flags=re.IGNORECASE,
+    )
+    # Redact GitHub tokens that may appear in git/gh subprocess output
+    msg = re.sub(r'gh[oprsu]_[a-zA-Z0-9_]{36,}', '[REDACTED-API-KEY]', msg)
+    msg = re.sub(r'github_pat_[a-zA-Z0-9_]{20,}', '[REDACTED-API-KEY]', msg)
+    # Redact AWS access key IDs that commonly appear in tool output/traces
+    msg = re.sub(r'\b(?:AKIA|ASIA)[A-Z0-9]{16}\b', '[REDACTED-API-KEY]', msg)
+    # Redact key/value or JSON-ish assignments such as API_KEY=*** or "token": "***".
+    # Keep these field names intentionally bounded to avoid redacting metadata
+    # such as PASSWORD_POLICY, SECRET_ROTATION_DAYS, MAX_API_KEY_LENGTH, or
+    # pagination cursors like page_token/next_token.
+    secret_field = (
+        r'(?:[A-Za-z0-9_-]*(?:API[_-]?KEY|PASSWORD|'
+        r'SECRET[_-]?KEY|SECRET[_-]?ACCESS[_-]?KEY)'
+        r'|(?:CLIENT|APP|SHARED|API|CONSUMER)[_-]?SECRET'
+        r'|(?:ACCESS|AUTH|BEARER|ID|REFRESH|SESSION|SERVICE)[_-]?TOKEN)'
+    )
+    # Quoted values may be short or contain spaces/commas; the field name marks them sensitive.
+    msg = re.sub(
+        rf'(\b{secret_field}\b["\']?\s*[:=]\s*)(["\'])(.*?)(\2)',
+        r'\1\2[REDACTED-API-KEY]\4',
+        msg,
+        flags=re.IGNORECASE,
+    )
+    # Unquoted values end at common log/JSON delimiters.
+    msg = re.sub(
+        rf'(\b{secret_field}\b\s*[:=]\s*)([^"\'\s,}}]+)',
+        r'\1[REDACTED-API-KEY]',
+        msg,
+        flags=re.IGNORECASE,
+    )
     return msg
 
 

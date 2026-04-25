@@ -325,10 +325,17 @@ def main():
                     print(f"Project '{args.name}' not found.")
                     return
                 editor = os.environ.get("EDITOR", os.environ.get("VISUAL", "vi"))
-                with tempfile.NamedTemporaryFile(suffix=".md", mode="w", delete=False) as tf:
-                    tf.write(p.notes or "")
-                    tf_path = tf.name
+                # Capture tf_path BEFORE tf.write so a failing write (disk
+                # full, etc.) still leaves tf_path set and the finally can
+                # unlink the stub. Keep tempfile creation inside the try so
+                # finally covers the whole create+write+use lifetime.
+                tf_path = None
                 try:
+                    with tempfile.NamedTemporaryFile(
+                        suffix=".md", mode="w", delete=False,
+                    ) as tf:
+                        tf_path = tf.name
+                        tf.write(p.notes or "")
                     result = subprocess.run(shlex.split(editor) + [tf_path])
                     if result.returncode != 0:
                         print("Editor exited with error. Notes unchanged.")
@@ -337,7 +344,8 @@ def main():
                     mgr.update_notes(args.name, new_notes)
                     print("Notes updated.")
                 finally:
-                    Path(tf_path).unlink(missing_ok=True)
+                    if tf_path:
+                        Path(tf_path).unlink(missing_ok=True)
             elif args.text:
                 mgr.update_notes(args.name, args.text)
                 print("Notes updated.")
@@ -522,7 +530,6 @@ def _get_output_summary(run_dir, meta):
 def _print_status(project):
     """Print project status."""
     from core.run import load_run_metadata
-    from .findings_utils import load_findings_from_dir
 
     print(f"Project: {project.name}")
     if project.description:
@@ -785,7 +792,7 @@ def _do_merge(project, merge_type, yes):
             stats = merge_runs(dirs, merged_dir)
         except Exception as e:
             print(f"  {cmd_type}: merge failed — {e}")
-            print(f"  Source runs preserved.")
+            print("  Source runs preserved.")
             continue
 
         try:

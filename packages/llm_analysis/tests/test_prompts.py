@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -78,6 +79,44 @@ class TestAnalysisPrompt:
         prompt = build_analysis_prompt_from_finding(finding)
         assert "sqli" in prompt
         assert "bad code" in prompt
+
+    @patch("core.sage.hooks._get_client")
+    def test_threads_repo_path_to_sage_scoped_domain(self, mock_get_client):
+        # With repo_path present, SAGE is queried and the domain tag is
+        # scoped per-repo (raptor-findings-<key>), not the bare domain.
+        mock_client = MagicMock()
+        mock_client.query.return_value = [
+            {"content": "prior SQLi finding in similar code", "score": 0.9},
+        ]
+        mock_get_client.return_value = mock_client
+
+        prompt = build_analysis_prompt_from_finding({
+            "rule_id": "sqli", "level": "error", "file_path": "db.py",
+            "start_line": 10, "end_line": 12, "message": "tainted input",
+            "repo_path": "/path/to/repo",
+        })
+
+        assert "Historical Context from SAGE" in prompt
+        assert mock_client.query.called
+        domain = mock_client.query.call_args.kwargs["domain_tag"]
+        assert domain.startswith("raptor-findings-")
+        assert domain != "raptor-findings"
+
+    @patch("core.sage.hooks._get_client")
+    def test_no_repo_path_skips_sage_enrichment(self, mock_get_client):
+        # Without repo_path the hook short-circuits (per-repo scoping, #198).
+        # Guards against a future regression where the short-circuit is
+        # accidentally removed and recall leaks across repos.
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        prompt = build_analysis_prompt_from_finding({
+            "rule_id": "sqli", "level": "error", "file_path": "db.py",
+            "start_line": 10, "end_line": 12, "message": "tainted input",
+        })
+
+        assert "Historical Context from SAGE" not in prompt
+        mock_client.query.assert_not_called()
 
 
 class TestAnalysisSchema:

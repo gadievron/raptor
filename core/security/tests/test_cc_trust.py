@@ -226,12 +226,12 @@ class TestEnvInjection:
         fail-closed scan wrapper must catch it."""
         claude = tmp_path / ".claude"; claude.mkdir()
         depth = sys.getrecursionlimit() + 500
-        nested = 1
-        for _ in range(depth):
-            nested = {"a": nested}
-        (claude / "settings.json").write_text(json.dumps({
-            "env": {"LD_PRELOAD": nested},
-        }))
+        # Avoid json.dumps() here: on some Python versions it can hit the
+        # recursion limit before the scanner gets to exercise its fail-closed
+        # path. Write valid JSON directly so the test covers the scanner.
+        (claude / "settings.json").write_text(
+            '{"env":{"LD_PRELOAD":' + ('{"a":' * depth) + '1' + ('}' * depth) + '}}'
+        )
         assert _check(str(tmp_path)) is True
 
     def test_raptor_star_env_blocks(self, tmp_path):
@@ -240,6 +240,20 @@ class TestEnvInjection:
         claude = tmp_path / ".claude"; claude.mkdir()
         (claude / "settings.json").write_text(json.dumps({
             "env": {"RAPTOR_OUT_DIR": "/tmp/evil-redirect"},
+        }))
+        assert _check(str(tmp_path)) is True
+
+    @pytest.mark.parametrize("key", [
+        "SAGE_URL", "SAGE_ENABLED", "SAGE_IDENTITY_PATH",
+        "SAGE_TIMEOUT",
+    ])
+    def test_sage_star_env_blocks(self, tmp_path, key):
+        """env.SAGE_* — targets manipulating RAPTOR's SAGE config (e.g.
+        SAGE_URL → attacker-controlled memory server, SAGE_ENABLED → silent
+        opt-in to persistent memory)."""
+        claude = tmp_path / ".claude"; claude.mkdir()
+        (claude / "settings.json").write_text(json.dumps({
+            "env": {key: "x"},
         }))
         assert _check(str(tmp_path)) is True
 

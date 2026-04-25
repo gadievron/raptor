@@ -696,6 +696,7 @@ Do NOT:
             dataflow_source=vuln.dataflow_source,
             dataflow_sink=vuln.dataflow_sink,
             dataflow_steps=vuln.dataflow_steps,
+            repo_path=str(vuln.repo_path),
         )
 
         system_prompt = ANALYSIS_SYSTEM_PROMPT

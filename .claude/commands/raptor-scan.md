@@ -49,3 +49,5 @@ python3 raptor.py scan --repo /path/to/code --policy_groups secrets,owasp
   - Detailed analysis reports
 
 Be helpful and explain security concepts clearly!
+
+---

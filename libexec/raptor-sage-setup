@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+#
+# raptor-sage-setup — install or uninstall the SAGE persistent-memory sidecar.
+#
+# Install (default):
+#   1. Merge core/sage/mcp-entry.json into ./.mcp.json (create or deep-merge).
+#   2. Merge SAGE_ENABLED=true into .claude/settings.local.json so Claude Code
+#      propagates it to RAPTOR subprocesses (Python pipeline opt-in).
+#   3. docker compose -f docker-compose.sage.yml up -d.
+#   4. Wait for SAGE health.
+#   5. Seed institutional knowledge (core/sage/scripts/seed_sage_knowledge.py).
+#   6. Register RAPTOR agents (core/sage/scripts/register_agents.py).
+#
+# Uninstall (--uninstall):
+#   1. docker compose down (data volumes preserved).
+#   2. Remove the SAGE entry from ./.mcp.json (delete file if it becomes empty).
+#   3. Remove SAGE_ENABLED from .claude/settings.local.json (delete file if empty).
+#
+# SAGE is opt-in — 99% of users never touch this. .mcp.json is .gitignored so
+# users who don't install SAGE have no MCP registration, no connection errors,
+# and no SAGE-related context loaded into Claude Code.
+#
+# Usage:
+#   libexec/raptor-sage-setup              # install
+#   libexec/raptor-sage-setup --uninstall  # tear down
+#
+# Prereqs: jq, docker + docker compose, python3, pip-installed sage-agent-sdk.
+
+set -euo pipefail
+
+usage() {
+    cat >&2 <<'EOF'
+usage: raptor-sage-setup [--uninstall]
+
+  (default)    install SAGE: merge MCP entry, bring up sidecar, seed knowledge.
+  --uninstall  stop SAGE sidecar and remove its MCP entry (data volumes kept).
+
+Prereqs: jq, docker, python3, pip-installed sage-agent-sdk.
+EOF
+    exit 2
+}
+
+MODE=install
+for arg in "$@"; do
+    case "$arg" in
+        --uninstall)
+            MODE=uninstall
+            ;;
+        -h|--help)
+            usage
+            ;;
+        *)
+            echo "raptor-sage-setup: unknown argument: $arg" >&2
+            usage
+            ;;
+    esac
+done
+
+# Resolve RAPTOR_DIR via symlink chain (same pattern as raptor-cc-trust-check).
+SCRIPT="$0"
+while [ -L "$SCRIPT" ]; do
+    DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+    SCRIPT="$(readlink "$SCRIPT")"
+    [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
+done
+RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+
+COMPOSE_FILE="$RAPTOR_DIR/docker-compose.sage.yml"
+TEMPLATE="$RAPTOR_DIR/core/sage/mcp-entry.json"
+MCP="$RAPTOR_DIR/.mcp.json"
+SETTINGS_LOCAL="$RAPTOR_DIR/.claude/settings.local.json"
+SAGE_URL="http://localhost:8090"
+
+need() {
+    command -v "$1" >/dev/null 2>&1 || {
+        echo "raptor-sage-setup: missing prerequisite: $1" >&2
+        exit 3
+    }
+}
+
+check_sdk() {
+    python3 -c "import sage_sdk" 2>/dev/null || {
+        echo "raptor-sage-setup: sage-agent-sdk not importable by python3." >&2
+        echo "  Install first: pip install sage-agent-sdk httpx" >&2
+        exit 3
+    }
+}
+
+merge_mcp_entry() {
+    if [ ! -f "$MCP" ]; then
+        cp "$TEMPLATE" "$MCP"
+        echo "Created $MCP."
+        return
+    fi
+    local tmp
+    tmp=$(mktemp)
+    trap 'rm -f "$tmp"' RETURN
+    jq -s '.[0] * .[1]' "$MCP" "$TEMPLATE" > "$tmp"
+    mv "$tmp" "$MCP"
+    trap - RETURN
+    echo "Merged SAGE entry into $MCP."
+}
+
+remove_mcp_entry() {
+    [ -f "$MCP" ] || return 0
+    local tmp
+    tmp=$(mktemp)
+    trap 'rm -f "$tmp"' RETURN
+    jq 'del(.mcpServers.sage)' "$MCP" > "$tmp"
+    mv "$tmp" "$MCP"
+    trap - RETURN
+    # If the file now contains only an empty mcpServers object (and nothing
+    # else at the top level), delete it — it's ours to clean up.
+    local server_count top_count
+    server_count="$(jq -r '.mcpServers // {} | length' "$MCP")"
+    top_count="$(jq -r 'keys | length' "$MCP")"
+    if [ "$server_count" = "0" ] && [ "$top_count" = "1" ]; then
+        rm -f "$MCP"
+        echo "Removed $MCP (no MCP servers remaining)."
+    else
+        echo "Removed SAGE entry from $MCP."
+    fi
+}
+
+wait_health() {
+    printf "Waiting for SAGE health"
+    # SAGE serves /health (no /v1 prefix) — see docker-compose.sage.yml
+    # healthcheck and core/sage/client.py.
+    for _ in $(seq 1 60); do
+        if curl -sf "$SAGE_URL/health" >/dev/null 2>&1; then
+            printf " — ready.\n"
+            return 0
+        fi
+        sleep 2
+        printf "."
+    done
+    printf " — timeout.\n" >&2
+    echo "SAGE did not become healthy within 120s." >&2
+    echo "Check: docker compose -f $COMPOSE_FILE logs sage" >&2
+    exit 1
+}
+
+enable_sage_env() {
+    # Writes SAGE_ENABLED=true into RAPTOR's .claude/settings.local.json
+    # so Claude Code propagates it into RAPTOR subprocesses. This is the
+    # *Python-pipeline* opt-in (the MCP opt-in is .mcp.json). Without this,
+    # recall_context_for_scan / store_scan_results no-op silently because
+    # core/sage/config.py:SageConfig.enabled defaults to False.
+    #
+    # settings.local.json is per-machine (already covered by `.claude/*.local.json`
+    # in .gitignore). cc_trust skips RAPTOR_DIR so the SAGE_* entry here is
+    # safe from our own trust check.
+    mkdir -p "$(dirname "$SETTINGS_LOCAL")"
+    local fragment='{"env":{"SAGE_ENABLED":"true"}}'
+    local tmp
+    tmp=$(mktemp)
+    trap 'rm -f "$tmp"' RETURN
+    if [ ! -f "$SETTINGS_LOCAL" ]; then
+        echo "$fragment" | jq . > "$SETTINGS_LOCAL"
+        echo "Wrote SAGE_ENABLED=true to $SETTINGS_LOCAL."
+    else
+        jq --argjson frag "$fragment" '. * $frag' "$SETTINGS_LOCAL" > "$tmp"
+        mv "$tmp" "$SETTINGS_LOCAL"
+        echo "Merged SAGE_ENABLED=true into $SETTINGS_LOCAL."
+    fi
+    trap - RETURN
+}
+
+disable_sage_env() {
+    [ -f "$SETTINGS_LOCAL" ] || return 0
+    local tmp
+    tmp=$(mktemp)
+    trap 'rm -f "$tmp"' RETURN
+    # Remove env.SAGE_ENABLED; if env becomes empty, drop env entirely.
+    jq 'if has("env") then (.env |= del(.SAGE_ENABLED)
+           | if .env == {} then del(.env) else . end)
+         else . end' "$SETTINGS_LOCAL" > "$tmp"
+    mv "$tmp" "$SETTINGS_LOCAL"
+    trap - RETURN
+    # If the file is now empty ({}), delete it.
+    if [ "$(jq -r 'length' "$SETTINGS_LOCAL" 2>/dev/null || echo 1)" = "0" ]; then
+        rm -f "$SETTINGS_LOCAL"
+        echo "Removed $SETTINGS_LOCAL (no settings remaining)."
+    else
+        echo "Removed SAGE_ENABLED from $SETTINGS_LOCAL."
+    fi
+}
+
+install_sage() {
+    need jq
+    need docker
+    need python3
+    need curl
+    check_sdk
+    merge_mcp_entry
+    enable_sage_env
+    docker compose -f "$COMPOSE_FILE" up -d
+    wait_health
+    python3 "$RAPTOR_DIR/core/sage/scripts/seed_sage_knowledge.py" --sage-url "$SAGE_URL"
+    python3 "$RAPTOR_DIR/core/sage/scripts/register_agents.py" --sage-url "$SAGE_URL"
+    echo
+    echo "SAGE is up. Restart Claude Code so it picks up the MCP registration."
+}
+
+uninstall_sage() {
+    need jq
+    need docker
+    docker compose -f "$COMPOSE_FILE" down
+    remove_mcp_entry
+    disable_sage_env
+    echo "SAGE sidecar stopped. Data volumes preserved."
+    echo "To wipe volumes: docker compose -f $COMPOSE_FILE down -v"
+}
+
+case "$MODE" in
+    install)   install_sage ;;
+    uninstall) uninstall_sage ;;
+esac

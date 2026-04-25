@@ -91,3 +91,5 @@ and add a 1-2 sentence summary paragraph after the `# RAPTOR Agentic Security Re
 header — e.g., "Scanned 26 findings across 10 C files. 8 are exploitable buffer overflows
 and command injections; 2 were ruled out as false positives." Use only facts from the
 report data. The report should stand on its own without this paragraph.
+
+---

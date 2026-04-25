@@ -133,3 +133,4 @@ All JSON outputs write to `$WORKDIR` (resolved by `raptor-run-lifecycle start`, 
 | `diagrams.md` | `--map`, `--trace` | Mermaid diagrams (auto-generated) |
 | *(none)* | `--teach` | Inline explanation — no file written |
 
+---

@@ -48,3 +48,5 @@ python3 raptor.py web --url https://example.com --auth-token "Bearer xyz"
 - Results are saved to `out/web_scan_<timestamp>/`
 
 Be ethical and responsible with security testing!
+
+---
