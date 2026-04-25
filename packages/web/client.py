@@ -13,9 +13,11 @@ Handles HTTP requests with safety features:
 import time
 from typing import Dict, List, Optional, Any
 import requests
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urljoin
 
+from core.config import RaptorConfig
 from core.logging import get_logger
+from core.security.redaction import redact_secrets
 
 logger = get_logger()
 
@@ -23,12 +25,14 @@ logger = get_logger()
 class WebClient:
     """Secure HTTP client for web application testing."""
 
-    def __init__(self, base_url: str, timeout: int = 30, rate_limit: float = 0.5, verify_ssl: bool = True):
+    def __init__(self, base_url: str, timeout: int = 30, rate_limit: float = 0.5,
+                 verify_ssl: bool = True, reveal_secrets: Optional[bool] = None):
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
         self.rate_limit = rate_limit  # Seconds between requests
         self.last_request_time = 0.0
         self.verify_ssl = verify_ssl
+        self.reveal_secrets = RaptorConfig.reveal_secrets_enabled() if reveal_secrets is None else reveal_secrets
 
         # Session for cookie management
         self.session = requests.Session()
@@ -51,16 +55,17 @@ class WebClient:
     def _log_request(self, method: str, url: str, response: requests.Response,
                      duration: float) -> None:
         """Log request details."""
+        log_url = redact_secrets(url, reveal_secrets=self.reveal_secrets)
         self.request_history.append({
             'method': method,
-            'url': url,
+            'url': log_url,
             'status_code': response.status_code,
             'duration': duration,
             'content_length': len(response.content),
             'timestamp': time.time(),
         })
 
-        logger.debug(f"{method} {url} -> {response.status_code} ({duration:.2f}s)")
+        logger.debug(f"{method} {log_url} -> {response.status_code} ({duration:.2f}s)")
 
     def get(self, path: str, params: Optional[Dict] = None,
             headers: Optional[Dict] = None) -> requests.Response:
