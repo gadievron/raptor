@@ -21,7 +21,12 @@ export and doing it right costs nothing.
 """
 
 import os
-import subprocess
+import tempfile
+from core.sandbox import run as _sandbox_run
+# GDB needs ptrace(), which seccomp blocks in the `full` profile. Use
+# profile='debug' — same filesystem/network isolation as full, but ptrace
+# is permitted so gdb can trace its target. Landlock is engaged with
+# target=output=<tempdir holding the gdb script + binary>.
 from pathlib import Path
 from typing import List, Optional
 
@@ -72,23 +77,35 @@ class GDBDebugger:
             script_file.unlink(missing_ok=True)
             raise
 
+        # Landlock needs a directory to engage — use the binary's parent
+        # and the gdb-script tempdir. Both are the same /tmp in practice
+        # when the binary was also placed in /tmp; we pass both for
+        # coverage. Landlock allows reads everywhere (gcc includes etc.),
+        # writes only to these.
+        binary_dir = str(self.binary.parent.resolve())
+        script_dir = str(script_file.parent.resolve())
+
         # Build GDB command
         cmd = ["gdb", "-batch", "-x", str(script_file), str(self.binary)]
 
-        # Run with input redirection if provided
+        # Run with input redirection if provided.
+        # profile='debug' permits ptrace while keeping all other seccomp
+        # blocks, namespace net/pid isolation, and Landlock active.
         try:
             if input_file:
                 with open(input_file, "rb") as f:
-                    result = subprocess.run(
-                        cmd,
+                    result = _sandbox_run(
+                        cmd, profile="debug",
+                        target=binary_dir, output=script_dir,
                         stdin=f,
                         capture_output=True,
                         text=True,
                         timeout=timeout,
                     )
             else:
-                result = subprocess.run(
-                    cmd,
+                result = _sandbox_run(
+                    cmd, profile="debug",
+                    target=binary_dir, output=script_dir,
                     capture_output=True,
                     text=True,
                     timeout=timeout,

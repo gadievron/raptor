@@ -815,6 +815,7 @@ RAPTOR is open source and welcomes contributions. Areas where help is needed:
 - **[DATAFLOW_VALIDATION_SUMMARY.md](DATAFLOW_VALIDATION_SUMMARY.md)**: Deep dive into dataflow validation (Phase 4)
 - **[crash-analysis.md](crash-analysis.md)**: Autonomous crash root-cause analysis guide
 - **[exploit-feasibility.md](exploit-feasibility.md)**: Exploit feasibility analysis guide
+- **[sandbox.md](sandbox.md)**: Subprocess sandbox — isolation layers, egress proxy, read-restriction, troubleshooting
 - **Test Script**: `test_dataflow_analysis.py` - Demonstrates dataflow-aware analysis
 
 

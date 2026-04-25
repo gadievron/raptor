@@ -58,7 +58,10 @@ def main() -> None:
     ap.add_argument("--memory-file", help="Path to memory file for learning persistence (default: ~/.raptor/fuzzing_memory.json)")
     ap.add_argument("--goal", help="High-level goal to achieve (e.g., 'find heap overflow', 'target parser code')")
 
+    from core.sandbox import add_cli_args, apply_cli_args
+    add_cli_args(ap)
     args = ap.parse_args()
+    apply_cli_args(args)
 
     binary_path = Path(args.binary).resolve()
     if not binary_path.exists():

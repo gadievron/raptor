@@ -26,7 +26,8 @@ def read_random_quote() -> str:
 
 
 def format_banner(logo, quote, tool_results, tool_warnings, llm_lines,
-                  llm_warnings, env_parts, env_warnings, project_line=None):
+                  llm_warnings, env_parts, env_warnings, project_line=None,
+                  lang_line=None):
     """Format the startup banner from gathered data.
 
     Args:
@@ -39,6 +40,7 @@ def format_banner(logo, quote, tool_results, tool_warnings, llm_lines,
         env_parts: List of short env status strings.
         env_warnings: List of warning strings from env checks.
         project_line: One-line project status, or None.
+        lang_line: Pre-formatted language support line, or None.
 
     Returns:
         Formatted banner string.
@@ -55,6 +57,10 @@ def format_banner(logo, quote, tool_results, tool_warnings, llm_lines,
 
     # Env
     lines.append(f"   env: {'  '.join(env_parts)}")
+
+    # Language support
+    if lang_line:
+        lines.append(lang_line)
 
     # LLM
     lines.extend(llm_lines)

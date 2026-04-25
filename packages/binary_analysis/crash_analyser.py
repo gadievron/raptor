@@ -7,6 +7,12 @@ This is so much of a WIP, it's not even funny. However, you can see what we are 
 """
 
 import subprocess
+from core.sandbox import run as _sandbox_run, run_trusted as _run_trusted
+# _run_trusted: read-only tools (file, readelf, nm, strings, etc.) — no namespace overhead.
+# Crash-analysis work runs a debugger or ASAN-instrumented binary:
+# - GDB / LLDB: need ptrace → profile='debug' (keeps net/Landlock/most seccomp).
+# - ASAN binary: no ptrace needed → default full sandbox via _sandbox_run.
+# Each call site specifies target+output for Landlock engagement.
 import os
 import hashlib
 import tempfile
@@ -77,7 +83,7 @@ class CrashAnalyser:
         
         # Check binary type first
         try:
-            result = subprocess.run(
+            result = _run_trusted(
                 ["file", str(self.binary)],
                 capture_output=True,
                 text=True,
@@ -91,7 +97,7 @@ class CrashAnalyser:
         if system == "darwin" or "mach-o" in binary_type:
             logger.info(f"Detected macOS/Mach-O binary, trying LLDB. Binary type: {binary_type[:100]}...")
             try:
-                result = subprocess.run(["lldb", "--version"], capture_output=True, text=True, timeout=5)
+                result = _run_trusted(["lldb", "--version"], capture_output=True, text=True, timeout=5)
                 logger.info(f"LLDB version check result: {result.returncode}, stdout: {result.stdout[:100]}, stderr: {result.stderr[:100]}")
                 if result.returncode == 0:
                     logger.info("Using LLDB debugger for macOS/Mach-O binary")
@@ -102,7 +108,7 @@ class CrashAnalyser:
         
         # Default to gdb for Linux/Windows or if LLDB fails
         try:
-            result = subprocess.run(["gdb", "--version"], capture_output=True, text=True, timeout=2)
+            result = _run_trusted(["gdb", "--version"], capture_output=True, text=True, timeout=2)
             if result.returncode == 0:
                 logger.info("Using GDB debugger")
                 return "gdb"
@@ -125,7 +131,7 @@ class CrashAnalyser:
         available = {}
         for tool, description in tools.items():
             try:
-                result = subprocess.run(
+                result = _run_trusted(
                     [tool, "--version"],
                     capture_output=True,
                     text=True,
@@ -156,7 +162,7 @@ class CrashAnalyser:
         
         try:
             # Use nm to get symbol table
-            result = subprocess.run(
+            result = _run_trusted(
                 ["nm", "-C", str(self.binary)],  # -C demangles C++ symbols
                 capture_output=True,
                 text=True,
@@ -217,7 +223,7 @@ class CrashAnalyser:
             return "unknown", "unknown"
             
         try:
-            result = subprocess.run(
+            result = _run_trusted(
                 ["addr2line", "-f", "-C", "-e", str(self.binary), address],
                 capture_output=True,
                 text=True,
@@ -496,10 +502,13 @@ class CrashAnalyser:
                 cmd_f.write("\n".join(gdb_commands))
 
             # Run GDB with input file via stdin (not in GDB script — avoids path injection)
+            # profile='debug' permits ptrace; all other seccomp blocks remain.
             cmd = ["gdb", "-batch", "-x", str(cmd_file), str(self.binary)]
+            binary_dir = str(self.binary.parent.resolve())
             with open(input_file, "rb") as f:
-                result = subprocess.run(
-                    cmd,
+                result = _sandbox_run(
+                    cmd, profile="debug",
+                    target=binary_dir, output=binary_dir,
                     stdin=f,
                     capture_output=True,
                     text=True,
@@ -564,11 +573,14 @@ class CrashAnalyser:
                 cmd_file = Path(cmd_f.name)
                 cmd_f.write("\n".join(lldb_commands))
 
-            # Run LLDB with longer timeout — input file via stdin (not in script)
+            # Run LLDB with longer timeout — debugger needs ptrace. 
             try:
+                binary_dir = str(self.binary.parent.resolve())
                 with open(input_file, "rb") as stdin_f:
-                    result = subprocess.run(
+                    result = _sandbox_run(
                         ["lldb", "-s", str(cmd_file), str(self.binary)],
+                        profile="debug",
+                        target=binary_dir, output=binary_dir,
                         stdin=stdin_f,
                         capture_output=True,
                         text=True,
@@ -635,8 +647,12 @@ class CrashAnalyser:
                 cmd_file = Path(cmd_f.name)
                 cmd_f.write("\n".join(lldb_commands))
 
-            result = subprocess.run(
+            # LLDB fallback — also a debugger, needs ptrace (profile='debug').
+            binary_dir = str(self.binary.parent.resolve())
+            result = _sandbox_run(
                 ["lldb", "-b", "-s", str(cmd_file), str(self.binary)],
+                profile="debug",
+                target=binary_dir, output=binary_dir,
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -900,7 +916,7 @@ class CrashAnalyser:
 
         try:
             # Use objdump for simple disassembly with more context
-            result = subprocess.run(
+            result = _run_trusted(
                 ["objdump", "-d", "--start-address=" + address, "-C", str(self.binary)],  # -C demangles
                 capture_output=True,
                 text=True,
@@ -940,7 +956,7 @@ class CrashAnalyser:
         if self._available_tools.get("file", False):
             try:
                 # Get file type
-                result = subprocess.run(
+                result = _run_trusted(
                     ["file", str(self.binary)],
                     capture_output=True,
                     text=True,
@@ -957,7 +973,7 @@ class CrashAnalyser:
         if self._available_tools.get("readelf", False):
             try:
                 # Get ELF header info (will work for ELF binaries, may fail for Mach-O)
-                result = subprocess.run(
+                result = _run_trusted(
                     ["readelf", "-h", str(self.binary)],
                     capture_output=True,
                     text=True,
@@ -979,7 +995,7 @@ class CrashAnalyser:
         
         try:
             # Check ASLR status
-            result = subprocess.run(
+            result = _run_trusted(
                 ["sysctl", "kern.aslr"],
                 capture_output=True,
                 text=True,
@@ -989,7 +1005,7 @@ class CrashAnalyser:
                 info["aslr_enabled"] = "1" in result.stdout
             else:
                 # Try Linux way
-                result = subprocess.run(
+                result = _run_trusted(
                     ["cat", "/proc/sys/kernel/randomize_va_space"],
                     capture_output=True,
                     text=True,
@@ -1004,7 +1020,7 @@ class CrashAnalyser:
             
         # Check if binary has stack canaries
         try:
-            result = subprocess.run(
+            result = _run_trusted(
                 ["objdump", "-d", str(self.binary)],
                 capture_output=True,
                 text=True,
@@ -1019,7 +1035,7 @@ class CrashAnalyser:
             
         # Check for NX/DEP
         try:
-            result = subprocess.run(
+            result = _run_trusted(
                 ["otool", "-hv", str(self.binary)],  # macOS
                 capture_output=True,
                 text=True,
@@ -1032,7 +1048,7 @@ class CrashAnalyser:
         except (OSError, subprocess.SubprocessError):
             try:
                 # Try Linux way
-                result = subprocess.run(
+                result = _run_trusted(
                     ["readelf", "-l", str(self.binary)],
                     capture_output=True,
                     text=True,
@@ -1176,7 +1192,7 @@ class CrashAnalyser:
         """Detect if binary was compiled with AddressSanitizer."""
         try:
             # Check for ASan symbols
-            result = subprocess.run(
+            result = _run_trusted(
                 ["nm", str(self.binary)],
                 capture_output=True,
                 text=True,
@@ -1191,7 +1207,7 @@ class CrashAnalyser:
                     return True
                     
             # Check for ASan runtime library dependencies
-            result = subprocess.run(
+            result = _run_trusted(
                 ["otool", "-L", str(self.binary)],
                 capture_output=True,
                 text=True,
@@ -1210,9 +1226,15 @@ class CrashAnalyser:
         logger.info("Running ASan analysis for enhanced diagnostics")
         
         try:
-            # Run the binary with the crash input
-            result = subprocess.run(
+            # Run the binary with the crash input — full sandbox. ASAN's
+            # own diagnostics don't need ptrace, so the default `full`
+            # profile (seccomp incl. ptrace block, Landlock, net block)
+            # is appropriate.
+            binary_dir = str(self.binary.parent.resolve())
+            result = _sandbox_run(
                 [str(self.binary), str(input_file)],
+                block_network=True,
+                target=binary_dir, output=binary_dir,
                 capture_output=True,
                 text=True,
                 timeout=30,

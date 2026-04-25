@@ -46,7 +46,7 @@ def check_tools() -> tuple[list, list, set]:
     for group_name, group in RaptorConfig.TOOL_GROUPS.items():
         members = sorted(n for n, d in RaptorConfig.TOOL_DEPS.items() if d.get("group") == group_name)
         if not any(m in available for m in members):
-            warnings.append(f"{group['affects']} unavailable \u2014 no scanner ({' or '.join(members)})")
+            warnings.append(f"{group['affects']} unavailable — no scanner ({' or '.join(members)})")
             for cmd in group["affects"].split(", "):
                 unavailable_features.add(cmd.strip())
 
@@ -57,7 +57,7 @@ def check_tools() -> tuple[list, list, set]:
             continue
         severity = dep.get("severity", "degrades")
         label = "unavailable" if severity == "required" else "limited"
-        warnings.append(f"{dep['affects']} {label} \u2014 {name} not found")
+        warnings.append(f"{dep['affects']} {label} — {name} not found")
         if severity == "required":
             for cmd in dep["affects"].split(", "):
                 unavailable_features.add(cmd.strip())
@@ -196,7 +196,7 @@ def check_llm() -> tuple[list, list]:
             lines.append("   llm: no external LLM configured")
 
         if shutil.which("claude"):
-            lines.append("        claude code \u2713")
+            lines.append("        claude code ✓")
 
     except Exception as e:
         lines.append("   llm: detection error")
@@ -276,9 +276,13 @@ def check_env(unavailable_features: set) -> tuple[list, list]:
     parts = []
     warnings = []
 
+    # Discourage running as root — RAPTOR executes untrusted code
+    if os.getuid() == 0:
+        warnings.append("Running as root is strongly discouraged — RAPTOR executes untrusted build commands, compiles PoCs, and runs fuzzing targets")
+
     out_dir = RaptorConfig.get_out_dir()
     out_ok = out_dir.exists() and os.access(out_dir, os.W_OK)
-    parts.append("out/ \u2713" if out_ok else "out/ \u2717")
+    parts.append("out/ ✓" if out_ok else "out/ ✗")
     if not out_ok:
         warnings.append("out/ directory not writable")
 
@@ -288,7 +292,7 @@ def check_env(unavailable_features: set) -> tuple[list, list]:
         free_gb = free_bytes / (1024 ** 3)
         parts.append(f"disk {free_gb:.0f} GB free" if free_gb >= 1 else f"disk {free_bytes / (1024**2):.0f} MB free")
         if free_gb < 5 and "/fuzz" not in unavailable_features:
-            warnings.append(f"Low disk space ({free_gb:.1f} GB) \u2014 fuzzing may fail")
+            warnings.append(f"Low disk space ({free_gb:.1f} GB) — fuzzing may fail")
     except OSError:
         pass
 
@@ -298,20 +302,76 @@ def check_env(unavailable_features: set) -> tuple[list, list]:
         parts.append(f"RAPTOR_CONFIG={os.getenv('RAPTOR_CONFIG')}")
 
     if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
-        warnings.append("/oss-forensics unavailable \u2014 BigQuery not configured")
+        warnings.append("/oss-forensics unavailable — BigQuery not configured")
 
-    # Tree-sitter inventory enrichment
+    # Subprocess sandboxing. Namespaces and Landlock are independent — a
+    # system without user namespaces (e.g. restricted containers) can
+    # still have Landlock, which protects the filesystem side. Report
+    # whatever is actually available rather than an all-or-nothing flag.
+    try:
+        from core.sandbox import (
+            check_net_available, check_mount_available, check_landlock_available,
+            check_seccomp_available,
+        )
+        net_ok = check_net_available()
+        mount_ok = check_mount_available() if net_ok else False
+        landlock_ok = check_landlock_available()
+        seccomp_ok = check_seccomp_available()
+        features = []
+        if net_ok:
+            features.append("net")
+        if mount_ok:
+            features.append("mount")
+        if landlock_ok:
+            features.append("landlock")
+        if seccomp_ok:
+            features.append("seccomp")
+        if features:
+            parts.append(f"sandbox ✓ ({'+'.join(features)})")
+            # Partial-sandbox warnings — name what's missing so users can
+            # decide whether the gap matters for their use case. (The
+            # banner's feature list already shows what IS active.)
+            if not net_ok:
+                warnings.append(
+                    "Sandbox network isolation missing — user namespaces "
+                    "not supported on this kernel. Subprocesses can still "
+                    "reach the network unless the caller passes "
+                    "allowed_tcp_ports to sandbox()."
+                )
+            elif not landlock_ok:
+                warnings.append(
+                    "Sandbox Landlock filesystem restriction missing — "
+                    "kernel does not support Landlock (needs 5.13+). "
+                    "Network isolation still active; writes outside the "
+                    "output dir are NOT restricted."
+                )
+        else:
+            parts.append("sandbox ✗")
+            warnings.append(
+                "Subprocess sandboxing unavailable — neither user "
+                "namespaces nor Landlock are supported on this kernel"
+            )
+    except Exception:
+        # Never let a sandbox-probe bug kill startup, but leave a trail
+        # at DEBUG so the bug is findable instead of invisible.
+        logging.getLogger("core.startup").debug(
+            "sandbox availability probe failed", exc_info=True
+        )
+
+    return parts, warnings
+
+
+def check_lang() -> str | None:
+    """Check language support (tree-sitter). Returns formatted line or None."""
     try:
         from core.inventory.extractors import _get_ts_languages
         ts_langs = _get_ts_languages()
         if ts_langs:
-            parts.append(f"tree-sitter \u2713 ({', '.join(ts_langs)})")
+            return f"  lang: tree-sitter ✓ ({', '.join(ts_langs)})"
         else:
-            parts.append("tree-sitter \u2717")
+            return f"  lang: tree-sitter ✗"
     except Exception:
-        pass
-
-    return parts, warnings
+        return None
 
 
 def check_active_project() -> str | None:
@@ -328,8 +388,8 @@ def check_active_project() -> str | None:
         proj_target = data.get("target", "")
         auto_marker = PROJECTS_DIR / ".auto"
         if auto_marker.exists() and auto_marker.read_text().strip() == name:
-            return f"Auto-activated project: {name} ({proj_target}) \u2014 `/project none` to clear"
-        return f"Project: {name} ({proj_target}) \u2014 `/project none` to clear"
+            return f"Auto-activated project: {name} ({proj_target}) — `/project none` to clear"
+        return f"Project: {name} ({proj_target}) — `/project none` to clear"
     except Exception:
         return None
 
@@ -377,6 +437,7 @@ def main():
         tool_results, tool_warnings, unavailable = check_tools()
         llm_lines, llm_warnings = check_llm()
         env_parts, env_warnings = check_env(unavailable)
+        lang_line = check_lang()
         project_line = check_active_project()
 
         logging.disable(logging.NOTSET)
@@ -384,7 +445,7 @@ def main():
         output = format_banner(
             logo, quote, tool_results, tool_warnings,
             llm_lines, llm_warnings, env_parts, env_warnings,
-            project_line,
+            project_line, lang_line,
         )
     except Exception:
         output = f"{logo}\n\nraptor:~$ {quote}"

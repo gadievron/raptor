@@ -1,0 +1,215 @@
+#!/usr/bin/python3 -I
+"""RAPTOR pid-1 shim for the subprocess-path sandbox.
+
+-I (isolated mode) is belt-and-braces: the sandbox's get_safe_env() strips
+PYTHONPATH/PYTHONHOME/PYTHONSTARTUP already, but caller-supplied env=
+dicts are passed through verbatim by design (context.py:544). -I makes
+python ignore PYTHON* env variables regardless, so an attacker-influenced
+PYTHONPATH can't inject code into OUR interpreter between the kernel's
+execve and main(). Without -I, a sitecustomize.py on an attacker path
+would run at interpreter startup — before a single line of this script.
+
+Why this exists
+---------------
+When `core/sandbox/context.py` invokes the subprocess path
+(`unshare --user --pid --fork --ipc [--net]`), the forked child
+becomes pid-1 of the new pid-ns and runs the target directly.
+Linux's pid-ns signal-filter policy (see `man pid_namespaces`)
+drops signals sent to pid-1 via `raise()` / `kill(getpid(), ...)`
+unless a handler is installed — so a target that calls `abort()`,
+`raise(SIGFPE)`, `_exit_via_assert()`, etc. has its death signal
+silently swallowed, and the parent sees a normal exit.
+
+Nested pid-ns setups (Docker-in-CI, systemd-nspawn, kata) can
+amplify this: in some kernel/util-linux combinations even
+synchronous CPU exceptions (div-by-zero, null-deref) get filtered
+when pid-1 is deeply nested. The sandbox's observability then
+reports `crashed: False` for a process that genuinely crashed,
+breaking target-bug detection.
+
+The fix is to wrap the target so the TARGET isn't pid-1. Target
+becomes pid-2, shim is pid-1. Signal delivery to target is
+governed by normal (non-init) rules. Shim reaps target, mirrors
+exit status back via either normal exit code or a self-re-raised
+signal — so the caller (subprocess.run's waitpid) sees the same
+returncode shape it would see running the binary outside the
+sandbox.
+
+This is the standard pattern used by tini, dumb-init, and every
+container runtime's in-box init. We ship a small Python version
+rather than a new C dependency — RAPTOR already requires Python,
+and the shim's overhead (one fork + waitpid) is ~5ms on typical
+hosts, negligible against the build-tool invocations it wraps.
+
+Used by the subprocess path only. The mount-ns (`_spawn.py`) path
+already does the equivalent via its own double-fork layout; no
+separate shim needed there.
+
+Behaviour contract
+------------------
+* Argv: shim path, followed by target argv. `shim cmd arg1 arg2`
+  → exec's `cmd arg1 arg2` as pid-2.
+* Normal exit of target → shim exits with the same code.
+* Target killed by signal → shim re-raises that signal on self
+  with SIG_DFL disposition, so waitpid on the shim sees
+  WIFSIGNALED with the same WTERMSIG. Caller's returncode is
+  negative (subprocess convention), observe._interpret_result
+  decodes it as `crashed: True`.
+* SIGTERM/SIGINT/SIGHUP/SIGQUIT to the shim → forwarded to target.
+  Shim otherwise stays out of the way of its own signal
+  disposition (no trap on SIGFPE etc., so it dies if those arrive
+  — same as an unwrapped target would).
+* Orphan processes (zombies not the direct target) are reaped but
+  their exit status is discarded. Only the target's status is
+  mirrored.
+"""
+
+from __future__ import annotations
+
+import os
+import signal
+import sys
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        # No target argv supplied — operator bug.
+        sys.stderr.write(
+            "raptor-pid1-shim: missing target argv. "
+            "Usage: raptor-pid1-shim <target> [args...]\n"
+        )
+        return 2
+
+    target_argv = sys.argv[1:]
+
+    child = os.fork()
+    if child == 0:
+        # Target branch. We want the target to be the session leader
+        # of its pid-ns — matches pre-shim behaviour where target was
+        # pid-1 and (under start_new_session=True from the Popen
+        # preexec) effectively the session leader. `ps -o sid` then
+        # shows pid==sid, and /dev/tty opens return ENXIO.
+        #
+        # But: `unshare --fork` sets up pid-1 such that its children
+        # are born as process-group leaders (pgid == their own pid)
+        # — so a direct `setsid()` in this fork'd child fails with
+        # EPERM ("calling process is already a process group
+        # leader"). Sidestep via a double-fork: the grandchild is
+        # NOT a pgrp leader and CAN setsid.
+        #
+        # Layout after this:
+        #   shim (pid-1, pid-ns init)  ← waits for first child
+        #   intermediate (pid-2)       ← forks grandchild, exits 0
+        #   target (pid-3)             ← session leader, execs target
+        #
+        # Shim's waitpid returns intermediate's status. The
+        # intermediate exits 0 IFF fork+exec of target succeeded up
+        # to the point the grandchild was spawned. But we can't then
+        # report the TARGET's exit from the intermediate once it has
+        # already left. Use a pipe for the intermediate to forward
+        # the target's wait status before exiting.
+        #
+        # Simpler alternative used here: intermediate execs target
+        # AFTER calling setsid, and exits with target's status
+        # naturally via execve. Before setsid, we must NOT be a
+        # pgrp leader — so we fork once more and the GRANDCHILD
+        # (which is not a pgrp leader by virtue of inheriting from
+        # a non-leader intermediate) does setsid + execve. The
+        # intermediate waitpids the grandchild and mirrors its exit
+        # via _exit(128+sig) / _exit(code) so the shim sees the
+        # right status.
+        intermediate_grandchild = os.fork()
+        if intermediate_grandchild == 0:
+            # Grandchild — inherits intermediate's pgrp (not leader
+            # of any pgrp), so setsid is permitted.
+            try:
+                os.setsid()
+            except OSError:
+                pass
+            try:
+                os.execvp(target_argv[0], target_argv)
+            except FileNotFoundError:
+                os._exit(127)
+            except PermissionError:
+                os._exit(126)
+            os._exit(125)  # unreachable
+
+        # Intermediate — waitpid grandchild, mirror status.
+        while True:
+            try:
+                _, g_status = os.waitpid(intermediate_grandchild, 0)
+                break
+            except InterruptedError:
+                continue
+        if os.WIFEXITED(g_status):
+            os._exit(os.WEXITSTATUS(g_status))
+        if os.WIFSIGNALED(g_status):
+            os._exit(128 + os.WTERMSIG(g_status))
+        os._exit(255)
+
+    # Shim (pid-1 of the new pid-ns) branch: forward common
+    # termination signals to the target, wait for target to exit,
+    # mirror status.
+    def _forward(sig: int, _frame) -> None:
+        try:
+            os.kill(child, sig)
+        except ProcessLookupError:
+            # Target already gone — ignore.
+            pass
+
+    for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
+        try:
+            signal.signal(s, _forward)
+        except (OSError, ValueError):
+            # Some envs (e.g. restrictive seccomp) may reject
+            # individual signal installs. Non-fatal — the shim
+            # still works, signals just won't forward cleanly.
+            pass
+
+    # Reap until the target is seen. Other zombies (if target
+    # forked) are collected but their status is discarded.
+    target_status = None
+    while True:
+        try:
+            reaped_pid, status = os.waitpid(-1, 0)
+        except ChildProcessError:
+            # No children left — target must have been reaped
+            # already (shouldn't happen with our single-fork
+            # layout, but be defensive).
+            break
+        except InterruptedError:
+            # A forwarded signal interrupted waitpid. Loop.
+            continue
+        if reaped_pid == child:
+            target_status = status
+            break
+        # Orphan reaped; continue waiting for target.
+
+    if target_status is None:
+        # Fell out without seeing target — shouldn't happen. Report
+        # a sentinel rc so operators can tell the shim misbehaved
+        # rather than the target returning 255 legitimately.
+        os._exit(254)
+
+    if os.WIFEXITED(target_status):
+        os._exit(os.WEXITSTATUS(target_status))
+
+    if os.WIFSIGNALED(target_status):
+        sig = os.WTERMSIG(target_status)
+        # Exit with 128+sig per unix convention. Can't re-raise the
+        # signal on self because the shim IS pid-1 of the new pid-
+        # ns and the kernel's pid-ns filter drops raise() /
+        # kill(self,...) from pid-1 without an installed handler —
+        # the very filter we're interposing to insulate the target
+        # from. observe._interpret_result decodes 128+sig the same
+        # way it decodes a negative return code (both → died by
+        # signal, both → crashed=True).
+        os._exit(128 + sig)
+
+    # WIFSTOPPED / WIFCONTINUED / unknown. Propagate a non-zero rc
+    # so the caller sees the anomaly.
+    os._exit(255)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

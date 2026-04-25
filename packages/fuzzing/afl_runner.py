@@ -8,6 +8,12 @@ Orchestrates AFL++ fuzzing campaigns with parallel workers.
 import os
 import shutil
 import subprocess
+
+from core.sandbox import run as _sandbox_run, run_trusted as _run_trusted
+# _run_trusted: read-only tools (strings, --help checks) — no namespace overhead.
+# Full sandbox for afl-fuzz / afl-showmap (execute untrusted binary): network
+# block + Landlock (target=output=self.output_dir — AFL reads and writes the
+# same corpus/queue/crash directories).
 import time
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -68,7 +74,7 @@ class AFLRunner:
         """Validate that AFL command works with basic arguments."""
         try:
             # Test AFL with --help flag (should exit cleanly)
-            result = subprocess.run(
+            result = _run_trusted(
                 [self.afl_fuzz, "--help"],
                 capture_output=True,
                 text=True,
@@ -106,7 +112,7 @@ class AFLRunner:
     def check_binary_instrumentation(self) -> bool:
         """Check if binary is instrumented for AFL."""
         # Try to detect AFL instrumentation
-        result = subprocess.run(
+        result = _run_trusted(
             ["strings", str(self.binary)],
             capture_output=True,
             text=True,
@@ -133,7 +139,7 @@ class AFLRunner:
             
             # Try to run afl-fuzz with a simple help command to check shared memory
             try:
-                result = subprocess.run(
+                result = _run_trusted(
                     ["afl-fuzz", "--help"],
                     capture_output=True,
                     text=True,
@@ -160,7 +166,7 @@ class AFLRunner:
 
     def check_binary_sanitizers(self) -> bool:
         """Check if binary is compiled with sanitizers like ASAN."""
-        result = subprocess.run(
+        result = _run_trusted(
             ["strings", str(self.binary)],
             capture_output=True,
             text=True,
@@ -282,6 +288,8 @@ class AFLRunner:
             afl_env.setdefault("AFL_SKIP_CPUFREQ", "1")
             afl_env.setdefault("AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES", "1")
 
+            # Intentionally bare Popen — AFL fuzz daemon is long-running and
+            # needs streaming output. Cannot use sandbox_run (blocks until exit).
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -534,12 +542,14 @@ class AFLRunner:
             if self.input_mode == "file" and test_input:
                 env['AFL_INPUT_FILE'] = str(test_input)
 
-            result = subprocess.run(
+            result = _sandbox_run(
                 showmap_cmd,
+                block_network=True,
+                target=str(self.output_dir),
+                output=str(self.output_dir),
                 capture_output=True,
                 text=True,
                 stdin=stdin_input,
-                close_fds=True,
                 cwd=str(self.output_dir),
                 env=env,
             )
