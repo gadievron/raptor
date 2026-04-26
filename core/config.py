@@ -107,7 +107,7 @@ class RaptorConfig:
     ENV_OUT_DIR = "RAPTOR_OUT_DIR"
     ENV_JOB_ID = "RAPTOR_JOB_ID"
     ENV_LLM_CMD = "RAPTOR_LLM_CMD"
-    ENV_REVEAL_SECRETS = "RAPTOR_REVEAL_SECRETS"
+    ENV_REVEAL_TARGET_SECRETS = "RAPTOR_REVEAL_TARGET_SECRETS"
 
     # LLM Provider Configuration
     OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
@@ -177,10 +177,10 @@ class RaptorConfig:
         """Return whether operators opted into retaining secrets in artifacts.
 
         Defaults to False so logs/findings are safe to share. Operators can set
-        RAPTOR_REVEAL_SECRETS=1/true/yes/on for local debugging when exact
+        RAPTOR_REVEAL_TARGET_SECRETS=1/true/yes/on for local debugging when exact
         credentials are needed in request history or findings.
         """
-        value = os.environ.get(RaptorConfig.ENV_REVEAL_SECRETS, "")
+        value = os.environ.get(RaptorConfig.ENV_REVEAL_TARGET_SECRETS, "")
         return value.strip().lower() in {"1", "true", "yes", "on"}
 
     @staticmethod

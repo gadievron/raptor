@@ -122,7 +122,7 @@ Examples:
     parser.add_argument(
         "--reveal-secrets",
         action="store_true",
-        help="Preserve secrets in web artifacts for local debugging; defaults to redaction unless RAPTOR_REVEAL_SECRETS is enabled",
+        help="Preserve secrets in web artifacts for local debugging; defaults to redaction unless RAPTOR_REVEAL_TARGET_SECRETS is enabled",
     )
 
     args = parser.parse_args()
@@ -162,7 +162,13 @@ Examples:
 
     # Run scan
     verify_ssl = not args.insecure
-    scanner = WebScanner(args.url, llm, out_dir, verify_ssl=verify_ssl, reveal_secrets=args.reveal_secrets or None)
+    scanner = WebScanner(
+        args.url,
+        llm,
+        out_dir,
+        verify_ssl=verify_ssl,
+        reveal_secrets=True if args.reveal_secrets else None,
+    )
 
     try:
         results = scanner.scan()

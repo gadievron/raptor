@@ -21,7 +21,6 @@ from typing import Dict, Optional, Any
 # packages/llm_analysis/llm/client.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
-from core.config import RaptorConfig
 from core.logging import get_logger
 from .config import LLMConfig, ModelConfig
 from .providers import LLMProvider, LLMResponse, StructuredResponse, create_provider
@@ -51,9 +50,6 @@ def _sanitize_log_message(msg: str) -> str:
     Searchable tags: #SECURITY #API_KEY_PROTECTION #LOG_SANITIZATION
     Related: Cursor Bot Bug #2, PR #32, defense-in-depth best practice
     """
-    if RaptorConfig.reveal_secrets_enabled():
-        return msg
-
     # Redact private key material before shorter generic patterns. If a log line
     # is truncated before the END marker, redact through the end of the message.
     msg = re.sub(

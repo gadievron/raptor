@@ -6,7 +6,7 @@ from core.security.redaction import redact_secrets
 
 @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on"])
 def test_reveal_secrets_config_accepts_truthy_opt_in(monkeypatch, value):
-    monkeypatch.setenv("RAPTOR_REVEAL_SECRETS", value)
+    monkeypatch.setenv("RAPTOR_REVEAL_TARGET_SECRETS", value)
 
     assert RaptorConfig.reveal_secrets_enabled() is True
 
@@ -14,9 +14,9 @@ def test_reveal_secrets_config_accepts_truthy_opt_in(monkeypatch, value):
 @pytest.mark.parametrize("value", ["", "0", "false", "no", "off", "debug"])
 def test_reveal_secrets_config_rejects_non_truthy_values(monkeypatch, value):
     if value:
-        monkeypatch.setenv("RAPTOR_REVEAL_SECRETS", value)
+        monkeypatch.setenv("RAPTOR_REVEAL_TARGET_SECRETS", value)
     else:
-        monkeypatch.delenv("RAPTOR_REVEAL_SECRETS", raising=False)
+        monkeypatch.delenv("RAPTOR_REVEAL_TARGET_SECRETS", raising=False)
 
     assert RaptorConfig.reveal_secrets_enabled() is False
 

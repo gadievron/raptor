@@ -31,7 +31,7 @@ def test_web_client_redacts_secret_urls_in_history_by_default():
 
 def test_web_client_honors_reveal_secrets_environment(monkeypatch):
     secret_value = "api-" + "b" * 24
-    monkeypatch.setenv("RAPTOR_REVEAL_SECRETS", "true")
+    monkeypatch.setenv("RAPTOR_REVEAL_TARGET_SECRETS", "true")
     client = WebClient("https://example.test")
 
     client._log_request(
@@ -46,7 +46,7 @@ def test_web_client_honors_reveal_secrets_environment(monkeypatch):
 
 def test_web_client_explicit_redaction_overrides_reveal_environment(monkeypatch):
     secret_value = "api-" + "c" * 24
-    monkeypatch.setenv("RAPTOR_REVEAL_SECRETS", "true")
+    monkeypatch.setenv("RAPTOR_REVEAL_TARGET_SECRETS", "true")
     client = WebClient("https://example.test", reveal_secrets=False)
 
     client._log_request(

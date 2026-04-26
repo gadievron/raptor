@@ -379,12 +379,6 @@ class TestSanitizeLogMessage:
         assert "n" * 64 not in result
         assert "[REDACTED-PRIVATE-KEY]" in result
 
-    def test_can_preserve_secrets_for_operator_debugging(self, monkeypatch):
-        """Operators can opt in to unredacted LLM logs for local troubleshooting."""
-        key = "sk-proj-" + "a" * 48
-        monkeypatch.setenv("RAPTOR_REVEAL_SECRETS", "true")
-
-        assert _sanitize_log_message(f"Error with key {key}") == f"Error with key {key}"
 
 
 class TestBudgetChecking:
