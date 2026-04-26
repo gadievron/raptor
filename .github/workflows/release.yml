@@ -1,0 +1,156 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v3.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          TAG="${{ steps.tag.outputs.name }}"
+
+          # Find the previous tag
+          PREV_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -v "^${TAG}$" | head -1)
+
+          if [ -z "$PREV_TAG" ]; then
+            echo "No previous tag found, using all commits"
+            COMMITS=$(git log --pretty=format:"%s" HEAD)
+          else
+            echo "Comparing ${PREV_TAG}..${TAG}"
+            COMMITS=$(git log --pretty=format:"%s" "${PREV_TAG}..HEAD")
+          fi
+
+          # Group commits into sections
+          FEATURES=$(echo "$COMMITS" | grep -iE '^feat(\(.+\))?:' | sed 's/^feat[^:]*: /- /' || true)
+          FIXES=$(echo "$COMMITS" | grep -iE '^fix(\(.+\))?:' | sed 's/^fix[^:]*: /- /' || true)
+          SECURITY=$(echo "$COMMITS" | grep -iE '^security(\(.+\))?:|^sec(\(.+\))?:' | sed 's/^sec[^:]*: /- /' || true)
+          DOCS=$(echo "$COMMITS" | grep -iE '^docs(\(.+\))?:' | sed 's/^docs[^:]*: /- /' || true)
+          OTHER=$(echo "$COMMITS" | grep -ivE '^(feat|fix|security|sec|docs)(\(.+\))?:' | sed 's/^/- /' || true)
+
+          # Build changelog
+          CHANGELOG="## What's changed in ${TAG}"
+          if [ -n "$PREV_TAG" ]; then
+            CHANGELOG="${CHANGELOG} (since ${PREV_TAG})"
+          fi
+          CHANGELOG="${CHANGELOG}
+
+"
+
+          if [ -n "$FEATURES" ]; then
+            CHANGELOG="${CHANGELOG}### New features
+${FEATURES}
+
+"
+          fi
+
+          if [ -n "$SECURITY" ]; then
+            CHANGELOG="${CHANGELOG}### Security
+${SECURITY}
+
+"
+          fi
+
+          if [ -n "$FIXES" ]; then
+            CHANGELOG="${CHANGELOG}### Bug fixes
+${FIXES}
+
+"
+          fi
+
+          if [ -n "$DOCS" ]; then
+            CHANGELOG="${CHANGELOG}### Docs
+${DOCS}
+
+"
+          fi
+
+          if [ -n "$OTHER" ]; then
+            CHANGELOG="${CHANGELOG}### Other changes
+${OTHER}
+
+"
+          fi
+
+          if [ -n "$PREV_TAG" ]; then
+            CHANGELOG="${CHANGELOG}**Full diff:** https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG}"
+          fi
+
+          # Write to file and output (escape for multiline)
+          echo "$CHANGELOG" > /tmp/changelog.md
+          cat /tmp/changelog.md
+          echo "file=/tmp/changelog.md" >> "$GITHUB_OUTPUT"
+
+      - name: Build release archives
+        run: |
+          TAG="${{ steps.tag.outputs.name }}"
+          NAME="raptor-${TAG}"
+
+          # Create a clean export (no git history, no dev/output artifacts)
+          git archive --format=tar --prefix="${NAME}/" HEAD | tar -x -C /tmp
+
+          # Remove things that don't belong in a release
+          cd /tmp
+          rm -rf \
+            "${NAME}/out" \
+            "${NAME}/codeql_dbs" \
+            "${NAME}/.vscode" \
+            "${NAME}/docs/img"
+
+          # Remove Python cache and test fixtures
+          find "${NAME}" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+          find "${NAME}" -type d -name ".venv" -exec rm -rf {} + 2>/dev/null || true
+          find "${NAME}" -name "*.pyc" -delete 2>/dev/null || true
+
+          # Build zip
+          zip -r "${NAME}.zip" "${NAME}" -x "*.DS_Store"
+
+          # Build tar.gz
+          tar -czf "${NAME}.tar.gz" "${NAME}"
+
+          # Checksums
+          sha256sum "${NAME}.zip" "${NAME}.tar.gz" > "${NAME}-checksums.txt"
+
+          echo "Archives built:"
+          ls -lh /tmp/${NAME}.*
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.tag.outputs.name }}"
+          NAME="raptor-${TAG}"
+
+          gh release create "${TAG}" \
+            --title "RAPTOR ${TAG}" \
+            --notes-file /tmp/changelog.md \
+            /tmp/${NAME}.zip \
+            /tmp/${NAME}.tar.gz \
+            /tmp/${NAME}-checksums.txt
