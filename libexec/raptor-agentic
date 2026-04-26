@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+#
+# raptor-agentic — thin libexec wrapper around `python3 raptor.py agentic`.
+#
+# Lets .claude/commands/agentic.md invoke the agentic pipeline via a stable
+# libexec command path that is allowlisted in .claude/settings.json, so the
+# slash command does not trigger a permission prompt for `python3 raptor.py`
+# on every run.
+#
+# Usage:
+#   libexec/raptor-agentic --repo <path> [--understand] [--validate] [...]
+#
+# All arguments pass through to raptor_agentic.py via raptor.py.
+
+set -euo pipefail
+
+# Resolve symlinks so RAPTOR_DIR is correct even when this wrapper is
+# symlinked into ~/bin or similar (matches bin/raptor's behaviour).
+SCRIPT="$0"
+while [ -L "$SCRIPT" ]; do
+    DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+    SCRIPT="$(readlink "$SCRIPT")"
+    [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
+done
+RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+
+# Defensive: confirm we're really inside a RAPTOR install before exec'ing
+# python3 on what might be a missing path. Fails loudly if symlink-walk
+# resolved to somewhere unexpected.
+if [ ! -f "$RAPTOR_DIR/raptor.py" ]; then
+    echo "raptor-agentic: cannot find raptor.py under $RAPTOR_DIR" >&2
+    echo "raptor-agentic: (resolved from $SCRIPT)" >&2
+    exit 1
+fi
+
+exec python3 "$RAPTOR_DIR/raptor.py" agentic "$@"

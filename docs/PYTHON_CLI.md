@@ -66,6 +66,29 @@ python3 raptor.py agentic --repo /path/to/code --max-findings 10
 
 Runs Semgrep + CodeQL + LLM analysis + exploit generation + patches (comprehensive).
 
+**Optional enrichment flags:**
+
+```bash
+# Pre-map architecture before scanning AND validate exploitable findings after
+python3 raptor.py agentic --repo /path/to/code --understand --validate
+
+# Same, via the libexec wrapper (avoids per-invocation Bash permission prompt)
+libexec/raptor-agentic --repo /path/to/code --understand --validate
+```
+
+- `--understand` runs `/understand --map` as a sibling lifecycle-managed run
+  before scanning. Produces `context-map.json` and enriches the agentic
+  checklist with priority markers so per-finding analysis prompts know which
+  functions sit on entry points or sinks.
+- `--validate` runs `/validate` as a sibling lifecycle-managed run after
+  scanning. Selects findings flagged `is_exploitable=true` or
+  `confidence="high"` (capped at 50, sorted by signal strength) and runs the
+  full multi-stage pipeline against them.
+
+Both flags degrade gracefully: if `claude` isn't on PATH or the target
+fails the `cc_trust` check, the flag is skipped with a logged warning and
+the base pipeline still runs.
+
 ### 3. codeql - Deep Analysis
 
 ```bash

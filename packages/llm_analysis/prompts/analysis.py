@@ -73,6 +73,12 @@ def build_analysis_prompt(
         if metadata.get("parameters"):
             param_strs = [f"{n}: {t}" if t else n for n, t in metadata["parameters"]]
             parts.append(f"Parameters: {', '.join(param_strs)}")
+        # Priority markers come from /understand --map via the agentic
+        # checklist enrichment. priority_reason is enum-bounded
+        # ("entry_point" or "sink") — safe to splice into the prompt.
+        if metadata.get("priority") == "high":
+            reason = metadata.get("priority_reason", "high-priority")
+            parts.append(f"Architectural role: {reason} (from /understand --map)")
         if parts:
             prompt += "\n**Function context (from inventory):**\n"
             for p in parts:
