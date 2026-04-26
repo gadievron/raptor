@@ -241,10 +241,12 @@ class QueryRunner:
         logger.info(f"Executing: {' '.join(cmd)}")
         logger.info(f"Timeout: {RaptorConfig.CODEQL_ANALYZE_TIMEOUT}s")
 
-        # Execute analysis
+        # Execute analysis in sandbox (network blocked — packs pre-fetched)
         try:
-            result = subprocess.run(
+            from core.sandbox import run as sandbox_run
+            result = sandbox_run(
                 cmd,
+                block_network=True,
                 capture_output=True,
                 text=True,
                 timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,
@@ -252,19 +254,41 @@ class QueryRunner:
 
             success = result.returncode == 0
 
-            # Auto-download missing query packs and retry once
+            # Auto-download missing query packs (needs network) and retry in sandbox
             if not success and "cannot be found" in (result.stderr or "").lower():
                 pack_name = _extract_missing_pack(result.stderr)
                 if pack_name:
                     logger.info(f"Query pack '{pack_name}' not found — downloading...")
-                    dl = subprocess.run(
+                    # Route codeql through the RAPTOR egress proxy.
+                    # CodeQL's Java stack respects the lowercase
+                    # `https_proxy` env var (set automatically by
+                    # use_egress_proxy=True). Hostname allowlist pins
+                    # the download to the CodeQL registry / GitHub
+                    # container registry; seccomp blocks UDP (no DNS
+                    # exfil — the proxy resolves on behalf). Landlock
+                    # pins writes to the codeql pack cache dir.
+                    from pathlib import Path
+                    codeql_cache = Path.home() / ".codeql"
+                    codeql_cache.mkdir(parents=True, exist_ok=True)
+                    dl = sandbox_run(
                         [self.codeql_cli, "pack", "download", pack_name],
+                        use_egress_proxy=True,
+                        proxy_hosts=[
+                            "ghcr.io",            # CodeQL packs hosted here
+                            "codeload.github.com",
+                            "objects.githubusercontent.com",
+                            "pkg-containers.githubusercontent.com",
+                        ],
+                        caller_label="codeql-pack-download",
+                        target=str(codeql_cache),
+                        output=str(codeql_cache),
                         capture_output=True, text=True, timeout=120,
                     )
                     if dl.returncode == 0:
                         logger.info(f"✓ Downloaded {pack_name} — retrying analysis")
-                        result = subprocess.run(
-                            cmd, capture_output=True, text=True,
+                        result = sandbox_run(
+                            cmd, block_network=True,
+                            capture_output=True, text=True,
                             timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,
                         )
                         success = result.returncode == 0
@@ -389,8 +413,10 @@ class QueryRunner:
         ]
 
         try:
-            result = subprocess.run(
+            from core.sandbox import run as sandbox_run
+            result = sandbox_run(
                 cmd,
+                block_network=True,
                 capture_output=True,
                 text=True,
                 timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,

@@ -43,7 +43,26 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
         cmd.extend(["--json-schema", json.dumps(effective_schema)])
 
     try:
-        proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=timeout)
+        # Isolation posture for the Claude sub-agent (prompt-injection
+        # defence):
+        #   - Landlock: writes only to output dir + /tmp (sensitive files
+        #     outside output can't be overwritten).
+        #   - Egress proxy: TCP goes through a RAPTOR-local HTTPS-CONNECT
+        #     proxy that enforces a HOSTNAME allowlist (not just port).
+        #     A compromised sub-agent can only reach api.anthropic.com,
+        #     not arbitrary :443 servers or localhost services.
+        #   - Seccomp: UDP blocked automatically by proxy mode, closing
+        #     the DNS-exfil path that the old `allowed_tcp_ports=[443]`
+        #     config left open (proxy does DNS on the child's behalf).
+        #   - Observability: proxy records every CONNECT attempt into
+        #     result.sandbox_info["proxy_events"] so operators can see
+        #     what hosts the agent tried (allowed or denied).
+        from core.sandbox import run as sandbox_run
+        proc = sandbox_run(cmd, input=prompt, capture_output=True, text=True,
+                           timeout=timeout, target=str(repo_path), output=str(out_dir),
+                           use_egress_proxy=True,
+                           proxy_hosts=["api.anthropic.com"],
+                           caller_label="claude-sub-agent")
     except subprocess.TimeoutExpired:
         return DispatchResult(result={"error": f"timeout after {timeout}s"})
 

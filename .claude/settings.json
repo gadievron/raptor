@@ -14,6 +14,7 @@
       "Bash(libexec/raptor-render-diagrams *)",
       "Bash(libexec/raptor-run-feasibility *)",
       "Bash(libexec/raptor-run-lifecycle *)",
+      "Bash(libexec/raptor-run-sandboxed *)",
       "Bash(libexec/raptor-startup-check *)",
       "Bash(libexec/raptor-validate-schema *)",
       "Write(/out/**)",
