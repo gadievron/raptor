@@ -29,29 +29,15 @@ def test_web_client_redacts_secret_urls_in_history_by_default():
     assert "debug=true" in logged_url
 
 
-def test_web_client_honors_reveal_secrets_environment(monkeypatch):
+def test_web_client_ignores_legacy_reveal_environment(monkeypatch):
     secret_value = "api-" + "b" * 24
-    monkeypatch.setenv("RAPTOR_REVEAL_TARGET_SECRETS", "true")
+    legacy_env_name = "RAPTOR_REVEAL" + "_TARGET_SECRETS"
+    monkeypatch.setenv(legacy_env_name, "true")
     client = WebClient("https://example.test")
 
     client._log_request(
         "GET",
         f"https://example.test/path?api_key={secret_value}&debug=true",
-        _response(),
-        0.01,
-    )
-
-    assert client.request_history[0]["url"].endswith(f"api_key={secret_value}&debug=true")
-
-
-def test_web_client_explicit_redaction_overrides_reveal_environment(monkeypatch):
-    secret_value = "api-" + "c" * 24
-    monkeypatch.setenv("RAPTOR_REVEAL_TARGET_SECRETS", "true")
-    client = WebClient("https://example.test", reveal_secrets=False)
-
-    client._log_request(
-        "GET",
-        f"https://example.test/path?api_key={secret_value}",
         _response(),
         0.01,
     )

@@ -15,7 +15,6 @@ from typing import Dict, List, Optional, Any
 import requests
 from urllib.parse import urljoin
 
-from core.config import RaptorConfig
 from core.logging import get_logger
 from core.security.redaction import redact_secrets
 
@@ -26,13 +25,13 @@ class WebClient:
     """Secure HTTP client for web application testing."""
 
     def __init__(self, base_url: str, timeout: int = 30, rate_limit: float = 0.5,
-                 verify_ssl: bool = True, reveal_secrets: Optional[bool] = None):
+                 verify_ssl: bool = True, reveal_secrets: bool = False):
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
         self.rate_limit = rate_limit  # Seconds between requests
         self.last_request_time = 0.0
         self.verify_ssl = verify_ssl
-        self.reveal_secrets = RaptorConfig.reveal_secrets_enabled() if reveal_secrets is None else reveal_secrets
+        self.reveal_secrets = reveal_secrets
 
         # Session for cookie management
         self.session = requests.Session()

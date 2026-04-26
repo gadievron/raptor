@@ -28,7 +28,7 @@ class WebScanner:
     """Fully autonomous web application security scanner."""
 
     def __init__(self, base_url: str, llm: Optional[LLMProvider], out_dir: Path,
-                 verify_ssl: bool = True, reveal_secrets: Optional[bool] = None):
+                 verify_ssl: bool = True, reveal_secrets: bool = False):
         self.base_url = base_url
         self.llm = llm
         self.out_dir = out_dir
@@ -122,7 +122,7 @@ Examples:
     parser.add_argument(
         "--reveal-secrets",
         action="store_true",
-        help="Preserve secrets in web artifacts for local debugging; defaults to redaction unless RAPTOR_REVEAL_TARGET_SECRETS is enabled",
+        help="Preserve secrets in web artifacts for local debugging; defaults to redaction",
     )
 
     args = parser.parse_args()
@@ -167,7 +167,7 @@ Examples:
         llm,
         out_dir,
         verify_ssl=verify_ssl,
-        reveal_secrets=True if args.reveal_secrets else None,
+        reveal_secrets=True if args.reveal_secrets else False,
     )
 
     try:
