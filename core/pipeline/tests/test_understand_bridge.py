@@ -1,7 +1,8 @@
-"""Tests for core.understand_bridge — /understand → /validate pipeline handoff."""
+"""Tests for core.pipeline.understand_bridge — /understand → /validate pipeline handoff."""
 
 import copy
 import json
+import os
 import sys
 import time
 import unittest.mock
@@ -9,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-# core/tests/ -> repo root
-sys.path.insert(0, str(Path(__file__).parents[2]))
+# core/pipeline/tests/ -> repo root
+sys.path.insert(0, str(Path(__file__).parents[3]))
 
-from core.understand_bridge import (
+from core.pipeline.understand_bridge import (
     find_understand_output,
     load_understand_context,
     enrich_checklist,
@@ -382,8 +383,9 @@ class TestHashFreshness:
         d1 = tmp_path / "d1"
         d2 = tmp_path / "d2"
         d1.mkdir()
-        time.sleep(0.01)
         d2.mkdir()
+        os.utime(d1, (1000, 1000))
+        os.utime(d2, (2000, 2000))
 
         for d in (d1, d2):
             _write_json(d / "checklist.json", {
@@ -398,8 +400,9 @@ class TestHashFreshness:
         d1 = tmp_path / "d1"
         d2 = tmp_path / "d2"
         d1.mkdir()
-        time.sleep(0.01)
         d2.mkdir()
+        os.utime(d1, (1000, 1000))
+        os.utime(d2, (2000, 2000))
 
         best_dir, stale = _rank_candidates([d1, d2], target_path=None)
         assert best_dir == d2
@@ -706,7 +709,7 @@ class TestEdgeCases:
             "files": [{"path": "a.py", "sha256": "OLD_HASH_WONT_MATCH"}],
         })
 
-        with unittest.mock.patch("core.understand_bridge.logger") as mock_logger:
+        with unittest.mock.patch("core.pipeline.understand_bridge.logger") as mock_logger:
             best_dir, stale = _rank_candidates([stale_dir], str(target))
 
         assert best_dir == stale_dir
