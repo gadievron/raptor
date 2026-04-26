@@ -126,7 +126,7 @@ def test_web_client_redacts_timeout_urls_in_logs(monkeypatch):
     def raise_timeout(*args, **kwargs):
         raise requests.exceptions.Timeout("boom")
 
-    monkeypatch.setattr(client.session, "get", raise_timeout)
+    monkeypatch.setattr(client.session, "request", raise_timeout)
 
     try:
         client.get(f"/slow?api_key={secret_value}")
@@ -152,7 +152,7 @@ def test_web_client_redacts_request_exception_urls_in_logs(monkeypatch):
             f"failed for https://example.test/path?access_token={secret_value}"
         )
 
-    monkeypatch.setattr(client.session, "post", raise_error)
+    monkeypatch.setattr(client.session, "request", raise_error)
 
     try:
         client.post("/path")
