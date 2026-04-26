@@ -12,13 +12,14 @@ Handles HTTP requests with safety features:
 
 import time
 from typing import Dict, List, Optional, Any
-import requests
 from urllib.parse import urlparse, urljoin
+
+import requests
+
+from core.logging import get_logger
 
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 _MAX_REDIRECTS = 10
-
-from core.logging import get_logger
 
 logger = get_logger()
 
@@ -151,7 +152,7 @@ class WebClient:
             )
 
             duration = time.time() - start_time
-            self._log_request('GET', url, response, duration)
+            self._log_request('GET', response.url or url, response, duration)
 
             return response
 
@@ -181,7 +182,7 @@ class WebClient:
             )
 
             duration = time.time() - start_time
-            self._log_request('POST', url, response, duration)
+            self._log_request('POST', response.url or url, response, duration)
 
             return response
 

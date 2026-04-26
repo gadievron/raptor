@@ -4,6 +4,8 @@ import http.server
 import threading
 from contextlib import contextmanager
 
+import requests
+
 import pytest
 
 from packages.web.client import WebClient
@@ -31,8 +33,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
 
 @contextmanager
-def _server(status=200, headers=None, body=b"ok"):
-    handler = type(
+def _server(status=200, headers=None, body=b"ok", handler_class=None):
+    handler = handler_class or type(
         "ScopedTestHandler",
         (_Handler,),
         {
@@ -92,21 +94,15 @@ def test_follows_same_origin_redirect():
             self.end_headers()
             self.wfile.write(b"redirected")
 
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), SameOriginRedirectHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
+    with _server(handler_class=SameOriginRedirectHandler) as (server, handler):
         client = WebClient(_base_url(server))
 
         response = client.get("/")
 
         assert response.status_code == 200
         assert response.text == "redirected"
-        assert SameOriginRedirectHandler.hits[-1]["path"] == "/final"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
+        assert handler.hits[-1]["path"] == "/final"
+        assert client.request_history[-1]["url"] == f"{_base_url(server)}/final"
 
 
 def test_blocks_cross_origin_redirect_before_requesting_new_host():
@@ -142,3 +138,61 @@ def test_same_origin_absolute_url_is_allowed():
 
         assert response.status_code == 200
         assert handler.hits[-1]["path"] == "/same-origin"
+
+
+def test_preserves_post_method_and_body_for_307_and_308_redirects():
+    class PreserveMethodRedirectHandler(_Handler):
+        hits = []
+
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            type(self).hits.append({
+                "method": "POST",
+                "path": self.path,
+                "body": body,
+                "headers": dict(self.headers),
+            })
+            if self.path in {"/temporary", "/permanent"}:
+                self.send_response(307 if self.path == "/temporary" else 308)
+                self.send_header("Location", "/final")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"preserved")
+
+    for path in ("/temporary", "/permanent"):
+        PreserveMethodRedirectHandler.hits = []
+        with _server(handler_class=PreserveMethodRedirectHandler) as (server, handler):
+            client = WebClient(_base_url(server))
+
+            response = client.post(path, data={"marker": "preserve-me"})
+
+            assert response.status_code == 200
+            assert response.text == "preserved"
+            assert [hit["path"] for hit in handler.hits] == [path, "/final"]
+            assert all(hit["method"] == "POST" for hit in handler.hits)
+            assert handler.hits[1]["body"] == b"marker=preserve-me"
+            assert client.request_history[-1]["url"] == f"{_base_url(server)}/final"
+
+
+def test_raises_too_many_redirects_after_limit_is_exhausted():
+    class RedirectLoopHandler(_Handler):
+        hits = []
+
+        def do_GET(self):
+            type(self).hits.append({
+                "path": self.path,
+                "headers": dict(self.headers),
+            })
+            self.send_response(302)
+            self.send_header("Location", "/loop")
+            self.end_headers()
+
+    with _server(handler_class=RedirectLoopHandler) as (server, handler):
+        client = WebClient(_base_url(server))
+
+        with pytest.raises(requests.exceptions.TooManyRedirects, match="Exceeded"):
+            client.get("/loop")
+
+        assert len(handler.hits) == 11
