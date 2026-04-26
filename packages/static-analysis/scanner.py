@@ -11,7 +11,6 @@
 import argparse
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -28,7 +27,9 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 from core.json import save_json
 from core.config import RaptorConfig
 from core.logging import get_logger
+from core.git import clone_repository
 from core.sarif.parser import generate_scan_metrics, validate_sarif
+from core.hash import sha256_tree
 
 logger = get_logger()
 
@@ -72,50 +73,6 @@ def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None,
     )
     return p.returncode, p.stdout, p.stderr
 
-
-def validate_repo_url(url: str) -> bool:
-    """Validate repository URL against allowed patterns."""
-    allowed_patterns = [
-        r'^https://github\.com/[\w\-]+/[\w.\-]+/?$',
-        r'^https://gitlab\.com/[\w\-]+/[\w.\-]+/?$',
-        r'^git@github\.com:[\w\-]+/[\w.\-]+\.git$',
-        r'^git@gitlab\.com:[\w\-]+/[\w.\-]+\.git$',
-    ]
-
-    return any(re.match(pattern, url) for pattern in allowed_patterns)
-
-
-def safe_clone(url: str, workdir: Path) -> Path:
-    """Clone a git repository safely with URL validation."""
-    # Validate URL
-    if not validate_repo_url(url):
-        logger.log_security_event(
-            "invalid_repo_url",
-            f"Rejected potentially unsafe repository URL: {url}"
-        )
-        raise ValueError(f"Invalid or untrusted repository URL: {url}")
-
-    repo_dir = workdir / "repo"
-    env = RaptorConfig.get_git_env()
-
-    logger.info(f"Cloning repository: {url}")
-    # git clone needs network; route via the egress proxy pinned to the
-    # hostnames that `validate_repo_url` already allowlists. UDP is
-    # blocked by the proxy-mode seccomp filter, DNS is resolved by the
-    # proxy, and the allowlist prevents redirect-chasing off-host.
-    rc, so, se = run(
-        ["git", "clone", "--depth", "1", "--no-tags", url, str(repo_dir)],
-        timeout=RaptorConfig.GIT_CLONE_TIMEOUT,
-        env=env,
-        proxy_hosts=["github.com", "gitlab.com",
-                     "codeload.github.com", "objects.githubusercontent.com"],
-        caller_label="scanner-git-clone",
-    )
-    if rc != 0:
-        raise RuntimeError(f"git clone failed: {se.strip() or so.strip()}")
-
-    logger.info(f"Repository cloned successfully to {repo_dir}")
-    return repo_dir
 
 def run_single_semgrep(
     name: str,
@@ -417,30 +374,6 @@ def run_codeql(repo_path: Path, out_dir: Path, languages):
     return sarif_paths
 
 
-def sha256_tree(root: Path) -> str:
-    """Hash directory tree with size limits and consistent chunk size."""
-    import hashlib
-    h = hashlib.sha256()
-    skipped_files = []
-
-    for p in sorted(root.rglob("*")):
-        if p.is_file():
-            stat = p.stat()
-            # Skip very large files
-            if stat.st_size > RaptorConfig.MAX_FILE_SIZE_FOR_HASH:
-                skipped_files.append(str(p.relative_to(root)))
-                continue
-
-            h.update(p.relative_to(root).as_posix().encode())
-            with p.open("rb") as f:
-                for chunk in iter(lambda: f.read(RaptorConfig.HASH_CHUNK_SIZE), b""):
-                    h.update(chunk)
-
-    if skipped_files:
-        logger.debug(f"Skipped {len(skipped_files)} large files during hashing")
-
-    return h.hexdigest()
-
 def main():
     ap = argparse.ArgumentParser(description="RAPTOR Automated Code Security Agent with parallel scanning")
     ap.add_argument("--repo", required=True, help="Path or Git URL")
@@ -472,7 +405,8 @@ def main():
     try:
         # Acquire repository
         if args.repo.startswith(("http://", "https://", "git@")):
-            repo_path = safe_clone(args.repo, tmp)
+            repo_path = tmp / "repo"
+            clone_repository(args.repo, repo_path)
         else:
             repo_path = Path(args.repo).resolve()
             if not repo_path.exists():
