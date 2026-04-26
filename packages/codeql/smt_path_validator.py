@@ -32,23 +32,51 @@ conditions.  Pass ``BV_C_UINT32`` to detect 32-bit unsigned wraparound
 (CWE-190); pass ``BV_C_INT32`` for signed-integer path conditions.
 Pre-made profiles are importable from ``core.smt_solver``.
 
-Known limitations:
-  - Negative integer literals (e.g. ``!= -1``) go to the unknown list.
-  - Unary NOT (``~``) is not supported; conditions using it fall through
-    to unknown.
-  - No operator precedence — expressions are evaluated strictly
-    left-to-right.  Mixed-operator expressions (e.g. ``a + b * c``) are
-    rejected to avoid mis-encoding; full precedence support is planned
-    for a follow-up.
-  - Bitmask form (``flags & MASK == val``) requires both ``MASK`` and
-    ``val`` to be integer literals.
-  - Profile-level signedness conflates two concerns: comparison
+Conditions rejected to the ``unknown`` bucket (rather than silently
+mis-encoded):
+
+  - **Operators outside the supported set.**  Accepted: ``+ - * |``,
+    relational ``< <= > >= == !=``, shifts ``<< >>``, bitmask
+    ``&`` (only in the ``flags & MASK == VAL`` form).  Rejected:
+    unary NOT (``~``), XOR (``^``), division (``/``), modulo (``%``),
+    ternary (``? :``), single-equals assignment, chained relational
+    (``0 < x < 100``).  Anything else goes to ``unknown`` via the
+    full-input-consumed sanity check.
+  - **C-syntax constructs.**  Function calls (``strlen(input)``),
+    type casts (``(uint32_t)x``), struct/pointer access (``obj.field``,
+    ``s->len``), array indexing (``arr[0]``), pointer dereference
+    (``*p``), ``sizeof``.  Any token containing ``(``, ``)``, ``.``,
+    ``->``, ``[``, ``]`` triggers rejection.
+  - **Negative integer literals** (e.g. ``!= -1``) — write the
+    bit-pattern in hex instead (``!= 0xFFFFFFFF`` at uint32).
+  - **Leading-zero decimals** (e.g. ``01234``) — ambiguous with C
+    octal; use hex or remove the leading zero.
+  - **Literals outside the profile's width range** — ``0x100`` at
+    uint8 would silently wrap to 0 in z3; we reject so the caller
+    knows the profile was wrong for this literal.
+
+Other limitations (verdict still trustworthy, but with caveats):
+
+  - **No operator precedence** — expressions are evaluated strictly
+    left-to-right.  Mixed-operator expressions (e.g. ``a + b * c``)
+    are rejected to avoid mis-encoding; full precedence support is
+    planned for a follow-up.  ``a * b * c`` and ``a + b + c`` are
+    fine (associativity preserves correctness).
+  - **Bitmask form** requires both ``MASK`` and ``VAL`` to be integer
+    literals; variables on either side go to ``unknown``.
+  - **Profile-level signedness conflates** two concerns: comparison
     signedness (``<``/``<=``/``>``/``>=`` routed through ``lt``/``le``)
     AND ``>>`` arithmetic-vs-logical shift.  In real C these can
     decouple (``(int)x >> 1`` is always arithmetic regardless of the
-    comparison's signedness).  Single-profile-per-path is the first-cut
-    design; per-variable typing is the next step when a real case
-    demands it.
+    comparison's signedness).  Single-profile-per-path is the
+    first-cut design; per-variable typing is the next step when a
+    real case demands it.
+  - **Z3 picks the smallest satisfying witness by default**, which is
+    often the trivial assignment (``x = 0``).  To find an *exploit*
+    witness, add a lower-bound condition that forces the dangerous
+    range (e.g. ``count > 0x10000000`` for CWE-190 wraparound at
+    uint32).  Will be addressed by Z3 Optimize integration in a
+    follow-up.
 
 Integration: packages/codeql/dataflow_validator.py :: DataflowValidator
 """
@@ -120,6 +148,29 @@ _TOKEN_RE = re.compile(
 )
 
 
+def _parse_literal_value(tok: str, profile: BVProfile) -> Optional[int]:
+    """Validate and convert a literal token to int, or None if invalid.
+
+    Centralised so atom-position literals and bitmask-form literals both
+    reject the same things:
+
+    - Out-of-range for profile width (would silently wrap in z3.BitVecVal).
+    - Leading-zero decimals (octal in C, ambiguous if interpreted as base-10).
+    - Anything that isn't a clean hex or decimal literal.
+    """
+    if _HEX_RE.match(tok):
+        v = int(tok, 16)
+    elif _INT_RE.match(tok):
+        if len(tok) > 1 and tok[0] == "0":
+            return None  # ambiguous with C octal
+        v = int(tok)
+    else:
+        return None
+    if v >= (1 << profile.width):
+        return None
+    return v
+
+
 def _parse_expr(text: str, vars_: Dict[str, Any], *, profile: BVProfile) -> Optional[Any]:
     """Parse an arithmetic expression into a Z3 bitvector at the given profile.
 
@@ -137,6 +188,13 @@ def _parse_expr(text: str, vars_: Dict[str, Any], *, profile: BVProfile) -> Opti
     if not tokens:
         return None
 
+    # Reject if any non-whitespace character was silently dropped by the
+    # tokeniser — characters like '~' (NOT), '^' (XOR), '/', '%' aren't in
+    # the token regex and would otherwise vanish, producing wrong answers
+    # (e.g. "~mask == 0xFF" mis-encoded as "mask == 0xFF").
+    if "".join(tokens) != re.sub(r"\s+", "", text):
+        return None
+
     # Reject mixed-operator expressions to avoid silent mis-encoding due to
     # the lack of operator precedence (currently strictly left-to-right).
     if {'+', '-'} & set(tokens[1::2]) and {'*', '>>', '<<', '|'} & set(tokens[1::2]):
@@ -145,10 +203,9 @@ def _parse_expr(text: str, vars_: Dict[str, Any], *, profile: BVProfile) -> Opti
     def atom(tok: str) -> Optional[Any]:
         if _NULL_RE.match(tok):
             return _mk_val(0, profile.width)
-        if _HEX_RE.match(tok):
-            return _mk_val(int(tok, 16), profile.width)
-        if _INT_RE.match(tok):
-            return _mk_val(int(tok), profile.width)
+        if _HEX_RE.match(tok) or _INT_RE.match(tok):
+            v = _parse_literal_value(tok, profile)
+            return None if v is None else _mk_val(v, profile.width)
         if _IDENT_RE.match(tok):
             if tok.lower() not in vars_:
                 vars_[tok.lower()] = _mk_var(tok.lower(), profile.width)
@@ -217,8 +274,16 @@ def _parse_condition(text: str, vars_: Dict[str, Any], *, profile: BVProfile) ->
         lhs = _parse_expr(m.group(1).strip(), vars_, profile=profile)
         if lhs is None:
             return None
-        masked = lhs & _mk_val(int(m.group(2), 0), profile.width)
-        rhs = _mk_val(int(m.group(4), 0), profile.width)
+        # Mask and rhs literals go through the same validation as atom-level
+        # literals — width range and leading-zero ambiguity must be rejected
+        # the same way, otherwise the bitmask path silently wraps or trips
+        # ValueError on octal-style tokens.
+        mask_val = _parse_literal_value(m.group(2), profile)
+        rhs_val = _parse_literal_value(m.group(4), profile)
+        if mask_val is None or rhs_val is None:
+            return None
+        masked = lhs & _mk_val(mask_val, profile.width)
+        rhs = _mk_val(rhs_val, profile.width)
         return (masked == rhs) if m.group(3) == '==' else (masked != rhs)
 
     # Relational: lhs OP rhs
@@ -312,16 +377,21 @@ def check_path_feasibility(
             continue
 
         final_expr = z3.Not(expr) if cond.negated else expr
+        # Display form reflects what was actually asserted — without this,
+        # an unsat-core listing for a negated condition shows the un-negated
+        # text and confuses readers ("ptr != NULL ⊥ ptr > 0" looks
+        # consistent until you realise we asserted ptr == 0 not ptr != NULL).
+        display = f"NOT ({cond.text})" if cond.negated else cond.text
 
         # Quick individual check: is this condition alone satisfiable?
         with _scoped(solver):
             solver.add(z3.Not(final_expr))
             if solver.check() == z3.unsat:
                 # Condition is a tautology — trivially satisfied
-                satisfied.append(cond.text)
+                satisfied.append(display)
                 continue
 
-        pending.append((cond.text, final_expr))
+        pending.append((display, final_expr))
 
     if not pending:
         if unknown:
