@@ -11,12 +11,11 @@ Manages multiple LLM providers with:
 """
 
 import hashlib
-import json
 import re
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Optional, Any, Tuple
+from typing import Dict, Optional, Any
 
 # Add parent directories to path for core imports
 # packages/llm_analysis/llm/client.py -> repo root
@@ -428,7 +427,7 @@ class LLMClient:
             else:
                 logger.warning(f"Falling back to: {model.provider}/{model.model_name}")
             if model.provider.lower() == "ollama":
-                logger.warning(f"Local model — exploit PoCs may be unreliable")
+                logger.warning("Local model — exploit PoCs may be unreliable")
 
             logger.debug(f"Trying model: {model.provider}/{model.model_name}")
 
@@ -570,7 +569,7 @@ class LLMClient:
             else:
                 logger.warning(f"Falling back to: {model.provider}/{model.model_name} (structured)")
             if model.provider.lower() == "ollama":
-                logger.warning(f"Local model — exploit PoCs may be unreliable")
+                logger.warning("Local model — exploit PoCs may be unreliable")
 
             for attempt in range(self.config.max_retries):
                 try:

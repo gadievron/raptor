@@ -65,7 +65,7 @@ class TestLLMClientInit:
             mock_logger.warning = lambda msg, *a, **kw: warning_messages.append(msg)
             mock_logger.info = MagicMock()
             mock_logger.debug = MagicMock()
-            client = LLMClient(config)
+            LLMClient(config)
 
         assert any("No external LLM available" in msg or "no primary model" in msg.lower()
                     for msg in warning_messages), (
@@ -378,6 +378,7 @@ class TestSanitizeLogMessage:
         assert private_key not in result
         assert "n" * 64 not in result
         assert "[REDACTED-PRIVATE-KEY]" in result
+
 
 
 class TestBudgetChecking:
