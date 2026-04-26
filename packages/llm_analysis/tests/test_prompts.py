@@ -213,8 +213,10 @@ class TestFindingResultSchema:
         # FINDING_RESULT_SCHEMA tightens confidence to enum[high,medium,low,null].
         # The post-pass selection logic relies on this — if jsonschema lets
         # "High" or "HIGH" through, the strict-equality match would silently
-        # skip them.
-        import jsonschema
+        # skip them. jsonschema is an optional dep project-wide (see
+        # core/sarif/parser.py for the pattern); skip the assertion when
+        # it's missing so CI runners without it don't fail.
+        jsonschema = pytest.importorskip("jsonschema")
         for value in ("high", "medium", "low", None):
             valid_finding = {
                 "finding_id": "f1",
@@ -227,8 +229,11 @@ class TestFindingResultSchema:
 
     def test_confidence_enum_rejects_drift(self):
         # Schema must reject case-drifted or arbitrary string values that
-        # would otherwise slip past the per-record validator.
-        import jsonschema
+        # would otherwise slip past the per-record validator. jsonschema 
+        # is an optional dep project-wide (see core/sarif/parser.py for 
+        # the pattern); skip the assertion when it's missing so CI runners 
+        # without it don't fail.
+        jsonschema = pytest.importorskip("jsonschema")
         for value in ("High", "HIGH", "very high", "exploitable"):
             invalid_finding = {
                 "finding_id": "f1",
