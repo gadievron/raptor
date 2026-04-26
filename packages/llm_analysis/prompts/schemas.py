@@ -5,14 +5,14 @@ Field names and types are aligned with the /validate pipeline — see
 core/schema_constants.py for the canonical field list.
 """
 
-from core.schema_constants import AGENTIC_RULING_VALUES, SEVERITY_LEVELS
+from core.schema_constants import AGENTIC_RULING_VALUES, CONFIDENCE_LEVELS, SEVERITY_LEVELS
 
 # Schema for vulnerability analysis — used with generate_structured()
 ANALYSIS_SCHEMA = {
     "is_true_positive": "boolean",
     "is_exploitable": "boolean",
     "exploitability_score": "float (0.0-1.0)",
-    "confidence": "string (high/medium/low)",
+    "confidence": f"string ({'/'.join(CONFIDENCE_LEVELS)})",
     "severity_assessment": f"string ({'/'.join(SEVERITY_LEVELS)})",
     "ruling": f"string ({'/'.join(AGENTIC_RULING_VALUES)})",
     "reasoning": "string",
@@ -49,7 +49,7 @@ FINDING_RESULT_SCHEMA = {
             "minimum": 0,
             "maximum": 1,
         },
-        "confidence": {"type": ["string", "null"]},
+        "confidence": {"type": ["string", "null"], "enum": [*CONFIDENCE_LEVELS, None]},
         "severity_assessment": {"type": "string"},
         "ruling": {"type": ["string", "null"]},
         "reasoning": {"type": "string"},

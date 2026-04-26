@@ -187,6 +187,10 @@ Examples:
     # Orchestration options
     parser.add_argument("--max-parallel", type=int, default=3,
                        help="Maximum parallel Claude Code agents for Phase 4 orchestration (default: 3)")
+    parser.add_argument("--understand", action="store_true",
+                        help="Run /understand --map before scanning for architectural context")
+    parser.add_argument("--validate", action="store_true",
+                        help="Run /validate on exploitable/high-confidence findings after analysis")
     parser.add_argument("--sequential", action="store_true",
                        help="Sequential analysis in Phase 3 instead of parallel Phase 4 orchestration")
 
@@ -412,6 +416,32 @@ Examples:
             logger.info(f"Inventory checklist built: {out_dir / 'checklist.json'}")
     except Exception as e:
         logger.warning(f"Inventory build failed (continuing without metadata): {e}")
+
+    # ========================================================================
+    # PRE-PASS: /understand --map (opt-in via --understand)
+    # Creates a lifecycle-managed sibling /understand run (discoverable to the
+    # bridge tier-2/3) AND enriches the agentic checklist with priority
+    # markers. The analysis prompt surfaces those markers per finding, so
+    # --understand pays off in this run too — not just in any later /validate.
+    # ========================================================================
+    prepass_result = None
+    if args.understand:
+        from core.orchestration import run_understand_prepass
+        print("\n" + "=" * 70)
+        print("UNDERSTAND PRE-PASS")
+        print("=" * 70)
+        prepass_result = run_understand_prepass(
+            target=original_repo_path,
+            agentic_out_dir=out_dir,
+            block_cc_dispatch=block_cc_dispatch,
+        )
+        if prepass_result.ran:
+            logger.info(f"Pre-pass wrote {prepass_result.context_map_path} "
+                        f"in {prepass_result.understand_dir} "
+                        f"(checklist enriched: {prepass_result.checklist_enriched}, "
+                        f"took {prepass_result.duration_s:.1f}s)")
+        else:
+            logger.warning(f"Pre-pass skipped: {prepass_result.skipped_reason}")
 
     all_sarif_files = []
     semgrep_metrics = {}
@@ -699,6 +729,29 @@ Examples:
     elif not llm_env.llm_available:
         print("\n  No LLM available. Findings prepared for manual review.")
         print("  For automated analysis, set an API key or install Claude Code.")
+
+    # ========================================================================
+    # POST-PASS: /validate (opt-in via --validate)
+    # Selects findings flagged exploitable or high-confidence, runs full
+    # validate pipeline against them.
+    # ========================================================================
+    postpass_result = None
+    if args.validate:
+        from core.orchestration import run_validate_postpass
+        print("\n" + "=" * 70)
+        print("VALIDATE POST-PASS")
+        print("=" * 70)
+        postpass_result = run_validate_postpass(
+            target=original_repo_path,
+            agentic_out_dir=out_dir,
+            analysis_report=analysis_report if analysis_report else out_dir / "autonomous" / "autonomous_analysis_report.json",
+            block_cc_dispatch=block_cc_dispatch,
+        )
+        if postpass_result.ran:
+            logger.info(f"Post-pass validated {postpass_result.selected_count} findings "
+                        f"(took {postpass_result.duration_s:.1f}s)")
+        else:
+            logger.warning(f"Post-pass skipped: {postpass_result.skipped_reason}")
 
     # ========================================================================
     # FINAL REPORT

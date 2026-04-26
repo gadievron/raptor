@@ -9,15 +9,39 @@ description: Full autonomous security workflow — scan, dedup, prep, analyse, c
 2. Deduplicate findings
 3. Prep findings (read code, extract dataflow)
 4. **Validate + analyse** each finding (exploitation-validator methodology, Stages A-D)
-5. **Self-review** — catch contradictions, retry low confidence (Stage F)
-6. **Consensus** — multi-model second opinion (if configured)
+5. **Self-review**: catch contradictions, retry low confidence (Stage F)
+6. **Consensus**: multi-model second opinion (if configured)
 7. **Generate exploit PoCs** for exploitable findings
 8. **Generate secure patches** for confirmed vulnerabilities
 9. **Cross-finding analysis** (structural grouping, shared root causes)
 
-Nothing will be applied to your code - only generated in out/ directory.
+Nothing will be applied to your code - only generated in the out/ directory.
 
-Execute: `python3 raptor.py agentic --repo <path>`
+Execute: `libexec/raptor-agentic --repo <path>`
+
+## Optional enrichment flags
+
+By default, `/agentic` scans and analyses findings in isolation. Two optional flags add richer context for more thorough results. They are opt-in because they add time and cost, but if you are doing a proper security review rather than a quick scan, they are well worth it.
+
+| Flag | What it does |
+|------|-------------|
+| `--understand` | Runs `/understand --map` as a proper sibling run, producing `context-map.json` (entry points, trust boundaries, sinks). Two consumers: (a) the agentic checklist gets priority markers, so per-finding analysis prompts say things like *"Architectural role: entry_point"* — improving in-run analysis; (b) any `/validate` against the same target — including this run's `--validate` post-pass — picks the map up via the bridge. |
+| `--validate` | After the agentic pipeline completes, runs `/validate` on findings flagged `is_exploitable: true` or `confidence: "high"`. Creates a sibling validate run; the bridge auto-discovers any `/understand` sibling produced by `--understand`. |
+
+You can use either flag on its own or combine them:
+
+```
+# Recommended for thorough reviews — pair both flags
+/agentic --understand --validate
+
+# Just enrich this run's analysis with architectural priority markers
+/agentic --understand
+
+# Just validate the findings that look exploitable (no pre-mapping)
+/agentic --validate
+```
+
+Pass both flags straight through to `libexec/raptor-agentic`. The Python layer owns all orchestration and selection logic; you don't need to filter findings or invoke other skills yourself.
 
 ## How analysis works
 

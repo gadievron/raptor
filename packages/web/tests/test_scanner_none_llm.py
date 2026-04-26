@@ -27,6 +27,29 @@ class TestWebScannerNoneLlm(unittest.TestCase):
             scanner = WebScanner("http://example.com", None, Path(tmpdir))
             self.assertIsNone(scanner.fuzzer)
             self.assertIsNone(scanner.llm)
+            mock_client_cls.assert_called_once_with(
+                "http://example.com",
+                verify_ssl=True,
+                reveal_secrets=False,
+            )
+
+    @patch("packages.web.scanner.WebCrawler")
+    @patch("packages.web.scanner.WebClient")
+    def test_init_threads_reveal_secrets_to_client(self, mock_client_cls, mock_crawler_cls):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scanner = WebScanner(
+                "http://example.com",
+                None,
+                Path(tmpdir),
+                verify_ssl=False,
+                reveal_secrets=True,
+            )
+            self.assertIsNone(scanner.fuzzer)
+            mock_client_cls.assert_called_once_with(
+                "http://example.com",
+                verify_ssl=False,
+                reveal_secrets=True,
+            )
 
     @patch("packages.web.scanner.WebCrawler")
     @patch("packages.web.scanner.WebClient")
