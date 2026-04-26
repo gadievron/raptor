@@ -165,7 +165,28 @@ GATES APPLY: U1 [READ-FIRST], U2 [ATTACKER-LENS], U5 [EVIDENCE-ONLY]
 
 Do not populate `sources`, `sinks`, or `entry_points` from file names or common patterns alone — read the code and verify.
 
-**[MAP-5] Record Coverage**
+**[MAP-5] Normalise context-map**
+
+Right after writing `context-map.json`, run the normaliser. It uses the
+checklist in the same dir as ground truth to:
+- backfill missing `name` fields on entry_points / sink_details from line ranges
+- normalise file paths (strip leading `./`, convert absolute paths under
+  the target into relative ones)
+- warn (non-fatal) on hallucinated files / out-of-range line numbers /
+  cross-reference typos in `unchecked_flows`
+
+```bash
+libexec/raptor-normalize-context-map "$WORKDIR"
+```
+
+Idempotent — safe to re-run. Skip this step only if `$WORKDIR/checklist.json`
+doesn't exist (e.g. you skipped MAP-0 inventory build).
+
+When you can, include the function `name` directly on each entry_point and
+sink_detail you emit — it helps the normaliser skip backfill and is
+clearer for human reviewers.
+
+**[MAP-6] Record Coverage**
 
 After writing `context-map.json`, update the inventory with which functions you examined.
 Write a JSON array of every function you read and analysed (entry points, sinks, trust boundary

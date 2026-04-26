@@ -443,12 +443,17 @@ class ValidatePostpassTests(unittest.TestCase):
         self.assertIn("not found", result.skipped_reason)
 
     def test_happy_path_runs_lifecycle_and_writes_selection_file(self):
+        # IDs deliberately use a hyphen + uppercase prefix so
+        # `assertNotIn(...)` below isn't a substring-collision risk
+        # against tempfile.mkdtemp's 8-char alphanumeric random suffix
+        # (CI ran into "f1" appearing inside "/tmp/tmpfef1_buh" and
+        # falsely failing the inline-injection check).
         with TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             report = self._make_report(tmp, [
-                {"finding_id": "f1", "is_exploitable": True},
-                {"finding_id": "f2", "confidence": "high"},
-                {"finding_id": "f3", "is_exploitable": False, "confidence": "low"},
+                {"finding_id": "FNDA-EXPLOITABLE", "is_exploitable": True},
+                {"finding_id": "FNDB-HIGHCONF", "confidence": "high"},
+                {"finding_id": "FNDC-IGNORED", "is_exploitable": False, "confidence": "low"},
             ])
             validate_dir = tmp / "validate_run"
             dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
@@ -468,7 +473,10 @@ class ValidatePostpassTests(unittest.TestCase):
             selection_file = validate_dir / "selected-findings.json"
             self.assertTrue(selection_file.exists())
             data = json.loads(selection_file.read_text())
-            self.assertEqual({f["id"] for f in data["findings"]}, {"f1", "f2"})
+            self.assertEqual(
+                {f["id"] for f in data["findings"]},
+                {"FNDA-EXPLOITABLE", "FNDB-HIGHCONF"},
+            )
             # Container metadata is /validate-shaped.
             self.assertIn("target_path", data)
 
@@ -477,9 +485,9 @@ class ValidatePostpassTests(unittest.TestCase):
                                if Path(c.args[0][0]).name == "claude")
             prompt = claude_call.kwargs["input"]
             self.assertIn("selected-findings.json", prompt)
-            self.assertNotIn("f1", prompt)
-            self.assertNotIn("f2", prompt)
-            self.assertNotIn("f3", prompt)
+            self.assertNotIn("FNDA-EXPLOITABLE", prompt)
+            self.assertNotIn("FNDB-HIGHCONF", prompt)
+            self.assertNotIn("FNDC-IGNORED", prompt)
 
     def test_skips_when_lifecycle_start_fails(self):
         with TemporaryDirectory() as tmp:
