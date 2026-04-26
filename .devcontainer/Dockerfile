@@ -15,8 +15,6 @@ RUN rm -f /etc/apt/sources.list.d/yarn.list
 # Organized by component that needs them
 # ============================================================================
 
-RUN rm -f /etc/apt/sources.list.d/yarn.list
-
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     && apt-get install -y --no-install-recommends \
     #
@@ -55,40 +53,9 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     # rr itself installed separately below
     libcapnp-dev \
     #
-    # --- Playwright / Browser dependencies (for packages/web playwright support) ---
-    fonts-liberation \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libc6 \
-    libcairo2 \
-    libcap2 \
-    libcups2 \
-    libdbus-1-3 \
-    libexpat1 \
-    libfontconfig1 \
-    libgcc-s1 \
-    libgdk-pixbuf2.0-0 \
-    libglib2.0-0 \
-    libgtk-3-0 \
-    libnspr4 \
-    libnss3 \
-    libpango-1.0-0 \
-    libpangocairo-1.0-0 \
-    libx11-6 \
-    libx11-xcb1 \
-    libxcb1 \
-    libxcomposite1 \
-    libxcursor1 \
-    libxdamage1 \
-    libxext6 \
-    libxfixes3 \
-    libxi6 \
-    libxrandr2 \
-    libxrender1 \
-    libxss1 \
-    libxtst6 \
-    lsb-release \
+    # --- TLS / distro detection (curl, nodesource, playwright deps installer) ---
     ca-certificates \
+    lsb-release \
     # --- Misc ---
     jq \
     unzip \
@@ -99,7 +66,7 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 # SEMGREP (static-analysis, scan, raptor-scan, agentic commands)
 # ============================================================================
 
-RUN pip install --no-cache-dir semgrep
+RUN pip install --no-cache-dir semgrep==1.161.0
 
 # ============================================================================
 # RR DEBUGGER (rr-debugger skill, crash-analysis agents)
@@ -152,18 +119,26 @@ RUN pip install --no-cache-dir -r /tmp/requirements-dev.txt
 # Install web package dependencies (includes playwright)
 RUN pip install --no-cache-dir -r /tmp/packages-web-requirements.txt
 
-# Install Playwright browser binaries
-RUN python -m playwright install
+# Install Playwright browser + system deps via Playwright's own dep installer.
+# Replaces a hand-rolled apt list that drifted out of sync with upstream Chromium deps.
+RUN apt-get update \
+    && python -m playwright install --with-deps chromium \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ============================================================================
 # CLAUDE CLI (claude-code npm package)
 # Required to run RAPTOR via bin/raptor
 # ============================================================================
 
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+# Capture-then-execute the nodesource setup script so a curl failure isn't
+# silently swallowed by the pipeline (curl | bash ignores curl's exit status).
+# Node 22 is the current LTS; Node 20 went EOL April 2026.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource_setup.sh \
+    && bash /tmp/nodesource_setup.sh \
+    && rm /tmp/nodesource_setup.sh \
     && apt-get install -y --no-install-recommends nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
-    && npm install -g @anthropic-ai/claude-code
+    && npm install -g @anthropic-ai/claude-code@2.1.119
 
 # ============================================================================
 # JS PACKAGE MANAGERS (yarn replaced apt source removed above)
@@ -187,3 +162,11 @@ ENV PYTHONPATH="/workspaces/raptor:/workspaces/raptor/packages:${PYTHONPATH}"
 # ============================================================================
 
 WORKDIR /workspaces/raptor
+
+# ============================================================================
+# RUNTIME USER
+# ============================================================================
+# Default to the non-root vscode user from the base image (UID 1000).
+# vscode has passwordless sudo for tools that genuinely need root (e.g. rr in
+# --privileged containers). All build steps above run as root by inheritance.
+USER vscode
