@@ -988,6 +988,48 @@ class EnrichmentTests(unittest.TestCase):
             ctx_map.write_text("{}")
             self.assertFalse(_enrich_agentic_checklist(tmp, ctx_map))
 
+    def test_enrichment_does_not_raise_on_non_list_files_in_checklist(self):
+        # The marked-counter inside _enrich_agentic_checklist iterates
+        # checklist["files"] and each file's items/functions. If any of
+        # those is a non-list (corrupt LLM-built checklist), the previous
+        # `or []` fallback would crash with `for x in 42`. Defensive
+        # guard means we degrade to "0 marked" with a warning rather than
+        # blowing up the post-pass.
+        import json
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            for bad_files in (42, "string", {"obj": True}):
+                (tmp / "checklist.json").write_text(json.dumps({
+                    "target_path": str(tmp),
+                    "files": bad_files,
+                }))
+                (tmp / "context-map.json").write_text(json.dumps({
+                    "entry_points": [{"file": "x.py", "name": "f"}],
+                    "sink_details": [],
+                }))
+                # Must not raise. Returns False because nothing got marked.
+                _enrich_agentic_checklist(tmp, tmp / "context-map.json")
+
+    def test_enrichment_does_not_raise_on_non_list_items_in_file_entry(self):
+        # Same gap, deeper iteration: file entry has items/functions as
+        # non-list.
+        import json
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "checklist.json").write_text(json.dumps({
+                "target_path": str(tmp),
+                "files": [
+                    {"path": "a.py", "items": "not a list"},
+                    {"path": "b.py", "functions": 42},
+                ],
+            }))
+            (tmp / "context-map.json").write_text(json.dumps({
+                "entry_points": [{"file": "a.py", "name": "f"}],
+                "sink_details": [],
+            }))
+            # Must not raise.
+            _enrich_agentic_checklist(tmp, tmp / "context-map.json")
+
     def test_enrichment_marks_multiple_files_and_reasons(self):
         # Both entry-points and sinks across multiple files must all land on
         # their corresponding checklist functions.

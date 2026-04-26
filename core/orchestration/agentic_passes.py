@@ -671,11 +671,19 @@ def _enrich_agentic_checklist(agentic_out_dir: Path, context_map_path: Path) -> 
             )
             return False
         enrich_checklist(checklist, context_map, str(agentic_out_dir))
+        # `or []` falls back only on falsy — a malformed checklist with
+        # files / items / functions as a non-list (string, int, dict)
+        # would still hit `for x in 42` and raise TypeError. Guard each
+        # iteration explicitly so corrupt input degrades to "0 marked"
+        # rather than crashing the post-pass.
+        def _as_list(v):
+            return v if isinstance(v, list) else []
         marked = sum(
             1
-            for f in (checklist.get("files") or [])
-            for fn in (f.get("items") or f.get("functions") or [])
-            if fn.get("priority") == "high"
+            for f in _as_list(checklist.get("files"))
+            if isinstance(f, dict)
+            for fn in (_as_list(f.get("items")) or _as_list(f.get("functions")))
+            if isinstance(fn, dict) and fn.get("priority") == "high"
         )
         if marked == 0:
             # Path-convention mismatch is the most common cause: context-map
