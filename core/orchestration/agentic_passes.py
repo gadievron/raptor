@@ -652,7 +652,7 @@ def _enrich_agentic_checklist(agentic_out_dir: Path, context_map_path: Path) -> 
         logger.info("agentic checklist not found at %s; skipping enrichment", checklist_path)
         return False
     try:
-        from core.pipeline.understand_bridge import enrich_checklist
+        from core.orchestration.understand_bridge import enrich_checklist
         checklist = load_json(checklist_path)
         context_map = load_json(context_map_path)
         if not isinstance(checklist, dict) or not isinstance(context_map, dict):

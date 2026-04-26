@@ -1,4 +1,4 @@
-"""Tests for core.pipeline.understand_bridge — /understand → /validate pipeline handoff."""
+"""Tests for core.orchestration.understand_bridge — /understand → /validate pipeline handoff."""
 
 import copy
 import json
@@ -10,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-# core/pipeline/tests/ -> repo root
+# core/orchestration/tests/ -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
-from core.pipeline.understand_bridge import (
+from core.orchestration.understand_bridge import (
     find_understand_output,
     load_understand_context,
     enrich_checklist,
@@ -709,7 +709,7 @@ class TestEdgeCases:
             "files": [{"path": "a.py", "sha256": "OLD_HASH_WONT_MATCH"}],
         })
 
-        with unittest.mock.patch("core.pipeline.understand_bridge.logger") as mock_logger:
+        with unittest.mock.patch("core.orchestration.understand_bridge.logger") as mock_logger:
             best_dir, stale = _rank_candidates([stale_dir], str(target))
 
         assert best_dir == stale_dir
@@ -774,7 +774,7 @@ class TestBuildChecklistScript:
         out_dir = tmp_path / "out"
         out_dir.mkdir()
 
-        repo_root = Path(__file__).parents[3]  # core/pipeline/tests -> repo root
+        repo_root = Path(__file__).parents[3]  # core/orchestration/tests -> repo root
         result = subprocess.run(
             ["libexec/raptor-build-checklist", str(target), str(out_dir)],
             capture_output=True, text=True, cwd=repo_root,

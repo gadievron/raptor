@@ -18,7 +18,7 @@ Handles three things automatically so the analyst doesn't have to:
 
 Usage (from Stage 0 in /validate):
 
-    from core.pipeline.understand_bridge import find_understand_output, load_understand_context, enrich_checklist
+    from core.orchestration.understand_bridge import find_understand_output, load_understand_context, enrich_checklist
 
     understand_dir, stale_files = find_understand_output(validate_dir, target_path=target)
     if understand_dir:

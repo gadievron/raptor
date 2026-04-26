@@ -20,7 +20,7 @@ from core.orchestration.agentic_passes import (
     _RAPTOR_DIR,
     _LIFECYCLE,
 )
-from core.pipeline.understand_bridge import find_understand_output, load_understand_context
+from core.orchestration.understand_bridge import find_understand_output, load_understand_context
 
 
 def _make_target(tmp: Path) -> Path:

@@ -214,7 +214,7 @@ The `/understand` command provides deep, adversarial code comprehension for secu
 
 **Output:** Resolved by `libexec/raptor-run-lifecycle start understand` (project dir or `out/understand_<timestamp>/`)
 
-**Pipeline integration:** `/validate` Stage 0 automatically imports `/understand` output via the bridge (`core/pipeline/understand_bridge.py`). No `--out` alignment needed — the bridge searches: (1) co-located files, (2) project siblings, (3) global `out/` by target path + SHA-256 freshness. When found, it pre-populates `attack-surface.json`, imports flow traces as attack paths, and marks entry points/sinks as high-priority in the checklist.
+**Pipeline integration:** `/validate` Stage 0 automatically imports `/understand` output via the bridge (`core/orchestration/understand_bridge.py`). No `--out` alignment needed — the bridge searches: (1) co-located files, (2) project siblings, (3) global `out/` by target path + SHA-256 freshness. When found, it pre-populates `attack-surface.json`, imports flow traces as attack paths, and marks entry points/sinks as high-priority in the checklist.
 
 ---
 
