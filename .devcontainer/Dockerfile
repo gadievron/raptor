@@ -15,6 +15,8 @@ RUN rm -f /etc/apt/sources.list.d/yarn.list
 # Organized by component that needs them
 # ============================================================================
 
+RUN rm -f /etc/apt/sources.list.d/yarn.list
+
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     && apt-get install -y --no-install-recommends \
     #
@@ -64,8 +66,7 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     libdbus-1-3 \
     libexpat1 \
     libfontconfig1 \
-    libgcc1 \
-    libgconf-2-4 \
+    libgcc-s1 \
     libgdk-pixbuf2.0-0 \
     libglib2.0-0 \
     libgtk-3-0 \
