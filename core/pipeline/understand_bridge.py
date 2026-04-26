@@ -18,7 +18,7 @@ Handles three things automatically so the analyst doesn't have to:
 
 Usage (from Stage 0 in /validate):
 
-    from core.understand_bridge import find_understand_output, load_understand_context, enrich_checklist
+    from core.pipeline.understand_bridge import find_understand_output, load_understand_context, enrich_checklist
 
     understand_dir, stale_files = find_understand_output(validate_dir, target_path=target)
     if understand_dir:
@@ -158,8 +158,9 @@ def _rank_candidates(
         return None
 
     if not target_path:
-        # No target — can't hash on disk, just pick newest
-        candidates.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+        # No target — can't hash on disk, just pick newest.
+        # Use mtime_ns for sub-second resolution; directory name breaks ties.
+        candidates.sort(key=lambda d: (d.stat().st_mtime_ns, d.name), reverse=True)
         return candidates[0], set()
 
     scored = []
@@ -167,15 +168,16 @@ def _rank_candidates(
         u_checklist = load_json(d / "checklist.json")
         if not u_checklist:
             # No checklist — treat as fully stale (can't verify any file)
-            scored.append((1, d.stat().st_mtime, d, set()))
+            scored.append((1, d.stat().st_mtime_ns, d, set()))
             continue
         u_hashes = _extract_hashes(u_checklist)
         stale = _find_stale_files(u_hashes, target_path)
         # fresh = 0 stale files → sort key 0 (best)
-        scored.append((len(stale), d.stat().st_mtime, d, stale))
+        scored.append((len(stale), d.stat().st_mtime_ns, d, stale))
 
-    # Sort: fewest stale first, then newest mtime first (negate for descending)
-    scored.sort(key=lambda t: (t[0], -t[1]))
+    # Sort descending: fewest stale (negated), then newest mtime_ns, then
+    # directory name (timestamp-based names sort chronologically).
+    scored.sort(key=lambda t: (-t[0], t[1], t[2].name), reverse=True)
     best_stale_count, _, best_dir, best_stale_files = scored[0]
 
     if best_stale_count > 0:
