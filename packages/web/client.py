@@ -51,10 +51,14 @@ class WebClient:
             time.sleep(self.rate_limit - elapsed)
         self.last_request_time = time.time()
 
+    def _redact_for_logging(self, value: object) -> str:
+        """Apply this client's secret-redaction policy to log/display text."""
+        return redact_secrets(value, reveal_secrets=self.reveal_secrets)
+
     def _log_request(self, method: str, url: str, response: requests.Response,
                      duration: float) -> None:
         """Log request details."""
-        log_url = redact_secrets(url, reveal_secrets=self.reveal_secrets)
+        log_url = self._redact_for_logging(url)
         self.request_history.append({
             'method': method,
             'url': log_url,
@@ -90,10 +94,10 @@ class WebClient:
             return response
 
         except requests.exceptions.Timeout:
-            logger.warning(f"Timeout on GET {url}")
+            logger.warning(f"Timeout on GET {self._redact_for_logging(url)}")
             raise
         except requests.exceptions.RequestException as e:
-            logger.error(f"Request failed: {e}")
+            logger.error(f"Request failed: {self._redact_for_logging(e)}")
             raise
 
     def post(self, path: str, data: Optional[Dict] = None,
@@ -122,7 +126,7 @@ class WebClient:
             return response
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"POST request failed: {e}")
+            logger.error(f"POST request failed: {self._redact_for_logging(e)}")
             raise
 
     def set_auth(self, username: str, password: str) -> None:

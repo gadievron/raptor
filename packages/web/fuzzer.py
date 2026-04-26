@@ -58,7 +58,10 @@ class WebFuzzer:
         if vulnerability_types is None:
             vulnerability_types = ['sqli', 'xss', 'command_injection', 'path_traversal']
 
-        logger.info(f"Fuzzing parameter '{param_name}' at {url}")
+        logger.info(
+            "Fuzzing parameter "
+            f"'{param_name}' at {redact_secrets(url, reveal_secrets=self.client.reveal_secrets)}"
+        )
 
         findings = []
 
