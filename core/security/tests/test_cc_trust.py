@@ -243,6 +243,20 @@ class TestEnvInjection:
         }))
         assert _check(str(tmp_path)) is True
 
+    @pytest.mark.parametrize("key", [
+        "SAGE_URL", "SAGE_ENABLED", "SAGE_IDENTITY_PATH",
+        "SAGE_TIMEOUT",
+    ])
+    def test_sage_star_env_blocks(self, tmp_path, key):
+        """env.SAGE_* — targets manipulating RAPTOR's SAGE config (e.g.
+        SAGE_URL → attacker-controlled memory server, SAGE_ENABLED → silent
+        opt-in to persistent memory)."""
+        claude = tmp_path / ".claude"; claude.mkdir()
+        (claude / "settings.json").write_text(json.dumps({
+            "env": {key: "x"},
+        }))
+        assert _check(str(tmp_path)) is True
+
 
 class TestMCP:
 

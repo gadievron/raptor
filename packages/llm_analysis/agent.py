@@ -696,6 +696,7 @@ Do NOT:
             dataflow_source=vuln.dataflow_source,
             dataflow_sink=vuln.dataflow_sink,
             dataflow_steps=vuln.dataflow_steps,
+            repo_path=str(vuln.repo_path),
         )
 
         system_prompt = ANALYSIS_SYSTEM_PROMPT
@@ -1078,6 +1079,19 @@ Do NOT:
                     )
                     if func and func.get("metadata"):
                         finding["metadata"] = dict(func["metadata"])
+                    # If /understand --map enriched the checklist, also surface
+                    # the priority markers so the analysis prompt can mention
+                    # the function's architectural role (entry_point / sink).
+                    # Use ``or {}`` (not setdefault) — finding["metadata"] can
+                    # be explicitly None from upstream SARIF parsers, and
+                    # setdefault would return None in that case, then
+                    # None["priority"] = ... raises TypeError.
+                    if func and func.get("priority"):
+                        metadata = finding.get("metadata") or {}
+                        metadata["priority"] = func["priority"]
+                        if func.get("priority_reason"):
+                            metadata["priority_reason"] = func["priority_reason"]
+                        finding["metadata"] = metadata
 
                 vuln = VulnerabilityContext(finding, self.repo_path)
 

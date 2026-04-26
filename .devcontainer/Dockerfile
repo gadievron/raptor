@@ -6,6 +6,10 @@
 
 FROM mcr.microsoft.com/devcontainers/python:1-3.12-bookworm
 
+# The base image ships a stale yarn apt source without its GPG key,
+# which breaks apt-get update (NO_PUBKEY 62D54FD4003F6525).
+RUN rm -f /etc/apt/sources.list.d/yarn.list
+
 # ============================================================================
 # SYSTEM DEPENDENCIES
 # Organized by component that needs them
@@ -159,6 +163,12 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
     && npm install -g @anthropic-ai/claude-code
+
+# ============================================================================
+# JS PACKAGE MANAGERS (yarn replaced apt source removed above)
+# ============================================================================
+
+RUN npm install -g yarn pnpm
 
 # ============================================================================
 # ENVIRONMENT CONFIGURATION

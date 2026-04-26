@@ -57,3 +57,5 @@ CWE-476 (null deref). String-based findings (CWE-89) fall through to LLM analysi
 # Specific language with custom build
 /codeql --repo /tmp/vulns --languages cpp --build-command "make"
 ```
+
+---

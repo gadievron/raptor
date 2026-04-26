@@ -1,0 +1,65 @@
+# SAGE Memory Sidecar for RAPTOR
+# Usage: docker compose -f docker-compose.sage.yml up -d
+#
+# Services:
+#   sage    - SAGE consensus-validated memory (port 8090)
+#   ollama  - Embedding model server (port 11435)
+#
+# Ports use non-standard mappings to avoid conflicts with local services.
+
+services:
+  ollama:
+    image: ollama/ollama:0.21.0
+    ports:
+      - "11435:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    # Uncomment for GPU support:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  ollama-init:
+    image: ollama/ollama:0.21.0
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["ollama", "pull", "nomic-embed-text"]
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+
+  sage:
+    image: ghcr.io/l33tdawg/sage:6.6.5
+    ports:
+      - "8090:8080"
+    volumes:
+      - sage_data:/root/.sage-gui
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_URL=http://ollama:11434
+      - REST_ADDR=0.0.0.0:8080
+    healthcheck:
+      # ghcr.io/l33tdawg/sage images ship with wget, not curl
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+  sage_data:

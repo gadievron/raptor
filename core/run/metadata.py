@@ -113,15 +113,28 @@ def _cleanup_abandoned(project_dir: Path, command: str, session_pid: int) -> Non
     Claude Code session), and same command type. This happens when the user
     presses Esc and retries the same command.
     """
-    if not project_dir.is_dir():
+    try:
+        if not project_dir.is_dir():
+            return
+        children = list(project_dir.iterdir())
+    except OSError:
+        # Parent dir may be a system-managed directory the current user
+        # can't read (e.g., /tmp containing systemd-private-* siblings,
+        # NFS with restricted ACLs). The cleanup is a best-effort tidy
+        # of *our* past runs; if we can't enumerate, skip and let the
+        # caller proceed.
         return
-    for d in project_dir.iterdir():
-        if not d.is_dir() or d.name.startswith((".", "_")):
+    for d in children:
+        try:
+            if not d.is_dir() or d.name.startswith((".", "_")):
+                continue
+            meta_path = d / RUN_METADATA_FILE
+            if not meta_path.exists():
+                continue
+            meta = load_json(meta_path)
+        except OSError:
+            # Per-child stat may fail even after iterdir succeeded.
             continue
-        meta_path = d / RUN_METADATA_FILE
-        if not meta_path.exists():
-            continue
-        meta = load_json(meta_path)
         if not meta:
             continue
         if (meta.get("status") == STATUS_RUNNING
@@ -189,15 +202,30 @@ def _promote_checklist(project_dir: Path) -> None:
     """
     from core.json import load_json, save_json
 
+    try:
+        children = list(project_dir.iterdir())
+    except OSError:
+        return
+
+    def _safe_mtime(d: Path) -> float:
+        try:
+            return d.stat().st_mtime
+        except OSError:
+            return 0.0
+
     checklists = []
-    for d in sorted(project_dir.iterdir(), key=lambda d: d.stat().st_mtime, reverse=True):
-        if not d.is_dir() or d.name.startswith((".", "_")):
+    for d in sorted(children, key=_safe_mtime, reverse=True):
+        try:
+            if not d.is_dir() or d.name.startswith((".", "_")):
+                continue
+            cl = d / "checklist.json"
+            if not cl.exists() or cl.is_symlink():
+                continue
+        except OSError:
             continue
-        cl = d / "checklist.json"
-        if cl.exists() and not cl.is_symlink():
-            data = load_json(cl)
-            if data:
-                checklists.append(data)
+        data = load_json(cl)
+        if data:
+            checklists.append(data)
 
     if not checklists:
         return

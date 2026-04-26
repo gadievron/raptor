@@ -483,12 +483,18 @@ class CrashAnalyser:
             "quit",
         ]
 
-        # Write commands to temporary file (with delete=False to keep it during execution)
-        with tempfile.NamedTemporaryFile(mode='w', suffix='_gdb_commands.txt', delete=False) as cmd_f:
-            cmd_file = Path(cmd_f.name)
-            cmd_f.write("\n".join(gdb_commands))
-
+        # Write commands to temporary file (delete=False to keep it during execution).
+        # cmd_f.write runs inside the `with`, BEFORE the try/finally below. A
+        # failing write (ENOSPC, I/O error) would leak the stub. Do the create
+        # + write + name-capture inside the try so finally always catches.
+        cmd_file = None
         try:
+            with tempfile.NamedTemporaryFile(
+                mode='w', suffix='_gdb_commands.txt', delete=False,
+            ) as cmd_f:
+                cmd_file = Path(cmd_f.name)
+                cmd_f.write("\n".join(gdb_commands))
+
             # Run GDB with input file via stdin (not in GDB script — avoids path injection)
             cmd = ["gdb", "-batch", "-x", str(cmd_file), str(self.binary)]
             with open(input_file, "rb") as f:
@@ -501,10 +507,11 @@ class CrashAnalyser:
                 )
         finally:
             # Clean up command file
-            try:
-                cmd_file.unlink()
-            except OSError:
-                pass
+            if cmd_file:
+                try:
+                    cmd_file.unlink()
+                except OSError:
+                    pass
 
         # Debug: save GDB output for inspection (using proper temp file)
         with tempfile.NamedTemporaryFile(mode='w', suffix='_gdb_output.txt', delete=False) as debug_f:
@@ -546,12 +553,17 @@ class CrashAnalyser:
             "quit",
         ]
 
-        # Write commands to temporary file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='_lldb_commands.txt', delete=False) as cmd_f:
-            cmd_file = Path(cmd_f.name)
-            cmd_f.write("\n".join(lldb_commands))
-
+        # Write commands to temporary file. Pull the create+write inside
+        # the try so a failing write doesn't leak the stub before we reach
+        # the existing finally-unlink below.
+        cmd_file = None
         try:
+            with tempfile.NamedTemporaryFile(
+                mode='w', suffix='_lldb_commands.txt', delete=False,
+            ) as cmd_f:
+                cmd_file = Path(cmd_f.name)
+                cmd_f.write("\n".join(lldb_commands))
+
             # Run LLDB with longer timeout — input file via stdin (not in script)
             try:
                 with open(input_file, "rb") as stdin_f:
@@ -586,9 +598,14 @@ class CrashAnalyser:
 
             return result.stdout
         finally:
-            # Clean up temp files
+            # Clean up temp files. cmd_file may be None if the initial
+            # write raised before assignment.
+            if cmd_file:
+                try:
+                    cmd_file.unlink()
+                except OSError:
+                    pass
             try:
-                cmd_file.unlink()
                 Path(lldb_out.name).unlink()
                 Path(lldb_err.name).unlink()
             except OSError:
@@ -607,12 +624,17 @@ class CrashAnalyser:
             "quit",
         ]
 
-        # Write commands to temporary file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='_lldb_fallback.txt', delete=False) as cmd_f:
-            cmd_file = Path(cmd_f.name)
-            cmd_f.write("\n".join(lldb_commands))
-
+        # Write commands to temporary file. Same hazard as the other two
+        # spots in this module: pull the create+write inside the try so a
+        # failing write doesn't leak the stub before reaching the finally.
+        cmd_file = None
         try:
+            with tempfile.NamedTemporaryFile(
+                mode='w', suffix='_lldb_fallback.txt', delete=False,
+            ) as cmd_f:
+                cmd_file = Path(cmd_f.name)
+                cmd_f.write("\n".join(lldb_commands))
+
             result = subprocess.run(
                 ["lldb", "-b", "-s", str(cmd_file), str(self.binary)],
                 capture_output=True,
@@ -625,10 +647,11 @@ class CrashAnalyser:
             return "LLDB analysis failed: timeout"
         finally:
             # Clean up temp file
-            try:
-                cmd_file.unlink()
-            except OSError:
-                pass
+            if cmd_file:
+                try:
+                    cmd_file.unlink()
+                except OSError:
+                    pass
 
     def _parse_lldb_output(self, context: CrashContext, lldb_output: str) -> None:
         """Parse LLDB output to extract crash information."""
@@ -1258,7 +1281,6 @@ class CrashAnalyser:
         if context.signal == "11":  # SIGSEGV
             if "rsp" in context.registers and "rip" in context.registers:
                 rsp = context.registers.get("rsp", "")
-                rip = context.registers.get("rip", "")
 
                 if rsp and "0x00000" in rsp:
                     return "null_deref"

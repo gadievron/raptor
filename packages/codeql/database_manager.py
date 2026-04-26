@@ -7,7 +7,6 @@ validation, and cleanup.
 """
 
 import hashlib
-import json
 import os
 import re
 import shutil
@@ -358,13 +357,23 @@ class DatabaseManager:
             if Path(build_cmd).is_file() or re.fullmatch(r'[a-zA-Z0-9._-]+', build_cmd):
                 cmd.extend(["--command", build_cmd])
             else:
+                # mkstemp creates the stub on disk BEFORE write_text/chmod run.
+                # The existing finally at the bottom of this method only fires
+                # if we reach the outer try — so guard create+write+chmod
+                # atomically here: clean up our own mess if any of the three
+                # raises, then re-raise so the caller still sees the error.
                 fd, script_name = tempfile.mkstemp(
                     prefix=".raptor_codeql_build_", suffix=".sh", dir=working_dir,
                 )
                 os.close(fd)
                 build_script = Path(script_name)
-                build_script.write_text(f"#!/bin/bash\n{build_cmd}\n")
-                build_script.chmod(build_script.stat().st_mode | stat.S_IEXEC)
+                try:
+                    build_script.write_text(f"#!/bin/bash\n{build_cmd}\n")
+                    build_script.chmod(build_script.stat().st_mode | stat.S_IEXEC)
+                except BaseException:
+                    build_script.unlink(missing_ok=True)
+                    build_script = None
+                    raise
                 cmd.extend(["--command", str(build_script)])
             logger.info(f"Build command: {build_system.command}")
             logger.info(f"Working directory: {working_dir}")
@@ -658,7 +667,7 @@ def main():
         if result.cached:
             print("(from cache)")
     else:
-        print(f"\n✗ Database creation failed")
+        print("\n✗ Database creation failed")
         for error in result.errors:
             print(f"  {error}")
 
