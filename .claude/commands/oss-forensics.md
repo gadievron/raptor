@@ -84,3 +84,5 @@ Key outputs:
 - Wait for each phase to complete before proceeding
 - Spawn followup investigations if oss-hypothesis-former-agent identifies any loose ends
 - Pass working directory to all agents
+
+---

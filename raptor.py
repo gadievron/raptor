@@ -72,6 +72,17 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
 
     start_run(out_dir, command, target=target)
 
+    # SAGE: Pre-scan recall
+    try:
+        from core.sage.hooks import recall_context_for_scan
+        sage_context = recall_context_for_scan(target or "")
+        if sage_context:
+            print(f"📚 SAGE: Recalled {len(sage_context)} historical memories")
+            for mem in sage_context[:3]:
+                print(f"   [{mem['confidence']:.0%}] {mem['content'][:80]}...")
+    except Exception:
+        pass
+
     # Inject --out so the downstream script uses the lifecycle directory
     if "--out" not in args:
         args = args + ["--out", str(out_dir)]
@@ -98,6 +109,37 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
                     break
     except Exception:
         pass
+
+    # SAGE: Post-scan storage
+    if rc == 0:
+        try:
+            from core.sage.hooks import store_scan_results
+            import json
+            # Try to find and store SARIF results
+            sarif_files = list(out_dir.glob("*.sarif")) + list(out_dir.glob("**/*.sarif"))
+            findings = []
+            for sf in sarif_files:
+                try:
+                    sarif = json.loads(sf.read_text())
+                    for run in sarif.get("runs", []):
+                        for result in run.get("results", []):
+                            findings.append({
+                                "rule_id": result.get("ruleId", "unknown"),
+                                "level": result.get("level", "warning"),
+                                "message": result.get("message", {}).get("text", ""),
+                                "file_path": (result.get("locations", [{}])[0]
+                                              .get("physicalLocation", {})
+                                              .get("artifactLocation", {})
+                                              .get("uri", "unknown")),
+                            })
+                except Exception:
+                    continue
+            if findings:
+                stored = store_scan_results(target or "", findings, {"total_findings": len(findings)})
+                if stored > 0:
+                    print(f"\n📚 SAGE: Stored {stored} findings for cross-run learning")
+        except Exception:
+            pass
 
     if rc == 0:
         complete_run(out_dir)

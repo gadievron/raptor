@@ -13,9 +13,10 @@ Handles HTTP requests with safety features:
 import time
 from typing import Dict, List, Optional, Any
 import requests
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urljoin
 
 from core.logging import get_logger
+from core.security.redaction import redact_secrets
 
 logger = get_logger()
 
@@ -23,12 +24,14 @@ logger = get_logger()
 class WebClient:
     """Secure HTTP client for web application testing."""
 
-    def __init__(self, base_url: str, timeout: int = 30, rate_limit: float = 0.5, verify_ssl: bool = True):
+    def __init__(self, base_url: str, timeout: int = 30, rate_limit: float = 0.5,
+                 verify_ssl: bool = True, reveal_secrets: bool = False):
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
         self.rate_limit = rate_limit  # Seconds between requests
         self.last_request_time = 0.0
         self.verify_ssl = verify_ssl
+        self.reveal_secrets = reveal_secrets
 
         # Session for cookie management
         self.session = requests.Session()
@@ -48,19 +51,24 @@ class WebClient:
             time.sleep(self.rate_limit - elapsed)
         self.last_request_time = time.time()
 
+    def _redact_for_logging(self, value: object) -> str:
+        """Apply this client's secret-redaction policy to log/display text."""
+        return redact_secrets(value, reveal_secrets=self.reveal_secrets)
+
     def _log_request(self, method: str, url: str, response: requests.Response,
                      duration: float) -> None:
         """Log request details."""
+        log_url = self._redact_for_logging(url)
         self.request_history.append({
             'method': method,
-            'url': url,
+            'url': log_url,
             'status_code': response.status_code,
             'duration': duration,
             'content_length': len(response.content),
             'timestamp': time.time(),
         })
 
-        logger.debug(f"{method} {url} -> {response.status_code} ({duration:.2f}s)")
+        logger.debug(f"{method} {log_url} -> {response.status_code} ({duration:.2f}s)")
 
     def get(self, path: str, params: Optional[Dict] = None,
             headers: Optional[Dict] = None) -> requests.Response:
@@ -86,10 +94,10 @@ class WebClient:
             return response
 
         except requests.exceptions.Timeout:
-            logger.warning(f"Timeout on GET {url}")
+            logger.warning(f"Timeout on GET {self._redact_for_logging(url)}")
             raise
         except requests.exceptions.RequestException as e:
-            logger.error(f"Request failed: {e}")
+            logger.error(f"Request failed: {self._redact_for_logging(e)}")
             raise
 
     def post(self, path: str, data: Optional[Dict] = None,
@@ -118,7 +126,7 @@ class WebClient:
             return response
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"POST request failed: {e}")
+            logger.error(f"POST request failed: {self._redact_for_logging(e)}")
             raise
 
     def set_auth(self, username: str, password: str) -> None:

@@ -36,20 +36,44 @@ _SEVERITY = [
 _VECTOR_RE = re.compile(
     r"^CVSS:3\.[01]/"
     r"AV:[NALP]/AC:[LH]/PR:[NLH]/UI:[NR]/S:[UC]/"
-    r"C:[NLH]/I:[NLH]/A:[NLH]$"
+    r"C:[NLH]/I:[NLH]/A:[NLH]"
+    # Optional temporal (E, RL, RC) and environmental
+    # (CR/IR/AR, MAV/MAC/MPR/MUI/MS, MC/MI/MA) segments. Real-world
+    # OSV records routinely include these — Log4Shell ships
+    # ``…/A:H/E:H`` — and rejecting them silently degraded scoring to
+    # ``None``. Each extension is ``METRIC:VALUE`` where the metric is
+    # alphabetic and the value is a single token; we accept any such
+    # suffix. ``compute_base_score`` ignores keys it doesn't recognise.
+    r"(?:/[A-Za-z]+:[A-Za-z0-9]+)*"
+    r"$"
 )
 
 
 def validate_vector(vector: str) -> bool:
-    """Check if a CVSS v3.1 vector string is well-formed."""
+    """Check if a CVSS v3.1 vector string is well-formed.
+
+    Accepts base-only vectors and vectors carrying optional temporal /
+    environmental extensions (``/E:H``, ``/RL:O``, ``/CR:H`` …). Only
+    the base segments contribute to the numeric score; the extensions
+    are tolerated, not consumed.
+    """
     return bool(_VECTOR_RE.match(vector))
 
 
 def parse_vector(vector: str) -> dict:
     """Parse a CVSS v3.1 vector string into a metric dict.
 
-    Returns dict like {"AV": "N", "AC": "L", "PR": "N", ...}.
+    Returns dict like ``{"AV": "N", "AC": "L", "PR": "N", ...}``.
     Raises ValueError if the vector is malformed.
+
+    The eight base metrics (``AV``, ``AC``, ``PR``, ``UI``, ``S``,
+    ``C``, ``I``, ``A``) are always present on a valid vector. When
+    the input carries optional temporal (``E``, ``RL``, ``RC``) or
+    environmental (``CR``, ``IR``, ``AR``, ``MAV``…``MA``) extensions,
+    those keys are also returned in the dict — callers iterating
+    ``items()`` will see them. ``compute_base_score`` looks up each
+    base metric by name and ignores extras, so extension keys never
+    influence the numeric output.
     """
     if not validate_vector(vector):
         raise ValueError(f"Invalid CVSS v3.1 vector: {vector}")

@@ -177,3 +177,5 @@ This command enforces strict validation gates. Full definitions are in `.claude/
  vulns    they're     working
           real        exploits
 ```
+
+---

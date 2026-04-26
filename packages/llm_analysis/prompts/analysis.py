@@ -44,6 +44,7 @@ def build_analysis_prompt(
     dataflow_sink: Optional[Dict[str, Any]] = None,
     dataflow_steps: Optional[list] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    repo_path: Optional[str] = None,
 ) -> str:
     """Build the vulnerability analysis prompt.
 
@@ -72,6 +73,12 @@ def build_analysis_prompt(
         if metadata.get("parameters"):
             param_strs = [f"{n}: {t}" if t else n for n, t in metadata["parameters"]]
             parts.append(f"Parameters: {', '.join(param_strs)}")
+        # Priority markers come from /understand --map via the agentic
+        # checklist enrichment. priority_reason is enum-bounded
+        # ("entry_point" or "sink") — safe to splice into the prompt.
+        if metadata.get("priority") == "high":
+            reason = metadata.get("priority_reason", "high-priority")
+            parts.append(f"Architectural role: {reason} (from /understand --map)")
         if parts:
             prompt += "\n**Function context (from inventory):**\n"
             for p in parts:
@@ -152,6 +159,15 @@ You have the COMPLETE attack path from source to sink. Use this to make an infor
 
 """
 
+    # Enrich with SAGE historical context (cross-run learning)
+    try:
+        from core.sage.hooks import enrich_analysis_prompt
+        sage_context = enrich_analysis_prompt(rule_id, file_path, repo_path=repo_path)
+        if sage_context:
+            prompt += sage_context
+    except Exception:
+        pass  # SAGE unavailable — no enrichment
+
     prompt += """
 **Your Task — work through each stage in sequence:**
 
@@ -223,4 +239,5 @@ def build_analysis_prompt_from_finding(finding: Dict[str, Any]) -> str:
         dataflow_sink=dataflow.get("sink") if dataflow else None,
         dataflow_steps=dataflow.get("steps") if dataflow else None,
         metadata=finding.get("metadata"),
+        repo_path=finding.get("repo_path"),
     )

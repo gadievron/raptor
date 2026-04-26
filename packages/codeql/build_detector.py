@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from shlex import quote
 from typing import Dict, List, Optional
-import xml.etree.ElementTree as ET
 
 # Add parent directory to path for imports
 # packages/codeql/build_detector.py -> repo root
@@ -454,11 +453,32 @@ class BuildDetector:
         build_cmd = f"{sys.executable} {quote(str(script_path))}"
         cleanup = [script_path, build_dir]
 
-        # Write heuristic build script and dry-run
-        self._write_build_script(
-            script_path, build_dir,
-            source_files, compiler, include_flags, define_flags,
-        )
+        # cleanup_paths is only returned to the caller on SUCCESS (via the
+        # BuildSystem at the bottom of this method). If _write_build_script
+        # or the first _dry_run raises, the caller never sees cleanup_paths
+        # and both the script stub AND the build dir leak UNDER self.repo_path
+        # (= pollutes the target repo). Guard with try/except that walks the
+        # cleanup list on failure before re-raising.
+        def _cleanup_on_failure():
+            for p in cleanup:
+                try:
+                    if p.is_dir():
+                        import shutil
+                        shutil.rmtree(str(p), ignore_errors=True)
+                    else:
+                        p.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+        try:
+            # Write heuristic build script and dry-run
+            self._write_build_script(
+                script_path, build_dir,
+                source_files, compiler, include_flags, define_flags,
+            )
+        except BaseException:
+            _cleanup_on_failure()
+            raise
         logger.info(f"Synthesised build script for {language}: {script_path}")
         logger.info(f"  Source files: {len(source_files)}")
 
@@ -484,7 +504,7 @@ class BuildDetector:
                     logger.info(f"  CC improved: {heuristic_ok} → {cc_ok} compiled")
                     build_type = "synthesised-cc"
                 else:
-                    logger.info(f"  CC didn't improve, using heuristic")
+                    logger.info("  CC didn't improve, using heuristic")
                     self._write_build_script(
                         script_path, build_dir,
                         source_files, compiler, include_flags, define_flags,
@@ -493,7 +513,7 @@ class BuildDetector:
             else:
                 confidence = 0.5
         else:
-            logger.info(f"  Dry-run: all files compiled successfully")
+            logger.info("  Dry-run: all files compiled successfully")
 
         return BuildSystem(
             type=build_type, command=build_cmd,
@@ -523,7 +543,7 @@ class BuildDetector:
         elif language == "java":
             source_files = list(self.repo_path.rglob("*.java"))
             compiler = "javac"
-            include_flags = [f"-sourcepath", str(self.repo_path)]
+            include_flags = ["-sourcepath", str(self.repo_path)]
         else:
             return [], "", [], []
 
@@ -784,7 +804,7 @@ def main():
     if args.validate:
         valid = detector.validate_build_command(build_system)
         if not valid:
-            print(f"WARNING: Build command validation failed")
+            print("WARNING: Build command validation failed")
 
     if args.json:
         output = {
