@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Stage E SMT verb: CWE-190 integer overflow / wraparound.
+
+Usage:
+  raptor-smt-check-overflow --op OP --operand X --operand Y [--operand Z ...]
+                            [--profile NAME] [--kind KIND]
+                            [--guard 'condition' ...]
+
+Each ``--operand`` is one operand of the suspect arithmetic op.  Operands
+must be atomic — single identifiers (``count``) or numeric literals
+(``16``, ``0x10``).  Compound forms like ``sizeof(record)`` are rejected
+with a clear error; pass the numeric value or use raptor-smt-validate-path
+directly for free-form predicates.
+
+``OP`` is the binary operator: ``+``, ``-``, ``*``.  (``<<`` and bitwise
+ops aren't covered by this verb — use raptor-smt-validate-path directly.)
+
+``--profile`` selects bitvector width / signedness; defaults to ``uint32``
+(most common CWE-190 case).  Must match ``--kind``: unsigned_wrap requires
+an unsigned profile; signed_wrap a signed one.
+
+``--kind`` is ``unsigned_wrap`` (default) or ``signed_wrap``.  signed_wrap
+is supported for ``+`` and ``*`` only — signed-minus overflow shape is
+too narrow for this verb's binary template.
+
+``--guard`` is repeatable — one visible source-level guard each.  If a
+guard was bypassed on the dangerous path, pre-negate it manually:
+``--guard 'len == 0'`` rather than ``--guard '!(len > 0)'``.
+
+Output: JSON to stdout matching validate_path's shape.  Of interest:
+
+  feasible=true   overflow IS reachable; ``model`` carries witness operands
+  feasible=false  guards rule out wrap
+  feasible=null   Z3 unavailable / unencodable
+
+The intrinsic predicate is built directly via core.smt_solver.csem (no
+parser involved for the verb's own predicate), so the verb cannot fail
+at parse time on its own predicate — only on caller-supplied guards.
+"""
+import argparse
+import json
+import sys
+from pathlib import Path
+
+# libexec/<this> -> repo root
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from packages.exploit_feasibility.smt_verbs import check_overflow
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(
+        prog="raptor-smt-check-overflow",
+        description="Stage E SMT verb for CWE-190 integer overflow.",
+    )
+    p.add_argument("--op", required=True, choices=["+", "-", "*"],
+                   help="Binary arithmetic operator (csem.{u,s}{add,sub,mul})")
+    p.add_argument("--operand", action="append", required=True, default=[],
+                   help="Operand expression (repeat for each operand; ≥2)")
+    p.add_argument("--profile", default="uint32",
+                   help="Bitvector profile name (default: uint32)")
+    p.add_argument("--kind", default="unsigned_wrap",
+                   choices=["unsigned_wrap", "signed_wrap"],
+                   help="Wrap pattern (default: unsigned_wrap)")
+    p.add_argument("--guard", action="append", default=[],
+                   help="Visible source-level guard (repeat for each)")
+    args = p.parse_args()
+
+    try:
+        result = check_overflow(
+            args.operand,
+            args.op,
+            profile=args.profile,
+            guards=args.guard,
+            kind=args.kind,
+        )
+    except (TypeError, ValueError) as e:
+        print(f"raptor-smt-check-overflow: {e}", file=sys.stderr)
+        return 2
+
+    json.dump(result, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

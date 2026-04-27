@@ -280,6 +280,69 @@ def _parse_expr(
 _CALL_HEAD_RE = re.compile(r'[a-z_][a-z0-9_]*', re.IGNORECASE)
 
 
+def _next_anon_index(vars_: Dict[str, Any]) -> int:
+    """Return the next free ``_anon_<N>`` index for ``vars_``.
+
+    Seeds from ``max(existing index) + 1`` rather than ``len(existing)``
+    so names stay unique even if a caller has deleted entries from
+    ``vars_`` (a sparse range would otherwise collide with a live anon
+    name).  Defensive against ``_anon_<non-int>`` keys: ignored.
+
+    Shared between :func:`_substitute_calls` (parser-side) and
+    :func:`make_anon_call_var` (verb-side) so both paths allocate from
+    the same counter.
+    """
+    existing_indices: List[int] = []
+    for k in vars_:
+        if k.startswith('_anon_'):
+            try:
+                existing_indices.append(int(k[len('_anon_'):]))
+            except ValueError:
+                pass
+    return max(existing_indices, default=-1) + 1
+
+
+def is_balanced_call(text: str) -> bool:
+    """Match a complete balanced ``<ident>(...)`` form, end-to-end.
+
+    Returns ``True`` only if ``text`` is *entirely* a single function-
+    call-shaped expression.  Used by domain encoders building operand
+    BVs to detect whether a single-operand string is a function call
+    that should be substituted with a free variable, vs an arithmetic
+    expression that should be rejected as compound.
+    """
+    m = _CALL_HEAD_RE.match(text)
+    if not m or m.end() >= len(text) or text[m.end()] != '(':
+        return False
+    depth = 1
+    j = m.end() + 1
+    while j < len(text) and depth > 0:
+        if text[j] == '(':
+            depth += 1
+        elif text[j] == ')':
+            depth -= 1
+        j += 1
+    return depth == 0 and j == len(text)
+
+
+def make_anon_call_var(vars_: Dict[str, Any], *, profile: BVProfile) -> Any:
+    """Allocate a fresh ``_anon_N`` Z3 BV for a function-call operand.
+
+    Two textually-identical calls (``strlen(s) == strlen(s)``) produce
+    *distinct* anon vars — the parser doesn't assume calls are pure.
+    Callers wanting same-call equality should use a helper variable in
+    a guard instead.
+
+    Shares the ``_anon_*`` namespace with the parser-side substitution
+    in :func:`_substitute_calls`, so a verb can build an operand and
+    then a guard that references the same call without index collision.
+    """
+    counter = _next_anon_index(vars_)
+    name = f"_anon_{counter}"
+    vars_[name] = _mk_var(name, profile.width)
+    return vars_[name]
+
+
 def _substitute_calls(
     text: str, vars_: Dict[str, Any], *, profile: BVProfile,
 ) -> str:
@@ -292,11 +355,6 @@ def _substitute_calls(
     preserving correctness: the placeholder is unconstrained, so the
     solver can never claim infeasibility based on the elided subterm.
 
-    The placeholder counter is seeded from ``max(existing index) + 1``
-    rather than ``len(existing)`` so that names stay unique even if a
-    caller has deleted entries from ``vars_`` (a sparse register would
-    otherwise collide with a live anon name).
-
     Nested calls collapse to a single placeholder
     (``f(g(x))`` → ``_anon_0``), since the outer call drives the
     balanced-paren walk.  Two textually-identical calls produce
@@ -305,16 +363,7 @@ def _substitute_calls(
     Unbalanced parens (``strlen(x``) are left in place; the caller's
     parens-check still rejects them.
     """
-    existing_indices: List[int] = []
-    for k in vars_:
-        if k.startswith('_anon_'):
-            try:
-                existing_indices.append(int(k[len('_anon_'):]))
-            except ValueError:
-                # Defensive: ignore any ``_anon_<non-int>`` someone may
-                # have stuffed in vars_ — those don't constrain ours.
-                pass
-    counter = max(existing_indices, default=-1) + 1
+    counter = _next_anon_index(vars_)
     out: List[str] = []
     i = 0
     n = len(text)
@@ -441,6 +490,237 @@ def _parse_condition(
 # Public API
 # ---------------------------------------------------------------------------
 
+def _classify_text_condition(
+    cond: PathCondition,
+    vars_: Dict[str, Any],
+    solver: Any,
+    *,
+    profile: BVProfile,
+) -> Tuple[Optional[str], Optional[Tuple[str, Any]], Optional[Rejection]]:
+    """Parse one text condition and classify it.
+
+    Returns one of:
+      - ``(satisfied_display, None, None)`` — tautology, no further work
+      - ``(None, (display, expr), None)`` — pending, must be solved
+      - ``(None, None, rejection)`` — unparseable, accumulate into unknown
+
+    Factored out so :func:`check_path_feasibility` and
+    :func:`check_verb_feasibility` share the same parse-and-classify
+    semantics.
+    """
+    expr = _parse_condition(cond.text, vars_, profile=profile)
+    if isinstance(expr, Rejection):
+        _get_logger().debug(
+            f"smt_path_validator: rejected {cond.text!r} ({expr.kind.value}: {expr.detail})"
+        )
+        return None, None, expr
+
+    final_expr = z3.Not(expr) if cond.negated else expr
+    # Display form reflects what was actually asserted — without this,
+    # an unsat-core listing for a negated condition shows the un-negated
+    # text and confuses readers ("ptr != NULL ⊥ ptr > 0" looks
+    # consistent until you realise we asserted ptr == 0 not ptr != NULL).
+    display = f"NOT ({cond.text})" if cond.negated else cond.text
+
+    # Quick individual check: is this condition alone satisfiable?
+    with _scoped(solver):
+        solver.add(z3.Not(final_expr))
+        if solver.check() == z3.unsat:
+            return display, None, None  # tautology
+
+    return None, (display, final_expr), None
+
+
+def _solve_pending(
+    pending: List[Tuple[str, Any]],
+    solver: Any,
+    satisfied: List[str],
+    unknown: List[str],
+    unknown_reasons: List[Rejection],
+    *,
+    profile: BVProfile,
+) -> PathSMTResult:
+    """Run the solver over pending predicates and produce a verdict.
+
+    Shared between :func:`check_path_feasibility` and
+    :func:`check_verb_feasibility`.  Caller has already classified
+    each input as tautology/pending/unknown; this function turns the
+    pending list into a sat/unsat/unknown verdict and packages the
+    result.
+    """
+    mode = profile.describe()
+
+    if not pending:
+        if unknown:
+            return PathSMTResult(
+                feasible=None,
+                satisfied=satisfied, unsatisfied=[], unknown=unknown,
+                unknown_reasons=unknown_reasons,
+                model={}, smt_available=True,
+                reasoning=(
+                    f"indeterminate ({mode}): {len(satisfied)} trivially satisfied, "
+                    f"{len(unknown)} unparseable — LLM analysis required"
+                ),
+            )
+        return PathSMTResult(
+            feasible=True,
+            satisfied=satisfied, unsatisfied=[], unknown=[],
+            unknown_reasons=[],
+            model={}, smt_available=True,
+            reasoning=f"all {len(satisfied)} condition(s) trivially satisfied ({mode})",
+        )
+
+    label_map = _track(solver, pending)
+    result = solver.check()
+
+    if result == z3.sat:
+        model_dict = _format_witness(solver.model(), signed=profile.signed)
+        return PathSMTResult(
+            feasible=True,
+            satisfied=satisfied, unsatisfied=[], unknown=unknown,
+            unknown_reasons=unknown_reasons,
+            model=model_dict, smt_available=True,
+            reasoning=(
+                f"feasible ({mode}): {len(pending)} condition(s) are jointly satisfiable"
+                + (f"; {len(satisfied)} trivially satisfied" if satisfied else "")
+                + (f"; {len(unknown)} unparsed" if unknown else "")
+            ),
+        )
+
+    if result == z3.unsat:
+        conflicts = _core_names(solver, label_map)
+        conflict_set = conflicts if conflicts else [t for t, _ in pending]
+        reasoning = f"infeasible ({mode}): path conditions are mutually exclusive"
+        if conflicts:
+            reasoning += f"; conflict: {' ⊥ '.join(conflicts[:3])}"
+        return PathSMTResult(
+            feasible=False,
+            satisfied=satisfied, unsatisfied=conflict_set, unknown=unknown,
+            unknown_reasons=unknown_reasons,
+            model={}, smt_available=True,
+            reasoning=reasoning,
+        )
+
+    # z3.unknown — timeout or outside decidable fragment.
+    solver_reason = _classify_solver_unknown(solver)
+    pending_texts = [t for t, _ in pending]
+    pending_reasons = [
+        Rejection(
+            t, solver_reason,
+            f"Z3 reason_unknown: {solver.reason_unknown()}"
+            if hasattr(solver, "reason_unknown") else "",
+        )
+        for t in pending_texts
+    ]
+    detail = (
+        f"likely the {_DEFAULT_TIMEOUT_MS}ms timeout"
+        if solver_reason is RejectionKind.SOLVER_TIMEOUT
+        else "conditions outside the decidable bitvector fragment"
+    )
+    return PathSMTResult(
+        feasible=None,
+        satisfied=satisfied, unsatisfied=[],
+        unknown=unknown + pending_texts,
+        unknown_reasons=unknown_reasons + pending_reasons,
+        model={}, smt_available=True,
+        reasoning=f"Z3 returned unknown ({mode}) — {detail}",
+    )
+
+
+def make_var(name: str, vars_: Dict[str, Any], *, profile: BVProfile) -> Any:
+    """Get-or-create a Z3 bitvector variable, sharing ``vars_`` with the parser.
+
+    Domain encoders (``smt_verbs``) building Z3 predicates directly via
+    csem need their operand BVs to share names with parser-built BVs so
+    that, e.g., a verb's overflow predicate over ``count`` and a guard
+    ``count < MAX`` constrain the *same* Z3 variable.
+
+    Names are lowercased to match the parser's convention.
+    """
+    key = name.lower()
+    if key not in vars_:
+        vars_[key] = _mk_var(key, profile.width)
+    return vars_[key]
+
+
+def make_val(literal: str, *, profile: BVProfile) -> Any:
+    """Resolve a literal token (``"16"``, ``"0xff"``) to a Z3 BitVecVal.
+
+    Goes through the same width / leading-zero validation as atom-position
+    literals in the parser, so callers get consistent rejection.
+    Raises ``ValueError`` on invalid literal — verbs catch and surface
+    as a verb-layer error.
+    """
+    from core.smt_solver import parse_literal_value
+    v = parse_literal_value(literal, profile)
+    if isinstance(v, Rejection):
+        raise ValueError(
+            f"literal {literal!r} rejected: {v.kind.value} ({v.detail})"
+        )
+    return _mk_val(v, profile.width)
+
+
+def check_verb_feasibility(
+    intrinsic: List[Tuple[str, Any]],
+    text_guards: List[PathCondition],
+    vars_: Dict[str, Any],
+    *,
+    profile: BVProfile = BV_C_UINT64,
+) -> PathSMTResult:
+    """Feasibility analysis for a named SMT verb.
+
+    Verbs build their intrinsic Z3 predicate directly (typically via
+    ``core.smt_solver.csem``) and pass it as ``intrinsic`` — a list of
+    ``(display_text, z3_expr)`` tuples.  ``display_text`` appears in
+    unsat-core conflict listings, so callers should pick a form that
+    reads as the verb's intent (e.g. ``"unsigned mul wraps: count * 16"``).
+
+    ``text_guards`` are caller-supplied path conditions, parsed via the
+    same path as :func:`check_path_feasibility`.  Verbs and the parser
+    share ``vars_`` so identifier-named operands resolve to the same
+    Z3 BV regardless of which path created them.
+
+    Always called with Z3 available; verbs short-circuit the
+    ``smt_available=False`` case before calling this helper.
+    """
+    mode = profile.describe()
+    solver = _new_solver()
+
+    satisfied: List[str] = []
+    unknown: List[str] = []
+    unknown_reasons: List[Rejection] = []
+    pending: List[Tuple[str, Any]] = list(intrinsic)  # intrinsic always solved
+
+    for cond in text_guards:
+        sat_display, pending_pair, rejection = _classify_text_condition(
+            cond, vars_, solver, profile=profile,
+        )
+        if sat_display is not None:
+            satisfied.append(sat_display)
+        elif rejection is not None:
+            unknown.append(cond.text)
+            unknown_reasons.append(rejection)
+        else:
+            assert pending_pair is not None
+            pending.append(pending_pair)
+
+    if not intrinsic and not pending and not unknown and not satisfied:
+        # Defensive: a verb with no intrinsic and no guards is a usage
+        # error but we still return something coherent rather than
+        # divide-by-zero in the verdict logic.
+        return PathSMTResult(
+            feasible=True,
+            satisfied=[], unsatisfied=[], unknown=[],
+            unknown_reasons=[],
+            model={}, smt_available=True,
+            reasoning=f"no predicates ({mode}) — vacuously satisfiable",
+        )
+
+    return _solve_pending(
+        pending, solver, satisfied, unknown, unknown_reasons, profile=profile,
+    )
+
+
 def check_path_feasibility(
     conditions: List[PathCondition],
     *,
@@ -494,106 +774,18 @@ def check_path_feasibility(
     pending: List[Tuple[str, Any]] = []
 
     for cond in conditions:
-        expr = _parse_condition(cond.text, vars_, profile=profile)
-        if isinstance(expr, Rejection):
-            _get_logger().debug(
-                f"smt_path_validator: rejected {cond.text!r} ({expr.kind.value}: {expr.detail})"
-            )
+        sat_display, pending_pair, rejection = _classify_text_condition(
+            cond, vars_, solver, profile=profile,
+        )
+        if sat_display is not None:
+            satisfied.append(sat_display)
+        elif rejection is not None:
             unknown.append(cond.text)
-            unknown_reasons.append(expr)
-            continue
+            unknown_reasons.append(rejection)
+        else:
+            assert pending_pair is not None
+            pending.append(pending_pair)
 
-        final_expr = z3.Not(expr) if cond.negated else expr
-        # Display form reflects what was actually asserted — without this,
-        # an unsat-core listing for a negated condition shows the un-negated
-        # text and confuses readers ("ptr != NULL ⊥ ptr > 0" looks
-        # consistent until you realise we asserted ptr == 0 not ptr != NULL).
-        display = f"NOT ({cond.text})" if cond.negated else cond.text
-
-        # Quick individual check: is this condition alone satisfiable?
-        with _scoped(solver):
-            solver.add(z3.Not(final_expr))
-            if solver.check() == z3.unsat:
-                # Condition is a tautology — trivially satisfied
-                satisfied.append(display)
-                continue
-
-        pending.append((display, final_expr))
-
-    if not pending:
-        if unknown:
-            return PathSMTResult(
-                feasible=None,
-                satisfied=satisfied, unsatisfied=[], unknown=unknown,
-                unknown_reasons=unknown_reasons,
-                model={}, smt_available=True,
-                reasoning=(
-                    f"indeterminate ({mode}): {len(satisfied)} trivially satisfied, "
-                    f"{len(unknown)} unparseable — LLM analysis required"
-                ),
-            )
-        return PathSMTResult(
-            feasible=True,
-            satisfied=satisfied, unsatisfied=[], unknown=[],
-            unknown_reasons=[],
-            model={}, smt_available=True,
-            reasoning=f"all {len(satisfied)} condition(s) trivially satisfied ({mode})",
-        )
-
-    label_map = _track(solver, pending)
-    result = solver.check()
-
-    if result == z3.sat:
-        model_dict = _format_witness(solver.model(), signed=profile.signed)
-        return PathSMTResult(
-            feasible=True,
-            satisfied=satisfied, unsatisfied=[], unknown=unknown,
-            unknown_reasons=unknown_reasons,
-            model=model_dict, smt_available=True,
-            reasoning=(
-                f"feasible ({mode}): {len(pending)} condition(s) are jointly satisfiable"
-                + (f"; {len(satisfied)} trivially satisfied" if satisfied else "")
-                + (f"; {len(unknown)} unparsed" if unknown else "")
-            ),
-        )
-
-    if result == z3.unsat:
-        conflicts = _core_names(solver, label_map)
-        conflict_set = conflicts if conflicts else [t for t, _ in pending]
-        reasoning = f"infeasible ({mode}): path conditions are mutually exclusive"
-        if conflicts:
-            reasoning += f"; conflict: {' ⊥ '.join(conflicts[:3])}"
-        return PathSMTResult(
-            feasible=False,
-            satisfied=satisfied, unsatisfied=conflict_set, unknown=unknown,
-            unknown_reasons=unknown_reasons,
-            model={}, smt_available=True,
-            reasoning=reasoning,
-        )
-
-    # z3.unknown — timeout or outside decidable fragment.  Tag every
-    # pending condition with the structured reason so callers can tell a
-    # solver punt apart from a parser failure.
-    solver_reason = _classify_solver_unknown(solver)
-    pending_texts = [t for t, _ in pending]
-    pending_reasons = [
-        Rejection(
-            t, solver_reason,
-            f"Z3 reason_unknown: {solver.reason_unknown()}"
-            if hasattr(solver, "reason_unknown") else "",
-        )
-        for t in pending_texts
-    ]
-    detail = (
-        f"likely the {_DEFAULT_TIMEOUT_MS}ms timeout"
-        if solver_reason is RejectionKind.SOLVER_TIMEOUT
-        else "conditions outside the decidable bitvector fragment"
-    )
-    return PathSMTResult(
-        feasible=None,
-        satisfied=satisfied, unsatisfied=[],
-        unknown=unknown + pending_texts,
-        unknown_reasons=unknown_reasons + pending_reasons,
-        model={}, smt_available=True,
-        reasoning=f"Z3 returned unknown ({mode}) — {detail}",
+    return _solve_pending(
+        pending, solver, satisfied, unknown, unknown_reasons, profile=profile,
     )

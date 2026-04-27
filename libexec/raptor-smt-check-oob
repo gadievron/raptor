@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""Stage E SMT verb: CWE-125 / CWE-787 array out-of-bounds.
+
+Usage:
+  raptor-smt-check-oob --buffer-size SIZE --index INDEX
+                       [--profile NAME] [--guard 'condition' ...]
+
+``SIZE`` and ``INDEX`` are identifier or expression strings naming the
+buffer length and the index used at the access site.  Compound
+expressions are accepted (``--index 'offset + length'``) — the parser
+handles arithmetic.
+
+``--profile`` defaults to ``uint64`` since most modern bounds are
+``size_t``-shaped.  Override when the index is ``int`` or narrower.
+
+``--guard`` is repeatable; one visible bounds-check / path condition each.
+If a check was bypassed on the dangerous path, pre-negate manually.
+
+Output: JSON to stdout matching :func:`validate_path`'s shape.  Of interest:
+
+  feasible=true   OOB IS reachable; ``model`` shows escaping index/size
+  feasible=false  guards rule out OOB
+  feasible=null   Z3 unavailable / unencodable
+
+Notes:
+  Only checks the upper bound (``index >= buffer_size``).  Negative-index
+  escapes need a signed profile AND an explicit guard expression.
+"""
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from packages.exploit_feasibility.smt_verbs import check_oob
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(
+        prog="raptor-smt-check-oob",
+        description="Stage E SMT verb for CWE-125 / CWE-787 OOB access.",
+    )
+    p.add_argument("--buffer-size", required=True, dest="buffer_size",
+                   help="Identifier/expression naming the buffer length")
+    p.add_argument("--index", required=True,
+                   help="Identifier/expression naming the index")
+    p.add_argument("--profile", default="uint64",
+                   help="Bitvector profile name (default: uint64)")
+    p.add_argument("--guard", action="append", default=[],
+                   help="Visible bounds-check / path condition (repeat)")
+    args = p.parse_args()
+
+    try:
+        result = check_oob(
+            args.buffer_size,
+            args.index,
+            profile=args.profile,
+            guards=args.guard,
+        )
+    except (TypeError, ValueError) as e:
+        print(f"raptor-smt-check-oob: {e}", file=sys.stderr)
+        return 2
+
+    json.dump(result, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""Stage E SMT verb: CWE-476 null-pointer dereference.
+
+Usage:
+  raptor-smt-check-null-deref --ptr PTR
+                              [--profile NAME] [--guard 'condition' ...]
+
+``PTR`` is the identifier naming the pointer at the dereference site.
+Use the *exact* name as it appears at the deref — the parser treats it
+as a free variable, so ``ptr`` and ``p->next`` are distinct symbols.
+
+``--profile`` defaults to ``uint64`` (pointer width on 64-bit targets).
+Override to ``uint32`` for 32-bit targets.
+
+``--guard`` is repeatable.  A null-check that was bypassed on the
+dangerous path should be passed pre-negated:
+``--guard 'ptr == NULL'`` (asserts the bypass condition directly).
+
+Output: JSON to stdout matching :func:`validate_path`'s shape.  Of interest:
+
+  feasible=true   null deref IS reachable
+  feasible=false  guards prove ptr cannot be NULL here
+  feasible=null   Z3 unavailable / unencodable
+"""
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from packages.exploit_feasibility.smt_verbs import check_null_deref
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(
+        prog="raptor-smt-check-null-deref",
+        description="Stage E SMT verb for CWE-476 null deref.",
+    )
+    p.add_argument("--ptr", required=True,
+                   help="Identifier naming the pointer at the deref site")
+    p.add_argument("--profile", default="uint64",
+                   help="Bitvector profile name (default: uint64)")
+    p.add_argument("--guard", action="append", default=[],
+                   help="Path condition / null-check (repeat)")
+    args = p.parse_args()
+
+    try:
+        result = check_null_deref(
+            args.ptr,
+            profile=args.profile,
+            guards=args.guard,
+        )
+    except (TypeError, ValueError) as e:
+        print(f"raptor-smt-check-null-deref: {e}", file=sys.stderr)
+        return 2
+
+    json.dump(result, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
