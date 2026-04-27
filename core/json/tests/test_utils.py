@@ -121,6 +121,45 @@ class TestSaveJson(unittest.TestCase):
             self.assertIn("\n", text)
             self.assertIn("  ", text)
 
+    def test_concurrent_threads_same_path_no_torn_writes(self):
+        """REGRESSION: two threads in the same process saving the same
+        path must not share a tempfile path. Earlier code used a
+        deterministic ``.~<name>.tmp`` suffix; both threads opened the
+        same path with O_TRUNC, the second clobbering the first's
+        partial write and leaving a torn file that fails json.loads.
+
+        With pid+tid in the suffix, each writer has its own tmpfile;
+        the final atomic rename is last-writer-wins, but every reader
+        sees a fully-formed file.
+        """
+        import threading as _threading
+
+        with TemporaryDirectory() as d:
+            p = Path(d) / "hot.json"
+            barrier = _threading.Barrier(8)
+            errors: list[BaseException] = []
+
+            def writer(i: int) -> None:
+                try:
+                    barrier.wait()
+                    for n in range(50):
+                        save_json(p, {"writer": i, "n": n})
+                except BaseException as e:
+                    errors.append(e)
+
+            threads = [_threading.Thread(target=writer, args=(i,))
+                       for i in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            self.assertEqual(errors, [], f"writer raised: {errors}")
+            # Whatever the final winner is, the file MUST parse cleanly.
+            data = json.loads(p.read_text())
+            self.assertIn("writer", data)
+            self.assertIn(data["writer"], range(8))
+
 
 if __name__ == "__main__":
     unittest.main()

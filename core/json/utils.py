@@ -8,6 +8,7 @@ serialization of Path/datetime objects.
 import json
 import os
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -86,8 +87,14 @@ def save_json(path: Union[str, Path], data: Any, mode: int = None) -> None:
     content = json.dumps(data, indent=2, cls=_RaptorEncoder) + "\n"
 
     # Write to temp file then rename — atomic on POSIX (same filesystem).
-    # .~ prefix makes stale temps visually obvious and excluded by get_run_dirs.
-    tmp = p.with_name(f".~{p.name}.tmp")
+    # .~ prefix makes stale temps visually obvious and excluded by
+    # get_run_dirs. The pid+tid suffix is what makes concurrent writers
+    # safe: two threads (or two processes) writing the same target path
+    # would otherwise share a tempfile path, and the second open with
+    # O_TRUNC would clobber the first's partial write — leaving a torn
+    # file that fails to parse on the next read. With pid+tid each
+    # writer has its own tempfile; the final rename is last-writer-wins.
+    tmp = p.with_name(f".~{p.name}.tmp.{os.getpid()}.{threading.get_ident()}")
     try:
         if mode is not None:
             # Create temp file with explicit permissions — no race window
