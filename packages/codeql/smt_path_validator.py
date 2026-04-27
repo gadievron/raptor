@@ -292,9 +292,10 @@ def _substitute_calls(
     preserving correctness: the placeholder is unconstrained, so the
     solver can never claim infeasibility based on the elided subterm.
 
-    The placeholder counter is seeded from existing ``_anon_*`` keys in
-    ``vars_`` so substitutions across multiple conditions in a single
-    path don't collide on a shared name.
+    The placeholder counter is seeded from ``max(existing index) + 1``
+    rather than ``len(existing)`` so that names stay unique even if a
+    caller has deleted entries from ``vars_`` (a sparse register would
+    otherwise collide with a live anon name).
 
     Nested calls collapse to a single placeholder
     (``f(g(x))`` → ``_anon_0``), since the outer call drives the
@@ -304,7 +305,16 @@ def _substitute_calls(
     Unbalanced parens (``strlen(x``) are left in place; the caller's
     parens-check still rejects them.
     """
-    counter = sum(1 for k in vars_ if k.startswith('_anon_'))
+    existing_indices: List[int] = []
+    for k in vars_:
+        if k.startswith('_anon_'):
+            try:
+                existing_indices.append(int(k[len('_anon_'):]))
+            except ValueError:
+                # Defensive: ignore any ``_anon_<non-int>`` someone may
+                # have stuffed in vars_ — those don't constrain ours.
+                pass
+    counter = max(existing_indices, default=-1) + 1
     out: List[str] = []
     i = 0
     n = len(text)
