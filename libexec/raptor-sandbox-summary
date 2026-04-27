@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""Retroactively finalize sandbox-summary.json for runs whose lifecycle
+didn't complete (hard kill, OOM, host reboot — anything that bypassed
+complete_run / fail_run / cancel_run).
+
+Most cases are handled automatically: when the same Claude Code session
+re-runs the same command type, core.run.metadata._cleanup_abandoned
+promotes the prior run from status=running to failed, which routes
+through the standard summary-finalize path. This shim is the explicit
+fallback for the rest.
+
+Usage:
+  raptor-sandbox-summary <run_dir>            # finalize one run
+  raptor-sandbox-summary --sweep <project>    # finalize every stranded
+                                                run under <project>
+
+Implemented as a shim over core.sandbox.summary._cli_main rather than
+`python -m core.sandbox.summary` to avoid the runpy double-import warning
+that fires when core/sandbox/__init__.py transitively imports
+core.sandbox.summary via observe.py before runpy executes it as __main__.
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.sandbox.summary import _cli_main  # noqa: E402
+
+if __name__ == "__main__":
+    raise SystemExit(_cli_main())

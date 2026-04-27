@@ -304,28 +304,105 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
 def _cli_main(argv: Optional[list] = None) -> int:
     """Retroactive summarize CLI.
 
-    Use case: a process crashed mid-run, leaving .sandbox-denials.jsonl
-    on disk but no sandbox-summary.json (lifecycle complete/fail/cancel
-    never ran). An operator (or a recovery script) can finalize the
-    summary after the fact:
+    Rarely needed in normal operation: ``core.run.metadata._cleanup_abandoned``
+    already finalizes the summary for the common Esc-then-retry case (same
+    Claude Code session, same command type) by promoting the prior run from
+    ``status=running`` to ``failed`` — which routes through ``fail_run`` and
+    therefore through the standard ``_finalize_sandbox_summary`` path.
 
-        python -m core.sandbox.summary <run_dir>
+    This CLI is the explicit fallback for cases the auto-recovery doesn't
+    cover: a hard kill, a different session, a different command type, or
+    operator-driven cleanup of a project dir with several stranded runs.
+
+    Two modes:
+
+        # Single-run mode — finalize one specific run dir.
+        libexec/raptor-sandbox-summary <run_dir>
+
+        # Sweep mode — finalize ALL stranded runs under a project dir.
+        # Iterates direct subdirectories, finalizes any with a leftover
+        # .sandbox-denials.jsonl, skips the rest. Useful for one-off
+        # cleanup of a project that accumulated abandoned runs across
+        # past sessions.
+        libexec/raptor-sandbox-summary --sweep <project_dir>
+
+    The ``python -m core.sandbox.summary`` form also works but emits a
+    runpy double-import warning (``core.sandbox.__init__`` imports
+    ``observe``, which imports this module before runpy executes it as
+    ``__main__``). Prefer the libexec shim, which sidesteps runpy.
     """
+    import argparse
     import sys  # local — keeps module import light for non-CLI consumers
-    args = argv if argv is not None else sys.argv[1:]
-    if len(args) != 1:
-        print("Usage: python -m core.sandbox.summary <run_dir>", file=sys.stderr)
-        return 2
-    run_dir = Path(args[0])
-    if not run_dir.is_dir():
-        print(f"error: {run_dir} is not a directory", file=sys.stderr)
+
+    # No explicit prog= — argparse uses sys.argv[0]'s basename, so the
+    # help text reflects whichever entry point invoked us
+    # (libexec/raptor-sandbox-summary, or `python -m core.sandbox.summary`).
+    parser = argparse.ArgumentParser(
+        description="Retroactively finalize sandbox-summary.json for runs "
+                    "whose lifecycle didn't complete.",
+    )
+    parser.add_argument(
+        "path",
+        help="run directory (single-run mode) or project directory (--sweep mode)",
+    )
+    parser.add_argument(
+        "--sweep",
+        action="store_true",
+        help="finalize every stranded run under PATH (treats PATH as a "
+             "project dir containing run subdirectories)",
+    )
+    try:
+        args = parser.parse_args(argv if argv is not None else sys.argv[1:])
+    except SystemExit as e:
+        # argparse exits 2 on bad args; preserve that contract
+        return e.code if isinstance(e.code, int) else 2
+
+    target = Path(args.path)
+    if not target.is_dir():
+        print(f"error: {target} is not a directory", file=sys.stderr)
         return 1
-    result = summarize_and_write(run_dir)
-    if result is None:
-        print(f"(no denials recorded for {run_dir})")
+
+    if not args.sweep:
+        # Single-run mode (original behaviour)
+        result = summarize_and_write(target)
+        if result is None:
+            print(f"(no denials recorded for {target})")
+            return 0
+        print(f"Wrote {target / SUMMARY_FILE} ({result['total_denials']} denials, "
+              f"by_type={result['by_type']})")
         return 0
-    print(f"Wrote {run_dir / SUMMARY_FILE} ({result['total_denials']} denials, "
-          f"by_type={result['by_type']})")
+
+    # Sweep mode — iterate children, finalize anything with a stranded JSONL.
+    swept = 0
+    written = 0
+    total_denials = 0
+    try:
+        children = sorted(target.iterdir())
+    except OSError as e:
+        print(f"error: cannot list {target}: {e}", file=sys.stderr)
+        return 1
+    for child in children:
+        try:
+            if not child.is_dir() or child.name.startswith((".", "_")):
+                continue
+            if not (child / DENIALS_FILE).exists():
+                continue
+        except OSError:
+            continue
+        swept += 1
+        result = summarize_and_write(child)
+        if result is not None:
+            written += 1
+            total_denials += result.get("total_denials", 0)
+            print(f"  {child.name}: {result['total_denials']} denials → "
+                  f"{SUMMARY_FILE}")
+        else:
+            # JSONL was present but summarize_and_write returned None
+            # (empty file or write failure); summarize_and_write already
+            # cleaned the empty JSONL. No per-dir line — keeps output tight.
+            pass
+    print(f"Swept {swept} stranded run(s) under {target}: "
+          f"{written} summary file(s) written, {total_denials} total denials.")
     return 0
 
 

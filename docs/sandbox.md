@@ -326,12 +326,31 @@ per-path overrides exist as sandbox API kwargs (`proxy_hosts`,
 so suggestions don't mention them. Generated regardless of profile, so
 even `--sandbox full` runs produce a summary.
 
-If a process crashes mid-run, the intermediate `.sandbox-denials.jsonl`
-is left on disk. To finalize the summary after the fact:
+**Recovery from non-clean exits.** If a run dies before its lifecycle
+hook fires (hard kill, SIGKILL, OOM), the intermediate
+`.sandbox-denials.jsonl` is left on disk and `sandbox-summary.json`
+isn't written. Two paths recover it:
 
-```bash
-python -m core.sandbox.summary <run_dir>
-```
+1. **Automatic** — the next time the same Claude Code session re-runs the
+   same command type (the Esc-then-retry pattern), `start_run`'s
+   `_cleanup_abandoned` sees the prior run still at `status=running`,
+   marks it `failed`, and `fail_run` routes through the standard
+   summary-finalize path. No operator action needed.
+
+2. **Manual** — for cases the auto-recovery doesn't cover (different
+   session, different command, host reboot, deliberate cleanup):
+
+   ```bash
+   # Single run.
+   libexec/raptor-sandbox-summary <run_dir>
+
+   # All stranded runs under a project dir at once.
+   libexec/raptor-sandbox-summary --sweep <project_dir>
+   ```
+
+   Sweep mode iterates direct subdirectories, finalizes each one that
+   still has a `.sandbox-denials.jsonl`, and skips the rest (no JSONL
+   means either nothing was blocked or the summary is already written).
 
 ### Crash signals across the pid-ns boundary
 

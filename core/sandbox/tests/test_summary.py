@@ -482,11 +482,105 @@ class TestCli:
         rc = summary_mod._cli_main([])
         assert rc == 2
         err = capsys.readouterr().err
-        assert "Usage" in err
+        # argparse emits lowercase "usage:" by default
+        assert "usage" in err.lower()
 
     def test_too_many_args_exits_2(self, tmp_path, capsys):
         rc = summary_mod._cli_main([str(tmp_path), "extra"])
         assert rc == 2
+
+
+class TestCliSweep:
+    """`python -m core.sandbox.summary --sweep <project_dir>` finalizes ALL
+    stranded runs under a project directory, not just one. Used for cleanup
+    of a project that accumulated abandoned runs across past sessions
+    (cases where `_cleanup_abandoned` couldn't run — different session,
+    different command type, or host died)."""
+
+    def _write_jsonl(self, run_dir: Path, n_denials: int) -> None:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        lines = []
+        for i in range(n_denials):
+            lines.append(json.dumps({
+                "ts": f"2026-04-27T15:00:{i:02d}Z",
+                "cmd": f"c{i}",
+                "returncode": 1,
+                "type": "network",
+                "suggested_fix": "...",
+            }))
+        (run_dir / summary_mod.DENIALS_FILE).write_text("\n".join(lines) + "\n")
+
+    def test_sweeps_multiple_stranded_runs(self, tmp_path, capsys):
+        # Project dir with three abandoned runs, each with a JSONL on disk.
+        self._write_jsonl(tmp_path / "scan-A", 2)
+        self._write_jsonl(tmp_path / "scan-B", 5)
+        self._write_jsonl(tmp_path / "scan-C", 1)
+
+        rc = summary_mod._cli_main(["--sweep", str(tmp_path)])
+        assert rc == 0
+
+        # All three got summary files
+        for name in ("scan-A", "scan-B", "scan-C"):
+            assert (tmp_path / name / summary_mod.SUMMARY_FILE).exists()
+            assert not (tmp_path / name / summary_mod.DENIALS_FILE).exists()
+
+        out = capsys.readouterr().out
+        assert "Swept 3" in out
+        assert "3 summary file(s)" in out
+        assert "8 total denials" in out  # 2+5+1
+
+    def test_sweep_skips_already_finalized_runs(self, tmp_path, capsys):
+        # One stranded run + two already-finalized runs (no JSONL, only
+        # summary). Sweep should touch only the stranded one.
+        self._write_jsonl(tmp_path / "scan-stranded", 3)
+        (tmp_path / "scan-clean-1").mkdir()
+        (tmp_path / "scan-clean-1" / summary_mod.SUMMARY_FILE).write_text(
+            json.dumps({"total_denials": 0, "by_type": {}, "denials": []})
+        )
+        (tmp_path / "scan-clean-2").mkdir()  # nothing in it
+
+        rc = summary_mod._cli_main(["--sweep", str(tmp_path)])
+        assert rc == 0
+
+        out = capsys.readouterr().out
+        assert "Swept 1" in out
+        assert "1 summary file(s)" in out
+        assert "3 total denials" in out
+        # clean-1's pre-existing summary untouched
+        clean1 = json.loads((tmp_path / "scan-clean-1" / summary_mod.SUMMARY_FILE).read_text())
+        assert clean1["total_denials"] == 0
+
+    def test_sweep_empty_project_dir(self, tmp_path, capsys):
+        rc = summary_mod._cli_main(["--sweep", str(tmp_path)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "Swept 0" in out
+        assert "0 summary file(s)" in out
+
+    def test_sweep_skips_dotfiles_and_underscore_dirs(self, tmp_path, capsys):
+        # Hidden / underscore-prefixed dirs (e.g. .raptor-state, _tmp)
+        # should be skipped even if they happen to contain a JSONL.
+        self._write_jsonl(tmp_path / ".hidden", 1)
+        self._write_jsonl(tmp_path / "_internal", 1)
+        self._write_jsonl(tmp_path / "real-run", 1)
+
+        rc = summary_mod._cli_main(["--sweep", str(tmp_path)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "Swept 1" in out  # only real-run
+
+    def test_sweep_nonexistent_path_exits_1(self, tmp_path, capsys):
+        bogus = tmp_path / "does-not-exist"
+        rc = summary_mod._cli_main(["--sweep", str(bogus)])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "not a directory" in err
+
+    def test_sweep_path_to_file_exits_1(self, tmp_path, capsys):
+        f = tmp_path / "a-file"
+        f.write_text("")
+        rc = summary_mod._cli_main(["--sweep", str(f)])
+        assert rc == 1
 
 
 class TestAdversarial:
