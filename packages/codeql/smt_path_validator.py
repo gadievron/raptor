@@ -42,11 +42,13 @@ mis-encoded):
     ternary (``? :``), single-equals assignment, chained relational
     (``0 < x < 100``).  Anything else goes to ``unknown`` via the
     full-input-consumed sanity check.
-  - **C-syntax constructs.**  Function calls (``strlen(input)``),
-    type casts (``(uint32_t)x``), struct/pointer access (``obj.field``,
+  - **C-syntax constructs (other than function calls).**  Type casts
+    (``(uint32_t)x``), struct/pointer access (``obj.field``,
     ``s->len``), array indexing (``arr[0]``), pointer dereference
-    (``*p``), ``sizeof``.  Any token containing ``(``, ``)``, ``.``,
-    ``->``, ``[``, ``]`` triggers rejection.
+    (``*p``), ``sizeof``.  Any token containing ``.``, ``->``, ``[``,
+    ``]`` still triggers rejection, as does **non-call grouping parens**
+    (``(a + b) * c``).  Function calls are an exception — see the
+    free-variable fallback below.
   - **Negative integer literals** (e.g. ``!= -1``) — write the
     bit-pattern in hex instead (``!= 0xFFFFFFFF`` at uint32).
   - **Leading-zero decimals** (e.g. ``01234``) — ambiguous with C
@@ -54,6 +56,15 @@ mis-encoded):
   - **Literals outside the profile's width range** — ``0x100`` at
     uint8 would silently wrap to 0 in z3; we reject so the caller
     knows the profile was wrong for this literal.
+
+Function-call subterms (``strlen(input)``, ``getpid()``, ...) are
+recovered through a free-variable fallback: each balanced
+``<ident>(...)`` subterm is replaced with a fresh ``_anon_N`` Z3
+variable before parsing, so the rest of the condition can still
+contribute to feasibility analysis.  Two textually-identical calls
+(``strlen(s) == strlen(s)``) are deliberately treated as *independent*
+free variables — the parser doesn't know which calls are pure, so it
+chooses the conservative semantics (no false claims of infeasibility).
 
 Other limitations (verdict still trustworthy, but with caveats):
 
@@ -266,6 +277,62 @@ def _parse_expr(
     return result
 
 
+_CALL_HEAD_RE = re.compile(r'[a-z_][a-z0-9_]*', re.IGNORECASE)
+
+
+def _substitute_calls(
+    text: str, vars_: Dict[str, Any], *, profile: BVProfile,
+) -> str:
+    """Replace balanced ``<ident>(...)`` subterms with fresh free variables.
+
+    Each function-call-shaped subterm is swapped for a unique
+    ``_anon_N`` placeholder and registered as a free Z3 bitvector in
+    ``vars_``.  Lets conditions like ``strlen(input) < 1024`` parse
+    instead of being rejected wholesale on the parens check, while
+    preserving correctness: the placeholder is unconstrained, so the
+    solver can never claim infeasibility based on the elided subterm.
+
+    The placeholder counter is seeded from existing ``_anon_*`` keys in
+    ``vars_`` so substitutions across multiple conditions in a single
+    path don't collide on a shared name.
+
+    Nested calls collapse to a single placeholder
+    (``f(g(x))`` → ``_anon_0``), since the outer call drives the
+    balanced-paren walk.  Two textually-identical calls produce
+    *distinct* placeholders — calls aren't assumed pure.
+
+    Unbalanced parens (``strlen(x``) are left in place; the caller's
+    parens-check still rejects them.
+    """
+    counter = sum(1 for k in vars_ if k.startswith('_anon_'))
+    out: List[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        m = _CALL_HEAD_RE.match(text, i)
+        if m and m.end() < n and text[m.end()] == '(':
+            depth = 1
+            j = m.end() + 1
+            while j < n and depth > 0:
+                if text[j] == '(':
+                    depth += 1
+                elif text[j] == ')':
+                    depth -= 1
+                j += 1
+            if depth == 0:
+                placeholder = f'_anon_{counter}'
+                counter += 1
+                vars_[placeholder] = _mk_var(placeholder, profile.width)
+                out.append(placeholder)
+                i = j
+                continue
+            # Unbalanced: fall through and copy the head char-by-char so
+            # the parens-check can flag it.
+        out.append(text[i])
+        i += 1
+    return ''.join(out)
+
+
 def _parse_condition(
     text: str, vars_: Dict[str, Any], *, profile: BVProfile,
 ) -> Union[Any, Rejection]:
@@ -277,22 +344,27 @@ def _parse_condition(
       lhs & mask == val  (bitmask alignment)
       lhs & mask != val
 
-    Conditions containing function-call syntax (parentheses) are rejected
-    with :data:`RejectionKind.PARENS_NOT_SUPPORTED` — they go to the
-    unknown list.
-
     English operator phrases ("is greater than", "equals", ...) are
-    rewritten to symbolic operators by :func:`canonicalise` before the
-    grammar runs.  ``text`` (the original) is preserved for rejection
-    messages so callers can match failures back to their input.
+    rewritten to symbolic operators by :func:`canonicalise` first, so
+    callers can use natural-language conditions.  Then function-call-
+    shaped subterms (``ident(...)``) are replaced with fresh ``_anon_N``
+    free variables by :func:`_substitute_calls`, so conditions like
+    ``strlen(input) < 1024`` can still drive feasibility analysis.  Any
+    parentheses left behind after that pass are non-call grouping
+    (``(a + b) * c``) and are rejected with
+    :data:`RejectionKind.PARENS_NOT_SUPPORTED`.  ``text`` (the original)
+    is preserved for rejection messages so callers can match failures
+    back to their input.
     """
     t = _canonicalise(text)
+    t = _substitute_calls(t, vars_, profile=profile)
 
     if '(' in t or ')' in t:
         return Rejection(
             text, RejectionKind.PARENS_NOT_SUPPORTED,
-            "input contains '(' or ')'",
-            hint="rewrite function calls or grouped subterms as a synthetic identifier",
+            "input contains '(' or ')' that is not a recognised function call",
+            hint="function calls (ident(...)) parse via the free-variable fallback; "
+                 "non-call grouping is unsupported — flatten the expression",
         )
 
     # Bitmask: lhs & mask (==|!=) val
