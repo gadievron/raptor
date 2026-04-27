@@ -772,17 +772,21 @@ class TestFreeVariableFallback:
         assert r.feasible is True
 
     @_requires_z3
-    def test_unbalanced_parens_still_rejected(self):
-        """Unbalanced ``ident(`` is *not* eligible for the fallback —
-        balanced-paren walk fails and the parens-check still fires."""
-        r = check_path_feasibility([
-            PathCondition("strlen(input < 1024", step_index=0),
-        ])
-        assert "strlen(input < 1024" in r.unknown
-        # Look for a rejection corresponding to this text
-        rej = next(
-            x for x in r.unknown_reasons if x.text == "strlen(input < 1024"
-        )
+    @pytest.mark.parametrize("expr", [
+        "strlen(input < 1024",  # missing close, mid-expression
+        "strlen(x",             # missing close, at EOI
+        "strlen(x))",           # extra close from the right
+        "f(g(x)",               # nested with one missing close
+        "strlen x)",            # orphan close, no preceding (
+    ])
+    def test_unbalanced_parens_still_rejected(self, expr):
+        """Any paren imbalance — open without close, close without open,
+        or nested mismatch — falls through the substitution and is
+        rejected by the parens-check rather than silently masquerading
+        as a parsed call."""
+        r = check_path_feasibility([PathCondition(expr, step_index=0)])
+        assert expr in r.unknown
+        rej = next(x for x in r.unknown_reasons if x.text == expr)
         assert rej.kind is RejectionKind.PARENS_NOT_SUPPORTED
 
     @_requires_z3
