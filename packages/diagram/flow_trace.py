@@ -158,11 +158,11 @@ def generate(data: dict[str, Any]) -> str:
                 lines.append(f"    {node_ids[1]} -. \"branch\" .-> {bid}")
 
     # Attacker control summary node
-    level = _sanitize(attacker_control.get("level", ""))
+    level = _sanitize(str(attacker_control.get("level", "")).upper())
     what = _sanitize(attacker_control.get("what", ""))
     if level and what:
         lines.append("")
-        ac_label = f"Attacker control: {level.upper()}\\n{what}"
+        ac_label = f"Attacker control: {level}\\n{what}"
         lines.append(f'    CTRL["{ac_label}"]')
         lines.append("    style CTRL fill:#fef9c3,stroke:#ca8a04")
 

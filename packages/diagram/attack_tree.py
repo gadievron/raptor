@@ -265,7 +265,7 @@ def generate(
     # Style classes
     status_groups: dict[str, list[str]] = {}
     for node in nodes:
-        s = node.get("status", "unexplored")
+        s = _sanitize(node.get("status", "unexplored"))
         status_groups.setdefault(s, []).append(node.get("id", "?"))
 
     lines.append("")
