@@ -624,9 +624,20 @@ class TestStructuredRejection:
         assert self._kind_for(r, "a + b * c == 0") is RejectionKind.MIXED_PRECEDENCE
 
     @_requires_z3
-    def test_trailing_tokens_rejection(self):
+    def test_no_relational_at_top_level_rejection(self):
+        """``a b`` has no relational/bitmask top-level shape, so
+        :func:`_parse_condition` itself rejects with UNRECOGNIZED_FORM —
+        no _parse_expr call ever sees the trailing token."""
         r = check_path_feasibility([PathCondition("a b", step_index=0)])
         assert self._kind_for(r, "a b") is RejectionKind.UNRECOGNIZED_FORM
+
+    @_requires_z3
+    def test_trailing_tokens_rejection(self):
+        """A trailing operand inside an expression slot — the relational
+        top-level matches, then _parse_expr can't consume the dangling
+        ``c`` and emits TRAILING_TOKENS."""
+        r = check_path_feasibility([PathCondition("a + b c == 0", step_index=0)])
+        assert self._kind_for(r, "a + b c == 0") is RejectionKind.TRAILING_TOKENS
 
     @_requires_z3
     def test_unrecognized_form_rejection(self):
