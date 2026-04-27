@@ -68,6 +68,48 @@ class TestNonZeroNonNull:
         assert canonicalise("ptr is nonnull") == "ptr != NULL"
 
 
+class TestPositiveZeroNullForms:
+    """``is null`` / ``is zero`` close the asymmetry with the negated forms."""
+
+    def test_is_null(self):
+        assert canonicalise("ptr is null") == "ptr == NULL"
+
+    def test_is_null_does_not_clash_with_is_non_null(self):
+        # The negated form must win; the positive ``is null`` rewrite
+        # must not trip on the residual ``null`` left behind.
+        assert canonicalise("ptr is non-null") == "ptr != NULL"
+
+    def test_is_zero(self):
+        assert canonicalise("count is zero") == "count == 0"
+
+    def test_is_zero_does_not_clash_with_is_non_zero(self):
+        assert canonicalise("count is non-zero") == "count != 0"
+
+
+class TestSynonyms:
+    """Single-word and short synonyms covering common LLM phrasings."""
+
+    def test_exceeds(self):
+        assert canonicalise("count exceeds 100") == "count > 100"
+
+    def test_below(self):
+        assert canonicalise("index below limit") == "index < limit"
+
+    def test_does_not_exceed(self):
+        # The longer ``does not exceed`` must win over the bare ``exceeds``.
+        assert canonicalise("len does not exceed buffer") == "len <= buffer"
+
+    def test_does_not_exceed_does_not_leak_to_exceeds(self):
+        # If ordering broke, ``does not exceed`` would become ``does not >``
+        # then collapse to ``does not >`` — assert the full sentence resolves.
+        out = canonicalise("len does not exceed buffer_size")
+        assert out == "len <= buffer_size"
+
+    def test_up_to_inclusive(self):
+        # Documented choice: ``up to N`` means ``<= N`` (inclusive).
+        assert canonicalise("count up to 16") == "count <= 16"
+
+
 class TestIdempotenceAndIdentifierSafety:
     """Symbolic input passes through unchanged; identifiers aren't mangled."""
 
