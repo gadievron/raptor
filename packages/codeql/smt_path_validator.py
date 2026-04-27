@@ -366,8 +366,7 @@ def _parse_condition(
     is preserved for rejection messages so callers can match failures
     back to their input.
     """
-    t = _canonicalise(text)
-    t = _substitute_calls(t, vars_, profile=profile)
+    t = _substitute_calls(_canonicalise(text), vars_, profile=profile)
 
     if '(' in t or ')' in t:
         return Rejection(
