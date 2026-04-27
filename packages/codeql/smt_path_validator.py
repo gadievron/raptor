@@ -84,14 +84,16 @@ Integration: packages/codeql/dataflow_validator.py :: DataflowValidator
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from core.logging import get_logger as _get_logger
 from core.smt_solver import (
     BV_C_UINT64,
     BVProfile,
     DEFAULT_TIMEOUT_MS as _DEFAULT_TIMEOUT_MS,
+    Rejection,
+    RejectionKind,
     core_names as _core_names,
     mk_val as _mk_val,
     mk_var as _mk_var,
@@ -120,7 +122,14 @@ class PathCondition:
 
 @dataclass
 class PathSMTResult:
-    """Result of SMT feasibility check over a set of path conditions."""
+    """Result of SMT feasibility check over a set of path conditions.
+
+    ``unknown`` keeps the original list-of-strings form for callers that
+    only care which texts were dropped.  ``unknown_reasons`` carries the
+    same set in :class:`Rejection` form, naming *why* each was dropped
+    (parser failure kind, solver timeout, ...) so consumers can retry,
+    rephrase, or surface diagnostics.
+    """
     feasible: Optional[bool]
     satisfied: List[str]
     unsatisfied: List[str]
@@ -128,6 +137,7 @@ class PathSMTResult:
     model: Dict[str, int]
     smt_available: bool
     reasoning: str
+    unknown_reasons: List[Rejection] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -148,30 +158,45 @@ _TOKEN_RE = re.compile(
 )
 
 
-def _parse_literal_value(tok: str, profile: BVProfile) -> Optional[int]:
-    """Validate and convert a literal token to int, or None if invalid.
+def _parse_literal_value(tok: str, profile: BVProfile) -> Union[int, Rejection]:
+    """Validate and convert a literal token, or return a structured rejection.
 
     Centralised so atom-position literals and bitmask-form literals both
     reject the same things:
 
-    - Out-of-range for profile width (would silently wrap in z3.BitVecVal).
-    - Leading-zero decimals (octal in C, ambiguous if interpreted as base-10).
-    - Anything that isn't a clean hex or decimal literal.
+    - Out-of-range for profile width (would silently wrap in z3.BitVecVal)
+      → :data:`RejectionKind.LITERAL_OUT_OF_RANGE`.
+    - Leading-zero decimals (octal in C, ambiguous if interpreted as base-10)
+      → :data:`RejectionKind.LITERAL_AMBIGUOUS`.
+    - Anything that isn't a clean hex or decimal literal
+      → :data:`RejectionKind.UNRECOGNIZED_OPERAND`.
     """
     if _HEX_RE.match(tok):
         v = int(tok, 16)
     elif _INT_RE.match(tok):
         if len(tok) > 1 and tok[0] == "0":
-            return None  # ambiguous with C octal
+            return Rejection(
+                tok, RejectionKind.LITERAL_AMBIGUOUS,
+                "leading-zero decimal is ambiguous with C octal",
+                hint="rewrite as hex (0x...) or strip the leading zero",
+            )
         v = int(tok)
     else:
-        return None
+        return Rejection(
+            tok, RejectionKind.UNRECOGNIZED_OPERAND,
+            f"token {tok!r} is not a hex or decimal literal",
+        )
     if v >= (1 << profile.width):
-        return None
+        return Rejection(
+            tok, RejectionKind.LITERAL_OUT_OF_RANGE,
+            f"value {v:#x} exceeds {profile.width}-bit profile range",
+        )
     return v
 
 
-def _parse_expr(text: str, vars_: Dict[str, Any], *, profile: BVProfile) -> Optional[Any]:
+def _parse_expr(
+    text: str, vars_: Dict[str, Any], *, profile: BVProfile,
+) -> Union[Any, Rejection]:
     """Parse an arithmetic expression into a Z3 bitvector at the given profile.
 
     Handles: identifier, NULL, hex literal, decimal literal, and binary
@@ -180,32 +205,46 @@ def _parse_expr(text: str, vars_: Dict[str, Any], *, profile: BVProfile) -> Opti
     signedness so the same ``>>`` source form encodes differently for
     signed vs unsigned path conditions.
 
-    Returns None — rather than a partial result — when an unsupported
-    token is encountered mid-expression, so the whole condition falls
-    through to the unknown list rather than being silently mis-encoded.
+    Returns a :class:`Rejection` — rather than a partial Z3 expression —
+    when something can't be encoded, so the whole condition falls through
+    to the unknown list with a structured reason rather than being
+    silently mis-encoded.
     """
     tokens = [t for t in _TOKEN_RE.findall(text.strip()) if t not in ('(', ')')]
     if not tokens:
-        return None
+        return Rejection(text, RejectionKind.LEX_EMPTY, "no tokens after tokenisation")
 
     # Reject if any non-whitespace character was silently dropped by the
     # tokeniser — characters like '~' (NOT), '^' (XOR), '/', '%' aren't in
     # the token regex and would otherwise vanish, producing wrong answers
     # (e.g. "~mask == 0xFF" mis-encoded as "mask == 0xFF").
     if "".join(tokens) != re.sub(r"\s+", "", text):
-        return None
+        return Rejection(
+            text, RejectionKind.UNRECOGNIZED_OPERAND,
+            "non-tokenisable character was silently dropped by the tokeniser",
+            hint="remove or rephrase unsupported operators (e.g. ~, ^, /, %)",
+        )
 
     # Reject mixed-operator expressions to avoid silent mis-encoding due to
     # the lack of operator precedence (currently strictly left-to-right).
     if {'+', '-'} & set(tokens[1::2]) and {'*', '>>', '<<', '|'} & set(tokens[1::2]):
-        return None
+        return Rejection(
+            text, RejectionKind.MIXED_PRECEDENCE,
+            "additive and multiplicative/bitwise ops mixed",
+            hint="split into separate conditions, each using one operator class",
+        )
 
     def atom(tok: str) -> Optional[Any]:
         if _NULL_RE.match(tok):
             return _mk_val(0, profile.width)
         if _HEX_RE.match(tok) or _INT_RE.match(tok):
             v = _parse_literal_value(tok, profile)
-            return None if v is None else _mk_val(v, profile.width)
+            # Atom-level literal failures collapse to None and surface as
+            # generic UNRECOGNIZED_OPERAND at the loop boundary; the more
+            # specific reasons (LITERAL_AMBIGUOUS / LITERAL_OUT_OF_RANGE)
+            # are preserved on the bitmask path which calls
+            # _parse_literal_value directly.
+            return None if isinstance(v, Rejection) else _mk_val(v, profile.width)
         if _IDENT_RE.match(tok):
             if tok.lower() not in vars_:
                 vars_[tok.lower()] = _mk_var(tok.lower(), profile.width)
@@ -213,18 +252,27 @@ def _parse_expr(text: str, vars_: Dict[str, Any], *, profile: BVProfile) -> Opti
         return None
 
     # Left-to-right accumulation of arithmetic and bitwise operators.
-    # Any unsupported operator causes an immediate None return.
+    # Any unsupported operator yields a structured rejection.
     result = atom(tokens[0])
     if result is None:
-        return None
+        return Rejection(
+            text, RejectionKind.UNRECOGNIZED_OPERAND,
+            f"token {tokens[0]!r} is not an identifier, NULL, or numeric literal",
+        )
     i = 1
     while i < len(tokens) - 1:
         op = tokens[i]
         if op not in ('+', '-', '*', '|', '>>', '<<'):
-            return None  # unsupported op — reject cleanly
+            return Rejection(
+                text, RejectionKind.UNSUPPORTED_OPERATOR,
+                f"operator {op!r} not in {{+, -, *, |, >>, <<}}",
+            )
         right = atom(tokens[i + 1])
         if right is None:
-            return None
+            return Rejection(
+                text, RejectionKind.UNRECOGNIZED_OPERAND,
+                f"token {tokens[i + 1]!r} is not an identifier, NULL, or numeric literal",
+            )
         if op == '+':
             result = result + right
         elif op == '-':
@@ -241,14 +289,29 @@ def _parse_expr(text: str, vars_: Dict[str, Any], *, profile: BVProfile) -> Opti
             result = result << right
         i += 2
 
-    # Reject orphaned trailing tokens.
     if i != len(tokens):
-        return None
+        return Rejection(
+            text, RejectionKind.TRAILING_TOKENS,
+            f"unconsumed token {tokens[i]!r}",
+        )
 
     return result
 
 
-def _parse_condition(text: str, vars_: Dict[str, Any], *, profile: BVProfile) -> Optional[Any]:
+def _propagate(text: str, sub: Rejection) -> Rejection:
+    """Re-anchor a sub-expression rejection on the full condition text.
+
+    Sub-expression parsers see only their own slice of the input, so a
+    rejection's ``text`` field starts out as that slice.  When bubbling
+    up to the condition level we replace it with the full condition so
+    callers can match the rejection back to the original input.
+    """
+    return Rejection(text, sub.kind, sub.detail, sub.hint)
+
+
+def _parse_condition(
+    text: str, vars_: Dict[str, Any], *, profile: BVProfile,
+) -> Union[Any, Rejection]:
     """Parse a single condition string into a Z3 boolean expression.
 
     Recognised forms:
@@ -258,12 +321,17 @@ def _parse_condition(text: str, vars_: Dict[str, Any], *, profile: BVProfile) ->
       lhs & mask != val
 
     Conditions containing function-call syntax (parentheses) are rejected
-    and return None — they go to the unknown list.
+    with :data:`RejectionKind.PARENS_NOT_SUPPORTED` — they go to the
+    unknown list.
     """
     t = text.strip()
 
     if '(' in t or ')' in t:
-        return None
+        return Rejection(
+            text, RejectionKind.PARENS_NOT_SUPPORTED,
+            "input contains '(' or ')'",
+            hint="rewrite function calls or grouped subterms as a synthetic identifier",
+        )
 
     # Bitmask: lhs & mask (==|!=) val
     m = re.fullmatch(
@@ -272,16 +340,19 @@ def _parse_condition(text: str, vars_: Dict[str, Any], *, profile: BVProfile) ->
     )
     if m:
         lhs = _parse_expr(m.group(1).strip(), vars_, profile=profile)
-        if lhs is None:
-            return None
+        if isinstance(lhs, Rejection):
+            return _propagate(text, lhs)
         # Mask and rhs literals go through the same validation as atom-level
         # literals — width range and leading-zero ambiguity must be rejected
         # the same way, otherwise the bitmask path silently wraps or trips
-        # ValueError on octal-style tokens.
+        # ValueError on octal-style tokens.  Specific Rejection reasons
+        # (LITERAL_AMBIGUOUS / LITERAL_OUT_OF_RANGE) are preserved here.
         mask_val = _parse_literal_value(m.group(2), profile)
+        if isinstance(mask_val, Rejection):
+            return _propagate(text, mask_val)
         rhs_val = _parse_literal_value(m.group(4), profile)
-        if mask_val is None or rhs_val is None:
-            return None
+        if isinstance(rhs_val, Rejection):
+            return _propagate(text, rhs_val)
         masked = lhs & _mk_val(mask_val, profile.width)
         rhs = _mk_val(rhs_val, profile.width)
         return (masked == rhs) if m.group(3) == '==' else (masked != rhs)
@@ -296,9 +367,11 @@ def _parse_condition(text: str, vars_: Dict[str, Any], *, profile: BVProfile) ->
     )
     if m:
         lhs = _parse_expr(m.group(1).strip(), vars_, profile=profile)
+        if isinstance(lhs, Rejection):
+            return _propagate(text, lhs)
         rhs = _parse_expr(m.group(3).strip(), vars_, profile=profile)
-        if lhs is None or rhs is None:
-            return None
+        if isinstance(rhs, Rejection):
+            return _propagate(text, rhs)
         op = m.group(2)
         if op == '==':
             return lhs == rhs
@@ -313,7 +386,12 @@ def _parse_condition(text: str, vars_: Dict[str, Any], *, profile: BVProfile) ->
         if op == '>=':
             return ge(lhs, rhs, signed=profile.signed)
 
-    return None
+    return Rejection(
+        text, RejectionKind.UNRECOGNIZED_FORM,
+        "no relational or bitmask pattern matched",
+        hint="use 'lhs OP rhs' with OP in {==, !=, <, <=, >, >=}, "
+             "or 'lhs & MASK (==|!=) VAL' for bitmask alignment",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +428,7 @@ def check_path_feasibility(
             feasible=None,
             satisfied=[], unsatisfied=[],
             unknown=[c.text for c in conditions],
+            unknown_reasons=[],
             model={}, smt_available=False,
             reasoning="z3 not available — install z3-solver for path feasibility analysis",
         )
@@ -358,6 +437,7 @@ def check_path_feasibility(
         return PathSMTResult(
             feasible=True,
             satisfied=[], unsatisfied=[], unknown=[],
+            unknown_reasons=[],
             model={}, smt_available=True,
             reasoning=f"no conditions ({mode}) — path is unconditionally reachable",
         )
@@ -367,13 +447,17 @@ def check_path_feasibility(
 
     satisfied: List[str] = []
     unknown: List[str] = []
+    unknown_reasons: List[Rejection] = []
     pending: List[Tuple[str, Any]] = []
 
     for cond in conditions:
         expr = _parse_condition(cond.text, vars_, profile=profile)
-        if expr is None:
-            _get_logger().debug(f"smt_path_validator: unparseable condition: {cond.text!r}")
+        if isinstance(expr, Rejection):
+            _get_logger().debug(
+                f"smt_path_validator: rejected {cond.text!r} ({expr.kind.value}: {expr.detail})"
+            )
             unknown.append(cond.text)
+            unknown_reasons.append(expr)
             continue
 
         final_expr = z3.Not(expr) if cond.negated else expr
@@ -398,6 +482,7 @@ def check_path_feasibility(
             return PathSMTResult(
                 feasible=None,
                 satisfied=satisfied, unsatisfied=[], unknown=unknown,
+                unknown_reasons=unknown_reasons,
                 model={}, smt_available=True,
                 reasoning=(
                     f"indeterminate ({mode}): {len(satisfied)} trivially satisfied, "
@@ -407,6 +492,7 @@ def check_path_feasibility(
         return PathSMTResult(
             feasible=True,
             satisfied=satisfied, unsatisfied=[], unknown=[],
+            unknown_reasons=[],
             model={}, smt_available=True,
             reasoning=f"all {len(satisfied)} condition(s) trivially satisfied ({mode})",
         )
@@ -419,6 +505,7 @@ def check_path_feasibility(
         return PathSMTResult(
             feasible=True,
             satisfied=satisfied, unsatisfied=[], unknown=unknown,
+            unknown_reasons=unknown_reasons,
             model=model_dict, smt_available=True,
             reasoning=(
                 f"feasible ({mode}): {len(pending)} condition(s) are jointly satisfiable"
@@ -436,18 +523,51 @@ def check_path_feasibility(
         return PathSMTResult(
             feasible=False,
             satisfied=satisfied, unsatisfied=conflict_set, unknown=unknown,
+            unknown_reasons=unknown_reasons,
             model={}, smt_available=True,
             reasoning=reasoning,
         )
 
-    # z3.unknown — timeout or outside decidable fragment
+    # z3.unknown — timeout or outside decidable fragment.  Tag every
+    # pending condition with the structured reason so callers can tell a
+    # solver punt apart from a parser failure.
+    solver_reason = _classify_solver_unknown(solver)
+    pending_texts = [t for t, _ in pending]
+    pending_reasons = [
+        Rejection(
+            t, solver_reason,
+            f"Z3 reason_unknown: {solver.reason_unknown()}"
+            if hasattr(solver, "reason_unknown") else "",
+        )
+        for t in pending_texts
+    ]
+    detail = (
+        f"likely the {_DEFAULT_TIMEOUT_MS}ms timeout"
+        if solver_reason is RejectionKind.SOLVER_TIMEOUT
+        else "conditions outside the decidable bitvector fragment"
+    )
     return PathSMTResult(
         feasible=None,
         satisfied=satisfied, unsatisfied=[],
-        unknown=unknown + [t for t, _ in pending],
+        unknown=unknown + pending_texts,
+        unknown_reasons=unknown_reasons + pending_reasons,
         model={}, smt_available=True,
-        reasoning=(
-            f"Z3 returned unknown ({mode}) — likely the {_DEFAULT_TIMEOUT_MS}ms timeout "
-            f"or conditions outside the bitvector fragment"
-        ),
+        reasoning=f"Z3 returned unknown ({mode}) — {detail}",
     )
+
+
+def _classify_solver_unknown(solver: Any) -> RejectionKind:
+    """Map Z3's ``reason_unknown()`` string to our rejection kind.
+
+    Z3 reports ``"timeout"`` (or, on some builds, ``"canceled"``) when
+    the per-solver timeout fires; anything else is grouped under
+    :data:`RejectionKind.SOLVER_UNKNOWN` (incomplete tactic, undecidable
+    fragment, ...).
+    """
+    try:
+        reason = (solver.reason_unknown() or "").lower()
+    except Exception:
+        return RejectionKind.SOLVER_UNKNOWN
+    if "timeout" in reason or "canceled" in reason or "cancelled" in reason:
+        return RejectionKind.SOLVER_TIMEOUT
+    return RejectionKind.SOLVER_UNKNOWN
