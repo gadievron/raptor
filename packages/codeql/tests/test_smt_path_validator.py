@@ -97,12 +97,17 @@ class TestFeasibility:
 
     @_requires_z3
     def test_unparseable_condition_goes_to_unknown(self):
-        """Function-call syntax is rejected by the parser — goes to unknown, not crash."""
+        """Non-call grouping parens are still rejected — goes to unknown, not crash.
+
+        Function-call shapes (``ident(...)``) are recovered via the
+        free-variable fallback; only non-call grouping (``(a + b)``)
+        remains unparseable.
+        """
         r = check_path_feasibility([
             PathCondition("size > 0", step_index=0),
-            PathCondition("validate(ptr, len) == 0", step_index=1),
+            PathCondition("(size + len) * 2 > 0", step_index=1),
         ])
-        assert "validate(ptr, len) == 0" in r.unknown
+        assert "(size + len) * 2 > 0" in r.unknown
         # The parseable condition still runs; result is sat or None, not outright infeasible
         assert r.feasible is not False
 
@@ -110,7 +115,8 @@ class TestFeasibility:
     def test_all_unknown_returns_none(self):
         """If nothing is parseable, feasible must be None (not True)."""
         r = check_path_feasibility([
-            PathCondition("foo(bar) > baz(qux)", step_index=0),
+            # Non-call grouping parens — not eligible for the fallback.
+            PathCondition("(a + b) > (c + d)", step_index=0),
         ])
         assert r.feasible is None
 
@@ -611,10 +617,13 @@ class TestStructuredRejection:
 
     @_requires_z3
     def test_parens_rejection(self):
+        # Non-call grouping parens.  Function-call shapes (``ident(...)``)
+        # are recovered by the free-variable fallback and don't reach
+        # the parens-rejection path.
         r = check_path_feasibility([
-            PathCondition("validate(ptr, len) == 0", step_index=0),
+            PathCondition("(a + b) > 0", step_index=0),
         ])
-        assert self._kind_for(r, "validate(ptr, len) == 0") is RejectionKind.PARENS_NOT_SUPPORTED
+        assert self._kind_for(r, "(a + b) > 0") is RejectionKind.PARENS_NOT_SUPPORTED
 
     @_requires_z3
     def test_mixed_precedence_rejection(self):
@@ -647,12 +656,14 @@ class TestStructuredRejection:
 
     @_requires_z3
     def test_rejection_carries_hint(self):
+        # Non-call grouping parens — still rejected, hint suggests
+        # flattening since the call-shape fallback doesn't apply here.
         r = check_path_feasibility([
-            PathCondition("validate(ptr, len) == 0", step_index=0),
+            PathCondition("(a + b) * 2 > 0", step_index=0),
         ])
-        rej = next(x for x in r.unknown_reasons if x.text == "validate(ptr, len) == 0")
+        rej = next(x for x in r.unknown_reasons if x.text == "(a + b) * 2 > 0")
         assert rej.hint  # non-empty
-        assert "synthetic identifier" in rej.hint or "rewrite" in rej.hint.lower()
+        assert "flatten" in rej.hint.lower() or "fallback" in rej.hint.lower()
 
     @_requires_z3
     def test_rejection_aligned_with_unknown_list(self):
@@ -660,7 +671,154 @@ class TestStructuredRejection:
         with the same text."""
         r = check_path_feasibility([
             PathCondition("size > 0", step_index=0),                    # parses
-            PathCondition("validate(p) == 0", step_index=1),            # parens
+            PathCondition("(p + q) == 0", step_index=1),                # grouping parens
             PathCondition("a + b * c == 0", step_index=2),              # mixed prec
         ])
         assert set(r.unknown) == {x.text for x in r.unknown_reasons}
+
+
+# ---------------------------------------------------------------------------
+# Free-variable fallback for function-call subterms
+# ---------------------------------------------------------------------------
+
+class TestFreeVariableFallback:
+    """``ident(...)`` subterms are replaced with fresh free variables so
+    the rest of the condition can drive feasibility analysis instead of
+    the whole condition being dropped to unknown.
+    """
+
+    @_requires_z3
+    def test_simple_call_lhs(self):
+        """``strlen(input) < 1024`` parses via the fallback."""
+        r = check_path_feasibility([
+            PathCondition("strlen(input) < 1024", step_index=0),
+        ])
+        assert r.unknown == []
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_simple_call_rhs(self):
+        """Calls work in RHS position too: ``0 < strlen(input)``."""
+        r = check_path_feasibility([
+            PathCondition("0 < strlen(input)", step_index=0),
+        ])
+        assert r.unknown == []
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_zero_arg_call(self):
+        """Zero-arg calls (``getpid()``) parse identically."""
+        r = check_path_feasibility([
+            PathCondition("getpid() != 0", step_index=0),
+        ])
+        assert r.unknown == []
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_multi_arg_call(self):
+        """Calls with internal commas/operators don't confuse the parser."""
+        r = check_path_feasibility([
+            PathCondition("min(a, b) > 0", step_index=0),
+        ])
+        assert r.unknown == []
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_nested_call_collapses(self):
+        """Nested calls collapse to a single placeholder via the
+        balanced-paren walk — outer call drives the substitution."""
+        r = check_path_feasibility([
+            PathCondition("f(g(x), h(y)) < 100", step_index=0),
+        ])
+        assert r.unknown == []
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_two_calls_distinct_free_vars(self):
+        """Two textually-identical calls produce *distinct* placeholders.
+
+        Calls aren't assumed pure, so ``strlen(s) == strlen(s)`` is
+        satisfiable — but ``strlen(s) != strlen(s)`` is also satisfiable
+        (different anon vars).  This is the conservative stance: the
+        solver never claims infeasibility from elided subterms.
+        """
+        sat_eq = check_path_feasibility([
+            PathCondition("strlen(s) == strlen(s)", step_index=0),
+        ])
+        sat_ne = check_path_feasibility([
+            PathCondition("strlen(s) != strlen(s)", step_index=0),
+        ])
+        assert sat_eq.feasible is True
+        assert sat_ne.feasible is True
+
+    @_requires_z3
+    def test_call_in_bitmask_lhs(self):
+        """Function call in bitmask LHS: ``strlen(s) & 0xff == 0``."""
+        r = check_path_feasibility([
+            PathCondition("strlen(s) & 0xff == 0", step_index=0),
+        ])
+        assert r.unknown == []
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_call_does_not_constrain_path(self):
+        """Conditions reduced to ``anon OP literal`` mustn't force
+        infeasibility on otherwise-compatible peer conditions."""
+        r = check_path_feasibility([
+            PathCondition("size > 0", step_index=0),
+            PathCondition("strlen(input) < 1024", step_index=1),
+        ])
+        assert r.unknown == []
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_unbalanced_parens_still_rejected(self):
+        """Unbalanced ``ident(`` is *not* eligible for the fallback —
+        balanced-paren walk fails and the parens-check still fires."""
+        r = check_path_feasibility([
+            PathCondition("strlen(input < 1024", step_index=0),
+        ])
+        assert "strlen(input < 1024" in r.unknown
+        # Look for a rejection corresponding to this text
+        rej = next(
+            x for x in r.unknown_reasons if x.text == "strlen(input < 1024"
+        )
+        assert rej.kind is RejectionKind.PARENS_NOT_SUPPORTED
+
+    @_requires_z3
+    def test_fallback_preserves_real_constraints(self):
+        """A path with a parsed real constraint and a fallback-recovered
+        call must still detect infeasibility driven by the real constraint."""
+        r = check_path_feasibility([
+            PathCondition("size > 100", step_index=0),
+            PathCondition("size < 50", step_index=1),
+            PathCondition("strlen(input) < 1024", step_index=2),  # free var
+        ])
+        # The two `size` constraints are mutually exclusive regardless of
+        # the free-var-only third condition.
+        assert r.feasible is False
+
+    @_requires_z3
+    def test_call_with_complex_inner(self):
+        """Inner expressions inside the call (operators, nested calls,
+        whitespace) don't matter — the whole balanced span becomes one
+        placeholder."""
+        r = check_path_feasibility([
+            PathCondition("compute(a + b * c, lookup(table, key)) > 0", step_index=0),
+        ])
+        assert r.unknown == []
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_anon_counter_progresses_across_conditions(self):
+        """Free-var allocator is seeded from existing ``vars_`` so
+        anon names don't collide across conditions in one path."""
+        # If both calls were assigned `_anon_0`, they'd share a Z3
+        # variable and 'first != 0 AND second == 0' would be unsat-ish
+        # in some encodings.  With distinct vars, both are satisfiable.
+        r = check_path_feasibility([
+            PathCondition("first(x) != 0", step_index=0),
+            PathCondition("second(y) == 0", step_index=1),
+        ])
+        assert r.unknown == []
+        assert r.feasible is True
