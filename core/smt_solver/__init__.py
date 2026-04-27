@@ -38,6 +38,7 @@ from .config import (
     BV_X86_64,
 )
 from .explain import core_names, track
+from .rejection import Rejection, RejectionKind
 from .session import DEFAULT_TIMEOUT_MS, new_solver, scoped
 from .witness import bv_to_int, format_vars, format_witness
 
@@ -77,4 +78,7 @@ __all__ = [
     # Unsat-core explanation
     "track",
     "core_names",
+    # Structured parser rejection reasons
+    "Rejection",
+    "RejectionKind",
 ]
