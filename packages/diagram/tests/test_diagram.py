@@ -2,10 +2,7 @@
 """Tests for the diagram generation package."""
 
 import json
-import tempfile
 from pathlib import Path
-
-import pytest
 
 from ..sanitize import sanitize, sanitize_id
 from ..findings_summary import generate_verdict_pie, generate_type_pie
@@ -20,6 +17,35 @@ from ..renderer import render_directory, render_and_write
 def assert_no_mermaid_directive_injection(output: str) -> None:
     """Assert payloads did not break out into Mermaid directive lines."""
     assert "\n    click " not in output.lower()
+
+
+def assert_usable_mermaid_flowchart(output: str) -> None:
+    """Assert generated Mermaid remains a recognizable, renderable flowchart."""
+    lines = [line.rstrip() for line in output.splitlines() if line.strip()]
+    assert lines, "Mermaid output is empty"
+    assert lines[0] in {"flowchart TD", "flowchart LR"}
+    assert any("-->" in line or "-." in line for line in lines), "flowchart has no edges"
+    assert any("[\"" in line or "[/\"" in line or "([\"" in line for line in lines), "flowchart has no labelled nodes"
+    assert "```" not in output, "raw flowchart generators should not emit markdown fences"
+
+
+def extract_mermaid_blocks(markdown: str) -> list[str]:
+    """Return the contents of fenced Mermaid blocks from rendered markdown."""
+    blocks: list[str] = []
+    in_block = False
+    current: list[str] = []
+    for line in markdown.splitlines():
+        if line.strip() == "```mermaid":
+            in_block = True
+            current = []
+            continue
+        if in_block and line.strip() == "```":
+            blocks.append("\n".join(current).strip())
+            in_block = False
+            continue
+        if in_block:
+            current.append(line)
+    return blocks
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +352,22 @@ class TestContextMap:
         # HTML-escaped angle brackets should be present
         assert "&lt;" in out or "&gt;" in out
 
+    def test_sanitized_context_map_is_still_usable_mermaid(self):
+        data = {
+            "entry_points": [
+                {"id": "EP-001; click EP-001 javascript:alert(1)", "path": "/api/<tenant>"}
+            ],
+            "boundary_details": [
+                {"id": "TB-001; click TB-001 javascript:alert(1)", "covers": ["EP-001"]}
+            ],
+            "sink_details": [
+                {"id": "SINK-001; click SINK-001 javascript:alert(1)", "operation": "open().write()"}
+            ],
+        }
+        out = gen_context_map(data)
+        assert_no_mermaid_directive_injection(out)
+        assert_usable_mermaid_flowchart(out)
+
     def test_class_assignments_use_sanitized_ids(self):
         data = {
             "entry_points": [
@@ -479,6 +521,21 @@ class TestFlowTrace:
         }
         assert_no_mermaid_directive_injection(gen_flow_trace(data))
 
+    def test_sanitized_flow_trace_is_still_usable_mermaid(self):
+        payload = "X\"]\n    click X javascript:alert(1)\n    Y[\""
+        data = {
+            "id": "TRACE-X",
+            "name": payload,
+            "steps": [
+                {"step": 1, "type": "entry", "definition": "src/routes.py:10", "description": payload},
+                {"step": 2, "type": "sink", "definition": "src/db.py:50", "description": "write"},
+            ],
+            "branches": [{"branch_point": "src/routes.py:10", "condition": payload, "outcome": payload}],
+        }
+        out = gen_flow_trace(data)
+        assert_no_mermaid_directive_injection(out)
+        assert_usable_mermaid_flowchart(out)
+
 
 # ---------------------------------------------------------------------------
 # attack_tree tests
@@ -518,7 +575,7 @@ class TestAttackTree:
         out = gen_attack_tree(ATTACK_TREE_DATA)
         # N1 and N2 have empty leads_to, so no outgoing edges from them
         lines = out.splitlines()
-        n1_edges = [l for l in lines if l.strip().startswith("N1 -->")]
+        n1_edges = [line for line in lines if line.strip().startswith("N1 -->")]
         assert not n1_edges
 
     def test_confirmed_node_shows_proximity_when_provided(self):
@@ -692,6 +749,21 @@ class TestAttackPaths:
         }, 0)
         assert_no_mermaid_directive_injection(out)
 
+    def test_sanitized_attack_path_is_still_usable_mermaid(self):
+        payload = "X\"]\n    click X javascript:alert(1)\n    Y[\""
+        out = generate_single({
+            "id": "PATH-X",
+            "name": payload,
+            "status": "confirmed",
+            "proximity": 8,
+            "steps": [
+                {"step": 1, "type": "entry", "definition": "src/routes.py:10", "description": payload},
+                {"step": 2, "type": "sink", "definition": "src/db.py:50", "description": "write"},
+            ],
+        }, 0)
+        assert_no_mermaid_directive_injection(out)
+        assert_usable_mermaid_flowchart(out)
+
 
 # ---------------------------------------------------------------------------
 # renderer tests
@@ -751,6 +823,28 @@ class TestRenderer:
         assert "Attack Paths" in out
         assert "Hypotheses" in out
         assert out.count("```mermaid") >= 5
+
+    def test_rendered_mermaid_blocks_have_usable_entrypoints(self, tmp_path):
+        self._make_out_dir(tmp_path, {
+            "context-map.json": CONTEXT_MAP_FULL,
+            "flow-trace-EP-001.json": FLOW_TRACE_DATA,
+            "attack-tree.json": ATTACK_TREE_DATA,
+            "attack-paths.json": ATTACK_PATHS_DATA,
+            "hypotheses.json": HYPOTHESES_DATA,
+            "findings.json": {
+                "findings": [
+                    {"ruling": {"status": "exploitable"}, "vuln_type": "buffer_overflow"},
+                    {"ruling": {"status": "confirmed"}, "vuln_type": "xss"},
+                ]
+            },
+        })
+        blocks = extract_mermaid_blocks(render_directory(tmp_path, target="full-run"))
+        assert blocks
+        assert all(
+            block.startswith(("flowchart TD", "flowchart LR", "pie title", "%%{init:"))
+            for block in blocks
+        )
+        assert all("\n```" not in block for block in blocks)
 
     def test_render_attack_tree_enriched_with_companions(self, tmp_path):
         disproven_wrapped = {"disproven": [{"finding": "N2", "why_wrong": "suppressed errors", "lesson": ""}]}
