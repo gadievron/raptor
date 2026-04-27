@@ -94,10 +94,13 @@ from core.smt_solver import (
     DEFAULT_TIMEOUT_MS as _DEFAULT_TIMEOUT_MS,
     Rejection,
     RejectionKind,
+    classify_solver_unknown as _classify_solver_unknown,
     core_names as _core_names,
     mk_val as _mk_val,
     mk_var as _mk_var,
     new_solver as _new_solver,
+    parse_literal_value as _parse_literal_value,
+    propagate as _propagate,
     scoped as _scoped,
     track as _track,
     z3,
@@ -156,42 +159,6 @@ _TOKEN_RE = re.compile(
     r'(0x[0-9a-f]+|\d+|[a-z_][a-z0-9_]*|[+\-*]|<=|>=|!=|==|>>|<<|[<>&|])',
     re.IGNORECASE,
 )
-
-
-def _parse_literal_value(tok: str, profile: BVProfile) -> Union[int, Rejection]:
-    """Validate and convert a literal token, or return a structured rejection.
-
-    Centralised so atom-position literals and bitmask-form literals both
-    reject the same things:
-
-    - Out-of-range for profile width (would silently wrap in z3.BitVecVal)
-      → :data:`RejectionKind.LITERAL_OUT_OF_RANGE`.
-    - Leading-zero decimals (octal in C, ambiguous if interpreted as base-10)
-      → :data:`RejectionKind.LITERAL_AMBIGUOUS`.
-    - Anything that isn't a clean hex or decimal literal
-      → :data:`RejectionKind.UNRECOGNIZED_OPERAND`.
-    """
-    if _HEX_RE.match(tok):
-        v = int(tok, 16)
-    elif _INT_RE.match(tok):
-        if len(tok) > 1 and tok[0] == "0":
-            return Rejection(
-                tok, RejectionKind.LITERAL_AMBIGUOUS,
-                "leading-zero decimal is ambiguous with C octal",
-                hint="rewrite as hex (0x...) or strip the leading zero",
-            )
-        v = int(tok)
-    else:
-        return Rejection(
-            tok, RejectionKind.UNRECOGNIZED_OPERAND,
-            f"token {tok!r} is not a hex or decimal literal",
-        )
-    if v >= (1 << profile.width):
-        return Rejection(
-            tok, RejectionKind.LITERAL_OUT_OF_RANGE,
-            f"value {v:#x} exceeds {profile.width}-bit profile range",
-        )
-    return v
 
 
 def _parse_expr(
@@ -296,17 +263,6 @@ def _parse_expr(
         )
 
     return result
-
-
-def _propagate(text: str, sub: Rejection) -> Rejection:
-    """Re-anchor a sub-expression rejection on the full condition text.
-
-    Sub-expression parsers see only their own slice of the input, so a
-    rejection's ``text`` field starts out as that slice.  When bubbling
-    up to the condition level we replace it with the full condition so
-    callers can match the rejection back to the original input.
-    """
-    return Rejection(text, sub.kind, sub.detail, sub.hint)
 
 
 def _parse_condition(
@@ -554,20 +510,3 @@ def check_path_feasibility(
         model={}, smt_available=True,
         reasoning=f"Z3 returned unknown ({mode}) — {detail}",
     )
-
-
-def _classify_solver_unknown(solver: Any) -> RejectionKind:
-    """Map Z3's ``reason_unknown()`` string to our rejection kind.
-
-    Z3 reports ``"timeout"`` (or, on some builds, ``"canceled"``) when
-    the per-solver timeout fires; anything else is grouped under
-    :data:`RejectionKind.SOLVER_UNKNOWN` (incomplete tactic, undecidable
-    fragment, ...).
-    """
-    try:
-        reason = (solver.reason_unknown() or "").lower()
-    except Exception:
-        return RejectionKind.SOLVER_UNKNOWN
-    if "timeout" in reason or "canceled" in reason or "cancelled" in reason:
-        return RejectionKind.SOLVER_TIMEOUT
-    return RejectionKind.SOLVER_UNKNOWN
