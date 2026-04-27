@@ -45,6 +45,14 @@ logger = logging.getLogger(__name__)
 # Stage B uses this to distinguish its own paths from pre-loaded ones.
 TRACE_SOURCE_LABEL = "understand:trace"
 
+# BVProfile name shorthands accepted on the optional ``path_profile`` field
+# of a flow trace.  Mirrors the names accepted by ``raptor-smt-validate-path``
+# so Stage E can pass the value through without translation.
+_VALID_PROFILE_NAMES = frozenset({
+    "uint8", "int8", "uint16", "int16",
+    "uint32", "int32", "uint64", "int64",
+})
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -673,7 +681,77 @@ def _trace_to_attack_path(trace: Dict[str, Any], trace_file: Path) -> Dict[str, 
     if summary.get("verdict"):
         path["trace_verdict"] = summary["verdict"]
 
+    # Forward SMT path-feasibility hints when present and well-formed.  Both
+    # fields are optional — Stage E falls back to extracting conditions from
+    # source if absent.  Malformed values are dropped with a logged warning
+    # rather than passed through; better Stage E re-extracts than confuses
+    # itself with bad data.
+    pc = _validate_path_conditions(trace.get("path_conditions"), str(trace_file))
+    if pc is not None:
+        path["path_conditions"] = pc
+    pp = _validate_path_profile(trace.get("path_profile"), str(trace_file))
+    if pp is not None:
+        path["path_profile"] = pp
+
     return path
+
+
+def _validate_path_conditions(
+    conditions: Any, source: str,
+) -> Optional[List[Any]]:
+    """Validate the optional ``path_conditions`` field on a flow trace.
+
+    Returns the conditions list if every element is a string or a
+    ``{"text": str, ...}`` dict (matching the shape
+    ``raptor-smt-validate-path --stdin`` accepts).  Returns ``None`` —
+    dropping the field entirely with a logged warning — if the value is
+    malformed.  Better the consumer re-extracts than confuses itself
+    with bad data.
+    """
+    if conditions is None:
+        return None
+    if not isinstance(conditions, list):
+        logger.warning(
+            "understand_bridge: %s path_conditions must be a list, got %s — dropping",
+            source, type(conditions).__name__,
+        )
+        return None
+    for i, c in enumerate(conditions):
+        if isinstance(c, str):
+            continue
+        if isinstance(c, dict):
+            text = c.get("text") or c.get("condition")
+            if not isinstance(text, str) or not text:
+                logger.warning(
+                    "understand_bridge: %s path_conditions[%d] missing/invalid 'text' — dropping field",
+                    source, i,
+                )
+                return None
+            continue
+        logger.warning(
+            "understand_bridge: %s path_conditions[%d] must be str or dict, got %s — dropping field",
+            source, i, type(c).__name__,
+        )
+        return None
+    return conditions
+
+
+def _validate_path_profile(profile: Any, source: str) -> Optional[str]:
+    """Validate the optional ``path_profile`` field on a flow trace.
+
+    Must be one of the stdint-style names accepted by
+    ``raptor-smt-validate-path``.  Drops the field with a warning on
+    anything else.
+    """
+    if profile is None:
+        return None
+    if not isinstance(profile, str) or profile not in _VALID_PROFILE_NAMES:
+        logger.warning(
+            "understand_bridge: %s path_profile must be one of %s, got %r — dropping",
+            source, sorted(_VALID_PROFILE_NAMES), profile,
+        )
+        return None
+    return profile
 
 
 def _merge_list_by_key(

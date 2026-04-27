@@ -4,6 +4,7 @@
 Usage:
   raptor-smt-validate-path [--profile <name>] <condition> [<condition> ...]
   raptor-smt-validate-path [--profile <name>] --stdin
+  raptor-smt-validate-path --from-trace <id> --workdir <path>
 
 Each ``<condition>`` is a single predicate string such as ``"size > 0"``
 or ``"alloc_size == count * 16"``.  Conditions must hold simultaneously
@@ -15,6 +16,16 @@ When ``--stdin`` is given, conditions are read as a JSON array.  Each
 element may be either a bare string or a ``{"text": ..., "negated":
 true}`` object — useful when conditions need explicit negation flags
 (e.g. piped from a tool that already extracts them).
+
+When ``--from-trace <id>`` is given, the script reads
+``<workdir>/attack-paths.json`` (or ``--attack-paths <file>`` if given
+explicitly), finds the entry with matching ``id``, and uses its
+``path_conditions`` and ``path_profile`` fields directly.  This is the
+preferred path for /understand-extracted traces — the conditions were
+extracted with full source-code context and don't need re-derivation.
+Explicit ``--profile`` overrides the trace's ``path_profile`` when both
+are supplied.  Fails (exit 2) when the trace has no ``path_conditions``
+or the file/id can't be resolved.
 
 ``--profile`` selects bitvector width and signedness:
 
@@ -49,6 +60,56 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from packages.exploit_feasibility.smt_path import validate_path
 
 
+def _err(msg: str) -> int:
+    print(f"raptor-smt-validate-path: {msg}", file=sys.stderr)
+    return 2
+
+
+def _resolve_from_trace(args) -> "tuple[list, str | None] | int":
+    """Load conditions + profile from an imported attack-paths entry.
+
+    Returns ``(conditions, profile_or_None)`` on success, or an exit-code int
+    on failure.  ``profile_or_None`` is the trace's path_profile when present,
+    else None (caller falls back to --profile arg or default).
+    """
+    if args.attack_paths:
+        ap_path = Path(args.attack_paths)
+    elif args.workdir:
+        ap_path = Path(args.workdir) / "attack-paths.json"
+    else:
+        return _err("--from-trace requires --workdir or --attack-paths")
+
+    if not ap_path.is_file():
+        return _err(f"attack-paths.json not found: {ap_path}")
+
+    try:
+        paths = json.loads(ap_path.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        return _err(f"failed to read {ap_path}: {e}")
+
+    if not isinstance(paths, list):
+        return _err(f"{ap_path} is not a JSON array")
+
+    matches = [p for p in paths if isinstance(p, dict) and p.get("id") == args.from_trace]
+    if not matches:
+        return _err(f"no attack-path with id {args.from_trace!r} in {ap_path}")
+    if len(matches) > 1:
+        return _err(f"multiple attack-paths with id {args.from_trace!r} in {ap_path}")
+
+    trace = matches[0]
+    conds = trace.get("path_conditions")
+    if conds is None:
+        return _err(
+            f"attack-path {args.from_trace!r} has no path_conditions — "
+            f"the trace was imported but /understand didn't extract them; "
+            f"fall back to extracting from source"
+        )
+    if not isinstance(conds, list):
+        return _err(f"attack-path {args.from_trace!r} path_conditions is not a list")
+
+    return conds, trace.get("path_profile")
+
+
 def main() -> int:
     p = argparse.ArgumentParser(
         prog="raptor-smt-validate-path",
@@ -56,8 +117,9 @@ def main() -> int:
     )
     p.add_argument(
         "--profile",
-        default="uint64",
-        help="Bitvector profile name (default: uint64).",
+        default=None,
+        help="Bitvector profile name.  Defaults to the trace's path_profile "
+             "when --from-trace is used, otherwise to 'uint64'.",
     )
     p.add_argument(
         "--stdin",
@@ -66,48 +128,60 @@ def main() -> int:
              "positional args.",
     )
     p.add_argument(
+        "--from-trace",
+        metavar="ID",
+        help="Use path_conditions/path_profile from the attack-path with "
+             "this id (requires --workdir or --attack-paths).",
+    )
+    p.add_argument(
+        "--workdir",
+        help="Validate run workdir; reads attack-paths.json from here when "
+             "--from-trace is given.",
+    )
+    p.add_argument(
+        "--attack-paths",
+        help="Explicit path to attack-paths.json (alternative to --workdir).",
+    )
+    p.add_argument(
         "conditions",
         nargs="*",
         help="Path-condition strings (each a single predicate).",
     )
     args = p.parse_args()
 
-    if args.stdin:
-        if args.conditions:
-            print(
-                "raptor-smt-validate-path: --stdin and positional conditions "
-                "are mutually exclusive",
-                file=sys.stderr,
-            )
-            return 2
+    # Mutually-exclusive input modes
+    modes = sum([bool(args.from_trace), bool(args.stdin), bool(args.conditions)])
+    if modes > 1:
+        return _err("--from-trace, --stdin, and positional conditions are mutually exclusive")
+    if modes == 0:
+        p.print_usage(sys.stderr)
+        return _err("at least one condition required (or use --stdin / --from-trace)")
+
+    trace_profile: str | None = None
+
+    if args.from_trace:
+        result_or_code = _resolve_from_trace(args)
+        if isinstance(result_or_code, int):
+            return result_or_code
+        conditions, trace_profile = result_or_code
+    elif args.stdin:
         try:
             payload = json.load(sys.stdin)
         except json.JSONDecodeError as e:
-            print(f"raptor-smt-validate-path: invalid JSON on stdin: {e}", file=sys.stderr)
-            return 2
+            return _err(f"invalid JSON on stdin: {e}")
         if not isinstance(payload, list):
-            print(
-                "raptor-smt-validate-path: --stdin payload must be a JSON array",
-                file=sys.stderr,
-            )
-            return 2
+            return _err("--stdin payload must be a JSON array")
         conditions = payload
     else:
-        if not args.conditions:
-            p.print_usage(sys.stderr)
-            print(
-                "raptor-smt-validate-path: at least one condition required "
-                "(or use --stdin)",
-                file=sys.stderr,
-            )
-            return 2
         conditions = list(args.conditions)
 
+    # Profile precedence: explicit --profile > trace's path_profile > "uint64"
+    profile = args.profile or trace_profile or "uint64"
+
     try:
-        result = validate_path(conditions, profile=args.profile)
+        result = validate_path(conditions, profile=profile)
     except (TypeError, ValueError) as e:
-        print(f"raptor-smt-validate-path: {e}", file=sys.stderr)
-        return 2
+        return _err(str(e))
 
     json.dump(result, sys.stdout, indent=2)
     sys.stdout.write("\n")

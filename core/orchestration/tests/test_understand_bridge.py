@@ -601,6 +601,101 @@ class TestLoadUnderstandContextFlowTraces:
         assert not (validate_dir / "attack-paths.json").exists()
 
 
+class TestPathConditionsForwarding:
+    """Optional ``path_conditions`` and ``path_profile`` fields produced by
+    ``/understand --trace`` should round-trip into ``attack-paths.json``
+    exactly as written, so Stage E can feed them straight to the SMT
+    helper without re-extracting from source.  Malformed values are
+    dropped with a logged warning rather than passed through."""
+
+    def _trace_with(self, **overrides):
+        trace = copy.deepcopy(MINIMAL_FLOW_TRACE)
+        trace.update(overrides)
+        return trace
+
+    def _import_and_get_path(self, tmp_path, trace):
+        understand_dir = tmp_path / "understand"
+        validate_dir = tmp_path / "validate"
+        understand_dir.mkdir()
+        validate_dir.mkdir()
+        _write_json(understand_dir / "context-map.json", MINIMAL_CONTEXT_MAP)
+        _write_json(understand_dir / "flow-trace-001.json", trace)
+        load_understand_context(understand_dir, validate_dir)
+        paths = json.loads((validate_dir / "attack-paths.json").read_text())
+        assert len(paths) == 1
+        return paths[0]
+
+    def test_path_conditions_round_trip(self, tmp_path):
+        trace = self._trace_with(path_conditions=[
+            {"text": "size > 0", "step_index": 1, "negated": False},
+            {"text": "ptr != NULL", "step_index": 2, "negated": False},
+        ])
+        path = self._import_and_get_path(tmp_path, trace)
+        assert path["path_conditions"] == [
+            {"text": "size > 0", "step_index": 1, "negated": False},
+            {"text": "ptr != NULL", "step_index": 2, "negated": False},
+        ]
+
+    def test_path_conditions_bare_strings_round_trip(self, tmp_path):
+        trace = self._trace_with(path_conditions=["size > 0", "count < 1024"])
+        path = self._import_and_get_path(tmp_path, trace)
+        assert path["path_conditions"] == ["size > 0", "count < 1024"]
+
+    def test_path_profile_round_trip(self, tmp_path):
+        trace = self._trace_with(path_profile="uint32")
+        path = self._import_and_get_path(tmp_path, trace)
+        assert path["path_profile"] == "uint32"
+
+    def test_absent_fields_omitted_from_attack_path(self, tmp_path):
+        path = self._import_and_get_path(tmp_path, self._trace_with())
+        assert "path_conditions" not in path
+        assert "path_profile" not in path
+
+    def test_malformed_path_conditions_dropped(self, tmp_path, caplog):
+        # Not a list — entire field dropped
+        trace = self._trace_with(path_conditions="not a list")
+        with caplog.at_level("WARNING", logger="core.orchestration.understand_bridge"):
+            path = self._import_and_get_path(tmp_path, trace)
+        assert "path_conditions" not in path
+        assert any("path_conditions must be a list" in r.message for r in caplog.records)
+
+    def test_path_conditions_with_int_element_dropped(self, tmp_path, caplog):
+        trace = self._trace_with(path_conditions=["size > 0", 42])
+        with caplog.at_level("WARNING", logger="core.orchestration.understand_bridge"):
+            path = self._import_and_get_path(tmp_path, trace)
+        assert "path_conditions" not in path
+
+    def test_path_conditions_dict_missing_text_dropped(self, tmp_path, caplog):
+        trace = self._trace_with(path_conditions=[{"step_index": 1, "negated": False}])
+        with caplog.at_level("WARNING", logger="core.orchestration.understand_bridge"):
+            path = self._import_and_get_path(tmp_path, trace)
+        assert "path_conditions" not in path
+
+    def test_unknown_path_profile_dropped(self, tmp_path, caplog):
+        trace = self._trace_with(path_profile="size_t")
+        with caplog.at_level("WARNING", logger="core.orchestration.understand_bridge"):
+            path = self._import_and_get_path(tmp_path, trace)
+        assert "path_profile" not in path
+        assert any("path_profile must be one of" in r.message for r in caplog.records)
+
+    def test_non_string_path_profile_dropped(self, tmp_path, caplog):
+        trace = self._trace_with(path_profile=32)
+        with caplog.at_level("WARNING", logger="core.orchestration.understand_bridge"):
+            path = self._import_and_get_path(tmp_path, trace)
+        assert "path_profile" not in path
+
+    def test_malformed_field_does_not_break_other_data(self, tmp_path, caplog):
+        """Even when SMT-related fields are malformed, the rest of the
+        attack-path import (steps, proximity, blockers) must still land."""
+        trace = self._trace_with(path_conditions=42, path_profile="bogus")
+        with caplog.at_level("WARNING", logger="core.orchestration.understand_bridge"):
+            path = self._import_and_get_path(tmp_path, trace)
+        assert "path_conditions" not in path
+        assert "path_profile" not in path
+        assert path["steps"] == MINIMAL_FLOW_TRACE["steps"]
+        assert path["proximity"] == MINIMAL_FLOW_TRACE["proximity"]
+
+
 # ---------------------------------------------------------------------------
 # enrich_checklist
 # ---------------------------------------------------------------------------
