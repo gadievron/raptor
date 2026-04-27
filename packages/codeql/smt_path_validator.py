@@ -94,6 +94,7 @@ from core.smt_solver import (
     DEFAULT_TIMEOUT_MS as _DEFAULT_TIMEOUT_MS,
     Rejection,
     RejectionKind,
+    canonicalise as _canonicalise,
     classify_solver_unknown as _classify_solver_unknown,
     core_names as _core_names,
     mk_val as _mk_val,
@@ -279,8 +280,13 @@ def _parse_condition(
     Conditions containing function-call syntax (parentheses) are rejected
     with :data:`RejectionKind.PARENS_NOT_SUPPORTED` — they go to the
     unknown list.
+
+    English operator phrases ("is greater than", "equals", ...) are
+    rewritten to symbolic operators by :func:`canonicalise` before the
+    grammar runs.  ``text`` (the original) is preserved for rejection
+    messages so callers can match failures back to their input.
     """
-    t = text.strip()
+    t = _canonicalise(text)
 
     if '(' in t or ')' in t:
         return Rejection(

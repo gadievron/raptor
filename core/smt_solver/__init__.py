@@ -22,6 +22,7 @@ predicates, one-gadget constraints, ...) live in their respective
 
 from .availability import z3, z3_available
 from .bitvec import ge, gt, le, lt, mk_val, mk_var
+from .canonicalise import canonicalise
 from .config import (
     BVProfile,
     BV_AARCH64,
@@ -90,4 +91,6 @@ __all__ = [
     "propagate",
     "parse_literal_value",
     "classify_solver_unknown",
+    # English-aliased pre-canonicalisation
+    "canonicalise",
 ]
