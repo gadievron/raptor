@@ -16,7 +16,7 @@ from .sanitize import sanitize as _sanitize, sanitize_id as _sid
 
 def _step_label(step: dict[str, Any]) -> str:
     n = _sanitize(step.get("step", "?"))
-    stype = _sanitize(step.get("type", "call")).upper()
+    stype = _sanitize(str(step.get("type", "call")).upper())
     desc = _sanitize(step.get("description", ""))
     tainted = _sanitize(step.get("tainted_var", ""))
     loc = _sanitize(step.get("definition") or step.get("call_site") or "")

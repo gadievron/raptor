@@ -536,6 +536,27 @@ class TestFlowTrace:
         assert_no_mermaid_directive_injection(out)
         assert_usable_mermaid_flowchart(out)
 
+    def test_uppercase_step_type_preserves_escaped_entities(self):
+        out = gen_flow_trace({
+            "id": "TRACE-X",
+            "name": "trace",
+            "steps": [{"step": 1, "type": "<sink>", "definition": "src/db.py:50"}],
+        })
+        assert "&lt;SINK&gt;" in out
+        assert "&LT;" not in out
+        assert "&GT;" not in out
+
+    def test_uppercase_attacker_control_level_preserves_escaped_entities(self):
+        out = gen_flow_trace({
+            "id": "TRACE-X",
+            "name": "trace",
+            "steps": [{"step": 1, "type": "entry", "definition": "src/routes.py:10"}],
+            "attacker_control": {"level": "<high>", "what": "query"},
+        })
+        assert "Attacker control: &lt;HIGH&gt;" in out
+        assert "&LT;" not in out
+        assert "&GT;" not in out
+
 
 # ---------------------------------------------------------------------------
 # attack_tree tests
@@ -636,6 +657,20 @@ class TestAttackTree:
         }
         hypotheses = [{"finding": "N1", "status": payload, "claim": payload}]
         assert_no_mermaid_directive_injection(gen_attack_tree(tree, hypotheses=hypotheses))
+
+    def test_status_group_keys_do_not_keep_raw_status_text(self):
+        payload = "unexpected<script>"
+        tree = {
+            "root": "ROOT",
+            "nodes": [
+                {"id": "ROOT", "goal": "root", "status": payload, "leads_to": "N1"},
+                {"id": "N1", "goal": "child", "status": "confirmed", "leads_to": ""},
+            ],
+        }
+        out = gen_attack_tree(tree)
+        class_lines = [line for line in out.splitlines() if line.strip().startswith("class ")]
+        assert "unexpected<script>" not in "\n".join(class_lines)
+        assert any(line.strip() == "class ROOT unexplored" for line in class_lines)
 
 
 # ---------------------------------------------------------------------------
@@ -748,6 +783,17 @@ class TestAttackPaths:
             ],
         }, 0)
         assert_no_mermaid_directive_injection(out)
+
+    def test_uppercase_step_type_preserves_escaped_entities(self):
+        out = generate_single({
+            "id": "PATH-X",
+            "name": "path",
+            "status": "confirmed",
+            "steps": [{"step": 1, "type": "<sink>", "definition": "src/db.py:50"}],
+        }, 0)
+        assert "&lt;SINK&gt;" in out
+        assert "&LT;" not in out
+        assert "&GT;" not in out
 
     def test_sanitized_attack_path_is_still_usable_mermaid(self):
         payload = "X\"]\n    click X javascript:alert(1)\n    Y[\""
