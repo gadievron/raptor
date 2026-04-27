@@ -32,6 +32,10 @@ Output: JSON to stdout with keys
   satisfied       conditions that are tautologies
   unsatisfied     conditions in the unsat core (when feasible=false)
   unknown         conditions the parser could not encode
+  unknown_reasons structured-rejection objects parallel to ``unknown``;
+                  each carries ``kind`` (e.g. "literal_ambiguous",
+                  "parens_not_supported") and an optional ``hint`` for
+                  targeted retry
   smt_available   true if z3-solver is loaded
 
 Exit code: always 0 on a well-formed invocation.  A ``feasible: false``
