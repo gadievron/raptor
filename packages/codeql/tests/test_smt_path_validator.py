@@ -9,7 +9,7 @@ import pytest
 # packages/codeql/tests/ -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
-from core.smt_solver import z3_available
+from core.smt_solver import RejectionKind, z3_available
 from packages.codeql.smt_path_validator import (
     PathCondition,
     PathSMTResult,
@@ -586,3 +586,70 @@ class TestParametricProfile:
         base, size = r.model["base"], r.model["size"]
         assert (base + size) & 0xFFFFFFFF <= 8192
         assert base > 0x80000000
+
+
+class TestStructuredRejection:
+    """`unknown_reasons` should classify *why* each unparseable condition
+    was dropped, parallel to the textual `unknown` list."""
+
+    def _kind_for(self, result, text):
+        for r in result.unknown_reasons:
+            if r.text == text:
+                return r.kind
+        raise AssertionError(
+            f"no Rejection for {text!r} in {result.unknown_reasons!r}"
+        )
+
+    def test_no_z3_reasons_empty(self):
+        """When Z3 is unavailable everything goes to unknown but we
+        don't synthesise per-condition rejection reasons — there's no
+        parser/solver to assign blame to."""
+        with patch("packages.codeql.smt_path_validator._z3_available", return_value=False):
+            r = check_path_feasibility([PathCondition("size > 0", step_index=0)])
+        assert r.unknown == ["size > 0"]
+        assert r.unknown_reasons == []
+
+    @_requires_z3
+    def test_parens_rejection(self):
+        r = check_path_feasibility([
+            PathCondition("validate(ptr, len) == 0", step_index=0),
+        ])
+        assert self._kind_for(r, "validate(ptr, len) == 0") is RejectionKind.PARENS_NOT_SUPPORTED
+
+    @_requires_z3
+    def test_mixed_precedence_rejection(self):
+        r = check_path_feasibility([
+            PathCondition("a + b * c == 0", step_index=0),
+        ])
+        assert self._kind_for(r, "a + b * c == 0") is RejectionKind.MIXED_PRECEDENCE
+
+    @_requires_z3
+    def test_trailing_tokens_rejection(self):
+        r = check_path_feasibility([PathCondition("a b", step_index=0)])
+        assert self._kind_for(r, "a b") is RejectionKind.UNRECOGNIZED_FORM
+
+    @_requires_z3
+    def test_unrecognized_form_rejection(self):
+        """A condition without a relational/bitmask top-level pattern."""
+        r = check_path_feasibility([PathCondition("size_only", step_index=0)])
+        assert self._kind_for(r, "size_only") is RejectionKind.UNRECOGNIZED_FORM
+
+    @_requires_z3
+    def test_rejection_carries_hint(self):
+        r = check_path_feasibility([
+            PathCondition("validate(ptr, len) == 0", step_index=0),
+        ])
+        rej = next(x for x in r.unknown_reasons if x.text == "validate(ptr, len) == 0")
+        assert rej.hint  # non-empty
+        assert "synthetic identifier" in rej.hint or "rewrite" in rej.hint.lower()
+
+    @_requires_z3
+    def test_rejection_aligned_with_unknown_list(self):
+        """For every entry in `unknown`, there's a `unknown_reasons` entry
+        with the same text."""
+        r = check_path_feasibility([
+            PathCondition("size > 0", step_index=0),                    # parses
+            PathCondition("validate(p) == 0", step_index=1),            # parens
+            PathCondition("a + b * c == 0", step_index=2),              # mixed prec
+        ])
+        assert set(r.unknown) == {x.text for x in r.unknown_reasons}
