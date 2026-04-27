@@ -147,7 +147,13 @@ echo -e "${BLUE}3. ARGUMENT VALIDATION (Actual Parsing)${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Test 3.1: Scan accepts --policy_groups and runs (or tries to)
-OUTPUT=$(python3 "$PROJECT_ROOT/raptor.py" scan --repo "$TEMP_REPO" --policy_groups secrets 2>&1)
+# Wrap with `timeout 10s` (mirrors #205's fix for real_tests_fast.sh): the
+# assertion is solely on the absence of "unrecognized argument" in output.
+# An unknown flag is rejected by argparse in <100ms; on a successful parse
+# the command falls through to a real semgrep scan (slow, fetches registry
+# packs).  The 10s ceiling preserves the test semantic — argparse rejection
+# always lands in output well before the timeout fires.
+OUTPUT=$(timeout 10s python3 "$PROJECT_ROOT/raptor.py" scan --repo "$TEMP_REPO" --policy_groups secrets 2>&1)
 EXIT_CODE=$?
 # Success (0) if semgrep installed, error if not, but NO argument parsing error
 if ! echo "$OUTPUT" | grep -qi "unrecognized argument\|--policy-groups"; then
@@ -157,7 +163,7 @@ else
 fi
 
 # Test 3.2: Agentic accepts --codeql flag
-OUTPUT=$(python3 "$PROJECT_ROOT/raptor.py" agentic --repo "$TEMP_REPO" --codeql 2>&1)
+OUTPUT=$(timeout 10s python3 "$PROJECT_ROOT/raptor.py" agentic --repo "$TEMP_REPO" --codeql 2>&1)
 if ! echo "$OUTPUT" | grep -qi "unrecognized argument\|--codeql"; then
     test_case "Agentic accepts --codeql flag" "PASS"
 else
@@ -165,7 +171,7 @@ else
 fi
 
 # Test 3.3: Agentic accepts --no-codeql flag
-OUTPUT=$(python3 "$PROJECT_ROOT/raptor.py" agentic --repo "$TEMP_REPO" --no-codeql 2>&1)
+OUTPUT=$(timeout 10s python3 "$PROJECT_ROOT/raptor.py" agentic --repo "$TEMP_REPO" --no-codeql 2>&1)
 if ! echo "$OUTPUT" | grep -qi "unrecognized argument\|--no-codeql"; then
     test_case "Agentic accepts --no-codeql flag" "PASS"
 else
@@ -173,7 +179,7 @@ else
 fi
 
 # Test 3.4: Agentic accepts --max-findings with number
-OUTPUT=$(python3 "$PROJECT_ROOT/raptor.py" agentic --repo "$TEMP_REPO" --max-findings 10 2>&1)
+OUTPUT=$(timeout 10s python3 "$PROJECT_ROOT/raptor.py" agentic --repo "$TEMP_REPO" --max-findings 10 2>&1)
 if ! echo "$OUTPUT" | grep -qi "unrecognized argument"; then
     test_case "Agentic accepts --max-findings <int>" "PASS"
 else
