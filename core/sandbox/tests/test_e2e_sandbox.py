@@ -1446,8 +1446,8 @@ class TestE2ELandlockReadRestriction(unittest.TestCase):
         """
         import os as _os
         from core.sandbox import run_untrusted
-        real_secret = Path.home() / ".raptor_fake_home_regression.txt"
-        real_secret.write_text("REAL-HOME-SECRET\n")
+        restricted_file = Path.home() / ".raptor_fake_home_regression.txt"
+        restricted_file.write_text("REAL-HOME-SECRET\n")
         try:
             with TemporaryDirectory() as out:
                 # 1. Child's HOME points at {output}/.home
@@ -1464,7 +1464,7 @@ class TestE2ELandlockReadRestriction(unittest.TestCase):
 
                 # 2. Real HOME secret not readable (absolute path)
                 r = run_untrusted(
-                    ["cat", str(real_secret)],
+                    ["cat", str(restricted_file)],
                     target=out, output=out,
                     capture_output=True, text=True, timeout=5,
                 )
@@ -1478,7 +1478,7 @@ class TestE2ELandlockReadRestriction(unittest.TestCase):
                 self.assertTrue((fake_home / ".cache").is_dir())
         finally:
             try:
-                real_secret.unlink()
+                restricted_file.unlink()
             except OSError:
                 pass
 
