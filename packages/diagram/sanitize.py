@@ -19,6 +19,7 @@ def sanitize(text: str, max_len: int = None) -> str:
     """
     result = (
         str(text)
+        .replace("&", "&amp;")
         .replace('"', "'")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
@@ -40,4 +41,5 @@ def sanitize_id(node_id: str) -> str:
 
     Strips everything except [A-Za-z0-9_-].
     """
-    return _SAFE_ID_RE.sub('_', str(node_id)) or "node"
+    sanitized = _SAFE_ID_RE.sub('_', str(node_id)).strip('_')
+    return sanitized or "node"

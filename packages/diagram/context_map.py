@@ -127,13 +127,13 @@ def generate(data: dict[str, Any]) -> str:
     lines.append("    classDef sink fill:#fee2e2,stroke:#dc2626,color:#7f1d1d")
 
     if entry_points:
-        ep_ids = ",".join(ep.get("id", "") for ep in entry_points)
+        ep_ids = ",".join(_sid(ep.get("id", "")) for ep in entry_points)
         lines.append(f"    class {ep_ids} ep")
     if boundary_details:
-        tb_ids = ",".join(tb.get("id", "") for tb in boundary_details)
+        tb_ids = ",".join(_sid(tb.get("id", "")) for tb in boundary_details)
         lines.append(f"    class {tb_ids} tb")
     if sink_details:
-        sink_ids = ",".join(s.get("id", "") for s in sink_details)
+        sink_ids = ",".join(_sid(s.get("id", "")) for s in sink_details)
         lines.append(f"    class {sink_ids} sink")
 
     return "\n".join(lines)

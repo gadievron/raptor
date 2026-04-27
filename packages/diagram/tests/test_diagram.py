@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from ..sanitize import sanitize
+from ..sanitize import sanitize, sanitize_id
 from ..findings_summary import generate_verdict_pie, generate_type_pie
 from ..context_map import generate as gen_context_map
 from ..flow_trace import generate as gen_flow_trace
@@ -49,6 +49,23 @@ class TestSanitize:
     def test_no_truncation_by_default(self):
         long = "a" * 200
         assert len(sanitize(long)) == 200
+
+    def test_ampersand_escaped_before_angle_brackets(self):
+        result = sanitize("Tom & Jerry <script>")
+        assert "&amp;" in result
+        assert "&lt;script&gt;" in result
+
+    def test_sanitize_id_removes_mermaid_callback_injection_chars(self):
+        payload = "node1; click node1 javascript:alert(1)"
+        result = sanitize_id(payload)
+        assert ";" not in result
+        assert " " not in result
+        assert ":" not in result
+        assert "(" not in result
+        assert ")" not in result
+
+    def test_sanitize_id_never_returns_empty(self):
+        assert sanitize_id("!@#$%^*()[]{}") == "node"
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +305,25 @@ class TestContextMap:
         assert '"test>' not in out
         # HTML-escaped angle brackets should be present
         assert "&lt;" in out or "&gt;" in out
+
+    def test_class_assignments_use_sanitized_ids(self):
+        data = {
+            "entry_points": [
+                {"id": "EP-001; click EP-001 javascript:alert(1)", "path": "/"}
+            ],
+            "boundary_details": [
+                {"id": "TB-001; click TB-001 javascript:alert(1)", "covers": []}
+            ],
+            "sink_details": [
+                {"id": "SINK-001; click SINK-001 javascript:alert(1)", "operation": "sink"}
+            ],
+        }
+        out = gen_context_map(data)
+        class_lines = [line.strip() for line in out.splitlines() if line.strip().startswith("class ")]
+        assert class_lines
+        assert all(";" not in line for line in class_lines)
+        assert all("javascript:" not in line for line in class_lines)
+        assert all(" click " not in line for line in class_lines)
 
 
 # ---------------------------------------------------------------------------
