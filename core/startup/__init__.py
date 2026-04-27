@@ -3,7 +3,10 @@ from pathlib import Path
 
 # core/startup/__init__.py → core/ → raptor/ (repo root)
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PROJECTS_DIR = Path.home() / ".raptor" / "projects"
+# Honors RAPTOR_PROJECTS_DIR env var; see core/project/project.py for rationale.
+PROJECTS_DIR = Path(
+    os.environ.get("RAPTOR_PROJECTS_DIR", str(Path.home() / ".raptor" / "projects"))
+)
 ACTIVE_LINK = PROJECTS_DIR / ".active"
 
 

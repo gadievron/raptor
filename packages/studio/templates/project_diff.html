@@ -1,0 +1,163 @@
+{% extends "project_base.html" %}
+{% block breadcrumb_tail %}
+  <span class="sep">›</span>
+  <span class="current">Diff</span>
+{% endblock %}
+{% block project_content %}
+
+<h1 style="margin: 0; font-size: 22px;">Run diff</h1>
+<div style="color: var(--fg2); font-size: 13px; margin: 4px 0 16px;">
+  Compare two runs of <strong>{{ project.name }}</strong> to see which findings were resolved, carried, or newly introduced.
+  Identity is <code class="mono">(file, line, normalized vuln_type)</code>.
+</div>
+
+<div class="card" style="margin-bottom: 20px;">
+  <form method="get" action="/projects/{{ project.name }}/diff" style="display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;">
+    <label style="flex: 1; min-width: 240px;">
+      <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; margin-bottom: 4px;">Run A (baseline)</div>
+      <select name="a" style="width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 12px;">
+        <option value="">— pick a run —</option>
+        {% for r in runs %}
+          <option value="{{ r.name }}" {% if a and a.name == r.name %}selected{% endif %}>{{ r.name }} ({{ r.kind }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label style="flex: 1; min-width: 240px;">
+      <div style="font-size: 11px; color: var(--fg2); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; margin-bottom: 4px;">Run B (candidate)</div>
+      <select name="b" style="width: 100%; padding: 8px 10px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 12px;">
+        <option value="">— pick a run —</option>
+        {% for r in runs %}
+          <option value="{{ r.name }}" {% if b and b.name == r.name %}selected{% endif %}>{{ r.name }} ({{ r.kind }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" class="btn btn-p" style="height: 34px;">Compute diff</button>
+  </form>
+</div>
+
+{% if error %}
+<div class="card" style="border-color: var(--crit); background: rgba(211,47,47,0.08); margin-bottom: 16px;">
+  <strong style="color: var(--crit);">Error:</strong> {{ error }}
+</div>
+{% endif %}
+
+{% if diff %}
+<div class="grid g3" style="margin-bottom: 20px;">
+  <div class="card kpi" style="border-color: rgba(211,47,47,0.35);">
+    <span class="num" style="color: var(--crit);">{{ diff.counts.new }}</span>
+    <span class="label">New on B</span>
+  </div>
+  <div class="card kpi">
+    <span class="num">{{ diff.counts.carried }}</span>
+    <span class="label">Carried</span>
+  </div>
+  <div class="card kpi" style="border-color: rgba(22,163,74,0.35);">
+    <span class="num" style="color: #16a34a;">{{ diff.counts.resolved }}</span>
+    <span class="label">Resolved on B</span>
+  </div>
+</div>
+
+{% macro finding_row(f) -%}
+  <td>
+    {% set fs = f.final_status or f.status or "pending" %}
+    {% if fs == "exploitable" %}<span class="badge b-critical">exploitable</span>
+    {% elif fs == "likely_exploitable" %}<span class="badge b-high">likely</span>
+    {% elif fs == "confirmed_constrained" %}<span class="badge b-medium">constrained</span>
+    {% elif fs == "confirmed_blocked" %}<span class="badge b-low">blocked</span>
+    {% elif fs == "confirmed" %}<span class="badge b-high">confirmed</span>
+    {% elif fs == "ruled_out" %}<span class="badge b-neutral">ruled out</span>
+    {% else %}<span class="badge b-neutral">{{ fs }}</span>{% endif %}
+  </td>
+  <td class="mono" style="font-size: 12px;">{{ f.vuln_type or f.type or "—" }}</td>
+  <td class="mono" style="font-size: 11px; color: var(--fg3);">{{ f.cwe_id or f.cwe or "" }}</td>
+  <td class="mono" style="font-size: 11px;">{{ f.file or "" }}{% if f.line %}:{{ f.line }}{% endif %}</td>
+{%- endmacro %}
+
+{% if diff.new %}
+<div class="card" style="padding: 0; margin-bottom: 16px;">
+  <h2 style="margin: 16px 20px 0; font-size: 14px; color: var(--crit);">New on B ({{ diff.new|length }})</h2>
+  <div style="padding: 0 20px 8px; font-size: 12px; color: var(--fg3);">Findings that appeared on B but were not present on A.</div>
+  <table>
+    <thead><tr><th>Status</th><th>Type</th><th>CWE</th><th>Location</th></tr></thead>
+    <tbody>
+    {% for f in diff.new %}
+      <tr>{{ finding_row(f) }}</tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if diff.carried %}
+<div class="card" style="padding: 0; margin-bottom: 16px;">
+  <h2 style="margin: 16px 20px 0; font-size: 14px;">Carried ({{ diff.carried|length }})</h2>
+  <div style="padding: 0 20px 8px; font-size: 12px; color: var(--fg3);">Still present on B. Status transitions highlighted.</div>
+  <table>
+    <thead>
+      <tr>
+        <th>Status on A → B</th>
+        <th>Verdict on A → B</th>
+        <th>Type</th>
+        <th>CWE</th>
+        <th>Location</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for c in diff.carried %}
+      <tr>
+        <td style="font-size: 11px;">
+          <span class="mono" style="color: var(--fg3);">{{ c.status_a }}</span>
+          {% if c.status_changed %}<span style="color: var(--accent); margin: 0 4px;">→</span>
+          <strong class="mono">{{ c.status_b }}</strong>
+          {% else %}<span style="color: var(--fg3); margin: 0 4px;">=</span>
+          <span class="mono" style="color: var(--fg3);">{{ c.status_b }}</span>{% endif %}
+        </td>
+        <td style="font-size: 11px;">
+          <span class="mono" style="color: var(--fg3);">{{ c.verdict_a }}</span>
+          {% if c.verdict_changed %}<span style="color: var(--accent); margin: 0 4px;">→</span>
+          <strong class="mono">{{ c.verdict_b }}</strong>
+          {% else %}<span style="color: var(--fg3); margin: 0 4px;">=</span>
+          <span class="mono" style="color: var(--fg3);">{{ c.verdict_b }}</span>{% endif %}
+        </td>
+        <td class="mono" style="font-size: 12px;">{{ c.b.vuln_type or c.b.type or "—" }}</td>
+        <td class="mono" style="font-size: 11px; color: var(--fg3);">{{ c.b.cwe_id or c.b.cwe or "" }}</td>
+        <td class="mono" style="font-size: 11px;">{{ c.b.file or "" }}{% if c.b.line %}:{{ c.b.line }}{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if diff.resolved %}
+<div class="card" style="padding: 0; margin-bottom: 16px;">
+  <h2 style="margin: 16px 20px 0; font-size: 14px; color: #16a34a;">Resolved on B ({{ diff.resolved|length }})</h2>
+  <div style="padding: 0 20px 8px; font-size: 12px; color: var(--fg3);">Findings present on A that no longer show up on B. Likely fixed, but verify.</div>
+  <table>
+    <thead><tr><th>Status on A</th><th>Type</th><th>CWE</th><th>Location</th></tr></thead>
+    <tbody>
+    {% for f in diff.resolved %}
+      <tr>{{ finding_row(f) }}</tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if not diff.new and not diff.carried and not diff.resolved %}
+<div class="card empty">
+  <div class="icon">∅</div>
+  <p>Both runs have zero findings — nothing to diff.</p>
+</div>
+{% endif %}
+
+{% endif %}
+
+{% if not a and not b and not error %}
+<div class="card empty" style="text-align: left; max-width: 560px; margin-left: auto; margin-right: auto;">
+  <div style="text-align: center;"><div class="icon" style="opacity: 0.5;">◱</div></div>
+  <p style="text-align: center;">Pick two runs above to see their delta.</p>
+</div>
+{% endif %}
+
+{% endblock %}

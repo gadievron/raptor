@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Settings — {{ app_title }}{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Settings</h1>
+  <div class="sub">Raptor model configuration and budget. Writes to <code class="mono">{{ config.raw_path }}</code>.</div>
+</div>
+
+{% if saved %}
+<div class="card" style="border-color: #16a34a; background: rgba(22,163,74,0.08); margin-bottom: 16px;">
+  <strong style="color: #16a34a;">Saved.</strong> Settings written to <code class="mono">{{ config.raw_path }}</code>.
+</div>
+{% endif %}
+
+{% if error %}
+<div class="card" style="border-color: var(--crit); background: rgba(211,47,47,0.08); margin-bottom: 16px;">
+  <strong style="color: var(--crit);">Error:</strong> {{ error }}
+</div>
+{% endif %}
+
+<form method="post" action="/settings" style="display: flex; flex-direction: column; gap: 20px;">
+
+<div class="card">
+  <h2 style="margin: 0 0 12px;">Analysis dispatch models</h2>
+  <div style="font-size: 12px; color: var(--fg2); margin-bottom: 16px;">
+    Configure raptor's per-role LLMs. Roles are assigned by raptor based on the task
+    (finding validation → <span class="mono">analysis</span>, exploit PoC generation → <span class="mono">code</span>, second-opinion → <span class="mono">consensus</span>, rate-limit fallback → <span class="mono">fallback</span>).
+    Frontier models (Claude, GPT-4/5) recommended for code generation.
+  </div>
+
+  {% for role in roles %}
+  {% set entry = config.by_role(role) %}
+  <div style="border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 12px; background: var(--bg);">
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px;">
+      <div>
+        <div style="font-size: 13px; font-weight: 700; letter-spacing: -0.01em;">{{ role }}</div>
+        <div style="font-size: 11px; color: var(--fg3); margin-top: 2px;">{{ role_descriptions[role] }}</div>
+      </div>
+      {% if entry %}<span class="badge b-ok">configured</span>{% else %}<span class="badge b-neutral">not set</span>{% endif %}
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+      <label>
+        <div style="font-size: 11px; color: var(--fg3); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; margin-bottom: 4px;">Provider</div>
+        <select name="{{ role }}__provider"
+                style="width: 100%; padding: 7px 8px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: inherit; font-size: 13px;">
+          <option value="">(none)</option>
+          {% for p in providers %}
+            <option value="{{ p }}" {% if entry and entry.provider == p %}selected{% endif %}>{{ p }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <div style="font-size: 11px; color: var(--fg3); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; margin-bottom: 4px;">Model</div>
+        <input name="{{ role }}__model" type="text"
+               value="{{ (entry.model if entry else '') }}"
+               placeholder="e.g. claude-opus-4-6, gpt-5.4"
+               style="width: 100%; padding: 7px 8px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 12px;">
+      </label>
+    </div>
+
+    <label style="display: block; margin-top: 10px;">
+      <div style="font-size: 11px; color: var(--fg3); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; margin-bottom: 4px;">API key</div>
+      <input name="{{ role }}__api_key" type="text"
+             value="{{ (entry.api_key if entry else '') }}"
+             placeholder="${ANTHROPIC_API_KEY} or raw key"
+             style="width: 100%; padding: 7px 8px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 12px;">
+      <div style="font-size: 11px; color: var(--fg3); margin-top: 4px;">
+        Prefer env refs (e.g. <code class="mono">${ANTHROPIC_API_KEY}</code>) over raw keys on disk.
+      </div>
+    </label>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <h2 style="margin: 0 0 12px;">Environment fallbacks</h2>
+  <div style="font-size: 12px; color: var(--fg2); margin-bottom: 12px;">
+    If no role is configured for a provider, raptor falls back to these environment variables automatically.
+  </div>
+  <table style="font-size: 12px;">
+    <thead><tr><th>Provider</th><th>Env var</th><th>Status</th></tr></thead>
+    <tbody>
+    {% for provider, info in env_status.items() %}
+      <tr>
+        <td class="mono">{{ provider }}</td>
+        <td class="mono" style="color: var(--fg2);">{{ info.env_var }}</td>
+        <td>
+          {% if info.is_set %}<span class="badge b-ok">set</span>
+          {% else %}<span class="badge b-neutral">unset</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2 style="margin: 0 0 12px;">Budget cap</h2>
+  <div style="font-size: 12px; color: var(--fg2); margin-bottom: 12px;">
+    Raptor reads <code class="mono">RAPTOR_MAX_COST</code> (USD) at run time. Value below is informational —
+    to change it, export the env var before launching raptor.
+  </div>
+  <div class="mono" style="font-size: 13px;">
+    RAPTOR_MAX_COST = {% if budget_cap is not none %}${{ budget_cap }}{% else %}<span style="color: var(--fg3);">(unset)</span>{% endif %}
+  </div>
+</div>
+
+<div>
+  <button type="submit" class="btn btn-p">Save models.json</button>
+</div>
+</form>
+
+{% endblock %}

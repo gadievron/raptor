@@ -19,6 +19,14 @@ instructor>=1.0.0
 # Optional: For enhanced dataflow visualization (recommended)
 tabulate>=0.9.0
 
+# Required by packages/studio (web UI). Runtime-only; pure-Python except
+# for uvicorn's optional httptools extra.
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+jinja2>=3.1.0
+python-multipart>=0.0.9
+markdown>=3.5
+
 # Optional: For SMT-based constraint analysis (one-gadget feasibility, etc.)
 # z3-solver==4.16.0.0
 
