@@ -6,6 +6,7 @@ Manages CodeQL database lifecycle including creation, caching,
 validation, and cleanup.
 """
 
+import errno
 import hashlib
 import os
 import re
@@ -273,6 +274,135 @@ class DatabaseManager:
         logger.info(f"✓ Using cached database for {language}: {db_path}")
         return db_path
 
+    # Concurrent-write safety: build-in-staging + atomic-promote pattern.
+    # Two parallel /codeql runs against the same target+language used to
+    # race on direct in-place writes to <db_root>/<repo_hash>/<language>-db,
+    # corrupting whichever finished second. Each writer now builds in its
+    # own staging dir on the same filesystem as canonical, then attempts
+    # atomic os.rename to canonical. First to finish wins the cache slot;
+    # losers cleanup their staging and use the winner's canonical. No lock,
+    # no warning, no corruption — readers never see a partial DB because
+    # the canonical slot is only ever replaced atomically by a complete one.
+
+    def _staging_path(self, repo_hash: str, language: str) -> Path:
+        """Return per-process staging path on the same filesystem as canonical.
+
+        Same-parent-dir is required so os.rename is atomic — cross-fs rename
+        falls back to copy-then-delete which is non-atomic and would let
+        readers see partial state.
+
+        **Process-safe, NOT thread-safe.** Two threads in the same process
+        share PID and thus get the same staging path; concurrent writes
+        within the staging dir would race. RAPTOR's parallelism model uses
+        processes (not threads) so this is fine in practice; a future
+        thread-based caller would need a different staging key (e.g.,
+        include thread.get_ident()).
+        """
+        canonical = self.get_database_dir(repo_hash, language)
+        return canonical.parent / f".staging-{language}-{os.getpid()}"
+
+    def _stale_marker_name(self, canonical: Path) -> str:
+        """Build a unique stale-marker name for an evicted canonical.
+
+        Uses time.time_ns() (nanoseconds since epoch, UTC) so two
+        evictions from the same process within the same wall-clock
+        second get distinct names — int(time.time()) would collide and
+        the second os.rename would fail with ENOTEMPTY, leaving the
+        (now-twice-detected-as-stale) canonical in place.
+
+        Note: timestamp here is UTC nanoseconds since epoch; unique_run_suffix
+        in core/run/output.py uses local-time strftime. Inconsistent but
+        intentional — both serve uniqueness, not timezone consistency.
+        """
+        return f"{canonical.name}.stale.{time.time_ns()}.{os.getpid()}"
+
+    def _gc_stale_markers(self, repo_dir: Path, max_age_seconds: int = 3600) -> None:
+        """Best-effort cleanup of `.stale.*` and `.staging-*` markers older
+        than `max_age_seconds`. Called on cache miss so the cache is
+        self-healing without depending on the manual `--cleanup` CLI being
+        run on a schedule.
+
+        1 hour TTL is generous: any active reader will have finished using
+        an evicted DB by then; any abandoned staging from a crashed writer
+        is genuinely orphaned by then.
+        """
+        if not repo_dir.is_dir():
+            return
+        cutoff = time.time() - max_age_seconds
+        for entry in repo_dir.iterdir():
+            name = entry.name
+            if not (name.startswith(".staging-") or ".stale." in name):
+                continue
+            try:
+                if entry.stat().st_mtime < cutoff:
+                    if entry.is_dir():
+                        shutil.rmtree(entry, ignore_errors=True)
+                    else:
+                        entry.unlink(missing_ok=True)
+            except OSError:
+                pass  # best-effort
+
+    def _evict_stale_canonical(
+        self, repo_hash: str, language: str, max_age_days: int,
+    ) -> None:
+        """Atomically rename the canonical DB out of the way if it's
+        stale (older than `max_age_days`), missing metadata for longer
+        than the grace period, or has malformed metadata — so future
+        cache lookups see a miss and trigger rebuild.
+
+        Reader-safety caveat: files a reader had OPEN before the rename
+        keep working — POSIX rename moves the directory entry, not the
+        underlying inode, and existing FDs reference the inode. But
+        readers doing NEW opens through the canonical path after the
+        rename will fail (path no longer points to the dir). CodeQL
+        queries open dataset chunks lazily during execution, so a query
+        in flight when we evict can break mid-run. Eviction only fires
+        on canonicals that are stale-by-age, missing metadata for >60s
+        (a plausibly-orphaned writer), or malformed — so the impact is
+        bounded to operators who chose to query already-broken data.
+
+        In-flight writer protection: the missing-metadata case applies
+        a grace period (`RaptorConfig.CODEQL_DB_MISSING_METADATA_GRACE`)
+        so a sibling in the post-promote / pre-save-metadata window
+        doesn't get its fresh canonical evicted.
+        """
+        canonical = self.get_database_dir(repo_hash, language)
+        if not canonical.exists():
+            return  # nothing to evict; short-circuit before load_metadata
+        metadata = self.load_metadata(repo_hash, language)
+        # Evict if metadata is malformed, stale-by-age, or missing-for-long-
+        # enough-to-rule-out-an-in-flight-writer. The grace period on the
+        # missing-metadata case is the critical one — without it, this
+        # function would race in-flight writers (see the config docstring
+        # on CODEQL_DB_MISSING_METADATA_GRACE for the timing analysis).
+        evict = False
+        if metadata is None:
+            try:
+                age = time.time() - canonical.stat().st_mtime
+            except OSError:
+                return  # canonical disappeared mid-check; harmless
+            if age >= RaptorConfig.CODEQL_DB_MISSING_METADATA_GRACE:
+                evict = True
+        else:
+            try:
+                created_at = datetime.fromisoformat(metadata.created_at)
+                if datetime.now() - created_at > timedelta(days=max_age_days):
+                    evict = True
+            except (ValueError, AttributeError):
+                # Malformed metadata can't come from an in-flight writer
+                # because save_metadata uses atomic temp-rename — readers
+                # see either the old or the new metadata, never partial.
+                # So malformed = on-disk corruption / hand-edit / bug; no
+                # grace period needed (no in-flight case to race).
+                evict = True
+        if not evict:
+            return
+        marker = canonical.with_name(self._stale_marker_name(canonical))
+        try:
+            os.rename(canonical, marker)
+        except OSError:
+            pass  # raced with another evictor; harmless
+
     def create_database(
         self,
         repo_path: Path,
@@ -287,7 +417,13 @@ class DatabaseManager:
             repo_path: Path to source code
             language: Programming language
             build_system: Build system info (None for no-build mode)
-            force: Force recreation even if cached DB exists
+            force: Force recreation even if cached DB exists. Skips both
+                the initial cache check AND the race-absorbing re-check
+                — a sibling who promoted between our entry and our force
+                eviction will have their canonical evicted and rebuilt.
+                That's the "user asked for fresh" semantics; if you want
+                to coalesce concurrent force=True invocations, do it at
+                the orchestrator layer.
 
         Returns:
             DatabaseResult with creation status
@@ -319,24 +455,62 @@ class DatabaseManager:
                     cached=True,
                 )
 
-        # Compute repo hash and database path
+        # Compute repo hash and paths. canonical is the cache slot;
+        # staging is per-process, on the same filesystem so atomic rename
+        # works. See _staging_path docstring for the same-fs requirement.
         repo_hash = self.compute_repo_hash(repo_path)
-        db_path = self.get_database_dir(repo_hash, language)
+        canonical_path = self.get_database_dir(repo_hash, language)
+        staging_path = self._staging_path(repo_hash, language)
 
-        # Ensure parent directory exists
-        db_path.parent.mkdir(parents=True, exist_ok=True)
+        # Ensure parent directory exists (db_root/<repo_hash>/)
+        canonical_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Remove existing database if forcing
-        if db_path.exists():
-            logger.info(f"Removing existing database: {db_path}")
-            shutil.rmtree(db_path)
+        # Self-healing GC of orphaned .staging-*/.stale.* markers from
+        # crashed writers or evicted stale DBs. Cheap (one iterdir).
+        self._gc_stale_markers(canonical_path.parent)
 
-        # Build the codeql command
+        # Force=True: evict canonical so the cache miss flow rebuilds.
+        # Use rename-out-of-the-way rather than rmtree so any concurrent
+        # reader keeps its inode references intact (see _evict_stale_canonical
+        # docstring for the POSIX semantics).
+        if force and canonical_path.exists():
+            logger.info(f"Force rebuild: evicting cached database for {language}")
+            try:
+                marker = canonical_path.with_name(self._stale_marker_name(canonical_path))
+                os.rename(canonical_path, marker)
+            except OSError:
+                pass  # someone else evicted in parallel; harmless
+
+        # Race-absorbing re-check: another concurrent writer may have
+        # promoted their staging to canonical between our initial cache
+        # miss (line 304) and now. If so, use theirs and skip the build.
+        if not force:
+            cached = self.get_cached_database(repo_path, language)
+            if cached:
+                duration = time.time() - start_time
+                metadata = self.load_metadata(repo_hash, language)
+                return DatabaseResult(
+                    success=True, language=language,
+                    database_path=cached, metadata=metadata,
+                    errors=[], duration_seconds=duration, cached=True,
+                )
+
+        # Stale eviction independent of force — handles the case where
+        # canonical exists but is older than the TTL.
+        self._evict_stale_canonical(repo_hash, language, max_age_days=7)
+
+        # Cleanup any prior leftover staging from this same process (e.g.,
+        # from a previous crashed run with the same PID after PID reuse).
+        if staging_path.exists():
+            shutil.rmtree(staging_path, ignore_errors=True)
+
+        # Build the codeql command — point at staging, not canonical, so
+        # readers of canonical never see a partial DB.
         cmd = [
             self.codeql_cli,
             "database",
             "create",
-            str(db_path),
+            str(staging_path),
             f"--language={language}",
             f"--source-root={repo_path}",
         ]
@@ -416,13 +590,110 @@ class DatabaseManager:
                     errors.append(result.stderr[:1000])  # Truncate long errors
                 logger.error(f"✗ Database creation failed for {language}")
                 logger.error(result.stderr[:500])
+                # Cleanup partial staging on build failure — no point keeping
+                # broken DBs around to confuse future cache lookups (they
+                # never reach canonical anyway since promote is gated on
+                # success, but the staging dir would otherwise linger
+                # until _gc_stale_markers picks it up).
+                shutil.rmtree(staging_path, ignore_errors=True)
+                final_path = None
+                did_promote = False
+                used_cached = False
             else:
-                logger.info(f"✓ Database created successfully: {db_path}")
+                # Atomic-promote: try to install our staging as canonical.
+                # Four post-build outcomes:
+                #   A. Won the rename → did_promote=True, used_cached=False
+                #   B. Lost rename, sibling's canonical valid → use theirs;
+                #      did_promote=False, used_cached=True
+                #   C. Lost rename, sibling's canonical invalid → evict it,
+                #      retry-promote our staging:
+                #      C1. Retry succeeds → did_promote=True (filled empty slot)
+                #      C2. Retry fails (third writer) → use our staging;
+                #          did_promote=False, used_cached=False
+                #   D. Other I/O error (perms, disk full) → fall back to our
+                #      staging; did_promote=False, used_cached=False
+                # Note: did_promote=True is set in two places (A and C1) and
+                # both gate save_metadata identically — kept inline rather
+                # than refactored because the surrounding control flow makes
+                # a unified flag harder to read.
+                final_path = canonical_path
+                did_promote = False
+                used_cached = False
+                try:
+                    os.rename(staging_path, canonical_path)
+                    logger.info(f"✓ Database promoted to canonical: {canonical_path}")
+                    did_promote = True
+                except OSError as e:
+                    if e.errno in (errno.ENOTEMPTY, errno.EEXIST):
+                        # Lost the promotion race. Validate the sibling's
+                        # canonical before trusting it — without this check,
+                        # a sibling who promoted broken content would propagate
+                        # to us as success=True pointing at garbage.
+                        if self.validate_database(canonical_path):
+                            logger.info(
+                                f"✓ Database promoted by sibling; using cached "
+                                f"{canonical_path}"
+                            )
+                            shutil.rmtree(staging_path, ignore_errors=True)
+                            used_cached = True
+                        else:
+                            # Sibling's canonical is broken. Best-effort:
+                            # evict it and try to install our (valid)
+                            # staging in its place — fills the cache slot
+                            # so the next run hits cache instead of
+                            # redundantly rebuilding. Both steps can fail
+                            # benignly: if eviction fails, retry-promote
+                            # falls into ENOTEMPTY again and we use staging.
+                            # If eviction succeeds but retry-promote loses
+                            # (third writer slipped in), we use staging.
+                            # Either way the broken canonical eventually
+                            # gets evicted (this run's lost-race branch on
+                            # the next attempt, or _gc_stale_markers).
+                            logger.warning(
+                                f"Canonical {canonical_path} exists but failed "
+                                f"validation; evicting and retrying promote"
+                            )
+                            try:
+                                marker = canonical_path.with_name(
+                                    self._stale_marker_name(canonical_path)
+                                )
+                                os.rename(canonical_path, marker)
+                            except OSError:
+                                pass  # eviction failed; retry-promote will see ENOTEMPTY
+                            try:
+                                os.rename(staging_path, canonical_path)
+                                logger.info(
+                                    f"✓ Database promoted to canonical "
+                                    f"(after evicting broken sibling copy): "
+                                    f"{canonical_path}"
+                                )
+                                did_promote = True
+                            except OSError:
+                                # Eviction may have failed, OR succeeded but
+                                # a third writer slipped into the empty slot.
+                                # Don't validate-and-cascade; keep staging.
+                                final_path = staging_path
+                    else:
+                        # Genuine I/O error (permissions, disk full); fall back
+                        # to using staging directly so the caller's analysis
+                        # can still proceed. Future runs will rebuild.
+                        logger.warning(
+                            f"Could not promote staging to canonical "
+                            f"({e}); using staging path"
+                        )
+                        final_path = staging_path
 
-            # Count files in database
-            file_count = self._count_database_files(db_path) if success else 0
+            # Count files in database (use whatever path won out above).
+            # Cosmetic-only: a force=True writer in another window could
+            # evict canonical between our os.rename above and this call,
+            # leaving file_count=0 in the metadata we eventually save.
+            # Not a correctness issue — the DB content the caller uses
+            # via FDs is unaffected (POSIX inode survives rename).
+            file_count = self._count_database_files(final_path) if success and final_path else 0
 
-            # Create metadata
+            # Create metadata; database_path reflects where the DB actually
+            # lives (canonical if promote succeeded, staging on fallback,
+            # None on build failure)
             metadata = DatabaseMetadata(
                 repo_hash=repo_hash,
                 repo_path=str(repo_path),
@@ -435,20 +706,26 @@ class DatabaseManager:
                 success=success,
                 duration_seconds=time.time() - start_time,
                 errors=errors,
-                database_path=str(db_path),
+                database_path=str(final_path) if final_path else "",
             )
 
-            # Save metadata
-            self.save_metadata(metadata)
+            # Save metadata only when WE promoted to canonical. If we used
+            # the sibling's canonical (used_cached) the winner's metadata
+            # is already there. If we used our own staging (validation
+            # failure or I/O error fallback) the metadata file at canonical
+            # path doesn't apply — saving it would mislead future cache
+            # lookups about what's at canonical.
+            if did_promote:
+                self.save_metadata(metadata)
 
             return DatabaseResult(
                 success=success,
                 language=language,
-                database_path=db_path if success else None,
+                database_path=final_path if success else None,
                 metadata=metadata,
                 errors=errors,
                 duration_seconds=time.time() - start_time,
-                cached=False,
+                cached=used_cached,
             )
 
         except subprocess.TimeoutExpired:
@@ -482,6 +759,16 @@ class DatabaseManager:
         finally:
             if build_script and build_script.exists():
                 build_script.unlink()
+            # Belt-and-braces staging cleanup for timeout / unhandled exception
+            # paths that bypass the success/failure cleanup branches above.
+            # Skip if we ended up using staging as final_path (the fallback
+            # cases where promote failed but we kept staging as a usable DB)
+            # — otherwise we'd delete the very DB we're returning to the
+            # caller. Use locals().get to handle the case where we never
+            # reached the assignment (early exception before final_path set).
+            _final = locals().get('final_path')
+            if staging_path.exists() and _final != staging_path:
+                shutil.rmtree(staging_path, ignore_errors=True)
 
     def create_databases_parallel(
         self,
