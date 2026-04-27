@@ -101,6 +101,13 @@ def start_run(output_dir: Path, command: str, extra: Dict[str, Any] = None,
         metadata["session_pid"] = session_pid
     if target:
         metadata["target_path"] = str(target)
+    # Mark this run as the active sandbox-summary recording target before
+    # any further setup work — guarantees that any sandbox calls made by
+    # _setup_checklist_symlink (or anything else added later between save_json
+    # and return) get recorded into this run's summary.
+    # Lazy import to avoid circular core.sandbox load on metadata import.
+    from core.sandbox.summary import set_active_run_dir
+    set_active_run_dir(output_dir)
     save_json(output_dir / RUN_METADATA_FILE, metadata)
     _setup_checklist_symlink(output_dir)
     return output_dir
@@ -240,8 +247,61 @@ def _promote_checklist(project_dir: Path) -> None:
     save_json(project_dir / "checklist.json", promoted)
 
 
+def _finalize_sandbox_summary(output_dir: Path) -> None:
+    """Write sandbox-summary.json (if any denials recorded) and clear the
+    active-run state. Called from every terminal-state transition so the
+    summary lands regardless of how the run ended.
+
+    Broad except: lifecycle hooks must never raise out of complete_run /
+    fail_run / cancel_run on account of summary-write failures. Today
+    summarize_and_write catches its own OSErrors and returns None, but a
+    future change introducing a different exception path shouldn't break
+    the lifecycle. The active-run state is always cleared in finally.
+    """
+    # Lazy import to keep core.sandbox out of metadata import time.
+    from core.sandbox.summary import (
+        summarize_and_write, set_active_run_dir, SUMMARY_FILE,
+    )
+    import logging
+    log = logging.getLogger(__name__)
+    try:
+        result = summarize_and_write(output_dir)
+        # Discoverability: if denials were captured, tell operators
+        # where the report is + how many entries. Silent when no denials
+        # (don't add chatter to clean runs).
+        if result is not None:
+            log.info(
+                "sandbox: %d denials this run → %s",
+                result.get("total_denials", 0),
+                output_dir / SUMMARY_FILE,
+            )
+    except Exception:  # noqa: BLE001 — never fail lifecycle on summary error
+        # Debug-only log so a developer can find swallowed exceptions
+        # when investigating "why is my summary missing?". INFO would be
+        # too noisy if the failure is recurrent.
+        log.debug(
+            "_finalize_sandbox_summary: summarize_and_write failed",
+            exc_info=True,
+        )
+    finally:
+        # Always clear active-run state, even if summary write failed —
+        # otherwise subsequent runs would record into a stale path.
+        set_active_run_dir(None)
+
+
+# Sandbox summary is finalized BEFORE the status update in every terminal-
+# state transition. If the process crashes between the two:
+#  - finalize-then-status-update path: status stays "running", summary on
+#    disk. A later cleanup-of-stale-runs marks the status appropriately;
+#    summary is already there. No data lost.
+#  - status-update-then-finalize path (the alternative): status flips to
+#    "completed" but no summary; reader assumes "no denials" because no
+#    file. Misleading.
+# Finalizing first preserves the data; status update is just the signal.
+
 def complete_run(output_dir: Path, extra: Dict[str, Any] = None) -> None:
     """Update .raptor-run.json to status=completed."""
+    _finalize_sandbox_summary(output_dir)
     _update_status(output_dir, STATUS_COMPLETED, extra)
 
 
@@ -251,11 +311,13 @@ def fail_run(output_dir: Path, error: str = None, extra: Dict[str, Any] = None,
     extra = extra or {}
     if error:
         extra["error"] = error
+    _finalize_sandbox_summary(output_dir)
     _update_status(output_dir, STATUS_FAILED, extra, record_timing=record_timing)
 
 
 def cancel_run(output_dir: Path, extra: Dict[str, Any] = None) -> None:
     """Update .raptor-run.json to status=cancelled."""
+    _finalize_sandbox_summary(output_dir)
     _update_status(output_dir, STATUS_CANCELLED, extra)
 
 

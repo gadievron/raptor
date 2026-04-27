@@ -19,6 +19,8 @@ import signal
 import subprocess
 from pathlib import Path
 
+from core.sandbox.summary import record_denial
+
 logger = logging.getLogger(__name__)
 
 # Truncate the command in single-line log messages so scan-loop output
@@ -307,12 +309,17 @@ def _check_blocked(stderr: str, cmd_display: str, returncode: int = 0,
         # Factual, non-accusatory log. Downstream tools still see the evidence
         # in sandbox_info["blocked"]; the human-facing log just notes what
         # happened without speculating about intent.
+        # Each denial also records to the per-run sandbox-summary if a run
+        # is active (see core/sandbox/summary.py) — gives operators a
+        # post-run aggregate of what the sandbox blocked, with suggested
+        # fixes, instead of forcing them to grep log lines.
         if category == "network":
             logger.info(
                 f"Sandbox: outbound network blocked during: {cmd_display} "
                 f"(rc={returncode})"
             )
             blocked_evidence.append("Attempted outbound network connection (blocked by sandbox)")
+            record_denial(cmd_display, returncode, "network")
         elif category == "write":
             path_note = f" to {attempted_path}" if attempted_path else ""
             logger.info(
@@ -321,8 +328,10 @@ def _check_blocked(stderr: str, cmd_display: str, returncode: int = 0,
             )
             if attempted_path:
                 blocked_evidence.append(f"Attempted write to {attempted_path} (blocked by sandbox)")
+                record_denial(cmd_display, returncode, "write", path=attempted_path)
             else:
                 blocked_evidence.append("Attempted write outside allowed paths (blocked by sandbox)")
+                record_denial(cmd_display, returncode, "write")
         elif category == "seccomp":
             # Actionable diagnostic — name the knob users can turn. Debug
             # unblocks ptrace; network-only turns off Landlock AND seccomp
@@ -341,6 +350,8 @@ def _check_blocked(stderr: str, cmd_display: str, returncode: int = 0,
                 f"Syscall denied by seccomp (profile={seccomp_profile!r}) — "
                 f"caller may need to relax sandbox"
             )
+            record_denial(cmd_display, returncode, "seccomp",
+                          profile=seccomp_profile)
 
         reported.add(category)
 

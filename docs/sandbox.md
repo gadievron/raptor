@@ -289,6 +289,50 @@ set — useful for post-run auditing. Each sandbox's buffer grows independently
 for its lifetime (no fixed cap, no ring-buffer eviction); the buffer is
 discarded when the sandbox context exits.
 
+### Per-run denial summary
+
+For commands that go through the lifecycle helpers (`core.run.metadata.start_run`
+/ `complete_run` / `fail_run` / `cancel_run` — i.e., everything driven by
+`/scan`, `/agentic`, `/codeql`, `/validate`, `/understand`, `/fuzz`, etc.), every
+sandbox enforcement event seen during the run is aggregated into
+`{run_dir}/sandbox-summary.json` at run-end.
+
+Format:
+
+```json
+{
+  "run_dir": "/path/to/run",
+  "generated_at": "2026-04-27T15:00:00Z",
+  "total_denials": 3,
+  "by_type": {"network": 1, "write": 1, "seccomp": 1},
+  "denials": [
+    {"ts": "...", "cmd": "git clone evil.com",
+     "returncode": 1, "type": "network",
+     "suggested_fix": "outbound network blocked; use `--sandbox none` to allow network (or accept the block)"},
+    {"ts": "...", "cmd": "tool /etc/blocked",
+     "returncode": 1, "type": "write", "path": "/etc/blocked",
+     "suggested_fix": "write outside allowed paths blocked to `/etc/blocked`; use `--sandbox network-only` or `--sandbox none` to drop Landlock (or move write into target dir)"},
+    {"ts": "...", "cmd": "...",
+     "returncode": 137, "type": "seccomp", "profile": "full",
+     "suggested_fix": "syscall blocked by seccomp; use `--sandbox debug` (allows ptrace) or `--sandbox network-only`/`--sandbox none` (drops seccomp)"}
+  ]
+}
+```
+
+`suggested_fix` references only the operator-facing CLI flags exposed by
+`add_cli_args` — `--sandbox {full,debug,network-only,none}`. Per-host or
+per-path overrides exist as sandbox API kwargs (`proxy_hosts`,
+`writable_paths`, `readable_paths`) but aren't exposed at the CLI level,
+so suggestions don't mention them. Generated regardless of profile, so
+even `--sandbox full` runs produce a summary.
+
+If a process crashes mid-run, the intermediate `.sandbox-denials.jsonl`
+is left on disk. To finalize the summary after the fact:
+
+```bash
+python -m core.sandbox.summary <run_dir>
+```
+
 ### Crash signals across the pid-ns boundary
 
 `unshare --pid --fork` makes the forked child pid-1 of the new pid-ns.

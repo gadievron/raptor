@@ -1871,5 +1871,70 @@ class TestE2EMaliciousMakefile(unittest.TestCase):
             self.assertIn("exfil_blocked", result.stdout + result.stderr)
 
 
+class TestE2ESandboxSummaryRecording(unittest.TestCase):
+    """End-to-end: real sandboxed subprocess produces a real denial → the
+    per-run sandbox-summary.json captures it with structured data and a
+    suggested-fix hint.
+
+    Exercises the full path: lifecycle start_run → sandbox_run with real
+    enforcement → observe._check_blocked detects denial from real stderr →
+    summary.record_denial appends to JSONL → lifecycle complete_run
+    finalizes summary. Unlike TestLifecycleIntegration (which feeds
+    synthetic stderr into _check_blocked), this proves the wiring under
+    the actual sandbox layers."""
+
+    def setUp(self):
+        if not check_net_available():
+            self.skipTest("User namespaces not available")
+
+    def test_blocked_network_lands_in_sandbox_summary(self):
+        import json as _json
+        from core.run.metadata import start_run, complete_run
+        from core.sandbox.summary import (
+            DENIALS_FILE, SUMMARY_FILE, set_active_run_dir,
+        )
+
+        with TemporaryDirectory() as d:
+            run_dir = Path(d) / "scan-e2e"
+            try:
+                start_run(run_dir, command="scan")
+
+                # Real sandboxed subprocess that hits a blocked-network path.
+                # Python socket connect produces a stderr signature
+                # observe._check_blocked recognises (network category).
+                sandbox_run(
+                    ["python3", "-c",
+                     "import socket; s=socket.socket(); s.settimeout(2); "
+                     "s.connect(('1.1.1.1', 80))"],
+                    block_network=True, capture_output=True, text=True, timeout=10,
+                )
+
+                complete_run(run_dir)
+
+                # Summary file present, JSONL cleaned up
+                summary_path = run_dir / SUMMARY_FILE
+                self.assertTrue(summary_path.exists(),
+                                f"sandbox-summary.json missing at {summary_path}")
+                self.assertFalse((run_dir / DENIALS_FILE).exists(),
+                                 "intermediate JSONL should be removed after summary")
+
+                summary = _json.loads(summary_path.read_text())
+                # Network denial captured
+                self.assertGreaterEqual(summary["total_denials"], 1)
+                self.assertIn("network", summary["by_type"])
+                # At least one denial references network with a suggested fix
+                # that mentions a real CLI flag
+                network_denials = [d for d in summary["denials"]
+                                   if d["type"] == "network"]
+                self.assertGreaterEqual(len(network_denials), 1)
+                fix = network_denials[0]["suggested_fix"]
+                self.assertIn("--sandbox", fix)
+            finally:
+                # Defensive: ensure no leaked active-run state if the test
+                # fails partway through (test isolation for any test that
+                # runs after this one in the same process).
+                set_active_run_dir(None)
+
+
 if __name__ == "__main__":
     unittest.main()
