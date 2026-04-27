@@ -26,6 +26,9 @@ def sanitize(text: str, max_len: int = None) -> str:
         .replace("{", "(")
         .replace("}", ")")
         .replace("\n", " ")
+        .replace("\r", " ")
+        .replace("\u2028", " ")
+        .replace("\u2029", " ")
     )
     if max_len and len(result) > max_len:
         result = result[:max_len - 3] + "..."
@@ -41,5 +44,5 @@ def sanitize_id(node_id: str) -> str:
 
     Strips everything except [A-Za-z0-9_-].
     """
-    sanitized = _SAFE_ID_RE.sub('_', str(node_id)).strip('_')
-    return sanitized or "node"
+    sanitized = _SAFE_ID_RE.sub('_', str(node_id))
+    return sanitized if sanitized.strip('_') else "node"

@@ -17,6 +17,11 @@ from ..hypotheses import generate as gen_hypotheses
 from ..renderer import render_directory, render_and_write
 
 
+def assert_no_mermaid_directive_injection(output: str) -> None:
+    """Assert payloads did not break out into Mermaid directive lines."""
+    assert "\n    click " not in output.lower()
+
+
 # ---------------------------------------------------------------------------
 # sanitize tests
 # ---------------------------------------------------------------------------
@@ -66,6 +71,16 @@ class TestSanitize:
 
     def test_sanitize_id_never_returns_empty(self):
         assert sanitize_id("!@#$%^*()[]{}") == "node"
+
+    def test_sanitize_id_preserves_replacement_position(self):
+        assert sanitize_id("A!") == "A_"
+        assert sanitize_id("!A") == "_A"
+
+    def test_line_separator_chars_removed(self):
+        result = sanitize("safe\rclick X javascript:alert(1)\u2028more\u2029text")
+        assert "\r" not in result
+        assert "\u2028" not in result
+        assert "\u2029" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +133,11 @@ class TestFindingsSummary:
         out = generate_verdict_pie(findings)
         assert "Exploitable" in out
         assert "False Positive" in out
+
+    def test_pie_labels_are_sanitized(self):
+        payload = "xss\"\n    click X javascript:alert(1)\n    X[\""
+        out = generate_type_pie([{"vuln_type": payload}])
+        assert_no_mermaid_directive_injection(out)
 
 
 # ---------------------------------------------------------------------------
@@ -324,6 +344,9 @@ class TestContextMap:
         assert all(";" not in line for line in class_lines)
         assert all("javascript:" not in line for line in class_lines)
         assert all(" click " not in line for line in class_lines)
+        assert f"class {sanitize_id(data['entry_points'][0]['id'])} ep" in out
+        assert f"class {sanitize_id(data['boundary_details'][0]['id'])} tb" in out
+        assert f"class {sanitize_id(data['sink_details'][0]['id'])} sink" in out
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +440,46 @@ class TestFlowTrace:
         assert "S2 -. \"branch\" .-> BR1" in out
 
 
+    def test_step_ids_and_class_assignments_are_sanitized(self):
+        data = {
+            "id": "TRACE-X",
+            "name": "malicious step id",
+            "steps": [
+                {
+                    "step": "1; click S1 javascript:alert(1)",
+                    "type": "entry",
+                    "definition": "src/routes.py:10",
+                    "description": "entry",
+                }
+            ],
+            "branches": [{"branch_point": "src/routes.py:10", "condition": "x", "outcome": "y"}],
+        }
+        out = gen_flow_trace(data)
+        assert_no_mermaid_directive_injection(out)
+        assert "class S1__click_S1_javascript_alert_1_ entry" in out
+        assert "S1__click_S1_javascript_alert_1_ -. \"branch\" .-> BR1" in out
+
+    def test_label_fields_do_not_escape_into_directives(self):
+        payload = "X\"]\n    click X javascript:alert(1)\n    Y[\""
+        data = {
+            "id": "TRACE-X",
+            "name": payload,
+            "steps": [
+                {
+                    "step": 1,
+                    "type": payload,
+                    "definition": payload,
+                    "description": payload,
+                    "tainted_var": payload,
+                    "confidence": payload,
+                }
+            ],
+            "branches": [{"branch_point": payload, "condition": payload, "outcome": payload}],
+            "attacker_control": {"level": payload, "what": payload},
+        }
+        assert_no_mermaid_directive_injection(gen_flow_trace(data))
+
+
 # ---------------------------------------------------------------------------
 # attack_tree tests
 # ---------------------------------------------------------------------------
@@ -505,6 +568,19 @@ class TestAttackTree:
         assert "subgraph" not in out
 
 
+    def test_status_and_hypothesis_enrichment_are_sanitized(self):
+        payload = "X\"]\n    click X javascript:alert(1)\n    Y[\""
+        tree = {
+            "root": "ROOT",
+            "nodes": [
+                {"id": "ROOT", "goal": "root", "status": payload, "leads_to": "N1"},
+                {"id": "N1", "goal": "child", "status": "confirmed", "leads_to": ""},
+            ],
+        }
+        hypotheses = [{"finding": "N1", "status": payload, "claim": payload}]
+        assert_no_mermaid_directive_injection(gen_attack_tree(tree, hypotheses=hypotheses))
+
+
 # ---------------------------------------------------------------------------
 # hypotheses tests
 # ---------------------------------------------------------------------------
@@ -548,6 +624,23 @@ class TestHypotheses:
         assert "\u2014" not in out
 
 
+    def test_subgraph_and_label_fields_are_sanitized(self):
+        payload = "F1; click F1 javascript:alert(1)"
+        label_payload = "X\"]\n    click X javascript:alert(1)\n    Y[\""
+        data = [{
+            "id": label_payload,
+            "finding": payload,
+            "status": label_payload,
+            "claim": label_payload,
+            "predictions": [
+                {"id": label_payload, "prediction": label_payload, "result": label_payload, "status": label_payload}
+            ],
+        }]
+        out = gen_hypotheses(data)
+        assert_no_mermaid_directive_injection(out)
+        assert "subgraph F1__click_F1_javascript_alert_1_" in out
+
+
 # ---------------------------------------------------------------------------
 # attack_paths tests
 # ---------------------------------------------------------------------------
@@ -579,6 +672,25 @@ class TestAttackPaths:
         assert "P0S1" in out
         assert "P0S2" in out
         assert "P0S1 --> P0S2" in out
+
+
+    def test_step_type_and_location_are_sanitized(self):
+        payload = "X\"]\n    click X javascript:alert(1)\n    Y[\""
+        out = generate_single({
+            "id": "PATH-X",
+            "name": payload,
+            "status": payload,
+            "steps": [
+                {
+                    "step": 1,
+                    "type": payload,
+                    "definition": payload,
+                    "description": payload,
+                    "tainted_var": payload,
+                }
+            ],
+        }, 0)
+        assert_no_mermaid_directive_injection(out)
 
 
 # ---------------------------------------------------------------------------

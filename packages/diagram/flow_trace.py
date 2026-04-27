@@ -11,16 +11,16 @@ from core.json import load_json
 from pathlib import Path
 from typing import Any
 
-from .sanitize import sanitize as _sanitize
+from .sanitize import sanitize as _sanitize, sanitize_id as _sid
 
 
 def _step_label(step: dict[str, Any]) -> str:
-    n = step.get("step", "?")
-    stype = step.get("type", "call").upper()
+    n = _sanitize(step.get("step", "?"))
+    stype = _sanitize(step.get("type", "call")).upper()
     desc = _sanitize(step.get("description", ""))
     tainted = _sanitize(step.get("tainted_var", ""))
-    loc = step.get("definition") or step.get("call_site") or ""
-    confidence = step.get("confidence", "")
+    loc = _sanitize(step.get("definition") or step.get("call_site") or "")
+    confidence = _sanitize(step.get("confidence", ""))
 
     parts = [f"[{n}] {stype}"]
     if loc:
@@ -64,18 +64,23 @@ def _step_node_shape(step: dict[str, Any]) -> tuple[str, str]:
     return "[", "]"
 
 
+def _step_node_id(step: dict[str, Any], fallback: int | str = "?") -> str:
+    """Return a safe Mermaid node ID for a flow-trace step."""
+    return _sid(f"S{step.get('step', fallback)}")
+
+
 def generate(data: dict[str, Any]) -> str:
     trace_id = data.get("id", "TRACE")
     name = _sanitize(data.get("name", trace_id))
     steps = data.get("steps", [])
     branches = data.get("branches", [])
     attacker_control = data.get("attacker_control", {})
-    summary = data.get("summary", {})
+
 
     if not steps:
         return f"flowchart TD\n    EMPTY[\"No steps in {trace_id}\"]"
 
-    lines = [f"flowchart TD"]
+    lines = ["flowchart TD"]
     lines.append(f'    TITLE["{name}"]')
     lines.append("    style TITLE fill:#f0f0f0,stroke:#999,font-weight:bold")
     lines.append("")
@@ -83,8 +88,7 @@ def generate(data: dict[str, Any]) -> str:
     node_ids: list[str] = ["TITLE"]
 
     for step in steps:
-        n = step.get("step", len(node_ids))
-        nid = f"S{n}"
+        nid = _step_node_id(step, len(node_ids))
         label = _step_label(step)
         open_ch, close_ch = _step_node_shape(step)
         lines.append(f'    {nid}{open_ch}"{label}"{close_ch}')
@@ -122,8 +126,7 @@ def generate(data: dict[str, Any]) -> str:
                 call_site = step.get("call_site", "") or ""
                 defn = step.get("definition", "") or ""
                 if branch_point_raw and (branch_point_raw in call_site or branch_point_raw in defn):
-                    sn = step.get("step")
-                    lines.append(f"    S{sn} -. \"branch\" .-> {bid}")
+                    lines.append(f"    {_step_node_id(step)} -. \"branch\" .-> {bid}")
                     attached = True
                     break
 
@@ -147,8 +150,7 @@ def generate(data: dict[str, Any]) -> str:
                                 best_dist = dist
                                 best_step = step
                     if best_step is not None:
-                        sn = best_step.get("step")
-                        lines.append(f"    S{sn} -. \"branch\" .-> {bid}")
+                        lines.append(f"    {_step_node_id(best_step)} -. \"branch\" .-> {bid}")
                         attached = True
 
             # --- pass 3: attach to first real step ---
@@ -156,7 +158,7 @@ def generate(data: dict[str, Any]) -> str:
                 lines.append(f"    {node_ids[1]} -. \"branch\" .-> {bid}")
 
     # Attacker control summary node
-    level = attacker_control.get("level", "")
+    level = _sanitize(attacker_control.get("level", ""))
     what = _sanitize(attacker_control.get("what", ""))
     if level and what:
         lines.append("")
@@ -165,9 +167,9 @@ def generate(data: dict[str, Any]) -> str:
         lines.append("    style CTRL fill:#fef9c3,stroke:#ca8a04")
 
     # Style: entry=blue, sink=red, call=default
-    entry_ids = ",".join(f"S{s['step']}" for s in steps if s.get("type") == "entry")
-    sink_ids = ",".join(f"S{s['step']}" for s in steps if s.get("type") == "sink")
-    sanitize_ids = ",".join(f"S{s['step']}" for s in steps if s.get("type") == "sanitize")
+    entry_ids = ",".join(_step_node_id(s) for s in steps if s.get("type") == "entry")
+    sink_ids = ",".join(_step_node_id(s) for s in steps if s.get("type") == "sink")
+    sanitize_ids = ",".join(_step_node_id(s) for s in steps if s.get("type") == "sanitize")
 
     lines.append("")
     lines.append("    classDef entry fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f")

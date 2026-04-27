@@ -6,6 +6,7 @@ Input: findings.json (from /validate) or orchestrated_report.json results (from 
 from typing import Any, Dict, List, Tuple
 
 from core.reporting.formatting import get_display_status, title_case_type
+from .sanitize import sanitize as _sanitize
 
 # Verdict colours — neutral palette, no red/green value judgement.
 # Exploitable vs Ruled Out is perspective-dependent (attacker vs defender).
@@ -74,6 +75,6 @@ def _pie_with_colours(title: str, slices: List[Tuple[str, int, str]]) -> str:
         f"pie title {title}",
     ]
     for label, count, _colour in slices:
-        lines.append(f'    "{label}" : {count}')
+        lines.append(f'    "{_sanitize(label)}" : {count}')
 
     return "\n".join(lines)

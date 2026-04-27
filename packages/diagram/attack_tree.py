@@ -69,7 +69,7 @@ def _build_hypothesis_index(hypotheses: list[dict]) -> dict[str, str]:
     index: dict[str, str] = {}
     for h in hypotheses:
         fid = h.get("finding") or h.get("finding_id", "")
-        status = h.get("status", "")
+        status = _sanitize(h.get("status", ""))
         claim = h.get("claim") or h.get("hypothesis", "")
         if fid and fid not in index:
             index[fid] = f"{status}: {_sanitize(claim[:60])}" if claim else status
@@ -80,9 +80,7 @@ def _node_label(node: dict, proximity_idx: dict, disproven_idx: dict) -> str:
     nid = node.get("id", "?")
     goal = _sanitize(node.get("goal", node.get("technique", nid)))
     technique = _sanitize(node.get("technique", ""))
-    status = node.get("status", "unexplored")
-    node_type = node.get("type", "")
-
+    status = _sanitize(node.get("status", "unexplored"))
     parts = [goal]
     if technique and technique != goal:
         parts.append(technique)

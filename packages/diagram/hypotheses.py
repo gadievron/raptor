@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from core.json import load_json
-from .sanitize import sanitize as _sanitize
+from .sanitize import sanitize as _sanitize, sanitize_id as _sid
 
 
 _STATUS_SYMBOL = {
@@ -25,10 +25,10 @@ _STATUS_SYMBOL = {
 
 
 def _prediction_label(pred: dict) -> str:
-    pid = pred.get("id", "?")
+    pid = _sanitize(pred.get("id", "?"))
     prediction = _sanitize(pred.get("prediction", pred.get("test", "")))
     result = _sanitize(pred.get("result", ""))
-    status = pred.get("status", "testing")
+    status = _sanitize(pred.get("status", "testing"))
 
     short_pred = prediction if len(prediction) <= 70 else prediction[:67] + "..."
     parts = [f"{pid} [{status}]", short_pred]
@@ -39,10 +39,10 @@ def _prediction_label(pred: dict) -> str:
 
 
 def _hyp_label(hyp: dict) -> str:
-    hid = hyp.get("id", "?")
+    hid = _sanitize(hyp.get("id", "?"))
     claim = _sanitize(hyp.get("claim") or hyp.get("hypothesis", ""))
-    status = hyp.get("status", "testing")
-    finding = hyp.get("finding") or hyp.get("finding_id", "")
+    status = _sanitize(hyp.get("status", "testing"))
+    finding = _sanitize(hyp.get("finding") or hyp.get("finding_id", ""))
 
     parts = [f"{hid}"]
     if finding:
@@ -84,7 +84,7 @@ def generate(hypotheses: list[dict[str, Any]]) -> str:
         nid = next_id("HN")
         hyp_node_ids[hid] = nid
         label = _hyp_label(hyp)
-        status = hyp.get("status", "testing")
+        status = _sanitize(hyp.get("status", "testing"))
         if status == "confirmed":
             lines.append(f'{indent}{nid}["{label}"]')
         elif status == "disproven":
@@ -96,7 +96,7 @@ def generate(hypotheses: list[dict[str, Any]]) -> str:
         for pred in hyp.get("predictions", []):
             pnid = next_id("PN")
             plabel = _prediction_label(pred)
-            pstatus = pred.get("status", "testing")
+            pstatus = _sanitize(pred.get("status", "testing"))
             if pstatus == "confirmed":
                 lines.append(f'{indent}{pnid}["{plabel}"]')
             elif pstatus == "disproven":
@@ -110,7 +110,7 @@ def generate(hypotheses: list[dict[str, Any]]) -> str:
     # Emit by finding subgraphs
     finding_hyp_nodes: dict[str, list[str]] = {}
     for fid, hyps in by_finding.items():
-        lines.append(f'    subgraph {fid.replace("-", "_")} ["{fid}"]')
+        lines.append(f'    subgraph {_sid(fid)} ["{_sanitize(fid)}"]')
         hyp_nodes = []
         for hyp in hyps:
             nid = emit_hypothesis(hyp, indent="        ")
@@ -139,7 +139,7 @@ def generate(hypotheses: list[dict[str, Any]]) -> str:
         nid = hyp_node_ids.get(hid)
         if not nid:
             continue
-        status = hyp.get("status", "testing")
+        status = _sanitize(hyp.get("status", "testing"))
         if status == "confirmed":
             confirmed_nodes.append(nid)
         elif status == "disproven":

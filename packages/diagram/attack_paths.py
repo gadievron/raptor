@@ -62,9 +62,9 @@ def generate_single(path_data: dict[str, Any], path_index: int) -> str:
         nid = f"P{path_index}S{i+1}"
         # Steps may be objects or strings
         if isinstance(step, dict):
-            step_type = step.get("type", "call")
+            step_type = _sanitize(step.get("type", "call"))
             desc = _sanitize(step.get("description", step.get("action", str(step))))
-            loc = step.get("call_site") or step.get("definition") or ""
+            loc = _sanitize(step.get("call_site") or step.get("definition") or "")
             tainted = _sanitize(step.get("tainted_var", ""))
             parts = [f"[{i+1}] {step_type.upper()}"]
             if loc:
