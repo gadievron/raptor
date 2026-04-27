@@ -498,4 +498,3 @@ class TestEvictStaleCanonicalGracePeriod:
             "orphaned canonical past grace period should be evicted"
         assert len(list(canonical.parent.glob("*.stale.*"))) == 1, \
             "exactly one stale marker should be created from eviction"
-
