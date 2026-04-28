@@ -97,17 +97,17 @@ class TestFeasibility:
 
     @_requires_z3
     def test_unparseable_condition_goes_to_unknown(self):
-        """Non-call grouping parens are still rejected — goes to unknown, not crash.
+        """Conditions outside the supported grammar go to unknown, not crash.
 
-        Function-call shapes (``ident(...)``) are recovered via the
-        free-variable fallback; only non-call grouping (``(a + b)``)
-        remains unparseable.
+        Operators silently dropped by the tokeniser (``~``, ``^``, ``/``,
+        ``%``, ...) are caught by the consumed-input check and rejected
+        rather than mis-encoded.
         """
         r = check_path_feasibility([
             PathCondition("size > 0", step_index=0),
-            PathCondition("(size + len) * 2 > 0", step_index=1),
+            PathCondition("~mask == 0xFFFFFFFF", step_index=1),
         ])
-        assert "(size + len) * 2 > 0" in r.unknown
+        assert "~mask == 0xFFFFFFFF" in r.unknown
         # The parseable condition still runs; result is sat or None, not outright infeasible
         assert r.feasible is not False
 
@@ -115,8 +115,7 @@ class TestFeasibility:
     def test_all_unknown_returns_none(self):
         """If nothing is parseable, feasible must be None (not True)."""
         r = check_path_feasibility([
-            # Non-call grouping parens — not eligible for the fallback.
-            PathCondition("(a + b) > (c + d)", step_index=0),
+            PathCondition("~mask == 0", step_index=0),  # NOT silently dropped
         ])
         assert r.feasible is None
 
@@ -616,21 +615,15 @@ class TestStructuredRejection:
         assert r.unknown_reasons == []
 
     @_requires_z3
-    def test_parens_rejection(self):
-        # Non-call grouping parens.  Function-call shapes (``ident(...)``)
-        # are recovered by the free-variable fallback and don't reach
-        # the parens-rejection path.
+    def test_unbalanced_paren_kind(self):
+        """Unbalanced parens (extra ``(`` or ``)``) reject with
+        UNBALANCED_PARENS — the dedicated kind, not the deprecated
+        PARENS_NOT_SUPPORTED.  Balanced grouping parens parse via
+        precedence climbing and don't reach this rejection path."""
         r = check_path_feasibility([
-            PathCondition("(a + b) > 0", step_index=0),
+            PathCondition("(a + b > 0", step_index=0),
         ])
-        assert self._kind_for(r, "(a + b) > 0") is RejectionKind.PARENS_NOT_SUPPORTED
-
-    @_requires_z3
-    def test_mixed_precedence_rejection(self):
-        r = check_path_feasibility([
-            PathCondition("a + b * c == 0", step_index=0),
-        ])
-        assert self._kind_for(r, "a + b * c == 0") is RejectionKind.MIXED_PRECEDENCE
+        assert self._kind_for(r, "(a + b > 0") is RejectionKind.UNBALANCED_PARENS
 
     @_requires_z3
     def test_no_relational_at_top_level_rejection(self):
@@ -656,14 +649,15 @@ class TestStructuredRejection:
 
     @_requires_z3
     def test_rejection_carries_hint(self):
-        # Non-call grouping parens — still rejected, hint suggests
-        # flattening since the call-shape fallback doesn't apply here.
+        # Top-level shape that doesn't match any relational/bitmask form
+        # comes back with UNRECOGNIZED_FORM and a hint pointing at the
+        # accepted templates.
         r = check_path_feasibility([
-            PathCondition("(a + b) * 2 > 0", step_index=0),
+            PathCondition("size_only", step_index=0),
         ])
-        rej = next(x for x in r.unknown_reasons if x.text == "(a + b) * 2 > 0")
+        rej = next(x for x in r.unknown_reasons if x.text == "size_only")
         assert rej.hint  # non-empty
-        assert "flatten" in rej.hint.lower() or "fallback" in rej.hint.lower()
+        assert "lhs" in rej.hint.lower()
 
     @_requires_z3
     def test_rejection_aligned_with_unknown_list(self):
@@ -671,8 +665,8 @@ class TestStructuredRejection:
         with the same text."""
         r = check_path_feasibility([
             PathCondition("size > 0", step_index=0),                    # parses
-            PathCondition("(p + q) == 0", step_index=1),                # grouping parens
-            PathCondition("a + b * c == 0", step_index=2),              # mixed prec
+            PathCondition("~mask == 0", step_index=1),                  # NOT silently dropped
+            PathCondition("a / b > 0", step_index=2),                   # division silently dropped
         ])
         assert set(r.unknown) == {x.text for x in r.unknown_reasons}
 
@@ -782,12 +776,12 @@ class TestFreeVariableFallback:
     def test_unbalanced_parens_still_rejected(self, expr):
         """Any paren imbalance — open without close, close without open,
         or nested mismatch — falls through the substitution and is
-        rejected by the parens-check rather than silently masquerading
-        as a parsed call."""
+        rejected by the balance check (or the expression parser) rather
+        than silently masquerading as a parsed call."""
         r = check_path_feasibility([PathCondition(expr, step_index=0)])
         assert expr in r.unknown
         rej = next(x for x in r.unknown_reasons if x.text == expr)
-        assert rej.kind is RejectionKind.PARENS_NOT_SUPPORTED
+        assert rej.kind is RejectionKind.UNBALANCED_PARENS
 
     @_requires_z3
     def test_fallback_preserves_real_constraints(self):
@@ -826,3 +820,207 @@ class TestFreeVariableFallback:
         ])
         assert r.unknown == []
         assert r.feasible is True
+
+
+# ---------------------------------------------------------------------------
+# C operator precedence
+# ---------------------------------------------------------------------------
+
+class TestPrecedence:
+    """C precedence: ``*`` > ``+ -`` > ``<< >>`` > ``|``, all left-associative.
+
+    The previous parser was strict left-to-right and rejected mixed-class
+    expressions with MIXED_PRECEDENCE.  The current parser binds operators
+    by C precedence, so mixed expressions encode with the grouping a C
+    compiler would produce.  These tests pin that grouping by asserting
+    the *value* a model would have under the correct interpretation.
+    """
+
+    @_requires_z3
+    def test_multiplication_binds_tighter_than_addition_rhs(self):
+        """``a + b * c == 64`` with ``a=4, b=4, c=15`` is feasible iff
+        the parse is ``a + (b * c) = 4 + 60 = 64``.  An LTR parse would
+        compute ``(a + b) * c = 8 * 15 = 120`` — infeasible."""
+        r = check_path_feasibility([
+            PathCondition("a + b * c == 64", step_index=0),
+            PathCondition("a == 4", step_index=1),
+            PathCondition("b == 4", step_index=2),
+            PathCondition("c == 15", step_index=3),
+        ])
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_multiplication_binds_tighter_than_addition_lhs(self):
+        """``a * b + c == 19`` with ``a=2, b=8, c=3`` requires ``(a*b)+c``."""
+        r = check_path_feasibility([
+            PathCondition("a * b + c == 19", step_index=0),
+            PathCondition("a == 2", step_index=1),
+            PathCondition("b == 8", step_index=2),
+            PathCondition("c == 3", step_index=3),
+        ])
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_subtraction_left_associative(self):
+        """``a - b - c`` parses as ``(a - b) - c``.  With a=10, b=3, c=2:
+        ``(10-3)-2 = 5``, not ``10-(3-2) = 9``."""
+        r = check_path_feasibility([
+            PathCondition("a - b - c == 5", step_index=0),
+            PathCondition("a == 10", step_index=1),
+            PathCondition("b == 3", step_index=2),
+            PathCondition("c == 2", step_index=3),
+        ])
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_shift_lower_precedence_than_addition(self):
+        """C surprise: ``a + b << 2`` is ``(a + b) << 2``, not
+        ``a + (b << 2)``.  With a=1, b=3: ``(1+3) << 2 = 16``, not
+        ``1 + (3 << 2) = 13``."""
+        r = check_path_feasibility([
+            PathCondition("a + b << 2 == 16", step_index=0),
+            PathCondition("a == 1", step_index=1),
+            PathCondition("b == 3", step_index=2),
+        ])
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_or_lowest_precedence(self):
+        """``a | b + c`` is ``a | (b + c)``.  Pick values that distinguish
+        the two readings: a=2, b=1, c=2 gives 2|(1+2)=2|3=3, while the
+        LTR misparse (2|1)+2 = 3+2 = 5."""
+        r = check_path_feasibility([
+            PathCondition("a | b + c == 3", step_index=0),
+            PathCondition("a == 2", step_index=1),
+            PathCondition("b == 1", step_index=2),
+            PathCondition("c == 2", step_index=3),
+        ])
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_three_level_mix(self):
+        """``a | b + c * d`` is ``a | (b + (c * d))``.  Values:
+        a=0x10, b=2, c=3, d=4 → 0x10 | (2 + 12) = 0x10 | 14 = 0x1E."""
+        r = check_path_feasibility([
+            PathCondition("a | b + c * d == 0x1E", step_index=0),
+            PathCondition("a == 0x10", step_index=1),
+            PathCondition("b == 2", step_index=2),
+            PathCondition("c == 3", step_index=3),
+            PathCondition("d == 4", step_index=4),
+        ])
+        assert r.feasible is True
+
+
+# ---------------------------------------------------------------------------
+# Parenthesised grouping
+# ---------------------------------------------------------------------------
+
+class TestParensGrouping:
+    """Balanced parens override C precedence and are now accepted by the
+    expression parser.  Function-call shapes (``ident(...)``) still go
+    through the free-variable fallback first; only the leftover ``( ... )``
+    is grouping."""
+
+    @_requires_z3
+    def test_parens_override_precedence(self):
+        """``(a + b) * c == 30`` with a=2, b=3, c=6: ``(2+3)*6 = 30``.
+        Without the parens, the C reading is ``a + (b * c) = 2 + 18 = 20``."""
+        r = check_path_feasibility([
+            PathCondition("(a + b) * c == 30", step_index=0),
+            PathCondition("a == 2", step_index=1),
+            PathCondition("b == 3", step_index=2),
+            PathCondition("c == 6", step_index=3),
+        ])
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_parens_force_shift_then_add(self):
+        """``a + (b << 2) == 13`` with a=1, b=3: ``1 + (3<<2) = 13``.
+        Without the parens, the C reading is ``(a+b) << 2 = 16``."""
+        r = check_path_feasibility([
+            PathCondition("a + (b << 2) == 13", step_index=0),
+            PathCondition("a == 1", step_index=1),
+            PathCondition("b == 3", step_index=2),
+        ])
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_nested_parens(self):
+        """``((x))`` parses as ``x`` — extra outer layers are no-ops."""
+        r = check_path_feasibility([
+            PathCondition("((x)) == 42", step_index=0),
+        ])
+        assert r.feasible is True
+        assert r.model.get("x") == 42
+
+    @_requires_z3
+    def test_deeply_nested_parens(self):
+        r = check_path_feasibility([
+            PathCondition("(((y))) > 0", step_index=0),
+            PathCondition("y < 100", step_index=1),
+        ])
+        assert r.feasible is True
+        assert 0 < r.model["y"] < 100
+
+    @_requires_z3
+    def test_parens_on_both_sides(self):
+        """Relational regex must split at the operator with parens on
+        either side.  ``(a + b) == (c + d)`` — both sides parse."""
+        r = check_path_feasibility([
+            PathCondition("(a + b) == (c + d)", step_index=0),
+            PathCondition("a == 1", step_index=1),
+            PathCondition("b == 2", step_index=2),
+            PathCondition("c == 0", step_index=3),
+        ])
+        assert r.feasible is True
+        assert r.model.get("d") == 3
+
+    @_requires_z3
+    def test_parens_in_bitmask_lhs(self):
+        """Bitmask form's LHS goes through ``_parse_expr``; parens work
+        there too: ``(a + b) & 0xff == 0``."""
+        r = check_path_feasibility([
+            PathCondition("(a + b) & 0xff == 0", step_index=0),
+        ])
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_unmatched_open_paren_in_expression(self):
+        """``(a + b > 0`` — relational splits at ``>``, LHS=``(a + b ``
+        has unmatched ``(``.  The early balance check catches this."""
+        r = check_path_feasibility([
+            PathCondition("(a + b > 0", step_index=0),
+        ])
+        assert "(a + b > 0" in r.unknown
+        rej = next(x for x in r.unknown_reasons if x.text == "(a + b > 0")
+        assert rej.kind is RejectionKind.UNBALANCED_PARENS
+
+    @_requires_z3
+    def test_unmatched_close_paren_in_expression(self):
+        """``a + b) > 0`` — extra ``)``."""
+        r = check_path_feasibility([
+            PathCondition("a + b) > 0", step_index=0),
+        ])
+        assert "a + b) > 0" in r.unknown
+        rej = next(x for x in r.unknown_reasons if x.text == "a + b) > 0")
+        assert rej.kind is RejectionKind.UNBALANCED_PARENS
+
+    @_requires_z3
+    def test_swapped_parens(self):
+        """``)a + b( > 0`` — balanced count but the structure is wrong.
+        The early balance check sees ``)`` first and rejects before
+        ``_parse_expr`` runs."""
+        r = check_path_feasibility([
+            PathCondition(")a + b( > 0", step_index=0),
+        ])
+        assert ")a + b( > 0" in r.unknown
+        rej = next(x for x in r.unknown_reasons if x.text == ")a + b( > 0")
+        assert rej.kind is RejectionKind.UNBALANCED_PARENS
+
+    @_requires_z3
+    def test_empty_parens_in_expression(self):
+        """``() + 1 > 0`` — ``()`` has no operand inside."""
+        r = check_path_feasibility([
+            PathCondition("() + 1 > 0", step_index=0),
+        ])
+        assert "() + 1 > 0" in r.unknown

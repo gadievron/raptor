@@ -52,13 +52,24 @@ class RejectionKind(str, Enum):
     """An operator outside the accepted set appeared in the expression."""
 
     PARENS_NOT_SUPPORTED = "parens_not_supported"
-    """Input contained ``(`` or ``)`` — function calls and grouping
-    aren't supported by the current grammar."""
+    """Deprecated — kept for backward compatibility with downstream
+    consumers that match on this value.  No encoder emits it any more:
+    the path validator's expression parser now supports grouping
+    parentheses via precedence climbing, and unbalanced cases emit
+    :data:`UNBALANCED_PARENS` instead."""
+
+    UNBALANCED_PARENS = "unbalanced_parens"
+    """Input had ``(`` without a matching ``)`` (or vice versa).  Fired
+    by the path validator's expression parser when the bracket structure
+    of a grouping subexpression doesn't close cleanly, or by the
+    condition-level balance check before dispatch."""
 
     MIXED_PRECEDENCE = "mixed_precedence"
-    """Expression mixed additive and multiplicative/bitwise operators.
-    The parser is strictly left-to-right with no precedence, so it
-    rejects mixed forms rather than risk silent mis-encoding."""
+    """Deprecated — kept for backward compatibility with downstream
+    consumers that match on this value.  No encoder emits it any more:
+    the path validator's expression parser now uses C operator precedence
+    (``*`` > ``+ -`` > ``<< >>`` > ``|``) and accepts mixed-operator
+    expressions directly.  Use parentheses to override precedence."""
 
     TRAILING_TOKENS = "trailing_tokens"
     """Tokens were left unconsumed after parsing (e.g. ``a b``)."""
