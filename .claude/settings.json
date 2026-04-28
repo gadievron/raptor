@@ -9,7 +9,7 @@
       "Bash(libexec/raptor-agentic *)",
       "Bash(libexec/raptor-build-checklist *)",
       "Bash(libexec/raptor-coverage-summary *)",
-      "Bash(libexec/raptor-validation-helper *)",
+      "Bash(libexec/raptor-normalize-context-map *)",
       "Bash(libexec/raptor-project-manager *)",
       "Bash(libexec/raptor-render-diagrams *)",
       "Bash(libexec/raptor-run-feasibility *)",
@@ -17,6 +17,7 @@
       "Bash(libexec/raptor-run-sandboxed *)",
       "Bash(libexec/raptor-startup-check *)",
       "Bash(libexec/raptor-validate-schema *)",
+      "Bash(libexec/raptor-validation-helper *)",
       "Write(/out/**)",
       "Edit(/out/**)"
     ]

@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from core.json import load_json, save_json
+from core.security.log_sanitisation import escape_nonprintable
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +194,7 @@ def _rank_candidates(
             "understand_bridge: best candidate %s has %d stale file(s)"
             " — data for these files will be excluded: %s",
             best_dir.name, best_stale_count,
-            ", ".join(sorted(best_stale_files)),
+            ", ".join(escape_nonprintable(f) for f in sorted(best_stale_files)),
         )
 
     return best_dir, best_stale_files
@@ -323,7 +324,17 @@ def load_understand_context(
         logger.warning("understand_bridge: no context-map.json found in %s", understand_dir)
         return summary
 
-    # --- Filter entries referencing stale files ---
+    # --- Normalise the context-map (path conventions, name backfill,
+    #     hallucination warnings) BEFORE filtering so stale-file matching
+    #     compares canonical paths. Otherwise an entry with `./foo.py`
+    #     would survive a stale-files set containing the canonical
+    #     `foo.py` and leak through. The validate dir's checklist is the
+    #     ground truth for normalisation. ---
+    validate_checklist = load_json(validate_dir / "checklist.json") or {}
+    normalize_context_map(context_map, validate_checklist,
+                          target_path=validate_checklist.get("target_path"))
+
+    # --- Filter entries referencing stale files (now using normalised paths) ---
     filtered = _filter_context_map(context_map, stale_files)
     if filtered:
         logger.info("understand_bridge: excluded %d entries referencing stale files", filtered)
@@ -354,64 +365,522 @@ def load_understand_context(
     return summary
 
 
+def normalize_context_map(context_map: Dict[str, Any], checklist: Dict[str, Any],
+                          target_path: Optional[str] = None) -> Dict[str, Any]:
+    """Mechanically fix up an LLM-produced context-map using the checklist
+    as ground truth.
+
+    Mutates ``context_map`` in place; returns it for chaining. Does five
+    deterministic passes that are safe to run multiple times (idempotent):
+
+    1. **Path normalisation** on every ``file:`` field across entry_points,
+       sink_details, boundary_details. Strips leading ``./``; converts
+       absolute paths under ``target_path`` to relative-from-target. The
+       bridge's downstream strict-equality match is sensitive to this.
+
+    2. **Name backfill** on entry_points and sink_details: when the LLM
+       emitted ``file`` + ``line`` but no ``name``, look up the function
+       in the checklist whose line range contains that line and inject
+       the function's name. Enables function-level enrichment instead of
+       falling back to file-level (which over-marks unrelated helpers).
+
+    3. **File-existence validation**: warns when a context-map entry
+       references a file that doesn't appear in the checklist (LLM
+       hallucination).
+
+    4. **Line-in-file sanity**: warns when a referenced line exceeds the
+       file's known length.
+
+    5. **Cross-reference validation**: warns when ``unchecked_flows``
+       references entry_point or sink IDs that don't exist in the
+       respective lists.
+
+    Returns the (mutated) context_map for caller convenience. Bails as a
+    no-op if either input is missing or wrong-typed.
+    """
+    if not isinstance(context_map, dict):
+        return context_map
+
+    # Path normalisation and cross-ref validation don't need the checklist
+    # — run them unconditionally so callers without an inventory still
+    # benefit from those passes.
+    _normalize_paths(context_map, target_path)
+    _validate_cross_refs(context_map)
+
+    if not isinstance(checklist, dict):
+        # Backfill / hallucination warnings need the checklist as ground truth.
+        return context_map
+
+    files_by_path = {
+        fi.get("path"): fi
+        for fi in _list_at(checklist, "files")
+        if isinstance(fi, dict) and fi.get("path")
+    }
+    _backfill_and_validate_locations(context_map, files_by_path)
+    return context_map
+
+
+# Top-level keys whose entries carry a (file, line) pair worth normalising.
+_LOCATION_BEARING_SECTIONS = ("entry_points", "sink_details", "boundary_details")
+
+
+def _list_at(d: Any, key: str) -> List[Any]:
+    """Return d[key] if it's a list, else an empty list.
+
+    Defensive guard for the many `for x in context_map.get(field) or []`
+    sites: `or []` falls back to `[]` only when the value is *falsy*, so
+    a truthy non-list (string, int, dict) would still hit `for x in 42`
+    and raise TypeError. Use this helper at every iteration site.
+    """
+    if not isinstance(d, dict):
+        return []
+    v = d.get(key)
+    return v if isinstance(v, list) else []
+
+
+def _normalize_path(path: str, target_path: Optional[str]) -> str:
+    """Return the path normalised relative to target_path when possible.
+
+    - Strips a leading ``./`` (claude often emits these).
+    - Converts an absolute path under ``target_path`` to its relative form.
+    - Leaves anything else untouched (no aggressive symlink resolution).
+    """
+    if not path:
+        return path
+    p = path.strip()
+    if p.startswith("./"):
+        p = p[2:]
+    if target_path and p.startswith("/"):
+        try:
+            rel = Path(p).resolve().relative_to(Path(target_path).resolve())
+            return str(rel)
+        except (ValueError, OSError):
+            pass  # not under target_path; leave as-is
+    return p
+
+
+def _normalize_paths(context_map: Dict[str, Any],
+                     target_path: Optional[str]) -> None:
+    for section in _LOCATION_BEARING_SECTIONS:
+        for entry in _list_at(context_map, section):
+            if not isinstance(entry, dict):
+                continue
+            file = entry.get("file")
+            # Only operate on strings — guard against LLM emitting a list,
+            # int, or other non-string for `file:`. _normalize_path's
+            # str.strip() would otherwise raise.
+            if isinstance(file, str) and file:
+                entry["file"] = _normalize_path(file, target_path)
+
+
+def _find_containing_function(file_info: Dict[str, Any],
+                               line: int) -> Optional[Dict[str, Any]]:
+    """Return the function in file_info whose line range contains ``line``.
+
+    Strict pass: collect every function with both ``line_start`` and
+    ``line_end`` such that ``line_start ≤ line ≤ line_end`` and return
+    the one with the smallest span (so nested functions get attributed
+    to the innermost match, not the enclosing function).
+
+    Fallback (when no strict match): return the function with the
+    closest preceding ``line_start`` — best-effort for inventories that
+    don't track function ends. Under-approximates: a line past the end
+    of the closest preceding function still gets attributed to it.
+    """
+    funcs = file_info.get("items")
+    if not isinstance(funcs, list):
+        funcs = _list_at(file_info, "functions")
+    # Strict pass: collect every function whose range contains the line,
+    # then pick the smallest span. Smallest-span wins so that nested
+    # functions (Python closures, JS inner functions) get attributed to
+    # the innermost match, not the outer enclosing function.
+    strict_matches = []
+    for fn in funcs:
+        if not isinstance(fn, dict):
+            continue
+        line_start = fn.get("line_start") or fn.get("line")
+        line_end = fn.get("line_end")
+        # Require both bounds to be ints — string-typed line numbers
+        # from a corrupt checklist would otherwise raise TypeError on
+        # the int-vs-str comparison below. Also reject bools to avoid
+        # weird behaviour even though bool is a subclass of int.
+        if not isinstance(line_start, int) or isinstance(line_start, bool):
+            continue
+        if not isinstance(line_end, int) or isinstance(line_end, bool):
+            continue
+        if line_start <= line <= line_end:
+            strict_matches.append((line_end - line_start, fn))
+    if strict_matches:
+        strict_matches.sort(key=lambda c: c[0])
+        return strict_matches[0][1]
+    # Fallback: closest preceding line_start (under-approximates but better
+    # than nothing for inventories without line_end).
+    candidates = []
+    for fn in funcs:
+        if not isinstance(fn, dict):
+            continue
+        line_start = fn.get("line_start") or fn.get("line")
+        if not isinstance(line_start, int) or isinstance(line_start, bool):
+            continue
+        if line_start > line:
+            continue
+        candidates.append((line_start, fn))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    return candidates[0][1]
+
+
+def _backfill_and_validate_locations(context_map: Dict[str, Any],
+                                      files_by_path: Dict[str, Dict[str, Any]]
+                                      ) -> None:
+    for section in _LOCATION_BEARING_SECTIONS:
+        for entry in _list_at(context_map, section):
+            if not isinstance(entry, dict):
+                continue
+            file = entry.get("file")
+            line = entry.get("line")
+            # files_by_path lookup uses dict.get(), which raises
+            # TypeError on unhashable types (list/dict). Require string.
+            if not isinstance(file, str) or not file or not isinstance(line, int):
+                continue
+
+            file_info = files_by_path.get(file)
+            if file_info is None:
+                logger.warning(
+                    "normalize_context_map: %s entry references file %s "
+                    "not present in checklist (likely LLM hallucination)",
+                    section, escape_nonprintable(file),
+                )
+                continue
+
+            total_lines = file_info.get("lines")
+            if isinstance(total_lines, int) and line > total_lines:
+                # escape_nonprintable on `file` so any control / ANSI / BIDI
+                # chars in an attacker-influenced filename get rendered as
+                # \xHH literals; raw %s would let them corrupt the terminal.
+                logger.warning(
+                    "normalize_context_map: %s entry references %s:%d "
+                    "but file has only %d lines (likely LLM hallucination)",
+                    section, escape_nonprintable(file), line, total_lines,
+                )
+                continue
+
+            # Backfill name if absent. Only backfill string names — a
+            # corrupt checklist with a non-string `name` field would
+            # otherwise propagate the type bug into context_map and
+            # crash enrich_checklist's tuple-key lookup downstream.
+            if not entry.get("name"):
+                func = _find_containing_function(file_info, line)
+                if func:
+                    func_name = func.get("name")
+                    if isinstance(func_name, str) and func_name:
+                        entry["name"] = func_name
+
+
+def _validate_cross_refs(context_map: Dict[str, Any]) -> None:
+    # Set construction requires hashable values — if claude emits an id as
+    # a list / dict, the comprehension would raise. Constrain to strings.
+    ep_ids = {
+        e.get("id") for e in _list_at(context_map, "entry_points")
+        if isinstance(e, dict) and isinstance(e.get("id"), str) and e.get("id")
+    }
+    sink_ids = {
+        s.get("id") for s in _list_at(context_map, "sink_details")
+        if isinstance(s, dict) and isinstance(s.get("id"), str) and s.get("id")
+    }
+    for flow in _list_at(context_map, "unchecked_flows"):
+        if not isinstance(flow, dict):
+            continue
+        # entry_point / sink may legitimately be either a single ID string
+        # ("EP-001") or a list of IDs (multiple sources reaching one sink).
+        # Collect into a uniform list before the membership check — set
+        # membership on a raw list would raise TypeError (lists unhashable).
+        for ep_ref in _as_id_list(flow.get("entry_point")):
+            if ep_ref not in ep_ids:
+                logger.warning(
+                    "normalize_context_map: unchecked_flow references "
+                    "entry_point %s not in entry_points list",
+                    escape_nonprintable(ep_ref),
+                )
+        for sink_ref in _as_id_list(flow.get("sink")):
+            if sink_ref not in sink_ids:
+                logger.warning(
+                    "normalize_context_map: unchecked_flow references "
+                    "sink %s not in sink_details list",
+                    escape_nonprintable(sink_ref),
+                )
+
+
+def _as_id_list(value: Any) -> List[str]:
+    """Coerce a context-map ID reference into a list of string IDs.
+
+    Accepts a single string, a list of strings (or mixed), or any other
+    type. Non-string elements are dropped silently rather than raising —
+    cross-ref validation is best-effort.
+    """
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        return [v for v in value if isinstance(v, str) and v]
+    return []
+
+
 def enrich_checklist(checklist: Dict[str, Any], context_map: Dict[str, Any],
                      output_dir: str = None) -> Dict[str, Any]:
     """Mark entry points and sinks as high-priority in a checklist.
 
     Mutates checklist in place. Returns the checklist for chaining.
     If output_dir is provided, saves the enriched checklist (symlink-safe).
+
+    Pipeline (in order):
+      1. Normalise the context-map (path conventions, name backfill, etc.).
+      2. Clear any prior bridge-written priority markers from the
+         checklist — re-runs reflect the current context-map exactly,
+         not stale accumulation from previous runs.
+      3. Build a (file, name|None) → reasons lookup from entry_points
+         and sink_details.
+      4. Walk the checklist; mark functions matching either file-level
+         or function-level lookups; reasons accumulate as ``"+"``-joined
+         sorted strings (single ``"sink"``, paired ``"entry_point+sink"``).
+      5. Write ``priority_targets`` from ``unchecked_flows`` (cleared in
+         step 2 so absent unchecked_flows means absent priority_targets).
+
+    **Side effect:** also mutates ``context_map`` in place via
+    ``normalize_context_map`` so missing names get backfilled (enabling
+    function-level matching) and paths get normalised (avoiding silent
+    strict-equality misses). Callers that need an unmodified context_map
+    should pass a deep copy.
     """
+    # Both inputs must be dict-shaped — defensive against malformed
+    # callers (e.g. a list-typed checklist would crash on .get()).
+    if not isinstance(checklist, dict) or not isinstance(context_map, dict):
+        return checklist
     if not checklist or not context_map:
         return checklist
 
-    # Build lookup sets: (relative_path, function_name) → reason
-    priority_functions: Dict[tuple, str] = {}
+    # Normalise the context-map first so the lookup keys are consistent
+    # with the checklist's path conventions and function names get filled
+    # in from line ranges where claude omitted them.
+    normalize_context_map(context_map, checklist,
+                          target_path=checklist.get("target_path"))
 
-    for ep in context_map.get("entry_points", []):
-        file_path = ep.get("file", "")
-        if file_path:
-            # Entry points reference a file but not always a specific function —
-            # mark the file itself so Stage B reads the whole entry handler.
-            priority_functions[(file_path, None)] = "entry_point"
+    # Clear bridge-written priority markers from any prior enrich run.
+    # Without this, a function previously marked priority=high would
+    # retain that marker even after a refreshed context-map no longer
+    # references it (stale data leak across re-runs). Re-running should
+    # always reflect the current context-map's reasons exactly.
+    # enrich_checklist is the sole writer of these fields, so the clear
+    # is safe — verified by grep across the codebase.
+    _clear_prior_priority_markers(checklist)
 
-    for sink in context_map.get("sink_details", []):
-        file_path = sink.get("file", "")
-        if file_path:
-            priority_functions[(file_path, None)] = "sink"
+    # Build lookup: (relative_path, function_name_or_None) → set of reasons.
+    # When the context map provides a function name on an entry_point /
+    # sink_detail entry we use it to scope the marker to that function only;
+    # when name is absent we fall back to file-level marking (every function
+    # in the file). Reasons accumulate so a function that is both an entry
+    # point and a sink gets both labels rather than only the one written
+    # last.
+    priority_functions: Dict[tuple, set] = {}
 
-    # Walk checklist and mark matching functions
+    def _record(entry: Any, reason: str) -> None:
+        """Record a priority reason against the (file, name) key.
+
+        Constrains both file and name to strings — tuple keys go into a
+        dict and a list/dict-typed file or name would be unhashable and
+        crash setdefault. Drops malformed entries silently rather than
+        propagating the type bug. None for absent name (file-level
+        marking).
+        """
+        if not isinstance(entry, dict):
+            return
+        file_path = entry.get("file", "")
+        if not isinstance(file_path, str) or not file_path:
+            return
+        raw_name = entry.get("name")
+        name = raw_name if isinstance(raw_name, str) and raw_name else None
+        priority_functions.setdefault((file_path, name), set()).add(reason)
+
+    for ep in _list_at(context_map, "entry_points"):
+        _record(ep, "entry_point")
+    for sink in _list_at(context_map, "sink_details"):
+        _record(sink, "sink")
+
+    # Walk checklist and mark matching functions. A function inherits
+    # file-level reasons (entries written without a name) plus any
+    # reasons keyed to its specific function name.
     for file_info in checklist.get("files", []):
+        if not isinstance(file_info, dict):
+            continue
         path = file_info.get("path", "")
-        file_reason = priority_functions.get((path, None))
+        if not isinstance(path, str):
+            continue
+        file_level_reasons = priority_functions.get((path, None), set())
 
-        if file_reason:
-            # Mark all functions in this file as high priority
-            for func in file_info.get("items", file_info.get("functions", [])):
+        funcs = file_info.get("items")
+        if not isinstance(funcs, list):
+            funcs = _list_at(file_info, "functions")
+        for func in funcs:
+            if not isinstance(func, dict):
+                continue
+            raw_fname = func.get("name")
+            # Function-level lookup needs a string name — non-string
+            # would crash dict.get on the tuple key. Falling back to ""
+            # means we just won't find a function-level match (file-level
+            # reasons may still apply).
+            fname = raw_fname if isinstance(raw_fname, str) else ""
+            func_level_reasons = priority_functions.get((path, fname), set())
+            reasons = file_level_reasons | func_level_reasons
+            if reasons:
                 func["priority"] = "high"
-                func["priority_reason"] = file_reason
+                # Deterministic concat — single reason renders as before
+                # ("entry_point" or "sink"); the entry+sink case becomes
+                # "entry_point+sink" (sorted alphabetically). Existing
+                # consumers (analysis prompt builder, agent metadata copy)
+                # render the string verbatim, no equality checks, so the
+                # combined form passes through cleanly.
+                func["priority_reason"] = "+".join(sorted(reasons))
 
-    # Add unchecked flows as priority targets at the checklist level
-    unchecked = context_map.get("unchecked_flows", [])
-    if unchecked:
-        checklist["priority_targets"] = [
-            {
-                "entry_point": flow.get("entry_point"),
-                "sink": flow.get("sink"),
-                "missing_boundary": flow.get("missing_boundary"),
-                "source": "understand:map",
-            }
+    # Add unchecked flows as priority targets at the checklist level.
+    # Each target also carries resolved entry-point / sink details
+    # (file, line, name) looked up from the context-map, so downstream
+    # consumers (Stage B prompts, /diagram, etc.) don't have to do the
+    # ID → details join themselves. Additive — original ID fields are
+    # preserved.
+    unchecked = context_map.get("unchecked_flows")
+    # Require a real list — accepting any truthy value would silently
+    # produce an empty priority_targets for malformed shapes (e.g.
+    # context-map with unchecked_flows: "string"), which is more
+    # surprising than just leaving the cleared key absent.
+    if isinstance(unchecked, list) and unchecked:
+        ep_by_id, sink_by_id = _index_entries_by_id(context_map)
+        targets = [
+            _build_priority_target(flow, ep_by_id, sink_by_id)
             for flow in unchecked
+            if isinstance(flow, dict)
         ]
-        logger.info(
-            "understand_bridge: marked %d unchecked flows as priority targets",
-            len(unchecked),
-        )
+        if targets:
+            checklist["priority_targets"] = targets
+            logger.info(
+                "understand_bridge: marked %d unchecked flows as priority targets",
+                len(targets),
+            )
 
     if output_dir:
         from core.inventory import save_checklist
         save_checklist(output_dir, checklist)
 
     return checklist
+
+
+def _index_entries_by_id(context_map: Dict[str, Any]
+                          ) -> Tuple[Dict[str, Dict[str, Any]],
+                                     Dict[str, Dict[str, Any]]]:
+    """Build {id → entry} lookups for entry_points and sink_details.
+
+    Skips entries with missing or non-string IDs (matching the defensive
+    posture of _validate_cross_refs). Returns a pair (ep_by_id, sink_by_id).
+    """
+    ep_by_id: Dict[str, Dict[str, Any]] = {}
+    for ep in _list_at(context_map, "entry_points"):
+        if not isinstance(ep, dict):
+            continue
+        ep_id = ep.get("id")
+        if isinstance(ep_id, str) and ep_id:
+            ep_by_id[ep_id] = ep
+    sink_by_id: Dict[str, Dict[str, Any]] = {}
+    for sd in _list_at(context_map, "sink_details"):
+        if not isinstance(sd, dict):
+            continue
+        sd_id = sd.get("id")
+        if isinstance(sd_id, str) and sd_id:
+            sink_by_id[sd_id] = sd
+    return ep_by_id, sink_by_id
+
+
+def _resolve_id_to_details(value: Any, by_id: Dict[str, Dict[str, Any]]
+                            ) -> List[Dict[str, Any]]:
+    """Resolve a single ID or list of IDs into a list of detail dicts.
+
+    Each detail keeps only the fields a downstream consumer actually
+    needs: id, file, line, name. Missing IDs (typos, etc.) are dropped
+    silently — _validate_cross_refs has already warned about them.
+    Always returns a list for shape consistency.
+
+    Type-checks each copied field — drops malformed values (list-typed
+    file, string-typed line, etc.) rather than propagating the type bug
+    to downstream consumers.
+    """
+    resolved: List[Dict[str, Any]] = []
+    for ref in _as_id_list(value):
+        entry = by_id.get(ref)
+        if not entry:
+            continue
+        out: Dict[str, Any] = {"id": ref}
+        # file / name must be non-empty strings; line must be int (and
+        # not bool, which is an int subclass in Python).
+        file_v = entry.get("file")
+        if isinstance(file_v, str) and file_v:
+            out["file"] = file_v
+        line_v = entry.get("line")
+        if isinstance(line_v, int) and not isinstance(line_v, bool):
+            out["line"] = line_v
+        name_v = entry.get("name")
+        if isinstance(name_v, str) and name_v:
+            out["name"] = name_v
+        resolved.append(out)
+    return resolved
+
+
+def _build_priority_target(flow: Dict[str, Any],
+                            ep_by_id: Dict[str, Dict[str, Any]],
+                            sink_by_id: Dict[str, Dict[str, Any]]
+                            ) -> Dict[str, Any]:
+    """Build a priority_targets entry from one unchecked_flow.
+
+    Preserves the original raw ID fields for backward compatibility and
+    adds ``entry_points_resolved`` / ``sinks_resolved`` lists with each
+    referenced entry's file / line / name pulled from the context-map.
+    """
+    return {
+        "entry_point": flow.get("entry_point"),
+        "sink": flow.get("sink"),
+        "missing_boundary": flow.get("missing_boundary"),
+        "source": "understand:map",
+        "entry_points_resolved": _resolve_id_to_details(
+            flow.get("entry_point"), ep_by_id),
+        "sinks_resolved": _resolve_id_to_details(
+            flow.get("sink"), sink_by_id),
+    }
+
+
+def _clear_prior_priority_markers(checklist: Dict[str, Any]) -> None:
+    """Remove bridge-written priority data so re-enrichment starts clean.
+
+    Targets:
+      - per-function ``priority`` and ``priority_reason`` fields
+      - top-level ``priority_targets`` list
+
+    Without this, a refreshed context-map that no longer references a
+    previously-marked function would leave the stale marker in place,
+    misleading downstream consumers (analysis prompt enrichment etc.)
+    into thinking a now-irrelevant function is on a security-sensitive
+    path.
+    """
+    checklist.pop("priority_targets", None)
+    for file_info in _list_at(checklist, "files"):
+        if not isinstance(file_info, dict):
+            continue
+        funcs = file_info.get("items")
+        if not isinstance(funcs, list):
+            funcs = _list_at(file_info, "functions")
+        for func in funcs:
+            if not isinstance(func, dict):
+                continue
+            func.pop("priority", None)
+            func.pop("priority_reason", None)
 
 
 # ---------------------------------------------------------------------------
@@ -430,16 +899,20 @@ def _references_file(entry: Dict[str, Any], stale_files: Set[str]) -> bool:
     """
     import re
 
-    # Direct file field (entry_points, sink_details, trust_boundaries)
+    # Direct file field (entry_points, sink_details, trust_boundaries).
+    # Constrain to strings — list/dict values would crash set membership
+    # (lists aren't hashable). Pre-existing weakness exposed once the
+    # upstream normalize started letting non-string `file:` values
+    # through unmodified.
     f = entry.get("file", "")
-    if f and f in stale_files:
+    if isinstance(f, str) and f and f in stale_files:
         return True
 
     # Embedded in string fields — extract filename before ":"
     # Patterns: "... @ file.c:N", "file.c:N — ...", "src/auth.py:12"
     for field in ("entry", "location", "check"):
         val = entry.get(field, "")
-        if not val:
+        if not isinstance(val, str) or not val:
             continue
         # Extract all "word.ext:digits" tokens (filenames with line numbers)
         for match in re.findall(r'[\w./+-]+\.\w+(?=:\d)', val):
@@ -628,16 +1101,19 @@ def _import_flow_traces(
     for trace_file in trace_files:
         trace = load_json(trace_file)
         if not isinstance(trace, dict):
-            logger.warning("understand_bridge: skipping malformed trace file %s", trace_file)
+            logger.warning("understand_bridge: skipping malformed trace file %s",
+                           escape_nonprintable(str(trace_file)))
             continue
 
         path_id = trace.get("id", trace_file.stem)
         if path_id in existing_ids:
-            logger.debug("understand_bridge: skipping already-imported trace %s", path_id)
+            logger.debug("understand_bridge: skipping already-imported trace %s",
+                         escape_nonprintable(str(path_id)))
             continue
 
         if stale_files and _trace_references_stale(trace, stale_files):
-            logger.info("understand_bridge: skipping stale trace %s", path_id)
+            logger.info("understand_bridge: skipping stale trace %s",
+                        escape_nonprintable(str(path_id)))
             skipped_stale += 1
             continue
 

@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Normalise a context-map.json in place using the run dir's checklist.json.
+
+Usage: raptor-normalize-context-map <understand_dir>
+
+Wraps core.orchestration.understand_bridge.normalize_context_map for
+invocation from skill markdown. Lets /understand --map clean its output
+right after writing context-map.json so anyone reading the on-disk file
+sees the normalised data — not just consumers that go through the bridge
+on read.
+
+Idempotent — safe to run more than once. Logs warnings for any
+hallucinated files / out-of-range lines / cross-ref typos but never
+errors out (a usable context-map should still get saved).
+"""
+import json
+import sys
+from pathlib import Path
+
+# libexec/raptor-normalize-context-map -> repo root (parents[1])
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.json import load_json, save_json
+from core.orchestration.understand_bridge import normalize_context_map
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print("Usage: raptor-normalize-context-map <understand_dir>",
+              file=sys.stderr)
+        return 1
+
+    understand_dir = Path(sys.argv[1])
+    if not understand_dir.is_dir():
+        print(f"raptor-normalize-context-map: {understand_dir} is not a directory",
+              file=sys.stderr)
+        return 1
+
+    context_map_path = understand_dir / "context-map.json"
+    if not context_map_path.exists():
+        print(f"raptor-normalize-context-map: {context_map_path} does not exist",
+              file=sys.stderr)
+        return 1
+
+    context_map = load_json(context_map_path)
+    if not isinstance(context_map, dict):
+        print(f"raptor-normalize-context-map: {context_map_path} is not a JSON object",
+              file=sys.stderr)
+        return 1
+
+    checklist = load_json(understand_dir / "checklist.json") or {}
+    target_path = checklist.get("target_path") if isinstance(checklist, dict) else None
+
+    normalize_context_map(context_map, checklist, target_path=target_path)
+    save_json(context_map_path, context_map)
+    print(f"raptor-normalize-context-map: normalised {context_map_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

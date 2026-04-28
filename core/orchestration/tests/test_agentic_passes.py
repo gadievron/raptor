@@ -443,6 +443,11 @@ class ValidatePostpassTests(unittest.TestCase):
         self.assertIn("not found", result.skipped_reason)
 
     def test_happy_path_runs_lifecycle_and_writes_selection_file(self):
+        # IDs deliberately use a hyphen + uppercase prefix so
+        # `assertNotIn(...)` below isn't a substring-collision risk
+        # against tempfile.mkdtemp's 8-char alphanumeric random suffix
+        # (CI ran into "f1" appearing inside "/tmp/tmpfef1_buh" and
+        # falsely failing the inline-injection check).
         with TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             report = self._make_report(tmp, [
