@@ -140,9 +140,10 @@ class CodeQLAgent:
         if out_dir:
             self.out_dir = Path(out_dir)
         else:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Collision-prevention via unique_run_suffix — see core/run/output.py.
+            from core.run.output import unique_run_suffix
             repo_name = self.repo_path.name
-            self.out_dir = RaptorConfig.BASE_OUT_DIR / f"codeql_{repo_name}_{timestamp}"
+            self.out_dir = RaptorConfig.BASE_OUT_DIR / f"codeql_{repo_name}_{unique_run_suffix('_')}"
 
         self.out_dir.mkdir(parents=True, exist_ok=True)
 

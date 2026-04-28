@@ -52,6 +52,21 @@ Identify all branches in the flow — not just the happy path:
 
 Trace each significant branch separately.
 
+**[TRACE-3b] Path Conditions (for SMT consumption)**
+
+Separately from `branches[]` (which describes *alternative* paths), record the **conjunction of guards on the dangerous path** — every condition that must hold for execution to actually reach the sink along the trace you've followed. These are downstream-consumed by the SMT path-feasibility helper (`raptor-smt-validate-path`), so emit them as simple bitvector predicates over named variables:
+
+  - Numeric comparisons: `"size > 0"`, `"offset + length <= buffer_size"`, `"count * 16 < max_alloc"`
+  - Null checks: `"ptr != NULL"`, `"ptr == NULL"`
+  - Bitmask: `"flags & 0x80000000 == 0"`
+  - Negated form (the guard was *bypassed* on the dangerous path): `{"text": "validate(input)", "negated": true}` — but most negations come out clearer as the inverted predicate (`ptr == NULL` instead of `!ptr != NULL`).
+
+For each condition, also record the `step_index` it gates so consumers can correlate back to `steps[]`.
+
+**Avoid:** function calls (`strlen(input)`), type casts (`(uint32_t)x`), struct/array access (`obj.field`, `arr[0]`), pointer deref (`*p`) — the SMT parser can't encode these. Either simplify into a bitvector predicate or omit; "missing" is far better than "wrong shape".
+
+Also pick a `path_profile` describing the dominant C type along the path — `"uint32"` for `int`/`unsigned int` arithmetic, `"uint64"` for `size_t`/`uint64_t`/pointers (default), `"int32"` for signed-overflow UB reasoning. Pre-made profiles: `uint8`, `int8`, `uint16`, `int16`, `uint32`, `int32`, `uint64`, `int64`. Pick one that matches the dominant arithmetic type on the path.
+
 **[TRACE-4] Sink Analysis**
 
 At each sink, record:
@@ -124,6 +139,11 @@ Summarize what the attacker controls:
       "outcome": "Bypasses auth middleware entirely — tainted data reaches same sink via shorter path"
     }
   ],
+  "path_conditions": [
+    {"text": "len(query) > 0", "step_index": 1, "negated": false},
+    {"text": "table != NULL", "step_index": 3, "negated": false}
+  ],
+  "path_profile": "uint64",
   "attacker_control": {
     "level": "full|partial|none",
     "what": "Full control over `query` field via POST body",
@@ -142,6 +162,8 @@ Summarize what the attacker controls:
 ```
 
 **Schema note:** `steps[]`, `proximity` (0–10 score: 10 = at the sink, 0 = no viable path), and `blockers[]` are shared with `attack-paths.json` from the validation pipeline. What this means is that a flow-trace can be consumed directly by Stage B. `branches`, `attacker_control`, and `summary` are trace-specific extensions.
+
+`path_conditions` and `path_profile` are forwarded by `core/orchestration/understand_bridge.py` into `attack-paths.json` so /validate's Stage E can feed them straight to the SMT path-feasibility helper without re-extracting from source. Both fields are optional — omit if the trace doesn't lend itself to bitvector predicates (e.g., string/format findings) and Stage E will fall back to its own reasoning.
 
 ## Teach Mode Integration
 

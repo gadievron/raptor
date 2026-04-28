@@ -451,9 +451,9 @@ class ValidatePostpassTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             report = self._make_report(tmp, [
-                {"finding_id": "FNDA-EXPLOITABLE", "is_exploitable": True},
-                {"finding_id": "FNDB-HIGHCONF", "confidence": "high"},
-                {"finding_id": "FNDC-IGNORED", "is_exploitable": False, "confidence": "low"},
+                {"finding_id": "FINDING-F1", "is_exploitable": True},
+                {"finding_id": "FINDING-F2", "confidence": "high"},
+                {"finding_id": "FINDING-F3", "is_exploitable": False, "confidence": "low"},
             ])
             validate_dir = tmp / "validate_run"
             dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
@@ -473,10 +473,7 @@ class ValidatePostpassTests(unittest.TestCase):
             selection_file = validate_dir / "selected-findings.json"
             self.assertTrue(selection_file.exists())
             data = json.loads(selection_file.read_text())
-            self.assertEqual(
-                {f["id"] for f in data["findings"]},
-                {"FNDA-EXPLOITABLE", "FNDB-HIGHCONF"},
-            )
+            self.assertEqual({f["id"] for f in data["findings"]}, {"FINDING-F1", "FINDING-F2"})
             # Container metadata is /validate-shaped.
             self.assertIn("target_path", data)
 
@@ -485,14 +482,14 @@ class ValidatePostpassTests(unittest.TestCase):
                                if Path(c.args[0][0]).name == "claude")
             prompt = claude_call.kwargs["input"]
             self.assertIn("selected-findings.json", prompt)
-            self.assertNotIn("FNDA-EXPLOITABLE", prompt)
-            self.assertNotIn("FNDB-HIGHCONF", prompt)
-            self.assertNotIn("FNDC-IGNORED", prompt)
+            self.assertNotIn("FINDING-F1", prompt)
+            self.assertNotIn("FINDING-F2", prompt)
+            self.assertNotIn("FINDING-F3", prompt)
 
     def test_skips_when_lifecycle_start_fails(self):
         with TemporaryDirectory() as tmp:
             tmp = Path(tmp)
-            report = self._make_report(tmp, [{"finding_id": "f1", "is_exploitable": True}])
+            report = self._make_report(tmp, [{"finding_id": "FINDING-F1", "is_exploitable": True}])
             dispatcher = _make_lifecycle_dispatcher(start_returncode=1)
             with patch("core.orchestration.agentic_passes.subprocess.run",
                        side_effect=dispatcher):

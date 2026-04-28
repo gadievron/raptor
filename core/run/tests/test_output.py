@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from core.run.output import get_output_dir, TargetMismatchError
+from core.run.output import get_output_dir, TargetMismatchError, unique_run_suffix
 
 # Mock that disables project resolution — for testing standalone (no project) mode.
 _NO_SYMLINK = patch("core.run.output._resolve_active_project", return_value=None)
@@ -41,7 +41,31 @@ class TestGetOutputDir(unittest.TestCase):
         result = get_output_dir("scan", target_name="")
         self.assertTrue(result.name.startswith("scan_"))
         parts = result.name.split("_")
-        self.assertEqual(len(parts), 3)
+        # scan_<date>_<time>_pid<N> — at least 4 parts; using >= so
+        # adding more suffix segments later (e.g., microseconds) doesn't
+        # break this test. Final part must be the pid marker.
+        self.assertGreaterEqual(len(parts), 4)
+        self.assertTrue(parts[-1].startswith("pid"))
+
+    def test_concurrent_same_second_invocations_get_distinct_dirs(self):
+        # The bug being fixed: two RAPTOR processes starting in the same
+        # wall-clock second used to compute identical run-dir names.
+        # mkdir(exist_ok=True) didn't fail; both wrote to the same dir;
+        # CI saw "mtime collisions". PID suffix forces distinct names
+        # because two simultaneous processes have different PIDs.
+        with TemporaryDirectory() as d:
+            with patch("core.run.output._resolve_active_project",
+                       return_value=(d, "test", "")):
+                # Pin the timestamp string so both calls see the same second
+                with patch("time.strftime", return_value="20260427-120000"):
+                    # Simulate sibling process via patched os.getpid
+                    with patch("os.getpid", return_value=11111):
+                        a = get_output_dir("scan")
+                    with patch("os.getpid", return_value=22222):
+                        b = get_output_dir("scan")
+                    self.assertNotEqual(a, b,
+                        "same-second invocations from different processes "
+                        "must produce distinct dir names")
 
 
 def _mock_project(d, name="myapp", target="/tmp/vulns"):
@@ -99,6 +123,64 @@ class TestTargetMismatch(unittest.TestCase):
                 result = get_output_dir("scan", explicit_out="/tmp/manual",
                                         target_path="/tmp/other")
                 self.assertEqual(result, Path("/tmp/manual").resolve())
+
+
+class TestUniqueRunSuffix(unittest.TestCase):
+    """The collision-prevention primitive used by every standalone-mode
+    output-dir computation across RAPTOR."""
+
+    def test_underscore_separator(self):
+        with patch("time.strftime", return_value="20260427_120000"):
+            with patch("os.getpid", return_value=12345):
+                self.assertEqual(unique_run_suffix("_"),
+                                 "20260427_120000_pid12345")
+
+    def test_hyphen_separator(self):
+        with patch("time.strftime", return_value="20260427-120000"):
+            with patch("os.getpid", return_value=12345):
+                self.assertEqual(unique_run_suffix("-"),
+                                 "20260427-120000-pid12345")
+
+    def test_default_separator_is_underscore(self):
+        # Standalone mode is the more common shape, so default to '_'.
+        with patch("time.strftime", return_value="20260427_120000"):
+            with patch("os.getpid", return_value=12345):
+                self.assertEqual(unique_run_suffix(),
+                                 "20260427_120000_pid12345")
+
+    def test_uses_correct_strftime_format_for_separator(self):
+        # The separator threads through into strftime so the date and time
+        # use the same separator as the suffix join — keeps the dirname
+        # visually consistent (no mixed `-` and `_`).
+        captured = {}
+        def capture(fmt):
+            captured["fmt"] = fmt
+            return "20260427-120000"
+        with patch("time.strftime", side_effect=capture):
+            with patch("os.getpid", return_value=99):
+                unique_run_suffix("-")
+        self.assertEqual(captured["fmt"], "%Y%m%d-%H%M%S")
+
+    def test_rejects_unsupported_separator(self):
+        # Defends against strftime-directive injection — passing `%H` as
+        # separator would otherwise interpolate into the format string.
+        with self.assertRaises(ValueError):
+            unique_run_suffix("%H")
+        with self.assertRaises(ValueError):
+            unique_run_suffix("/")
+        with self.assertRaises(ValueError):
+            unique_run_suffix("")
+
+    def test_two_pids_produce_distinct_suffixes(self):
+        # The fundamental property: two concurrent processes get different
+        # PIDs and therefore different suffixes even at the same wall-clock
+        # second.
+        with patch("time.strftime", return_value="20260427_120000"):
+            with patch("os.getpid", return_value=11111):
+                a = unique_run_suffix("_")
+            with patch("os.getpid", return_value=22222):
+                b = unique_run_suffix("_")
+            self.assertNotEqual(a, b)
 
 
 if __name__ == "__main__":

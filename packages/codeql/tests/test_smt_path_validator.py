@@ -9,7 +9,7 @@ import pytest
 # packages/codeql/tests/ -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
-from core.smt_solver import z3_available
+from core.smt_solver import RejectionKind, z3_available
 from packages.codeql.smt_path_validator import (
     PathCondition,
     PathSMTResult,
@@ -97,12 +97,17 @@ class TestFeasibility:
 
     @_requires_z3
     def test_unparseable_condition_goes_to_unknown(self):
-        """Function-call syntax is rejected by the parser — goes to unknown, not crash."""
+        """Non-call grouping parens are still rejected — goes to unknown, not crash.
+
+        Function-call shapes (``ident(...)``) are recovered via the
+        free-variable fallback; only non-call grouping (``(a + b)``)
+        remains unparseable.
+        """
         r = check_path_feasibility([
             PathCondition("size > 0", step_index=0),
-            PathCondition("validate(ptr, len) == 0", step_index=1),
+            PathCondition("(size + len) * 2 > 0", step_index=1),
         ])
-        assert "validate(ptr, len) == 0" in r.unknown
+        assert "(size + len) * 2 > 0" in r.unknown
         # The parseable condition still runs; result is sat or None, not outright infeasible
         assert r.feasible is not False
 
@@ -110,9 +115,135 @@ class TestFeasibility:
     def test_all_unknown_returns_none(self):
         """If nothing is parseable, feasible must be None (not True)."""
         r = check_path_feasibility([
-            PathCondition("foo(bar) > baz(qux)", step_index=0),
+            # Non-call grouping parens — not eligible for the fallback.
+            PathCondition("(a + b) > (c + d)", step_index=0),
         ])
         assert r.feasible is None
+
+    @_requires_z3
+    @pytest.mark.parametrize("expr", [
+        "~mask == 0xFFFFFFFF",  # unary NOT silently dropped → would become "mask == ..."
+        "a ^ b == 0",            # XOR silently dropped → "a b == 0" (orphan caught)
+        "a / b > 0",             # division silently dropped
+        "a % 16 == 0",           # modulo silently dropped
+        "x | ~y == 0",           # NOT inside expression
+        "p ? q : r == 0",        # ternary silently dropped
+    ])
+    def test_silently_dropped_chars_go_to_unknown(self, expr):
+        """The tokeniser only matches a fixed set of operator characters;
+        anything outside that set ('~', '^', '/', '%', '?', ':') would
+        otherwise vanish from the token stream and produce a wrong
+        encoding.  The full-input-consumed sanity check rejects these."""
+        r = check_path_feasibility([PathCondition(expr, step_index=0)])
+        assert expr in r.unknown, (
+            f"silently-dropped chars in {expr!r} were not rejected; "
+            f"this is the same class of bug as the operator-precedence "
+            f"silent mis-encoding caught in PR #206."
+        )
+
+    @_requires_z3
+    def test_literal_too_wide_for_profile_goes_to_unknown(self):
+        """``x == 0x100`` at uint8 would silently wrap to ``x == 0`` since
+        Z3's BitVecVal truncates modulo width.  The verdict ``feasible:
+        true with x=0`` would mislead the caller about what was checked.
+        Refuse instead — the profile is wrong for this literal."""
+        from core.smt_solver import BVProfile
+        r = check_path_feasibility(
+            [PathCondition("x == 0x100", step_index=0)],
+            profile=BVProfile(width=8, signed=False),
+        )
+        assert "x == 0x100" in r.unknown
+
+    @_requires_z3
+    def test_literal_at_width_boundary_fits(self):
+        """``x == 0xFF`` at uint8 is exactly the max — must still be accepted."""
+        from core.smt_solver import BVProfile
+        r = check_path_feasibility(
+            [PathCondition("x == 0xFF", step_index=0)],
+            profile=BVProfile(width=8, signed=False),
+        )
+        assert r.feasible is True
+        assert r.model["x"] == 0xFF
+
+    @_requires_z3
+    def test_leading_zero_decimal_goes_to_unknown(self):
+        """``01234`` looks decimal but in C is octal (=668).  Accepting as
+        base-10 silently mis-encodes; reject and let the caller use hex
+        instead."""
+        r = check_path_feasibility([PathCondition("x == 01234", step_index=0)])
+        assert "x == 01234" in r.unknown
+
+    @_requires_z3
+    def test_bare_zero_decimal_accepted(self):
+        """``0`` (single digit) is unambiguous — must still parse."""
+        r = check_path_feasibility([PathCondition("x == 0", step_index=0)])
+        assert r.feasible is True
+        assert r.model.get("x") == 0
+
+    @_requires_z3
+    def test_bitmask_mask_too_wide_for_profile_goes_to_unknown(self):
+        """The bitmask form (``flags & MASK == VAL``) extracts MASK and
+        VAL via its own regex rather than going through ``atom()`` — the
+        same width-range check must apply or 0x100 at uint8 silently
+        wraps to 0, producing a false tautology."""
+        from core.smt_solver import BVProfile
+        r = check_path_feasibility(
+            [PathCondition("flags & 0x100 == 0", step_index=0)],
+            profile=BVProfile(width=8, signed=False),
+        )
+        assert "flags & 0x100 == 0" in r.unknown
+
+    @_requires_z3
+    def test_bitmask_leading_zero_mask_goes_to_unknown(self):
+        """Leading-zero literals in the bitmask path used to crash
+        ``int(tok, 0)`` with a Python ValueError on tokens like '010';
+        now they're rejected cleanly to ``unknown``."""
+        r = check_path_feasibility([PathCondition("flags & 010 == 0", step_index=0)])
+        assert "flags & 010 == 0" in r.unknown
+
+    @_requires_z3
+    def test_bitmask_leading_zero_rhs_goes_to_unknown(self):
+        r = check_path_feasibility([PathCondition("flags & 0xff == 010", step_index=0)])
+        assert "flags & 0xff == 010" in r.unknown
+
+    @_requires_z3
+    def test_bitmask_normal_form_still_works(self):
+        """Regression check: the bitmask-path validation tightening
+        must not break valid bitmask conditions."""
+        r = check_path_feasibility([PathCondition("flags & 0xff == 0", step_index=0)])
+        assert r.feasible is True
+        assert (r.model.get("flags", 0) & 0xff) == 0
+
+
+class TestNegatedDisplay:
+    """When a condition has ``negated=True``, downstream display strings
+    (in ``satisfied`` / ``unsatisfied`` / unsat-core reasoning) must
+    reflect what was actually asserted.  Showing the un-negated text
+    confuses readers — ``"ptr != NULL ⊥ ptr > 0"`` looks consistent
+    until you realise the solver actually asserted ``ptr == 0``."""
+
+    @_requires_z3
+    def test_negated_condition_shown_with_NOT_prefix_in_unsat_core(self):
+        r = check_path_feasibility([
+            PathCondition("ptr != NULL", step_index=0, negated=True),  # asserts ptr == 0
+            PathCondition("ptr > 0", step_index=1),
+        ])
+        assert r.feasible is False
+        # The display reflects what was asserted, not the original text.
+        assert "NOT (ptr != NULL)" in r.unsatisfied
+        # And the un-negated text should NOT appear (it's misleading).
+        assert "ptr != NULL" not in r.unsatisfied
+
+    @_requires_z3
+    def test_non_negated_condition_displayed_as_written(self):
+        """Unmodified conditions still appear verbatim."""
+        r = check_path_feasibility([
+            PathCondition("x > 100", step_index=0),
+            PathCondition("x < 50", step_index=1),
+        ])
+        assert r.feasible is False
+        assert "x > 100" in r.unsatisfied
+        assert "x < 50" in r.unsatisfied
 
     @_requires_z3
     def test_negated_condition(self):
@@ -461,3 +592,237 @@ class TestParametricProfile:
         base, size = r.model["base"], r.model["size"]
         assert (base + size) & 0xFFFFFFFF <= 8192
         assert base > 0x80000000
+
+
+class TestStructuredRejection:
+    """`unknown_reasons` should classify *why* each unparseable condition
+    was dropped, parallel to the textual `unknown` list."""
+
+    def _kind_for(self, result, text):
+        for r in result.unknown_reasons:
+            if r.text == text:
+                return r.kind
+        raise AssertionError(
+            f"no Rejection for {text!r} in {result.unknown_reasons!r}"
+        )
+
+    def test_no_z3_reasons_empty(self):
+        """When Z3 is unavailable everything goes to unknown but we
+        don't synthesise per-condition rejection reasons — there's no
+        parser/solver to assign blame to."""
+        with patch("packages.codeql.smt_path_validator._z3_available", return_value=False):
+            r = check_path_feasibility([PathCondition("size > 0", step_index=0)])
+        assert r.unknown == ["size > 0"]
+        assert r.unknown_reasons == []
+
+    @_requires_z3
+    def test_parens_rejection(self):
+        # Non-call grouping parens.  Function-call shapes (``ident(...)``)
+        # are recovered by the free-variable fallback and don't reach
+        # the parens-rejection path.
+        r = check_path_feasibility([
+            PathCondition("(a + b) > 0", step_index=0),
+        ])
+        assert self._kind_for(r, "(a + b) > 0") is RejectionKind.PARENS_NOT_SUPPORTED
+
+    @_requires_z3
+    def test_mixed_precedence_rejection(self):
+        r = check_path_feasibility([
+            PathCondition("a + b * c == 0", step_index=0),
+        ])
+        assert self._kind_for(r, "a + b * c == 0") is RejectionKind.MIXED_PRECEDENCE
+
+    @_requires_z3
+    def test_no_relational_at_top_level_rejection(self):
+        """``a b`` has no relational/bitmask top-level shape, so
+        :func:`_parse_condition` itself rejects with UNRECOGNIZED_FORM —
+        no _parse_expr call ever sees the trailing token."""
+        r = check_path_feasibility([PathCondition("a b", step_index=0)])
+        assert self._kind_for(r, "a b") is RejectionKind.UNRECOGNIZED_FORM
+
+    @_requires_z3
+    def test_trailing_tokens_rejection(self):
+        """A trailing operand inside an expression slot — the relational
+        top-level matches, then _parse_expr can't consume the dangling
+        ``c`` and emits TRAILING_TOKENS."""
+        r = check_path_feasibility([PathCondition("a + b c == 0", step_index=0)])
+        assert self._kind_for(r, "a + b c == 0") is RejectionKind.TRAILING_TOKENS
+
+    @_requires_z3
+    def test_unrecognized_form_rejection(self):
+        """A condition without a relational/bitmask top-level pattern."""
+        r = check_path_feasibility([PathCondition("size_only", step_index=0)])
+        assert self._kind_for(r, "size_only") is RejectionKind.UNRECOGNIZED_FORM
+
+    @_requires_z3
+    def test_rejection_carries_hint(self):
+        # Non-call grouping parens — still rejected, hint suggests
+        # flattening since the call-shape fallback doesn't apply here.
+        r = check_path_feasibility([
+            PathCondition("(a + b) * 2 > 0", step_index=0),
+        ])
+        rej = next(x for x in r.unknown_reasons if x.text == "(a + b) * 2 > 0")
+        assert rej.hint  # non-empty
+        assert "flatten" in rej.hint.lower() or "fallback" in rej.hint.lower()
+
+    @_requires_z3
+    def test_rejection_aligned_with_unknown_list(self):
+        """For every entry in `unknown`, there's a `unknown_reasons` entry
+        with the same text."""
+        r = check_path_feasibility([
+            PathCondition("size > 0", step_index=0),                    # parses
+            PathCondition("(p + q) == 0", step_index=1),                # grouping parens
+            PathCondition("a + b * c == 0", step_index=2),              # mixed prec
+        ])
+        assert set(r.unknown) == {x.text for x in r.unknown_reasons}
+
+
+# ---------------------------------------------------------------------------
+# Free-variable fallback for function-call subterms
+# ---------------------------------------------------------------------------
+
+class TestFreeVariableFallback:
+    """``ident(...)`` subterms are replaced with fresh free variables so
+    the rest of the condition can drive feasibility analysis instead of
+    the whole condition being dropped to unknown.
+    """
+
+    @_requires_z3
+    def test_simple_call_lhs(self):
+        """``strlen(input) < 1024`` parses via the fallback."""
+        r = check_path_feasibility([
+            PathCondition("strlen(input) < 1024", step_index=0),
+        ])
+        assert r.unknown == []
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_simple_call_rhs(self):
+        """Calls work in RHS position too: ``0 < strlen(input)``."""
+        r = check_path_feasibility([
+            PathCondition("0 < strlen(input)", step_index=0),
+        ])
+        assert r.unknown == []
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_zero_arg_call(self):
+        """Zero-arg calls (``getpid()``) parse identically."""
+        r = check_path_feasibility([
+            PathCondition("getpid() != 0", step_index=0),
+        ])
+        assert r.unknown == []
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_multi_arg_call(self):
+        """Calls with internal commas/operators don't confuse the parser."""
+        r = check_path_feasibility([
+            PathCondition("min(a, b) > 0", step_index=0),
+        ])
+        assert r.unknown == []
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_nested_call_collapses(self):
+        """Nested calls collapse to a single placeholder via the
+        balanced-paren walk — outer call drives the substitution."""
+        r = check_path_feasibility([
+            PathCondition("f(g(x), h(y)) < 100", step_index=0),
+        ])
+        assert r.unknown == []
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_two_calls_distinct_free_vars(self):
+        """Two textually-identical calls produce *distinct* placeholders.
+
+        Calls aren't assumed pure, so ``strlen(s) == strlen(s)`` is
+        satisfiable — but ``strlen(s) != strlen(s)`` is also satisfiable
+        (different anon vars).  This is the conservative stance: the
+        solver never claims infeasibility from elided subterms.
+        """
+        sat_eq = check_path_feasibility([
+            PathCondition("strlen(s) == strlen(s)", step_index=0),
+        ])
+        sat_ne = check_path_feasibility([
+            PathCondition("strlen(s) != strlen(s)", step_index=0),
+        ])
+        assert sat_eq.feasible is True
+        assert sat_ne.feasible is True
+
+    @_requires_z3
+    def test_call_in_bitmask_lhs(self):
+        """Function call in bitmask LHS: ``strlen(s) & 0xff == 0``."""
+        r = check_path_feasibility([
+            PathCondition("strlen(s) & 0xff == 0", step_index=0),
+        ])
+        assert r.unknown == []
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_call_does_not_constrain_path(self):
+        """Conditions reduced to ``anon OP literal`` mustn't force
+        infeasibility on otherwise-compatible peer conditions."""
+        r = check_path_feasibility([
+            PathCondition("size > 0", step_index=0),
+            PathCondition("strlen(input) < 1024", step_index=1),
+        ])
+        assert r.unknown == []
+        assert r.feasible is True
+
+    @_requires_z3
+    @pytest.mark.parametrize("expr", [
+        "strlen(input < 1024",  # missing close, mid-expression
+        "strlen(x",             # missing close, at EOI
+        "strlen(x))",           # extra close from the right
+        "f(g(x)",               # nested with one missing close
+        "strlen x)",            # orphan close, no preceding (
+    ])
+    def test_unbalanced_parens_still_rejected(self, expr):
+        """Any paren imbalance — open without close, close without open,
+        or nested mismatch — falls through the substitution and is
+        rejected by the parens-check rather than silently masquerading
+        as a parsed call."""
+        r = check_path_feasibility([PathCondition(expr, step_index=0)])
+        assert expr in r.unknown
+        rej = next(x for x in r.unknown_reasons if x.text == expr)
+        assert rej.kind is RejectionKind.PARENS_NOT_SUPPORTED
+
+    @_requires_z3
+    def test_fallback_preserves_real_constraints(self):
+        """A path with a parsed real constraint and a fallback-recovered
+        call must still detect infeasibility driven by the real constraint."""
+        r = check_path_feasibility([
+            PathCondition("size > 100", step_index=0),
+            PathCondition("size < 50", step_index=1),
+            PathCondition("strlen(input) < 1024", step_index=2),  # free var
+        ])
+        # The two `size` constraints are mutually exclusive regardless of
+        # the free-var-only third condition.
+        assert r.feasible is False
+
+    @_requires_z3
+    def test_call_with_complex_inner(self):
+        """Inner expressions inside the call (operators, nested calls,
+        whitespace) don't matter — the whole balanced span becomes one
+        placeholder."""
+        r = check_path_feasibility([
+            PathCondition("compute(a + b * c, lookup(table, key)) > 0", step_index=0),
+        ])
+        assert r.unknown == []
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_anon_counter_progresses_across_conditions(self):
+        """Free-var allocator is seeded from existing ``vars_`` so
+        anon names don't collide across conditions in one path."""
+        # If both calls were assigned `_anon_0`, they'd share a Z3
+        # variable and 'first != 0 AND second == 0' would be unsat-ish
+        # in some encodings.  With distinct vars, both are satisfiable.
+        r = check_path_feasibility([
+            PathCondition("first(x) != 0", step_index=0),
+            PathCondition("second(y) == 0", step_index=1),
+        ])
+        assert r.unknown == []
+        assert r.feasible is True

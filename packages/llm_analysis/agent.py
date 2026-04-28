@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from core.config import RaptorConfig
 from core.logging import get_logger
 from core.progress import HackerProgress
+from core.run.output import unique_run_suffix
 from core.sarif.parser import parse_sarif_findings, deduplicate_findings
 from core.inventory.lookup import lookup_function as _lookup_function
 from llm.client import LLMClient, _is_auth_error
@@ -1249,8 +1250,8 @@ def main() -> None:
     if args.out:
         out_dir = Path(args.out).resolve()
     else:
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        out_dir = RaptorConfig.get_out_dir() / f"autonomous_v2_{timestamp}"
+        # Collision-prevention via unique_run_suffix — see core/run/output.py.
+        out_dir = RaptorConfig.get_out_dir() / f"autonomous_v2_{unique_run_suffix('_')}"
 
     # Initialize agent with LLM
     agent = AutonomousSecurityAgentV2(repo_path, out_dir, prep_only=args.prep_only)

@@ -73,6 +73,17 @@ class RaptorConfig:
     # CodeQL Resource Configuration
     CODEQL_RAM_MB = 8192             # RAM for CodeQL analysis (8GB)
     CODEQL_THREADS = 0               # 0 = use all available CPUs
+
+    # CodeQL DB cache: grace period before _evict_stale_canonical evicts
+    # a canonical that has no metadata yet. The promote sequence has a
+    # gap between os.rename(staging, canonical) and save_metadata
+    # (covers _count_database_files + get_codeql_version subprocess +
+    # save_metadata atomic write). Grace period must exceed worst-case
+    # gap to avoid evicting in-flight writers' just-promoted canonicals.
+    # 60s is well above measured gap (~1s in normal conditions); orphan
+    # canonicals from crashed writers self-heal once their mtime
+    # crosses this threshold.
+    CODEQL_DB_MISSING_METADATA_GRACE = 60   # seconds
     CODEQL_MAX_PATHS = 4             # Max dataflow paths per query
     CODEQL_DB_CACHE_DAYS = 7         # Keep databases for 7 days
     CODEQL_DB_AUTO_CLEANUP = True    # Automatically cleanup old databases

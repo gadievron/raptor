@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.json import save_json
 from core.config import RaptorConfig
+from core.run.output import unique_run_suffix
 from core.logging import get_logger
 from core.git import clone_repository
 from core.sarif.parser import generate_scan_metrics, validate_sarif
@@ -442,8 +443,8 @@ def main():
             out_dir = Path(args.out)
         else:
             repo_name = repo_path.name
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            out_dir = RaptorConfig.get_out_dir() / f"scan_{repo_name}_{timestamp}"
+            # Collision-prevention via unique_run_suffix — see core/run/output.py.
+            out_dir = RaptorConfig.get_out_dir() / f"scan_{repo_name}_{unique_run_suffix('_')}"
         out_dir.mkdir(parents=True, exist_ok=True)
 
         # Manifest
@@ -576,5 +577,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

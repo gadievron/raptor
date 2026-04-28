@@ -20,6 +20,32 @@ class TargetMismatchError(ValueError):
     pass
 
 
+def unique_run_suffix(separator: str = "_") -> str:
+    """Sub-second-unique suffix for run-dir names: timestamp + PID,
+    joined by ``separator``. Use ``-`` for hyphen-style names (project
+    mode), ``_`` for underscore-style (standalone mode). Only ``-`` and
+    ``_`` are accepted to avoid strftime-directive injection (e.g., a
+    caller passing ``%H`` would get the format string interpreted).
+
+    Original failure mode: two RAPTOR processes starting in the same
+    wall-clock second computed identical run-dir names. Concrete
+    consequences depend on the caller — e.g., ``mkdir(exist_ok=True)``
+    silently shares the dir (interleaved writes), ``mkdir(exist_ok=False)``
+    raises, downstream code may overwrite per-run files. CI saw mtime
+    collisions and intermittent failures.
+
+    Two concurrent processes have different PIDs; PID reuse within the
+    same wall-clock second is essentially impossible on Linux. A single
+    process calling this multiple times within the same second would
+    reuse its PID — not a concern for the lifecycle entry-point use
+    case (one call per run start), but worth knowing.
+    """
+    if separator not in ("_", "-"):
+        raise ValueError(f"separator must be '_' or '-', got {separator!r}")
+    fmt = f"%Y%m%d{separator}%H%M%S"
+    return f"{time.strftime(fmt)}{separator}pid{os.getpid()}"
+
+
 def _resolve_active_project() -> Optional[Tuple[str, str, str]]:
     """Resolve the current active project from the .active symlink.
 
@@ -77,17 +103,18 @@ def get_output_dir(command: str, target_name: str = "", explicit_out: str = None
         if effective_target and project_target:
             _check_target_mismatch(effective_target, project_name, project_target)
 
-        # Project mode: command-YYYYMMDD-HHMMSS (hyphens throughout)
-        timestamp = time.strftime("%Y%m%d-%H%M%S")
-        return Path(project_dir) / f"{command}-{timestamp}"
+        # Project mode: command-YYYYMMDD-HHMMSS-pidNNNNN (hyphens throughout).
+        # See unique_run_suffix() for the collision-prevention rationale.
+        return Path(project_dir) / f"{command}-{unique_run_suffix('-')}"
 
-    # Standalone mode: command_target_timestamp (underscores, backwards
-    # compatible with existing directories created before project support)
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    # Standalone mode: command_target_YYYYMMDD_HHMMSS_pidNNNNN (underscores,
+    # backwards compatible with existing directories created before project
+    # support).
+    suffix = unique_run_suffix("_")
     if target_name:
-        dirname = f"{command}_{target_name}_{timestamp}"
+        dirname = f"{command}_{target_name}_{suffix}"
     else:
-        dirname = f"{command}_{timestamp}"
+        dirname = f"{command}_{suffix}"
 
     return RaptorConfig.get_out_dir() / dirname
 

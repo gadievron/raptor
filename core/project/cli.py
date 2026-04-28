@@ -9,6 +9,8 @@ import os
 import sys
 from pathlib import Path
 
+from core.run.output import unique_run_suffix
+
 from .project import ProjectManager
 
 
@@ -786,8 +788,8 @@ def _do_merge(project, merge_type, yes):
     groups = mergeable
 
     for cmd_type, dirs in groups.items():
-        timestamp = time.strftime("%Y%m%d-%H%M%S")
-        merged_dir = project.output_path / f"{cmd_type}-{timestamp}"
+        # Collision-prevention via unique_run_suffix — see core/run/output.py.
+        merged_dir = project.output_path / f"{cmd_type}-{unique_run_suffix('-')}"
 
         try:
             stats = merge_runs(dirs, merged_dir)
