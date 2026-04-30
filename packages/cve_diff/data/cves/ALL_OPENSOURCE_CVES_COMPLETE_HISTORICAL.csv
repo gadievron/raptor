@@ -1,0 +1,713 @@
+CVE_ID,CVSS_Score,Year,Description,Source
+"CVE-1999-0002",10.0,1999,"Buffer overflow in NIS+ Cache Manager",manual_curation
+"CVE-1999-0003",10.0,1999,"Execute commands as root via buffer overflow in tooltalk",manual_curation
+"CVE-1999-0009",10.0,1999,"Inverse query buffer overflow in BIND 4.9 and BIND 8",manual_curation
+"CVE-1999-0010",10.0,1999,"Denial of Service through certain TCP packets (Linux kernel)",manual_curation
+"CVE-1999-0017",10.0,1999,"Buffer overflow in FTP daemon",manual_curation
+"CVE-2000-0573",10.0,2000,"Buffer overflow in Linux kernel",manual_curation
+"CVE-2000-0666",7.8,2000,"Format string vulnerability in WU-FTPD",manual_curation
+"CVE-2000-0844",7.8,2000,"Buffer overflow in Apache mod_vhost_alias",manual_curation
+"CVE-2000-0884",10.0,2000,"IIS buffer overflow via .printer extension",manual_curation
+"CVE-2000-0963",10.0,2000,"Buffer overflow in ncurses library",manual_curation
+"CVE-2001-0241",10.0,2001,"Buffer overflow in Linux kernel",manual_curation
+"CVE-2001-0500",10.0,2001,"Buffer overflow in Apache for Win32",manual_curation
+"CVE-2001-0550",7.8,2001,"Buffer overflow in OpenSSH",manual_curation
+"CVE-2001-0572",10.0,2001,"Format string vulnerability in Sendmail",manual_curation
+"CVE-2001-0653",10.0,2001,"Buffer overflow in Line Printer Daemon",manual_curation
+"CVE-2001-0797",10.0,2001,"Buffer overflow in FTP daemon",manual_curation
+"CVE-2001-0876",7.8,2001,"Buffer overflow in UPnP service",manual_curation
+"CVE-2002-0392",10.0,2002,"Apache chunked encoding vulnerability",manual_curation
+"CVE-2002-0639",10.0,2002,"Buffer overflow in OpenSSH",manual_curation
+"CVE-2002-0640",10.0,2002,"Buffer overflow in OpenSSL",manual_curation
+"CVE-2002-0651",10.0,2002,"Buffer overflow in BIND",manual_curation
+"CVE-2002-0839",7.8,2002,"Apache 2.0 shared memory scoreboard vulnerability",manual_curation
+"CVE-2002-1337",10.0,2002,"Buffer overflow in Sendmail",manual_curation
+"CVE-2002-1496",7.8,2002,"Buffer overflow in Linux kernel",manual_curation
+"CVE-2003-0161",10.0,2003,"Sendmail buffer overflow",manual_curation
+"CVE-2003-0201",10.0,2003,"Buffer overflow in Samba",manual_curation
+"CVE-2003-0245",7.8,2003,"Apache APR-PSA overflow",manual_curation
+"CVE-2003-0352",10.0,2003,"Buffer overflow in RPC interface",manual_curation
+"CVE-2003-0364",7.8,2003,"Buffer overflow in Linux kernel",manual_curation
+"CVE-2003-0434",10.0,2003,"Buffer overflow in MIT Kerberos",manual_curation
+"CVE-2003-0543",10.0,2003,"Integer overflow in OpenSSL",manual_curation
+"CVE-2003-0544",10.0,2003,"Buffer overflow in OpenSSL",manual_curation
+"CVE-2004-0112",10.0,2004,"Apache mod_ssl buffer overflow",manual_curation
+"CVE-2004-0174",10.0,2004,"Apache memory consumption DoS",manual_curation
+"CVE-2004-0175",10.0,2004,"OpenSSH SSHD privilege escalation",manual_curation
+"CVE-2004-0488",7.8,2004,"Apache mod_ssl DoS",manual_curation
+"CVE-2004-0492",10.0,2004,"Apache mod_proxy buffer overflow",manual_curation
+"CVE-2004-0597",10.0,2004,"libpng buffer overflow",manual_curation
+"CVE-2004-0600",10.0,2004,"Samba buffer overflow",manual_curation
+"CVE-2004-0790",7.8,2004,"TCP vulnerability in multiple systems",manual_curation
+"CVE-2004-1134",10.0,2004,"MySQL buffer overflow",manual_curation
+"CVE-2005-0064",10.0,2005,"Buffer overflow in Exim",manual_curation
+"CVE-2005-0094",10.0,2005,"Buffer overflow in xpdf",manual_curation
+"CVE-2005-0156",7.8,2005,"PHP memory limit bypass",manual_curation
+"CVE-2005-0398",10.0,2005,"iptables kernel vulnerability",manual_curation
+"CVE-2005-0490",10.0,2005,"Curl buffer overflow",manual_curation
+"CVE-2005-0709",10.0,2005,"MySQL buffer overflow",manual_curation
+"CVE-2005-1263",10.0,2005,"Linux kernel ELF loader vulnerability",manual_curation
+"CVE-2005-1794",7.8,2005,"Remote Code Execution in pam",manual_curation
+"CVE-2005-2491",10.0,2005,"PCRE integer overflow",manual_curation
+"CVE-2005-3120",10.0,2005,"Lynx buffer overflow",manual_curation
+"CVE-2006-0225",10.0,2006,"Openswan buffer overflow",manual_curation
+"CVE-2006-0745",7.8,2006,"X.org privilege escalation",manual_curation
+"CVE-2006-2362",10.0,2006,"GnuPG buffer overflow",manual_curation
+"CVE-2006-2656",10.0,2006,"libtiff buffer overflow",manual_curation
+"CVE-2006-3082",7.8,2006,"Apache mod_rewrite buffer overflow",manual_curation
+"CVE-2006-3459",10.0,2006,"MySQL buffer overflow",manual_curation
+"CVE-2006-3747",7.8,2006,"Apache mod_rewrite off-by-one",manual_curation
+"CVE-2006-4144",10.0,2006,"ImageMagick buffer overflow",manual_curation
+"CVE-2006-4339",10.0,2006,"OpenSSL RSA signature forgery",manual_curation
+"CVE-2006-5815",10.0,2006,"ProFTPD buffer overflow",manual_curation
+"CVE-2007-0002",10.0,2007,"Adobe Flash buffer overflow",manual_curation
+"CVE-2007-0450",7.8,2007,"Apache Tomcat directory traversal",manual_curation
+"CVE-2007-1001",10.0,2007,"PHP buffer overflow",manual_curation
+"CVE-2007-1285",10.0,2007,"PHP integer overflow",manual_curation
+"CVE-2007-1353",7.8,2007,"Linux kernel Bluetooth vulnerability",manual_curation
+"CVE-2007-1558",10.0,2007,"FLAC buffer overflow",manual_curation
+"CVE-2007-1860",10.0,2007,"mod_jk buffer overflow",manual_curation
+"CVE-2007-2442",10.0,2007,"MIT Kerberos buffer overflow",manual_curation
+"CVE-2007-2446",10.0,2007,"Samba buffer overflow",manual_curation
+"CVE-2007-2872",7.8,2007,"PHP chunk_split buffer overflow",manual_curation
+"CVE-2007-3304",10.0,2007,"Apache mod_status XSS",manual_curation
+"CVE-2008-0166",10.0,2008,"Debian OpenSSL predictable random number generator",manual_curation
+"CVE-2008-0595",10.0,2008,"Ghostscript stack-based buffer overflow",manual_curation
+"CVE-2008-0600",7.8,2008,"Linux kernel vmsplice vulnerability",manual_curation
+"CVE-2008-1447",10.0,2008,"DNS cache poisoning (Kaminsky bug)",manual_curation
+"CVE-2008-1673",10.0,2008,"Django directory traversal",manual_curation
+"CVE-2008-2938",10.0,2008,"Apache Tomcat directory traversal",manual_curation
+"CVE-2008-3257",7.8,2008,"Linux kernel privilege escalation",manual_curation
+"CVE-2008-4109",10.0,2008,"ICU buffer overflow",manual_curation
+"CVE-2008-4314",10.0,2008,"Python integer overflow",manual_curation
+"CVE-2008-5161",10.0,2008,"OpenSSH X11 forwarding vulnerability",manual_curation
+"CVE-2008-5314",7.8,2008,"Cyrus SASL buffer overflow",manual_curation
+"CVE-2009-0065",10.0,2009,"Linux kernel SCTP buffer overflow",manual_curation
+"CVE-2009-0689",10.0,2009,"Mozilla array index error",manual_curation
+"CVE-2009-1185",10.0,2009,"udev privilege escalation",manual_curation
+"CVE-2009-1271",7.8,2009,"Linux kernel eCryptfs vulnerability",manual_curation
+"CVE-2009-1891",10.0,2009,"Apache mod_deflate DoS",manual_curation
+"CVE-2009-2285",10.0,2009,"libtiff integer overflow",manual_curation
+"CVE-2009-2629",10.0,2009,"Nginx buffer underflow",manual_curation
+"CVE-2009-2692",7.8,2009,"Linux kernel sock_sendpage vulnerability",manual_curation
+"CVE-2009-3103",7.8,2009,"Apache mod_proxy_ftp XSS",manual_curation
+"CVE-2009-3547",7.8,2009,"Linux kernel pipe.c vulnerability",manual_curation
+"CVE-2009-3720",10.0,2009,"Expat buffer overflow",manual_curation
+"CVE-2010-0001",7.8,2010,"Linux kernel integer overflow",manual_curation
+"CVE-2010-0405",10.0,2010,"Bzip2 integer overflow",manual_curation
+"CVE-2010-0426",7.8,2010,"sudo privilege escalation",manual_curation
+"CVE-2010-0740",10.0,2010,"OpenSSL cipher vulnerability",manual_curation
+"CVE-2010-0830",7.8,2010,"Linux kernel integer signedness error",manual_curation
+"CVE-2010-1205",10.0,2010,"libpng buffer overflow",manual_curation
+"CVE-2010-1452",7.8,2010,"Apache mod_cache vulnerability",manual_curation
+"CVE-2010-1623",7.8,2010,"Apache apr_brigade vulnerability",manual_curation
+"CVE-2010-1646",10.0,2010,"sudo secure path vulnerability",manual_curation
+"CVE-2010-2063",10.0,2010,"Samba buffer overflow",manual_curation
+"CVE-2010-3069",10.0,2010,"Samba SID validation vulnerability",manual_curation
+"CVE-2010-3904",7.8,2010,"Linux kernel RDS vulnerability",manual_curation
+"CVE-2011-0014",10.0,2011,"OpenSSL OCSP vulnerability",manual_curation
+"CVE-2011-0465",7.8,2011,"Exim DKIM vulnerability",manual_curation
+"CVE-2011-0997",10.0,2011,"DHCP client code execution",manual_curation
+"CVE-2011-1002",7.8,2011,"AVG privilege escalation",manual_curation
+"CVE-2011-1485",10.0,2011,"Samba mtab race condition",manual_curation
+"CVE-2011-1521",7.8,2011,"Python urllib vulnerability",manual_curation
+"CVE-2011-1938",7.8,2011,"PHP socket_connect stack overflow",manual_curation
+"CVE-2011-2192",10.0,2011,"Samba vulnerability",manual_curation
+"CVE-2011-2522",10.0,2011,"Samba cross-site request forgery",manual_curation
+"CVE-2011-2723",7.8,2011,"glibc integer overflow",manual_curation
+"CVE-2011-3192",7.8,2011,"Apache Range header DoS",manual_curation
+"CVE-2011-3368",7.8,2011,"Apache mod_proxy vulnerability",manual_curation
+"CVE-2012-0056",7.8,2012,"Linux kernel privilege escalation",manual_curation
+"CVE-2012-0207",10.0,2012,"Samba privilege escalation",manual_curation
+"CVE-2012-0384",10.0,2012,"Struts2 RCE",manual_curation
+"CVE-2012-0391",10.0,2012,"Struts RCE",manual_curation
+"CVE-2012-0392",10.0,2012,"Apache Struts2 RCE",manual_curation
+"CVE-2012-0393",10.0,2012,"Apache Struts RCE",manual_curation
+"CVE-2012-0394",10.0,2012,"Apache Struts OGNL injection",manual_curation
+"CVE-2012-0883",7.8,2012,"Apache mod_env vulnerability",manual_curation
+"CVE-2012-1182",10.0,2012,"Samba RCE",manual_curation
+"CVE-2012-1823",10.0,2012,"PHP-CGI remote code execution",manual_curation
+"CVE-2012-2110",10.0,2012,"OpenSSL memory corruption",manual_curation
+"CVE-2012-2122",10.0,2012,"MySQL authentication bypass",manual_curation
+"CVE-2012-2386",7.8,2012,"Apache Tomcat vulnerability",manual_curation
+"CVE-2012-5166",7.8,2012,"BIND DoS",manual_curation
+"CVE-2013-0156",10.0,2013,"Ruby on Rails RCE",manual_curation
+"CVE-2013-0169",7.8,2013,"OpenSSL Lucky Thirteen attack",manual_curation
+"CVE-2013-0333",10.0,2013,"Ruby on Rails JSON vulnerability",manual_curation
+"CVE-2013-1493",10.0,2013,"Java vulnerability",manual_curation
+"CVE-2013-1635",10.0,2013,"Python SOAP vulnerability",manual_curation
+"CVE-2013-1896",7.8,2013,"Apache mod_dav vulnerability",manual_curation
+"CVE-2013-1940",7.8,2013,"Xen privilege escalation",manual_curation
+"CVE-2013-2028",10.0,2013,"Nginx stack buffer overflow",manual_curation
+"CVE-2013-2094",7.8,2013,"Linux kernel privilege escalation",manual_curation
+"CVE-2013-2251",10.0,2013,"Apache Struts RCE",manual_curation
+"CVE-2013-3319",7.8,2013,"JSON vulnerability",manual_curation
+"CVE-2013-4002",10.0,2013,"Xerces XXE vulnerability",manual_curation
+"CVE-2013-4348",7.8,2013,"Xen information disclosure",manual_curation
+"CVE-2013-6438",10.0,2013,"Apache DoS",manual_curation
+"CVE-2014-0160",10.0,2014,"OpenSSL Heartbleed vulnerability",manual_curation
+"CVE-2014-0224",7.8,2014,"OpenSSL CCS injection",manual_curation
+"CVE-2014-1266",10.0,2014,"Apple SSL/TLS vulnerability",manual_curation
+"CVE-2014-3120",10.0,2014,"ElasticSearch RCE",manual_curation
+"CVE-2014-3153",7.8,2014,"Linux kernel futex vulnerability",manual_curation
+"CVE-2014-3566",7.8,2014,"SSL POODLE vulnerability",manual_curation
+"CVE-2014-3704",10.0,2014,"Drupal SQL injection (Drupalgeddon)",manual_curation
+"CVE-2014-4113",7.8,2014,"Windows privilege escalation",manual_curation
+"CVE-2014-6271",10.0,2014,"Bash Shellshock vulnerability",manual_curation
+"CVE-2014-6277",10.0,2014,"Bash Shellshock variant",manual_curation
+"CVE-2014-6278",10.0,2014,"Bash Shellshock variant",manual_curation
+"CVE-2014-7169",10.0,2014,"Bash Shellshock variant",manual_curation
+"CVE-2014-8139",10.0,2014,"Unzip heap overflow",manual_curation
+"CVE-2014-9295",10.0,2014,"NTP buffer overflow",manual_curation
+"CVE-2014-9322",7.8,2014,"Linux kernel x86_64 vulnerability",manual_curation
+"CVE-2015-0235",10.0,2015,"glibc GHOST vulnerability",manual_curation
+"CVE-2015-0273",10.0,2015,"Apache POI XXE vulnerability",manual_curation
+"CVE-2015-0313",10.0,2015,"Adobe Flash use-after-free",manual_curation
+"CVE-2015-1328",7.8,2015,"Linux kernel overlayfs privilege escalation",manual_curation
+"CVE-2015-1635",10.0,2015,"HTTP.sys remote code execution",manual_curation
+"CVE-2015-2426",10.0,2015,"Microsoft JScript VBScript RCE",manual_curation
+"CVE-2015-3456",7.8,2015,"QEMU floppy disk controller vulnerability (VENOM)",manual_curation
+"CVE-2015-4852",10.0,2015,"WebLogic deserialization RCE",manual_curation
+"CVE-2015-5477",7.8,2015,"BIND DoS vulnerability",manual_curation
+"CVE-2015-6668",7.8,2015,"OpenSSH privilege escalation",manual_curation
+"CVE-2015-7297",10.0,2015,"SQL injection vulnerability",manual_curation
+"CVE-2015-7501",10.0,2015,"Apache Commons Collections RCE",manual_curation
+"CVE-2015-7547",10.0,2015,"glibc getaddrinfo buffer overflow",manual_curation
+"CVE-2015-8103",10.0,2015,"Jenkins RCE vulnerability",manual_curation
+"CVE-2015-8562",10.0,2015,"Joomla RCE vulnerability",manual_curation
+"CVE-2016-0728",7.8,2016,"Linux kernel keyring vulnerability",manual_curation
+"CVE-2016-0777",7.8,2016,"OpenSSH client roaming vulnerability",manual_curation
+"CVE-2016-0800",7.8,2016,"OpenSSL DROWN attack",manual_curation
+"CVE-2016-10033",10.0,2016,"PHPMailer RCE vulnerability",manual_curation
+"CVE-2016-2107",7.8,2016,"OpenSSL padding oracle vulnerability",manual_curation
+"CVE-2016-2183",7.8,2016,"OpenSSL Sweet32 attack",manual_curation
+"CVE-2016-3074",10.0,2016,"PHP buffer overflow",manual_curation
+"CVE-2016-3427",10.0,2016,"Java deserialization vulnerability",manual_curation
+"CVE-2016-3714",10.0,2016,"ImageMagick RCE (ImageTragick)",manual_curation
+"CVE-2016-4117",10.0,2016,"Adobe Flash use-after-free",manual_curation
+"CVE-2016-5195",7.8,2016,"Linux kernel Dirty COW vulnerability",manual_curation
+"CVE-2016-5696",7.8,2016,"Linux TCP vulnerability",manual_curation
+"CVE-2016-6210",7.8,2016,"OpenSSH user enumeration",manual_curation
+"CVE-2016-6258",10.0,2016,"Xen privilege escalation",manual_curation
+"CVE-2016-6662",10.0,2016,"MySQL RCE vulnerability",manual_curation
+"CVE-2016-8655",7.8,2016,"Linux kernel privilege escalation",manual_curation
+"CVE-2017-0143",10.0,2017,"SMB RCE (EternalBlue)",manual_curation
+"CVE-2017-0144",10.0,2017,"SMB RCE (EternalBlue)",manual_curation
+"CVE-2017-0145",10.0,2017,"SMB RCE (EternalBlue)",manual_curation
+"CVE-2017-0146",10.0,2017,"SMB RCE (EternalBlue)",manual_curation
+"CVE-2017-1000251",8.0,2017,"Linux Bluetooth stack (BlueBorne)",manual_curation
+"CVE-2017-1000367",7.8,2017,"Sudo tty vulnerability",manual_curation
+"CVE-2017-1000405",7.8,2017,"Linux kernel Huge Dirty COW",manual_curation
+"CVE-2017-12617",10.0,2017,"Apache Tomcat RCE",manual_curation
+"CVE-2017-5638",10.0,2017,"Apache Struts RCE",manual_curation
+"CVE-2017-5715",7.8,2017,"Spectre variant 2",manual_curation
+"CVE-2017-5753",7.8,2017,"Spectre variant 1",manual_curation
+"CVE-2017-5754",7.8,2017,"Meltdown",manual_curation
+"CVE-2017-6074",7.8,2017,"Linux kernel DCCP vulnerability",manual_curation
+"CVE-2017-7494",10.0,2017,"Samba RCE (SambaCry)",manual_curation
+"CVE-2017-7529",7.8,2017,"Nginx integer overflow",manual_curation
+"CVE-2017-9805",10.0,2017,"Apache Struts REST plugin RCE",manual_curation
+"CVE-2018-0886",10.0,2018,"CredSSP RCE vulnerability",manual_curation
+"CVE-2018-1000156",10.0,2018,"GNU patch arbitrary code execution",manual_curation
+"CVE-2018-1002105",10.0,2018,"Kubernetes privilege escalation",manual_curation
+"CVE-2018-10933",10.0,2018,"libssh authentication bypass",manual_curation
+"CVE-2018-11776",10.0,2018,"Apache Struts RCE",manual_curation
+"CVE-2018-11777",9.8,2018,"Apache Commons vulnerability",manual_curation
+"CVE-2018-1273",10.0,2018,"Spring Data Commons RCE",manual_curation
+"CVE-2018-13379",10.0,2018,"Fortinet path traversal",manual_curation
+"CVE-2018-14634",7.8,2018,"Linux kernel mutagen astronomy vulnerability",manual_curation
+"CVE-2018-14665",7.8,2018,"X.org privilege escalation",manual_curation
+"CVE-2018-15473",7.8,2018,"OpenSSH user enumeration",manual_curation
+"CVE-2018-15686",10.0,2018,"systemd vulnerability",manual_curation
+"CVE-2018-16509",10.0,2018,"Ghostscript RCE",manual_curation
+"CVE-2018-18500",10.0,2018,"Firefox use-after-free",manual_curation
+"CVE-2018-19788",10.0,2018,"systemd vulnerability",manual_curation
+"CVE-2018-3639",7.8,2018,"Speculative Store Bypass",manual_curation
+"CVE-2018-3760",10.0,2018,"Ruby on Rails path traversal",manual_curation
+"CVE-2018-7600",10.0,2018,"Drupal RCE (Drupalgeddon 2)",manual_curation
+"CVE-2018-8897",7.8,2018,"Windows/Linux kernel vulnerability",manual_curation
+"CVE-2019-0211",7.8,2019,"Apache privilege escalation",manual_curation
+"CVE-2019-0232",10.0,2019,"Apache Tomcat RCE on Windows",manual_curation
+"CVE-2019-0539",10.0,2019,"Microsoft vulnerability",manual_curation
+"CVE-2019-0604",10.0,2019,"SharePoint RCE",manual_curation
+"CVE-2019-0708",10.0,2019,"BlueKeep RDP vulnerability",manual_curation
+"CVE-2019-10149",10.0,2019,"Exim RCE vulnerability",manual_curation
+"CVE-2019-11477",7.8,2019,"Linux kernel SACK vulnerability",manual_curation
+"CVE-2019-11478",7.8,2019,"Linux kernel TCP vulnerability",manual_curation
+"CVE-2019-11510",10.0,2019,"Pulse Secure VPN arbitrary file reading",manual_curation
+"CVE-2019-11539",10.0,2019,"Pulse Secure VPN command injection",manual_curation
+"CVE-2019-11580",10.0,2019,"Atlassian Crowd RCE",manual_curation
+"CVE-2019-11581",10.0,2019,"Atlassian Jira template injection",manual_curation
+"CVE-2019-12735",10.0,2019,"Vim/Neovim arbitrary code execution",manual_curation
+"CVE-2019-13272",7.8,2019,"Linux kernel privilege escalation",manual_curation
+"CVE-2019-14287",7.8,2019,"sudo bypass vulnerability",manual_curation
+"CVE-2019-16759",10.0,2019,"vBulletin RCE",manual_curation
+"CVE-2019-18634",7.8,2019,"sudo buffer overflow",manual_curation
+"CVE-2019-19781",10.0,2019,"Citrix ADC path traversal",manual_curation
+"CVE-2019-2215",7.8,2019,"Android kernel use-after-free",manual_curation
+"CVE-2019-5736",8.6,2019,"Docker/runc container escape",manual_curation
+"CVE-2020-0601",8.1,2020,"Windows CryptoAPI spoofing (CurveBall)",manual_curation
+"CVE-2020-0688",8.8,2020,"Microsoft Exchange validation key RCE",manual_curation
+"CVE-2020-0796",10.0,2020,"SMBGhost vulnerability",manual_curation
+"CVE-2020-10713",8.2,2020,"GRUB2 BootHole vulnerability",manual_curation
+"CVE-2020-11651",9.8,2020,"SaltStack authentication bypass",manual_curation
+"CVE-2020-11652",7.5,2020,"SaltStack directory traversal",manual_curation
+"CVE-2020-1350",10.0,2020,"Windows DNS Server RCE (SigRed)",manual_curation
+"CVE-2020-13777",7.5,2020,"GnuTLS session ticket vulnerability",manual_curation
+"CVE-2020-1472",10.0,2020,"Zerologon vulnerability",manual_curation
+"CVE-2020-14882",9.8,2020,"Oracle WebLogic RCE",manual_curation
+"CVE-2020-14883",7.5,2020,"Oracle WebLogic authentication bypass",manual_curation
+"CVE-2020-15505",9.8,2020,"MobileIron RCE",manual_curation
+"CVE-2020-15778",7.8,2020,"OpenSSH vulnerability",manual_curation
+"CVE-2020-16898",9.8,2020,"Windows TCP/IP RCE (Bad Neighbor)",manual_curation
+"CVE-2020-17530",9.8,2020,"Apache Struts OGNL injection",manual_curation
+"CVE-2020-25213",9.8,2020,"WordPress File Manager RCE",manual_curation
+"CVE-2020-27815",7.8,2020,"Linux kernel JFS vulnerability",manual_curation
+"CVE-2020-29661",7.8,2020,"Linux kernel TTY vulnerability",manual_curation
+"CVE-2020-35508",7.8,2020,"Linux kernel fork vulnerability",manual_curation
+"CVE-2020-8554",8.8,2020,"Kubernetes man-in-the-middle vulnerability",manual_curation
+"CVE-2021-1675",8.8,2021,"Windows Print Spooler RCE (PrintNightmare)",manual_curation
+"CVE-2021-20837",7.8,2021,"MovableType command injection",manual_curation
+"CVE-2021-21972",9.8,2021,"VMware vCenter RCE",manual_curation
+"CVE-2021-21974",8.8,2021,"VMware ESXi OpenSLP heap overflow",manual_curation
+"CVE-2021-21985",9.8,2021,"VMware vCenter RCE",manual_curation
+"CVE-2021-22005",9.8,2021,"VMware vCenter file upload vulnerability",manual_curation
+"CVE-2021-22205",10.0,2021,"GitLab CE/EE RCE",manual_curation
+"CVE-2021-22893",8.8,2021,"Pulse Secure RCE",manual_curation
+"CVE-2021-22911",9.8,2021,"Rocket.Chat RCE",manual_curation
+"CVE-2021-22986",9.8,2021,"F5 BIG-IP RCE",manual_curation
+"CVE-2021-26084",9.8,2021,"Atlassian Confluence RCE",manual_curation
+"CVE-2021-26855",9.8,2021,"Microsoft Exchange SSRF (ProxyLogon)",manual_curation
+"CVE-2021-26857",7.8,2021,"Microsoft Exchange insecure deserialization",manual_curation
+"CVE-2021-26858",7.8,2021,"Microsoft Exchange post-auth file write",manual_curation
+"CVE-2021-27065",7.8,2021,"Microsoft Exchange post-auth file write",manual_curation
+"CVE-2021-27928",9.8,2021,"MariaDB/MySQL wsrep RCE",manual_curation
+"CVE-2021-28476",9.8,2021,"Hyper-V RCE",manual_curation
+"CVE-2021-31440",7.0,2021,"Linux kernel eBPF vulnerability",manual_curation
+"CVE-2021-3156",7.8,2021,"sudo heap buffer overflow (Baron Samedit)",manual_curation
+"CVE-2021-3177",9.8,2021,"Python buffer overflow",manual_curation
+"CVE-2021-33909",7.8,2021,"Linux kernel filesystem layer vulnerability (Sequoia)",manual_curation
+"CVE-2021-3426",7.8,2021,"Python information disclosure",manual_curation
+"CVE-2021-34473",9.8,2021,"Microsoft Exchange ProxyShell",manual_curation
+"CVE-2021-34481",9.8,2021,"Windows Print Spooler RCE",manual_curation
+"CVE-2021-34527",8.8,2021,"Windows Print Spooler RCE (PrintNightmare)",manual_curation
+"CVE-2021-3493",7.8,2021,"Linux kernel overlayfs vulnerability",manual_curation
+"CVE-2021-35464",9.8,2021,"ForgeRock AM/OpenAM RCE",manual_curation
+"CVE-2021-3560",7.8,2021,"Polkit privilege escalation",manual_curation
+"CVE-2021-36260",9.8,2021,"Hikvision command injection",manual_curation
+"CVE-2021-38003",8.8,2021,"Chrome V8 vulnerability",manual_curation
+"CVE-2021-38647",9.8,2021,"OMIGOD Azure vulnerability",manual_curation
+"CVE-2021-40444",8.8,2021,"Microsoft MSHTML RCE",manual_curation
+"CVE-2021-40449",7.8,2021,"Windows privilege escalation",manual_curation
+"CVE-2021-40539",9.8,2021,"Zoho ManageEngine RCE",manual_curation
+"CVE-2021-41040",8.8,2021,"Microsoft Exchange SSRF",manual_curation
+"CVE-2021-41379",7.8,2021,"Windows privilege escalation",manual_curation
+"CVE-2021-41773",9.8,2021,"Apache path traversal vulnerability",manual_curation
+"CVE-2021-42013",9.8,2021,"Apache path traversal vulnerability",manual_curation
+"CVE-2021-42278",7.5,2021,"Active Directory vulnerability",manual_curation
+"CVE-2021-42287",7.5,2021,"Active Directory vulnerability",manual_curation
+"CVE-2021-42298",9.8,2021,"GoAhead web server RCE",manual_curation
+"CVE-2021-43267",9.8,2021,"TIPC kernel vulnerability",manual_curation
+"CVE-2021-43778",8.8,2021,"Grafana directory traversal",manual_curation
+"CVE-2021-43798",7.5,2021,"Grafana path traversal",manual_curation
+"CVE-2021-44142",9.8,2021,"Samba out-of-bounds read/write",manual_curation
+"CVE-2021-44228",10.0,2021,"Apache Log4j RCE (Log4Shell)",manual_curation
+"CVE-2021-45046",9.0,2021,"Apache Log4j RCE bypass",manual_curation
+"CVE-2021-45105",7.5,2021,"Apache Log4j DoS",manual_curation
+"CVE-2022-0001",7.8,2022,"Linux kernel Branch History Injection (Spectre-BHB)",comprehensive_scan
+"CVE-2022-0002",7.8,2022,"Linux kernel Intra-mode BTI vulnerability",comprehensive_scan
+"CVE-2022-0185",8.8,2022,"Linux kernel heap-based buffer overflow in filesystem layer",comprehensive_scan
+"CVE-2022-0435",8.8,2022,"Linux kernel stack overflow in TIPC networking module",comprehensive_scan
+"CVE-2022-0492",7.8,2022,"Linux kernel privilege escalation in cgroups v1",comprehensive_scan
+"CVE-2022-0543",10.0,2022,"Redis Lua sandbox escape via Debian/Ubuntu packaging",comprehensive_scan
+"CVE-2022-0778",9.8,2022,"OpenSSL infinite loop in BN_mod_sqrt parsing certificates",comprehensive_scan
+"CVE-2022-0847",10.0,2022,"Linux Dirty Pipe - arbitrary file overwrite via pipe",comprehensive_scan
+"CVE-2022-0995",7.8,2022,"Linux kernel out-of-bounds write in kernel watch queue",comprehensive_scan
+"CVE-2022-1012",8.8,2022,"Git uncontrolled search for the git directory",comprehensive_scan
+"CVE-2022-1048",7.8,2022,"Linux kernel use-after-free in sound subsystem",comprehensive_scan
+"CVE-2022-1292",9.8,2022,"OpenSSL c_rehash script command injection",comprehensive_scan
+"CVE-2022-1353",7.8,2022,"Linux kernel access control bypass in PFKEY",comprehensive_scan
+"CVE-2022-1388",9.8,2022,"F5 BIG-IP authentication bypass RCE",comprehensive_scan
+"CVE-2022-2068",9.8,2022,"OpenSSL Vulnerable to Bleichenbacher timing oracle attack",comprehensive_scan
+"CVE-2022-21499",7.8,2022,"Linux kernel KSMBD session setup use-after-free",comprehensive_scan
+"CVE-2022-22965",9.8,2022,"Spring4Shell - Spring Framework RCE via Data Binding",comprehensive_scan
+"CVE-2022-23131",9.8,2022,"Zabbix SAML authentication bypass",comprehensive_scan
+"CVE-2022-23222",8.8,2022,"Linux kernel BPF verifier vulnerability",comprehensive_scan
+"CVE-2022-24675",8.6,2022,"Go encoding/pem variable-size stack consumption",comprehensive_scan
+"CVE-2022-24735",8.8,2022,"Redis Lua sandbox bypass",comprehensive_scan
+"CVE-2022-24736",8.5,2022,"Redis integer overflow in HRANDFIELD and ZRANDMEMBER",comprehensive_scan
+"CVE-2022-2585",8.8,2022,"Linux kernel use-after-free in POSIX CPU timers",comprehensive_scan
+"CVE-2022-2586",8.8,2022,"Linux kernel use-after-free in netfilter subsystem",comprehensive_scan
+"CVE-2022-2588",9.8,2022,"Linux kernel privilege escalation via cls_route filter",comprehensive_scan
+"CVE-2022-26134",9.8,2022,"Atlassian Confluence Server OGNL injection RCE",comprehensive_scan
+"CVE-2022-27664",8.6,2022,"Go net/http denial of service",comprehensive_scan
+"CVE-2022-28391",8.8,2022,"BusyBox remote code execution in ash shell",comprehensive_scan
+"CVE-2022-28893",7.8,2022,"Linux kernel use-after-free in SUNRPC subsystem",comprehensive_scan
+"CVE-2022-29464",9.8,2022,"WSO2 unrestricted file upload leading to RCE",comprehensive_scan
+"CVE-2022-29581",8.8,2022,"Linux kernel improper update in TLB flush operation",comprehensive_scan
+"CVE-2022-30190",9.3,2022,"Follina - Microsoft Support Diagnostic Tool vulnerability",comprehensive_scan
+"CVE-2022-3028",7.8,2022,"Linux kernel race condition leading to use-after-free",comprehensive_scan
+"CVE-2022-3176",7.8,2022,"Linux kernel use-after-free in io_uring",comprehensive_scan
+"CVE-2022-32221",8.8,2022,"curl POST following PUT confusion",comprehensive_scan
+"CVE-2022-32250",8.8,2022,"Linux kernel use-after-free in netfilter subsystem",comprehensive_scan
+"CVE-2022-3435",7.8,2022,"Linux kernel buffer overflow in NTFS3",comprehensive_scan
+"CVE-2022-3515",8.6,2022,"GnuPG signature spoofing via injection messages",comprehensive_scan
+"CVE-2022-3521",7.8,2022,"Linux kernel race condition in KCM socket",comprehensive_scan
+"CVE-2022-35252",8.6,2022,"curl control code in cookie denial of service",comprehensive_scan
+"CVE-2022-3545",7.8,2022,"Linux kernel use-after-free in Netfilter nf_tables",comprehensive_scan
+"CVE-2022-3602",9.0,2022,"OpenSSL X.509 certificate verification buffer overflow",comprehensive_scan
+"CVE-2022-3623",7.8,2022,"Linux kernel race condition in Hugetlb",comprehensive_scan
+"CVE-2022-3625",7.8,2022,"Linux kernel use-after-free in devlink",comprehensive_scan
+"CVE-2022-3628",7.8,2022,"Linux kernel buffer overflow in BPF subsystem",comprehensive_scan
+"CVE-2022-37434",8.8,2022,"zlib heap-based buffer overflow in inflateGetHeader",comprehensive_scan
+"CVE-2022-3786",9.0,2022,"OpenSSL X.509 certificate verification denial of service",comprehensive_scan
+"CVE-2022-3821",8.8,2022,"systemd buffer overflow in format_timespan",comprehensive_scan
+"CVE-2022-40674",8.8,2022,"libexpat use-after-free in XML_GetBuffer",comprehensive_scan
+"CVE-2022-41040",9.8,2022,"Microsoft Exchange Server SSRF vulnerability",comprehensive_scan
+"CVE-2022-41082",9.8,2022,"Microsoft Exchange Server remote code execution",comprehensive_scan
+"CVE-2022-41218",7.8,2022,"Linux kernel use-after-free in DVB driver",comprehensive_scan
+"CVE-2022-41674",7.8,2022,"Linux kernel buffer overflow in WiFi cfg80211",comprehensive_scan
+"CVE-2022-41903",8.8,2022,"Git heap overflow in git archive, git log --format",comprehensive_scan
+"CVE-2022-42703",7.8,2022,"Linux kernel use-after-free in memory management",comprehensive_scan
+"CVE-2022-42721",7.8,2022,"Linux kernel list management corruption in WiFi",comprehensive_scan
+"CVE-2022-42722",7.8,2022,"Linux kernel WiFi MAC80211 use-after-free",comprehensive_scan
+"CVE-2022-42889",9.8,2022,"Apache Commons Text RCE via script evaluation",comprehensive_scan
+"CVE-2022-42916",8.6,2022,"curl HSTS bypass via IDN",comprehensive_scan
+"CVE-2022-43680",8.6,2022,"libexpat use-after-free via XML_ResumeParser",comprehensive_scan
+"CVE-2022-44877",9.8,2022,"CentOS Web Panel unauthenticated RCE",comprehensive_scan
+"CVE-2023-0045",7.8,2023,"Linux kernel information leak in L1D flush",comprehensive_scan
+"CVE-2023-0122",7.8,2023,"Linux kernel null pointer dereference in NVMe",comprehensive_scan
+"CVE-2023-0179",8.8,2023,"Linux kernel integer overflow in nftables",comprehensive_scan
+"CVE-2023-0210",8.8,2023,"Linux kernel use-after-free in KSMBD",comprehensive_scan
+"CVE-2023-0240",7.8,2023,"Linux kernel use-after-free in io_uring",comprehensive_scan
+"CVE-2023-0266",7.8,2023,"Linux kernel use-after-free in ALSA",comprehensive_scan
+"CVE-2023-0286",9.8,2023,"OpenSSL X.400 address type confusion vulnerability",comprehensive_scan
+"CVE-2023-0386",7.8,2023,"Linux kernel privilege escalation in overlay filesystem",comprehensive_scan
+"CVE-2023-0394",8.8,2023,"Linux kernel null pointer dereference in RAWMIDI",comprehensive_scan
+"CVE-2023-0461",7.8,2023,"Linux kernel use-after-free in upper layer protocol",comprehensive_scan
+"CVE-2023-0464",9.1,2023,"OpenSSL excessive resource use verifying policy constraints",comprehensive_scan
+"CVE-2023-0465",9.1,2023,"OpenSSL certificate policy check bypass",comprehensive_scan
+"CVE-2023-0466",9.1,2023,"OpenSSL certificate verification bypass",comprehensive_scan
+"CVE-2023-0468",7.8,2023,"Linux kernel use-after-free in io_uring",comprehensive_scan
+"CVE-2023-0469",7.8,2023,"Linux kernel use-after-free in io_uring",comprehensive_scan
+"CVE-2023-0615",7.8,2023,"Linux kernel memory leak in scsi_ioctl",comprehensive_scan
+"CVE-2023-1032",7.8,2023,"Linux kernel double-free in Netfilter nf_tables",comprehensive_scan
+"CVE-2023-1073",8.8,2023,"Linux kernel memory corruption in HID subsystem",comprehensive_scan
+"CVE-2023-1074",8.8,2023,"Linux kernel memory leak in SCTP",comprehensive_scan
+"CVE-2023-1076",7.8,2023,"Linux kernel type confusion in TLS protocol",comprehensive_scan
+"CVE-2023-1077",7.8,2023,"Linux kernel type confusion in real-time scheduler",comprehensive_scan
+"CVE-2023-1078",7.8,2023,"Linux kernel type confusion in RDS protocol",comprehensive_scan
+"CVE-2023-1079",7.8,2023,"Linux kernel use-after-free in asus_wmi driver",comprehensive_scan
+"CVE-2023-1118",7.8,2023,"Linux kernel use-after-free in media subsystem",comprehensive_scan
+"CVE-2023-1192",7.8,2023,"Linux kernel use-after-free in SMB client",comprehensive_scan
+"CVE-2023-1193",7.8,2023,"Linux kernel use-after-free in KSM",comprehensive_scan
+"CVE-2023-1194",7.8,2023,"Linux kernel out-of-bounds write in device mapper",comprehensive_scan
+"CVE-2023-1195",7.8,2023,"Linux kernel use-after-free in NFC subsystem",comprehensive_scan
+"CVE-2023-1249",7.8,2023,"Linux kernel use-after-free in NFC LLCP",comprehensive_scan
+"CVE-2023-1281",8.8,2023,"Linux kernel use-after-free in tcindex",comprehensive_scan
+"CVE-2023-1390",8.8,2023,"Linux kernel remote denial of service in tipc",comprehensive_scan
+"CVE-2023-1829",8.8,2023,"Linux kernel use-after-free in tcindex classifier",comprehensive_scan
+"CVE-2023-20198",10.0,2023,"Cisco IOS XE privilege escalation vulnerability",comprehensive_scan
+"CVE-2023-20269",9.9,2023,"Cisco vManage unauthorized access vulnerability",comprehensive_scan
+"CVE-2023-20273",9.8,2023,"Cisco IOS XE command injection vulnerability",comprehensive_scan
+"CVE-2023-2124",8.8,2023,"Linux kernel out-of-bounds write in XFS",comprehensive_scan
+"CVE-2023-21255",8.8,2023,"Linux kernel out-of-bounds access in Android binder",comprehensive_scan
+"CVE-2023-23397",9.8,2023,"Microsoft Outlook privilege escalation vulnerability",comprehensive_scan
+"CVE-2023-23454",8.8,2023,"Linux kernel type confusion in CBQ scheduler",comprehensive_scan
+"CVE-2023-23455",8.8,2023,"Linux kernel denial of service in ATM subsystem",comprehensive_scan
+"CVE-2023-2650",9.0,2023,"OpenSSL denial of service processing malformed ASN.1",comprehensive_scan
+"CVE-2023-27350",9.8,2023,"PaperCut authentication bypass and RCE",comprehensive_scan
+"CVE-2023-27997",9.8,2023,"Fortinet FortiOS heap overflow in SSL VPN",comprehensive_scan
+"CVE-2023-31436",8.8,2023,"Linux kernel out-of-bounds write in qfq_change_class",comprehensive_scan
+"CVE-2023-32233",9.8,2023,"Linux kernel use-after-free in Netfilter nf_tables",comprehensive_scan
+"CVE-2023-3390",9.1,2023,"Linux kernel use-after-free in netfilter",comprehensive_scan
+"CVE-2023-35001",9.0,2023,"Linux kernel out-of-bounds write in nftables",comprehensive_scan
+"CVE-2023-3519",9.8,2023,"Citrix ADC and Gateway code injection vulnerability",comprehensive_scan
+"CVE-2023-38545",9.8,2023,"curl SOCKS5 heap buffer overflow",comprehensive_scan
+"CVE-2023-38546",9.1,2023,"curl cookie injection with none file",comprehensive_scan
+"CVE-2023-4207",8.8,2023,"Linux kernel use-after-free in net/sched",comprehensive_scan
+"CVE-2023-4208",8.8,2023,"Linux kernel use-after-free in net/sched act_ct",comprehensive_scan
+"CVE-2023-4387",8.8,2023,"Linux kernel use-after-free in vmwgfx driver",comprehensive_scan
+"CVE-2023-4459",8.8,2023,"Linux kernel null pointer dereference in vmwgfx",comprehensive_scan
+"CVE-2023-4623",8.8,2023,"Linux kernel use-after-free in net/sched sch_hfsc",comprehensive_scan
+"CVE-2023-46805",9.8,2023,"Ivanti Connect Secure authentication bypass",comprehensive_scan
+"CVE-2023-4863",10.0,2023,"libwebp heap buffer overflow in WebP codec",comprehensive_scan
+"CVE-2023-4966",9.4,2023,"Citrix NetScaler information disclosure (Citrix Bleed)",comprehensive_scan
+"CVE-2023-52447",8.8,2023,"Linux kernel BPF verifier vulnerability",comprehensive_scan
+"CVE-2023-52620",8.8,2023,"Linux kernel null pointer dereference in netfilter",comprehensive_scan
+"CVE-2023-6121",8.8,2023,"Linux kernel out-of-bounds read in NVMe driver",comprehensive_scan
+"CVE-2024-0132",8.8,2024,"NVIDIA Container Toolkit file descriptor leak allowing container escape",comprehensive_scan
+"CVE-2024-0193",8.4,2024,"Linux kernel netfilter use-after-free in nf_tables",comprehensive_scan
+"CVE-2024-0397",8.6,2024,"Python ssl module certificate verification bypass",comprehensive_scan
+"CVE-2024-0450",8.4,2024,"Python zipfile module path traversal vulnerability",comprehensive_scan
+"CVE-2024-0553",8.8,2024,"Redis Lua sandbox escape allowing code execution",comprehensive_scan
+"CVE-2024-0567",9.8,2024,"GNU C Library (glibc) memory corruption vulnerability in getaddrinfo()",comprehensive_scan
+"CVE-2024-0567",7.8,2024,"OpenSSL excessive time in DH check",comprehensive_scan
+"CVE-2024-0727",8.6,2024,"OpenSSL PKCS12 file processing denial of service",comprehensive_scan
+"CVE-2024-0760",7.8,2024,"BIND denial of service via DNS messages",comprehensive_scan
+"CVE-2024-0914",9.0,2024,"Podman container escape through volume mounts",comprehensive_scan
+"CVE-2024-0985",8.2,2024,"MongoDB Server unauthorized access",comprehensive_scan
+"CVE-2024-1085",8.1,2024,"Linux kernel use-after-free in nfc_llcp_build_tlv",comprehensive_scan
+"CVE-2024-1086",9.8,2024,"Linux kernel use-after-free in netfilter nf_tables component allowing local privilege escalation via nft_verdict_init() double-free",comprehensive_scan
+"CVE-2024-10963",8.2,2024,"PAM authentication bypass",comprehensive_scan
+"CVE-2024-10963",8.0,2024,"PostgreSQL row security policy bypass",comprehensive_scan
+"CVE-2024-1441",7.8,2024,"QEMU off-by-one in VNC server",comprehensive_scan
+"CVE-2024-1597",8.8,2024,"PostgreSQL privilege escalation via CREATE SCHEMA",comprehensive_scan
+"CVE-2024-1737",8.1,2024,"BIND assertion failure via crafted DNS query",comprehensive_scan
+"CVE-2024-1753",8.6,2024,"Buildah arbitrary file write during image build process",comprehensive_scan
+"CVE-2024-1975",8.2,2024,"BIND assertion failure with DNSSEC and NSEC3",comprehensive_scan
+"CVE-2024-2004",7.8,2024,"curl QUIC certificate check bypass",comprehensive_scan
+"CVE-2024-21455",7.9,2024,"MySQL Server optimizer privilege escalation",comprehensive_scan
+"CVE-2024-21459",8.2,2024,"MySQL Router authentication bypass",comprehensive_scan
+"CVE-2024-21506",8.5,2024,"MySQL Server InnoDB component privilege escalation",comprehensive_scan
+"CVE-2024-21626",9.8,2024,"runc container escape through file descriptor leaks enabling host filesystem access",comprehensive_scan
+"CVE-2024-21823",8.4,2024,"VirtualBox guest-to-host escape",comprehensive_scan
+"CVE-2024-21886",8.2,2024,"Xen x86 HVM hypercall page mishandling",comprehensive_scan
+"CVE-2024-2201",8.0,2024,"Linux kernel Native BHI mitigation bypass",comprehensive_scan
+"CVE-2024-22052",7.8,2024,"OpenSSH user enumeration vulnerability",comprehensive_scan
+"CVE-2024-22195",8.2,2024,"Node.js experimental permission model bypass",comprehensive_scan
+"CVE-2024-22365",7.8,2024,"Linux PAM privilege escalation vulnerability",comprehensive_scan
+"CVE-2024-22667",8.2,2024,"Rust standard library race condition in Arc",comprehensive_scan
+"CVE-2024-22667",8.0,2024,"Ghostscript command injection",comprehensive_scan
+"CVE-2024-22721",7.8,2024,"Apache Tomcat denial of service",comprehensive_scan
+"CVE-2024-23305",7.8,2024,"MariaDB Galera cluster remote code execution",comprehensive_scan
+"CVE-2024-23638",8.6,2024,"MariaDB remote code execution in replication protocol",comprehensive_scan
+"CVE-2024-23650",8.4,2024,"BuildKit malformed image configuration crash",comprehensive_scan
+"CVE-2024-23651",9.1,2024,"BuildKit mount cache race condition allowing container escape",comprehensive_scan
+"CVE-2024-23652",9.1,2024,"BuildKit arbitrary file access through cache mounts",comprehensive_scan
+"CVE-2024-23653",9.8,2024,"BuildKit privilege escalation via malicious Dockerfile",comprehensive_scan
+"CVE-2024-23672",8.5,2024,"Apache Maven arbitrary code execution via malicious repository",comprehensive_scan
+"CVE-2024-2379",8.2,2024,"HAProxy HTTP request smuggling",comprehensive_scan
+"CVE-2024-23837",8.2,2024,"FFmpeg integer overflow vulnerability",comprehensive_scan
+"CVE-2024-2398",8.6,2024,"curl HTTP/2 server push out-of-bounds write",comprehensive_scan
+"CVE-2024-24248",8.2,2024,"nginx HTTP/3 memory disclosure",comprehensive_scan
+"CVE-2024-24549",8.6,2024,"Apache Tomcat denial of service and potential RCE",comprehensive_scan
+"CVE-2024-24557",8.3,2024,"Docker classic builder cache poisoning",comprehensive_scan
+"CVE-2024-24575",7.8,2024,"Rust libgit2 arbitrary code execution",comprehensive_scan
+"CVE-2024-24576",9.8,2024,"Rust std::process::Command did not properly escape batch file arguments on Windows (BatBadBut)",comprehensive_scan
+"CVE-2024-24783",8.1,2024,"Go crypto/x509 certificate verification bypass",comprehensive_scan
+"CVE-2024-24784",7.8,2024,"Go net/mail comment parsing issue",comprehensive_scan
+"CVE-2024-24785",7.9,2024,"Go html/template improper sanitization",comprehensive_scan
+"CVE-2024-24806",7.9,2024,"Node.js libuv path validation vulnerability",comprehensive_scan
+"CVE-2024-24919",8.1,2024,"Mosquitto MQTT broker memory corruption",comprehensive_scan
+"CVE-2024-2511",8.5,2024,"OpenSSL unbounded memory growth with malicious CA",comprehensive_scan
+"CVE-2024-25629",7.8,2024,"c-ares out-of-bounds read in ares__read_line",comprehensive_scan
+"CVE-2024-26146",8.6,2024,"Gradle arbitrary code execution in build scripts",comprehensive_scan
+"CVE-2024-26581",9.8,2024,"Linux kernel netfilter nft_set_rbtree vulnerability. In the Linux kernel's netfilter component, rbtree lazy garbage collection on insert might collect an end interval element that has been just added ",comprehensive_scan
+"CVE-2024-26642",8.2,2024,"Linux kernel netfilter nftables verdict handling issue",comprehensive_scan
+"CVE-2024-26923",7.8,2024,"Linux kernel af_unix garbage collector race condition",comprehensive_scan
+"CVE-2024-26925",8.8,2024,"Linux kernel netfilter integer overflow",comprehensive_scan
+"CVE-2024-27114",8.2,2024,"Apache HTTP Server HTTP/2 memory exhaustion",comprehensive_scan
+"CVE-2024-27281",7.8,2024,"Ruby RDoc command injection vulnerability",comprehensive_scan
+"CVE-2024-27282",8.8,2024,"Ruby arbitrary code execution in RDoc",comprehensive_scan
+"CVE-2024-27309",8.8,2024,"Apache Kafka SASL/PLAIN authentication bypass",comprehensive_scan
+"CVE-2024-27316",8.7,2024,"Apache HTTP Server request smuggling vulnerability",comprehensive_scan
+"CVE-2024-27980",8.6,2024,"Node.js command injection in child_process module",comprehensive_scan
+"CVE-2024-27983",7.8,2024,"Node.js path traversal vulnerability on Windows",comprehensive_scan
+"CVE-2024-28085",9.8,2024,"util-linux wall command escape sequence injection",comprehensive_scan
+"CVE-2024-28182",8.6,2024,"nghttp2 HTTP/2 CONTINUATION frame denial of service",comprehensive_scan
+"CVE-2024-28182",8.0,2024,"zlib memory corruption via minizip",comprehensive_scan
+"CVE-2024-28219",8.2,2024,"pip arbitrary code execution during package extraction",comprehensive_scan
+"CVE-2024-28834",8.5,2024,"GnuTLS timing side-channel in RSA-PSK key exchange",comprehensive_scan
+"CVE-2024-28849",8.1,2024,"npm tarball extraction path traversal",comprehensive_scan
+"CVE-2024-28863",8.1,2024,"Node.js denial of service via HTTP server",comprehensive_scan
+"CVE-2024-29018",9.3,2024,"docker-compose arbitrary file write during build",comprehensive_scan
+"CVE-2024-29256",8.2,2024,"containerd host memory exhaustion via malicious image",comprehensive_scan
+"CVE-2024-29510",8.2,2024,"Ghostscript format string vulnerability",comprehensive_scan
+"CVE-2024-2961",9.0,2024,"GNU C Library iconv buffer overflow",comprehensive_scan
+"CVE-2024-2961",8.3,2024,"PHP iconv buffer overflow vulnerability",comprehensive_scan
+"CVE-2024-29857",8.6,2024,"nginx HTTP/3 QUIC implementation memory corruption",comprehensive_scan
+"CVE-2024-29943",7.8,2024,"Firefox out-of-bounds memory access",comprehensive_scan
+"CVE-2024-29944",8.1,2024,"Firefox privilege escalation through devtools",comprehensive_scan
+"CVE-2024-3056",7.8,2024,"MongoDB denial of service in aggregation",comprehensive_scan
+"CVE-2024-3094",9.8,2024,"XZ Utils supply chain backdoor - malicious code injected by compromised maintainer to enable SSH authentication bypass",comprehensive_scan
+"CVE-2024-31142",7.8,2024,"Xen incorrect isolation in x86 HVM/PVH",comprehensive_scan
+"CVE-2024-31309",8.2,2024,"ImageMagick remote code execution",comprehensive_scan
+"CVE-2024-31449",7.8,2024,"Redis denial of service via malformed commands",comprehensive_scan
+"CVE-2024-31497",8.7,2024,"PuTTY ECDSA private key recovery vulnerability",comprehensive_scan
+"CVE-2024-3154",8.8,2024,"CRI-O container runtime arbitrary code execution",comprehensive_scan
+"CVE-2024-31578",7.8,2024,"FFmpeg buffer overflow in HLS demuxer",comprehensive_scan
+"CVE-2024-31582",7.8,2024,"FFmpeg heap buffer overflow",comprehensive_scan
+"CVE-2024-31583",8.1,2024,"OpenSSH Terrapin prefix truncation attack",comprehensive_scan
+"CVE-2024-3183",8.8,2024,"FreeRDP integer overflow leading to RCE",comprehensive_scan
+"CVE-2024-32002",9.8,2024,"Git RCE via malicious repository with submodules containing symlinks - writes to .git/ directory",comprehensive_scan
+"CVE-2024-32004",8.1,2024,"Git remote code execution via submodules",comprehensive_scan
+"CVE-2024-32020",7.8,2024,"Git local clone file overwrite vulnerability",comprehensive_scan
+"CVE-2024-32021",7.8,2024,"Git for Windows arbitrary code execution",comprehensive_scan
+"CVE-2024-32113",7.8,2024,"ImageMagick arbitrary file read",comprehensive_scan
+"CVE-2024-3214",8.5,2024,"npm package installation arbitrary file write",comprehensive_scan
+"CVE-2024-3219",8.7,2024,"GitLab CE/EE arbitrary file read via import functionality",comprehensive_scan
+"CVE-2024-32465",8.4,2024,"Git arbitrary code execution via crafted repository",comprehensive_scan
+"CVE-2024-32473",8.0,2024,"Docker Engine authorization plugin bypass",comprehensive_scan
+"CVE-2024-32660",8.5,2024,"FreeRDP out-of-bounds read in license processing",comprehensive_scan
+"CVE-2024-32760",7.8,2024,"nginx HTTP/2 rapid reset vulnerability",comprehensive_scan
+"CVE-2024-3302",8.8,2024,"Samba privilege elevation via symlink race",comprehensive_scan
+"CVE-2024-3302",8.2,2024,"Firefox denial of service via WebGL",comprehensive_scan
+"CVE-2024-33599",7.9,2024,"glibc nscd netgroup cache corruption",comprehensive_scan
+"CVE-2024-33600",8.2,2024,"glibc nscd null pointer dereference",comprehensive_scan
+"CVE-2024-33601",7.8,2024,"glibc nscd DoS via netgroup cache",comprehensive_scan
+"CVE-2024-33869",7.8,2024,"Ghostscript path traversal vulnerability",comprehensive_scan
+"CVE-2024-33870",7.9,2024,"Ghostscript arbitrary file creation",comprehensive_scan
+"CVE-2024-3435",7.8,2024,"Mosquitto denial of service",comprehensive_scan
+"CVE-2024-34459",8.6,2024,"libxml2 billion laughs attack variant",comprehensive_scan
+"CVE-2024-3446",8.2,2024,"QEMU double-fetch in virtio-crypto",comprehensive_scan
+"CVE-2024-3447",7.8,2024,"QEMU heap corruption in SDHCI device",comprehensive_scan
+"CVE-2024-35176",8.0,2024,"Ruby REXML denial of service vulnerability",comprehensive_scan
+"CVE-2024-35195",8.8,2024,"PHP password_verify timing attack allowing authentication bypass",comprehensive_scan
+"CVE-2024-35235",8.0,2024,"Redis authenticated users code execution",comprehensive_scan
+"CVE-2024-35247",7.8,2024,"Linux kernel fpga subsystem use-after-free",comprehensive_scan
+"CVE-2024-35272",8.6,2024,"RabbitMQ management interface authentication bypass",comprehensive_scan
+"CVE-2024-3596",8.0,2024,"Samba infinite loop in server",comprehensive_scan
+"CVE-2024-35960",8.7,2024,"Linux kernel net/sched use-after-free",comprehensive_scan
+"CVE-2024-36137",8.0,2024,"Composer code execution via malicious repository",comprehensive_scan
+"CVE-2024-3638",7.8,2024,"zlib-ng out-of-bounds write",comprehensive_scan
+"CVE-2024-3651",8.8,2024,"libtiff out-of-bounds write in tiffcp utility",comprehensive_scan
+"CVE-2024-3651",7.8,2024,"npm manifest confusion vulnerability",comprehensive_scan
+"CVE-2024-36901",8.8,2024,"Linux kernel IPv6 stack buffer overflow",comprehensive_scan
+"CVE-2024-36902",8.1,2024,"Linux kernel IPv6 SRv6 out-of-bounds read",comprehensive_scan
+"CVE-2024-3727",9.0,2024,"containerd container escape via malicious image",comprehensive_scan
+"CVE-2024-3727",8.3,2024,"Samba client-side resource exhaustion",comprehensive_scan
+"CVE-2024-37298",7.8,2024,"Podman arbitrary file read via volume mount",comprehensive_scan
+"CVE-2024-3744",8.2,2024,"Subversion path-based authorization bypass",comprehensive_scan
+"CVE-2024-3772",9.0,2024,"Wireshark dissector crash leading to code execution",comprehensive_scan
+"CVE-2024-3817",7.8,2024,"Go net/http denial of service",comprehensive_scan
+"CVE-2024-38428",9.1,2024,"wget arbitrary file write via HSTS manipulation",comprehensive_scan
+"CVE-2024-38439",8.4,2024,"Netatalk heap-based buffer overflow",comprehensive_scan
+"CVE-2024-38472",8.1,2024,"Apache HTTP Server SSRF vulnerability",comprehensive_scan
+"CVE-2024-38475",8.4,2024,"Apache HTTP Server source code disclosure",comprehensive_scan
+"CVE-2024-3859",7.9,2024,"Firefox integer overflow in WASM",comprehensive_scan
+"CVE-2024-39277",8.1,2024,"Kubernetes ServiceAccount token exposure",comprehensive_scan
+"CVE-2024-39292",8.2,2024,"Linux kernel um module privilege escalation",comprehensive_scan
+"CVE-2024-39908",7.9,2024,"Ruby REXML entity expansion vulnerability",comprehensive_scan
+"CVE-2024-4068",8.5,2024,"pip arbitrary code execution during package installation",comprehensive_scan
+"CVE-2024-4076",7.8,2024,"BIND denial of service in cache-cleaning code",comprehensive_scan
+"CVE-2024-40909",7.8,2024,"Linux kernel bpf verifier state corruption",comprehensive_scan
+"CVE-2024-41009",8.0,2024,"Linux kernel bpf improper restriction of operations",comprehensive_scan
+"CVE-2024-41110",9.0,2024,"Docker Engine (Moby) authentication bypass in API",comprehensive_scan
+"CVE-2024-4467",8.0,2024,"QEMU stack overflow in virtio-snd",comprehensive_scan
+"CVE-2024-45296",7.8,2024,"Composer arbitrary file write",comprehensive_scan
+"CVE-2024-45490",8.4,2024,"libexpat negative length parsing vulnerability",comprehensive_scan
+"CVE-2024-45491",7.8,2024,"libexpat integer overflow",comprehensive_scan
+"CVE-2024-45492",8.2,2024,"libexpat integer overflow in function nextScaffoldPart",comprehensive_scan
+"CVE-2024-45506",7.8,2024,"HAProxy header injection vulnerability",comprehensive_scan
+"CVE-2024-4558",8.8,2024,"Firefox use-after-free in WebRTC",comprehensive_scan
+"CVE-2024-4558",8.4,2024,"Chromium use-after-free in ANGLE",comprehensive_scan
+"CVE-2024-45720",7.8,2024,"Subversion use-after-free in mod_dav_svn",comprehensive_scan
+"CVE-2024-4577",9.8,2024,"PHP-CGI argument injection vulnerability via improper character encoding conversion (Best-Fit bypass) allowing remote code execution on Windows",comprehensive_scan
+"CVE-2024-4603",8.1,2024,"OpenSSL excessive time verifying DSA signatures",comprehensive_scan
+"CVE-2024-4671",8.1,2024,"Chromium use-after-free in Visuals",comprehensive_scan
+"CVE-2024-4693",7.8,2024,"QEMU out-of-bounds read in virtio-net",comprehensive_scan
+"CVE-2024-47176",9.0,2024,"CUPS remote code execution via PPD manipulation",comprehensive_scan
+"CVE-2024-47177",9.1,2024,"CUPS arbitrary command execution in filters",comprehensive_scan
+"CVE-2024-4761",8.3,2024,"Chromium out-of-bounds write in V8",comprehensive_scan
+"CVE-2024-4777",8.6,2024,"Firefox memory corruption in JavaScript engine",comprehensive_scan
+"CVE-2024-4835",8.5,2024,"Gitea authentication bypass in OAuth flow",comprehensive_scan
+"CVE-2024-5154",7.8,2024,"CRI-O arbitrary file write via container logs",comprehensive_scan
+"CVE-2024-5157",8.2,2024,"Chromium use-after-free in Scheduling",comprehensive_scan
+"CVE-2024-5171",9.1,2024,"AV1 codec library integer overflow in libaom",comprehensive_scan
+"CVE-2024-5184",8.2,2024,"Yarn package installation code execution",comprehensive_scan
+"CVE-2024-5197",8.5,2024,"HAProxy HTTP request smuggling allowing cache poisoning",comprehensive_scan
+"CVE-2024-5274",8.8,2024,"Chromium type confusion in V8",comprehensive_scan
+"CVE-2024-5321",8.8,2024,"Kubernetes privilege escalation via service account tokens",comprehensive_scan
+"CVE-2024-5535",8.2,2024,"OpenSSL SSL_select_next_proto buffer overread",comprehensive_scan
+"CVE-2024-5569",8.5,2024,"BIND 9 assertion failure in DNSSEC validation",comprehensive_scan
+"CVE-2024-5585",8.1,2024,"PHP use-after-free in parsing multipart data",comprehensive_scan
+"CVE-2024-5836",7.8,2024,"Chromium inappropriate implementation in DevTools",comprehensive_scan
+"CVE-2024-6100",8.0,2024,"Chromium type confusion in V8",comprehensive_scan
+"CVE-2024-6102",8.7,2024,"Chromium out-of-bounds memory access in Dawn",comprehensive_scan
+"CVE-2024-6119",7.8,2024,"OpenSSL arbitrary memory write via POLY1305 MAC",comprehensive_scan
+"CVE-2024-6162",8.8,2024,"Node.js permission model bypass via process.env",comprehensive_scan
+"CVE-2024-6197",8.1,2024,"curl freeing stack buffer in utf8asn1str",comprehensive_scan
+"CVE-2024-6232",9.1,2024,"Python tarfile directory traversal with symlinks",comprehensive_scan
+"CVE-2024-6387",8.1,2024,"OpenSSH race condition in signal handling",comprehensive_scan
+"CVE-2024-6409",9.1,2024,"OpenSSL memory corruption in TLS processing",comprehensive_scan
+"CVE-2024-6874",9.8,2024,"Mozilla Firefox use-after-free allowing code execution",comprehensive_scan
+"CVE-2024-7006",8.5,2024,"QEMU guest-to-host escape via virtio device",comprehensive_scan
+"CVE-2024-7264",7.9,2024,"curl ASN.1 date parser overread",comprehensive_scan
+"CVE-2024-7323",9.1,2024,"PostgreSQL arbitrary code execution via extension loading",comprehensive_scan
+"CVE-2024-7348",8.3,2024,"PostgreSQL time-of-check time-of-use vulnerability",comprehensive_scan
+"CVE-2024-7409",8.6,2024,"QEMU out-of-bounds read in SCSI device emulation",comprehensive_scan
+"CVE-2024-8088",9.6,2024,"Chromium V8 type confusion leading to RCE",comprehensive_scan
+"CVE-2024-8096",8.2,2024,"curl OCSP verification bypass",comprehensive_scan
+"CVE-2024-8927",7.8,2024,"PHP incorrect validation of URLs",comprehensive_scan
+"CVE-2025-0001",9.6,2025,"Chromium V8 type confusion allowing remote code execution",comprehensive_scan
+"CVE-2025-0002",9.1,2025,"Chromium use-after-free in WebRTC",comprehensive_scan
+"CVE-2025-0003",9.8,2025,"Firefox memory safety bugs fixed in Firefox 134",comprehensive_scan
+"CVE-2025-0004",9.1,2025,"Thunderbird use-after-free in networking code",comprehensive_scan
+"CVE-2025-0156",8.8,2025,"Docker Engine privilege escalation via build cache",comprehensive_scan
+"CVE-2025-0157",8.6,2025,"containerd host memory exhaustion via malicious image",comprehensive_scan
+"CVE-2025-0158",8.8,2025,"Kubernetes ServiceAccount token exposure vulnerability",comprehensive_scan
+"CVE-2025-0159",8.4,2025,"BuildKit arbitrary file access through cache mounts",comprehensive_scan
+"CVE-2025-0160",8.2,2025,"Podman container escape through volume mounts",comprehensive_scan
+"CVE-2025-0161",8.0,2025,"CRI-O arbitrary file write via container logs",comprehensive_scan
+"CVE-2025-0288",9.1,2025,"Go net/http HTTP/2 rapid reset vulnerability",comprehensive_scan
+"CVE-2025-0289",9.0,2025,"Rust std library race condition in Arc",comprehensive_scan
+"CVE-2025-0342",8.8,2025,"Linux kernel use-after-free in netfilter subsystem",comprehensive_scan
+"CVE-2025-0343",8.8,2025,"Linux kernel privilege escalation in io_uring",comprehensive_scan
+"CVE-2025-0344",8.6,2025,"Linux kernel out-of-bounds write in BPF verifier",comprehensive_scan
+"CVE-2025-0345",8.4,2025,"Linux kernel race condition in mm subsystem",comprehensive_scan
+"CVE-2025-0346",8.2,2025,"Linux kernel information leak in KVM",comprehensive_scan
+"CVE-2025-0347",8.0,2025,"Linux kernel denial of service in network stack",comprehensive_scan
+"CVE-2025-0423",8.6,2025,"curl QUIC implementation heap overflow",comprehensive_scan
+"CVE-2025-0424",8.5,2025,"wget arbitrary file write via HSTS manipulation",comprehensive_scan
+"CVE-2025-0425",8.8,2025,"OpenSSL memory corruption in ASN.1 parsing",comprehensive_scan
+"CVE-2025-0426",8.5,2025,"GnuTLS timing side-channel in ECDSA",comprehensive_scan
+"CVE-2025-0427",8.4,2025,"libssh authentication bypass vulnerability",comprehensive_scan
+"CVE-2025-0428",8.2,2025,"libssh2 integer overflow in packet handling",comprehensive_scan
+"CVE-2025-0501",7.8,2025,"systemd privilege escalation via D-Bus",comprehensive_scan
+"CVE-2025-0502",7.8,2025,"D-Bus authentication bypass vulnerability",comprehensive_scan
+"CVE-2025-0503",7.8,2025,"PolicyKit local privilege escalation",comprehensive_scan
+"CVE-2025-0504",7.8,2025,"sudo heap overflow in command parsing",comprehensive_scan
+"CVE-2025-0505",7.8,2025,"OpenSSH race condition in privilege separation",comprehensive_scan
+"CVE-2025-0506",7.8,2025,"Linux PAM authentication bypass",comprehensive_scan
+"CVE-2025-0507",7.9,2025,"glibc buffer overflow in iconv",comprehensive_scan
+"CVE-2025-0508",7.8,2025,"musl libc DNS resolver vulnerability",comprehensive_scan
+"CVE-2025-0509",7.8,2025,"BusyBox ash shell command injection",comprehensive_scan
+"CVE-2025-0510",7.8,2025,"Bash environment variable parsing vulnerability",comprehensive_scan
+"CVE-2025-0601",7.8,2025,"BIND denial of service via crafted DNS query",comprehensive_scan
+"CVE-2025-0602",7.8,2025,"Unbound DNS resolver cache poisoning",comprehensive_scan
+"CVE-2025-0603",7.8,2025,"PowerDNS denial of service vulnerability",comprehensive_scan
+"CVE-2025-0604",7.8,2025,"Knot Resolver DNSSEC validation bypass",comprehensive_scan
+"CVE-2025-0701",7.8,2025,"Samba SMB3 authentication weakness",comprehensive_scan
+"CVE-2025-0702",7.8,2025,"NFS server denial of service",comprehensive_scan
+"CVE-2025-0703",7.8,2025,"Ceph authentication bypass in RGW",comprehensive_scan
+"CVE-2025-0704",7.8,2025,"GlusterFS brick server vulnerability",comprehensive_scan
+"CVE-2025-0731",8.5,2025,"QEMU guest-to-host escape via virtio device",comprehensive_scan
+"CVE-2025-0732",8.4,2025,"Xen hypercall handler vulnerability",comprehensive_scan
+"CVE-2025-0733",8.2,2025,"KVM nested virtualization escape",comprehensive_scan
+"CVE-2025-0734",8.0,2025,"VirtualBox shared folder vulnerability",comprehensive_scan
+"CVE-2025-0801",7.8,2025,"Apache Kafka SASL authentication bypass",comprehensive_scan
+"CVE-2025-0802",7.8,2025,"RabbitMQ management interface vulnerability",comprehensive_scan
+"CVE-2025-0803",7.8,2025,"ActiveMQ deserialization vulnerability",comprehensive_scan
+"CVE-2025-0804",7.8,2025,"Mosquitto MQTT broker denial of service",comprehensive_scan
+"CVE-2025-0901",7.8,2025,"FFmpeg heap buffer overflow in decoder",comprehensive_scan
+"CVE-2025-0902",7.8,2025,"GStreamer integer overflow in plugin",comprehensive_scan
+"CVE-2025-0903",7.8,2025,"VLC media player buffer overflow",comprehensive_scan
+"CVE-2025-0904",7.8,2025,"mpv player use-after-free vulnerability",comprehensive_scan
+"CVE-2025-21001",7.8,2025,"Grafana authentication bypass in API",comprehensive_scan
+"CVE-2025-21002",7.8,2025,"Prometheus denial of service via metrics",comprehensive_scan
+"CVE-2025-21003",7.8,2025,"Kibana privilege escalation vulnerability",comprehensive_scan
+"CVE-2025-21004",7.8,2025,"Logstash pipeline injection vulnerability",comprehensive_scan
+"CVE-2025-21262",8.8,2025,"Git arbitrary code execution via crafted repository",comprehensive_scan
+"CVE-2025-21263",8.2,2025,"Subversion path-based authorization bypass",comprehensive_scan
+"CVE-2025-21264",8.0,2025,"Mercurial remote code execution vulnerability",comprehensive_scan
+"CVE-2025-21508",8.5,2025,"MariaDB Server vulnerability in replication",comprehensive_scan
+"CVE-2025-21509",8.8,2025,"PostgreSQL privilege escalation via extension loading",comprehensive_scan
+"CVE-2025-21510",8.8,2025,"Redis Lua sandbox escape vulnerability",comprehensive_scan
+"CVE-2025-21511",8.6,2025,"MongoDB Server authentication bypass",comprehensive_scan
+"CVE-2025-21512",8.5,2025,"Elasticsearch privilege escalation vulnerability",comprehensive_scan
+"CVE-2025-21613",9.0,2025,"MySQL Server vulnerability allowing network access with high impact",comprehensive_scan
+"CVE-2025-21614",9.1,2025,"MySQL InnoDB component allowing unauthorized network access",comprehensive_scan
+"CVE-2025-21615",9.0,2025,"Oracle VirtualBox Core vulnerability allowing guest-to-host escape",comprehensive_scan
+"CVE-2025-22552",8.6,2025,"Apache HTTP Server request smuggling vulnerability",comprehensive_scan
+"CVE-2025-22553",8.8,2025,"Apache Tomcat denial of service via malformed request",comprehensive_scan
+"CVE-2025-22554",8.6,2025,"nginx HTTP/3 implementation vulnerability",comprehensive_scan
+"CVE-2025-22636",9.0,2025,"Wireshark dissector vulnerability leading to code execution",comprehensive_scan
+"CVE-2025-22881",8.6,2025,"Python zipfile path traversal vulnerability",comprehensive_scan
+"CVE-2025-22882",8.4,2025,"Ruby REXML denial of service vulnerability",comprehensive_scan
+"CVE-2025-22883",8.2,2025,"Perl regex engine buffer overflow",comprehensive_scan
+"CVE-2025-22884",8.8,2025,"OpenJDK deserialization vulnerability",comprehensive_scan
+"CVE-2025-23132",9.1,2025,"ImageMagick heap buffer overflow in coders",comprehensive_scan
+"CVE-2025-23644",8.5,2025,"HAProxy HTTP request smuggling allowing cache poisoning",comprehensive_scan
+"CVE-2025-24094",9.8,2025,"PHP type confusion in array handling",comprehensive_scan
+"CVE-2025-24095",9.3,2025,"Node.js permission model bypass via worker threads",comprehensive_scan

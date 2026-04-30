@@ -1,0 +1,36 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.2
+    hooks:
+      - id: mypy
+        additional_dependencies: ["pydantic>=2.5", "types-PyYAML", "types-requests"]
+        args: [--ignore-missing-imports]
+
+  - repo: local
+    hooks:
+      - id: no-loose-md-at-root
+        name: no loose markdown files at repo root
+        entry: scripts/check_no_loose_md.py
+        language: script
+        pass_filenames: false
+        always_run: true
+
+      - id: no-always-true-return
+        name: forbid `return x or True/False` (invariant #9)
+        entry: scripts/check_no_always_true_return.py
+        language: script
+        pass_filenames: false
+        always_run: true
+        files: '^cve_diff/.*\.py$'

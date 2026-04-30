@@ -1,0 +1,263 @@
+{
+  "n_actions": 37,
+  "by_severity": {
+    "HIGH": 0,
+    "MEDIUM": 19,
+    "LOW": 18,
+    "INFO": 0
+  },
+  "actions": [
+    {
+      "severity": "MEDIUM",
+      "kind": "high_complexity",
+      "where": "cve_diff/agent/loop.py:199",
+      "text": "`run` cyclomatic complexity = 66"
+    },
+    {
+      "severity": "MEDIUM",
+      "kind": "high_complexity",
+      "where": "cve_diff/agent/tools.py:159",
+      "text": "`_deterministic_hints_impl` cyclomatic complexity = 34"
+    },
+    {
+      "severity": "MEDIUM",
+      "kind": "high_complexity",
+      "where": "cve_diff/agent/tools.py:74",
+      "text": "`_gh_get` cyclomatic complexity = 16"
+    },
+    {
+      "severity": "MEDIUM",
+      "kind": "high_complexity",
+      "where": "cve_diff/cli/bench.py:105",
+      "text": "`_run_one` cyclomatic complexity = 15"
+    },
+    {
+      "severity": "MEDIUM",
+      "kind": "high_complexity",
+      "where": "cve_diff/cli/bench.py:318",
+      "text": "`_render_bench_markdown` cyclomatic complexity = 33"
+    },
+    {
+      "severity": "MEDIUM",
+      "kind": "high_complexity",
+      "where": "cve_diff/cli/bench.py:551",
+      "text": "`bench` cyclomatic complexity = 17"
+    },
+    {
+      "severity": "MEDIUM",
+      "kind": "high_complexity",
+      "where": "cve_diff/cli/main.py:222",
+      "text": "`run` cyclomatic complexity = 34"
+    },
+    {
+      "severity": "MEDIUM",
+      "kind": "high_complexity",
+      "where": "cve_diff/cli/main.py:71",
+      "text": "`_flow_from_pipeline` cyclomatic complexity = 20"
+    },
+    {
+      "severity": "MEDIUM",
+      "kind": "high_complexity",
+      "where": "cve_diff/diffing/extract_via_api.py:60",
+      "text": "`extract_via_api` cyclomatic complexity = 20"
+    },
+    {
+      "severity": "MEDIUM",
+      "kind": "high_complexity",
+      "where": "cve_diff/diffing/extract_via_gitlab_api.py:62",
+      "text": "`extract_via_gitlab_api` cyclomatic complexity = 27"
+    },
+    {
+      "severity": "MEDIUM",
+      "kind": "high_complexity",
+      "where": "cve_diff/pipeline.py:213",
+      "text": "`_acquire_to_render` cyclomatic complexity = 17"
+    },
+    {
+      "severity": "MEDIUM",
+      "kind": "high_complexity",
+      "where": "cve_diff/report/consensus.py:107",
+      "text": "`_osv_references` cyclomatic complexity = 19"
+    },
+    {
+      "severity": "MEDIUM",
+      "kind": "high_complexity",
+      "where": "cve_diff/report/markdown.py:133",
+      "text": "`render_flow` cyclomatic complexity = 42"
+    },
+    {
+      "severity": "MEDIUM",
+      "kind": "high_complexity",
+      "where": "cve_diff/report/markdown.py:64",
+      "text": "`_summarise_args` cyclomatic complexity = 16"
+    },
+    {
+      "severity": "MEDIUM",
+      "kind": "high_complexity",
+      "where": "cve_diff/report/osv_schema.py:92",
+      "text": "`_assert_osv_shape` cyclomatic complexity = 15"
+    },
+    {
+      "severity": "MEDIUM",
+      "kind": "unused_validators",
+      "where": "cve_diff/security/validators.py",
+      "text": "Validators with 0 callsites in cve_diff/: validate_url, validate_path, validate_commit_sha, validate_cvss_score. Either wire in or delete."
+    },
+    {
+      "severity": "MEDIUM",
+      "kind": "high_complexity",
+      "where": "cve_diff/security/validators.py:196",
+      "text": "`validate_cvss_score` cyclomatic complexity = 16"
+    },
+    {
+      "severity": "MEDIUM",
+      "kind": "high_complexity",
+      "where": "cve_diff/security/validators.py:30",
+      "text": "`validate_cve_id` cyclomatic complexity = 25"
+    },
+    {
+      "severity": "MEDIUM",
+      "kind": "high_complexity",
+      "where": "cve_diff/security/validators.py:87",
+      "text": "`validate_url` cyclomatic complexity = 21"
+    },
+    {
+      "severity": "LOW",
+      "kind": "high_complexity",
+      "where": "cve_diff/acquisition/layers.py:160",
+      "text": "`acquire` cyclomatic complexity = 13"
+    },
+    {
+      "severity": "LOW",
+      "kind": "high_complexity",
+      "where": "cve_diff/agent/invariants.py:42",
+      "text": "`discover_validator` cyclomatic complexity = 14"
+    },
+    {
+      "severity": "LOW",
+      "kind": "long_function",
+      "where": "cve_diff/agent/loop.py",
+      "text": "`run` is 332 LOC \u2014 review for splitting."
+    },
+    {
+      "severity": "LOW",
+      "kind": "high_complexity",
+      "where": "cve_diff/agent/tools.py:221",
+      "text": "`_gh_search_impl` cyclomatic complexity = 13"
+    },
+    {
+      "severity": "LOW",
+      "kind": "high_complexity",
+      "where": "cve_diff/agent/tools.py:377",
+      "text": "`_fetch_distro_advisory_impl` cyclomatic complexity = 13"
+    },
+    {
+      "severity": "LOW",
+      "kind": "long_function",
+      "where": "cve_diff/cli/bench.py",
+      "text": "`_render_bench_markdown` is 144 LOC \u2014 review for splitting."
+    },
+    {
+      "severity": "LOW",
+      "kind": "high_complexity",
+      "where": "cve_diff/cli/bench.py:464",
+      "text": "`_render_html` cyclomatic complexity = 13"
+    },
+    {
+      "severity": "LOW",
+      "kind": "long_function",
+      "where": "cve_diff/cli/main.py",
+      "text": "`run` is 255 LOC \u2014 review for splitting."
+    },
+    {
+      "severity": "LOW",
+      "kind": "long_function",
+      "where": "cve_diff/diffing/extract_via_api.py",
+      "text": "`extract_via_api` is 106 LOC \u2014 review for splitting."
+    },
+    {
+      "severity": "LOW",
+      "kind": "long_function",
+      "where": "cve_diff/diffing/extract_via_gitlab_api.py",
+      "text": "`extract_via_gitlab_api` is 126 LOC \u2014 review for splitting."
+    },
+    {
+      "severity": "LOW",
+      "kind": "high_complexity",
+      "where": "cve_diff/diffing/extract_via_gitlab_api.py:190",
+      "text": "`extract_for_agreement` cyclomatic complexity = 13"
+    },
+    {
+      "severity": "LOW",
+      "kind": "high_complexity",
+      "where": "cve_diff/diffing/extract_via_patch_url.py:105",
+      "text": "`extract_via_patch_url` cyclomatic complexity = 13"
+    },
+    {
+      "severity": "LOW",
+      "kind": "long_function",
+      "where": "cve_diff/discovery/osv.py",
+      "text": "`parse` is 87 LOC \u2014 review for splitting."
+    },
+    {
+      "severity": "LOW",
+      "kind": "long_function",
+      "where": "cve_diff/pipeline.py",
+      "text": "`_acquire_to_render` is 135 LOC \u2014 review for splitting."
+    },
+    {
+      "severity": "LOW",
+      "kind": "high_complexity",
+      "where": "cve_diff/report/flow.py:73",
+      "text": "`write_flow_files` cyclomatic complexity = 13"
+    },
+    {
+      "severity": "LOW",
+      "kind": "long_function",
+      "where": "cve_diff/report/markdown.py",
+      "text": "`render_flow` is 147 LOC \u2014 review for splitting."
+    },
+    {
+      "severity": "LOW",
+      "kind": "high_complexity",
+      "where": "cve_diff/security/validators.py:136",
+      "text": "`validate_path` cyclomatic complexity = 14"
+    },
+    {
+      "severity": "LOW",
+      "kind": "high_complexity",
+      "where": "cve_diff/security/validators.py:163",
+      "text": "`validate_commit_sha` cyclomatic complexity = 14"
+    }
+  ],
+  "phase_summaries": {
+    "00_understand": {
+      "present": true,
+      "size": 12598
+    },
+    "01_inventory": {
+      "present": true,
+      "size": 25145
+    },
+    "02_functions": {
+      "present": true,
+      "size": 38577
+    },
+    "03_quality": {
+      "present": true,
+      "size": 155
+    },
+    "04_security": {
+      "present": true,
+      "size": 11768
+    },
+    "05_optimization": {
+      "present": true,
+      "size": 184
+    },
+    "06_user_stories": {
+      "present": true,
+      "size": 29035
+    }
+  }
+}

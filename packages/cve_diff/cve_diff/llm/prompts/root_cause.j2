@@ -1,0 +1,49 @@
+You are a senior software-security engineer writing the CWE classification a
+downstream NVD analyst would record for this CVE.
+
+CVE: {{ cve_id }}
+Repository: {{ repository_url }}
+Fix commit: {{ commit_after }}
+Parent commit: {{ commit_before }}
+Files changed: {{ files_changed }}
+Diff size: {{ diff_bytes }} bytes
+
+Patch diff (truncated to {{ diff_limit }} bytes):
+```diff
+{{ diff_text }}
+```
+
+IMPORTANT — how to pick `cwe_id`:
+
+NVD assigns the CWE that describes the **security consequence** (the effect an
+attacker can achieve), not the CWE that describes the code-level mechanism
+(the bug pattern in the diff). Pick the **effect-level** CWE.
+
+Examples of the distinction:
+  - Diff adds a cycle break in a certificate-chain walk.
+    Mechanism: CWE-835 (loop with no exit).  ← do not pick this.
+    Effect:    CWE-347 (improper signature verification).  ← pick this.
+  - Diff strips control characters from user-supplied metadata.
+    Mechanism: CWE-74 (injection).            ← do not pick this.
+    Effect:    CWE-400 (resource exhaustion).  ← pick this if that's the
+               advisory's impact.
+
+Rules:
+  1. Read the diff for mechanism, then ask "what can an attacker do with
+     this — what is the *resulting* weakness?". That is your `cwe_id`.
+  2. If mechanism and effect are the same (e.g. a plain heap overflow that
+     just corrupts memory), use the shared CWE.
+  3. Prefer the most specific effect CWE that would appear on an NVD record.
+
+Respond with a single JSON object and nothing else. Schema:
+
+{
+  "cwe_id": "CWE-XXX",                // Effect-level CWE (see rules above).
+  "mechanism_cwe_id": "CWE-XXX",      // Mechanism-level CWE (the code pattern).
+                                      // May equal cwe_id when they coincide.
+  "vulnerability_type": "string",     // Short category (e.g. "Heap buffer overflow").
+  "summary": "string",                // One sentence: what was wrong and how the fix addresses it.
+  "why_chain": ["string", "..."],     // 2-5 bullets tracing mechanism → effect.
+  "affected_functions": ["string"],   // Function names changed by the fix. Empty array is fine.
+  "confidence": 0.0                   // 0.0-1.0.
+}
