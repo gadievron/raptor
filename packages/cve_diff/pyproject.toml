@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling>=1.18"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cve-diff"
+version = "0.1.0"
+description = "CVE patch analysis pipeline — discover, acquire, diff, and explain"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31",
+    "httpx>=0.25",
+    "pydantic>=2.5",
+    "typer>=0.12",
+    "rich>=13.7",
+    "pyyaml>=6.0",
+    "psutil>=5.9",
+    "jinja2>=3.1",
+    "anthropic>=0.34",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-xdist",
+    "pytest-cov",
+    "pytest-timeout",
+    "ruff",
+    "black",
+    "mypy",
+    "pre-commit",
+    "hypothesis",
+    "responses>=0.23",
+]
+healing = ["sqlalchemy>=2.0", "alembic>=1.13"]
+
+[project.scripts]
+cve-diff = "cve_diff.cli.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["cve_diff", "tools"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Integration tests hit live services (OSV, GitHub) and are skipped by default.
+# Run them explicitly with `pytest -m integration` or `pytest tests/integration`.
+addopts = "-ra --strict-markers -m 'not integration'"
+markers = [
+    "integration: live-service integration tests",
+    "slow: tests that take >5s",
+]

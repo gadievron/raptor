@@ -1,0 +1,1208 @@
+{
+  "name": "random_200",
+  "description": "200 open-source CVEs stratified by year (2015-2025) and CVSS severity. Seed=20260424. Built for the agentic-first rebuild baseline per plan snuggly-wandering-meerkat; measured pass gate is >=35%.",
+  "seed": 20260424,
+  "size": 200,
+  "cves": [
+    {
+      "cve_id": "CVE-2015-0235",
+      "cvss": 10.0,
+      "year": 2015,
+      "description": "glibc GHOST vulnerability"
+    },
+    {
+      "cve_id": "CVE-2015-0273",
+      "cvss": 10.0,
+      "year": 2015,
+      "description": "Apache POI XXE vulnerability"
+    },
+    {
+      "cve_id": "CVE-2015-0313",
+      "cvss": 10.0,
+      "year": 2015,
+      "description": "Adobe Flash use-after-free"
+    },
+    {
+      "cve_id": "CVE-2015-1328",
+      "cvss": 7.8,
+      "year": 2015,
+      "description": "Linux kernel overlayfs privilege escalation"
+    },
+    {
+      "cve_id": "CVE-2015-1635",
+      "cvss": 10.0,
+      "year": 2015,
+      "description": "HTTP.sys remote code execution"
+    },
+    {
+      "cve_id": "CVE-2015-3456",
+      "cvss": 7.8,
+      "year": 2015,
+      "description": "QEMU floppy disk controller vulnerability (VENOM)"
+    },
+    {
+      "cve_id": "CVE-2015-4852",
+      "cvss": 10.0,
+      "year": 2015,
+      "description": "WebLogic deserialization RCE"
+    },
+    {
+      "cve_id": "CVE-2015-5477",
+      "cvss": 7.8,
+      "year": 2015,
+      "description": "BIND DoS vulnerability"
+    },
+    {
+      "cve_id": "CVE-2015-6668",
+      "cvss": 7.8,
+      "year": 2015,
+      "description": "OpenSSH privilege escalation"
+    },
+    {
+      "cve_id": "CVE-2015-7297",
+      "cvss": 10.0,
+      "year": 2015,
+      "description": "SQL injection vulnerability"
+    },
+    {
+      "cve_id": "CVE-2015-7501",
+      "cvss": 10.0,
+      "year": 2015,
+      "description": "Apache Commons Collections RCE"
+    },
+    {
+      "cve_id": "CVE-2015-7547",
+      "cvss": 10.0,
+      "year": 2015,
+      "description": "glibc getaddrinfo buffer overflow"
+    },
+    {
+      "cve_id": "CVE-2015-8103",
+      "cvss": 10.0,
+      "year": 2015,
+      "description": "Jenkins RCE vulnerability"
+    },
+    {
+      "cve_id": "CVE-2015-8562",
+      "cvss": 10.0,
+      "year": 2015,
+      "description": "Joomla RCE vulnerability"
+    },
+    {
+      "cve_id": "CVE-2016-0728",
+      "cvss": 7.8,
+      "year": 2016,
+      "description": "Linux kernel keyring vulnerability"
+    },
+    {
+      "cve_id": "CVE-2016-0777",
+      "cvss": 7.8,
+      "year": 2016,
+      "description": "OpenSSH client roaming vulnerability"
+    },
+    {
+      "cve_id": "CVE-2016-0800",
+      "cvss": 7.8,
+      "year": 2016,
+      "description": "OpenSSL DROWN attack"
+    },
+    {
+      "cve_id": "CVE-2016-10033",
+      "cvss": 10.0,
+      "year": 2016,
+      "description": "PHPMailer RCE vulnerability"
+    },
+    {
+      "cve_id": "CVE-2016-2183",
+      "cvss": 7.8,
+      "year": 2016,
+      "description": "OpenSSL Sweet32 attack"
+    },
+    {
+      "cve_id": "CVE-2016-3074",
+      "cvss": 10.0,
+      "year": 2016,
+      "description": "PHP buffer overflow"
+    },
+    {
+      "cve_id": "CVE-2016-3427",
+      "cvss": 10.0,
+      "year": 2016,
+      "description": "Java deserialization vulnerability"
+    },
+    {
+      "cve_id": "CVE-2016-3714",
+      "cvss": 10.0,
+      "year": 2016,
+      "description": "ImageMagick RCE (ImageTragick)"
+    },
+    {
+      "cve_id": "CVE-2016-4117",
+      "cvss": 10.0,
+      "year": 2016,
+      "description": "Adobe Flash use-after-free"
+    },
+    {
+      "cve_id": "CVE-2016-5195",
+      "cvss": 7.8,
+      "year": 2016,
+      "description": "Linux kernel Dirty COW vulnerability"
+    },
+    {
+      "cve_id": "CVE-2016-5696",
+      "cvss": 7.8,
+      "year": 2016,
+      "description": "Linux TCP vulnerability"
+    },
+    {
+      "cve_id": "CVE-2016-6210",
+      "cvss": 7.8,
+      "year": 2016,
+      "description": "OpenSSH user enumeration"
+    },
+    {
+      "cve_id": "CVE-2016-6258",
+      "cvss": 10.0,
+      "year": 2016,
+      "description": "Xen privilege escalation"
+    },
+    {
+      "cve_id": "CVE-2016-6662",
+      "cvss": 10.0,
+      "year": 2016,
+      "description": "MySQL RCE vulnerability"
+    },
+    {
+      "cve_id": "CVE-2016-8655",
+      "cvss": 7.8,
+      "year": 2016,
+      "description": "Linux kernel privilege escalation"
+    },
+    {
+      "cve_id": "CVE-2017-0143",
+      "cvss": 10.0,
+      "year": 2017,
+      "description": "SMB RCE (EternalBlue)"
+    },
+    {
+      "cve_id": "CVE-2017-0144",
+      "cvss": 10.0,
+      "year": 2017,
+      "description": "SMB RCE (EternalBlue)"
+    },
+    {
+      "cve_id": "CVE-2017-0145",
+      "cvss": 10.0,
+      "year": 2017,
+      "description": "SMB RCE (EternalBlue)"
+    },
+    {
+      "cve_id": "CVE-2017-0146",
+      "cvss": 10.0,
+      "year": 2017,
+      "description": "SMB RCE (EternalBlue)"
+    },
+    {
+      "cve_id": "CVE-2017-1000251",
+      "cvss": 8.0,
+      "year": 2017,
+      "description": "Linux Bluetooth stack (BlueBorne)"
+    },
+    {
+      "cve_id": "CVE-2017-1000367",
+      "cvss": 7.8,
+      "year": 2017,
+      "description": "Sudo tty vulnerability"
+    },
+    {
+      "cve_id": "CVE-2017-1000405",
+      "cvss": 7.8,
+      "year": 2017,
+      "description": "Linux kernel Huge Dirty COW"
+    },
+    {
+      "cve_id": "CVE-2017-12617",
+      "cvss": 10.0,
+      "year": 2017,
+      "description": "Apache Tomcat RCE"
+    },
+    {
+      "cve_id": "CVE-2017-5638",
+      "cvss": 10.0,
+      "year": 2017,
+      "description": "Apache Struts RCE"
+    },
+    {
+      "cve_id": "CVE-2017-5715",
+      "cvss": 7.8,
+      "year": 2017,
+      "description": "Spectre variant 2"
+    },
+    {
+      "cve_id": "CVE-2017-5753",
+      "cvss": 7.8,
+      "year": 2017,
+      "description": "Spectre variant 1"
+    },
+    {
+      "cve_id": "CVE-2017-5754",
+      "cvss": 7.8,
+      "year": 2017,
+      "description": "Meltdown"
+    },
+    {
+      "cve_id": "CVE-2017-6074",
+      "cvss": 7.8,
+      "year": 2017,
+      "description": "Linux kernel DCCP vulnerability"
+    },
+    {
+      "cve_id": "CVE-2017-7494",
+      "cvss": 10.0,
+      "year": 2017,
+      "description": "Samba RCE (SambaCry)"
+    },
+    {
+      "cve_id": "CVE-2017-7529",
+      "cvss": 7.8,
+      "year": 2017,
+      "description": "Nginx integer overflow"
+    },
+    {
+      "cve_id": "CVE-2017-9805",
+      "cvss": 10.0,
+      "year": 2017,
+      "description": "Apache Struts REST plugin RCE"
+    },
+    {
+      "cve_id": "CVE-2018-0886",
+      "cvss": 10.0,
+      "year": 2018,
+      "description": "CredSSP RCE vulnerability"
+    },
+    {
+      "cve_id": "CVE-2018-1000156",
+      "cvss": 10.0,
+      "year": 2018,
+      "description": "GNU patch arbitrary code execution"
+    },
+    {
+      "cve_id": "CVE-2018-1002105",
+      "cvss": 10.0,
+      "year": 2018,
+      "description": "Kubernetes privilege escalation"
+    },
+    {
+      "cve_id": "CVE-2018-10933",
+      "cvss": 10.0,
+      "year": 2018,
+      "description": "libssh authentication bypass"
+    },
+    {
+      "cve_id": "CVE-2018-11776",
+      "cvss": 10.0,
+      "year": 2018,
+      "description": "Apache Struts RCE"
+    },
+    {
+      "cve_id": "CVE-2018-11777",
+      "cvss": 9.8,
+      "year": 2018,
+      "description": "Apache Commons vulnerability"
+    },
+    {
+      "cve_id": "CVE-2018-1273",
+      "cvss": 10.0,
+      "year": 2018,
+      "description": "Spring Data Commons RCE"
+    },
+    {
+      "cve_id": "CVE-2018-14634",
+      "cvss": 7.8,
+      "year": 2018,
+      "description": "Linux kernel mutagen astronomy vulnerability"
+    },
+    {
+      "cve_id": "CVE-2018-14665",
+      "cvss": 7.8,
+      "year": 2018,
+      "description": "X.org privilege escalation"
+    },
+    {
+      "cve_id": "CVE-2018-15473",
+      "cvss": 7.8,
+      "year": 2018,
+      "description": "OpenSSH user enumeration"
+    },
+    {
+      "cve_id": "CVE-2018-15686",
+      "cvss": 10.0,
+      "year": 2018,
+      "description": "systemd vulnerability"
+    },
+    {
+      "cve_id": "CVE-2018-16509",
+      "cvss": 10.0,
+      "year": 2018,
+      "description": "Ghostscript RCE"
+    },
+    {
+      "cve_id": "CVE-2018-18500",
+      "cvss": 10.0,
+      "year": 2018,
+      "description": "Firefox use-after-free"
+    },
+    {
+      "cve_id": "CVE-2018-19788",
+      "cvss": 10.0,
+      "year": 2018,
+      "description": "systemd vulnerability"
+    },
+    {
+      "cve_id": "CVE-2018-3639",
+      "cvss": 7.8,
+      "year": 2018,
+      "description": "Speculative Store Bypass"
+    },
+    {
+      "cve_id": "CVE-2018-3760",
+      "cvss": 10.0,
+      "year": 2018,
+      "description": "Ruby on Rails path traversal"
+    },
+    {
+      "cve_id": "CVE-2018-7600",
+      "cvss": 10.0,
+      "year": 2018,
+      "description": "Drupal RCE (Drupalgeddon 2)"
+    },
+    {
+      "cve_id": "CVE-2019-0211",
+      "cvss": 7.8,
+      "year": 2019,
+      "description": "Apache privilege escalation"
+    },
+    {
+      "cve_id": "CVE-2019-0604",
+      "cvss": 10.0,
+      "year": 2019,
+      "description": "SharePoint RCE"
+    },
+    {
+      "cve_id": "CVE-2019-0708",
+      "cvss": 10.0,
+      "year": 2019,
+      "description": "BlueKeep RDP vulnerability"
+    },
+    {
+      "cve_id": "CVE-2019-10149",
+      "cvss": 10.0,
+      "year": 2019,
+      "description": "Exim RCE vulnerability"
+    },
+    {
+      "cve_id": "CVE-2019-11477",
+      "cvss": 7.8,
+      "year": 2019,
+      "description": "Linux kernel SACK vulnerability"
+    },
+    {
+      "cve_id": "CVE-2019-11478",
+      "cvss": 7.8,
+      "year": 2019,
+      "description": "Linux kernel TCP vulnerability"
+    },
+    {
+      "cve_id": "CVE-2019-11510",
+      "cvss": 10.0,
+      "year": 2019,
+      "description": "Pulse Secure VPN arbitrary file reading"
+    },
+    {
+      "cve_id": "CVE-2019-11539",
+      "cvss": 10.0,
+      "year": 2019,
+      "description": "Pulse Secure VPN command injection"
+    },
+    {
+      "cve_id": "CVE-2019-11580",
+      "cvss": 10.0,
+      "year": 2019,
+      "description": "Atlassian Crowd RCE"
+    },
+    {
+      "cve_id": "CVE-2019-11581",
+      "cvss": 10.0,
+      "year": 2019,
+      "description": "Atlassian Jira template injection"
+    },
+    {
+      "cve_id": "CVE-2019-12735",
+      "cvss": 10.0,
+      "year": 2019,
+      "description": "Vim/Neovim arbitrary code execution"
+    },
+    {
+      "cve_id": "CVE-2019-13272",
+      "cvss": 7.8,
+      "year": 2019,
+      "description": "Linux kernel privilege escalation"
+    },
+    {
+      "cve_id": "CVE-2019-14287",
+      "cvss": 7.8,
+      "year": 2019,
+      "description": "sudo bypass vulnerability"
+    },
+    {
+      "cve_id": "CVE-2019-16759",
+      "cvss": 10.0,
+      "year": 2019,
+      "description": "vBulletin RCE"
+    },
+    {
+      "cve_id": "CVE-2019-18634",
+      "cvss": 7.8,
+      "year": 2019,
+      "description": "sudo buffer overflow"
+    },
+    {
+      "cve_id": "CVE-2019-2215",
+      "cvss": 7.8,
+      "year": 2019,
+      "description": "Android kernel use-after-free"
+    },
+    {
+      "cve_id": "CVE-2019-5736",
+      "cvss": 8.6,
+      "year": 2019,
+      "description": "Docker/runc container escape"
+    },
+    {
+      "cve_id": "CVE-2020-0796",
+      "cvss": 10.0,
+      "year": 2020,
+      "description": "SMBGhost vulnerability"
+    },
+    {
+      "cve_id": "CVE-2020-10713",
+      "cvss": 8.2,
+      "year": 2020,
+      "description": "GRUB2 BootHole vulnerability"
+    },
+    {
+      "cve_id": "CVE-2020-11651",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "SaltStack authentication bypass"
+    },
+    {
+      "cve_id": "CVE-2020-11652",
+      "cvss": 7.5,
+      "year": 2020,
+      "description": "SaltStack directory traversal"
+    },
+    {
+      "cve_id": "CVE-2020-13777",
+      "cvss": 7.5,
+      "year": 2020,
+      "description": "GnuTLS session ticket vulnerability"
+    },
+    {
+      "cve_id": "CVE-2020-1472",
+      "cvss": 10.0,
+      "year": 2020,
+      "description": "Zerologon vulnerability"
+    },
+    {
+      "cve_id": "CVE-2020-15505",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "MobileIron RCE"
+    },
+    {
+      "cve_id": "CVE-2020-15778",
+      "cvss": 7.8,
+      "year": 2020,
+      "description": "OpenSSH vulnerability"
+    },
+    {
+      "cve_id": "CVE-2020-17530",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "Apache Struts OGNL injection"
+    },
+    {
+      "cve_id": "CVE-2020-25213",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "WordPress File Manager RCE"
+    },
+    {
+      "cve_id": "CVE-2020-27815",
+      "cvss": 7.8,
+      "year": 2020,
+      "description": "Linux kernel JFS vulnerability"
+    },
+    {
+      "cve_id": "CVE-2020-29661",
+      "cvss": 7.8,
+      "year": 2020,
+      "description": "Linux kernel TTY vulnerability"
+    },
+    {
+      "cve_id": "CVE-2020-35508",
+      "cvss": 7.8,
+      "year": 2020,
+      "description": "Linux kernel fork vulnerability"
+    },
+    {
+      "cve_id": "CVE-2020-8554",
+      "cvss": 8.8,
+      "year": 2020,
+      "description": "Kubernetes man-in-the-middle vulnerability"
+    },
+    {
+      "cve_id": "CVE-2021-20837",
+      "cvss": 7.8,
+      "year": 2021,
+      "description": "MovableType command injection"
+    },
+    {
+      "cve_id": "CVE-2021-22205",
+      "cvss": 10.0,
+      "year": 2021,
+      "description": "GitLab CE/EE RCE"
+    },
+    {
+      "cve_id": "CVE-2021-22893",
+      "cvss": 8.8,
+      "year": 2021,
+      "description": "Pulse Secure RCE"
+    },
+    {
+      "cve_id": "CVE-2021-22911",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "Rocket.Chat RCE"
+    },
+    {
+      "cve_id": "CVE-2021-26084",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "Atlassian Confluence RCE"
+    },
+    {
+      "cve_id": "CVE-2021-28476",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "Hyper-V RCE"
+    },
+    {
+      "cve_id": "CVE-2021-31440",
+      "cvss": 7.0,
+      "year": 2021,
+      "description": "Linux kernel eBPF vulnerability"
+    },
+    {
+      "cve_id": "CVE-2021-3426",
+      "cvss": 7.8,
+      "year": 2021,
+      "description": "Python information disclosure"
+    },
+    {
+      "cve_id": "CVE-2021-3493",
+      "cvss": 7.8,
+      "year": 2021,
+      "description": "Linux kernel overlayfs vulnerability"
+    },
+    {
+      "cve_id": "CVE-2021-35464",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "ForgeRock AM/OpenAM RCE"
+    },
+    {
+      "cve_id": "CVE-2021-3560",
+      "cvss": 7.8,
+      "year": 2021,
+      "description": "Polkit privilege escalation"
+    },
+    {
+      "cve_id": "CVE-2021-38003",
+      "cvss": 8.8,
+      "year": 2021,
+      "description": "Chrome V8 vulnerability"
+    },
+    {
+      "cve_id": "CVE-2021-38647",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "OMIGOD Azure vulnerability"
+    },
+    {
+      "cve_id": "CVE-2021-41773",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "Apache path traversal vulnerability"
+    },
+    {
+      "cve_id": "CVE-2021-42013",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "Apache path traversal vulnerability"
+    },
+    {
+      "cve_id": "CVE-2021-42287",
+      "cvss": 7.5,
+      "year": 2021,
+      "description": "Active Directory vulnerability"
+    },
+    {
+      "cve_id": "CVE-2021-43267",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "TIPC kernel vulnerability"
+    },
+    {
+      "cve_id": "CVE-2021-44228",
+      "cvss": 10.0,
+      "year": 2021,
+      "description": "Apache Log4j RCE (Log4Shell)"
+    },
+    {
+      "cve_id": "CVE-2022-0001",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel Branch History Injection (Spectre-BHB)"
+    },
+    {
+      "cve_id": "CVE-2022-0778",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "OpenSSL infinite loop in BN_mod_sqrt parsing certificates"
+    },
+    {
+      "cve_id": "CVE-2022-1048",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel use-after-free in sound subsystem"
+    },
+    {
+      "cve_id": "CVE-2022-1388",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "F5 BIG-IP authentication bypass RCE"
+    },
+    {
+      "cve_id": "CVE-2022-22965",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "Spring4Shell - Spring Framework RCE via Data Binding"
+    },
+    {
+      "cve_id": "CVE-2022-24735",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "Redis Lua sandbox bypass"
+    },
+    {
+      "cve_id": "CVE-2022-2585",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "Linux kernel use-after-free in POSIX CPU timers"
+    },
+    {
+      "cve_id": "CVE-2022-28391",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "BusyBox remote code execution in ash shell"
+    },
+    {
+      "cve_id": "CVE-2022-3176",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel use-after-free in io_uring"
+    },
+    {
+      "cve_id": "CVE-2022-32250",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "Linux kernel use-after-free in netfilter subsystem"
+    },
+    {
+      "cve_id": "CVE-2022-35252",
+      "cvss": 8.6,
+      "year": 2022,
+      "description": "curl control code in cookie denial of service"
+    },
+    {
+      "cve_id": "CVE-2022-3623",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel race condition in Hugetlb"
+    },
+    {
+      "cve_id": "CVE-2022-3625",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel use-after-free in devlink"
+    },
+    {
+      "cve_id": "CVE-2022-3786",
+      "cvss": 9.0,
+      "year": 2022,
+      "description": "OpenSSL X.509 certificate verification denial of service"
+    },
+    {
+      "cve_id": "CVE-2022-40674",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "libexpat use-after-free in XML_GetBuffer"
+    },
+    {
+      "cve_id": "CVE-2022-41218",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel use-after-free in DVB driver"
+    },
+    {
+      "cve_id": "CVE-2022-41674",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel buffer overflow in WiFi cfg80211"
+    },
+    {
+      "cve_id": "CVE-2022-41903",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "Git heap overflow in git archive, git log --format"
+    },
+    {
+      "cve_id": "CVE-2022-42721",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel list management corruption in WiFi"
+    },
+    {
+      "cve_id": "CVE-2022-42916",
+      "cvss": 8.6,
+      "year": 2022,
+      "description": "curl HSTS bypass via IDN"
+    },
+    {
+      "cve_id": "CVE-2023-0210",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel use-after-free in KSMBD"
+    },
+    {
+      "cve_id": "CVE-2023-0286",
+      "cvss": 9.8,
+      "year": 2023,
+      "description": "OpenSSL X.400 address type confusion vulnerability"
+    },
+    {
+      "cve_id": "CVE-2023-0386",
+      "cvss": 7.8,
+      "year": 2023,
+      "description": "Linux kernel privilege escalation in overlay filesystem"
+    },
+    {
+      "cve_id": "CVE-2023-0394",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel null pointer dereference in RAWMIDI"
+    },
+    {
+      "cve_id": "CVE-2023-0461",
+      "cvss": 7.8,
+      "year": 2023,
+      "description": "Linux kernel use-after-free in upper layer protocol"
+    },
+    {
+      "cve_id": "CVE-2023-0464",
+      "cvss": 9.1,
+      "year": 2023,
+      "description": "OpenSSL excessive resource use verifying policy constraints"
+    },
+    {
+      "cve_id": "CVE-2023-1032",
+      "cvss": 7.8,
+      "year": 2023,
+      "description": "Linux kernel double-free in Netfilter nf_tables"
+    },
+    {
+      "cve_id": "CVE-2023-1073",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel memory corruption in HID subsystem"
+    },
+    {
+      "cve_id": "CVE-2023-1074",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel memory leak in SCTP"
+    },
+    {
+      "cve_id": "CVE-2023-1076",
+      "cvss": 7.8,
+      "year": 2023,
+      "description": "Linux kernel type confusion in TLS protocol"
+    },
+    {
+      "cve_id": "CVE-2023-1078",
+      "cvss": 7.8,
+      "year": 2023,
+      "description": "Linux kernel type confusion in RDS protocol"
+    },
+    {
+      "cve_id": "CVE-2023-1192",
+      "cvss": 7.8,
+      "year": 2023,
+      "description": "Linux kernel use-after-free in SMB client"
+    },
+    {
+      "cve_id": "CVE-2023-1194",
+      "cvss": 7.8,
+      "year": 2023,
+      "description": "Linux kernel out-of-bounds write in device mapper"
+    },
+    {
+      "cve_id": "CVE-2023-1195",
+      "cvss": 7.8,
+      "year": 2023,
+      "description": "Linux kernel use-after-free in NFC subsystem"
+    },
+    {
+      "cve_id": "CVE-2023-1281",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel use-after-free in tcindex"
+    },
+    {
+      "cve_id": "CVE-2023-21255",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel out-of-bounds access in Android binder"
+    },
+    {
+      "cve_id": "CVE-2023-2650",
+      "cvss": 9.0,
+      "year": 2023,
+      "description": "OpenSSL denial of service processing malformed ASN.1"
+    },
+    {
+      "cve_id": "CVE-2023-31436",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel out-of-bounds write in qfq_change_class"
+    },
+    {
+      "cve_id": "CVE-2023-35001",
+      "cvss": 9.0,
+      "year": 2023,
+      "description": "Linux kernel out-of-bounds write in nftables"
+    },
+    {
+      "cve_id": "CVE-2023-38545",
+      "cvss": 9.8,
+      "year": 2023,
+      "description": "curl SOCKS5 heap buffer overflow"
+    },
+    {
+      "cve_id": "CVE-2023-4387",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel use-after-free in vmwgfx driver"
+    },
+    {
+      "cve_id": "CVE-2024-1753",
+      "cvss": 8.6,
+      "year": 2024,
+      "description": "Buildah arbitrary file write during image build process"
+    },
+    {
+      "cve_id": "CVE-2024-21455",
+      "cvss": 7.9,
+      "year": 2024,
+      "description": "MySQL Server optimizer privilege escalation"
+    },
+    {
+      "cve_id": "CVE-2024-21506",
+      "cvss": 8.5,
+      "year": 2024,
+      "description": "MySQL Server InnoDB component privilege escalation"
+    },
+    {
+      "cve_id": "CVE-2024-21823",
+      "cvss": 8.4,
+      "year": 2024,
+      "description": "VirtualBox guest-to-host escape"
+    },
+    {
+      "cve_id": "CVE-2024-23837",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "FFmpeg integer overflow vulnerability"
+    },
+    {
+      "cve_id": "CVE-2024-2398",
+      "cvss": 8.6,
+      "year": 2024,
+      "description": "curl HTTP/2 server push out-of-bounds write"
+    },
+    {
+      "cve_id": "CVE-2024-24785",
+      "cvss": 7.9,
+      "year": 2024,
+      "description": "Go html/template improper sanitization"
+    },
+    {
+      "cve_id": "CVE-2024-2511",
+      "cvss": 8.5,
+      "year": 2024,
+      "description": "OpenSSL unbounded memory growth with malicious CA"
+    },
+    {
+      "cve_id": "CVE-2024-28863",
+      "cvss": 8.1,
+      "year": 2024,
+      "description": "Node.js denial of service via HTTP server"
+    },
+    {
+      "cve_id": "CVE-2024-29018",
+      "cvss": 9.3,
+      "year": 2024,
+      "description": "docker-compose arbitrary file write during build"
+    },
+    {
+      "cve_id": "CVE-2024-31583",
+      "cvss": 8.1,
+      "year": 2024,
+      "description": "OpenSSH Terrapin prefix truncation attack"
+    },
+    {
+      "cve_id": "CVE-2024-32004",
+      "cvss": 8.1,
+      "year": 2024,
+      "description": "Git remote code execution via submodules"
+    },
+    {
+      "cve_id": "CVE-2024-3302",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "Firefox denial of service via WebGL"
+    },
+    {
+      "cve_id": "CVE-2024-35272",
+      "cvss": 8.6,
+      "year": 2024,
+      "description": "RabbitMQ management interface authentication bypass"
+    },
+    {
+      "cve_id": "CVE-2024-45490",
+      "cvss": 8.4,
+      "year": 2024,
+      "description": "libexpat negative length parsing vulnerability"
+    },
+    {
+      "cve_id": "CVE-2024-4558",
+      "cvss": 8.4,
+      "year": 2024,
+      "description": "Chromium use-after-free in ANGLE"
+    },
+    {
+      "cve_id": "CVE-2024-4603",
+      "cvss": 8.1,
+      "year": 2024,
+      "description": "OpenSSL excessive time verifying DSA signatures"
+    },
+    {
+      "cve_id": "CVE-2024-4835",
+      "cvss": 8.5,
+      "year": 2024,
+      "description": "Gitea authentication bypass in OAuth flow"
+    },
+    {
+      "cve_id": "CVE-2024-5157",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "Chromium use-after-free in Scheduling"
+    },
+    {
+      "cve_id": "CVE-2024-5184",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "Yarn package installation code execution"
+    },
+    {
+      "cve_id": "CVE-2024-5197",
+      "cvss": 8.5,
+      "year": 2024,
+      "description": "HAProxy HTTP request smuggling allowing cache poisoning"
+    },
+    {
+      "cve_id": "CVE-2024-5585",
+      "cvss": 8.1,
+      "year": 2024,
+      "description": "PHP use-after-free in parsing multipart data"
+    },
+    {
+      "cve_id": "CVE-2024-5836",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "Chromium inappropriate implementation in DevTools"
+    },
+    {
+      "cve_id": "CVE-2024-6102",
+      "cvss": 8.7,
+      "year": 2024,
+      "description": "Chromium out-of-bounds memory access in Dawn"
+    },
+    {
+      "cve_id": "CVE-2024-6232",
+      "cvss": 9.1,
+      "year": 2024,
+      "description": "Python tarfile directory traversal with symlinks"
+    },
+    {
+      "cve_id": "CVE-2024-6874",
+      "cvss": 9.8,
+      "year": 2024,
+      "description": "Mozilla Firefox use-after-free allowing code execution"
+    },
+    {
+      "cve_id": "CVE-2024-7006",
+      "cvss": 8.5,
+      "year": 2024,
+      "description": "QEMU guest-to-host escape via virtio device"
+    },
+    {
+      "cve_id": "CVE-2024-8927",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "PHP incorrect validation of URLs"
+    },
+    {
+      "cve_id": "CVE-2025-0001",
+      "cvss": 9.6,
+      "year": 2025,
+      "description": "Chromium V8 type confusion allowing remote code execution"
+    },
+    {
+      "cve_id": "CVE-2025-0002",
+      "cvss": 9.1,
+      "year": 2025,
+      "description": "Chromium use-after-free in WebRTC"
+    },
+    {
+      "cve_id": "CVE-2025-0159",
+      "cvss": 8.4,
+      "year": 2025,
+      "description": "BuildKit arbitrary file access through cache mounts"
+    },
+    {
+      "cve_id": "CVE-2025-0342",
+      "cvss": 8.8,
+      "year": 2025,
+      "description": "Linux kernel use-after-free in netfilter subsystem"
+    },
+    {
+      "cve_id": "CVE-2025-0426",
+      "cvss": 8.5,
+      "year": 2025,
+      "description": "GnuTLS timing side-channel in ECDSA"
+    },
+    {
+      "cve_id": "CVE-2025-0501",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "systemd privilege escalation via D-Bus"
+    },
+    {
+      "cve_id": "CVE-2025-0603",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "PowerDNS denial of service vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-0732",
+      "cvss": 8.4,
+      "year": 2025,
+      "description": "Xen hypercall handler vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-0802",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "RabbitMQ management interface vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-0804",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "Mosquitto MQTT broker denial of service"
+    },
+    {
+      "cve_id": "CVE-2025-21001",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "Grafana authentication bypass in API"
+    },
+    {
+      "cve_id": "CVE-2025-21002",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "Prometheus denial of service via metrics"
+    },
+    {
+      "cve_id": "CVE-2025-21004",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "Logstash pipeline injection vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-21262",
+      "cvss": 8.8,
+      "year": 2025,
+      "description": "Git arbitrary code execution via crafted repository"
+    },
+    {
+      "cve_id": "CVE-2025-21263",
+      "cvss": 8.2,
+      "year": 2025,
+      "description": "Subversion path-based authorization bypass"
+    },
+    {
+      "cve_id": "CVE-2025-21264",
+      "cvss": 8.0,
+      "year": 2025,
+      "description": "Mercurial remote code execution vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-21510",
+      "cvss": 8.8,
+      "year": 2025,
+      "description": "Redis Lua sandbox escape vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-21614",
+      "cvss": 9.1,
+      "year": 2025,
+      "description": "MySQL InnoDB component allowing unauthorized network access"
+    },
+    {
+      "cve_id": "CVE-2025-22881",
+      "cvss": 8.6,
+      "year": 2025,
+      "description": "Python zipfile path traversal vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-22882",
+      "cvss": 8.4,
+      "year": 2025,
+      "description": "Ruby REXML denial of service vulnerability"
+    }
+  ]
+}

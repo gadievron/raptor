@@ -1,0 +1,1131 @@
+{
+  "claims": [
+    {
+      "claim": "All 5 stage headers always render",
+      "needle": "Stage 1 \u2014 DISCOVER",
+      "hits": [
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 185,
+          "text": "out.append(f\"## Stage 1 \u2014 DISCOVER {discover_glyph}\")"
+        },
+        {
+          "file": "audit/phases/06_user_stories.py",
+          "line": 56,
+          "text": "\"Stage 1 \u2014 DISCOVER\"),"
+        },
+        {
+          "file": "tests/unit/cli/test_main.py",
+          "line": 170,
+          "text": "(`Stage 1 \u2014 DISCOVER \u2713`, `Stage 2 \u2014 ACQUIRE \u2713`, etc.) actually"
+        },
+        {
+          "file": "tests/unit/cli/test_main.py",
+          "line": 190,
+          "text": "assert \"Stage 1 \u2014 DISCOVER\" in flow_md"
+        },
+        {
+          "file": "tests/unit/cli/test_main.py",
+          "line": 222,
+          "text": "assert \"Stage 1 \u2014 DISCOVER\" in result.output"
+        },
+        {
+          "file": "tests/unit/cli/test_main.py",
+          "line": 251,
+          "text": "assert \"Stage 1 \u2014 DISCOVER\" not in result.output"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 401,
+          "text": "assert \"Stage 1 \u2014 DISCOVER\" in md"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 426,
+          "text": "assert \"Stage 1 \u2014 DISCOVER \u2713\" in md"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 454,
+          "text": "for header in (\"Stage 1 \u2014 DISCOVER \u2713\", \"Stage 2 \u2014 ACQUIRE \u2713\","
+        }
+      ],
+      "count": 9
+    },
+    {
+      "claim": "Pipeline trace flows to stdout (Outcome marker)",
+      "needle": "\u2713 PASS",
+      "hits": [
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 168,
+          "text": "out.append(\"**\u2713 PASS**\")"
+        },
+        {
+          "file": "audit/phases/06_user_stories.py",
+          "line": 59,
+          "text": "\"\u2713 PASS\"),"
+        },
+        {
+          "file": "tests/unit/cli/test_main.py",
+          "line": 196,
+          "text": "assert \"\u2713 PASS\" in flow_md"
+        },
+        {
+          "file": "tests/unit/cli/test_main.py",
+          "line": 223,
+          "text": "assert \"\u2713 PASS\" in result.output"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 19,
+          "text": "flow.md ends with a \u2713 PASS outcome line.\"\"\""
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 47,
+          "text": "assert \"\u2713 PASS\" in md"
+        }
+      ],
+      "count": 6
+    },
+    {
+      "claim": "Stage 4 Sources block emits per-source rows",
+      "needle": "**Sources:**",
+      "hits": [
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 342,
+          "text": "rows: list[str] = [\"**Sources:**\", \"\"]"
+        },
+        {
+          "file": "audit/phases/06_user_stories.py",
+          "line": 62,
+          "text": "\"**Sources:**\"),"
+        }
+      ],
+      "count": 2
+    },
+    {
+      "claim": "patch_url is a third extractor",
+      "needle": "patch_url",
+      "hits": [
+        {
+          "file": "cve_diff/pipeline.py",
+          "line": 150,
+          "text": "# up to two (JSON API + patch URL); cgit yields just patch_url."
+        },
+        {
+          "file": "cve_diff/diffing/extract_via_gitlab_api.py",
+          "line": 203,
+          "text": "* ``patch_url`` \u2014 the forge's raw ``<sha>.patch`` text endpoint"
+        },
+        {
+          "file": "cve_diff/diffing/extract_via_gitlab_api.py",
+          "line": 213,
+          "text": "from cve_diff.diffing.extract_via_patch_url import extract_via_patch_url"
+        },
+        {
+          "file": "cve_diff/diffing/extract_via_gitlab_api.py",
+          "line": 238,
+          "text": "b = extract_via_patch_url(cve_id, ref)"
+        },
+        {
+          "file": "cve_diff/diffing/extract_via_gitlab_api.py",
+          "line": 240,
+          "text": "results.append((\"patch_url\", b))"
+        },
+        {
+          "file": "cve_diff/diffing/extract_via_patch_url.py",
+          "line": 38,
+          "text": "def _patch_url_for(ref: RepoRef) -> str | None:"
+        },
+        {
+          "file": "cve_diff/diffing/extract_via_patch_url.py",
+          "line": 105,
+          "text": "def extract_via_patch_url(cve_id: str, ref: RepoRef) -> DiffBundle | None:"
+        },
+        {
+          "file": "cve_diff/diffing/extract_via_patch_url.py",
+          "line": 112,
+          "text": "url = _patch_url_for(ref)"
+        },
+        {
+          "file": "cve_diff/diffing/extraction_agreement.py",
+          "line": 12,
+          "text": "`extract_via_patch_url`). Distinct from the API JSON path; works"
+        },
+        {
+          "file": "cve_diff/diffing/extraction_agreement.py",
+          "line": 57,
+          "text": "pairs \u2014 usually 2 for GitHub (api + patch_url), 1-2 for GitLab,"
+        },
+        {
+          "file": "cve_diff/diffing/extraction_agreement.py",
+          "line": 58,
+          "text": "and 1 for cgit (patch_url only)."
+        },
+        {
+          "file": "cve_diff/cli/main.py",
+          "line": 467,
+          "text": "# patch_url) that landed."
+        },
+        {
+          "file": "cve_diff/report/flow.py",
+          "line": 37,
+          "text": "``gitlab_api``, or ``patch_url``."
+        },
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 296,
+          "text": "\"patch_url\": \"Patch URL\","
+        },
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 315,
+          "text": "if method == \"patch_url\":"
+        },
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 375,
+          "text": "if \"patch_url\" in src_names and \"github_api\" not in src_names \\"
+        },
+        {
+          "file": "audit/phases/02_functions.py",
+          "line": 31,
+          "text": "\"cve_diff/diffing/extract_via_patch_url.py\","
+        },
+        {
+          "file": "audit/phases/06_user_stories.py",
+          "line": 13,
+          "text": ".gitlab_api.patch, .patch_url.patch\" \u2014 assert each emission"
+        },
+        {
+          "file": "audit/phases/06_user_stories.py",
+          "line": 17,
+          "text": "patch_url all referenced."
+        },
+        {
+          "file": "audit/phases/06_user_stories.py",
+          "line": 64,
+          "text": "\"patch_url is a third extractor\","
+        },
+        {
+          "file": "audit/phases/06_user_stories.py",
+          "line": 65,
+          "text": "\"patch_url\"),"
+        },
+        {
+          "file": "tests/unit/diffing/test_extraction_agreement.py",
+          "line": 110,
+          "text": "lambda *_a, **_kw: [(\"github_api\", api), (\"patch_url\", patch)],"
+        },
+        {
+          "file": "tests/unit/diffing/test_extraction_agreement.py",
+          "line": 128,
+          "text": "assert src_names == {\"clone\", \"github_api\", \"patch_url\"}"
+        },
+        {
+          "file": "tests/unit/diffing/test_extraction_agreement.py",
+          "line": 131,
+          "text": "assert methods == [\"github_api\", \"patch_url\"]"
+        },
+        {
+          "file": "tests/unit/diffing/test_extraction_agreement.py",
+          "line": 143,
+          "text": "(\"patch_url\", patch)])"
+        },
+        {
+          "file": "tests/unit/diffing/test_extraction_agreement.py",
+          "line": 145,
+          "text": "# 3 pairwise verdicts: (clone,api), (clone,patch_url), (api,patch_url)"
+        },
+        {
+          "file": "tests/unit/diffing/test_extraction_agreement.py",
+          "line": 162,
+          "text": "(\"patch_url\", patch)])"
+        },
+        {
+          "file": "tests/unit/diffing/test_extraction_agreement.py",
+          "line": 175,
+          "text": "(\"patch_url\", patch)])"
+        },
+        {
+          "file": "tests/unit/diffing/test_extraction_agreement.py",
+          "line": 179,
+          "text": "def test_summarize_two_source_clone_plus_patch_url_for_cgit() -> None:"
+        },
+        {
+          "file": "tests/unit/diffing/test_extraction_agreement.py",
+          "line": 181,
+          "text": "With 2 sources (clone + patch_url) we get a real verdict \u2014 first"
+        },
+        {
+          "file": "tests/unit/diffing/test_extraction_agreement.py",
+          "line": 185,
+          "text": "out = ea._summarize_n([(\"clone\", clone), (\"patch_url\", patch)])"
+        },
+        {
+          "file": "tests/unit/diffing/test_extraction_agreement.py",
+          "line": 189,
+          "text": "assert src_names == {\"clone\", \"patch_url\"}"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 173,
+          "text": "from cve_diff.diffing import extract_via_patch_url as evpu"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 187,
+          "text": "monkeypatch.setattr(evpu, \"extract_via_patch_url\", lambda *_a, **_kw: None)"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 203,
+          "text": "from cve_diff.diffing import extract_via_patch_url as evpu"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 217,
+          "text": "monkeypatch.setattr(evpu, \"extract_via_patch_url\", lambda *_a, **_kw: None)"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 234,
+          "text": "from cve_diff.diffing import extract_via_patch_url as evpu"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 237,
+          "text": "# be \"unsupported\" but is now reachable via patch_url; for a truly"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 239,
+          "text": "monkeypatch.setattr(evpu, \"extract_via_patch_url\", lambda *_a, **_kw: None)"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 1,
+          "text": "\"\"\"Tests for cve_diff/diffing/extract_via_patch_url.py \u2014 third diff source."
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 27,
+          "text": "def test_patch_url_for_github() -> None:"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 29,
+          "text": "from cve_diff.diffing.extract_via_patch_url import _patch_url_for"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 31,
+          "text": "url = _patch_url_for(_ref(repo=\"https://github.com/socketio/engine.io\","
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 36,
+          "text": "def test_patch_url_for_gitlab() -> None:"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 38,
+          "text": "from cve_diff.diffing.extract_via_patch_url import _patch_url_for"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 40,
+          "text": "url = _patch_url_for(_ref(repo=\"https://gitlab.com/foo/bar\", sha=sha))"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 44,
+          "text": "def test_patch_url_for_cgit_kernel_org() -> None:"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 47,
+          "text": "from cve_diff.diffing.extract_via_patch_url import _patch_url_for"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 51,
+          "text": "url = _patch_url_for(ref)"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 57,
+          "text": "def test_patch_url_for_unsupported_forge_returns_none() -> None:"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 60,
+          "text": "from cve_diff.diffing.extract_via_patch_url import _patch_url_for"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 61,
+          "text": "assert _patch_url_for(_ref(repo=\"file:///tmp/some/repo\")) is None"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 62,
+          "text": "assert _patch_url_for(_ref(repo=\"https://bitbucket.org/foo/bar\")) is None"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 65,
+          "text": "assert _patch_url_for(_ref(repo=\"https://example.com/some/repo\")) is None"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 105,
+          "text": "def test_extract_via_patch_url_parses_unified_diff(monkeypatch) -> None:"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 108,
+          "text": "from cve_diff.diffing import extract_via_patch_url as evpu"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 120,
+          "text": "bundle = evpu.extract_via_patch_url(\"CVE-2022-21676\", _ref())"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 133,
+          "text": "def test_extract_via_patch_url_returns_none_on_404(monkeypatch) -> None:"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 137,
+          "text": "from cve_diff.diffing import extract_via_patch_url as evpu"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 149,
+          "text": "bundle = evpu.extract_via_patch_url(\"CVE-2022-21676\", _ref())"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 153,
+          "text": "def test_extract_via_patch_url_returns_none_on_unsupported_forge() -> None:"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 156,
+          "text": "from cve_diff.diffing.extract_via_patch_url import extract_via_patch_url"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 157,
+          "text": "bundle = extract_via_patch_url(\"CVE-X\","
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 162,
+          "text": "def test_extract_via_patch_url_returns_none_on_empty_body(monkeypatch) -> None:"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 165,
+          "text": "from cve_diff.diffing import extract_via_patch_url as evpu"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 177,
+          "text": "bundle = evpu.extract_via_patch_url(\"CVE-X\", _ref())"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 181,
+          "text": "def test_extract_via_patch_url_swallows_network_errors(monkeypatch) -> None:"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 184,
+          "text": "from cve_diff.diffing import extract_via_patch_url as evpu"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_patch_url.py",
+          "line": 197,
+          "text": "bundle = evpu.extract_via_patch_url(\"CVE-X\", _ref())"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 214,
+          "text": "{\"name\": \"patch_url\", \"files\": 2, \"bytes\": 2244},"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 218,
+          "text": "\"clone:patch_url\": \"agree\","
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 219,
+          "text": "\"github_api:patch_url\": \"agree\","
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 234,
+          "text": "assert \"Patch URL\" in md or \"patch_url\" in md"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 244,
+          "text": "def test_render_flow_diff_shows_two_sources_clone_plus_patch_url_for_cgit("
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 267,
+          "text": "{\"name\": \"patch_url\", \"files\": 5, \"bytes\": 12000},"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 269,
+          "text": "\"pairwise\": {\"clone:patch_url\": \"agree\"},"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 280,
+          "text": "assert \"Patch URL\" in md or \"patch_url\" in md"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 343,
+          "text": "{\"name\": \"patch_url\", \"files\": 5, \"bytes\": 8000},"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 347,
+          "text": "\"clone:patch_url\": \"agree\","
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 348,
+          "text": "\"github_api:patch_url\": \"disagree\","
+        }
+      ],
+      "count": 80
+    },
+    {
+      "claim": "GitHub API extractor exists",
+      "needle": "github_api",
+      "hits": [
+        {
+          "file": "cve_diff/pipeline.py",
+          "line": 308,
+          "text": "(b for n, b in extras if n in (\"github_api\", \"gitlab_api\")),"
+        },
+        {
+          "file": "cve_diff/diffing/extract_via_gitlab_api.py",
+          "line": 202,
+          "text": "* ``github_api`` / ``gitlab_api`` \u2014 JSON commits API."
+        },
+        {
+          "file": "cve_diff/diffing/extract_via_gitlab_api.py",
+          "line": 223,
+          "text": "results.append((\"github_api\", b))"
+        },
+        {
+          "file": "cve_diff/discovery/nvd.py",
+          "line": 11,
+          "text": "Placement in the cascade (osv \u2192 nvd \u2192 github_api) reflects coverage:"
+        },
+        {
+          "file": "cve_diff/discovery/nvd.py",
+          "line": 15,
+          "text": "- github_api is the last resort when neither OSV nor NVD resolves."
+        },
+        {
+          "file": "cve_diff/cli/bench.py",
+          "line": 155,
+          "text": "\"github_api\" if \"github.com\" in url"
+        },
+        {
+          "file": "cve_diff/cli/main.py",
+          "line": 466,
+          "text": "# Echo each second-source `.patch` file (github_api / gitlab_api /"
+        },
+        {
+          "file": "cve_diff/report/flow.py",
+          "line": 36,
+          "text": "``<method>`` is e.g. ``github_api``,"
+        },
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 294,
+          "text": "\"github_api\": \"GitHub API\","
+        },
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 311,
+          "text": "if method == \"github_api\":"
+        },
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 375,
+          "text": "if \"patch_url\" in src_names and \"github_api\" not in src_names \\"
+        },
+        {
+          "file": "audit/phases/06_user_stories.py",
+          "line": 12,
+          "text": "* \"<cve>.flow.md, .flow.jsonl, .clone.patch, .github_api.patch,"
+        },
+        {
+          "file": "audit/phases/06_user_stories.py",
+          "line": 16,
+          "text": "* \"Three independent extractors per PASS\" \u2014 clone + github_api +"
+        },
+        {
+          "file": "audit/phases/06_user_stories.py",
+          "line": 68,
+          "text": "\"github_api\"),"
+        },
+        {
+          "file": "tests/integration/test_nvd_live.py",
+          "line": 40,
+          "text": "through to github_api, which is the intended behavior."
+        },
+        {
+          "file": "tests/unit/diffing/test_extraction_agreement.py",
+          "line": 110,
+          "text": "lambda *_a, **_kw: [(\"github_api\", api), (\"patch_url\", patch)],"
+        },
+        {
+          "file": "tests/unit/diffing/test_extraction_agreement.py",
+          "line": 128,
+          "text": "assert src_names == {\"clone\", \"github_api\", \"patch_url\"}"
+        },
+        {
+          "file": "tests/unit/diffing/test_extraction_agreement.py",
+          "line": 131,
+          "text": "assert methods == [\"github_api\", \"patch_url\"]"
+        },
+        {
+          "file": "tests/unit/diffing/test_extraction_agreement.py",
+          "line": 142,
+          "text": "out = ea._summarize_n([(\"clone\", clone), (\"github_api\", api),"
+        },
+        {
+          "file": "tests/unit/diffing/test_extraction_agreement.py",
+          "line": 161,
+          "text": "out = ea._summarize_n([(\"clone\", clone), (\"github_api\", api),"
+        },
+        {
+          "file": "tests/unit/diffing/test_extraction_agreement.py",
+          "line": 166,
+          "text": "assert out.get(\"outliers\") == [\"github_api\"]"
+        },
+        {
+          "file": "tests/unit/diffing/test_extraction_agreement.py",
+          "line": 174,
+          "text": "out = ea._summarize_n([(\"clone\", clone), (\"github_api\", api),"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 195,
+          "text": "assert any(m == \"github_api\" for m, _b in out)"
+        },
+        {
+          "file": "tests/unit/cli/test_main.py",
+          "line": 127,
+          "text": "# API extraction skipped for file:// (non-GitHub) \u2014 no .github_api.patch."
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 213,
+          "text": "{\"name\": \"github_api\", \"files\": 2, \"bytes\": 2185},"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 217,
+          "text": "\"clone:github_api\": \"agree\","
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 219,
+          "text": "\"github_api:patch_url\": \"agree\","
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 233,
+          "text": "assert \"GitHub API\" in md or \"github_api\" in md"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 342,
+          "text": "{\"name\": \"github_api\", \"files\": 3, \"bytes\": 4232},"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 346,
+          "text": "\"clone:github_api\": \"disagree\","
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 348,
+          "text": "\"github_api:patch_url\": \"disagree\","
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 350,
+          "text": "\"outliers\": [\"github_api\"],"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 363,
+          "text": "assert \"github_api\" in md or \"GitHub API\" in md"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 498,
+          "text": "api_method=\"github_api\","
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 501,
+          "text": "assert (tmp_path / \"CVE-2099-0002.github_api.patch\").read_text() == \"api-extracted-body\\n\""
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 514,
+          "text": "assert not (tmp_path / \"CVE-2099-0003.github_api.patch\").exists()"
+        }
+      ],
+      "count": 36
+    },
+    {
+      "claim": "GitLab API extractor exists",
+      "needle": "gitlab_api",
+      "hits": [
+        {
+          "file": "cve_diff/pipeline.py",
+          "line": 308,
+          "text": "(b for n, b in extras if n in (\"github_api\", \"gitlab_api\")),"
+        },
+        {
+          "file": "cve_diff/diffing/extract_via_gitlab_api.py",
+          "line": 10,
+          "text": "* adds ``extract_via_gitlab_api`` \u2014 a parallel of ``extract_via_api``"
+        },
+        {
+          "file": "cve_diff/diffing/extract_via_gitlab_api.py",
+          "line": 62,
+          "text": "def extract_via_gitlab_api(cve_id: str, ref: RepoRef) -> DiffBundle:"
+        },
+        {
+          "file": "cve_diff/diffing/extract_via_gitlab_api.py",
+          "line": 80,
+          "text": "f\"{cve_id}: extract_via_gitlab_api supports gitlab URLs only \""
+        },
+        {
+          "file": "cve_diff/diffing/extract_via_gitlab_api.py",
+          "line": 202,
+          "text": "* ``github_api`` / ``gitlab_api`` \u2014 JSON commits API."
+        },
+        {
+          "file": "cve_diff/diffing/extract_via_gitlab_api.py",
+          "line": 228,
+          "text": "b = extract_via_gitlab_api(cve_id, ref)"
+        },
+        {
+          "file": "cve_diff/diffing/extract_via_gitlab_api.py",
+          "line": 230,
+          "text": "results.append((\"gitlab_api\", b))"
+        },
+        {
+          "file": "cve_diff/diffing/extract_via_patch_url.py",
+          "line": 31,
+          "text": "from cve_diff.diffing.extract_via_gitlab_api import _gitlab_host_and_slug"
+        },
+        {
+          "file": "cve_diff/diffing/extraction_agreement.py",
+          "line": 28,
+          "text": "from cve_diff.diffing.extract_via_gitlab_api import extract_for_agreement"
+        },
+        {
+          "file": "cve_diff/diffing/extraction_agreement.py",
+          "line": 56,
+          "text": "``extract_via_gitlab_api``) returns a list of ``(method, bundle)``"
+        },
+        {
+          "file": "cve_diff/cli/bench.py",
+          "line": 156,
+          "text": "else \"gitlab_api\" if \"gitlab\" in url"
+        },
+        {
+          "file": "cve_diff/cli/main.py",
+          "line": 466,
+          "text": "# Echo each second-source `.patch` file (github_api / gitlab_api /"
+        },
+        {
+          "file": "cve_diff/report/flow.py",
+          "line": 37,
+          "text": "``gitlab_api``, or ``patch_url``."
+        },
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 295,
+          "text": "\"gitlab_api\": \"GitLab API\","
+        },
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 313,
+          "text": "if method == \"gitlab_api\":"
+        },
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 376,
+          "text": "and \"gitlab_api\" not in src_names:"
+        },
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 415,
+          "text": "The forge dispatcher in ``extract_via_gitlab_api.extract_for_agreement``"
+        },
+        {
+          "file": "audit/phases/02_functions.py",
+          "line": 30,
+          "text": "\"cve_diff/diffing/extract_via_gitlab_api.py\","
+        },
+        {
+          "file": "audit/phases/06_user_stories.py",
+          "line": 13,
+          "text": ".gitlab_api.patch, .patch_url.patch\" \u2014 assert each emission"
+        },
+        {
+          "file": "audit/phases/06_user_stories.py",
+          "line": 71,
+          "text": "\"gitlab_api\"),"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 1,
+          "text": "\"\"\"Tests for cve_diff/diffing/extract_via_gitlab_api.py."
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 26,
+          "text": "from cve_diff.diffing.extract_via_gitlab_api import _gitlab_host_and_slug"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 33,
+          "text": "from cve_diff.diffing.extract_via_gitlab_api import _gitlab_host_and_slug"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 40,
+          "text": "from cve_diff.diffing.extract_via_gitlab_api import _gitlab_host_and_slug"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 46,
+          "text": "from cve_diff.diffing.extract_via_gitlab_api import _gitlab_host_and_slug"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 54,
+          "text": "# --- extract_via_gitlab_api ---"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 56,
+          "text": "def test_extract_via_gitlab_api_returns_bundle_on_success("
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 61,
+          "text": "import cve_diff.diffing.extract_via_gitlab_api as mod"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 87,
+          "text": "bundle = mod.extract_via_gitlab_api("
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 109,
+          "text": "def test_extract_via_gitlab_api_refuses_non_gitlab_url() -> None:"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 112,
+          "text": "from cve_diff.diffing.extract_via_gitlab_api import extract_via_gitlab_api"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 114,
+          "text": "extract_via_gitlab_api("
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 124,
+          "text": "def test_extract_via_gitlab_api_raises_on_404(monkeypatch: pytest.MonkeyPatch) -> None:"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 125,
+          "text": "import cve_diff.diffing.extract_via_gitlab_api as mod"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 129,
+          "text": "mod.extract_via_gitlab_api("
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 139,
+          "text": "def test_extract_via_gitlab_api_raises_on_no_parent("
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 144,
+          "text": "import cve_diff.diffing.extract_via_gitlab_api as mod"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 150,
+          "text": "mod.extract_via_gitlab_api("
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 172,
+          "text": "from cve_diff.diffing import extract_via_gitlab_api as mod"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 186,
+          "text": "monkeypatch.setattr(mod, \"extract_via_gitlab_api\", fake_gitlab)"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 202,
+          "text": "from cve_diff.diffing import extract_via_gitlab_api as mod"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 216,
+          "text": "monkeypatch.setattr(mod, \"extract_via_gitlab_api\", fake_gitlab)"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 224,
+          "text": "assert any(m == \"gitlab_api\" for m, _b in out)"
+        },
+        {
+          "file": "tests/unit/diffing/test_extract_via_gitlab_api.py",
+          "line": 233,
+          "text": "from cve_diff.diffing import extract_via_gitlab_api as mod"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 505,
+          "text": "\"\"\"For GitLab repos the file is named ``<cve>.gitlab_api.patch`` so"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 511,
+          "text": "api_method=\"gitlab_api\","
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 513,
+          "text": "assert (tmp_path / \"CVE-2099-0003.gitlab_api.patch\").exists()"
+        }
+      ],
+      "count": 47
+    },
+    {
+      "claim": "Verdict line on every PASS",
+      "needle": "Verdict:",
+      "hits": [
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 353,
+          "text": "rows.append(\"**Verdict:** single source (cannot cross-check)\")"
+        },
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 385,
+          "text": "\"\"\"Build the Stage 4 ``Verdict:`` line for an N-source agreement.\"\"\""
+        },
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 393,
+          "text": "return f\"**Verdict:** \u2713 {n}/{n} agree \u2014 all sources match\""
+        },
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 398,
+          "text": "f\"**Verdict:** \u26a0 {n - len(outliers)}/{n} agree \u2014 \""
+        },
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 403,
+          "text": "return f\"**Verdict:** \u26a0 partial \u2014 pairwise: {pairwise}\""
+        },
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 405,
+          "text": "return f\"**Verdict:** \u2717 disagree \u2014 no two sources match\""
+        },
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 409,
+          "text": "return f\"**Verdict:** {glyph}\""
+        },
+        {
+          "file": "audit/phases/06_user_stories.py",
+          "line": 74,
+          "text": "\"Verdict:\"),"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 239,
+          "text": "assert \"Verdict:\" in md"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 318,
+          "text": "assert \"Verdict:\" in md"
+        },
+        {
+          "file": "tests/unit/report/test_flow.py",
+          "line": 359,
+          "text": "assert \"Verdict:\" in md"
+        },
+        {
+          "file": "tools/oracle/osv_oracle.py",
+          "line": 118,
+          "text": "def verify(cve_id: str, picked_slug: str, picked_sha: str) -> OracleVerdict:"
+        },
+        {
+          "file": "tools/oracle/types.py",
+          "line": 50,
+          "text": "class OracleVerdict:"
+        },
+        {
+          "file": "tools/oracle/nvd_oracle.py",
+          "line": 44,
+          "text": "def verify(cve_id: str, picked_slug: str, picked_sha: str) -> OracleVerdict:"
+        },
+        {
+          "file": "tools/oracle/cross_check.py",
+          "line": 72,
+          "text": "def _verify_one(cve_id: str, picked_slug: str, picked_sha: str) -> OracleVerdict:"
+        }
+      ],
+      "count": 15
+    },
+    {
+      "claim": "OSV Schema 1.6.0 advertised",
+      "needle": "1.6.0",
+      "hits": [
+        {
+          "file": "cve_diff/report/osv_schema.py",
+          "line": 2,
+          "text": "OSV Schema 1.6.0 renderer for a `DiffBundle`."
+        },
+        {
+          "file": "cve_diff/report/osv_schema.py",
+          "line": 19,
+          "text": "OSV_SCHEMA_VERSION = \"1.6.0\""
+        },
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 275,
+          "text": "out.append(\"**Outputs:** OSV Schema 1.6.0, per-CVE Markdown, flow log\")"
+        },
+        {
+          "file": "audit/phases/06_user_stories.py",
+          "line": 76,
+          "text": "\"OSV Schema 1.6.0 advertised\","
+        },
+        {
+          "file": "audit/phases/06_user_stories.py",
+          "line": 77,
+          "text": "\"1.6.0\"),"
+        },
+        {
+          "file": "tests/unit/test_stage_assertions.py",
+          "line": 88,
+          "text": "\"schema_version\": \"1.6.0\","
+        },
+        {
+          "file": "tests/unit/test_stage_assertions.py",
+          "line": 98,
+          "text": "\"schema_version\": \"1.6.0\", \"id\": \"CVE-X\", \"modified\": \"now\","
+        },
+        {
+          "file": "tests/unit/test_stage_assertions.py",
+          "line": 107,
+          "text": "\"schema_version\": \"1.6.0\", \"id\": \"CVE-X\", \"modified\": \"now\","
+        },
+        {
+          "file": "tests/unit/test_stage_assertions.py",
+          "line": 116,
+          "text": "\"schema_version\": \"1.6.0\", \"id\": \"CVE-X\", \"modified\": \"now\","
+        },
+        {
+          "file": "tests/unit/test_stage_assertions.py",
+          "line": 125,
+          "text": "\"schema_version\": \"1.6.0\", \"id\": \"CVE-X\", \"modified\": \"now\","
+        },
+        {
+          "file": "tests/unit/test_report_osv_schema.py",
+          "line": 1,
+          "text": "\"\"\"OSV Schema 1.6.0 renderer tests.\"\"\""
+        },
+        {
+          "file": "tests/unit/test_report_osv_schema.py",
+          "line": 31,
+          "text": "assert osv[\"schema_version\"] == \"1.6.0\""
+        }
+      ],
+      "count": 12
+    },
+    {
+      "claim": "Pointer-consensus signal",
+      "needle": "Pointer consensus",
+      "hits": [
+        {
+          "file": "cve_diff/cli/bench.py",
+          "line": 406,
+          "text": "integrity_lines.append(\"| Pointer consensus (OSV refs + NVD Patch-tagged) | Count |\")"
+        },
+        {
+          "file": "cve_diff/cli/bench.py",
+          "line": 480,
+          "text": "# Pointer consensus + extraction-agreement cells. Both empty"
+        },
+        {
+          "file": "cve_diff/report/markdown.py",
+          "line": 277,
+          "text": "out.append(f\"**Pointer consensus:** {cons}/2 method(s) agreed (OSV refs + NVD Patch-tag)\")"
+        },
+        {
+          "file": "audit/phases/06_user_stories.py",
+          "line": 80,
+          "text": "\"Pointer consensus\"),"
+        }
+      ],
+      "count": 4
+    }
+  ],
+  "test_run": {
+    "exit_code": 0,
+    "n_passed": 632,
+    "ok": true,
+    "last_line": "632 passed, 1 deselected in 38.40s",
+    "stdout_tail": "........................................................................ [ 11%]\n........................................................................ [ 22%]\n........................................................................ [ 34%]\n........................................................................ [ 45%]\n........................................................................ [ 56%]\n........................................................................ [ 68%]\n........................................................................ [ 79%]\n........................................................................ [ 91%]\n........................................................                 [100%]\n632 passed, 1 deselected in 38.40s",
+    "stderr_tail": ""
+  },
+  "missing_claims": []
+}

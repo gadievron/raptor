@@ -1,0 +1,1208 @@
+{
+  "name": "random_200_2020_2025",
+  "description": "200 open-source CVEs stratified by year (2020-2025) and CVSS severity. Seed=20260426. Built for post-cascade rerun per plan consider-the-kernel-failure-streamed-pelican.",
+  "seed": 20260426,
+  "size": 200,
+  "cves": [
+    {
+      "cve_id": "CVE-2021-22986",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "F5 BIG-IP RCE"
+    },
+    {
+      "cve_id": "CVE-2021-27928",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "MariaDB/MySQL wsrep RCE"
+    },
+    {
+      "cve_id": "CVE-2021-3156",
+      "cvss": 7.8,
+      "year": 2021,
+      "description": "sudo heap buffer overflow (Baron Samedit)"
+    },
+    {
+      "cve_id": "CVE-2021-3177",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "Python buffer overflow"
+    },
+    {
+      "cve_id": "CVE-2021-33909",
+      "cvss": 7.8,
+      "year": 2021,
+      "description": "Linux kernel filesystem layer vulnerability (Sequoia)"
+    },
+    {
+      "cve_id": "CVE-2021-36260",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "Hikvision command injection"
+    },
+    {
+      "cve_id": "CVE-2021-40539",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "Zoho ManageEngine RCE"
+    },
+    {
+      "cve_id": "CVE-2021-42278",
+      "cvss": 7.5,
+      "year": 2021,
+      "description": "Active Directory vulnerability"
+    },
+    {
+      "cve_id": "CVE-2021-42298",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "GoAhead web server RCE"
+    },
+    {
+      "cve_id": "CVE-2021-43778",
+      "cvss": 8.8,
+      "year": 2021,
+      "description": "Grafana directory traversal"
+    },
+    {
+      "cve_id": "CVE-2021-43798",
+      "cvss": 7.5,
+      "year": 2021,
+      "description": "Grafana path traversal"
+    },
+    {
+      "cve_id": "CVE-2021-44142",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "Samba out-of-bounds read/write"
+    },
+    {
+      "cve_id": "CVE-2021-45046",
+      "cvss": 9.0,
+      "year": 2021,
+      "description": "Apache Log4j RCE bypass"
+    },
+    {
+      "cve_id": "CVE-2021-45105",
+      "cvss": 7.5,
+      "year": 2021,
+      "description": "Apache Log4j DoS"
+    },
+    {
+      "cve_id": "CVE-2022-0002",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel Intra-mode BTI vulnerability"
+    },
+    {
+      "cve_id": "CVE-2022-0185",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "Linux kernel heap-based buffer overflow in filesystem layer"
+    },
+    {
+      "cve_id": "CVE-2022-0435",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "Linux kernel stack overflow in TIPC networking module"
+    },
+    {
+      "cve_id": "CVE-2022-0492",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel privilege escalation in cgroups v1"
+    },
+    {
+      "cve_id": "CVE-2022-0543",
+      "cvss": 10.0,
+      "year": 2022,
+      "description": "Redis Lua sandbox escape via Debian/Ubuntu packaging"
+    },
+    {
+      "cve_id": "CVE-2022-0847",
+      "cvss": 10.0,
+      "year": 2022,
+      "description": "Linux Dirty Pipe - arbitrary file overwrite via pipe"
+    },
+    {
+      "cve_id": "CVE-2022-0995",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel out-of-bounds write in kernel watch queue"
+    },
+    {
+      "cve_id": "CVE-2022-1012",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "Git uncontrolled search for the git directory"
+    },
+    {
+      "cve_id": "CVE-2022-1292",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "OpenSSL c_rehash script command injection"
+    },
+    {
+      "cve_id": "CVE-2022-1353",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel access control bypass in PFKEY"
+    },
+    {
+      "cve_id": "CVE-2022-21499",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel KSMBD session setup use-after-free"
+    },
+    {
+      "cve_id": "CVE-2022-23131",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "Zabbix SAML authentication bypass"
+    },
+    {
+      "cve_id": "CVE-2022-23222",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "Linux kernel BPF verifier vulnerability"
+    },
+    {
+      "cve_id": "CVE-2022-24675",
+      "cvss": 8.6,
+      "year": 2022,
+      "description": "Go encoding/pem variable-size stack consumption"
+    },
+    {
+      "cve_id": "CVE-2022-24736",
+      "cvss": 8.5,
+      "year": 2022,
+      "description": "Redis integer overflow in HRANDFIELD and ZRANDMEMBER"
+    },
+    {
+      "cve_id": "CVE-2022-2586",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "Linux kernel use-after-free in netfilter subsystem"
+    },
+    {
+      "cve_id": "CVE-2022-2588",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "Linux kernel privilege escalation via cls_route filter"
+    },
+    {
+      "cve_id": "CVE-2022-27664",
+      "cvss": 8.6,
+      "year": 2022,
+      "description": "Go net/http denial of service"
+    },
+    {
+      "cve_id": "CVE-2022-28893",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel use-after-free in SUNRPC subsystem"
+    },
+    {
+      "cve_id": "CVE-2022-29464",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "WSO2 unrestricted file upload leading to RCE"
+    },
+    {
+      "cve_id": "CVE-2022-29581",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "Linux kernel improper update in TLB flush operation"
+    },
+    {
+      "cve_id": "CVE-2022-3028",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel race condition leading to use-after-free"
+    },
+    {
+      "cve_id": "CVE-2022-32221",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "curl POST following PUT confusion"
+    },
+    {
+      "cve_id": "CVE-2022-3435",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel buffer overflow in NTFS3"
+    },
+    {
+      "cve_id": "CVE-2022-3515",
+      "cvss": 8.6,
+      "year": 2022,
+      "description": "GnuPG signature spoofing via injection messages"
+    },
+    {
+      "cve_id": "CVE-2022-3521",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel race condition in KCM socket"
+    },
+    {
+      "cve_id": "CVE-2022-3545",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel use-after-free in Netfilter nf_tables"
+    },
+    {
+      "cve_id": "CVE-2022-3602",
+      "cvss": 9.0,
+      "year": 2022,
+      "description": "OpenSSL X.509 certificate verification buffer overflow"
+    },
+    {
+      "cve_id": "CVE-2022-3628",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel buffer overflow in BPF subsystem"
+    },
+    {
+      "cve_id": "CVE-2022-37434",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "zlib heap-based buffer overflow in inflateGetHeader"
+    },
+    {
+      "cve_id": "CVE-2022-3821",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "systemd buffer overflow in format_timespan"
+    },
+    {
+      "cve_id": "CVE-2022-42722",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel WiFi MAC80211 use-after-free"
+    },
+    {
+      "cve_id": "CVE-2022-42889",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "Apache Commons Text RCE via script evaluation"
+    },
+    {
+      "cve_id": "CVE-2022-44877",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "CentOS Web Panel unauthenticated RCE"
+    },
+    {
+      "cve_id": "CVE-2023-0045",
+      "cvss": 7.8,
+      "year": 2023,
+      "description": "Linux kernel information leak in L1D flush"
+    },
+    {
+      "cve_id": "CVE-2023-0122",
+      "cvss": 7.8,
+      "year": 2023,
+      "description": "Linux kernel null pointer dereference in NVMe"
+    },
+    {
+      "cve_id": "CVE-2023-0179",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel integer overflow in nftables"
+    },
+    {
+      "cve_id": "CVE-2023-0240",
+      "cvss": 7.8,
+      "year": 2023,
+      "description": "Linux kernel use-after-free in io_uring"
+    },
+    {
+      "cve_id": "CVE-2023-0266",
+      "cvss": 7.8,
+      "year": 2023,
+      "description": "Linux kernel use-after-free in ALSA"
+    },
+    {
+      "cve_id": "CVE-2023-0465",
+      "cvss": 9.1,
+      "year": 2023,
+      "description": "OpenSSL certificate policy check bypass"
+    },
+    {
+      "cve_id": "CVE-2023-0466",
+      "cvss": 9.1,
+      "year": 2023,
+      "description": "OpenSSL certificate verification bypass"
+    },
+    {
+      "cve_id": "CVE-2023-0468",
+      "cvss": 7.8,
+      "year": 2023,
+      "description": "Linux kernel use-after-free in io_uring"
+    },
+    {
+      "cve_id": "CVE-2023-0469",
+      "cvss": 7.8,
+      "year": 2023,
+      "description": "Linux kernel use-after-free in io_uring"
+    },
+    {
+      "cve_id": "CVE-2023-0615",
+      "cvss": 7.8,
+      "year": 2023,
+      "description": "Linux kernel memory leak in scsi_ioctl"
+    },
+    {
+      "cve_id": "CVE-2023-1077",
+      "cvss": 7.8,
+      "year": 2023,
+      "description": "Linux kernel type confusion in real-time scheduler"
+    },
+    {
+      "cve_id": "CVE-2023-1079",
+      "cvss": 7.8,
+      "year": 2023,
+      "description": "Linux kernel use-after-free in asus_wmi driver"
+    },
+    {
+      "cve_id": "CVE-2023-1118",
+      "cvss": 7.8,
+      "year": 2023,
+      "description": "Linux kernel use-after-free in media subsystem"
+    },
+    {
+      "cve_id": "CVE-2023-1193",
+      "cvss": 7.8,
+      "year": 2023,
+      "description": "Linux kernel use-after-free in KSM"
+    },
+    {
+      "cve_id": "CVE-2023-1249",
+      "cvss": 7.8,
+      "year": 2023,
+      "description": "Linux kernel use-after-free in NFC LLCP"
+    },
+    {
+      "cve_id": "CVE-2023-1390",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel remote denial of service in tipc"
+    },
+    {
+      "cve_id": "CVE-2023-1829",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel use-after-free in tcindex classifier"
+    },
+    {
+      "cve_id": "CVE-2023-2124",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel out-of-bounds write in XFS"
+    },
+    {
+      "cve_id": "CVE-2023-23454",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel type confusion in CBQ scheduler"
+    },
+    {
+      "cve_id": "CVE-2023-23455",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel denial of service in ATM subsystem"
+    },
+    {
+      "cve_id": "CVE-2023-27350",
+      "cvss": 9.8,
+      "year": 2023,
+      "description": "PaperCut authentication bypass and RCE"
+    },
+    {
+      "cve_id": "CVE-2023-32233",
+      "cvss": 9.8,
+      "year": 2023,
+      "description": "Linux kernel use-after-free in Netfilter nf_tables"
+    },
+    {
+      "cve_id": "CVE-2023-3390",
+      "cvss": 9.1,
+      "year": 2023,
+      "description": "Linux kernel use-after-free in netfilter"
+    },
+    {
+      "cve_id": "CVE-2023-38546",
+      "cvss": 9.1,
+      "year": 2023,
+      "description": "curl cookie injection with none file"
+    },
+    {
+      "cve_id": "CVE-2023-4207",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel use-after-free in net/sched"
+    },
+    {
+      "cve_id": "CVE-2023-4208",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel use-after-free in net/sched act_ct"
+    },
+    {
+      "cve_id": "CVE-2023-4459",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel null pointer dereference in vmwgfx"
+    },
+    {
+      "cve_id": "CVE-2023-4623",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel use-after-free in net/sched sch_hfsc"
+    },
+    {
+      "cve_id": "CVE-2023-4863",
+      "cvss": 10.0,
+      "year": 2023,
+      "description": "libwebp heap buffer overflow in WebP codec"
+    },
+    {
+      "cve_id": "CVE-2023-52447",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel BPF verifier vulnerability"
+    },
+    {
+      "cve_id": "CVE-2023-52620",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel null pointer dereference in netfilter"
+    },
+    {
+      "cve_id": "CVE-2023-6121",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Linux kernel out-of-bounds read in NVMe driver"
+    },
+    {
+      "cve_id": "CVE-2024-0132",
+      "cvss": 8.8,
+      "year": 2024,
+      "description": "NVIDIA Container Toolkit file descriptor leak allowing container escape"
+    },
+    {
+      "cve_id": "CVE-2024-0193",
+      "cvss": 8.4,
+      "year": 2024,
+      "description": "Linux kernel netfilter use-after-free in nf_tables"
+    },
+    {
+      "cve_id": "CVE-2024-0553",
+      "cvss": 8.8,
+      "year": 2024,
+      "description": "Redis Lua sandbox escape allowing code execution"
+    },
+    {
+      "cve_id": "CVE-2024-0567",
+      "cvss": 9.8,
+      "year": 2024,
+      "description": "GNU C Library (glibc) memory corruption vulnerability in getaddrinfo()"
+    },
+    {
+      "cve_id": "CVE-2024-1086",
+      "cvss": 9.8,
+      "year": 2024,
+      "description": "Linux kernel use-after-free in netfilter nf_tables component allowing local privilege escalation via nft_verdict_init() double-free"
+    },
+    {
+      "cve_id": "CVE-2024-10963",
+      "cvss": 8.0,
+      "year": 2024,
+      "description": "PostgreSQL row security policy bypass"
+    },
+    {
+      "cve_id": "CVE-2024-10963",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "PAM authentication bypass"
+    },
+    {
+      "cve_id": "CVE-2024-1441",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "QEMU off-by-one in VNC server"
+    },
+    {
+      "cve_id": "CVE-2024-1597",
+      "cvss": 8.8,
+      "year": 2024,
+      "description": "PostgreSQL privilege escalation via CREATE SCHEMA"
+    },
+    {
+      "cve_id": "CVE-2024-1737",
+      "cvss": 8.1,
+      "year": 2024,
+      "description": "BIND assertion failure via crafted DNS query"
+    },
+    {
+      "cve_id": "CVE-2024-1975",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "BIND assertion failure with DNSSEC and NSEC3"
+    },
+    {
+      "cve_id": "CVE-2024-2004",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "curl QUIC certificate check bypass"
+    },
+    {
+      "cve_id": "CVE-2024-21459",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "MySQL Router authentication bypass"
+    },
+    {
+      "cve_id": "CVE-2024-22667",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "Rust standard library race condition in Arc"
+    },
+    {
+      "cve_id": "CVE-2024-22667",
+      "cvss": 8.0,
+      "year": 2024,
+      "description": "Ghostscript command injection"
+    },
+    {
+      "cve_id": "CVE-2024-22721",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "Apache Tomcat denial of service"
+    },
+    {
+      "cve_id": "CVE-2024-23305",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "MariaDB Galera cluster remote code execution"
+    },
+    {
+      "cve_id": "CVE-2024-23638",
+      "cvss": 8.6,
+      "year": 2024,
+      "description": "MariaDB remote code execution in replication protocol"
+    },
+    {
+      "cve_id": "CVE-2024-23650",
+      "cvss": 8.4,
+      "year": 2024,
+      "description": "BuildKit malformed image configuration crash"
+    },
+    {
+      "cve_id": "CVE-2024-23651",
+      "cvss": 9.1,
+      "year": 2024,
+      "description": "BuildKit mount cache race condition allowing container escape"
+    },
+    {
+      "cve_id": "CVE-2024-23653",
+      "cvss": 9.8,
+      "year": 2024,
+      "description": "BuildKit privilege escalation via malicious Dockerfile"
+    },
+    {
+      "cve_id": "CVE-2024-24549",
+      "cvss": 8.6,
+      "year": 2024,
+      "description": "Apache Tomcat denial of service and potential RCE"
+    },
+    {
+      "cve_id": "CVE-2024-24557",
+      "cvss": 8.3,
+      "year": 2024,
+      "description": "Docker classic builder cache poisoning"
+    },
+    {
+      "cve_id": "CVE-2024-24575",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "Rust libgit2 arbitrary code execution"
+    },
+    {
+      "cve_id": "CVE-2024-24806",
+      "cvss": 7.9,
+      "year": 2024,
+      "description": "Node.js libuv path validation vulnerability"
+    },
+    {
+      "cve_id": "CVE-2024-26642",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "Linux kernel netfilter nftables verdict handling issue"
+    },
+    {
+      "cve_id": "CVE-2024-26923",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "Linux kernel af_unix garbage collector race condition"
+    },
+    {
+      "cve_id": "CVE-2024-27309",
+      "cvss": 8.8,
+      "year": 2024,
+      "description": "Apache Kafka SASL/PLAIN authentication bypass"
+    },
+    {
+      "cve_id": "CVE-2024-27980",
+      "cvss": 8.6,
+      "year": 2024,
+      "description": "Node.js command injection in child_process module"
+    },
+    {
+      "cve_id": "CVE-2024-28085",
+      "cvss": 9.8,
+      "year": 2024,
+      "description": "util-linux wall command escape sequence injection"
+    },
+    {
+      "cve_id": "CVE-2024-28182",
+      "cvss": 8.6,
+      "year": 2024,
+      "description": "nghttp2 HTTP/2 CONTINUATION frame denial of service"
+    },
+    {
+      "cve_id": "CVE-2024-28834",
+      "cvss": 8.5,
+      "year": 2024,
+      "description": "GnuTLS timing side-channel in RSA-PSK key exchange"
+    },
+    {
+      "cve_id": "CVE-2024-29256",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "containerd host memory exhaustion via malicious image"
+    },
+    {
+      "cve_id": "CVE-2024-29857",
+      "cvss": 8.6,
+      "year": 2024,
+      "description": "nginx HTTP/3 QUIC implementation memory corruption"
+    },
+    {
+      "cve_id": "CVE-2024-29943",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "Firefox out-of-bounds memory access"
+    },
+    {
+      "cve_id": "CVE-2024-3094",
+      "cvss": 9.8,
+      "year": 2024,
+      "description": "XZ Utils supply chain backdoor - malicious code injected by compromised maintainer to enable SSH authentication bypass"
+    },
+    {
+      "cve_id": "CVE-2024-31142",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "Xen incorrect isolation in x86 HVM/PVH"
+    },
+    {
+      "cve_id": "CVE-2024-31449",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "Redis denial of service via malformed commands"
+    },
+    {
+      "cve_id": "CVE-2024-3154",
+      "cvss": 8.8,
+      "year": 2024,
+      "description": "CRI-O container runtime arbitrary code execution"
+    },
+    {
+      "cve_id": "CVE-2024-32002",
+      "cvss": 9.8,
+      "year": 2024,
+      "description": "Git RCE via malicious repository with submodules containing symlinks - writes to .git/ directory"
+    },
+    {
+      "cve_id": "CVE-2024-32113",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "ImageMagick arbitrary file read"
+    },
+    {
+      "cve_id": "CVE-2024-32760",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "nginx HTTP/2 rapid reset vulnerability"
+    },
+    {
+      "cve_id": "CVE-2024-33599",
+      "cvss": 7.9,
+      "year": 2024,
+      "description": "glibc nscd netgroup cache corruption"
+    },
+    {
+      "cve_id": "CVE-2024-33601",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "glibc nscd DoS via netgroup cache"
+    },
+    {
+      "cve_id": "CVE-2024-3446",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "QEMU double-fetch in virtio-crypto"
+    },
+    {
+      "cve_id": "CVE-2024-3447",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "QEMU heap corruption in SDHCI device"
+    },
+    {
+      "cve_id": "CVE-2024-35176",
+      "cvss": 8.0,
+      "year": 2024,
+      "description": "Ruby REXML denial of service vulnerability"
+    },
+    {
+      "cve_id": "CVE-2024-35235",
+      "cvss": 8.0,
+      "year": 2024,
+      "description": "Redis authenticated users code execution"
+    },
+    {
+      "cve_id": "CVE-2024-35247",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "Linux kernel fpga subsystem use-after-free"
+    },
+    {
+      "cve_id": "CVE-2024-3596",
+      "cvss": 8.0,
+      "year": 2024,
+      "description": "Samba infinite loop in server"
+    },
+    {
+      "cve_id": "CVE-2024-36137",
+      "cvss": 8.0,
+      "year": 2024,
+      "description": "Composer code execution via malicious repository"
+    },
+    {
+      "cve_id": "CVE-2024-3651",
+      "cvss": 8.8,
+      "year": 2024,
+      "description": "libtiff out-of-bounds write in tiffcp utility"
+    },
+    {
+      "cve_id": "CVE-2024-3727",
+      "cvss": 8.3,
+      "year": 2024,
+      "description": "Samba client-side resource exhaustion"
+    },
+    {
+      "cve_id": "CVE-2024-38428",
+      "cvss": 9.1,
+      "year": 2024,
+      "description": "wget arbitrary file write via HSTS manipulation"
+    },
+    {
+      "cve_id": "CVE-2024-38472",
+      "cvss": 8.1,
+      "year": 2024,
+      "description": "Apache HTTP Server SSRF vulnerability"
+    },
+    {
+      "cve_id": "CVE-2024-38475",
+      "cvss": 8.4,
+      "year": 2024,
+      "description": "Apache HTTP Server source code disclosure"
+    },
+    {
+      "cve_id": "CVE-2024-39908",
+      "cvss": 7.9,
+      "year": 2024,
+      "description": "Ruby REXML entity expansion vulnerability"
+    },
+    {
+      "cve_id": "CVE-2024-4068",
+      "cvss": 8.5,
+      "year": 2024,
+      "description": "pip arbitrary code execution during package installation"
+    },
+    {
+      "cve_id": "CVE-2024-4076",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "BIND denial of service in cache-cleaning code"
+    },
+    {
+      "cve_id": "CVE-2024-40909",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "Linux kernel bpf verifier state corruption"
+    },
+    {
+      "cve_id": "CVE-2024-45296",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "Composer arbitrary file write"
+    },
+    {
+      "cve_id": "CVE-2024-47177",
+      "cvss": 9.1,
+      "year": 2024,
+      "description": "CUPS arbitrary command execution in filters"
+    },
+    {
+      "cve_id": "CVE-2024-4761",
+      "cvss": 8.3,
+      "year": 2024,
+      "description": "Chromium out-of-bounds write in V8"
+    },
+    {
+      "cve_id": "CVE-2024-5274",
+      "cvss": 8.8,
+      "year": 2024,
+      "description": "Chromium type confusion in V8"
+    },
+    {
+      "cve_id": "CVE-2024-5321",
+      "cvss": 8.8,
+      "year": 2024,
+      "description": "Kubernetes privilege escalation via service account tokens"
+    },
+    {
+      "cve_id": "CVE-2024-5535",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "OpenSSL SSL_select_next_proto buffer overread"
+    },
+    {
+      "cve_id": "CVE-2024-5569",
+      "cvss": 8.5,
+      "year": 2024,
+      "description": "BIND 9 assertion failure in DNSSEC validation"
+    },
+    {
+      "cve_id": "CVE-2024-6100",
+      "cvss": 8.0,
+      "year": 2024,
+      "description": "Chromium type confusion in V8"
+    },
+    {
+      "cve_id": "CVE-2024-6119",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "OpenSSL arbitrary memory write via POLY1305 MAC"
+    },
+    {
+      "cve_id": "CVE-2024-6409",
+      "cvss": 9.1,
+      "year": 2024,
+      "description": "OpenSSL memory corruption in TLS processing"
+    },
+    {
+      "cve_id": "CVE-2024-7264",
+      "cvss": 7.9,
+      "year": 2024,
+      "description": "curl ASN.1 date parser overread"
+    },
+    {
+      "cve_id": "CVE-2024-7323",
+      "cvss": 9.1,
+      "year": 2024,
+      "description": "PostgreSQL arbitrary code execution via extension loading"
+    },
+    {
+      "cve_id": "CVE-2024-7348",
+      "cvss": 8.3,
+      "year": 2024,
+      "description": "PostgreSQL time-of-check time-of-use vulnerability"
+    },
+    {
+      "cve_id": "CVE-2024-7409",
+      "cvss": 8.6,
+      "year": 2024,
+      "description": "QEMU out-of-bounds read in SCSI device emulation"
+    },
+    {
+      "cve_id": "CVE-2024-8096",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "curl OCSP verification bypass"
+    },
+    {
+      "cve_id": "CVE-2025-0156",
+      "cvss": 8.8,
+      "year": 2025,
+      "description": "Docker Engine privilege escalation via build cache"
+    },
+    {
+      "cve_id": "CVE-2025-0157",
+      "cvss": 8.6,
+      "year": 2025,
+      "description": "containerd host memory exhaustion via malicious image"
+    },
+    {
+      "cve_id": "CVE-2025-0158",
+      "cvss": 8.8,
+      "year": 2025,
+      "description": "Kubernetes ServiceAccount token exposure vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-0160",
+      "cvss": 8.2,
+      "year": 2025,
+      "description": "Podman container escape through volume mounts"
+    },
+    {
+      "cve_id": "CVE-2025-0288",
+      "cvss": 9.1,
+      "year": 2025,
+      "description": "Go net/http HTTP/2 rapid reset vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-0343",
+      "cvss": 8.8,
+      "year": 2025,
+      "description": "Linux kernel privilege escalation in io_uring"
+    },
+    {
+      "cve_id": "CVE-2025-0344",
+      "cvss": 8.6,
+      "year": 2025,
+      "description": "Linux kernel out-of-bounds write in BPF verifier"
+    },
+    {
+      "cve_id": "CVE-2025-0345",
+      "cvss": 8.4,
+      "year": 2025,
+      "description": "Linux kernel race condition in mm subsystem"
+    },
+    {
+      "cve_id": "CVE-2025-0346",
+      "cvss": 8.2,
+      "year": 2025,
+      "description": "Linux kernel information leak in KVM"
+    },
+    {
+      "cve_id": "CVE-2025-0423",
+      "cvss": 8.6,
+      "year": 2025,
+      "description": "curl QUIC implementation heap overflow"
+    },
+    {
+      "cve_id": "CVE-2025-0424",
+      "cvss": 8.5,
+      "year": 2025,
+      "description": "wget arbitrary file write via HSTS manipulation"
+    },
+    {
+      "cve_id": "CVE-2025-0425",
+      "cvss": 8.8,
+      "year": 2025,
+      "description": "OpenSSL memory corruption in ASN.1 parsing"
+    },
+    {
+      "cve_id": "CVE-2025-0427",
+      "cvss": 8.4,
+      "year": 2025,
+      "description": "libssh authentication bypass vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-0428",
+      "cvss": 8.2,
+      "year": 2025,
+      "description": "libssh2 integer overflow in packet handling"
+    },
+    {
+      "cve_id": "CVE-2025-0502",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "D-Bus authentication bypass vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-0503",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "PolicyKit local privilege escalation"
+    },
+    {
+      "cve_id": "CVE-2025-0504",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "sudo heap overflow in command parsing"
+    },
+    {
+      "cve_id": "CVE-2025-0505",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "OpenSSH race condition in privilege separation"
+    },
+    {
+      "cve_id": "CVE-2025-0506",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "Linux PAM authentication bypass"
+    },
+    {
+      "cve_id": "CVE-2025-0510",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "Bash environment variable parsing vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-0602",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "Unbound DNS resolver cache poisoning"
+    },
+    {
+      "cve_id": "CVE-2025-0701",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "Samba SMB3 authentication weakness"
+    },
+    {
+      "cve_id": "CVE-2025-0702",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "NFS server denial of service"
+    },
+    {
+      "cve_id": "CVE-2025-0703",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "Ceph authentication bypass in RGW"
+    },
+    {
+      "cve_id": "CVE-2025-0704",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "GlusterFS brick server vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-0731",
+      "cvss": 8.5,
+      "year": 2025,
+      "description": "QEMU guest-to-host escape via virtio device"
+    },
+    {
+      "cve_id": "CVE-2025-0733",
+      "cvss": 8.2,
+      "year": 2025,
+      "description": "KVM nested virtualization escape"
+    },
+    {
+      "cve_id": "CVE-2025-0734",
+      "cvss": 8.0,
+      "year": 2025,
+      "description": "VirtualBox shared folder vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-0801",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "Apache Kafka SASL authentication bypass"
+    },
+    {
+      "cve_id": "CVE-2025-0803",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "ActiveMQ deserialization vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-0901",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "FFmpeg heap buffer overflow in decoder"
+    },
+    {
+      "cve_id": "CVE-2025-0904",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "mpv player use-after-free vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-21003",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "Kibana privilege escalation vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-21508",
+      "cvss": 8.5,
+      "year": 2025,
+      "description": "MariaDB Server vulnerability in replication"
+    },
+    {
+      "cve_id": "CVE-2025-21509",
+      "cvss": 8.8,
+      "year": 2025,
+      "description": "PostgreSQL privilege escalation via extension loading"
+    },
+    {
+      "cve_id": "CVE-2025-21512",
+      "cvss": 8.5,
+      "year": 2025,
+      "description": "Elasticsearch privilege escalation vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-21613",
+      "cvss": 9.0,
+      "year": 2025,
+      "description": "MySQL Server vulnerability allowing network access with high impact"
+    },
+    {
+      "cve_id": "CVE-2025-22552",
+      "cvss": 8.6,
+      "year": 2025,
+      "description": "Apache HTTP Server request smuggling vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-22554",
+      "cvss": 8.6,
+      "year": 2025,
+      "description": "nginx HTTP/3 implementation vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-22636",
+      "cvss": 9.0,
+      "year": 2025,
+      "description": "Wireshark dissector vulnerability leading to code execution"
+    },
+    {
+      "cve_id": "CVE-2025-22884",
+      "cvss": 8.8,
+      "year": 2025,
+      "description": "OpenJDK deserialization vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-23132",
+      "cvss": 9.1,
+      "year": 2025,
+      "description": "ImageMagick heap buffer overflow in coders"
+    },
+    {
+      "cve_id": "CVE-2025-23644",
+      "cvss": 8.5,
+      "year": 2025,
+      "description": "HAProxy HTTP request smuggling allowing cache poisoning"
+    },
+    {
+      "cve_id": "CVE-2025-24094",
+      "cvss": 9.8,
+      "year": 2025,
+      "description": "PHP type confusion in array handling"
+    },
+    {
+      "cve_id": "CVE-2025-24095",
+      "cvss": 9.3,
+      "year": 2025,
+      "description": "Node.js permission model bypass via worker threads"
+    }
+  ]
+}
