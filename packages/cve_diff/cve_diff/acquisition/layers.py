@@ -49,6 +49,21 @@ def _commit_exists(repo_path: Path, sha: str) -> bool:
     return completed.returncode == 0
 
 
+def _clean_dest(dest: Path) -> None:
+    """Remove ``dest`` if it exists and has content. No-op otherwise.
+
+    Defensive: 60s timeout protects against pathological filesystems;
+    failures are silently ignored — the next acquire attempt will surface
+    a real error if rm-rf actually didn't work. Used by every layer's
+    pre-acquire cleanup and the cascade's between-layer cleanup.
+    """
+    if dest.exists() and any(dest.iterdir()):
+        subprocess.run(
+            ["rm", "-rf", str(dest)],
+            capture_output=True, check=False, timeout=60,
+        )
+
+
 @dataclass
 class LayerReport:
     name: str
@@ -112,11 +127,7 @@ class ShallowCloneLayer(AcquisitionLayer):
     def acquire(self, ref: RepoRef, dest: Path) -> LayerReport:
         last_err = "no depth tried"
         for depth in self.depths:
-            if dest.exists() and any(dest.iterdir()):
-                subprocess.run(
-                    ["rm", "-rf", str(dest)],
-                    capture_output=True, check=False, timeout=60,
-                )
+            _clean_dest(dest)
             cmd = [
                 "git", "clone", "--quiet", "--depth", str(depth),
                 ref.repository_url, str(dest),
@@ -176,11 +187,7 @@ class FullCloneLayer(AcquisitionLayer):
                     f"repo too large ({size_kb // 1024} MB > {self.max_size_mb} MB cap)",
                 )
 
-        if dest.exists() and any(dest.iterdir()):
-            subprocess.run(
-                ["rm", "-rf", str(dest)],
-                capture_output=True, check=False, timeout=60,
-            )
+        _clean_dest(dest)
         cmd = ["git", "clone", "--quiet", ref.repository_url, str(dest)]
         try:
             result = subprocess.run(
@@ -210,11 +217,7 @@ class CascadingRepoAcquirer:
             self.reports.append(report)
             if report.ok:
                 return
-            if layer_dest.exists():
-                subprocess.run(
-                    ["rm", "-rf", str(layer_dest)],
-                    capture_output=True, check=False, timeout=60,
-                )
+            _clean_dest(layer_dest)
         raise AcquisitionError(
             "All acquisition layers failed: "
             + "; ".join(f"{r.name}={r.detail or 'no detail'}" for r in self.reports)
