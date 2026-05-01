@@ -304,3 +304,39 @@ def test_cascade_raises_when_all_layers_fail(tmp_path):
     msg = str(excinfo.value)
     assert "targeted_fetch" in msg
     assert "shallow_clone" in msg
+
+
+# ---------- _clean_dest safety guard ----------
+# Defense-in-depth: the helper does ``rm -rf $dest``. Today every caller
+# passes a tempdir, but a future caller could pass ``Path("/")`` or a
+# similarly short absolute path. Guard refuses anything that's not at
+# least 3 path-components and absolute.
+
+
+def test_clean_dest_refuses_filesystem_root():
+    from cve_diff.acquisition.layers import _clean_dest
+    with pytest.raises(ValueError, match="dangerous path"):
+        _clean_dest(Path("/"))
+
+
+def test_clean_dest_refuses_short_absolute_path():
+    from cve_diff.acquisition.layers import _clean_dest
+    with pytest.raises(ValueError, match="dangerous path"):
+        _clean_dest(Path("/tmp"))
+
+
+def test_clean_dest_refuses_relative_path():
+    from cve_diff.acquisition.layers import _clean_dest
+    with pytest.raises(ValueError, match="dangerous path"):
+        _clean_dest(Path("foo/bar"))
+
+
+def test_clean_dest_accepts_real_tempdir(tmp_path):
+    """Sanity: a real ≥3-component absolute path with content gets removed."""
+    from cve_diff.acquisition.layers import _clean_dest
+    target = tmp_path / "subdir"
+    target.mkdir()
+    (target / "file.txt").write_text("content")
+    assert target.exists()
+    _clean_dest(target)
+    assert not target.exists()

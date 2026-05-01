@@ -53,10 +53,20 @@ def _clean_dest(dest: Path) -> None:
     """Remove ``dest`` if it exists and has content. No-op otherwise.
 
     Defensive: 60s timeout protects against pathological filesystems;
-    failures are silently ignored — the next acquire attempt will surface
-    a real error if rm-rf actually didn't work. Used by every layer's
-    pre-acquire cleanup and the cascade's between-layer cleanup.
+    transient subprocess failures are silently ignored — the next acquire
+    attempt will surface a real error if rm-rf actually didn't work.
+    Used by every layer's pre-acquire cleanup and the cascade's
+    between-layer cleanup.
+
+    Safety: refuses filesystem root, short absolute paths (< 3 path
+    components), and relative paths. Production callers always pass a
+    tempdir like ``/tmp/cve-diff-XXXX/...``. Guard protects against future
+    caller mistakes (``Path("/")`` would otherwise become ``rm -rf /``).
+    Raises ``ValueError`` rather than silently no-op'ing — such a path is
+    a programming error, not a transient failure.
     """
+    if not dest.is_absolute() or len(dest.parts) < 3:
+        raise ValueError(f"_clean_dest refusing dangerous path: {dest!r}")
     if dest.exists() and any(dest.iterdir()):
         subprocess.run(
             ["rm", "-rf", str(dest)],
