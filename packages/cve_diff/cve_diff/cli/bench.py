@@ -87,6 +87,13 @@ class _CveResult:
     # candidate). Distinct from ``meta_retry_attempted`` (budget walks).
     post_submit_retry_attempted: bool = False
     bench_retry_attempted: bool = False
+    # Gate-firing telemetry: how many times each agent-loop submit gate
+    # fed back rejection during this run. Distinct from the terminal
+    # surrender (which lands as ``error_class``); these counters surface
+    # the recoverable feedback path. ``unverified_submits`` = verified-SHA
+    # gate firings; ``not_found_submits`` = SHA-existence gate firings.
+    unverified_submits: int = 0
+    not_found_submits: int = 0
     # Integrity signals — populated on PASS only (failures don't have a
     # bundle to compare). `consensus_agree` is the count of OSV/NVD
     # methods that agree on the pointer (0, 1, or 2). `extraction_agree`
@@ -222,6 +229,8 @@ def _agent_attrs(pipeline: "Pipeline", model_id: str) -> dict:
         "llm_retries": int(tel.get("llm_retries", 0)),
         "meta_retry_attempted": bool(getattr(pipeline, "_last_meta_retry_attempted", False)),
         "post_submit_retry_attempted": bool(getattr(pipeline, "_last_post_submit_retry_attempted", False)),
+        "unverified_submits": int(tel.get("unverified_submits", 0)),
+        "not_found_submits": int(tel.get("not_found_submits", 0)),
     }
 
 

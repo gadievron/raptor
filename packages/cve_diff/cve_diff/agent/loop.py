@@ -463,6 +463,8 @@ class AgentLoop:
                                     tuple(verified), llm_retries,
                                     tool_calls_with_args=tuple(tool_calls_with_args),
                                     reflection_injected=reflection_injected,
+                                    unverified_submits=unverified_submits,
+                                    not_found_submits=not_found_submits,
                                 )
                             tool_results.append(_build_rejection_feedback(
                                 tool_use_id=b.id, slug=slug, sha=sha,
@@ -504,6 +506,8 @@ class AgentLoop:
                                     tuple(verified), llm_retries,
                                     tool_calls_with_args=tuple(tool_calls_with_args),
                                     reflection_injected=reflection_injected,
+                                    unverified_submits=unverified_submits,
+                                    not_found_submits=not_found_submits,
                                 )
                             tool_results.append(_build_rejection_feedback(
                                 tool_use_id=b.id, slug=slug, sha=sha,
@@ -601,6 +605,8 @@ class AgentLoop:
             tuple(verified), llm_retries,
             tool_calls_with_args=tuple(tool_calls_with_args),
             reflection_injected=reflection_injected,
+            unverified_submits=unverified_submits,
+            not_found_submits=not_found_submits,
         )
 
     def _finalize(
@@ -614,6 +620,8 @@ class AgentLoop:
         *,
         tool_calls_with_args: tuple[tuple[str, str], ...] = (),
         reflection_injected: bool = False,
+        unverified_submits: int = 0,
+        not_found_submits: int = 0,
     ) -> AgentResult:
         elapsed = round(budget.elapsed_s, 3)
         elapsed_ms = round((time.monotonic() - start) * 1000.0, 3)
@@ -628,6 +636,8 @@ class AgentLoop:
             "tool_calls_with_args": [list(t) for t in tool_calls_with_args],
             "reflection_injected": reflection_injected,
             "llm_retries": llm_retries,
+            "unverified_submits": unverified_submits,
+            "not_found_submits": not_found_submits,
         }
         if isinstance(result, AgentSurrender):
             out = AgentSurrender(
