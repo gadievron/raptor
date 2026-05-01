@@ -15,11 +15,13 @@ Summary outputs:
 from __future__ import annotations
 
 import json
+import shutil
 import signal
 import tempfile
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
+from datetime import date
 from pathlib import Path
 
 import typer
@@ -645,6 +647,7 @@ def bench(
     _flush()
     (output_dir / "summary.html").write_text(_render_html(summary))
     (output_dir / "bench_report.md").write_text(_render_bench_markdown(summary))
+    _persist_summary(output_dir / "summary.json", sample)
     typer.echo("")
     typer.echo(f"=== {summary.passed}/{summary.total} passed ({pct:.1f}%) ===")
     if non_source:
@@ -672,6 +675,28 @@ def bench(
     typer.echo(f"summary: {output_dir / 'summary.json'}")
     typer.echo(f"html:    {output_dir / 'summary.html'}")
     typer.echo(f"report:  {output_dir / 'bench_report.md'}")
+
+
+def _persist_summary(summary_path: Path, sample: Path) -> None:
+    """Copy a finished bench's summary.json into ``data/runs/<date>_<stem>.json``
+    so the structured per-CVE outcome record survives /tmp cleanup. Best-effort:
+    failure logs but does not fail the bench.
+
+    Without this, the rich BenchResult fields (per-CVE outcome, cost,
+    iterations, full tool-call list, retry flags, agreement verdicts) leak
+    out of the corpus every time /tmp is cleaned. The 2026-05-01 corpus
+    audit found 466 of 1,071 sampled CVEs had zero baseline mention because
+    their bench dirs were cleaned before persistence.
+    """
+    try:
+        runs_dir = Path("data/runs")
+        if not runs_dir.is_dir():
+            return  # not running from a project checkout; skip silently.
+        dest = runs_dir / f"{date.today():%Y%m%d}_{sample.stem}.json"
+        shutil.copy2(summary_path, dest)
+        typer.echo(f"persisted: {dest}")
+    except Exception as exc:  # noqa: BLE001 — never fail the bench on a copy
+        typer.echo(f"(could not persist summary to data/runs/: {exc})", err=True)
 
 
 # Error classes the bench-layer retry pass re-runs. Anything else is a
