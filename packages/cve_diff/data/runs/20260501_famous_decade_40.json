@@ -1,0 +1,2462 @@
+{
+  "sample": "data/samples/famous_decade_40.json",
+  "total": 40,
+  "passed": 29,
+  "results": [
+    {
+      "cve_id": "CVE-2016-10033",
+      "ok": true,
+      "elapsed_s": 25.2,
+      "files_changed": 2,
+      "diff_bytes": 1172,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 3,
+      "agent_tokens": 28042,
+      "agent_cost_usd": 0.270585,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2016-10033\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"ed4e7ce8ad877a8f578139c491c256ab1933c7c9\", \"slug\": \"phpmailer/phpmailer\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"ed4e7ce8ad877a8f578139c491c256ab1933c7c9\", \"slug\": \"phpmailer/phpmailer\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"ed4e7ce8ad877a8f578139c491c256ab1933c7c9\", \"outcome\": \"rescued\", \"rationale\": \"OSV deterministic hint po"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 1,
+      "extraction_agree": "majority_agree"
+    },
+    {
+      "cve_id": "CVE-2016-5195",
+      "ok": true,
+      "elapsed_s": 43.8,
+      "files_changed": 2,
+      "diff_bytes": 1740,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 3,
+      "agent_tokens": 47194,
+      "agent_cost_usd": 0.574035,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2016-5195\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2016-5195\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"19be0eaffa3ac7d8eb6784ad9bdbc7d67ed8e619\", \"slug\": \"torvalds/linux\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"19be0eaffa3ac7d8eb6784ad9bdbc7d67ed8e619\", \"slug\": \"torvalds/linux\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"19be0eaffa3ac7d8eb6784ad9bdbc7d67ed8e619\", \"outcome\": \"rescued\", \"rationale\": \"CVE-2016-5195 (\\\"Dirty CO"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 2,
+      "extraction_agree": "majority_agree"
+    },
+    {
+      "cve_id": "CVE-2017-1000253",
+      "ok": true,
+      "elapsed_s": 41.4,
+      "files_changed": 1,
+      "diff_bytes": 931,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 4,
+      "agent_tokens": 46051,
+      "agent_cost_usd": 0.439681,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2017-1000253\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2017-1000253\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"a87938b2e246b81b4fb713edb371a9fa3c5c3c86\", \"slug\": \"torvalds/linux\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"a87938b2e246b81b4fb713edb371a9fa3c5c3c86\", \"slug\": \"torvalds/linux\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"a87938b2e246b81b4fb713edb371a9fa3c5c3c86\", \"outcome\": \"rescued\", \"rationale\": \"OSV details explicitly ci"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 0,
+      "extraction_agree": "majority_agree"
+    },
+    {
+      "cve_id": "CVE-2017-12615",
+      "ok": false,
+      "elapsed_s": 221.9,
+      "files_changed": 0,
+      "diff_bytes": 0,
+      "shape": "",
+      "error": "DiscoveryError: CVE-2017-12615: agent surrendered (no_evidence): OSV lists cbf7381f46f2d8d902562c3cc3147d6d1414d6cb as last_affected for Tomcat 7.0.79, but check_diff_shape shows that commit is packaging_only (Tag 7.0.79 \u2014 only build.properties.default), so it is the version-tag commit not the upstr",
+      "error_class": "no_evidence",
+      "agent_iterations": 20,
+      "agent_tokens": 330823,
+      "agent_cost_usd": 1.674885,
+      "agent_tool_calls": [
+        "check_diff_shape",
+        "gh_search_commits",
+        "gh_search_commits",
+        "deterministic_hints",
+        "osv_raw",
+        "gh_commit_detail",
+        "gh_list_commits_by_path",
+        "gh_search_commits",
+        "gh_search_commits",
+        "http_fetch",
+        "gh_list_commits_by_path",
+        "gh_search_commits",
+        "gh_list_commits_by_path",
+        "gh_list_commits_by_path",
+        "gh_commit_detail",
+        "gh_search_commits",
+        "gh_search_commits",
+        "http_fetch",
+        "git_ls_remote",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "check_diff_shape",
+          "{\"sha\": \"cbf7381f46f2d8d902562c3cc3147d6d1414d6cb\", \"slug\": \"apache/tomcat\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"CVE-2017-12615 repo:apache/tomcat\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/tomcat DefaultServlet readonly PUT\"}"
+        ],
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2017-12615\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2017-12615\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"cbf7381f46f2d8d902562c3cc3147d6d1414d6cb\", \"slug\": \"apache/tomcat\"}"
+        ],
+        [
+          "gh_list_commits_by_path",
+          "{\"path\": \"java/org/apache/catalina/servlets/DefaultServlet.java\", \"since\": \"2017-07-01\", \"slug\": \"apache/tomcat\", \"until"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/tomcat 12615\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/tomcat 61542 PUT JSP\"}"
+        ],
+        [
+          "http_fetch",
+          "{\"url\": \"https://lists.apache.org/thread.html/3d19773b4cf0377db62d1e9328bf9160bf1819f04f988315086931d7%40%3Cdev.tomcat.a"
+        ],
+        [
+          "gh_list_commits_by_path",
+          "{\"path\": \"java/org/apache/catalina/servlets/DefaultServlet.java\", \"since\": \"2017-08-01\", \"slug\": \"apache/tomcat\", \"until"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/tomcat readonly Windows PUT 7.0.81\"}"
+        ],
+        [
+          "gh_list_commits_by_path",
+          "{\"path\": \"webapps/docs/changelog.xml\", \"since\": \"2017-08-09\", \"slug\": \"apache/tomcat\", \"until\": \"2017-08-12\"}"
+        ],
+        [
+          "gh_list_commits_by_path",
+          "{\"path\": \"java/org/apache/naming/resources/FileDirContext.java\", \"since\": \"2017-08-01\", \"slug\": \"apache/tomcat\", \"until\""
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"70e547234bc77571c1bbc88626d44a467e2cef74\", \"slug\": \"apache/tomcat\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/tomcat tc7.0.x readonly\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/tomcat 1808430\"}"
+        ],
+        [
+          "http_fetch",
+          "{\"url\": \"https://github.com/apache/tomcat/commits/7.0.81\"}"
+        ],
+        [
+          "git_ls_remote",
+          "{\"url\": \"https://github.com/apache/tomcat\"}"
+        ],
+        [
+          "submit_result",
+          "{\"outcome\": \"no_evidence\", \"rationale\": \"OSV lists cbf7381f46f2d8d902562c3cc3147d6d1414d6cb as last_affected for Tomcat "
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": true,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": null,
+      "extraction_agree": ""
+    },
+    {
+      "cve_id": "CVE-2017-5638",
+      "ok": true,
+      "elapsed_s": 25.9,
+      "files_changed": 3,
+      "diff_bytes": 3669,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 3,
+      "agent_tokens": 36123,
+      "agent_cost_usd": 0.423165,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2017-5638\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2017-5638\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"352306493971e7d5a756d61780d57a76eb1f519a\", \"slug\": \"apache/struts\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"352306493971e7d5a756d61780d57a76eb1f519a\", \"slug\": \"apache/struts\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"352306493971e7d5a756d61780d57a76eb1f519a\", \"outcome\": \"rescued\", \"rationale\": \"CVE-2017-5638 is the Apac"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 1,
+      "extraction_agree": "partial"
+    },
+    {
+      "cve_id": "CVE-2018-11776",
+      "ok": true,
+      "elapsed_s": 58.6,
+      "files_changed": 4,
+      "diff_bytes": 35380,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 12,
+      "agent_tokens": 162091,
+      "agent_cost_usd": 0.790829,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_search_commits",
+        "gh_commit_detail",
+        "osv_raw",
+        "gh_search_commits",
+        "gh_search_commits",
+        "gh_search_commits",
+        "gh_search_commits",
+        "gh_search_commits",
+        "gh_search_commits",
+        "gh_list_commits_by_path",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2018-11776\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"dbcca3512ee1a971cc0b44beac8f6b219a1bb153\", \"slug\": \"apache/struts\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"eacc002334b42dc808099b12d2ce2a5177cab42d\", \"slug\": \"apache/struts\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"6ec2bdc197f30af472c0ae176dca80d2944553e6\", \"slug\": \"apache/struts\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"45effc3822c5ea8fb4afbcb5bbab33b8b2bb08ff\", \"slug\": \"apache/struts\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"CVE-2018-11776 repo:apache/struts\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"bad9a49060b5d9ddb03f2700cbdeeea5cf51e125\", \"slug\": \"apache/struts\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2018-11776\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/struts S2-057 namespace\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/struts WW-4794\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/struts namespace wildcard validation\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/struts WW-4860\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/struts WW-4884\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/struts cleanupActionName\"}"
+        ],
+        [
+          "gh_list_commits_by_path",
+          "{\"path\": \"core/src/main/java/org/apache/struts2/dispatcher/mapper/DefaultActionMapper.java\", \"since\": \"2018-07-01\", \"slu"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"eec0d8e877dc86da4946268caf73c2f7ed5d2fc6\", \"slug\": \"apache/struts\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"eec0d8e877dc86da4946268caf73c2f7ed5d2fc6\", \"slug\": \"apache/struts\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"eec0d8e877dc86da4946268caf73c2f7ed5d2fc6\", \"outcome\": \"rescued\", \"rationale\": \"CVE-2018-11776 (Apache St"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 1,
+      "extraction_agree": "agree"
+    },
+    {
+      "cve_id": "CVE-2018-7600",
+      "ok": true,
+      "elapsed_s": 34.8,
+      "files_changed": 2,
+      "diff_bytes": 4803,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 6,
+      "agent_tokens": 76181,
+      "agent_cost_usd": 0.475345,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2018-7600\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2018-7600\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"ca315ad868680ff1d5686a07fc326eb116816049\", \"slug\": \"drupal/drupal\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"6424f69db19adbf6b21832ab4973d07165ee86ad\", \"slug\": \"drupal/drupal\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"9798f28fe983bea94fb06ff52423355688066780\", \"slug\": \"drupal/drupal\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"5ac8738fa69df34a0635f0907d661b509ff9a28f\", \"slug\": \"drupal/drupal\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"88e134084c440adf7a977f410f603e1effe795c6\", \"slug\": \"drupal/drupal\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"26da01fc021a516a752f61d09dc03a508b75230f\", \"slug\": \"drupal/drupal\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"5ac8738fa69df34a0635f0907d661b509ff9a28f\", \"slug\": \"drupal/drupal\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"5ac8738fa69df34a0635f0907d661b509ff9a28f\", \"outcome\": \"rescued\", \"rationale\": \"OSV's affected.ranges.fix"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 1,
+      "extraction_agree": "partial"
+    },
+    {
+      "cve_id": "CVE-2019-0708",
+      "ok": false,
+      "elapsed_s": 12.7,
+      "files_changed": 0,
+      "diff_bytes": 0,
+      "shape": "",
+      "error": "UnsupportedSource: CVE-2019-0708: CVE-2019-0708 (\"BlueKeep\") is a Remote Code Execution vulnerability in Microsoft Windows Remote Desktop Services (Terminal Services) on Windows 7, Windows Server 2008, and Windows Server 2008 R2. Microsoft Windows is closed-source proprietary software with no public",
+      "error_class": "UnsupportedSource",
+      "agent_iterations": 2,
+      "agent_tokens": 38079,
+      "agent_cost_usd": 0.381581,
+      "agent_tool_calls": [
+        "nvd_raw",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "nvd_raw",
+          "{\"cve_id\": \"CVE-2019-0708\"}"
+        ],
+        [
+          "submit_result",
+          "{\"outcome\": \"unsupported\", \"rationale\": \"CVE-2019-0708 (\\\"BlueKeep\\\") is a Remote Code Execution vulnerability in Micros"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": null,
+      "extraction_agree": ""
+    },
+    {
+      "cve_id": "CVE-2019-11043",
+      "ok": true,
+      "elapsed_s": 42.1,
+      "files_changed": 4,
+      "diff_bytes": 3430,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 6,
+      "agent_tokens": 82930,
+      "agent_cost_usd": 0.58168,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "gh_commit_detail",
+        "osv_raw",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2019-11043\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"ab061f95ca966731b1bb8d291ba0d01c14fcfdfc\", \"slug\": \"php/php-src\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2019-11043\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"ab061f95ca966731b1bb8d291ba0d01c14fcfdfc\", \"slug\": \"php/php-src\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"326cd05dae2eb411d5fdacede8a4bfa7a0798182\", \"slug\": \"php/php-src\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"d41dd0b518cd831c50d0f441aa5fc561d55bff66\", \"slug\": \"php/php-src\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"335008f6b2040e34cc3253b83e4a6377a95d6e6c\", \"slug\": \"php/php-src\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"ab061f95ca966731b1c84cf5b7b20155c0a1c06a\", \"slug\": \"php/php-src\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"ab061f95ca966731b1c84cf5b7b20155c0a1c06a\", \"slug\": \"php/php-src\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"ab061f95ca966731b1c84cf5b7b20155c0a1c06a\", \"outcome\": \"rescued\", \"rationale\": \"Commit message: \\\"Fix bug"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 1,
+      "extraction_agree": "partial"
+    },
+    {
+      "cve_id": "CVE-2019-14287",
+      "ok": true,
+      "elapsed_s": 37.9,
+      "files_changed": 465,
+      "diff_bytes": 4029902,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 3,
+      "agent_tokens": 38963,
+      "agent_cost_usd": 0.306893,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2019-14287\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2019-14287\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"b84e16e6c760e774003a4540c84c69c02d675815\", \"slug\": \"millert/sudo\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"b84e16e6c760e774003a4540c84c69c02d675815\", \"slug\": \"millert/sudo\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"b84e16e6c760e774003a4540c84c69c02d675815\", \"outcome\": \"rescued\", \"rationale\": \"OSV affected.ranges lists"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 1,
+      "extraction_agree": "majority_agree"
+    },
+    {
+      "cve_id": "CVE-2019-5736",
+      "ok": true,
+      "elapsed_s": 17.8,
+      "files_changed": 2,
+      "diff_bytes": 7605,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 4,
+      "agent_tokens": 39923,
+      "agent_cost_usd": 0.191011,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2019-5736\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"0a8e4117e7f715d5fbeef398405813ce8e88558b\", \"slug\": \"opencontainers/runc\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"0a8e4117e7f715d5fbeef398405813ce8e88558b\", \"slug\": \"opencontainers/runc\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"0a8e4117e7f715d5fbeef398405813ce8e88558b\", \"outcome\": \"rescued\", \"rationale\": \"Commit in opencontainers/"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 2,
+      "extraction_agree": "partial"
+    },
+    {
+      "cve_id": "CVE-2020-1472",
+      "ok": true,
+      "elapsed_s": 41.1,
+      "files_changed": 1,
+      "diff_bytes": 2644,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 5,
+      "agent_tokens": 97842,
+      "agent_cost_usd": 0.919543,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "nvd_raw",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_search_commits",
+        "osv_raw",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2020-1472\"}"
+        ],
+        [
+          "nvd_raw",
+          "{\"cve_id\": \"CVE-2020-1472\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"aa658ca962cfe9057741495ce9eda5d6b6965882\", \"slug\": \"samba-team/samba\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"ef64fc24b31f057bd344e7135d32732c8b3057e2\", \"slug\": \"samba-team/samba\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"356c036ef15b9790570e151cd1180910b4d35c18\", \"slug\": \"samba-team/samba\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"CVE-2020-1472 repo:samba-team/samba\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2020-1472\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"d8a6e6549c185daa26852d6d85f475cddfb3083a\", \"slug\": \"samba-team/samba\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"d8a6e6549c185daa26852d6d85f475cddfb3083a\", \"slug\": \"samba-team/samba\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"d8a6e6549c185daa26852d6d85f475cddfb3083a\", \"outcome\": \"rescued\", \"rationale\": \"CVE-2020-1472 (Zerologon)"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 1,
+      "extraction_agree": "partial"
+    },
+    {
+      "cve_id": "CVE-2020-14882",
+      "ok": false,
+      "elapsed_s": 8.2,
+      "files_changed": 0,
+      "diff_bytes": 0,
+      "shape": "",
+      "error": "UnsupportedSource: CVE-2020-14882: CVE-2020-14882 is in Oracle WebLogic Server (Oracle Fusion Middleware Console), a proprietary closed-source product. NVD/OSV references list only Oracle's CPU advisory (cpuoct2020.html) and packetstorm exploit writeups \u2014 no public source repository or commit. There",
+      "error_class": "UnsupportedSource",
+      "agent_iterations": 2,
+      "agent_tokens": 22376,
+      "agent_cost_usd": 0.137527,
+      "agent_tool_calls": [
+        "nvd_raw",
+        "osv_raw",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "nvd_raw",
+          "{\"cve_id\": \"CVE-2020-14882\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2020-14882\"}"
+        ],
+        [
+          "submit_result",
+          "{\"outcome\": \"unsupported\", \"rationale\": \"CVE-2020-14882 is in Oracle WebLogic Server (Oracle Fusion Middleware Console),"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": null,
+      "extraction_agree": ""
+    },
+    {
+      "cve_id": "CVE-2020-15257",
+      "ok": true,
+      "elapsed_s": 17.4,
+      "files_changed": 11,
+      "diff_bytes": 20469,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 4,
+      "agent_tokens": 38343,
+      "agent_cost_usd": 0.164056,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2020-15257\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"4a4bb851f5da563ff6e68a83dc837c7699c469ad\", \"slug\": \"containerd/containerd\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"4a4bb851f5da563ff6e68a83dc837c7699c469ad\", \"slug\": \"containerd/containerd\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"4a4bb851f5da563ff6e68a83dc837c7699c469ad\", \"outcome\": \"rescued\", \"rationale\": \"OSV references the merge "
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 2,
+      "extraction_agree": "partial"
+    },
+    {
+      "cve_id": "CVE-2021-22205",
+      "ok": true,
+      "elapsed_s": 147.8,
+      "files_changed": 1,
+      "diff_bytes": 183,
+      "shape": "packaging_only",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 5,
+      "agent_tokens": 62326,
+      "agent_cost_usd": 0.435072,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "gitlab_commit",
+        "gitlab_commit",
+        "git_ls_remote",
+        "http_fetch",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2021-22205\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2021-22205\"}"
+        ],
+        [
+          "gitlab_commit",
+          "{\"host\": \"https://gitlab.com\", \"sha\": \"db2e358dba43b6ad3a35fde5b1e21a3635b1a19d\", \"slug\": \"gitlab-org/gitlab\"}"
+        ],
+        [
+          "gitlab_commit",
+          "{\"host\": \"https://gitlab.com\", \"sha\": \"5760c3c5919f911376a44fe16d674af2af898914\", \"slug\": \"gitlab-org/gitlab\"}"
+        ],
+        [
+          "git_ls_remote",
+          "{\"url\": \"https://gitlab.com/gitlab-org/gitlab.git\"}"
+        ],
+        [
+          "http_fetch",
+          "{\"url\": \"https://gitlab.com/gitlab-org/gitlab/-/commit/db2e358dba43b6ad3a35fde5b1e21a3635b1a19d.patch\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"db2e358dba43b6ad3a35fde5b1e21a3635b1a19d\", \"outcome\": \"rescued\", \"rationale\": \"OSV record for CVE-2021-2"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 0,
+      "extraction_agree": "single_source"
+    },
+    {
+      "cve_id": "CVE-2021-26855",
+      "ok": false,
+      "elapsed_s": 9.7,
+      "files_changed": 0,
+      "diff_bytes": 0,
+      "shape": "",
+      "error": "UnsupportedSource: CVE-2021-26855: CVE-2021-26855 (\"ProxyLogon\") affects Microsoft Exchange Server 2013/2016/2019, which is proprietary closed-source software. NVD lists only Microsoft CPEs and the only patch reference is the MSRC advisory portal (portal.msrc.microsoft.com). OSV has no commit refere",
+      "error_class": "UnsupportedSource",
+      "agent_iterations": 2,
+      "agent_tokens": 25006,
+      "agent_cost_usd": 0.18141,
+      "agent_tool_calls": [
+        "nvd_raw",
+        "osv_raw",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "nvd_raw",
+          "{\"cve_id\": \"CVE-2021-26855\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2021-26855\"}"
+        ],
+        [
+          "submit_result",
+          "{\"outcome\": \"unsupported\", \"rationale\": \"CVE-2021-26855 (\\\"ProxyLogon\\\") affects Microsoft Exchange Server 2013/2016/201"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": null,
+      "extraction_agree": ""
+    },
+    {
+      "cve_id": "CVE-2021-3156",
+      "ok": true,
+      "elapsed_s": 43.6,
+      "files_changed": 1,
+      "diff_bytes": 2196,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 7,
+      "agent_tokens": 75237,
+      "agent_cost_usd": 0.379513,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_search_commits",
+        "gh_search_commits",
+        "check_diff_shape",
+        "submit_result",
+        "gh_commit_detail",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2021-3156\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"10d072a320c885e2e805ef2e47fe7a2ebde68abc\", \"slug\": \"millert/sudo\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"caa666c2dfa1f4286ccfbed5e512432665b72d3a\", \"slug\": \"millert/sudo\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:sudo-project/sudo CVE-2021-3156\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:sudo-project/sudo Baron Samedit set_cmnd\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"1f8638577d0c80a4ff864a2aad80a0d95488e9a8\", \"slug\": \"sudo-project/sudo\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"1f8638577d0c80a4ff864a2aad80a0d95488e9a8\", \"outcome\": \"rescued\", \"rationale\": \"CVE-2021-3156 (Baron Same"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"1f8638577d0c80a4ff864a2aad80a0d95488e9a8\", \"slug\": \"sudo-project/sudo\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"1f8638577d0c80a4ff864a2aad80a0d95488e9a8\", \"outcome\": \"rescued\", \"rationale\": \"CVE-2021-3156 (Baron Same"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 1,
+      "extraction_agree": "partial"
+    },
+    {
+      "cve_id": "CVE-2021-34527",
+      "ok": false,
+      "elapsed_s": 11.2,
+      "files_changed": 0,
+      "diff_bytes": 0,
+      "shape": "",
+      "error": "UnsupportedSource: CVE-2021-34527: CVE-2021-34527 (\"PrintNightmare\") is a remote code execution vulnerability in the Microsoft Windows Print Spooler service. Windows is closed-source proprietary software; the fix was delivered as binary security updates (KB5004945 and follow-ups on July 6/7, 2021) v",
+      "error_class": "UnsupportedSource",
+      "agent_iterations": 2,
+      "agent_tokens": 25431,
+      "agent_cost_usd": 0.190421,
+      "agent_tool_calls": [
+        "nvd_raw",
+        "osv_raw",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "nvd_raw",
+          "{\"cve_id\": \"CVE-2021-34527\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2021-34527\"}"
+        ],
+        [
+          "submit_result",
+          "{\"outcome\": \"unsupported\", \"rationale\": \"CVE-2021-34527 (\\\"PrintNightmare\\\") is a remote code execution vulnerability in"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": null,
+      "extraction_agree": ""
+    },
+    {
+      "cve_id": "CVE-2021-4034",
+      "ok": true,
+      "elapsed_s": 154.5,
+      "files_changed": 2,
+      "diff_bytes": 1700,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 4,
+      "agent_tokens": 51241,
+      "agent_cost_usd": 0.401492,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "gitlab_commit",
+        "gitlab_commit",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2021-4034\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2021-4034\"}"
+        ],
+        [
+          "gitlab_commit",
+          "{\"host\": \"https://gitlab.freedesktop.org\", \"sha\": \"a2bf5c9c83b6ae46cbd5c779d3055bff81ded683\", \"slug\": \"polkit/polkit\"}"
+        ],
+        [
+          "gitlab_commit",
+          "{\"host\": \"https://gitlab.freedesktop.org\", \"sha\": \"a2bf5c9c83b6ae46cbd5c779d3055bff81ded683\", \"slug\": \"polkit/polkit\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"a2bf5c9c83b6ae46cbd5c779d3055bff81ded683\", \"outcome\": \"rescued\", \"rationale\": \"CVE-2021-4034 (PwnKit) af"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 0,
+      "extraction_agree": "single_source"
+    },
+    {
+      "cve_id": "CVE-2021-44228",
+      "ok": true,
+      "elapsed_s": 49.0,
+      "files_changed": 11,
+      "diff_bytes": 18172,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 8,
+      "agent_tokens": 213953,
+      "agent_cost_usd": 1.466112,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_search_commits",
+        "gh_search_commits",
+        "gh_search_commits",
+        "gh_search_commits",
+        "gh_search_commits",
+        "gh_commit_detail",
+        "gh_search_commits",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2021-44228\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2021-44228\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"c30a1398a6697fb832c650870c44284d0052103e\", \"slug\": \"apache/logging-log4j2\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"38513a7d57343881f7bf58f37e67d6a87e0a47c5\", \"slug\": \"apache/logging-log4j2\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/logging-log4j2 LOG4J2-3198 JNDI\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/logging-log4j2 JndiLookup disable lookup\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/logging-log4j2 CVE-2021-44228\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/logging-log4j2 message lookups disabled default 2.15\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/logging-log4j2 restrict LDAP JNDI\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"c77b3cb39312b83b053d23a2158b99ac7de44dd3\", \"slug\": \"apache/logging-log4j2\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/logging-log4j2 LOG4J2-3198\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"001aaada7dab82c3c09cde5f8e14245dc9d8b454\", \"slug\": \"apache/logging-log4j2\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"001aaada7dab82c3c09cde5f8e14245dc9d8b454\", \"slug\": \"apache/logging-log4j2\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"001aaada7dab82c3c09cde5f8e14245dc9d8b454\", \"outcome\": \"rescued\", \"rationale\": \"Apache Log4j2 commit \\\"LO"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 1,
+      "extraction_agree": "partial"
+    },
+    {
+      "cve_id": "CVE-2021-45046",
+      "ok": true,
+      "elapsed_s": 36.6,
+      "files_changed": 6,
+      "diff_bytes": 10823,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 7,
+      "agent_tokens": 79081,
+      "agent_cost_usd": 0.434092,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_search_commits",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "gh_search_commits",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2021-45046\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"ad361d2e517e765f69db464d9407ac2dd80bc93e\", \"slug\": \"apache/logging-log4j2\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"cffe58f6a433ea1ab60ceb129d4c9b3377acda1d\", \"slug\": \"apache/logging-log4j2\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"c34a08096cc8e5d942967dc2fe0e9e238b6b6980\", \"slug\": \"apache/logging-log4j2\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"CVE-2021-45046 repo:apache/logging-log4j2\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"f8e30c84764b8d7b799b17d2b5ecb2924865ba5f\", \"slug\": \"apache/logging-log4j2\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"f8e30c84764b8d7b799b17d2b5ecb2924865ba5f\", \"slug\": \"apache/logging-log4j2\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/logging-log4j2 message lookups disable\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"27972043b76c9645476f561c5adc483dec6d3f5d\", \"slug\": \"apache/logging-log4j2\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"27972043b76c9645476f561c5adc483dec6d3f5d\", \"slug\": \"apache/logging-log4j2\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"27972043b76c9645476f561c5adc483dec6d3f5d\", \"outcome\": \"rescued\", \"rationale\": \"OSV's \\\"fixed\\\" SHAs (ad3"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 1,
+      "extraction_agree": "partial"
+    },
+    {
+      "cve_id": "CVE-2022-0847",
+      "ok": true,
+      "elapsed_s": 59.8,
+      "files_changed": 1,
+      "diff_bytes": 590,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 5,
+      "agent_tokens": 61144,
+      "agent_cost_usd": 0.420071,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2022-0847\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2022-0847\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"9d2231c5d74e13b2a0546fee6737ee4446017903\", \"slug\": \"torvalds/linux\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"9d2231c5d74e13b2a0546fee6737ee4446017903\", \"slug\": \"torvalds/linux\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"9d2231c5d74e13b2a0546fee6737ee4446017903\", \"outcome\": \"rescued\", \"rationale\": \"CVE-2022-0847 is the \\\"Di"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 0,
+      "extraction_agree": "majority_agree"
+    },
+    {
+      "cve_id": "CVE-2022-22965",
+      "ok": true,
+      "elapsed_s": 42.6,
+      "files_changed": 1,
+      "diff_bytes": 2659,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 7,
+      "agent_tokens": 96217,
+      "agent_cost_usd": 0.56136,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_search_commits",
+        "gh_search_commits",
+        "gh_search_commits",
+        "gh_list_commits_by_path",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2022-22965\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2022-22965\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"707a24c48b21fc35e8be715afc80f020a24a9714\", \"slug\": \"spring-projects/spring-framework\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"cfa701b8726f06528e9d408b1b94f333f70da45f\", \"slug\": \"spring-projects/spring-framework\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"CVE-2022-22965 repo:spring-projects/spring-framework\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:spring-projects/spring-framework data binding disallowedFields class\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:spring-projects/spring-framework Class.module data binding\"}"
+        ],
+        [
+          "gh_list_commits_by_path",
+          "{\"path\": \"spring-beans/src/main/java/org/springframework/beans/CachedIntrospectionResults.java\", \"since\": \"2022-03-25\", "
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"002546b3e4b8d791ea6acccb81eb3168f51abb15\", \"slug\": \"spring-projects/spring-framework\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"002546b3e4b8d791ea6acccb81eb3168f51abb15\", \"slug\": \"spring-projects/spring-framework\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"002546b3e4b8d791ea6acccb81eb3168f51abb15\", \"outcome\": \"rescued\", \"rationale\": \"CVE-2022-22965 (Spring4Sh"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 1,
+      "extraction_agree": "partial"
+    },
+    {
+      "cve_id": "CVE-2022-30190",
+      "ok": false,
+      "elapsed_s": 10.0,
+      "files_changed": 0,
+      "diff_bytes": 0,
+      "shape": "",
+      "error": "UnsupportedSource: CVE-2022-30190: CVE-2022-30190 (\"Follina\") is a remote code execution vulnerability in the Microsoft Windows Support Diagnostic Tool (MSDT), a closed-source component of Microsoft Windows. CPEs cover Windows 7/8.1/10/11 and Windows Server 2008\u20132022. All references (NVD, OSV) point",
+      "error_class": "UnsupportedSource",
+      "agent_iterations": 2,
+      "agent_tokens": 23274,
+      "agent_cost_usd": 0.15789,
+      "agent_tool_calls": [
+        "nvd_raw",
+        "osv_raw",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "nvd_raw",
+          "{\"cve_id\": \"CVE-2022-30190\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2022-30190\"}"
+        ],
+        [
+          "submit_result",
+          "{\"outcome\": \"unsupported\", \"rationale\": \"CVE-2022-30190 (\\\"Follina\\\") is a remote code execution vulnerability in the Mi"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": null,
+      "extraction_agree": ""
+    },
+    {
+      "cve_id": "CVE-2022-3602",
+      "ok": true,
+      "elapsed_s": 30.7,
+      "files_changed": 1,
+      "diff_bytes": 442,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 3,
+      "agent_tokens": 38084,
+      "agent_cost_usd": 0.29175,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2022-3602\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2022-3602\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"fe3b639dc19b325846f4f6801f2f4604f56e3de3\", \"slug\": \"openssl/openssl\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"fe3b639dc19b325846f4f6801f2f4604f56e3de3\", \"slug\": \"openssl/openssl\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"fe3b639dc19b325846f4f6801f2f4604f56e3de3\", \"outcome\": \"rescued\", \"rationale\": \"OSV references list git.o"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 1,
+      "extraction_agree": "majority_agree"
+    },
+    {
+      "cve_id": "CVE-2022-42889",
+      "ok": true,
+      "elapsed_s": 43.9,
+      "files_changed": 10,
+      "diff_bytes": 66819,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 9,
+      "agent_tokens": 106787,
+      "agent_cost_usd": 0.555318,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "gh_search_commits",
+        "osv_raw",
+        "gh_search_commits",
+        "gh_search_commits",
+        "gh_list_commits_by_path",
+        "check_diff_shape",
+        "submit_result",
+        "gh_commit_detail",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2022-42889\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"9397c1cdce7e78ffb3f53267d47c857d54c45d1c\", \"slug\": \"apache/commons-text\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"9397c1cdce7e78ffb3f53267d47c857d54c45d1c\", \"slug\": \"apache/commons-text\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/commons-text TEXT-130 StringSubstitutor\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2022-42889\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/commons-text disable lookups default\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/commons-text StringLookupFactory interpolator\"}"
+        ],
+        [
+          "gh_list_commits_by_path",
+          "{\"path\": \"src/main/java/org/apache/commons/text/lookup/StringLookupFactory.java\", \"since\": \"2022-08-01\", \"slug\": \"apache"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"b9b40b903e2d1f9935039803c9852439576780ea\", \"slug\": \"apache/commons-text\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"b9b40b903e2d1f9935039803c9852439576780ea\", \"outcome\": \"rescued\", \"rationale\": \"CVE-2022-42889 (Text4Shel"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"b9b40b903e2d1f9935039803c9852439576780ea\", \"slug\": \"apache/commons-text\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"b9b40b903e2d1f9935039803c9852439576780ea\", \"outcome\": \"rescued\", \"rationale\": \"CVE-2022-42889 (Text4Shel"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 1,
+      "extraction_agree": "agree"
+    },
+    {
+      "cve_id": "CVE-2022-47966",
+      "ok": false,
+      "elapsed_s": 22.9,
+      "files_changed": 0,
+      "diff_bytes": 0,
+      "shape": "",
+      "error": "UnsupportedSource: CVE-2022-47966: CVE-2022-47966 affects multiple Zoho ManageEngine on-premise products (ServiceDesk Plus, ADManager Plus, PAM 360, Password Manager Pro, Endpoint Central, etc.), all of which are closed-source proprietary commercial software from Zoho Corporation. The vulnerability ",
+      "error_class": "UnsupportedSource",
+      "agent_iterations": 3,
+      "agent_tokens": 75283,
+      "agent_cost_usd": 0.849135,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "nvd_raw",
+        "osv_raw",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2022-47966\"}"
+        ],
+        [
+          "nvd_raw",
+          "{\"cve_id\": \"CVE-2022-47966\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2022-47966\"}"
+        ],
+        [
+          "submit_result",
+          "{\"outcome\": \"unsupported\", \"rationale\": \"CVE-2022-47966 affects multiple Zoho ManageEngine on-premise products (ServiceD"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": null,
+      "extraction_agree": ""
+    },
+    {
+      "cve_id": "CVE-2023-20198",
+      "ok": false,
+      "elapsed_s": 10.8,
+      "files_changed": 0,
+      "diff_bytes": 0,
+      "shape": "",
+      "error": "UnsupportedSource: CVE-2023-20198: CVE-2023-20198 affects Cisco IOS XE Software web UI (also rebranded in Rockwell Automation Allen-Bradley Stratix 5200/5800 firmware, which run IOS XE). Cisco IOS XE is a proprietary, closed-source network operating system; there is no public upstream git repository",
+      "error_class": "UnsupportedSource",
+      "agent_iterations": 2,
+      "agent_tokens": 22527,
+      "agent_cost_usd": 0.149359,
+      "agent_tool_calls": [
+        "osv_raw",
+        "nvd_raw",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2023-20198\"}"
+        ],
+        [
+          "nvd_raw",
+          "{\"cve_id\": \"CVE-2023-20198\"}"
+        ],
+        [
+          "submit_result",
+          "{\"outcome\": \"unsupported\", \"rationale\": \"CVE-2023-20198 affects Cisco IOS XE Software web UI (also rebranded in Rockwell"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": null,
+      "extraction_agree": ""
+    },
+    {
+      "cve_id": "CVE-2023-23397",
+      "ok": false,
+      "elapsed_s": 12.1,
+      "files_changed": 0,
+      "diff_bytes": 0,
+      "shape": "",
+      "error": "UnsupportedSource: CVE-2023-23397: CVE-2023-23397 is a Microsoft Outlook Elevation of Privilege vulnerability. Affected products per NVD CPE are Microsoft 365 Apps, Office 2019/LTSC 2021, and Outlook 2013/2016 \u2014 all closed-source proprietary Microsoft products. The only references are MSRC's vendor ",
+      "error_class": "UnsupportedSource",
+      "agent_iterations": 2,
+      "agent_tokens": 20006,
+      "agent_cost_usd": 0.098441,
+      "agent_tool_calls": [
+        "nvd_raw",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "nvd_raw",
+          "{\"cve_id\": \"CVE-2023-23397\"}"
+        ],
+        [
+          "submit_result",
+          "{\"outcome\": \"unsupported\", \"rationale\": \"CVE-2023-23397 is a Microsoft Outlook Elevation of Privilege vulnerability. Aff"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": null,
+      "extraction_agree": ""
+    },
+    {
+      "cve_id": "CVE-2023-38545",
+      "ok": true,
+      "elapsed_s": 80.7,
+      "files_changed": 3,
+      "diff_bytes": 3451,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 8,
+      "agent_tokens": 160558,
+      "agent_cost_usd": 1.096605,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "gh_search_commits",
+        "gh_search_commits",
+        "http_fetch",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2023-38545\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2023-38545\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"172e54cda18412da73fd8eb4e444e8a5b371ca59\", \"slug\": \"curl/curl\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"172e54cda18412da73fd8eb4e444e8a5b371ca59\", \"slug\": \"curl/curl\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:curl/curl SOCKS5 heap buffer overflow CVE-2023-38545\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:curl/curl socks5 hostname overflow\"}"
+        ],
+        [
+          "http_fetch",
+          "{\"url\": \"https://curl.se/docs/CVE-2023-38545.html\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"fb4415d8aee6c1\", \"slug\": \"curl/curl\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"fb4415d8aee6c1\", \"slug\": \"curl/curl\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"fb4415d8aee6c14a9b6d0a5e2c98e0181c7eb1ae\", \"outcome\": \"rescued\", \"rationale\": \"curl's official advisory "
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"fb4415d8aee6c1\", \"outcome\": \"rescued\", \"rationale\": \"curl's official advisory at https://curl.se/docs/CV"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 1,
+      "extraction_agree": "partial"
+    },
+    {
+      "cve_id": "CVE-2023-46604",
+      "ok": true,
+      "elapsed_s": 32.6,
+      "files_changed": 18,
+      "diff_bytes": 36861,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 5,
+      "agent_tokens": 62252,
+      "agent_cost_usd": 0.425139,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "gh_search_commits",
+        "gh_search_commits",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2023-46604\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2023-46604\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"5f6edd9781c1438aa40fd4c7ec243a76a6be38c0\", \"slug\": \"apache/activemq\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"5f6edd9781c1438aa40fd4c7ec243a76a6be38c0\", \"slug\": \"apache/activemq\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"CVE-2023-46604 repo:apache/activemq\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"OpenWire validate throwable class repo:apache/activemq\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"3eaf3107f4fb9a3ce7ab45c175bfaeac7e866d5b\", \"slug\": \"apache/activemq\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"3eaf3107f4fb9a3ce7ab45c175bfaeac7e866d5b\", \"slug\": \"apache/activemq\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"3eaf3107f4fb9a3ce7ab45c175bfaeac7e866d5b\", \"outcome\": \"rescued\", \"rationale\": \"CVE-2023-46604 is the Apa"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 1,
+      "extraction_agree": "partial"
+    },
+    {
+      "cve_id": "CVE-2023-4911",
+      "ok": true,
+      "elapsed_s": 37.7,
+      "files_changed": 3,
+      "diff_bytes": 4430,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 5,
+      "agent_tokens": 67237,
+      "agent_cost_usd": 0.479378,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "gh_search_commits",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2023-4911\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2023-4911\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"ef321e23c20eebc6d6fb4044425c00e6df27b05f\", \"slug\": \"bminor/glibc\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"ef321e23c20eebc6d6fb4044425c00e6df27b05f\", \"slug\": \"bminor/glibc\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"CVE-2023-4911 repo:bminor/glibc\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"1056e5b4c3f2d90ed2b4a55f96add28da2f4c8fa\", \"slug\": \"bminor/glibc\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"1056e5b4c3f2d90ed2b4a55f96add28da2f4c8fa\", \"slug\": \"bminor/glibc\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"1056e5b4c3f2d90ed2b4a55f96add28da2f4c8fa\", \"outcome\": \"rescued\", \"rationale\": \"Upstream glibc fix for CV"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 1,
+      "extraction_agree": "partial"
+    },
+    {
+      "cve_id": "CVE-2024-1086",
+      "ok": true,
+      "elapsed_s": 78.7,
+      "files_changed": 1,
+      "diff_bytes": 904,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 4,
+      "agent_tokens": 38261,
+      "agent_cost_usd": 0.16262,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2024-1086\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"f342de4e2f33e0e39165d8639387aa6c19dff660\", \"slug\": \"torvalds/linux\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"f342de4e2f33e0e39165d8639387aa6c19dff660\", \"slug\": \"torvalds/linux\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"f342de4e2f33e0e39165d8639387aa6c19dff660\", \"outcome\": \"rescued\", \"rationale\": \"Commit \\\"netfilter: nf_ta"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 2,
+      "extraction_agree": "majority_agree"
+    },
+    {
+      "cve_id": "CVE-2024-21762",
+      "ok": false,
+      "elapsed_s": 9.1,
+      "files_changed": 0,
+      "diff_bytes": 0,
+      "shape": "",
+      "error": "UnsupportedSource: CVE-2024-21762: CVE-2024-21762 is an out-of-bounds write in Fortinet FortiOS and FortiProxy. Fortinet is a proprietary network-appliance vendor; FortiOS/FortiProxy are closed-source firmware with no public source repository or upstream git mirror. The only references are the Forti",
+      "error_class": "UnsupportedSource",
+      "agent_iterations": 2,
+      "agent_tokens": 21416,
+      "agent_cost_usd": 0.126157,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "nvd_raw",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2024-21762\"}"
+        ],
+        [
+          "nvd_raw",
+          "{\"cve_id\": \"CVE-2024-21762\"}"
+        ],
+        [
+          "submit_result",
+          "{\"outcome\": \"unsupported\", \"rationale\": \"CVE-2024-21762 is an out-of-bounds write in Fortinet FortiOS and FortiProxy. Fo"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": null,
+      "extraction_agree": ""
+    },
+    {
+      "cve_id": "CVE-2024-27198",
+      "ok": false,
+      "elapsed_s": 8.2,
+      "files_changed": 0,
+      "diff_bytes": 0,
+      "shape": "",
+      "error": "UnsupportedSource: CVE-2024-27198: CVE-2024-27198 is an authentication bypass in JetBrains TeamCity (commercial CI/CD product). TeamCity is closed-source proprietary software; the vendor publishes only a fixed-version notice (2023.11.4) and no upstream source repository or fix commit is publicly ava",
+      "error_class": "UnsupportedSource",
+      "agent_iterations": 2,
+      "agent_tokens": 18720,
+      "agent_cost_usd": 0.079226,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2024-27198\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2024-27198\"}"
+        ],
+        [
+          "submit_result",
+          "{\"outcome\": \"unsupported\", \"rationale\": \"CVE-2024-27198 is an authentication bypass in JetBrains TeamCity (commercial CI"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": null,
+      "extraction_agree": ""
+    },
+    {
+      "cve_id": "CVE-2024-3094",
+      "ok": true,
+      "elapsed_s": 22.3,
+      "files_changed": 12,
+      "diff_bytes": 73537,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 4,
+      "agent_tokens": 50146,
+      "agent_cost_usd": 0.378686,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "gh_search_repos",
+        "gh_search_commits",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2024-3094\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2024-3094\"}"
+        ],
+        [
+          "gh_search_repos",
+          "{\"query\": \"tukaani-project xz\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:tukaani-project/xz CVE-2024-3094\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"e93e13c8b3bec925c56e0c0b675d8000a0f7f754\", \"slug\": \"tukaani-project/xz\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"e93e13c8b3bec925c56e0c0b675d8000a0f7f754\", \"slug\": \"tukaani-project/xz\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"e93e13c8b3bec925c56e0c0b675d8000a0f7f754\", \"outcome\": \"rescued\", \"rationale\": \"Commit message explicitly"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 0,
+      "extraction_agree": "majority_agree"
+    },
+    {
+      "cve_id": "CVE-2024-43044",
+      "ok": true,
+      "elapsed_s": 51.3,
+      "files_changed": 5,
+      "diff_bytes": 23543,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 7,
+      "agent_tokens": 105031,
+      "agent_cost_usd": 0.763429,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_search_commits",
+        "osv_raw",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_search_commits",
+        "gh_search_commits",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2024-43044\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"c5a3ba542f1ca94e0d2f0a3e7a4b88deaa8de140\", \"slug\": \"jenkinsci/jenkins\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"d0df46d2e83e89bdd3eced69460842ab7aa03315\", \"slug\": \"jenkinsci/jenkins\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"CVE-2024-43044 repo:jenkinsci/jenkins\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2024-43044\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"0c13259cebc6a780fee7825838f4dd98ece8e68a\", \"slug\": \"jenkinsci/jenkins\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"3752f406bfef764e4954238acf44343169ae5799\", \"slug\": \"jenkinsci/jenkins\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"SECURITY-3430 repo:jenkinsci/jenkins\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"SECURITY-3430 repo:jenkinsci/remoting\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"5d26b53ad3a5cd8c4a060eef4f56d75e65ca17a5\", \"slug\": \"jenkinsci/jenkins\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"5d26b53ad3a5cd8c4a060eef4f56d75e65ca17a5\", \"slug\": \"jenkinsci/jenkins\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"5d26b53ad3a5cd8c4a060eef4f56d75e65ca17a5\", \"outcome\": \"rescued\", \"rationale\": \"CVE-2024-43044 correspond"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 1,
+      "extraction_agree": "agree"
+    },
+    {
+      "cve_id": "CVE-2024-47177",
+      "ok": true,
+      "elapsed_s": 114.7,
+      "files_changed": 2,
+      "diff_bytes": 896,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 7,
+      "agent_tokens": 72424,
+      "agent_cost_usd": 0.359795,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2024-47177\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"9044b135b01339b490d8777093266aa6c19f24b2\", \"slug\": \"openprinting/cups-filters\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"4496d13c8c6dacb688c3ee5062ff057ac9b5c3e6\", \"slug\": \"openprinting/cups-filters\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"4496d13c8c6dacb688c3ee5062ff057ac9b5c3e6\", \"outcome\": \"rescued\", \"rationale\": \"CVE-2024-47177 is the foo"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"4496d13c8c6dacb688c3ee5062ff057ac9b5c3e6\", \"slug\": \"openprinting/cups-filters\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"3143db74427d978991273bf181598dc010c7d2d8\", \"slug\": \"openprinting/cups-filters\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"eeaa514f11bd2a5cdfcbad62a617066e1b030f52\", \"slug\": \"openprinting/cups-filters\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"3143db74427d978991273bf181598dc010c7d2d8\", \"outcome\": \"rescued\", \"rationale\": \"CVE-2024-47177 is the foo"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": true,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 0,
+      "extraction_agree": "majority_agree"
+    },
+    {
+      "cve_id": "CVE-2024-6387",
+      "ok": true,
+      "elapsed_s": 63.3,
+      "files_changed": 1,
+      "diff_bytes": 1433,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 7,
+      "agent_tokens": 125712,
+      "agent_cost_usd": 0.823009,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "gh_search_commits",
+        "gh_search_commits",
+        "gh_search_commits",
+        "http_fetch",
+        "gh_list_commits_by_path",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2024-6387\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2024-6387\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:openssh/openssh-portable CVE-2024-6387\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:openssh/openssh-portable race condition signal handler sshd\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:openssh/openssh-portable SIGALRM sigdie\"}"
+        ],
+        [
+          "http_fetch",
+          "{\"url\": \"https://www.openssh.com/txt/release-9.8\"}"
+        ],
+        [
+          "gh_list_commits_by_path",
+          "{\"path\": \"sshd.c\", \"since\": \"2024-06-25T00:00:00Z\", \"slug\": \"openssh/openssh-portable\", \"until\": \"2024-07-02T00:00:00Z\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"12b6cc09ce6c430681f03af2a8069e37a664690b\", \"slug\": \"openssh/openssh-portable\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"12b6cc09ce6c430681f03af2a8069e37a664690b\", \"slug\": \"openssh/openssh-portable\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"12b6cc09ce6c430681f03af2a8069e37a664690b\", \"outcome\": \"rescued\", \"rationale\": \"CVE-2024-6387 (\\\"regreSSH"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 2,
+      "extraction_agree": "majority_agree"
+    },
+    {
+      "cve_id": "CVE-2025-24813",
+      "ok": true,
+      "elapsed_s": 59.3,
+      "files_changed": 2,
+      "diff_bytes": 2718,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 8,
+      "agent_tokens": 132109,
+      "agent_cost_usd": 0.8054,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "gh_search_commits",
+        "gh_search_commits",
+        "gh_commit_detail",
+        "gh_search_commits",
+        "gh_list_commits_by_path",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2025-24813\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2025-24813\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"7145107845fe82dafee783bb0bfd6bea028e173b\", \"slug\": \"apache/tomcat\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"7145107845fe82dafee783bb0bfd6bea028e173b\", \"slug\": \"apache/tomcat\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"9636e5188311f30c1e46c94191d2145998778bf4\", \"slug\": \"apache/tomcat\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"6e6ddf18b5dd4baadd4470f2f48a71b9c4185122\", \"slug\": \"apache/tomcat\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/tomcat CVE-2025-24813\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/tomcat partial PUT path equivalence\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"3269bb1f75449cc579c4b6b7b97f2de67995dc0b\", \"slug\": \"apache/tomcat\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:apache/tomcat partial PUT temporary file\"}"
+        ],
+        [
+          "gh_list_commits_by_path",
+          "{\"path\": \"java/org/apache/catalina/servlets/DefaultServlet.java\", \"since\": \"2025-01-01\", \"slug\": \"apache/tomcat\", \"until"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"0a668e0c27f2b7ca0cc7c6eea32253b9b5ecb29c\", \"slug\": \"apache/tomcat\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"0a668e0c27f2b7ca0cc7c6eea32253b9b5ecb29c\", \"slug\": \"apache/tomcat\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"0a668e0c27f2b7ca0cc7c6eea32253b9b5ecb29c\", \"outcome\": \"rescued\", \"rationale\": \"CVE-2025-24813 is the Apa"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 1,
+      "extraction_agree": "partial"
+    }
+  ]
+}
