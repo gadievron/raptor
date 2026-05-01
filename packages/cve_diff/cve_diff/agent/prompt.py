@@ -224,8 +224,6 @@ Rules:
   the loop will surrender ``no_evidence`` for you. To stay productive,
   prefer cascading into an *untried* source class over re-querying
   a class that already returned noise.
-  prefer cascading into an *untried* source class over re-querying
-  a class that already returned noise.
 """
 
 
