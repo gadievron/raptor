@@ -32,7 +32,6 @@ from cve_diff.core.models import (
     CommitSha,
     DiffBundle,
     FileChange,
-    IntroducedMarker,
     RepoRef,
 )
 from cve_diff.diffing import shape_dynamic

@@ -25,7 +25,6 @@ by default. Permanent (4xx other than 429) raises immediately.
 
 from __future__ import annotations
 
-import os
 import sys
 import time
 from dataclasses import dataclass, field
