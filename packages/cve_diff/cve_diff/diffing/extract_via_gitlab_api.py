@@ -25,9 +25,9 @@ import requests
 
 from cve_diff.core.exceptions import AnalysisError
 from cve_diff.core.models import CommitSha, DiffBundle, FileChange, RepoRef
+from cve_diff.core.test_path import is_test_path as _is_test_path
 from cve_diff.diffing import shape_dynamic
-from cve_diff.diffing.extract_via_api import _is_test_path
-from cve_diff.diffing.extract_via_api import (  # for the dispatcher
+from cve_diff.diffing.extract_via_api import (
     extract_via_api as _extract_via_api_github,
 )
 

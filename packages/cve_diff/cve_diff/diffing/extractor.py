@@ -8,12 +8,12 @@ one-liner (see plan's Port/Rewrite/Discard table).
 
 from __future__ import annotations
 
-import re
 import subprocess
 from pathlib import Path
 
 from cve_diff.core.exceptions import AnalysisError
 from cve_diff.core.models import CommitSha, DiffBundle, FileChange, RepoRef
+from cve_diff.core.test_path import is_test_path as _is_test_path
 from cve_diff.core.url_re import GITHUB_REPO_URL_RE, normalize_slug
 from cve_diff.diffing import shape_dynamic
 from cve_diff.infra import github_client
@@ -27,18 +27,6 @@ DEFAULT_TIMEOUT_S = 300
 # 128 KB — so one extra doubling wouldn't move the needle). See
 # `data/baselines/stage4_tier1_analysis_2026-04-24.md`.
 MAX_FILE_BYTES = 128 * 1024
-
-# Test-file path heuristic. Intentionally generic: matches path segments
-# named `test[s]`, `__tests__`, `spec[s]`, or filenames of the form
-# `test_*.{py,go,rs,…}` / `*_test.{py,go,rs}` / `*.spec.{js,ts,jsx,tsx}`.
-# No language-specific list.
-_TEST_PATH_RE = re.compile(
-    r"(?:^|/)(?:tests?|__tests__|specs?|testing)(?:/|$)"
-    r"|(?:^|/)test_[^/]+\.[a-z]+$"
-    r"|(?:^|/)[^/]+_test\.[a-z]+$"
-    r"|(?:^|/)[^/]+\.spec\.[a-z]+$",
-    re.IGNORECASE,
-)
 
 
 def _slug_of(url: str) -> str | None:
@@ -113,10 +101,6 @@ def extract_diff(
         shape=shape,
         files=files,
     )
-
-
-def _is_test_path(path: str) -> bool:
-    return bool(_TEST_PATH_RE.search(path))
 
 
 def _count_hunks_per_file(diff_text: str) -> dict[str, int]:
