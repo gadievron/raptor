@@ -119,14 +119,28 @@ def _get(url: str) -> requests.Response | dict[str, Any]:
     return resp
 
 
+def _http_or_error(url: str) -> tuple[requests.Response | None, dict[str, Any] | None]:
+    """Return ``(resp, None)`` on a 200; ``(None, error_dict)`` otherwise.
+
+    Centralizes the error-shape contract for the per-distro fetchers below:
+    ``{"error": "network: ..."}`` from ``_get`` on RequestException,
+    ``{"error": "http <code>"}`` on non-200. Each fetcher then handles only
+    its own parse step.
+    """
+    resp = _get(url)
+    if isinstance(resp, dict):
+        return None, resp
+    if resp.status_code != 200:
+        return None, {"error": f"http {resp.status_code}"}
+    return resp, None
+
+
 def _fetch_debian(cve_id: str) -> dict[str, Any]:
     """Scrape Debian security-tracker HTML — extract anchor URLs +
     'Fixed by:' notes line."""
-    resp = _get(_DEBIAN_URL.format(cve_id=cve_id))
-    if isinstance(resp, dict):
-        return resp
-    if resp.status_code != 200:
-        return {"error": f"http {resp.status_code}"}
+    resp, err = _http_or_error(_DEBIAN_URL.format(cve_id=cve_id))
+    if err:
+        return err
     body = resp.text[:_MAX_BYTES]
     refs: list[str] = []
     for href in _HREF_RE.findall(body):
@@ -138,11 +152,9 @@ def _fetch_debian(cve_id: str) -> dict[str, Any]:
 
 def _fetch_ubuntu(cve_id: str) -> dict[str, Any]:
     """Ubuntu CVE search API — returns JSON with cves[].references + notes."""
-    resp = _get(_UBUNTU_URL.format(cve_id=cve_id))
-    if isinstance(resp, dict):
-        return resp
-    if resp.status_code != 200:
-        return {"error": f"http {resp.status_code}"}
+    resp, err = _http_or_error(_UBUNTU_URL.format(cve_id=cve_id))
+    if err:
+        return err
     try:
         data = resp.json()
     except ValueError:
@@ -166,11 +178,9 @@ def _fetch_ubuntu(cve_id: str) -> dict[str, Any]:
 
 def _fetch_redhat(cve_id: str) -> dict[str, Any]:
     """Red Hat hydra security-data API — returns JSON with references[]."""
-    resp = _get(_REDHAT_URL.format(cve_id=cve_id))
-    if isinstance(resp, dict):
-        return resp
-    if resp.status_code != 200:
-        return {"error": f"http {resp.status_code}"}
+    resp, err = _http_or_error(_REDHAT_URL.format(cve_id=cve_id))
+    if err:
+        return err
     try:
         data = resp.json()
     except ValueError:
