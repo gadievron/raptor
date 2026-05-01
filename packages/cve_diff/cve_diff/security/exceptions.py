@@ -1,8 +1,7 @@
 """Security-domain exceptions.
 
-Raised by the validators in ``cve_diff/security/validators.py`` when
-input fails defensive checks (CVE id format, URL shape, path
-traversal, SSRF, SHA format, CVSS score).
+Raised by the CVE-id validator in ``cve_diff/security/validators.py``
+when input fails the format / injection / path-traversal checks.
 """
 
 
@@ -12,7 +11,3 @@ class SecurityError(Exception):
 
 class ValidationError(SecurityError):
     """Raised when input validation fails."""
-
-
-class SSRFError(SecurityError):
-    """Raised when an SSRF bypass attempt is detected."""
