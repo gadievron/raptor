@@ -231,14 +231,16 @@ OSV JSON plus a `summary.{json,html,md}` aggregating outcomes
 | 7 | IdenticalCommitsError (would diff `HEAD..HEAD`) |
 | 9 | AnalysisError / LLMCallFailed |
 
-## Tests
+## Verifying your install
 
 ```bash
-pytest tests/unit -q          # 632 hermetic — no network
-pytest -m integration         # live OSV / GitHub / NVD; opt-in
+cve-diff --help                        # CLI loads
+cve-diff health                        # probes OSV / GitHub / Anthropic
+cve-diff run CVE-2024-3094 -o /tmp/out --disk-limit-pct 95
 ```
 
-The default `pytest` config marks integration tests deselected.
+The third command runs the full pipeline on a known-good CVE (xz-utils
+backdoor) — expect `✓ PASS` and 7 artifacts in `/tmp/out`.
 
 ## Out of scope
 
@@ -250,7 +252,4 @@ The default `pytest` config marks integration tests deselected.
 
 ## See also
 
-- `audit/REPORT.md` — automated audit (file-by-file + function-level
-  + threat model + ruff + tests). `python -m audit.runner all` to
-  re-run; nothing silent, every finding cited file:line.
 - `cve_diff/agent/prompt.py` — the system prompt the agent runs with.
