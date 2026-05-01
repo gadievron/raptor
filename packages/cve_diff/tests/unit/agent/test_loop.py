@@ -628,6 +628,9 @@ def test_verified_sha_gate_rejects_unverified_submit(
     """Submit with a (slug, sha) NOT seen by gh_commit_detail returns a
     tool_result with submit_rejected=true; the loop continues, doesn't
     terminate."""
+    # Stub the SHA-existence gate so it doesn't hit the network on fake SHAs.
+    monkeypatch.setattr("cve_diff.infra.github_client.commit_exists",
+                        lambda slug, sha: True)
     gh = _gh_tool("acme/widget", "deadbeef0000")
     responses = [
         # Iter 1: agent verifies one (slug, sha)
@@ -678,6 +681,9 @@ def test_verified_sha_gate_accepts_prefix_match(
     """Agent verifies a 12-char SHA via gh_commit_detail then submits
     the same 12 chars (or a prefix of the SHA the tool returned). The
     gate accepts prefix-match in either direction."""
+    # Stub the SHA-existence gate so it doesn't hit the network on fake SHAs.
+    monkeypatch.setattr("cve_diff.infra.github_client.commit_exists",
+                        lambda slug, sha: True)
     gh = _gh_tool("acme/widget", "deadbeef00001234567")
     responses = [
         _FakeResp(
@@ -759,3 +765,182 @@ def test_verified_sha_gate_skipped_for_non_github_urls(
     result = AgentLoop().run(_cfg(), AgentContext(cve_id="CVE-X"))
     assert isinstance(result, AgentOutput)
     assert result.value == "deadbeef0000"
+
+
+# ---------- SHA-existence (404) submit gate ----------
+
+
+def test_sha_not_found_gate_rejects_404_submit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the agent submits a SHA that prefix-matches a verified pair
+    but does NOT resolve on GitHub (commit_exists → False), the loop must
+    feed back a `submit_rejected` tool_result and let the agent retry —
+    not surrender immediately. Defends against the CVE-2023-38545 stochastic
+    where the agent emits a real prefix + hallucinated tail. Realistic
+    setup: agent verifies a 12-char prefix via gh_commit_detail (which
+    GitHub resolves), then submits the prefix + hallucinated tail —
+    verified-SHA gate accepts (prefix-tolerant), 404 gate must reject."""
+    # 40-char SHAs starting with fb4415d8aee6c14 are 404'd (the
+    # hallucinated tail); 12-char prefix fb4415d8aee6 resolves cleanly.
+    monkeypatch.setattr(
+        "cve_diff.infra.github_client.commit_exists",
+        lambda slug, sha: False if len(sha) == 40 and sha.startswith("fb4415d8aee6c14") else True,
+    )
+    gh = _gh_tool("curl/curl", "fb4415d8aee6")
+    responses = [
+        # Iter 1: agent verifies a 12-char prefix
+        _FakeResp(
+            content=[_FakeBlock(type="tool_use", id="t1", name="gh_commit_detail",
+                                input={"slug": "curl/curl", "sha": "fb4415d8aee6"})],
+            usage=_FakeUsage(),
+        ),
+        # Iter 2: agent submits a 40-char hallucinated SHA with matching
+        # prefix. Verified-SHA gate accepts (sha.startswith(vsha)). 404
+        # gate fires.
+        _FakeResp(
+            content=[_FakeBlock(type="tool_use", id="t2", name="submit_result",
+                                input={"outcome": "rescued",
+                                       "repository_url": "https://github.com/curl/curl",
+                                       "fix_commit": "fb4415d8aee6c14a9ec300ca28dfe318fe85e1cc",
+                                       "rationale": "hallucinated tail"})],
+            usage=_FakeUsage(),
+        ),
+        # Iter 3: agent retries with the verified 12-char prefix (which
+        # commit_exists treats as resolvable).
+        _FakeResp(
+            content=[_FakeBlock(type="tool_use", id="t3", name="submit_result",
+                                input={"outcome": "rescued",
+                                       "repository_url": "https://github.com/curl/curl",
+                                       "fix_commit": "fb4415d8aee6",
+                                       "rationale": "verified prefix"})],
+            usage=_FakeUsage(),
+        ),
+    ]
+    fake = _patch_client(monkeypatch, responses)
+    cfg = AgentConfig(
+        system_prompt="sys", user_message="go",
+        tools=(gh,), validator=_pass_validator,
+        budget_tokens=1_000_000, budget_cost_usd=1.0, budget_s=60.0,
+        max_iterations=10,
+    )
+    result = AgentLoop().run(cfg, AgentContext(cve_id="CVE-2023-38545"))
+    assert isinstance(result, AgentOutput), \
+        f"expected AgentOutput, got {type(result).__name__}: {getattr(result,'reason','')}"
+    assert result.value == "fb4415d8aee6"
+    # Confirm the 404 rejection feedback was actually fed back to the agent.
+    rejection_seen = False
+    for kw in fake.messages.kwargs_log:
+        for m in kw.get("messages", []):
+            content = m.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    text = block.get("content", "") if isinstance(block, dict) else ""
+                    if isinstance(text, str) and "sha_not_found" in text:
+                        rejection_seen = True
+    assert rejection_seen, "404 feedback never sent to the agent"
+
+
+def test_sha_not_found_gate_surrenders_after_three_404s(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After _MAX_NOT_FOUND_SUBMITS (=2) feedbacks + 1 more, surrender as
+    sha_not_found_in_repo. Prevents infinite loops when the agent keeps
+    submitting 404'd SHAs."""
+    monkeypatch.setattr(
+        "cve_diff.infra.github_client.commit_exists",
+        lambda slug, sha: False,  # everything 404s
+    )
+    gh = _gh_tool("curl/curl", "fb4415d8aee6c10a4ce3328c42b9c2e4eb5bbafb")
+    bad_submit = _FakeBlock(
+        type="tool_use", id="ts", name="submit_result",
+        input={"outcome": "rescued",
+               "repository_url": "https://github.com/curl/curl",
+               "fix_commit": "fb4415d8aee6c10a4ce3328c42b9c2e4eb5bbafb",
+               "rationale": "still 404"},
+    )
+    responses = [
+        # Verify so the verified-SHA gate accepts subsequent submits.
+        _FakeResp(
+            content=[_FakeBlock(type="tool_use", id="t1", name="gh_commit_detail",
+                                input={"slug": "curl/curl",
+                                       "sha": "fb4415d8aee6c10a4ce3328c42b9c2e4eb5bbafb"})],
+            usage=_FakeUsage(),
+        ),
+        # 3 submits in a row — 3rd trips the surrender.
+        _FakeResp(content=[bad_submit], usage=_FakeUsage()),
+        _FakeResp(content=[bad_submit], usage=_FakeUsage()),
+        _FakeResp(content=[bad_submit], usage=_FakeUsage()),
+    ]
+    _patch_client(monkeypatch, responses)
+    cfg = AgentConfig(
+        system_prompt="sys", user_message="go",
+        tools=(gh,), validator=_pass_validator,
+        budget_tokens=1_000_000, budget_cost_usd=1.0, budget_s=60.0,
+        max_iterations=10,
+    )
+    result = AgentLoop().run(cfg, AgentContext(cve_id="CVE-2023-38545"))
+    assert isinstance(result, AgentSurrender)
+    assert result.reason == "sha_not_found_in_repo"
+
+
+def test_sha_not_found_gate_skipped_when_commit_exists_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """commit_exists → None means rate-limited / non-determinable. The gate
+    must NOT block the submit on uncertainty — accept and let the validator
+    + downstream stages handle it. Same policy as invariants.discover_validator."""
+    calls: list[tuple[str, str]] = []
+    def _track(slug: str, sha: str):
+        calls.append((slug, sha))
+        return None
+    monkeypatch.setattr("cve_diff.infra.github_client.commit_exists", _track)
+    gh = _gh_tool("acme/widget", "deadbeef0000")
+    responses = [
+        _FakeResp(
+            content=[_FakeBlock(type="tool_use", id="t1", name="gh_commit_detail",
+                                input={"slug": "acme/widget", "sha": "deadbeef0000"})],
+            usage=_FakeUsage(),
+        ),
+        _FakeResp(
+            content=[_FakeBlock(type="tool_use", id="t2", name="submit_result",
+                                input={"outcome": "rescued",
+                                       "repository_url": "https://github.com/acme/widget",
+                                       "fix_commit": "deadbeef0000",
+                                       "rationale": "rate-limited path"})],
+            usage=_FakeUsage(),
+        ),
+    ]
+    _patch_client(monkeypatch, responses)
+    result = AgentLoop().run(_cfg(tools=(gh,)), AgentContext(cve_id="CVE-X"))
+    assert isinstance(result, AgentOutput)
+    assert result.value == "deadbeef0000"
+    assert calls == [("acme/widget", "deadbeef0000")], "gate should still call commit_exists once"
+
+
+def test_sha_not_found_gate_skipped_for_non_github_urls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-GitHub URLs (no extractable github slug) skip the 404 gate —
+    commit_exists is GitHub-only and we don't want to block legitimate
+    cgit / gitlab forge picks. Should not even call commit_exists."""
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "cve_diff.infra.github_client.commit_exists",
+        lambda slug, sha: calls.append((slug, sha)) or False,
+    )
+    responses = [
+        _FakeResp(
+            content=[_FakeBlock(type="tool_use", id="t1", name="submit_result",
+                                input={"outcome": "rescued",
+                                       "repository_url": "https://gitlab.freedesktop.org/xkb/xkbcommon",
+                                       "fix_commit": "deadbeef0000",
+                                       "rationale": "non-github forge"})],
+            usage=_FakeUsage(),
+        ),
+    ]
+    _patch_client(monkeypatch, responses)
+    result = AgentLoop().run(_cfg(), AgentContext(cve_id="CVE-X"))
+    assert isinstance(result, AgentOutput)
+    assert result.value == "deadbeef0000"
+    assert calls == [], "commit_exists must not be called for non-GitHub URLs"

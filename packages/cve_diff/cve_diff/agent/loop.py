@@ -32,6 +32,7 @@ from cve_diff.agent import source_classes
 from cve_diff.agent.tools import Tool
 from cve_diff.agent.types import AgentContext, AgentOutput, AgentResult, AgentSurrender
 from cve_diff.core.url_re import extract_github_slug
+from cve_diff.infra import github_client
 from cve_diff.llm.client import MODEL_PRICES
 
 
@@ -112,6 +113,45 @@ def _rules_disabled() -> bool:
 # verified candidate; 3 strikes means structural integrity is
 # impossible for this CVE on this run.
 _MAX_UNVERIFIED_SUBMITS = 2
+
+# How many times the agent may submit a (slug, sha) that does not resolve
+# on the GitHub remote (``commit_exists`` → False) before the loop
+# surrenders ``sha_not_found_in_repo``. Distinct from
+# ``_MAX_UNVERIFIED_SUBMITS``: that gate catches "you didn't call
+# gh_commit_detail on this pair"; this gate catches "you submitted a SHA
+# that prefix-matches a verified pair but doesn't actually exist on the
+# remote" — the CVE-2023-38545 stochastic where the agent emits a real
+# 14-char prefix with a hallucinated tail.
+_MAX_NOT_FOUND_SUBMITS = 2
+
+
+def _build_rejection_feedback(
+    tool_use_id: str,
+    slug: str,
+    sha: str,
+    verified: list[tuple[str, str]],
+    reason: str,
+    next_step: str,
+) -> dict[str, Any]:
+    """Build the tool_result block sent back to the agent when a submit
+    is rejected by a gate (verified-SHA or SHA-existence). Both gates
+    use the same shape; the only differences are the ``reason`` line and
+    the ``next_step`` instruction. Centralising keeps the two gates DRY
+    and ensures the agent sees a uniform feedback schema."""
+    verified_brief = ", ".join(
+        f"{vs}@{vh[:12]}" for vs, vh in verified[:5]
+    ) or "(none)"
+    return {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": json.dumps({
+            "submit_rejected": True,
+            "reason": reason,
+            "submitted": {"slug": slug, "sha": sha},
+            "verified_pairs": verified_brief,
+            "next_step": next_step,
+        }),
+    }
 
 
 def _is_verified(slug: str, sha: str, verified: list[tuple[str, str]]) -> bool:
@@ -224,6 +264,8 @@ class AgentLoop:
         tool_calls_with_args: list[tuple[str, str]] = []
         # Verified-SHA submit gate counter — see _MAX_UNVERIFIED_SUBMITS.
         unverified_submits: int = 0
+        # SHA-existence gate counter — see _MAX_NOT_FOUND_SUBMITS.
+        not_found_submits: int = 0
 
         _emit("entry", {
             "cve": ctx.cve_id,
@@ -422,33 +464,65 @@ class AgentLoop:
                                     tool_calls_with_args=tuple(tool_calls_with_args),
                                     reflection_injected=reflection_injected,
                                 )
-                            # Feed back a tool_result so the agent can
-                            # re-verify. Don't terminate. Same shape as
-                            # any other tool_result block.
-                            verified_brief = ", ".join(
-                                f"{vs}@{vh[:12]}" for vs, vh in verified[:5]
-                            ) or "(none)"
-                            feedback = json.dumps({
-                                "submit_rejected": True,
-                                "reason": (
+                            tool_results.append(_build_rejection_feedback(
+                                tool_use_id=b.id, slug=slug, sha=sha,
+                                verified=verified,
+                                reason=(
                                     "the (slug, sha) you submitted was not "
                                     "verified by gh_commit_detail in this run."
                                 ),
-                                "submitted": {"slug": slug, "sha": sha},
-                                "verified_pairs": verified_brief,
-                                "next_step": (
+                                next_step=(
                                     "call gh_commit_detail on the SHA you "
                                     "intend to submit, or submit one of the "
                                     "verified pairs. You have "
                                     f"{_MAX_UNVERIFIED_SUBMITS - unverified_submits + 1} "
                                     "attempt(s) left."
                                 ),
-                            })
-                            tool_results.append({
-                                "type": "tool_result",
-                                "tool_use_id": b.id,
-                                "content": feedback,
-                            })
+                            ))
+                            continue
+                        # SHA-existence gate: catches the prefix-tolerance
+                        # hole in the verified-SHA gate (real prefix +
+                        # hallucinated tail). ``commit_exists`` returns
+                        # None on rate-limit / non-GitHub — treat as
+                        # accept, same policy as the validator backstop.
+                        if slug and sha and github_client.commit_exists(slug, sha) is False:
+                            not_found_submits += 1
+                            if not_found_submits > _MAX_NOT_FOUND_SUBMITS:
+                                _emit("submit_sha_not_found", {
+                                    "cve": ctx.cve_id, "slug": slug, "sha": sha,
+                                })
+                                return self._finalize(
+                                    AgentSurrender(
+                                        reason="sha_not_found_in_repo",
+                                        detail=(
+                                            f"agent submitted ({slug}, {sha[:12]}) "
+                                            f"{not_found_submits} times; "
+                                            f"GitHub returned 404 each time."
+                                        ),
+                                    ),
+                                    budget, start, tuple(tool_call_log),
+                                    tuple(verified), llm_retries,
+                                    tool_calls_with_args=tuple(tool_calls_with_args),
+                                    reflection_injected=reflection_injected,
+                                )
+                            tool_results.append(_build_rejection_feedback(
+                                tool_use_id=b.id, slug=slug, sha=sha,
+                                verified=verified,
+                                reason=(
+                                    "sha_not_found: GitHub returned 404 for the "
+                                    "(slug, sha) you submitted. Common cause: "
+                                    "you emitted a SHA with the right prefix "
+                                    "but a hallucinated tail. Submit the FULL "
+                                    "40-char SHA exactly as gh_commit_detail "
+                                    "returned it, or pick a different candidate."
+                                ),
+                                next_step=(
+                                    "submit a verified pair verbatim, or call "
+                                    "gh_commit_detail on a new candidate. You "
+                                    f"have {_MAX_NOT_FOUND_SUBMITS - not_found_submits + 1} "
+                                    "attempt(s) left."
+                                ),
+                            ))
                             continue
                     submit_payload = args
                     break
