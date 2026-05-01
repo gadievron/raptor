@@ -944,3 +944,101 @@ def test_sha_not_found_gate_skipped_for_non_github_urls(
     assert isinstance(result, AgentOutput)
     assert result.value == "deadbeef0000"
     assert calls == [], "commit_exists must not be called for non-GitHub URLs"
+
+
+# ---------- Gate-firing telemetry counters ----------
+
+
+def test_telemetry_unverified_submits_counter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`last_telemetry["unverified_submits"]` records how many times the
+    verified-SHA gate fed back rejection. Lets bench analysis count gate
+    firings without inferring from submit_result count."""
+    monkeypatch.setattr("cve_diff.infra.github_client.commit_exists",
+                        lambda slug, sha: True)
+    gh = _gh_tool("acme/widget", "deadbeef0000")
+    responses = [
+        # Verify one (slug, sha)
+        _FakeResp(
+            content=[_FakeBlock(type="tool_use", id="t1", name="gh_commit_detail",
+                                input={"slug": "acme/widget", "sha": "deadbeef0000"})],
+            usage=_FakeUsage(),
+        ),
+        # Submit a DIFFERENT (unverified) SHA — gate fires feedback
+        _FakeResp(
+            content=[_FakeBlock(type="tool_use", id="t2", name="submit_result",
+                                input={"outcome": "rescued",
+                                       "repository_url": "https://github.com/acme/widget",
+                                       "fix_commit": "cafebabe9999",
+                                       "rationale": "typo"})],
+            usage=_FakeUsage(),
+        ),
+        # Resubmit the verified SHA — succeeds
+        _FakeResp(
+            content=[_FakeBlock(type="tool_use", id="t3", name="submit_result",
+                                input={"outcome": "rescued",
+                                       "repository_url": "https://github.com/acme/widget",
+                                       "fix_commit": "deadbeef0000",
+                                       "rationale": "fixed it"})],
+            usage=_FakeUsage(),
+        ),
+    ]
+    _patch_client(monkeypatch, responses)
+    loop = AgentLoop()
+    result = loop.run(_cfg(tools=(gh,)), AgentContext(cve_id="CVE-X"))
+    assert isinstance(result, AgentOutput)
+    assert loop.last_telemetry["unverified_submits"] == 1
+    assert loop.last_telemetry["not_found_submits"] == 0
+
+
+def test_telemetry_not_found_submits_counter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`last_telemetry["not_found_submits"]` records how many times the
+    SHA-existence gate fed back rejection."""
+    # commit_exists: False for any 40-char SHA, True otherwise
+    monkeypatch.setattr(
+        "cve_diff.infra.github_client.commit_exists",
+        lambda slug, sha: False if len(sha) == 40 else True,
+    )
+    gh = _gh_tool("curl/curl", "fb4415d8aee6")
+    responses = [
+        # Verify a 12-char prefix
+        _FakeResp(
+            content=[_FakeBlock(type="tool_use", id="t1", name="gh_commit_detail",
+                                input={"slug": "curl/curl", "sha": "fb4415d8aee6"})],
+            usage=_FakeUsage(),
+        ),
+        # Submit 40-char hallucination — verified-SHA gate accepts
+        # (prefix-tolerant), 404 gate must reject and feed back
+        _FakeResp(
+            content=[_FakeBlock(type="tool_use", id="t2", name="submit_result",
+                                input={"outcome": "rescued",
+                                       "repository_url": "https://github.com/curl/curl",
+                                       "fix_commit": "fb4415d8aee6c14a9ec300ca28dfe318fe85e1cc",
+                                       "rationale": "hallucinated"})],
+            usage=_FakeUsage(),
+        ),
+        # Resubmit the 12-char verified prefix — succeeds (commit_exists True for short)
+        _FakeResp(
+            content=[_FakeBlock(type="tool_use", id="t3", name="submit_result",
+                                input={"outcome": "rescued",
+                                       "repository_url": "https://github.com/curl/curl",
+                                       "fix_commit": "fb4415d8aee6",
+                                       "rationale": "real"})],
+            usage=_FakeUsage(),
+        ),
+    ]
+    _patch_client(monkeypatch, responses)
+    cfg = AgentConfig(
+        system_prompt="sys", user_message="go",
+        tools=(gh,), validator=_pass_validator,
+        budget_tokens=1_000_000, budget_cost_usd=1.0, budget_s=60.0,
+        max_iterations=10,
+    )
+    loop = AgentLoop()
+    result = loop.run(cfg, AgentContext(cve_id="CVE-2023-38545"))
+    assert isinstance(result, AgentOutput)
+    assert loop.last_telemetry["not_found_submits"] == 1
+    assert loop.last_telemetry["unverified_submits"] == 0
