@@ -34,6 +34,7 @@ from cve_diff.core.models import (
     FileChange,
     RepoRef,
 )
+from cve_diff.core.test_path import is_test_path as _is_test_path
 from cve_diff.diffing import shape_dynamic
 from cve_diff.infra import github_client
 
@@ -164,12 +165,3 @@ def extract_via_api(
     )
 
 
-_TEST_PATH_RE = re.compile(
-    r"(^|/)(tests?|spec|specs?|__tests__|fixtures?)/|(^|/)test_[^/]*$|"
-    r"_test\.[^/]+$|\.test\.[^/]+$|\.spec\.[^/]+$",
-    re.IGNORECASE,
-)
-
-
-def _is_test_path(path: str) -> bool:
-    return bool(_TEST_PATH_RE.search(path or ""))
