@@ -4,10 +4,11 @@ from __future__ import annotations
 import json
 
 import pytest
-import responses
 
 from tools.oracle import osv_oracle
 from tools.oracle.types import Verdict
+
+from .._http_mock import GET, POST
 
 
 _OSV_URL = "https://api.osv.dev/v1/vulns/CVE-2023-38545"
@@ -21,9 +22,8 @@ def _payload(references: list[dict] | None = None, affected: list[dict] | None =
     }
 
 
-@responses.activate
-def test_match_exact_on_references() -> None:
-    responses.add(responses.GET, _OSV_URL, json=_payload(
+def test_match_exact_on_references(http) -> None:
+    http.add(GET, _OSV_URL, json=_payload(
         references=[{"type": "FIX", "url": "https://github.com/curl/curl/commit/fb4415d8aee6c10a4ce3328c42b9c2e4eb5bbafb"}]
     ))
     v = osv_oracle.verify("CVE-2023-38545", "curl/curl", "fb4415d8aee6c10a4ce3328c42b9c2e4eb5bbafb")
@@ -31,9 +31,8 @@ def test_match_exact_on_references() -> None:
     assert v.source == "osv"
 
 
-@responses.activate
-def test_match_range_on_affected_events() -> None:
-    responses.add(responses.GET, _OSV_URL, json=_payload(
+def test_match_range_on_affected_events(http) -> None:
+    http.add(GET, _OSV_URL, json=_payload(
         affected=[{"ranges": [{"type": "GIT", "repo": "https://github.com/curl/curl",
                                "events": [{"fixed": "fb4415d8aee6c10a4ce3328c42b9c2e4eb5bbafb"}]}]}]
     ))
@@ -41,9 +40,8 @@ def test_match_range_on_affected_events() -> None:
     assert v.verdict == Verdict.MATCH_RANGE
 
 
-@responses.activate
-def test_mirror_different_slug() -> None:
-    responses.add(responses.GET, _OSV_URL, json=_payload(
+def test_mirror_different_slug(http) -> None:
+    http.add(GET, _OSV_URL, json=_payload(
         affected=[{"ranges": [{"type": "GIT", "repo": "https://github.com/sourceware/glibc",
                                "events": [{"fixed": "d5dd6189d506968ed10339b4bd5412e95f1ad2bf"}]}]}]
     ))
@@ -52,37 +50,33 @@ def test_mirror_different_slug() -> None:
     assert v.verdict.is_pass
 
 
-@responses.activate
-def test_likely_hallucination() -> None:
+def test_likely_hallucination(http) -> None:
     # OSV has a real answer; agent picked a different SHA on a different slug.
-    responses.add(responses.GET, _OSV_URL, json=_payload(
+    http.add(GET, _OSV_URL, json=_payload(
         references=[{"type": "FIX", "url": "https://github.com/curl/curl/commit/fb4415d8aee6c10a4ce3328c42b9c2e4eb5bbafb"}]
     ))
     v = osv_oracle.verify("CVE-2023-38545", "somerando/curl", "deadbeefcafebabe1234567890abcdef12345678")
     assert v.verdict == Verdict.LIKELY_HALLUCINATION
 
 
-@responses.activate
-def test_dispute_same_slug_different_sha() -> None:
+def test_dispute_same_slug_different_sha(http) -> None:
     # OSV has a real SHA on curl/curl; we claim a different SHA on curl/curl.
-    responses.add(responses.GET, _OSV_URL, json=_payload(
+    http.add(GET, _OSV_URL, json=_payload(
         references=[{"type": "FIX", "url": "https://github.com/curl/curl/commit/fb4415d8aee6c10a4ce3328c42b9c2e4eb5bbafb"}]
     ))
     v = osv_oracle.verify("CVE-2023-38545", "curl/curl", "deadbeefcafebabe1234567890abcdef12345678")
     assert v.verdict == Verdict.DISPUTE
 
 
-@responses.activate
-def test_orphan_on_404() -> None:
-    responses.add(responses.GET, _OSV_URL, status=404)
+def test_orphan_on_404(http) -> None:
+    http.add(GET, _OSV_URL, status=404)
     v = osv_oracle.verify("CVE-2023-38545", "curl/curl", "abc123")
     assert v.verdict == Verdict.ORPHAN
     assert v.source == "none"
 
 
-@responses.activate
-def test_orphan_no_commit_data() -> None:
-    responses.add(responses.GET, _OSV_URL, json=_payload(
+def test_orphan_no_commit_data(http) -> None:
+    http.add(GET, _OSV_URL, json=_payload(
         references=[{"type": "ADVISORY", "url": "https://example.com/advisory"}]
     ))
     v = osv_oracle.verify("CVE-2023-38545", "curl/curl", "abc123")
@@ -90,9 +84,8 @@ def test_orphan_no_commit_data() -> None:
     assert v.source == "osv"
 
 
-@responses.activate
-def test_dispute_when_bench_refused_but_osv_has_data() -> None:
-    responses.add(responses.GET, _OSV_URL, json=_payload(
+def test_dispute_when_bench_refused_but_osv_has_data(http) -> None:
+    http.add(GET, _OSV_URL, json=_payload(
         references=[{"type": "FIX", "url": "https://github.com/curl/curl/commit/fb4415d8aee6c10a4ce3328c42b9c2e4eb5bbafb"}]
     ))
     # Empty pick simulates bench's UnsupportedSource or DiscoveryError.
@@ -101,17 +94,15 @@ def test_dispute_when_bench_refused_but_osv_has_data() -> None:
     assert "bench refused" in v.notes
 
 
-@responses.activate
-def test_kernel_shortlink_maps_to_torvalds_linux() -> None:
-    responses.add(responses.GET, _OSV_URL, json=_payload(
+def test_kernel_shortlink_maps_to_torvalds_linux(http) -> None:
+    http.add(GET, _OSV_URL, json=_payload(
         references=[{"type": "FIX", "url": "https://git.kernel.org/linus/c/e9be9d5e76e34872f0c37d72e25bc27fe9e2c54c"}]
     ))
     v = osv_oracle.verify("CVE-2023-38545", "torvalds/linux", "e9be9d5e76e34872f0c37d72e25bc27fe9e2c54c")
     assert v.verdict == Verdict.MATCH_EXACT
 
 
-@responses.activate
-def test_alias_following_recovers_ghsa_ref() -> None:
+def test_alias_following_recovers_ghsa_ref(http) -> None:
     """CVE record has no commit refs, but GHSA alias does.
 
     Primary OSV record for CVE-X returns aliases=[GHSA-xyz] and no
@@ -119,13 +110,13 @@ def test_alias_following_recovers_ghsa_ref() -> None:
     record yields a github commit URL; oracle returns MATCH_EXACT.
     """
     # Primary CVE record: only aliases, no commits.
-    responses.add(responses.GET, _OSV_URL, json={
+    http.add(GET, _OSV_URL, json={
         "id": "CVE-2023-38545",
         "aliases": ["GHSA-abcd-1234-wxyz"],
         "references": [{"type": "ADVISORY", "url": "https://example.com/a"}],
     })
     # Alias GHSA record: carries the github commit.
-    responses.add(responses.GET,
+    http.add(GET,
                   "https://api.osv.dev/v1/vulns/GHSA-abcd-1234-wxyz",
                   json={
                       "id": "GHSA-abcd-1234-wxyz",
@@ -136,10 +127,9 @@ def test_alias_following_recovers_ghsa_ref() -> None:
     assert "GHSA-" in v.source  # source label records the alias chain
 
 
-@responses.activate
-def test_alias_following_skips_non_ghsa_aliases() -> None:
+def test_alias_following_skips_non_ghsa_aliases(http) -> None:
     """DSA/USN aliases are advisory pages, not worth fetching — should be ignored."""
-    responses.add(responses.GET, _OSV_URL, json={
+    http.add(GET, _OSV_URL, json={
         "id": "CVE-2023-38545",
         "aliases": ["DSA-5000-1", "USN-1234-1"],  # neither is GHSA
         "references": [{"type": "ADVISORY", "url": "https://example.com/a"}],
@@ -150,7 +140,7 @@ def test_alias_following_skips_non_ghsa_aliases() -> None:
     assert v.source == "osv"
 
 
-def test_verdict_is_pass() -> None:
+def test_verdict_is_pass(http) -> None:
     assert Verdict.MATCH_EXACT.is_pass
     assert Verdict.MATCH_RANGE.is_pass
     assert Verdict.MIRROR_DIFFERENT_SLUG.is_pass

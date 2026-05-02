@@ -159,10 +159,13 @@ def _run_one(cve_id: str, output_dir: str, disk_limit_pct: float = 80.0,
                 api_bundle = getattr(pipeline, "_last_api_bundle", None)
                 api_method = None
                 if api_bundle is not None:
-                    url = (result.bundle.repo_ref.repository_url or "").lower()
+                    from cve_diff.core.url_re import (
+                        is_github_url, is_gitlab_url,
+                    )
+                    url = result.bundle.repo_ref.repository_url or ""
                     api_method = (
-                        "github_api" if "github.com" in url
-                        else "gitlab_api" if "gitlab" in url
+                        "github_api" if is_github_url(url)
+                        else "gitlab_api" if is_gitlab_url(url)
                         else "api"
                     )
                 write_outcome_patches(

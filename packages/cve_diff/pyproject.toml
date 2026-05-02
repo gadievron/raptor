@@ -10,9 +10,12 @@ requires-python = ">=3.12"
 dependencies = [
     "requests>=2.31",
     "typer>=0.12",
-    "psutil>=5.9",
-    "jinja2>=3.1",
     "anthropic>=0.34",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
 ]
 
 [project.scripts]
@@ -20,3 +23,13 @@ cve-diff = "cve_diff.cli.main:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["cve_diff"]
+
+[tool.pytest.ini_options]
+# Register the ``integration`` marker so unit-test runs don't emit
+# UnknownMarkWarning. Live-network probes (``TestOSVLive`` etc.) carry
+# this marker and are deselected by default; opt in with ``-m
+# integration``.
+markers = [
+    "integration: end-to-end tests that hit live network — deselected by default",
+]
+addopts = "-m 'not integration'"

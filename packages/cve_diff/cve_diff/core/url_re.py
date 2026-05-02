@@ -83,3 +83,53 @@ def extract_github_slug(url: str) -> str | None:
     if not m:
         return None
     return normalize_slug(m.group(1))
+
+
+def _hostname(url: str) -> str:
+    """Lowercase hostname or empty string. Stdlib ``urlparse`` is
+    strict enough for our cases — it pulls the host out of the
+    authority component and ignores path content. Empty string on
+    parse failures so callers stay total-functional.
+    """
+    from urllib.parse import urlparse
+    try:
+        return (urlparse(url).hostname or "").lower()
+    except (ValueError, AttributeError):
+        return ""
+
+
+def is_github_url(url: str) -> bool:
+    """Pre-2026-05-02 several callers used ``"github.com" in url``,
+    which CodeQL flagged as ``incomplete-url-substring-sanitization``:
+    ``https://github.com.evil.com/...`` matches as a substring but is
+    not a GitHub URL. Hostname-anchored check fixes that.
+    """
+    h = _hostname(url)
+    return h == "github.com" or h.endswith(".github.com")
+
+
+def is_gitlab_url(url: str) -> bool:
+    """Canonical ``gitlab.com`` URL (including subdomains like
+    ``salsa.debian.org``-style mirrors that proxy to
+    ``*.gitlab.com``). Hostname-anchored — same threat model as
+    :func:`is_github_url`.
+
+    Self-hosted GitLab instances (``gitlab.<vendor>.com``) intentionally
+    fall through. Naive label-anchored matches are still bypassable
+    (``gitlab.com.evil.com`` starts with ``gitlab.``) and the only
+    consumer in cve-diff today (bench telemetry classification) is
+    happy to lose self-hosted attribution rather than accept the
+    bypass surface. Callers that need self-hosted detection use
+    ``_gitlab_host_and_slug`` for full host parsing.
+    """
+    h = _hostname(url)
+    return h == "gitlab.com" or h.endswith(".gitlab.com")
+
+
+def is_kernel_org_url(url: str) -> bool:
+    """``kernel.org`` and subdomains (``git.kernel.org``,
+    ``patchwork.kernel.org`` etc.). Hostname-anchored — closes
+    the same ``kernel.org`` substring footgun as
+    :func:`is_github_url`."""
+    h = _hostname(url)
+    return h == "kernel.org" or h.endswith(".kernel.org")

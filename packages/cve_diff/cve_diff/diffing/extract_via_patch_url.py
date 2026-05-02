@@ -63,8 +63,17 @@ def _patch_url_for(ref: RepoRef) -> str | None:
     # cgit-style: kernel.org and similar. The URL pattern is
     # `<base>/commit/?id=<sha>&format=patch`. We strip a trailing `.git`
     # / trailing slash and append the cgit query.
+    #
+    # ``is_kernel_org_url`` is hostname-anchored so a ``kernel.org``
+    # substring inside an attacker-supplied path can't match. The
+    # ``/cgit/`` and ``git.savannah`` checks remain substring-based —
+    # ``cgit`` is a path token (forge software, not a host) and
+    # ``git.savannah.gnu.org`` shows up in two slightly different host
+    # forms across NVD records, so a strict hostname check would miss
+    # legitimate variants.
+    from cve_diff.core.url_re import is_kernel_org_url
     low = url.lower()
-    if "kernel.org" in low or "/cgit/" in low or "git.savannah" in low:
+    if is_kernel_org_url(url) or "/cgit/" in low or "git.savannah" in low:
         base = url.rstrip("/")
         if base.endswith(".git"):
             base = base[:-4]
