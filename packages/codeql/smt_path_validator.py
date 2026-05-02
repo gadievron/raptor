@@ -37,18 +37,17 @@ mis-encoded):
 
   - **Operators outside the supported set.**  Accepted: ``+ - * |``,
     relational ``< <= > >= == !=``, shifts ``<< >>``, bitmask
-    ``&`` (only in the ``flags & MASK == VAL`` form).  Rejected:
-    unary NOT (``~``), XOR (``^``), division (``/``), modulo (``%``),
-    ternary (``? :``), single-equals assignment, chained relational
-    (``0 < x < 100``).  Anything else goes to ``unknown`` via the
-    full-input-consumed sanity check.
-  - **C-syntax constructs (other than function calls).**  Type casts
-    (``(uint32_t)x``), struct/pointer access (``obj.field``,
+    ``&`` (only in the ``flags & MASK == VAL`` form), and grouping
+    parentheses ``( )``.  Rejected: unary NOT (``~``), XOR (``^``),
+    division (``/``), modulo (``%``), ternary (``? :``), single-equals
+    assignment, chained relational (``0 < x < 100``).  Anything else
+    goes to ``unknown`` via the full-input-consumed sanity check.
+  - **C-syntax constructs (other than function calls and grouping).**
+    Type casts (``(uint32_t)x``), struct/pointer access (``obj.field``,
     ``s->len``), array indexing (``arr[0]``), pointer dereference
     (``*p``), ``sizeof``.  Any token containing ``.``, ``->``, ``[``,
-    ``]`` still triggers rejection, as does **non-call grouping parens**
-    (``(a + b) * c``).  Function calls are an exception — see the
-    free-variable fallback below.
+    ``]`` still triggers rejection.  Function calls are an exception —
+    see the free-variable fallback below.
   - **Negative integer literals** (e.g. ``!= -1``) — write the
     bit-pattern in hex instead (``!= 0xFFFFFFFF`` at uint32).
   - **Leading-zero decimals** (e.g. ``01234``) — ambiguous with C
@@ -56,6 +55,8 @@ mis-encoded):
   - **Literals outside the profile's width range** — ``0x100`` at
     uint8 would silently wrap to 0 in z3; we reject so the caller
     knows the profile was wrong for this literal.
+  - **Unbalanced parentheses** — extra ``(`` or ``)``, mismatched
+    nesting (``)(``), or a paren count that doesn't return to zero.
 
 Function-call subterms (``strlen(input)``, ``getpid()``, ...) are
 recovered through a free-variable fallback: each balanced
@@ -68,11 +69,13 @@ chooses the conservative semantics (no false claims of infeasibility).
 
 Other limitations (verdict still trustworthy, but with caveats):
 
-  - **No operator precedence** — expressions are evaluated strictly
-    left-to-right.  Mixed-operator expressions (e.g. ``a + b * c``)
-    are rejected to avoid mis-encoding; full precedence support is
-    planned for a follow-up.  ``a * b * c`` and ``a + b + c`` are
-    fine (associativity preserves correctness).
+  - **C operator precedence**, not arithmetic-textbook precedence.
+    Within an expression, ``*`` binds tightest, then ``+ -``, then
+    ``<< >>``, then ``|`` (lowest).  All left-associative.  The
+    notable surprise is that shifts bind *less* tightly than additive
+    operators in C — ``a + b << 2`` parses as ``(a + b) << 2``, not
+    ``a + (b << 2)``.  Use parentheses to make the grouping explicit
+    when the C reading isn't what was meant.
   - **Bitmask form** requires both ``MASK`` and ``VAL`` to be integer
     literals; variables on either side go to ``unknown``.
   - **Profile-level signedness conflates** two concerns: comparison
@@ -164,13 +167,31 @@ _INT_RE = re.compile(r'^\d+$')
 _IDENT_RE = re.compile(r'^[a-z_][a-z0-9_]*$', re.IGNORECASE)
 _NULL_RE = re.compile(r'^NULL$', re.IGNORECASE)
 
-# Tokenise: identifiers, hex literals, decimal literals, operators.
+# Tokenise: identifiers, hex literals, decimal literals, operators, parens.
 # '>>' and '<<' appear before '[<>&|]' so they are matched as two-char tokens
 # rather than as two separate single-char tokens.
 _TOKEN_RE = re.compile(
-    r'(0x[0-9a-f]+|\d+|[a-z_][a-z0-9_]*|[+\-*]|<=|>=|!=|==|>>|<<|[<>&|])',
+    r'(0x[0-9a-f]+|\d+|[a-z_][a-z0-9_]*|[+\-*()]|<=|>=|!=|==|>>|<<|[<>&|])',
     re.IGNORECASE,
 )
+
+# Operator precedence for the arithmetic/bitwise sub-expression.  C-derived:
+#   *               > +-              > << >>            > |
+# All left-associative.  The relational and bitmask layers run in
+# ``_parse_condition`` above this; ``&`` therefore doesn't appear in this
+# table — it's only accepted in the dedicated bitmask form.
+_PRECEDENCE: Dict[str, int] = {
+    '|':  1,
+    '<<': 2, '>>': 2,
+    '+':  3, '-':  3,
+    '*':  4,
+}
+
+# Operator-shaped tokens we recognise but don't accept as binary operators
+# inside ``_parse_expr`` — they belong to the relational or bitmask layer
+# and reaching ``_parse_expr`` with one in operand-trailing position is a
+# user error rather than a malformed expression.
+_RELATIONAL_TOKENS = frozenset({'<=', '>=', '!=', '==', '<', '>', '&'})
 
 
 def _parse_expr(
@@ -178,18 +199,24 @@ def _parse_expr(
 ) -> Union[Any, Rejection]:
     """Parse an arithmetic expression into a Z3 bitvector at the given profile.
 
-    Handles: identifier, NULL, hex literal, decimal literal, and binary
-    +/-/* /|/shifts between those terms (left-to-right, no precedence).
-    Right-shift is routed through ``csem.ashr`` / ``csem.lshr`` by
-    signedness so the same ``>>`` source form encodes differently for
-    signed vs unsigned path conditions.
+    Handles: identifier, NULL, hex literal, decimal literal, parenthesised
+    grouping, and binary ``+ - * | << >>`` between those terms.  Operators
+    bind by C precedence (``*`` > ``+ -`` > ``<< >>`` > ``|``), all
+    left-associative.  Right-shift is routed through ``csem.ashr`` /
+    ``csem.lshr`` by signedness so the same ``>>`` source form encodes
+    differently for signed vs unsigned path conditions.
 
     Returns a :class:`Rejection` — rather than a partial Z3 expression —
     when something can't be encoded, so the whole condition falls through
     to the unknown list with a structured reason rather than being
     silently mis-encoded.
+
+    Implementation: precedence climbing over a flat token list, with a
+    mutable cursor (``pos``) shared by closures.  Atoms include
+    parenthesised subexpressions, which recursively re-enter the climb
+    with ``min_prec=0`` and consume the matching ``)``.
     """
-    tokens = [t for t in _TOKEN_RE.findall(text.strip()) if t not in ('(', ')')]
+    tokens = _TOKEN_RE.findall(text.strip())
     if not tokens:
         return Rejection(text, RejectionKind.LEX_EMPTY, "no tokens after tokenisation")
 
@@ -204,74 +231,110 @@ def _parse_expr(
             hint="remove or rephrase unsupported operators (e.g. ~, ^, /, %)",
         )
 
-    # Reject mixed-operator expressions to avoid silent mis-encoding due to
-    # the lack of operator precedence (currently strictly left-to-right).
-    if {'+', '-'} & set(tokens[1::2]) and {'*', '>>', '<<', '|'} & set(tokens[1::2]):
-        return Rejection(
-            text, RejectionKind.MIXED_PRECEDENCE,
-            "additive and multiplicative/bitwise ops mixed",
-            hint="split into separate conditions, each using one operator class",
-        )
+    pos = [0]
 
-    def atom(tok: str) -> Optional[Any]:
+    def _atom() -> Union[Any, Rejection]:
+        if pos[0] >= len(tokens):
+            return Rejection(
+                text, RejectionKind.UNRECOGNIZED_OPERAND,
+                "unexpected end of expression — operand expected",
+            )
+        tok = tokens[pos[0]]
+        if tok == '(':
+            pos[0] += 1
+            inner = _climb(0)
+            if isinstance(inner, Rejection):
+                return inner
+            if pos[0] >= len(tokens) or tokens[pos[0]] != ')':
+                return Rejection(
+                    text, RejectionKind.UNBALANCED_PARENS,
+                    "expected ')' to close subexpression",
+                )
+            pos[0] += 1
+            return inner
+        if tok == ')':
+            return Rejection(
+                text, RejectionKind.UNBALANCED_PARENS,
+                "expected operand, got ')'",
+            )
         if _NULL_RE.match(tok):
+            pos[0] += 1
             return _mk_val(0, profile.width)
         if _HEX_RE.match(tok) or _INT_RE.match(tok):
             v = _parse_literal_value(tok, profile)
-            # Atom-level literal failures collapse to None and surface as
-            # generic UNRECOGNIZED_OPERAND at the loop boundary; the more
-            # specific reasons (LITERAL_AMBIGUOUS / LITERAL_OUT_OF_RANGE)
-            # are preserved on the bitmask path which calls
-            # _parse_literal_value directly.
-            return None if isinstance(v, Rejection) else _mk_val(v, profile.width)
+            if isinstance(v, Rejection):
+                # Re-anchor the literal-specific rejection (LITERAL_AMBIGUOUS
+                # / LITERAL_OUT_OF_RANGE) on the full input text so callers
+                # can match it back to the original condition.
+                return _propagate(text, v)
+            pos[0] += 1
+            return _mk_val(v, profile.width)
         if _IDENT_RE.match(tok):
-            if tok.lower() not in vars_:
-                vars_[tok.lower()] = _mk_var(tok.lower(), profile.width)
-            return vars_[tok.lower()]
-        return None
-
-    # Left-to-right accumulation of arithmetic and bitwise operators.
-    # Any unsupported operator yields a structured rejection.
-    result = atom(tokens[0])
-    if result is None:
+            key = tok.lower()
+            if key not in vars_:
+                vars_[key] = _mk_var(key, profile.width)
+            pos[0] += 1
+            return vars_[key]
         return Rejection(
             text, RejectionKind.UNRECOGNIZED_OPERAND,
-            f"token {tokens[0]!r} is not an identifier, NULL, or numeric literal",
+            f"token {tok!r} is not an identifier, NULL, or numeric literal",
         )
-    i = 1
-    while i < len(tokens) - 1:
-        op = tokens[i]
-        if op not in ('+', '-', '*', '|', '>>', '<<'):
-            return Rejection(
-                text, RejectionKind.UNSUPPORTED_OPERATOR,
-                f"operator {op!r} not in {{+, -, *, |, >>, <<}}",
-            )
-        right = atom(tokens[i + 1])
-        if right is None:
-            return Rejection(
-                text, RejectionKind.UNRECOGNIZED_OPERAND,
-                f"token {tokens[i + 1]!r} is not an identifier, NULL, or numeric literal",
-            )
-        if op == '+':
-            result = result + right
-        elif op == '-':
-            result = result - right
-        elif op == '*':
-            result = result * right
-        elif op == '|':
-            result = result | right
-        elif op == '>>':
+
+    def _apply(op: str, lhs: Any, rhs: Any) -> Any:
+        if op == '+':  return lhs + rhs
+        if op == '-':  return lhs - rhs
+        if op == '*':  return lhs * rhs
+        if op == '|':  return lhs | rhs
+        if op == '<<': return lhs << rhs
+        if op == '>>':
             # Route right-shift through csem so signedness picks the
             # correct arithmetic vs logical variant.
-            result = _ashr(result, right) if profile.signed else _lshr(result, right)
-        else:  # '<<'
-            result = result << right
-        i += 2
+            return _ashr(lhs, rhs) if profile.signed else _lshr(lhs, rhs)
+        # _PRECEDENCE keys are exhaustive; reaching here is a bug, not user
+        # input.  Raise so the invariant survives under ``python -O``.
+        raise RuntimeError(f"unhandled operator {op!r}")
 
-    if i != len(tokens):
+    def _climb(min_prec: int) -> Union[Any, Rejection]:
+        lhs = _atom()
+        if isinstance(lhs, Rejection):
+            return lhs
+        while pos[0] < len(tokens):
+            tok = tokens[pos[0]]
+            if tok not in _PRECEDENCE:
+                # Anything else — ``)``, a relational op, an extra atom —
+                # ends this climb level.  The outer dispatcher classifies
+                # the leftover (paren imbalance, unsupported operator, or
+                # plain trailing token).
+                break
+            prec = _PRECEDENCE[tok]
+            if prec < min_prec:
+                break
+            pos[0] += 1
+            rhs = _climb(prec + 1)  # left-associative
+            if isinstance(rhs, Rejection):
+                return rhs
+            lhs = _apply(tok, lhs, rhs)
+        return lhs
+
+    result = _climb(0)
+    if isinstance(result, Rejection):
+        return result
+
+    if pos[0] != len(tokens):
+        leftover = tokens[pos[0]]
+        if leftover in ('(', ')'):
+            return Rejection(
+                text, RejectionKind.UNBALANCED_PARENS,
+                f"unexpected {leftover!r} in expression",
+            )
+        if leftover in _RELATIONAL_TOKENS:
+            return Rejection(
+                text, RejectionKind.UNSUPPORTED_OPERATOR,
+                f"operator {leftover!r} not in {{+, -, *, |, >>, <<}}",
+            )
         return Rejection(
             text, RejectionKind.TRAILING_TOKENS,
-            f"unconsumed token {tokens[i]!r}",
+            f"unconsumed token {leftover!r}",
         )
 
     return result
@@ -410,19 +473,36 @@ def _parse_condition(
     free variables by :func:`_substitute_calls`, so conditions like
     ``strlen(input) < 1024`` can still drive feasibility analysis.  Any
     parentheses left behind after that pass are non-call grouping
-    (``(a + b) * c``) and are rejected with
-    :data:`RejectionKind.PARENS_NOT_SUPPORTED`.  ``text`` (the original)
-    is preserved for rejection messages so callers can match failures
-    back to their input.
+    (``(a + b) * c``) and are now supported via precedence climbing in
+    :func:`_parse_expr` — the early balance check below only catches
+    the structurally-broken cases (extra ``)`` or unmatched ``(``)
+    before they fall through to a less specific rejection further down.
+    ``text`` (the original) is preserved for rejection messages so
+    callers can match failures back to their input.
     """
     t = _substitute_calls(_canonicalise(text), vars_, profile=profile)
 
-    if '(' in t or ')' in t:
+    # Early paren-balance scan.  ``_parse_expr`` would catch most imbalances
+    # itself, but only conditions whose top-level matches the relational or
+    # bitmask regex below ever reach it.  Cases like ``strlen(x`` or
+    # ``f(g(x)`` (no relational op) would otherwise fall through to a
+    # generic UNRECOGNIZED_FORM rejection — this loop pre-empts that with
+    # a more specific UNBALANCED_PARENS.
+    depth = 0
+    for ch in t:
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+            if depth < 0:
+                return Rejection(
+                    text, RejectionKind.UNBALANCED_PARENS,
+                    "')' has no matching '('",
+                )
+    if depth != 0:
         return Rejection(
-            text, RejectionKind.PARENS_NOT_SUPPORTED,
-            "input contains '(' or ')' that is not a recognised function call",
-            hint="function calls (ident(...)) parse via the free-variable fallback; "
-                 "non-call grouping is unsupported — flatten the expression",
+            text, RejectionKind.UNBALANCED_PARENS,
+            f"{depth} unmatched '(' at end of input",
         )
 
     # Bitmask: lhs & mask (==|!=) val
