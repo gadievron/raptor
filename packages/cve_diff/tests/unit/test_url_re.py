@@ -6,6 +6,9 @@ import pytest
 from cve_diff.core.url_re import (
     GITHUB_COMMIT_URL_RE,
     extract_github_slug,
+    is_github_url,
+    is_gitlab_url,
+    is_kernel_org_url,
     normalize_slug,
 )
 
@@ -84,3 +87,75 @@ def test_commit_url_re_keeps_dotted_repo_name() -> None:
     assert m is not None
     assert m.group(1) == "socketio/engine.io"
     assert m.group(2) == "c0e194d44933bd83bf9a4b126fca68ba7bf5098c"
+
+
+# ---- hostname-anchored URL classifiers -------------------------------
+#
+# Pre-2026-05-02 several callers used ``"github.com" in url`` /
+# ``"kernel.org" in url`` substring checks, which CodeQL flagged as
+# ``incomplete-url-substring-sanitization``: a URL like
+# ``https://github.com.evil.com/...`` matches the substring but is not
+# a GitHub URL. ``urlparse``-based hostname checks fix that.
+
+
+class TestIsGithubUrl:
+    def test_canonical_github(self) -> None:
+        assert is_github_url("https://github.com/torvalds/linux")
+        assert is_github_url("https://github.com/curl/curl/commit/abc")
+
+    def test_subdomains(self) -> None:
+        # api.github.com is GitHub-owned — should match.
+        assert is_github_url("https://api.github.com/repos/x/y")
+        assert is_github_url("https://raw.githubusercontent.com") is False
+
+    def test_substring_attack(self) -> None:
+        """Closes ``incomplete-url-substring-sanitization``."""
+        assert is_github_url("https://github.com.evil.com/foo") is False
+        assert is_github_url("https://evil.com/github.com/foo") is False
+        assert is_github_url("https://evilgithub.com/foo") is False
+
+    def test_other_forges(self) -> None:
+        assert is_github_url("https://gitlab.com/foo/bar") is False
+        assert is_github_url("https://bitbucket.org/foo/bar") is False
+
+    def test_empty_or_garbage(self) -> None:
+        assert is_github_url("") is False
+        assert is_github_url("not a url") is False
+
+
+class TestIsGitlabUrl:
+    def test_canonical_gitlab(self) -> None:
+        assert is_gitlab_url("https://gitlab.com/foo/bar")
+        assert is_gitlab_url("https://api.gitlab.com/v4/foo")
+
+    def test_substring_attack(self) -> None:
+        assert is_gitlab_url("https://gitlab.com.evil.com/foo") is False
+        # ``gitlab`` mid-host should NOT match.
+        assert is_gitlab_url("https://my-gitlab-mirror.evil.com") is False
+        assert is_gitlab_url("https://evilgitlab.com") is False
+
+    def test_self_hosted_falls_through(self) -> None:
+        """Self-hosted GitLab (``gitlab.<vendor>.com``) is intentionally
+        not classified by this helper — see docstring rationale.
+        Callers needing full self-hosted detection use
+        ``_gitlab_host_and_slug``."""
+        assert is_gitlab_url("https://gitlab.example.com/foo") is False
+        assert is_gitlab_url("https://gitlab.kde.org/proj/repo") is False
+
+    def test_other_forges(self) -> None:
+        assert is_gitlab_url("https://github.com/foo/bar") is False
+
+
+class TestIsKernelOrgUrl:
+    def test_canonical_kernel_org(self) -> None:
+        assert is_kernel_org_url("https://kernel.org/foo")
+        assert is_kernel_org_url("https://git.kernel.org/linus/abc")
+        assert is_kernel_org_url("https://patchwork.kernel.org/x")
+
+    def test_substring_attack(self) -> None:
+        assert is_kernel_org_url("https://kernel.org.evil.com/foo") is False
+        assert is_kernel_org_url("https://evil.com/kernel.org/foo") is False
+        assert is_kernel_org_url("https://evilkernel.org") is False
+
+    def test_other_forges(self) -> None:
+        assert is_kernel_org_url("https://github.com/torvalds/linux") is False

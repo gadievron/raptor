@@ -214,9 +214,10 @@ def extract_for_agreement(
 
     results: list[tuple[str, DiffBundle]] = []
 
-    url = (ref.repository_url or "").lower()
+    from cve_diff.core.url_re import is_github_url
+    url = ref.repository_url or ""
     # JSON API path (per-forge).
-    if "github.com" in url:
+    if is_github_url(url):
         try:
             b = _extract_via_api_github(cve_id, ref)
             if b is not None:

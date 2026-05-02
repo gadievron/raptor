@@ -16,8 +16,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from string import Template
 
 from cve_diff.core.models import DiffBundle
 from cve_diff.llm.client import ResilientLLMClient
@@ -25,13 +24,16 @@ from cve_diff.llm.client import ResilientLLMClient
 DEFAULT_MODEL = "claude-opus-4-7"
 DIFF_PROMPT_LIMIT = 32_000  # Bytes of diff passed to the model.
 
+# The single LLM prompt template uses ``${var}`` substitutions only —
+# no loops, no conditionals, no inheritance — so ``string.Template``
+# (stdlib) covers it without pulling in jinja2. Templates live as
+# ``.txt`` next to this module; pre-2026-05-02 used ``.j2`` with
+# jinja2's ``{{ var }}`` syntax.
 _PROMPTS_DIR = Path(__file__).parent.parent / "llm" / "prompts"
-_env = Environment(
-    loader=FileSystemLoader(str(_PROMPTS_DIR)),
-    autoescape=select_autoescape([]),
-    trim_blocks=True,
-    lstrip_blocks=True,
-)
+
+
+def _load_template(name: str) -> Template:
+    return Template((_PROMPTS_DIR / name).read_text(encoding="utf-8"))
 
 
 class AnalysisError(RuntimeError):
@@ -86,11 +88,14 @@ class RootCauseAnalyzer:
             raise AnalysisError(f"response missing required field: {exc}. got={data!r}") from exc
 
     def _render_prompt(self, bundle: DiffBundle) -> str:
-        tmpl = _env.get_template("root_cause.j2")
+        tmpl = _load_template("root_cause.txt")
         diff_text = bundle.diff_text
         if len(diff_text) > self.diff_limit:
             diff_text = diff_text[: self.diff_limit] + "\n[...truncated...]"
-        return tmpl.render(
+        # ``substitute`` (not ``safe_substitute``) so a missing key
+        # raises immediately rather than silently leaving ``$placeholder``
+        # in the rendered prompt.
+        return tmpl.substitute(
             cve_id=bundle.cve_id,
             repository_url=bundle.repo_ref.repository_url,
             commit_after=bundle.commit_after,

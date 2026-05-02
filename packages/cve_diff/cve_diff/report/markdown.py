@@ -315,8 +315,12 @@ def _ref_hint(method: str, slug: str | None, sha: str | None) -> str:
     if method == "patch_url":
         # Forge-aware hint: GitHub uses `<slug>/commit/<sha>.patch`,
         # cgit uses the `?id=<sha>&format=patch` query.
+        from cve_diff.core.url_re import is_kernel_org_url
         s = (slug or "").lower()
-        if "kernel.org" in s or "cgit" in s:
+        # Hostname-anchored ``kernel.org`` check (closes the
+        # incomplete-substring CodeQL footgun); ``cgit`` stays as a
+        # path-token substring since it's forge software, not a host.
+        if is_kernel_org_url(slug or "") or "cgit" in s:
             return f"`{slug}/commit/?id={sha}&format=patch`"
         return f"`{slug}/commit/{sha}.patch`"
     return f"`{slug} @ {sha}`"
@@ -419,8 +423,13 @@ def _single_source_reason(slug: str | None) -> str:
     """
     if not slug:
         return "no second extractor available"
+    from cve_diff.core.url_re import is_kernel_org_url
     s = slug.lower()
-    if "kernel.org" in s or "cgit" in s:
+    # Hostname-anchored ``kernel.org`` check (closes the
+    # incomplete-substring CodeQL footgun); ``cgit`` /
+    # ``googlesource`` stay as path-token substrings — both are
+    # forge-software identifiers, not hostnames.
+    if is_kernel_org_url(slug) or "cgit" in s:
         return "cgit forge — no second extractor available"
     if "googlesource" in s:
         return "googlesource forge — no second extractor available"
