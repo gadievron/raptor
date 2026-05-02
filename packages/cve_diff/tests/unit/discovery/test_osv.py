@@ -193,30 +193,16 @@ class TestOSVFetch:
         assert result is not None
         assert len(result.tuples) == 1
 
-    def test_404_falls_through_to_batch(self, http) -> None:
+    def test_404_returns_none(self, http) -> None:
+        """OSV resolves CVE / GHSA / DSA aliases server-side via
+        ``/vulns/<id>`` so a 404 is final — the legacy ``/query``
+        fallback was dead code (wrong body shape; returned ``None``
+        deterministically in production) and was removed in the
+        packages/osv-consumption rewire."""
         http.get(
             "https://api.osv.dev/v1/vulns/CVE-2024-9999",
             json={"code": 5, "message": "not found"},
             status=404,
-        )
-        http.post(
-            "https://api.osv.dev/v1/query",
-            json={"results": [{"vulns": [_fixture("CVE-2023-38545")]}]},
-            status=200,
-        )
-        result = OSVDiscoverer().fetch("CVE-2024-9999")
-        assert result is not None
-        assert len(result.tuples) == 1
-
-    def test_returns_none_when_both_endpoints_miss(self, http) -> None:
-        http.get(
-            "https://api.osv.dev/v1/vulns/CVE-2024-9999",
-            json={}, status=404,
-        )
-        http.post(
-            "https://api.osv.dev/v1/query",
-            json={"results": [{}]},
-            status=200,
         )
         assert OSVDiscoverer().fetch("CVE-2024-9999") is None
 
