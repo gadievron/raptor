@@ -68,10 +68,20 @@ def main():
     p_status.add_argument("name", nargs="?", help="Project name")
 
     # coverage
-    p_cov = sub.add_parser("coverage", help="Show coverage summary",
-                           usage="raptor project coverage [<name>] [--detailed]", **_F)
+    p_cov = sub.add_parser(
+        "coverage",
+        help="Show coverage summary",
+        usage="raptor project coverage [<name>] [--detailed] [--fail-under <pct>]",
+        **_F,
+    )
     p_cov.add_argument("name", nargs="?", help="Project name")
     p_cov.add_argument("--detailed", action="store_true", help="Per-file breakdown")
+    p_cov.add_argument(
+        "--fail-under",
+        type=float,
+        metavar="<pct>",
+        help="Exit non-zero unless LLM item coverage is at least this percentage",
+    )
 
     # findings
     p_findings = sub.add_parser("findings", help="Show merged findings across all runs",
@@ -231,7 +241,9 @@ def main():
             if not p:
                 print(f"Project '{name}' not found.")
                 return
-            _print_coverage(p, detailed=args.detailed)
+            result = _print_coverage(p, detailed=args.detailed, fail_under=args.fail_under)
+            if result is False:
+                sys.exit(1)
 
         elif args.subcommand == "findings":
             name = args.name or _get_active_project()
@@ -581,19 +593,28 @@ def _print_status(project):
         print("\nNo runs.")
 
 
-def _print_coverage(project, detailed=False):
+def _print_coverage(project, detailed=False, fail_under=None):
     """Print project coverage summary or detailed view."""
     from core.coverage.summary import (
-        compute_project_summary, format_summary, format_detailed,
+        compute_project_summary,
+        coverage_threshold_met,
+        format_detailed,
+        format_summary,
+        format_threshold_result,
     )
     summary = compute_project_summary(project)
     if not summary:
         print("No coverage data (no checklist or coverage records found).")
-        return
+        return False if fail_under is not None else None
     if detailed:
         print(format_detailed(summary))
     else:
         print(format_summary(summary))
+    if fail_under is not None:
+        print()
+        print(format_threshold_result(summary, fail_under))
+        return coverage_threshold_met(summary, fail_under)
+    return None
 
 
 def _print_findings(project, detailed=False):

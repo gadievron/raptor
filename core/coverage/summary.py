@@ -211,6 +211,32 @@ def _pl(n: int, word: str) -> str:
     return f"{n} {word}" if n == 1 else f"{n} {word}s"
 
 
+def llm_item_coverage_percent(summary: Dict[str, Any]) -> float:
+    """Return percentage of inventory items reviewed by LLM coverage records."""
+    if not summary:
+        return 0.0
+    total = summary.get("inventory", {}).get("items", 0)
+    if not total:
+        return 100.0
+    reviewed = total - summary.get("unreviewed_functions", 0)
+    return max(0.0, min(100.0, reviewed / total * 100))
+
+
+def coverage_threshold_met(summary: Dict[str, Any], fail_under: float) -> bool:
+    """Return whether LLM item coverage satisfies ``fail_under`` percent."""
+    return llm_item_coverage_percent(summary) >= fail_under
+
+
+def format_threshold_result(summary: Dict[str, Any], fail_under: float) -> str:
+    """Format a copy-paste friendly coverage threshold result."""
+    pct = llm_item_coverage_percent(summary)
+    status = "PASS" if coverage_threshold_met(summary, fail_under) else "FAIL"
+    return (
+        f"Coverage threshold: {pct:.1f}% LLM item coverage; "
+        f"required {fail_under:.1f}% — {status}"
+    )
+
+
 def format_summary(summary: Dict[str, Any]) -> str:
     """Format coverage summary — Option D (actionable overview)."""
     if not summary:

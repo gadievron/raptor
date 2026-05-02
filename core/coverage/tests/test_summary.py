@@ -5,7 +5,14 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from core.coverage.summary import compute_summary, compute_project_summary, format_summary
+from core.coverage.summary import (
+    compute_summary,
+    compute_project_summary,
+    coverage_threshold_met,
+    format_summary,
+    format_threshold_result,
+    llm_item_coverage_percent,
+)
 from core.coverage.record import write_record
 
 
@@ -176,6 +183,28 @@ class TestFormatSummary(unittest.TestCase):
 
     def test_no_data(self):
         self.assertEqual(format_summary(None), "No coverage data available.")
+
+    def test_llm_item_coverage_threshold_helpers(self):
+        summary = {
+            "inventory": {"files": 2, "sloc": 120, "items": 4},
+            "tools": {
+                "llm": {
+                    "files_examined": 1,
+                    "files_total": 2,
+                    "functions_analysed": 3,
+                    "functions_total": 4,
+                }
+            },
+            "unreviewed_functions": 1,
+            "unreviewed_sloc": 30,
+            "missing_groups": [],
+            "per_file": [],
+        }
+        self.assertEqual(llm_item_coverage_percent(summary), 75.0)
+        self.assertTrue(coverage_threshold_met(summary, 75.0))
+        self.assertFalse(coverage_threshold_met(summary, 80.0))
+        self.assertIn("75.0% LLM item coverage", format_threshold_result(summary, 80.0))
+        self.assertIn("FAIL", format_threshold_result(summary, 80.0))
 
 
 class TestProjectSummary(unittest.TestCase):
