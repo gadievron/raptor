@@ -13,7 +13,6 @@ Used by `agent/loop.py` to:
 1. Track which source classes the agent has already tried.
 2. Surrender no_evidence when ALL applicable classes are exhausted AND
    no verification call has succeeded.
-3. Inject a one-shot reflection hint at iter 4 listing untried classes.
 
 Distinct from the no-lists mandate: this is a tool-name → source-class
 mapping (intrinsic to the tools we built, not a discovery list of
@@ -113,8 +112,6 @@ def should_surrender_no_evidence(
 
 
 def untried_classes(tool_call_log: list[str]) -> frozenset[str]:
-    """Source classes the agent hasn't invoked yet — kept for the
-    cascade rule's tried-set logic and the per-stage retrospective
-    (`scripts/retrospective_per_stage.py`). The iter-3 reflection
-    hint that originally consumed this is retired (2026-04-26)."""
+    """Source classes the agent hasn't invoked yet — used by the
+    cascade rule's tried-set logic."""
     return frozenset(SOURCE_CLASSES.keys()) - tried_classes(tool_call_log)
