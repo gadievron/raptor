@@ -756,8 +756,19 @@ class TestAuditRunDirKwarg:
                                                stdout="", stderr="")
 
         # Force the spawn path so writable_paths is meaningful.
-        if not _spawn_mod.mount_ns_available():
-            pytest.skip("mount-ns not available — spawn path won't engage")
+        # mount_ns_available() checks ONLY for newuidmap binaries —
+        # not the apparmor sysctl. The actual spawn-eligibility gate
+        # in context.py also requires check_mount_available() (sysctl
+        # check). CI runners on Ubuntu have the binaries but
+        # apparmor_restrict_unprivileged_userns=1, so the spawn path
+        # silently degrades to subprocess+preexec and the fake
+        # run_sandboxed never gets called → KeyError on `captured`.
+        # Skip if either gate fails so the assertion is sound.
+        from core.sandbox.probes import check_mount_available
+        if not (_spawn_mod.mount_ns_available()
+                and check_mount_available()):
+            pytest.skip("mount-ns not available (binaries OR sysctl) "
+                        "— spawn path won't engage")
         monkeypatch.setattr(_spawn_mod, "run_sandboxed", fake_run_sandboxed)
 
         target = tmp_path / "tgt"; target.mkdir()
@@ -783,8 +794,12 @@ class TestAuditRunDirKwarg:
         not a replacement."""
         from core.sandbox import context as ctx
         from core.sandbox import _spawn as _spawn_mod
-        if not _spawn_mod.mount_ns_available():
-            pytest.skip("mount-ns not available")
+        from core.sandbox.probes import check_mount_available
+        # mount_ns_available() alone is insufficient — see comment in
+        # test_audit_run_dir_does_not_add_to_writable_paths above.
+        if not (_spawn_mod.mount_ns_available()
+                and check_mount_available()):
+            pytest.skip("mount-ns not available (binaries OR sysctl)")
         captured = {}
 
         def fake_run_sandboxed(*args, **kwargs):
