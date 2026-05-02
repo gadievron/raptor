@@ -7,9 +7,10 @@ HTTP round-trip is mocked.
 from __future__ import annotations
 
 import pytest
-import responses
 
 from cve_diff.discovery.nvd import NvdDiscoverer
+
+from .._http_mock import GET
 
 
 @pytest.fixture(autouse=True)
@@ -38,7 +39,7 @@ def _nvd_payload(refs: list[dict]) -> dict:
 
 
 class TestDefaultTimeout:
-    def test_default_timeout_is_at_least_thirty_seconds(self) -> None:
+    def test_default_timeout_is_at_least_thirty_seconds(self, http) -> None:
         """NVD's endpoint is slow under real load — the 2026-04-20 re-bench
         had NvdDiscoverer time out on ~all 80 CVEs with a 10s default."""
         from cve_diff.discovery.nvd import DEFAULT_TIMEOUT_S
@@ -46,10 +47,8 @@ class TestDefaultTimeout:
 
 
 class TestExtractsPatchTaggedGithubCommits:
-    @responses.activate
-    def test_single_patch_tagged_commit_becomes_tuple(self) -> None:
-        responses.add(
-            responses.GET,
+    def test_single_patch_tagged_commit_becomes_tuple(self, http) -> None:
+        http.add(GET,
             "https://services.nvd.nist.gov/rest/json/cves/2.0",
             json=_nvd_payload([
                 {
@@ -68,11 +67,9 @@ class TestExtractsPatchTaggedGithubCommits:
         assert tup.fix_commit == "172e54cda18412da73fd8eb4e444e8a5b371ca59"
         assert tup.introduced is None
 
-    @responses.activate
-    def test_multiple_patch_refs_deduplicated(self) -> None:
+    def test_multiple_patch_refs_deduplicated(self, http) -> None:
         url = "https://github.com/x/y/commit/abcdef1234567890abcdef1234567890abcdef12"
-        responses.add(
-            responses.GET,
+        http.add(GET,
             "https://services.nvd.nist.gov/rest/json/cves/2.0",
             json=_nvd_payload([
                 {"url": url, "tags": ["Patch"]},
@@ -86,10 +83,8 @@ class TestExtractsPatchTaggedGithubCommits:
 
 
 class TestFiltersNonPatchTagged:
-    @responses.activate
-    def test_ref_without_patch_tag_is_ignored(self) -> None:
-        responses.add(
-            responses.GET,
+    def test_ref_without_patch_tag_is_ignored(self, http) -> None:
+        http.add(GET,
             "https://services.nvd.nist.gov/rest/json/cves/2.0",
             json=_nvd_payload([
                 {
@@ -102,12 +97,10 @@ class TestFiltersNonPatchTagged:
         result = NvdDiscoverer().fetch("CVE-2024-1234")
         assert result is None
 
-    @responses.activate
-    def test_patch_tagged_non_commit_url_is_ignored(self) -> None:
+    def test_patch_tagged_non_commit_url_is_ignored(self, http) -> None:
         """A Patch-tagged link that isn't github.com/.../commit/<sha> (e.g.
         points at a PR or an issue tracker) carries no usable SHA."""
-        responses.add(
-            responses.GET,
+        http.add(GET,
             "https://services.nvd.nist.gov/rest/json/cves/2.0",
             json=_nvd_payload([
                 {"url": "https://github.com/x/y/pull/42", "tags": ["Patch"]},
@@ -126,10 +119,8 @@ class TestExtractsEmbeddedUrls:
     those references were silently dropped. ``.search()`` recovers them.
     """
 
-    @responses.activate
-    def test_url_with_leading_prose_is_extracted(self) -> None:
-        responses.add(
-            responses.GET,
+    def test_url_with_leading_prose_is_extracted(self, http) -> None:
+        http.add(GET,
             "https://services.nvd.nist.gov/rest/json/cves/2.0",
             json=_nvd_payload([
                 {
@@ -150,10 +141,8 @@ class TestExtractsEmbeddedUrls:
 
 
 class TestRejectsShortShas:
-    @responses.activate
-    def test_sha_below_seven_chars_rejected(self) -> None:
-        responses.add(
-            responses.GET,
+    def test_sha_below_seven_chars_rejected(self, http) -> None:
+        http.add(GET,
             "https://services.nvd.nist.gov/rest/json/cves/2.0",
             json=_nvd_payload([
                 {"url": "https://github.com/x/y/commit/abc123", "tags": ["Patch"]},
@@ -165,10 +154,8 @@ class TestRejectsShortShas:
 
 
 class TestEmptyAndMissing:
-    @responses.activate
-    def test_no_refs_returns_none(self) -> None:
-        responses.add(
-            responses.GET,
+    def test_no_refs_returns_none(self, http) -> None:
+        http.add(GET,
             "https://services.nvd.nist.gov/rest/json/cves/2.0",
             json=_nvd_payload([]),
             status=200,
@@ -176,10 +163,8 @@ class TestEmptyAndMissing:
         result = NvdDiscoverer().fetch("CVE-2024-1234")
         assert result is None
 
-    @responses.activate
-    def test_cve_not_in_nvd_returns_none(self) -> None:
-        responses.add(
-            responses.GET,
+    def test_cve_not_in_nvd_returns_none(self, http) -> None:
+        http.add(GET,
             "https://services.nvd.nist.gov/rest/json/cves/2.0",
             json={"vulnerabilities": []},
             status=200,
@@ -187,20 +172,16 @@ class TestEmptyAndMissing:
         result = NvdDiscoverer().fetch("CVE-2024-1234")
         assert result is None
 
-    @responses.activate
-    def test_404_returns_none(self) -> None:
-        responses.add(
-            responses.GET,
+    def test_404_returns_none(self, http) -> None:
+        http.add(GET,
             "https://services.nvd.nist.gov/rest/json/cves/2.0",
             status=404,
         )
         result = NvdDiscoverer().fetch("CVE-2024-1234")
         assert result is None
 
-    @responses.activate
-    def test_rate_limited_returns_none(self) -> None:
-        responses.add(
-            responses.GET,
+    def test_rate_limited_returns_none(self, http) -> None:
+        http.add(GET,
             "https://services.nvd.nist.gov/rest/json/cves/2.0",
             status=403,
         )
@@ -209,12 +190,10 @@ class TestEmptyAndMissing:
 
 
 class TestRawIsPreservedForContext:
-    @responses.activate
-    def test_raw_is_full_cve_record(self) -> None:
+    def test_raw_is_full_cve_record(self, http) -> None:
         """The cve dict is preserved in `raw` so downstream can build an
         AdvisoryContext from the CPE configurations later."""
-        responses.add(
-            responses.GET,
+        http.add(GET,
             "https://services.nvd.nist.gov/rest/json/cves/2.0",
             json=_nvd_payload([
                 {
@@ -255,15 +234,13 @@ class TestRateLimitRetry:
     without CPE products, mismatch penalty doesn't fire on writeup repos.
     """
 
-    @responses.activate
-    def test_retries_once_on_429(self, monkeypatch) -> None:
+    def test_retries_once_on_429(self, http, monkeypatch) -> None:
         monkeypatch.setattr(
             "cve_diff.discovery.nvd._RETRY_BASE_S", 0
         )  # no real sleep in unit tests
         url = "https://services.nvd.nist.gov/rest/json/cves/2.0"
-        responses.add(responses.GET, url, status=429)
-        responses.add(
-            responses.GET,
+        http.add(GET, url, status=429)
+        http.add(GET,
             url,
             json=_nvd_payload_with_cpe(["cpe:2.3:a:curl:curl:*:*:*:*:*:*:*:*"]),
             status=200,
@@ -272,12 +249,11 @@ class TestRateLimitRetry:
         assert payload is not None
         assert payload["vulnerabilities"]
 
-    @responses.activate
-    def test_gives_up_after_max_retries(self, monkeypatch) -> None:
+    def test_gives_up_after_max_retries(self, http, monkeypatch) -> None:
         monkeypatch.setattr("cve_diff.discovery.nvd._RETRY_BASE_S", 0)
         url = "https://services.nvd.nist.gov/rest/json/cves/2.0"
         for _ in range(5):
-            responses.add(responses.GET, url, status=429)
+            http.add(GET, url, status=429)
         payload = NvdDiscoverer(cache_enabled=False).get_payload("CVE-2024-1234")
         assert payload is None
 
@@ -286,11 +262,9 @@ class TestProcessLocalCache:
     """Repeated get_payload calls on the same CVE serve from the process-local
     memory cache; one network call total."""
 
-    @responses.activate
-    def test_second_call_is_served_from_cache(self) -> None:
+    def test_second_call_is_served_from_cache(self, http) -> None:
         url = "https://services.nvd.nist.gov/rest/json/cves/2.0"
-        responses.add(
-            responses.GET,
+        http.add(GET,
             url,
             json=_nvd_payload_with_cpe(["cpe:2.3:a:curl:curl:*:*:*:*:*:*:*:*"]),
             status=200,
@@ -300,36 +274,32 @@ class TestProcessLocalCache:
         assert first is not None
         second = disc.get_payload("CVE-2099-9999")
         assert second is not None
-        assert len(responses.calls) == 1
+        assert len(http.calls) == 1
 
 
 class TestApiKeyHeader:
     """NVD_API_KEY raises the quota from 5/30s to 50/30s. Required under
     any serious bench parallelism."""
 
-    @responses.activate
-    def test_api_key_env_sends_header(self, monkeypatch) -> None:
+    def test_api_key_env_sends_header(self, http, monkeypatch) -> None:
         monkeypatch.setenv("NVD_API_KEY", "test-key-123")
         url = "https://services.nvd.nist.gov/rest/json/cves/2.0"
-        responses.add(
-            responses.GET,
+        http.add(GET,
             url,
             json=_nvd_payload_with_cpe(["cpe:2.3:a:curl:curl:*:*:*:*:*:*:*:*"]),
             status=200,
         )
         NvdDiscoverer(cache_enabled=False).get_payload("CVE-2024-9999")
-        assert len(responses.calls) == 1
-        assert responses.calls[0].request.headers.get("apiKey") == "test-key-123"
+        assert len(http.calls) == 1
+        assert http.calls[0].headers.get("apiKey") == "test-key-123"
 
-    @responses.activate
-    def test_no_api_key_sends_no_header(self, monkeypatch) -> None:
+    def test_no_api_key_sends_no_header(self, http, monkeypatch) -> None:
         monkeypatch.delenv("NVD_API_KEY", raising=False)
         url = "https://services.nvd.nist.gov/rest/json/cves/2.0"
-        responses.add(
-            responses.GET,
+        http.add(GET,
             url,
             json=_nvd_payload_with_cpe(["cpe:2.3:a:curl:curl:*:*:*:*:*:*:*:*"]),
             status=200,
         )
         NvdDiscoverer(cache_enabled=False).get_payload("CVE-2024-9998")
-        assert "apiKey" not in responses.calls[0].request.headers
+        assert "apiKey" not in http.calls[0].headers

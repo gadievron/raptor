@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import pytest
-import responses
 
 from cve_diff.discovery.nvd import NvdDiscoverer
+
+from .._http_mock import GET, POST
 from tools.oracle import nvd_oracle
 from tools.oracle.types import Verdict
 
@@ -26,9 +27,8 @@ def _nvd_payload(refs: list[dict]) -> dict:
     }
 
 
-@responses.activate
-def test_match_exact_on_patch_tagged_commit() -> None:
-    responses.add(responses.GET, _NVD_URL, json=_nvd_payload([
+def test_match_exact_on_patch_tagged_commit(http) -> None:
+    http.add(GET, _NVD_URL, json=_nvd_payload([
         {"url": "https://github.com/curl/curl/commit/fb4415d8aee6c10a4ce3328c42b9c2e4eb5bbafb", "tags": ["Patch"]},
     ]))
     v = nvd_oracle.verify("CVE-TEST", "curl/curl", "fb4415d8aee6c10a4ce3328c42b9c2e4eb5bbafb")
@@ -36,9 +36,8 @@ def test_match_exact_on_patch_tagged_commit() -> None:
     assert v.source == "nvd"
 
 
-@responses.activate
-def test_orphan_when_no_patch_tagged_refs() -> None:
-    responses.add(responses.GET, _NVD_URL, json=_nvd_payload([
+def test_orphan_when_no_patch_tagged_refs(http) -> None:
+    http.add(GET, _NVD_URL, json=_nvd_payload([
         {"url": "https://github.com/curl/curl/commit/fb4415d8aee6c10a4ce3328c42b9c2e4eb5bbafb", "tags": ["Third Party Advisory"]},
     ]))
     v = nvd_oracle.verify("CVE-TEST", "curl/curl", "fb4415d8aee6c10a4ce3328c42b9c2e4eb5bbafb")
@@ -46,30 +45,27 @@ def test_orphan_when_no_patch_tagged_refs() -> None:
     assert v.source == "nvd"
 
 
-@responses.activate
-def test_hallucination_when_nvd_patch_ref_disagrees() -> None:
-    responses.add(responses.GET, _NVD_URL, json=_nvd_payload([
+def test_hallucination_when_nvd_patch_ref_disagrees(http) -> None:
+    http.add(GET, _NVD_URL, json=_nvd_payload([
         {"url": "https://github.com/curl/curl/commit/fb4415d8aee6c10a4ce3328c42b9c2e4eb5bbafb", "tags": ["Patch"]},
     ]))
     v = nvd_oracle.verify("CVE-TEST", "other/repo", "deadbeefcafebabe1234567890abcdef12345678")
     assert v.verdict == Verdict.LIKELY_HALLUCINATION
 
 
-@responses.activate
-def test_dispute_when_bench_refused_but_nvd_has_patch() -> None:
-    responses.add(responses.GET, _NVD_URL, json=_nvd_payload([
+def test_dispute_when_bench_refused_but_nvd_has_patch(http) -> None:
+    http.add(GET, _NVD_URL, json=_nvd_payload([
         {"url": "https://github.com/curl/curl/commit/fb4415d8aee6c10a4ce3328c42b9c2e4eb5bbafb", "tags": ["Patch"]},
     ]))
     v = nvd_oracle.verify("CVE-TEST", "", "")
     assert v.verdict == Verdict.DISPUTE
 
 
-@responses.activate
-def test_orphan_on_nvd_fetch_error() -> None:
-    responses.add(responses.GET, _NVD_URL, status=500)
-    responses.add(responses.GET, _NVD_URL, status=500)
-    responses.add(responses.GET, _NVD_URL, status=500)
-    responses.add(responses.GET, _NVD_URL, status=500)
-    responses.add(responses.GET, _NVD_URL, status=500)
+def test_orphan_on_nvd_fetch_error(http) -> None:
+    http.add(GET, _NVD_URL, status=500)
+    http.add(GET, _NVD_URL, status=500)
+    http.add(GET, _NVD_URL, status=500)
+    http.add(GET, _NVD_URL, status=500)
+    http.add(GET, _NVD_URL, status=500)
     v = nvd_oracle.verify("CVE-TEST", "curl/curl", "abc1234")
     assert v.verdict == Verdict.ORPHAN
