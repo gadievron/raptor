@@ -12,6 +12,16 @@ The pattern below is the **strict union** of the two divergent regexes
 that previously coexisted — i.e., a path is "test" if EITHER of the old
 patterns already classified it that way. No path that both old patterns
 agreed was non-test gets re-classified.
+
+The classifier is deliberately **extension-agnostic**: ``test_*`` and
+``*_test.*`` filenames match regardless of suffix because legitimate
+test fixtures use ``.txt`` / ``.json`` / ``.bin`` / etc. as often as
+``.py`` / ``.go`` / ``.c``. Callers that need source-language filtering
+should compose with their own extension check.
+
+Module renamed from ``test_path.py`` to ``path_classifier.py`` (2026-05-02)
+to stop pytest's default ``test_*.py`` collection rule from picking up
+application code.
 """
 
 from __future__ import annotations

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from cve_diff.core.exceptions import AnalysisError
 from cve_diff.core.models import CommitSha, DiffBundle, FileChange, RepoRef
-from cve_diff.core.test_path import is_test_path as _is_test_path
+from cve_diff.core.path_classifier import is_test_path
 from cve_diff.core.url_re import GITHUB_REPO_URL_RE, normalize_slug
 from cve_diff.diffing import shape_dynamic
 from cve_diff.infra import github_client
@@ -166,7 +166,7 @@ def _build_file_changes(
     for path in paths:
         out.append(FileChange(
             path=path,
-            is_test=_is_test_path(path),
+            is_test=is_test_path(path),
             hunks_count=hunk_counts.get(path, 0),
             before_source=_show_blob(repo, before, path, timeout_s, cap_bytes),
             after_source=_show_blob(repo, after, path, timeout_s, cap_bytes),

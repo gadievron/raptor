@@ -25,7 +25,7 @@ import requests
 
 from cve_diff.core.exceptions import AnalysisError
 from cve_diff.core.models import CommitSha, DiffBundle, FileChange, RepoRef
-from cve_diff.core.test_path import is_test_path as _is_test_path
+from cve_diff.core.path_classifier import is_test_path
 from cve_diff.diffing import shape_dynamic
 from cve_diff.diffing.extract_via_api import (
     extract_via_api as _extract_via_api_github,
@@ -152,7 +152,7 @@ def extract_via_gitlab_api(cve_id: str, ref: RepoRef) -> DiffBundle:
         files.append(
             FileChange(
                 path=path,
-                is_test=_is_test_path(path),
+                is_test=is_test_path(path),
                 hunks_count=body.count("\n@@ ") + (1 if body.startswith("@@ ") else 0),
                 before_source=None,
                 after_source=None,

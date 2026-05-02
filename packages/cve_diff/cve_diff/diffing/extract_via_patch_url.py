@@ -26,7 +26,7 @@ import re
 import requests
 
 from cve_diff.core.models import CommitSha, DiffBundle, FileChange, RepoRef
-from cve_diff.core.test_path import is_test_path as _is_test_path
+from cve_diff.core.path_classifier import is_test_path
 from cve_diff.core.url_re import extract_github_slug
 from cve_diff.diffing import shape_dynamic
 from cve_diff.diffing.extract_via_gitlab_api import _gitlab_host_and_slug
@@ -145,7 +145,7 @@ def extract_via_patch_url(cve_id: str, ref: RepoRef) -> DiffBundle | None:
     files = tuple(
         FileChange(
             path=p,
-            is_test=_is_test_path(p),
+            is_test=is_test_path(p),
             hunks_count=hc,
             before_source=None,
             after_source=None,
