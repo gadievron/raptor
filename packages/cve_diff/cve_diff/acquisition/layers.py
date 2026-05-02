@@ -3,19 +3,30 @@ Acquisition layers: turn a `RepoRef` into a local directory with both commits.
 
 Two strategies, tried in order (plan's cascade):
 
-1. TargetedFetchLayer — `git init` + `git remote add` + `git fetch --depth=5`
-   for each commit. Works for old CVEs whose fix commits aren't in recent
-   history. ~70% of wins on the reference project's measured runs.
+1. TargetedFetchLayer — ``core.git.fetch_commit`` per wanted SHA. Works for
+   old CVEs whose fix commits aren't reachable from a depth-1 clone of HEAD.
+   ~70% of wins on the reference project's measured runs.
 
-2. ShallowCloneLayer — `git clone --depth=D` for D in (100, 500) per
-   Bug #3 ("progressive deepening"). Recovers when the server refuses direct
-   commit fetches (common for older GitLab instances / some mirrors).
-   The 2000-depth tier was dropped on the 2026-04-20 bench: it was the
-   median 64s worst-case and caused 3/40 timeouts. If the SHA isn't
-   reachable at 500 it almost never is at 2000 either — those fixes are
-   cherry-picks off branches we can't resolve.
+2. ShallowCloneLayer — ``core.git.clone_repository`` with progressive depth
+   (100, 500). Recovers when the server refuses direct commit fetches
+   (common for older GitLab instances / some mirrors). The 2000-depth tier
+   was dropped on the 2026-04-20 bench: median 64s worst-case and 3/40
+   timeouts. If the SHA isn't reachable at 500 it almost never is at 2000.
 
-Dropped from the reference port: the `TemporalAcquisitionLayer` (deleted
+3. FullCloneLayer — ``core.git.clone_repository`` with ``depth=None``.
+   Last-resort for old git servers that reject ``fetch <unadvertised-sha>``
+   (e.g. BootHole / GRUB2 on git.savannah-style hosts) and for deep cherry-
+   picks not reachable at depth=500.
+
+Pre-rewire each layer shelled out to ``git clone`` / ``git fetch`` directly
+via ``subprocess.run``. That bypassed the egress proxy + sandbox isolation:
+a malicious server-side hook on a forked clone (or a compromised mirror)
+ran with full host network and filesystem access. The layers now route
+every git transport through ``core.git.{clone_repository, fetch_commit}``,
+which engages the sandbox + hostname-allowlisted egress proxy used by the
+rest of RAPTOR.
+
+Dropped from the reference port: the ``TemporalAcquisitionLayer`` (deleted
 branches, 925 LOC of workarounds) — the plan calls it "marginal value" and
 drops it from Phase 1.
 """
@@ -26,17 +37,26 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.git import clone_repository, fetch_commit
+
 from cve_diff.core.exceptions import AcquisitionError
 from cve_diff.core.models import RepoRef
 
 PROGRESSIVE_DEPTHS: tuple[int, ...] = (100, 500)
 TARGETED_DEPTH = 5
+# Sanity bound only — actual per-call timeout is delegated to
+# ``RaptorConfig.GIT_CLONE_TIMEOUT`` inside ``core.git``. Retained so
+# ``test_git_timeout_bounded`` keeps its acquire-budget invariant
+# (≤180s) explicit at this layer.
 GIT_TIMEOUT_S = 120
 
 
 def _commit_exists(repo_path: Path, sha: str) -> bool:
-    # Local-only `cat-file` — but a defensive timeout prevents pathological
-    # filesystems (broken NFS, dying disk) from hanging the pipeline.
+    # Local-only ``cat-file`` check — operates on already-fetched objects
+    # in ``repo_path/.git/`` and never touches the network. Stays as a
+    # raw subprocess (no sandbox needed for purely-local reads); the
+    # 30s timeout protects against pathological filesystems (broken NFS,
+    # dying disk) hanging the pipeline.
     try:
         completed = subprocess.run(
             ["git", "-C", str(repo_path), "cat-file", "-e", f"{sha}^{{commit}}"],
@@ -92,38 +112,39 @@ class AcquisitionLayer:
 class TargetedFetchLayer(AcquisitionLayer):
     name: str = "targeted_fetch"
     depth: int = TARGETED_DEPTH
-    timeout_s: int = GIT_TIMEOUT_S
 
     def acquire(self, ref: RepoRef, dest: Path) -> LayerReport:
         dest.mkdir(parents=True, exist_ok=True)
         if any(dest.iterdir()):
             return LayerReport(self.name, False, f"dest not empty: {dest}")
 
-        steps: list[list[str]] = [
-            ["git", "-C", str(dest), "init", "-q", "-b", "main"],
-            ["git", "-C", str(dest), "remote", "add", "origin", ref.repository_url],
-        ]
         wanted = [ref.fix_commit]
         if isinstance(ref.introduced, str) and ref.introduced:
             wanted.append(ref.introduced)
 
+        # ``fetch_commit`` initialises ``dest`` on first call, then
+        # ``git fetch --depth=N origin <sha>`` per requested SHA. The
+        # first SHA's fetch creates the repo; subsequent SHAs reuse
+        # ``origin`` (set-url is idempotent inside fetch_commit).
         for sha in wanted:
-            steps.append(
-                ["git", "-C", str(dest), "fetch", "--depth", str(self.depth), "origin", sha]
-            )
-
-        for cmd in steps:
             try:
-                result = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=self.timeout_s, check=False
+                fetch_commit(dest, ref.repository_url, sha, depth=self.depth)
+            except ValueError as e:
+                # URL fails the allowlist, SHA fails the shape check, or
+                # ``dest`` fails the writable-path check. All caller-side
+                # bugs / inputs — propagate as a layer failure.
+                return LayerReport(self.name, False, f"validation: {e}")
+            except RuntimeError as e:
+                return LayerReport(
+                    self.name, False,
+                    f"fetch {sha[:12]}: {str(e)[:200]}",
                 )
-            except subprocess.TimeoutExpired:
-                return LayerReport(self.name, False, f"timeout: {' '.join(cmd)}")
-            if result.returncode != 0:
-                return LayerReport(self.name, False, f"{' '.join(cmd)} → {result.stderr.strip()[:200]}")
 
         if not _commit_exists(dest, ref.fix_commit):
-            return LayerReport(self.name, False, f"fix_commit missing after fetch: {ref.fix_commit}")
+            return LayerReport(
+                self.name, False,
+                f"fix_commit missing after fetch: {ref.fix_commit}",
+            )
 
         return LayerReport(self.name, True, "")
 
@@ -132,25 +153,22 @@ class TargetedFetchLayer(AcquisitionLayer):
 class ShallowCloneLayer(AcquisitionLayer):
     name: str = "shallow_clone"
     depths: tuple[int, ...] = PROGRESSIVE_DEPTHS
-    timeout_s: int = GIT_TIMEOUT_S
 
     def acquire(self, ref: RepoRef, dest: Path) -> LayerReport:
         last_err = "no depth tried"
         for depth in self.depths:
             _clean_dest(dest)
-            cmd = [
-                "git", "clone", "--quiet", "--depth", str(depth),
-                ref.repository_url, str(dest),
-            ]
             try:
-                result = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=self.timeout_s, check=False
+                clone_repository(ref.repository_url, dest, depth=depth)
+            except ValueError as e:
+                # URL allowlist / writable-path validator — surfaces
+                # caller-side input issues. Stop trying further depths
+                # since the inputs themselves are invalid.
+                return LayerReport(
+                    self.name, False, f"validation: {e}",
                 )
-            except subprocess.TimeoutExpired:
-                last_err = f"timeout @ depth={depth}"
-                continue
-            if result.returncode != 0:
-                last_err = result.stderr.strip()[:200]
+            except RuntimeError as e:
+                last_err = str(e)[:200]
                 continue
             if _commit_exists(dest, ref.fix_commit):
                 return LayerReport(self.name, True, f"depth={depth}")
@@ -175,7 +193,6 @@ class FullCloneLayer(AcquisitionLayer):
     spinning for 5+ min on a clone we'll discard anyway.
     """
     name: str = "full_clone"
-    timeout_s: int = 300
     max_size_mb: int = 2048
 
     def acquire(self, ref: RepoRef, dest: Path) -> LayerReport:
@@ -198,15 +215,12 @@ class FullCloneLayer(AcquisitionLayer):
                 )
 
         _clean_dest(dest)
-        cmd = ["git", "clone", "--quiet", ref.repository_url, str(dest)]
         try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=self.timeout_s, check=False
-            )
-        except subprocess.TimeoutExpired:
-            return LayerReport(self.name, False, f"timeout @ full clone ({self.timeout_s}s)")
-        if result.returncode != 0:
-            return LayerReport(self.name, False, result.stderr.strip()[:200])
+            clone_repository(ref.repository_url, dest, depth=None)
+        except ValueError as e:
+            return LayerReport(self.name, False, f"validation: {e}")
+        except RuntimeError as e:
+            return LayerReport(self.name, False, str(e)[:200])
         if _commit_exists(dest, ref.fix_commit):
             return LayerReport(self.name, True, "")
         return LayerReport(self.name, False, "fix_commit missing after full clone")
