@@ -439,165 +439,22 @@ class AutonomousSecurityAgentV2:
         logger.info("DATAFLOW VALIDATION (Deep Analysis)")
         logger.info("=" * 70)
 
-        # Build comprehensive validation prompt
-        validation_prompt = f"""You are an elite security researcher performing DEEP VALIDATION of a dataflow path detected by CodeQL.
+        from packages.llm_analysis.prompts import (
+            build_dataflow_validation_bundle,
+            DATAFLOW_VALIDATION_SCHEMA,
+        )
 
-**CRITICAL MISSION:** Determine if this is a REAL exploitable vulnerability or a FALSE POSITIVE.
-
-**VULNERABILITY:** {vuln.rule_id}
-**MESSAGE:** {vuln.message}
-
-═══════════════════════════════════════════════════════════════
-COMPLETE DATAFLOW PATH ANALYSIS
-═══════════════════════════════════════════════════════════════
-
-**SOURCE (Where data enters the system):**
-Location: {vuln.dataflow_source['file']}:{vuln.dataflow_source['line']}
-Type: {vuln.dataflow_source['label']}
-
-Code:
-```
-{vuln.dataflow_source['code']}
-```
-
-"""
-
-        # Add each intermediate step with detailed analysis
-        if vuln.dataflow_steps:
-            validation_prompt += f"**INTERMEDIATE STEPS ({len(vuln.dataflow_steps)} transformations):**\n\n"
-
-            for i, step in enumerate(vuln.dataflow_steps, 1):
-                marker = "🛡️ SANITIZER" if step['is_sanitizer'] else "⚙️ TRANSFORMATION"
-                validation_prompt += f"""{marker} #{i}: {step['label']}
-Location: {step['file']}:{step['line']}
-
-Code:
-```
-{step['code']}
-```
-
-"""
-
-        validation_prompt += f"""**SINK (Where data reaches dangerous operation):**
-Location: {vuln.dataflow_sink['file']}:{vuln.dataflow_sink['line']}
-Type: {vuln.dataflow_sink['label']}
-
-Code:
-```
-{vuln.dataflow_sink['code']}
-```
-
-═══════════════════════════════════════════════════════════════
-VALIDATION TASKS (BE BRUTALLY HONEST)
-═══════════════════════════════════════════════════════════════
-
-**1. SOURCE CONTROL ANALYSIS:**
-   Examine the source code carefully:
-   - Is this data from HTTP request, user input, file upload? → ATTACKER CONTROLLED ✅
-   - Is it from config file, environment variable? → REQUIRES ACCESS FIRST 🔶
-   - Is it a hardcoded constant, internal variable? → FALSE POSITIVE ❌
-
-   Look at the actual code - what does it show?
-
-**2. SANITIZER EFFECTIVENESS ANALYSIS:**
-"""
-
-        if vuln.sanitizers_found:
-            validation_prompt += f"""   You detected {len(vuln.sanitizers_found)} sanitizer(s): {', '.join(vuln.sanitizers_found)}
-
-   For EACH sanitizer, analyze the actual code:
-   - What exactly does it do? (trim, replace, escape, encode, validate)
-   - Is it appropriate for the vulnerability type?
-     * SQL injection needs parameterized queries or escaping
-     * XSS needs HTML entity encoding
-     * Command injection needs input validation or safe APIs
-   - Can it be bypassed? Common bypasses:
-     * Incomplete sanitization (only filters some chars)
-     * Encoding bypasses (URL encoding, double encoding)
-     * Case sensitivity issues
-     * Unicode/UTF-8 bypasses
-   - Is it applied to ALL code paths?
-
-"""
-        else:
-            validation_prompt += """   NO sanitizers detected in dataflow path!
-   - Is there implicit sanitization (type checking, framework protection)?
-   - Are there barriers in the runtime environment?
-
-"""
-
-        validation_prompt += """**3. REACHABILITY ANALYSIS:**
-   - Can an attacker actually trigger this code path?
-   - Are there authentication/authorization checks?
-   - Are there prerequisites that block exploitation?
-   - Is this code path actually used in production?
-
-**4. EXPLOITABILITY ASSESSMENT:**
-   Consider the COMPLETE path from source to sink:
-   - Can attacker-controlled data reach the sink with malicious content intact?
-   - What specific payload would exploit this?
-   - What is the attack complexity (low/medium/high)?
-
-**5. IMPACT ANALYSIS:**
-   If exploitable, what can an attacker achieve?
-   - Code execution, data exfiltration, privilege escalation?
-   - Estimate CVSS score (0.0-10.0)
-
-═══════════════════════════════════════════════════════════════
-YOUR VERDICT
-═══════════════════════════════════════════════════════════════
-
-Provide a structured assessment covering ALL points above.
-Be specific - cite actual code and explain your reasoning.
-If you find this is NOT exploitable, explain exactly why (don't just say "sanitized").
-If it IS exploitable, provide the exact attack path and payload concept.
-"""
-
-        # Validation schema
-        validation_schema = {
-            "source_type": "string - describe what type of source this is (user_input/config/hardcoded/etc)",
-            "source_attacker_controlled": "boolean - can attacker control this source?",
-            "source_reasoning": "string - explain why source is or isn't attacker-controlled",
-
-            "sanitizers_found": f"integer - number of sanitizers ({len(vuln.sanitizers_found)})",
-            "sanitizers_effective": "boolean - do sanitizers prevent exploitation?",
-            "sanitizer_details": "list of dicts with keys: name, purpose, bypass_possible, bypass_method",
-
-            "path_reachable": "boolean - can this code path be reached by attacker?",
-            "reachability_barriers": "list of strings - what blocks reaching this path?",
-
-            "is_exploitable": "boolean - FINAL VERDICT: is this truly exploitable?",
-            "exploitability_confidence": "float (0.0-1.0) - how confident in this assessment?",
-            "exploitability_reasoning": "string - detailed explanation of verdict",
-
-            "attack_complexity": "string - low/medium/high - difficulty of exploitation",
-            "attack_prerequisites": "list of strings - what attacker needs to succeed",
-            "attack_payload_concept": "string - describe what payload would work, or empty if not exploitable",
-
-            "impact_if_exploited": "string - what attacker can achieve",
-            "cvss_estimate": "float (0.0-10.0) - severity score",
-
-            "false_positive": "boolean - is this a false positive?",
-            "false_positive_reason": "string - why it's false positive, or empty",
-        }
-
-        system_prompt = """You are an elite security researcher specializing in:
-- Advanced vulnerability analysis and exploit development
-- Sanitizer bypass techniques and evasion
-- Real-world attack scenarios and feasibility assessment
-- CVSS scoring and risk assessment
-
-Your job is to validate dataflow findings with BRUTAL HONESTY:
-- If it's a false positive, say so clearly and explain why
-- If sanitizers are effective, explain exactly how they work
-- If it's exploitable, provide specific attack details
-- Base ALL conclusions on the actual code provided
-
-Do NOT:
-- Guess or assume
-- Give generic answers
-- Overstate or understate severity
-- Ignore sanitizers or barriers"""
+        bundle = build_dataflow_validation_bundle(
+            rule_id=vuln.rule_id,
+            message=vuln.message,
+            dataflow_source=vuln.dataflow_source,
+            dataflow_sink=vuln.dataflow_sink,
+            dataflow_steps=vuln.dataflow_steps,
+            sanitizers_found=vuln.sanitizers_found,
+        )
+        validation_prompt = next(m.content for m in bundle.messages if m.role == "user")
+        system_prompt = next(m.content for m in bundle.messages if m.role == "system")
+        validation_schema = DATAFLOW_VALIDATION_SCHEMA
 
         try:
             logger.info("Sending dataflow to LLM for deep validation...")
@@ -675,14 +532,14 @@ Do NOT:
             else:
                 logger.warning(f"⚠️  Failed to extract dataflow path")
 
-        # Generate analysis using LLM
         from packages.llm_analysis.prompts import (
-            build_analysis_prompt, build_analysis_schema, ANALYSIS_SYSTEM_PROMPT,
+            build_analysis_prompt_bundle,
+            build_analysis_schema,
         )
 
         analysis_schema = build_analysis_schema(has_dataflow=vuln.has_dataflow)
 
-        prompt = build_analysis_prompt(
+        bundle = build_analysis_prompt_bundle(
             rule_id=vuln.rule_id,
             level=vuln.level,
             file_path=vuln.file_path,
@@ -697,8 +554,8 @@ Do NOT:
             dataflow_steps=vuln.dataflow_steps,
             repo_path=str(vuln.repo_path),
         )
-
-        system_prompt = ANALYSIS_SYSTEM_PROMPT
+        prompt = next(m.content for m in bundle.messages if m.role == "user")
+        system_prompt = next(m.content for m in bundle.messages if m.role == "system")
 
         try:
             if not isinstance(self.llm, ClaudeCodeProvider):
@@ -809,11 +666,9 @@ Do NOT:
         logger.info(f"Generating exploit PoC for {vuln.rule_id}")
         logger.info(f"   Target: {vuln.file_path}:{vuln.start_line}")
 
-        from packages.llm_analysis.prompts import (
-            build_exploit_prompt, EXPLOIT_SYSTEM_PROMPT,
-        )
+        from packages.llm_analysis.prompts.exploit import build_exploit_prompt_bundle
 
-        prompt = build_exploit_prompt(
+        bundle = build_exploit_prompt_bundle(
             rule_id=vuln.rule_id,
             file_path=vuln.file_path,
             start_line=vuln.start_line,
@@ -823,8 +678,8 @@ Do NOT:
             surrounding_context=vuln.surrounding_context,
             feasibility=vuln.feasibility if hasattr(vuln, 'feasibility') else None,
         )
-
-        system_prompt = EXPLOIT_SYSTEM_PROMPT
+        prompt = next(m.content for m in bundle.messages if m.role == "user")
+        system_prompt = next(m.content for m in bundle.messages if m.role == "system")
 
         try:
             logger.info("Requesting exploit code from LLM...")
@@ -879,16 +734,14 @@ Do NOT:
         with open(file_path) as f:
             full_file_content = f.read()
 
-        from packages.llm_analysis.prompts import (
-            build_patch_prompt, PATCH_SYSTEM_PROMPT,
-        )
+        from packages.llm_analysis.prompts.patch import build_patch_prompt_bundle
 
         # Load attack path if available
         attack_path = None
         if vuln.attack_path_ref:
             attack_path = self._load_attack_path(vuln.attack_path_ref)
 
-        prompt = build_patch_prompt(
+        bundle = build_patch_prompt_bundle(
             rule_id=vuln.rule_id,
             file_path=vuln.file_path,
             start_line=vuln.start_line,
@@ -900,8 +753,8 @@ Do NOT:
             feasibility=vuln.feasibility,
             attack_path=attack_path,
         )
-
-        system_prompt = PATCH_SYSTEM_PROMPT
+        prompt = next(m.content for m in bundle.messages if m.role == "user")
+        system_prompt = next(m.content for m in bundle.messages if m.role == "system")
 
         try:
             logger.info("   🤖 Requesting secure patch from LLM...")

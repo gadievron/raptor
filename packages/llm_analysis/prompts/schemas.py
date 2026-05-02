@@ -36,6 +36,28 @@ DATAFLOW_SCHEMA_FIELDS = {
     "dataflow_exploitable": "boolean - is the complete dataflow path exploitable?",
 }
 
+# Schema for deep dataflow validation — used by agent.py's validate_dataflow
+DATAFLOW_VALIDATION_SCHEMA = {
+    "source_type": "string - type of source (user_input/config/hardcoded/etc)",
+    "source_attacker_controlled": "boolean - can attacker control this source?",
+    "source_reasoning": "string - explain why source is or isn't attacker-controlled",
+    "sanitizers_found": "integer - number of sanitizers in the path",
+    "sanitizers_effective": "boolean - do sanitizers prevent exploitation?",
+    "sanitizer_details": "list of dicts with keys: name, purpose, bypass_possible, bypass_method",
+    "path_reachable": "boolean - can this code path be reached by attacker?",
+    "reachability_barriers": "list of strings - what blocks reaching this path?",
+    "is_exploitable": "boolean - FINAL VERDICT: is this truly exploitable?",
+    "exploitability_confidence": "float (0.0-1.0) - how confident in this assessment?",
+    "exploitability_reasoning": "string - detailed explanation of verdict",
+    "attack_complexity": "string - low/medium/high - difficulty of exploitation",
+    "attack_prerequisites": "list of strings - what attacker needs to succeed",
+    "attack_payload_concept": "string - describe what payload would work, or empty if not exploitable",
+    "impact_if_exploited": "string - what attacker can achieve",
+    "cvss_estimate": "float (0.0-10.0) - severity score",
+    "false_positive": "boolean - is this a false positive?",
+    "false_positive_reason": "string - why it's false positive, or empty",
+}
+
 # JSON Schema for CC sub-agent structured output (claude -p --json-schema).
 # This is a proper JSON Schema, unlike ANALYSIS_SCHEMA which uses descriptive strings.
 FINDING_RESULT_SCHEMA = {

@@ -263,10 +263,14 @@ class TestGroupAnalysisTask:
         task = GroupAnalysisTask(results_by_id=results)
         group = {"group_id": "G-001", "criterion": "rule_id",
                  "criterion_value": "sqli", "finding_ids": ["f-001", "f-002"]}
+        # Post anti-prompt-injection migration: prior LLM reasoning lands in the
+        # user message (untrusted block); task instructions ("root cause", etc.)
+        # land in the system message.
         prompt = task.build_prompt(group)
+        system = task.get_system_prompt()
         assert "injectable" in prompt
         assert "parameterised" in prompt
-        assert "root cause" in prompt.lower()
+        assert "root cause" in system.lower()
 
     def test_item_id_is_group_id(self):
         task = GroupAnalysisTask()

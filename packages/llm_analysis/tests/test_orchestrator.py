@@ -21,7 +21,6 @@ from packages.llm_analysis.orchestrator import (
     CUTOFF_SKIP_CONSENSUS,
 )
 from packages.llm_analysis.cc_dispatch import (
-    build_finding_prompt,
     build_schema,
 )
 from packages.llm_analysis.prompts.schemas import FINDING_RESULT_SCHEMA
@@ -239,85 +238,6 @@ class TestOrchestrate:
         assert result is not None
         assert result["orchestration"]["findings_analysed"] == 0
         assert result["orchestration"]["findings_failed"] > 0
-
-
-class TestBuildFindingPrompt:
-    """Test prompt construction."""
-
-    def test_includes_finding_metadata(self):
-        """Prompt includes rule_id, file_path, line numbers."""
-        finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
-        prompt = build_finding_prompt(finding)
-
-        assert "py/sql-injection" in prompt
-        assert "db.py" in prompt
-        assert "42" in prompt
-        assert "f-001" in prompt
-
-    def test_no_raw_code_in_prompt(self):
-        """Prompt does NOT include raw code from the finding."""
-        finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
-        finding["code"] = "cursor.execute(f'SELECT * FROM users WHERE id={uid}')"
-        finding["surrounding_context"] = "def get_user(uid):\n    cursor = db.cursor()\n    ..."
-
-        prompt = build_finding_prompt(finding)
-
-        assert "cursor.execute" not in prompt
-        assert "def get_user" not in prompt
-
-    def test_includes_dataflow_summary(self):
-        """Dataflow metadata is included (without code)."""
-        finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
-        finding["dataflow"] = {
-            "source": {"file": "routes.py", "line": 15, "label": "HTTP parameter"},
-            "sink": {"file": "db.py", "line": 42, "label": "SQL query"},
-            "steps": [{"file": "utils.py", "line": 20}],
-            "sanitizers_found": [],
-        }
-
-        prompt = build_finding_prompt(finding)
-        assert "routes.py:15" in prompt
-        assert "db.py:42" in prompt
-
-    def test_no_exploits_flag(self):
-        """--no-exploits suppresses exploit generation instructions."""
-        finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
-
-        prompt_with = build_finding_prompt(finding, no_exploits=False)
-        prompt_without = build_finding_prompt(finding, no_exploits=True)
-
-        assert "proof-of-concept" in prompt_with.lower() or "exploit" in prompt_with.lower()
-        assert "proof-of-concept" not in prompt_without.lower()
-
-    def test_no_patches_flag(self):
-        """--no-patches suppresses patch generation instructions."""
-        finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
-
-        prompt_with = build_finding_prompt(finding, no_patches=False)
-        prompt_without = build_finding_prompt(finding, no_patches=True)
-
-        assert "secure fix" in prompt_with.lower() or "patch" in prompt_with.lower()
-        assert "secure fix" not in prompt_without.lower()
-
-    def test_includes_score_range(self):
-        """Prompt mentions the 0.0-1.0 score range."""
-        finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
-        prompt = build_finding_prompt(finding)
-        assert "0.0" in prompt and "1.0" in prompt
-
-    def test_feasibility_framing(self):
-        """Feasibility section tells agent to treat constraints as ground truth."""
-        finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
-        finding["feasibility"] = {
-            "verdict": "likely_exploitable",
-            "chain_breaks": ["Full RELRO blocks GOT overwrite"],
-            "what_would_help": ["Format string"],
-        }
-
-        prompt = build_finding_prompt(finding)
-        assert "ground truth" in prompt
-        assert "upstream validation pipeline" in prompt
-        assert "GOT overwrite" in prompt
 
 
 class TestMergeResults:
@@ -699,3 +619,115 @@ class TestSelfConsistency:
         }
         _check_self_consistency(results)
         assert "self_contradictory" not in results["f-001"]
+
+
+# ── Weakened Defenses ──────────────────────────────────────────────
+
+class TestWeakenedDefenses:
+    """Test --accept-weakened-defenses behaviour when probe fails."""
+
+    def _make_external_llm_mocks(self):
+        """Build mocks for the external LLM dispatch path."""
+        fake_config = MagicMock()
+        fake_config.primary_model = "ollama/llama3"
+        fake_config.max_cost_per_scan = 0
+
+        mock_model = MagicMock()
+        mock_model.model_name = "ollama/llama3"
+
+        role_resolution = {
+            "analysis_model": mock_model,
+            "code_model": None,
+            "consensus_models": [],
+            "fallback_models": [],
+        }
+        return fake_config, role_resolution
+
+    def _run_with_failing_probe(self, tmp_path, accept=False):
+        """Helper: dispatch with an external LLM model that fails the canary probe."""
+        report = _make_prep_report()
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(report))
+
+        from core.security.envelope_probe import ProbeResult
+        failing_probe = ProbeResult(
+            compatible=False, valid_json=True, correct_verdict=False,
+            nonce_leaked=False, raw_response="{}",
+            error="Model failed to identify a trivial buffer overflow",
+        )
+
+        fake_config, role_res = self._make_external_llm_mocks()
+
+        analysis_result = _make_cc_result("finding-001")
+
+        def mock_dispatch_task(task, findings, dispatch_fn, role_resolution,
+                               results_by_id, cost_tracker, max_parallel):
+            for f in findings:
+                fid = f.get("finding_id")
+                r = dict(analysis_result, finding_id=fid)
+                results_by_id[fid] = r
+            return [dict(analysis_result, finding_id=f.get("finding_id"))
+                    for f in findings]
+
+        mock_dispatch_fn = MagicMock(return_value=MagicMock(
+            result=analysis_result, cost=0, tokens=0, model="ollama/llama3",
+            duration=0,
+        ))
+
+        with patch("core.llm.config.resolve_model_roles",
+                   return_value=role_res), \
+             patch("core.llm.client.LLMClient") as mock_cls, \
+             patch("packages.llm_analysis.dispatch.dispatch_task",
+                   side_effect=mock_dispatch_task), \
+             patch("core.security.envelope_probe.probe_envelope_compatibility",
+                   return_value=failing_probe):
+            mock_cls.return_value = MagicMock()
+            return orchestrate(
+                prep_report_path=report_path,
+                repo_path=tmp_path,
+                out_dir=tmp_path / "orch",
+                llm_config=fake_config,
+                accept_weakened_defenses=accept,
+            )
+
+    def test_probe_failure_aborts_without_flag(self, tmp_path):
+        """Probe failure without --accept-weakened-defenses returns None."""
+        result = self._run_with_failing_probe(tmp_path, accept=False)
+        assert result is None
+
+    def test_probe_failure_continues_with_flag(self, tmp_path):
+        """Probe failure with --accept-weakened-defenses falls back to passthrough."""
+        with patch("core.security.rule_of_two.is_interactive", return_value=True):
+            result = self._run_with_failing_probe(tmp_path, accept=True)
+        assert result is not None
+        assert result["orchestration"]["defense_profile"] == "passthrough"
+        assert result["orchestration"]["weakened_defenses"] is True
+
+    def test_weakened_defenses_false_when_probe_passes(self, tmp_path):
+        """When probe passes, weakened_defenses is False regardless of flag."""
+        report = _make_prep_report()
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(report))
+
+        cc_result = json.dumps(_make_cc_result("finding-001"))
+
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("packages.llm_analysis.orchestrator.shutil.which",
+                   return_value="/usr/bin/claude"), \
+             patch("packages.llm_analysis.cc_dispatch.subprocess.run",
+                   side_effect=_mock_subprocess_ok([cc_result])):
+            result = orchestrate(
+                prep_report_path=report_path,
+                repo_path=tmp_path,
+                out_dir=tmp_path / "orch",
+                accept_weakened_defenses=True,
+            )
+
+        assert result is not None
+        assert result["orchestration"]["weakened_defenses"] is False
+
+    def test_weakened_defenses_blocked_in_ci(self, tmp_path):
+        """--accept-weakened-defenses is blocked in non-interactive mode."""
+        with patch("core.security.rule_of_two.is_interactive", return_value=False):
+            result = self._run_with_failing_probe(tmp_path, accept=True)
+        assert result is None

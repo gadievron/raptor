@@ -1,0 +1,12 @@
+# Role / persona-swap injection patterns.
+# Hits suggest the content is asking the model to assume a different role —
+# common opener for "developer mode" / "DAN" / jailbreak templates.
+
+you are now (?:a |an )?(?:dan|aim|developer mode|jailbreak|unrestricted|evil|uncensored)
+let'?s play (?:a game|pretend|roleplay)
+pretend (?:to be|you are|that you are|you have no)
+act as (?:if you were |a |an )?(?:dan|aim|jailbreak|unrestricted|developer|hacker|attacker)
+you have no (?:restrictions|filters|limits|safety|guidelines)
+roleplay as (?:a |an )?(?:hacker|attacker|criminal|unrestricted)
+your new (?:role|persona|identity|character) is
+from now on (?:you (?:are|will|must)|respond)

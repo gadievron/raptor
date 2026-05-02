@@ -1,0 +1,21 @@
+# Unicode smuggling / tag character injection patterns.
+# These detect Unicode code points used to hide instructions from human
+# review while remaining parseable by LLM tokenisers.
+
+# Unicode tag characters (U+E0001..U+E007F) — invisible "language tags"
+# that some tokenisers decode as ASCII. Used in the "Unicode tag smuggling"
+# attack (Trail of Bits, 2024).
+[\U000e0001-\U000e007f]
+
+# Invisible formatting / zero-width characters used to hide text or
+# disrupt visual review.
+[​-‏⁠-⁯﻿]
+
+# Homoglyph-rich blocks used to fake identifiers / URLs in prompts.
+# Cyrillic lookalikes for Latin a/c/e/o/p/s/x.
+[аеорсхАВЕНОРСТХ](?=[a-zA-Z])
+
+# Right-to-left override (U+202E) and related BIDI overrides — used to
+# make "mark as safe" render visually while the logical text says the
+# opposite.
+[‪-‮⁦-⁩]

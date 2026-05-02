@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Optional
 
 from core.json import load_json, save_json
+from core.sandbox import run as sandbox_run
 from core.schema_constants import CONFIDENCE_LEVELS
 
 logger = logging.getLogger(__name__)
@@ -128,6 +129,14 @@ def _run_understand_prepass_unsafe(
     if block_cc_dispatch:
         return PrepassResult(ran=False, skipped_reason="cc_trust blocked dispatch (untrusted target)")
 
+    from core.security.rule_of_two import (
+        NonInteractiveError, require_interactive_for_agentic_pass,
+    )
+    try:
+        require_interactive_for_agentic_pass("understand")
+    except NonInteractiveError as e:
+        return PrepassResult(ran=False, skipped_reason=str(e))
+
     claude_bin = claude_bin or shutil.which("claude")
     if not claude_bin:
         return PrepassResult(ran=False, skipped_reason="claude not on PATH")
@@ -171,10 +180,14 @@ def _run_understand_prepass_unsafe(
                 timeout_s=_PREPASS_TIMEOUT_S,
                 capture_json_envelope=False,
             )
-            proc = subprocess.run(
+            proc = sandbox_run(
                 build_cc_command(prepass_config),
                 input=prompt, text=True,
                 timeout=_PREPASS_TIMEOUT_S,
+                target=str(target), output=str(understand_dir),
+                use_egress_proxy=True,
+                proxy_hosts=["api.anthropic.com"],
+                caller_label="agentic-understand",
             )
         except subprocess.TimeoutExpired:
             _fail_lifecycle(understand_dir, f"timeout after {_PREPASS_TIMEOUT_S}s")
@@ -289,6 +302,14 @@ def _run_validate_postpass_unsafe(
     if block_cc_dispatch:
         return PostpassResult(ran=False, skipped_reason="cc_trust blocked dispatch (untrusted target)")
 
+    from core.security.rule_of_two import (
+        NonInteractiveError, require_interactive_for_agentic_pass,
+    )
+    try:
+        require_interactive_for_agentic_pass("validate")
+    except NonInteractiveError as e:
+        return PostpassResult(ran=False, skipped_reason=str(e))
+
     claude_bin = claude_bin or shutil.which("claude")
     if not claude_bin:
         return PostpassResult(ran=False, skipped_reason="claude not on PATH")
@@ -373,10 +394,14 @@ def _run_validate_postpass_unsafe(
                 timeout_s=_POSTPASS_TIMEOUT_S,
                 capture_json_envelope=False,
             )
-            proc = subprocess.run(
+            proc = sandbox_run(
                 build_cc_command(postpass_config),
                 input=prompt, text=True,
                 timeout=_POSTPASS_TIMEOUT_S,
+                target=str(target), output=str(validate_dir),
+                use_egress_proxy=True,
+                proxy_hosts=["api.anthropic.com"],
+                caller_label="agentic-validate",
             )
         except subprocess.TimeoutExpired:
             _fail_lifecycle(validate_dir, f"timeout after {_POSTPASS_TIMEOUT_S}s")

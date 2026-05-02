@@ -178,6 +178,56 @@ class TestBuildFindingDetail(unittest.TestCase):
         self.assertNotIn("**Remediation:**", section.content)
 
 
+class TestFindingDetailSanitisation(unittest.TestCase):
+    """Verify LLM-returned fields are sanitised before report rendering."""
+
+    def test_ansi_in_reasoning_escaped(self):
+        finding = {**SAMPLE_FINDINGS[0], "reasoning": "vuln\x1b[31m confirmed\x1b[0m"}
+        section = build_finding_detail(finding, 1)
+        self.assertNotIn("\x1b", section.content)
+        self.assertIn("\\x1b", section.content)
+
+    def test_ansi_in_attack_scenario_escaped(self):
+        finding = {**SAMPLE_FINDINGS[0], "attack_scenario": "send \x07bell payload"}
+        section = build_finding_detail(finding, 1)
+        self.assertNotIn("\x07", section.content)
+
+    def test_markdown_heading_in_reasoning_defanged(self):
+        finding = {**SAMPLE_FINDINGS[0], "reasoning": "# Injected Heading\nreal analysis"}
+        section = build_finding_detail(finding, 1)
+        self.assertNotIn("# Injected Heading", section.content)
+        self.assertIn("Injected Heading", section.content)
+
+    def test_patch_code_preserves_hash_include(self):
+        finding = {**SAMPLE_FINDINGS[0], "patch_code": "#include <stdio.h>\nint main() {}"}
+        section = build_finding_detail(finding, 1)
+        self.assertIn("#include <stdio.h>", section.content)
+
+    def test_ansi_in_patch_code_escaped(self):
+        finding = {**SAMPLE_FINDINGS[0], "patch_code": "int x\x1b[31m = 0;"}
+        section = build_finding_detail(finding, 1)
+        self.assertNotIn("\x1b", section.content)
+        self.assertIn("\\x1b", section.content)
+
+    def test_ansi_in_feasibility_verdict_escaped(self):
+        finding = {**SAMPLE_FINDINGS[0],
+                   "feasibility": {"verdict": "likely\x1b[32m exploitable"}}
+        section = build_finding_detail(finding, 1)
+        self.assertNotIn("\x1b", section.content)
+
+    def test_ansi_in_dataflow_summary_escaped(self):
+        finding = {**SAMPLE_FINDINGS[0],
+                   "dataflow_summary": "src\x1b[31m -> sink"}
+        section = build_finding_detail(finding, 1)
+        self.assertNotIn("\x1b", section.content)
+
+    def test_long_reasoning_capped(self):
+        finding = {**SAMPLE_FINDINGS[0], "reasoning": "x" * 5000}
+        section = build_finding_detail(finding, 1)
+        self.assertIn("…", section.content)
+        self.assertLess(len(section.content), 5000)
+
+
 class TestBuildFindingsSpec(unittest.TestCase):
 
     def test_builds_valid_spec(self):

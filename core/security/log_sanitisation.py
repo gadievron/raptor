@@ -25,7 +25,10 @@ Cc/Cf/Cn/Co/Cs/Zl/Zp. ESC (0x1b), NUL, CR, LF, BEL, C1 controls
 """
 
 
-def escape_nonprintable(s: str) -> str:
+_STRUCTURAL_WHITESPACE = frozenset(('\n', '\t'))
+
+
+def escape_nonprintable(s: str, *, preserve_newlines: bool = False) -> str:
     """Return `s` with each non-printable character replaced by `\\xHH`.
 
     Use this on any string that may contain attacker-influenced content
@@ -34,7 +37,16 @@ def escape_nonprintable(s: str) -> str:
 
     Printable characters — including ASCII space and Unicode letters
     with legitimate non-ASCII categories — pass through unchanged.
+
+    When `preserve_newlines` is True, ``\\n`` and ``\\t`` are kept as-is
+    (they are structural in source code and multi-line prose). All other
+    non-printable characters are still escaped.
     """
+    if preserve_newlines:
+        return "".join(
+            c if c.isprintable() or c in _STRUCTURAL_WHITESPACE else f"\\x{ord(c):02x}"
+            for c in s
+        )
     return "".join(
         c if c.isprintable() else f"\\x{ord(c):02x}"
         for c in s

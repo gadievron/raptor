@@ -861,7 +861,13 @@ class GeminiProvider(LLMProvider):
             response = self.client.models.generate_content(**generate_kwargs)
             duration = time.monotonic() - t_start
 
-            content = response.text or ""
+            content = (response.text or "").strip()
+            if content.startswith("```") and content.endswith("```"):
+                content = content.split("\n", 1)[1] if "\n" in content else content[3:]
+                content = content.rsplit("```", 1)[0].strip()
+            elif content.startswith("```"):
+                content = content.split("\n", 1)[1] if "\n" in content else content[3:]
+                content = content.strip()
             parsed = json.loads(content)
             if not parsed:
                 # Gemini sometimes returns {} in structured mode — fall back to text

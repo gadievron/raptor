@@ -37,6 +37,18 @@ class DispatchTask:
     temperature: float = 0.7
     budget_cutoff: float = 1.0  # 1.0 = never skip. 0.85 = skip at 85% budget
 
+    def get_last_nonce(self) -> str:
+        """Return the nonce from the most recent build_prompt call, if any.
+
+        Subclasses that use PromptBundle should store bundle.nonce and
+        return it here so the dispatcher can feed it to defense telemetry.
+        """
+        return ""
+
+    def get_profile_name(self) -> str:
+        """Return the defense profile name for telemetry."""
+        return ""
+
     def select_items(self, items: list, prior_results: dict) -> list:
         """Select which items to process. Default: all items."""
         return items
@@ -182,11 +194,26 @@ def dispatch_task(
     start = time.monotonic()
     system_prompt = task.get_system_prompt()
 
+    from core.security.prompt_telemetry import defense_telemetry
+    from core.security.prompt_input_preflight import preflight
+    profile_name = task.get_profile_name()
+
+    import threading as _th
+    _nonces: dict[str, str] = {}
+    _nonces_lock = _th.Lock()
+
     with ThreadPoolExecutor(max_workers=max_parallel) as executor:
         futures = {}
         for model, item in work:
             def _do_one(m=model, it=item):
                 prompt = task.build_prompt(it)
+                nonce = task.get_last_nonce()
+                if nonce:
+                    iid = task.get_item_id(it)
+                    with _nonces_lock:
+                        _nonces[iid] = nonce
+                pf = preflight(prompt)
+                defense_telemetry.record_preflight(hit=pf.has_injection_indicators)
                 schema = task.get_schema(it)
                 return dispatch_fn(prompt, schema, system_prompt, task.temperature, m)
 
@@ -207,6 +234,22 @@ def dispatch_task(
                 running_cost += item_cost
                 results.append(processed)
                 consecutive_errors = 0
+
+                # Record defense telemetry (nonce leakage, schema rejection)
+                with _nonces_lock:
+                    nonce = _nonces.pop(item_id, "")
+                if nonce and profile_name:
+                    raw = ""
+                    if hasattr(dispatch_result, "result") and isinstance(dispatch_result.result, dict):
+                        raw = dispatch_result.result.get("content", "")
+                    defense_telemetry.record_response(
+                        model_id=processed.get("analysed_by", "unknown"),
+                        profile_name=profile_name,
+                        nonce=nonce,
+                        raw_response=raw or str(dispatch_result.result),
+                        schema_accepted=True,
+                        schema_retried=False,
+                    )
 
                 # Feed costs to tracker for budget enforcement
                 if item_cost > 0:
@@ -242,6 +285,20 @@ def dispatch_task(
                 display = task.get_item_display(item)
                 print(f"  [{completed}/{total} {_format_elapsed(elapsed)} ${running_cost:.2f}] "
                       f"{display} FAILED — {err_str}")
+
+                # Record schema failure telemetry (skip auth/network errors)
+                if error_type not in ("auth", "timeout") and profile_name:
+                    with _nonces_lock:
+                        nonce = _nonces.pop(item_id, "")
+                    if nonce:
+                        defense_telemetry.record_response(
+                            model_id=model,
+                            profile_name=profile_name,
+                            nonce=nonce,
+                            raw_response=err_str,
+                            schema_accepted=False,
+                            schema_retried=False,
+                        )
 
                 if _is_auth_error(err_str):
                     print("\n  Authentication/billing error — aborting remaining")
