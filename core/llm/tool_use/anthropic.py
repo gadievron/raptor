@@ -197,6 +197,7 @@ class AnthropicToolUseProvider:
         max_tokens: int = 4096,
         cache_control: CacheControl = CacheControl(),
         anthropic_task_budget_beta: bool = False,
+        anthropic_task_budget_tokens: int | None = None,
         **_unused: Any,
     ) -> TurnResponse:
         """Send one round-trip to Anthropic.
@@ -204,6 +205,18 @@ class AnthropicToolUseProvider:
         Provider-specific kwargs:
           * ``anthropic_task_budget_beta``: route via
             ``client.beta.messages.create`` (cost-cap beta endpoint).
+            Activating the beta requires both this flag (sets the
+            ``betas=["task-budgets-..."]`` header) AND
+            ``anthropic_task_budget_tokens`` (sets the
+            ``output_config.task_budget`` request body).
+          * ``anthropic_task_budget_tokens``: total token budget
+            communicated to the model via
+            ``output_config: {task_budget: {type: "tokens", total: N}}``.
+            The model self-regulates against this countdown mid-loop;
+            without it the beta header is dead-on-arrival (server
+            accepts the request but no budget is in effect). Required
+            when ``anthropic_task_budget_beta=True``; ignored
+            otherwise.
 
         Transient errors (APIConnectionError, 429, 5xx) are retried
         internally with exponential backoff up to ``max_retries``
@@ -213,6 +226,13 @@ class AnthropicToolUseProvider:
         level and ignored — preserves graceful degradation across
         consumers but makes typos discoverable.
         """
+        if anthropic_task_budget_beta and anthropic_task_budget_tokens is None:
+            raise ValueError(
+                "anthropic_task_budget_beta=True requires "
+                "anthropic_task_budget_tokens=N (total token budget the "
+                "model self-regulates against). Without it the beta "
+                "endpoint accepts the request but no budget is enforced."
+            )
         if _unused:
             logger.debug(
                 "anthropic.turn: ignoring unrecognised kwargs: %s",
@@ -280,6 +300,12 @@ class AnthropicToolUseProvider:
         }
         if anthropic_task_budget_beta:
             kwargs["betas"] = [_TASK_BUDGET_BETA]
+            kwargs["output_config"] = {
+                "task_budget": {
+                    "type": "tokens",
+                    "total": anthropic_task_budget_tokens,
+                },
+            }
         if system_arg is not None:
             kwargs["system"] = system_arg
 

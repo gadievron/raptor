@@ -423,7 +423,8 @@ def test_beta_task_budget_routes_to_beta_messages() -> None:
     ``client.beta.messages.create`` instead of the standard endpoint
     AND passes the ``betas=[...]`` parameter — without the parameter
     the beta endpoint accepts the request but doesn't actually
-    activate the beta (the bug v1 of this code shipped with)."""
+    activate the beta. Also requires ``anthropic_task_budget_tokens``
+    so the ``output_config`` request body is set."""
     from core.llm.tool_use.anthropic import _TASK_BUDGET_BETA
 
     p, c = _provider_with_stub()
@@ -434,17 +435,41 @@ def test_beta_task_budget_routes_to_beta_messages() -> None:
         messages=[Message(role="user", content=[TextBlock(text="x")])],
         tools=[],
         anthropic_task_budget_beta=True,
+        anthropic_task_budget_tokens=8000,
     )
     assert len(c.messages.calls) == 0                # standard endpoint not called
     assert len(c.beta.messages.calls) == 1           # beta endpoint called
     sent = c.beta.messages.calls[0]
     assert sent.get("betas") == [_TASK_BUDGET_BETA]
+    assert sent.get("output_config") == {
+        "task_budget": {"type": "tokens", "total": 8000},
+    }
 
 
-def test_standard_endpoint_does_not_carry_betas_kwarg() -> None:
+def test_beta_without_token_budget_raises() -> None:
+    """``anthropic_task_budget_beta=True`` without
+    ``anthropic_task_budget_tokens`` raises at request time — the beta
+    endpoint accepts the request without ``output_config`` but no
+    budget is enforced; failing loud here surfaces the misconfiguration
+    immediately rather than silently producing uncapped runs."""
+    p, c = _provider_with_stub()
+    with pytest.raises(ValueError, match="anthropic_task_budget_tokens=N"):
+        p.turn(
+            messages=[Message(role="user", content=[TextBlock(text="x")])],
+            tools=[],
+            anthropic_task_budget_beta=True,
+        )
+    # Neither endpoint was called — fail-loud happens pre-flight.
+    assert len(c.messages.calls) == 0
+    assert len(c.beta.messages.calls) == 0
+
+
+def test_standard_endpoint_does_not_carry_beta_kwargs() -> None:
     """Without ``anthropic_task_budget_beta=True`` the request goes
-    via the standard endpoint and must NOT carry a ``betas`` kwarg —
-    the standard endpoint rejects unknown parameters."""
+    via the standard endpoint and must NOT carry ``betas`` or
+    ``output_config`` — the standard endpoint rejects unknown
+    parameters. Passing ``anthropic_task_budget_tokens`` alone (no
+    beta flag) is accepted but has no effect."""
     p, c = _provider_with_stub()
     c.messages.responses.append(_StubResponse(
         [_StubBlock("text", text="ok")], stop_reason="end_turn",
@@ -452,9 +477,12 @@ def test_standard_endpoint_does_not_carry_betas_kwarg() -> None:
     p.turn(
         messages=[Message(role="user", content=[TextBlock(text="x")])],
         tools=[],
+        anthropic_task_budget_tokens=8000,            # no-op without beta=True
     )
     assert len(c.messages.calls) == 1
-    assert "betas" not in c.messages.calls[0]
+    sent = c.messages.calls[0]
+    assert "betas" not in sent
+    assert "output_config" not in sent
 
 
 # ---------------------------------------------------------------------------
