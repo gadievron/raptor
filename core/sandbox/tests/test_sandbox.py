@@ -510,6 +510,37 @@ class TestLandlockEnforcement(unittest.TestCase):
             self.assertTrue(denied,
                             f"expected EACCES or ENOENT; got {combined!r}")
 
+    def test_relative_output_path_does_not_break_landlock(self):
+        """Regression: a relative output= (e.g. 'out/scan_xxx') used to
+        fail Landlock open in the mount-ns child after pivot_root,
+        printing 'RAPTOR: Landlock writable path could not be opened'
+        on stderr and silently disabling the writable rule for output.
+        Discovered via E2E scan against /tmp/vulns where scanner.py
+        passes a relative out_dir into sandbox_run().
+        """
+        import os
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as target_abs, TemporaryDirectory() as parent:
+            saved_cwd = os.getcwd()
+            os.chdir(parent)
+            try:
+                rel_out = "out/scan_relative_test"
+                os.makedirs(rel_out, exist_ok=True)
+                with sandbox(target=target_abs, output=rel_out) as run:
+                    result = run(
+                        ["sh", "-c", f"echo ok > {rel_out}/proof.txt"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                self.assertNotIn(
+                    "Landlock writable path could not be opened",
+                    result.stderr,
+                    "relative output= path triggered Landlock open failure",
+                )
+                self.assertEqual(result.returncode, 0,
+                                 f"sandbox child failed: stderr={result.stderr!r}")
+            finally:
+                os.chdir(saved_cwd)
+
     def test_output_alone_engages_landlock(self):
         """Passing only `output` engages filesystem isolation — writes
         outside fail either via Landlock (EACCES) or mount-ns (path

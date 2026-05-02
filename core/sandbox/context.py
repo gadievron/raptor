@@ -370,7 +370,13 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
     if target or output or allowed_tcp_ports:
         writable_paths = ["/tmp"]
         if output:
-            writable_paths.append(output)
+            # Absolutize: a relative path like "out/foo" fails Landlock
+            # open in the mount-ns child after pivot_root (the new
+            # rootfs has no `out/` directory) and triggers the
+            # "RAPTOR: Landlock writable path could not be opened"
+            # stderr line. The bind-mount fallback masks the failure
+            # as a silent enforcement gap on writes to `output`.
+            writable_paths.append(os.path.abspath(output))
 
     # Loud warnings when caller requested Landlock features but the kernel
     # does not actually support them — silent degradation here would mean
