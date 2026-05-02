@@ -97,7 +97,7 @@ _SUBMIT_TOOL = Tool(
 
 
 def _rules_disabled() -> bool:
-    """Variant-2 toggle: skip cascade-surrender + iter-3 reflection.
+    """Variant-2 toggle: skip cascade-surrender.
 
     Set ``CVE_DIFF_DISABLE_RULES=1`` to test the purely-agentic path
     where only the hard caps ($2/30 iter/720s) backstop.
@@ -255,8 +255,6 @@ class AgentLoop:
         # How many in-loop LLM retries fired (across all iterations).
         # Surface this to the bench so the report can show retry effects.
         llm_retries: int = 0
-        # The iter-3 reflection hint fires at most once per run.
-        reflection_injected: bool = False
         # Per-call (tool_name, args_repr_first_120chars) — captured to
         # validate args-novelty claims in post-hoc analysis. Privacy-safe:
         # args are CVE IDs, slugs, queries, paths — no secrets. Limited
@@ -301,7 +299,6 @@ class AgentLoop:
                     ),
                     budget, start, tuple(tool_call_log), tuple(verified), llm_retries,
                     tool_calls_with_args=tuple(tool_calls_with_args),
-                    reflection_injected=reflection_injected,
                 )
             if (
                 not rules_disabled
@@ -320,7 +317,6 @@ class AgentLoop:
                     ),
                     budget, start, tuple(tool_call_log), tuple(verified), llm_retries,
                     tool_calls_with_args=tuple(tool_calls_with_args),
-                    reflection_injected=reflection_injected,
                 )
 
             # Prompt caching: mark the system prompt as cacheable so
@@ -381,7 +377,6 @@ class AgentLoop:
                     AgentSurrender(reason="llm_error", detail=str(last_exc)[:200] if last_exc else "unknown"),
                     budget, start, tuple(tool_call_log), tuple(verified), llm_retries,
                     tool_calls_with_args=tuple(tool_calls_with_args),
-                    reflection_injected=reflection_injected,
                 )
 
             budget.iterations += 1
@@ -417,7 +412,6 @@ class AgentLoop:
                     AgentSurrender(reason="model_stopped_without_submit", detail=text_snippet[:200]),
                     budget, start, tuple(tool_call_log), tuple(verified), llm_retries,
                     tool_calls_with_args=tuple(tool_calls_with_args),
-                    reflection_injected=reflection_injected,
                 )
 
             tool_results: list[dict[str, Any]] = []
@@ -462,7 +456,6 @@ class AgentLoop:
                                     budget, start, tuple(tool_call_log),
                                     tuple(verified), llm_retries,
                                     tool_calls_with_args=tuple(tool_calls_with_args),
-                                    reflection_injected=reflection_injected,
                                     unverified_submits=unverified_submits,
                                     not_found_submits=not_found_submits,
                                 )
@@ -505,7 +498,6 @@ class AgentLoop:
                                     budget, start, tuple(tool_call_log),
                                     tuple(verified), llm_retries,
                                     tool_calls_with_args=tuple(tool_calls_with_args),
-                                    reflection_injected=reflection_injected,
                                     unverified_submits=unverified_submits,
                                     not_found_submits=not_found_submits,
                                 )
@@ -604,7 +596,6 @@ class AgentLoop:
             result, budget, start, tuple(tool_call_log),
             tuple(verified), llm_retries,
             tool_calls_with_args=tuple(tool_calls_with_args),
-            reflection_injected=reflection_injected,
             unverified_submits=unverified_submits,
             not_found_submits=not_found_submits,
         )
@@ -619,7 +610,6 @@ class AgentLoop:
         llm_retries: int = 0,
         *,
         tool_calls_with_args: tuple[tuple[str, str], ...] = (),
-        reflection_injected: bool = False,
         unverified_submits: int = 0,
         not_found_submits: int = 0,
     ) -> AgentResult:
@@ -634,7 +624,6 @@ class AgentLoop:
             "elapsed_s": elapsed,
             "tool_calls": list(tool_calls),
             "tool_calls_with_args": [list(t) for t in tool_calls_with_args],
-            "reflection_injected": reflection_injected,
             "llm_retries": llm_retries,
             "unverified_submits": unverified_submits,
             "not_found_submits": not_found_submits,

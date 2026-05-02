@@ -84,7 +84,7 @@ def _patch_agent_loop(monkeypatch, result):
                 ("osv_raw", '{"cve_id": "CVE-X"}'),
                 ("submit_result", '{"outcome": "rescued"}'),
             ],
-            "reflection_injected": False, "llm_retries": 0,
+            "llm_retries": 0,
         }
         return result
     monkeypatch.setattr(AgentLoop, "run", stub_run)

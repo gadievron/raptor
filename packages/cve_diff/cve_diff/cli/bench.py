@@ -71,10 +71,6 @@ class _CveResult:
     # "agent re-queried with varied args" — relevant for validating
     # Action A's claims and analyzing walker patterns.
     agent_tool_calls_with_args: tuple[tuple[str, str], ...] = ()
-    # Whether the iter-4 reflection hint actually fired during this
-    # run. Helps measure how often the agent reaches the hint vs
-    # solves before iter-4.
-    reflection_fired: bool = False
     agent_model: str = ""
     # Recovery telemetry: how many in-loop LLM retries fired (3-attempt
     # backoff inside AgentLoop), whether the pipeline's meta-retry on
@@ -227,7 +223,6 @@ def _agent_attrs(pipeline: "Pipeline", model_id: str) -> dict:
         "agent_tool_calls_with_args": tuple(
             tuple(t) for t in tel.get("tool_calls_with_args", [])
         ),
-        "reflection_fired": bool(tel.get("reflection_injected", False)),
         "agent_model": model_id,
         "llm_retries": int(tel.get("llm_retries", 0)),
         "meta_retry_attempted": bool(getattr(pipeline, "_last_meta_retry_attempted", False)),
