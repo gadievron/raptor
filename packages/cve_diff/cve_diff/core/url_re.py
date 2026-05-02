@@ -70,8 +70,16 @@ def normalize_slug(slug: str) -> str:
 
 
 def extract_github_slug(url: str) -> str | None:
-    """Return the canonical `owner/repo` slug from any GitHub URL, or None."""
-    m = GITHUB_REPO_URL_RE.match(url or "")
+    """Return the canonical `owner/repo` slug from any GitHub URL, or None.
+
+    Uses ``.search()`` so embedded URLs (e.g. an OSV reference body
+    like ``"see fix at https://github.com/owner/repo"``) are matched.
+    Pre-2026-05-02 used ``.match()``, which only matched at position 0
+    and silently dropped any URL with leading prose — a real hit when
+    OSV/NVD authors wrap the URL in advisory text. Consistent with
+    ``discovery/osv.py``'s ``_GITHUB_COMMIT_URL_RE.search()`` usage.
+    """
+    m = GITHUB_REPO_URL_RE.search(url or "")
     if not m:
         return None
     return normalize_slug(m.group(1))

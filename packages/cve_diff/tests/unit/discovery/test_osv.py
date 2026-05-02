@@ -231,6 +231,55 @@ class TestOSVFetch:
         assert OSVDiscoverer().fetch("CVE-2024-9999") is None
 
 
+class TestNormalizeRepo:
+    """``_normalize_repo`` collapses git://, ssh://git@, and bare ``git@``
+    SCP-style URLs to ``https://<host>/<path>``. Pre-2026-05-02 the
+    ``git@`` SCP-style branch was broken: a chained
+    ``.replace("git@", "https://").replace(":", "/", 1)`` clobbered the
+    ``://`` separator from the first replace, producing malformed
+    ``https//<host>:<path>`` URLs that downstream slug extractors then
+    silently dropped.
+    """
+
+    def test_git_at_scp_style_normalises(self) -> None:
+        from cve_diff.discovery.osv import OSVDiscoverer
+        out = OSVDiscoverer._normalize_repo("git@github.com:owner/repo")
+        assert out == "https://github.com/owner/repo"
+
+    def test_git_at_scp_style_with_dot_git_suffix(self) -> None:
+        from cve_diff.discovery.osv import OSVDiscoverer
+        out = OSVDiscoverer._normalize_repo("git@github.com:owner/repo.git")
+        assert out == "https://github.com/owner/repo"
+
+    def test_git_at_scp_style_gitlab(self) -> None:
+        from cve_diff.discovery.osv import OSVDiscoverer
+        out = OSVDiscoverer._normalize_repo(
+            "git@gitlab.com:group/subgroup/repo.git",
+        )
+        assert out == "https://gitlab.com/group/subgroup/repo"
+
+    def test_git_protocol_normalises(self) -> None:
+        from cve_diff.discovery.osv import OSVDiscoverer
+        out = OSVDiscoverer._normalize_repo("git://github.com/owner/repo.git")
+        assert out == "https://github.com/owner/repo"
+
+    def test_ssh_git_at_normalises(self) -> None:
+        from cve_diff.discovery.osv import OSVDiscoverer
+        out = OSVDiscoverer._normalize_repo(
+            "ssh://git@github.com/owner/repo.git",
+        )
+        assert out == "https://github.com/owner/repo"
+
+    def test_https_passthrough(self) -> None:
+        from cve_diff.discovery.osv import OSVDiscoverer
+        out = OSVDiscoverer._normalize_repo("https://github.com/owner/repo")
+        assert out == "https://github.com/owner/repo"
+
+    def test_empty_returns_empty(self) -> None:
+        from cve_diff.discovery.osv import OSVDiscoverer
+        assert OSVDiscoverer._normalize_repo("") == ""
+
+
 @pytest.mark.integration
 class TestOSVLive:
     """Live OSV hit — marked `integration`, skipped by default."""
