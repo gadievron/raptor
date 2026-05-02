@@ -34,7 +34,7 @@ from cve_diff.core.models import (
     FileChange,
     RepoRef,
 )
-from cve_diff.core.test_path import is_test_path as _is_test_path
+from cve_diff.core.path_classifier import is_test_path
 from cve_diff.diffing import shape_dynamic
 from cve_diff.infra import github_client
 
@@ -129,7 +129,7 @@ def extract_via_api(
         files.append(
             FileChange(
                 path=path,
-                is_test=_is_test_path(path),
+                is_test=is_test_path(path),
                 hunks_count=patch.count("\n@@ ") + (1 if patch.startswith("@@ ") else 0),
                 # API doesn't return full file contents — just patch hunks.
                 # Clone-based extractor populates these blobs; the API path

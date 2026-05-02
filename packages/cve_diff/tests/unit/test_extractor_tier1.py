@@ -1,4 +1,7 @@
-"""Tier-1 extractor additions: test-path heuristic, hunk counting, per-file blobs."""
+"""Tier-1 extractor additions: hunk counting, per-file blobs.
+
+Test-path heuristic tests live in ``tests/unit/test_path_classifier.py``
+(the helper itself moved to ``cve_diff/core/path_classifier.py``)."""
 from __future__ import annotations
 
 import subprocess
@@ -10,40 +13,9 @@ from cve_diff.core.models import CommitSha, FileChange, RepoRef
 from cve_diff.diffing.extractor import (
     MAX_FILE_BYTES,
     _count_hunks_per_file,
-    _is_test_path,
     _show_blob,
     extract_diff,
 )
-
-
-# ---------- test-path heuristic ----------
-
-@pytest.mark.parametrize("path", [
-    "tests/test_foo.py",
-    "src/tests/runner.c",
-    "foo_test.go",
-    "parser.spec.ts",
-    "__tests__/util.js",
-    "test_helper.rb",
-    "testing/fixtures.py",
-])
-def test_is_test_path_positive(path: str) -> None:
-    assert _is_test_path(path) is True
-
-
-@pytest.mark.parametrize("path", [
-    "src/main.c",
-    "lib/auth.go",
-    "README.md",
-    "test_helper_not_py.txt",  # no .py / language extension on base
-    "foo.yaml",
-    "test_path_in_middle.py",  # not prefixed — still test, actually matches
-])
-def test_is_test_path_negative_or_positive(path: str) -> None:
-    # Most of these are False; the last one validates documentation-that-regex-is-broad.
-    # We don't enforce a specific answer here except for the obvious source-file cases.
-    if path in ("src/main.c", "lib/auth.go", "README.md", "foo.yaml"):
-        assert _is_test_path(path) is False
 
 
 # ---------- hunk counting ----------
