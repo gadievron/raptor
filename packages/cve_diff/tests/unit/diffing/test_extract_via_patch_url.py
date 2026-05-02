@@ -196,3 +196,49 @@ def test_extract_via_patch_url_swallows_network_errors(monkeypatch) -> None:
 
     bundle = evpu.extract_via_patch_url("CVE-X", _ref())
     assert bundle is None
+
+
+def test_extract_bundle_has_commit_before_equal_to_commit_after(
+    monkeypatch,
+) -> None:
+    """patch URL responses don't carry parent-commit metadata. Pre-
+    2026-05-02 the extractor used ``<sha>^`` (git revspec for "parent
+    of sha") which violated ``CommitSha``'s "this is a real SHA"
+    contract and broke downstream display: ``report/markdown.py``'s
+    ``_commit_url(<sha>^)`` 404s, ``report/osv_schema.py`` emits the
+    bogus revspec into the OSV record. New contract: when parent is
+    unknown, ``commit_before == commit_after`` (signal "parent
+    unknown" to consumers via equality, keep ``CommitSha`` honest).
+    """
+    from cve_diff.diffing import extract_via_patch_url as evpu
+
+    sha = "c0e194d4493326a1a45f9eebd64bccf81d56fbf3"
+    body = (
+        "From " + sha + " Mon Sep 17 00:00:00 2001\n"
+        "From: Test\n"
+        "Subject: [PATCH] fix\n\n"
+        "diff --git a/file b/file\n"
+        "--- a/file\n"
+        "+++ b/file\n"
+        "@@ -1 +1 @@\n"
+        "-old\n"
+        "+new\n"
+    )
+
+    class _Resp:
+        status_code = 200
+        text = body
+        url = "https://github.com/socketio/engine.io/commit/" + sha + ".patch"
+
+    def fake_get(url, timeout=None, headers=None):
+        return _Resp()
+
+    monkeypatch.setattr(evpu, "requests", type("M", (), {
+        "get": staticmethod(fake_get),
+        "RequestException": Exception,
+    }))
+
+    bundle = evpu.extract_via_patch_url("CVE-X", _ref(sha=sha))
+    assert bundle is not None
+    assert bundle.commit_before == bundle.commit_after == sha
+    assert "^" not in bundle.commit_before
