@@ -31,8 +31,10 @@ from __future__ import annotations
 
 import logging
 import re
+import tempfile
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from core.config import RaptorConfig
 from core.git.validate import validate_repo_url
@@ -47,6 +49,14 @@ from core.git.validate import validate_repo_url
 # matches *just before* a trailing newline, so ``"deadbeef\n"`` would
 # otherwise sneak past a ``^...$`` check.
 _SHA_RE = re.compile(r"[0-9a-fA-F]{4,40}")
+
+# Strict 40-char SHA for ``ls-remote`` output parsing. Git always
+# emits full SHAs; a line with a shorter "SHA" is malformed and
+# possibly hostile (a remote can return arbitrary bytes), so we
+# don't accept abbreviated SHAs in this position. (Distinct from
+# ``_SHA_RE`` above, which validates *caller-supplied* SHAs that
+# may be abbreviated by intent.)
+_LS_REMOTE_SHA_RE = re.compile(r"[0-9a-fA-F]{40}")
 
 logger = logging.getLogger(__name__)
 
@@ -309,4 +319,166 @@ def fetch_commit(
     return True
 
 
-__all__ = ["clone_repository", "fetch_commit", "get_safe_git_env"]
+def ls_remote(
+    url: str,
+    *,
+    proxy_hosts: Iterable[str],
+    timeout: int = 20,
+) -> List[Tuple[str, str]]:
+    """Run ``git ls-remote --heads --tags`` against ``url``.
+
+    Read-only operation that returns the refs the remote advertises.
+    Sandbox-routed via ``run_untrusted`` with the egress proxy pinned
+    to ``proxy_hosts``. Caller supplies the allowlist because consumers
+    of this helper cover wider forge sets than the github/gitlab pair
+    ``clone_repository`` accepts (cve_diff's agent uses it to probe
+    non-GitHub forges like git.kernel.org, git.savannah.gnu.org,
+    git.tukaani.org, etc).
+
+    The egress proxy enforces:
+
+      - hostname allowlist: connections to anything outside
+        ``proxy_hosts`` are refused at CONNECT;
+      - private-IP / loopback / link-local block: hostnames that
+        resolve to RFC 1918 / 127.0.0.0/8 / 169.254.0.0/16 / etc.
+        are refused regardless of the allowlist (closes the SSRF
+        and DNS-rebinding surface);
+      - HTTPS-only transport: SSH / git:// schemes can't tunnel
+        through HTTPS-CONNECT.
+
+    Args:
+        url: HTTPS git URL. Must have a hostname and no userinfo.
+            ``http://`` is rejected because the in-process egress
+            proxy is HTTPS-CONNECT exclusively.
+        proxy_hosts: hostname allowlist passed to the proxy. Must be
+            non-empty, and bare hostnames only (no ``host:port``
+            entries — the URL's port is unrelated to the allowlist
+            check). The URL's host must also appear here (defence
+            in depth — the proxy would refuse anyway).
+        timeout: per-call wall-clock cap (seconds; default 20).
+            Tighter than ``RaptorConfig.GIT_CLONE_TIMEOUT`` because
+            ls-remote returns a ref-list, not whole repos.
+
+    Returns:
+        ``[(sha, ref), ...]`` — e.g.
+        ``[("abc...", "refs/heads/main"), ("def...", "refs/tags/v1")]``.
+        Lines whose first column isn't a SHA shape are skipped
+        defensively.
+
+    Raises:
+        ValueError: URL fails scheme/userinfo/hostname checks, or
+            ``proxy_hosts`` is empty, or URL host isn't in
+            ``proxy_hosts``.
+        RuntimeError: sandbox unavailable, or ``git ls-remote``
+            exited non-zero.
+        subprocess.TimeoutExpired: ``timeout`` elapsed before git
+            returned. Propagated unchanged so callers handling the
+            ``(RuntimeError, TimeoutExpired)`` tuple cover both
+            shapes — same contract as ``clone_repository`` /
+            ``fetch_commit``.
+        FileNotFoundError: ``git`` binary not on PATH inside the
+            sandbox. Caller-trusted (CI environments always have
+            it); propagated for diagnosability.
+    """
+    proxy_host_list = list(proxy_hosts)
+    if not proxy_host_list:
+        raise ValueError("ls_remote requires non-empty proxy_hosts")
+
+    # ``urlparse`` is more honest than a regex for the "is this a
+    # safe URL shape" check — handles userinfo, fragments, ports
+    # cleanly. ValueError surfaces on URLs containing null bytes /
+    # invalid IPv6 / etc.; rare but worth surfacing as a ValueError
+    # so callers don't see a stdlib internal type.
+    try:
+        parsed = urlparse(url)
+    except ValueError as e:
+        raise ValueError(f"ls_remote: malformed URL: {e}") from None
+
+    # ``https`` only — the in-process egress proxy is HTTPS-CONNECT
+    # exclusively, so plain ``http://`` would pass this check but
+    # fail at the proxy with a confusing transport error. Refuse
+    # upfront for a clearer contract.
+    if parsed.scheme != "https":
+        raise ValueError(
+            f"ls_remote requires https URL; got scheme={parsed.scheme!r}"
+        )
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(
+            "ls_remote refuses URLs with userinfo (credentials in URL)"
+        )
+    if not parsed.hostname:
+        raise ValueError(f"ls_remote: URL has no hostname: {url!r}")
+
+    # Pre-check the hostname is in the supplied allowlist. The proxy
+    # enforces too — this is defence-in-depth and a clearer error
+    # before the subprocess fires.
+    host = parsed.hostname.lower()
+    allowed_lower = {h.lower() for h in proxy_host_list}
+    if host not in allowed_lower:
+        raise ValueError(
+            f"ls_remote: URL host {host!r} not in proxy_hosts allowlist"
+        )
+
+    try:
+        from core.sandbox import run_untrusted
+    except ImportError:
+        raise RuntimeError(
+            "core.sandbox unavailable - git ls-remote refuses to run "
+            "without sandbox isolation"
+        )
+
+    # ``ls-remote`` doesn't write to the host filesystem, but
+    # ``run_untrusted`` requires a non-empty ``output`` so Landlock
+    # engages and ``fake_home`` has somewhere to materialise.
+    # An ephemeral temp dir gives the sandbox a writable scratch
+    # area that's discarded as soon as we leave the with-block.
+    with tempfile.TemporaryDirectory(prefix="raptor-ls-remote-") as td:
+        logger.info("git ls-remote: %s (allowlist=%s)",
+                     url, ",".join(sorted(allowed_lower)))
+        proc = run_untrusted(
+            ["git", "ls-remote", "--heads", "--tags", url],
+            target=td,
+            output=td,
+            env=get_safe_git_env(),
+            use_egress_proxy=True,
+            proxy_hosts=proxy_host_list,
+            timeout=timeout,
+            capture_output=True,
+            text=True,
+            # ``errors="replace"`` so a hostile remote returning
+            # non-UTF-8 bytes doesn't surface as
+            # ``UnicodeDecodeError``. The output parser uses a
+            # strict 40-hex-char SHA regex below, so any U+FFFD
+            # replacement chars in the SHA position fail the regex
+            # and the line is skipped defensively.
+            encoding="utf-8",
+            errors="replace",
+        )
+
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "").strip()
+        stdout = (proc.stdout or "").strip()
+        raise RuntimeError(
+            f"git ls-remote failed: {stderr or stdout or 'unknown error'}"
+        )
+
+    refs: List[Tuple[str, str]] = []
+    for line in (proc.stdout or "").splitlines():
+        # Each line is: ``<40-hex sha>\t<ref>``.
+        parts = line.split("\t", 1)
+        if len(parts) != 2:
+            continue
+        sha, ref = parts
+        # Strict 40-char SHA — git always emits full SHAs in
+        # ls-remote output. A shorter "SHA" is malformed and possibly
+        # hostile (a remote can return arbitrary bytes), so we don't
+        # accept abbreviated SHAs here. Distinct from caller-supplied
+        # SHA validation in ``fetch_commit`` which allows abbreviation.
+        if not _LS_REMOTE_SHA_RE.fullmatch(sha):
+            continue
+        refs.append((sha, ref))
+
+    return refs
+
+
+__all__ = ["clone_repository", "fetch_commit", "get_safe_git_env", "ls_remote"]

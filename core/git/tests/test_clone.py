@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from core.git.clone import clone_repository, fetch_commit
+from core.git.clone import clone_repository, fetch_commit, ls_remote
 
 
 _VALID_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
@@ -333,3 +333,211 @@ def test_fetch_passes_sanitised_env_and_timeout(tmp_path: Path) -> None:
         assert "GIT_TERMINAL_PROMPT" in kwargs["env"]
         assert kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
         assert kwargs["timeout"] == RaptorConfig.GIT_CLONE_TIMEOUT
+
+
+# ---------------------------------------------------------------------------
+# ls_remote
+# ---------------------------------------------------------------------------
+
+_KERNEL_HOSTS = ("git.kernel.org", "git.savannah.gnu.org")
+
+
+def test_ls_remote_rejects_empty_proxy_hosts() -> None:
+    """``proxy_hosts`` must be non-empty — the proxy would refuse
+    every connection otherwise, so we surface a clear ValueError
+    rather than a confusing transport failure."""
+    with patch("core.sandbox.run_untrusted") as mock_run:
+        with pytest.raises(ValueError, match="proxy_hosts"):
+            ls_remote("https://git.kernel.org/foo", proxy_hosts=[])
+        mock_run.assert_not_called()
+
+
+@pytest.mark.parametrize("bad_url", [
+    "ssh://git@github.com/foo/bar",       # SSH unsupported (proxy is HTTPS)
+    "git://git.kernel.org/foo",            # git protocol unsupported
+    "file:///etc/passwd",                  # file scheme blocked
+    "ftp://example.com/foo",               # arbitrary non-http
+    "http://git.kernel.org/foo",           # plain HTTP rejected (proxy
+                                            # is HTTPS-CONNECT exclusively)
+    "https://user:pass@git.kernel.org/x",  # userinfo
+    "https://user@git.kernel.org/x",       # bare username
+    "https:///no-host/path",               # missing host
+    "not a url",                           # not parseable
+])
+def test_ls_remote_rejects_bad_url_shapes(bad_url: str) -> None:
+    """URL must be ``https://<host>/...`` with no userinfo. ``http://``
+    is also rejected because the in-process egress proxy is
+    HTTPS-CONNECT exclusively."""
+    with patch("core.sandbox.run_untrusted") as mock_run:
+        with pytest.raises(ValueError):
+            ls_remote(bad_url, proxy_hosts=_KERNEL_HOSTS)
+        mock_run.assert_not_called()
+
+
+def test_ls_remote_rejects_url_host_outside_allowlist() -> None:
+    """Pre-check is defence-in-depth — proxy enforces too — but we
+    surface a clear error before the subprocess fires."""
+    with patch("core.sandbox.run_untrusted") as mock_run:
+        with pytest.raises(ValueError, match="not in proxy_hosts"):
+            ls_remote(
+                "https://evil.example.com/foo",
+                proxy_hosts=_KERNEL_HOSTS,
+            )
+        mock_run.assert_not_called()
+
+
+def test_ls_remote_host_match_is_case_insensitive() -> None:
+    """Hostnames are case-insensitive per RFC 1035; uppercase variants
+    of allowlisted hosts must still pass."""
+    with patch("core.sandbox.run_untrusted") as mock_run:
+        mock_run.return_value = _completed(0, stdout="")
+        ls_remote(
+            "https://Git.Kernel.Org/foo",
+            proxy_hosts=_KERNEL_HOSTS,
+        )
+        assert mock_run.called
+
+
+def test_ls_remote_engages_egress_proxy(tmp_path: Path) -> None:
+    """Sandbox call must pin both ``use_egress_proxy=True`` and
+    ``proxy_hosts``. Without the flag the proxy never starts and
+    ``run_untrusted``'s forced ``block_network=True`` would silently
+    drop the connection."""
+    with patch("core.sandbox.run_untrusted") as mock_run:
+        mock_run.return_value = _completed(0)
+        ls_remote("https://git.kernel.org/foo", proxy_hosts=_KERNEL_HOSTS)
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs.get("use_egress_proxy") is True
+        assert "git.kernel.org" in kwargs.get("proxy_hosts", [])
+        assert kwargs.get("timeout") == 20  # default
+
+
+def test_ls_remote_parses_refs() -> None:
+    """Each ``<sha>\\t<ref>`` line is parsed; malformed lines are
+    skipped defensively (a hostile remote could craft them).
+
+    The SHA-shape check is strict 40 hex (not the 4-40 input
+    validator) — git always emits full SHAs in ls-remote output;
+    abbreviated "SHAs" from a remote are malformed.
+    """
+    stdout = (
+        "abc1234567890abc1234567890abc1234567890a\trefs/heads/main\n"
+        "def1234567890def1234567890def1234567890b\trefs/tags/v1.0\n"
+        "garbage_line_no_tab\n"
+        "not-a-sha\trefs/heads/funny\n"
+        "0000\trefs/heads/short-sha\n"  # too short — strict regex rejects
+        "12345678901234567890123456789012345678901234\trefs/x\n"  # too long
+    )
+    with patch("core.sandbox.run_untrusted") as mock_run:
+        mock_run.return_value = _completed(0, stdout=stdout)
+        refs = ls_remote(
+            "https://git.kernel.org/foo",
+            proxy_hosts=_KERNEL_HOSTS,
+        )
+    assert refs == [
+        ("abc1234567890abc1234567890abc1234567890a", "refs/heads/main"),
+        ("def1234567890def1234567890def1234567890b", "refs/tags/v1.0"),
+    ]
+
+
+def test_ls_remote_failure_raises_runtime_error() -> None:
+    with patch("core.sandbox.run_untrusted") as mock_run:
+        mock_run.return_value = _completed(
+            128, stderr="fatal: repository not found",
+        )
+        with pytest.raises(RuntimeError, match="repository not found"):
+            ls_remote(
+                "https://git.kernel.org/foo",
+                proxy_hosts=_KERNEL_HOSTS,
+            )
+
+
+def test_ls_remote_passes_sanitised_env() -> None:
+    """``GIT_TERMINAL_PROMPT=0`` and the rest of ``get_git_env``
+    must reach the subprocess so a malformed credential prompt
+    can't hang the run."""
+    with patch("core.sandbox.run_untrusted") as mock_run:
+        mock_run.return_value = _completed(0, stdout="")
+        ls_remote("https://git.kernel.org/foo", proxy_hosts=_KERNEL_HOSTS)
+        kwargs = mock_run.call_args.kwargs
+        assert kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_ls_remote_custom_timeout_propagates() -> None:
+    with patch("core.sandbox.run_untrusted") as mock_run:
+        mock_run.return_value = _completed(0, stdout="")
+        ls_remote(
+            "https://git.kernel.org/foo",
+            proxy_hosts=_KERNEL_HOSTS,
+            timeout=60,
+        )
+        assert mock_run.call_args.kwargs["timeout"] == 60
+
+
+def test_ls_remote_propagates_filenotfounderror() -> None:
+    """If ``git`` isn't installed in the sandbox, ``run_untrusted``
+    surfaces ``FileNotFoundError`` and the helper lets it propagate.
+    Caller-trusted (raptor's CI environment always has git); test
+    pins the propagation contract so a future change that swallows
+    the exception is caught."""
+    with patch("core.sandbox.run_untrusted") as mock_run:
+        mock_run.side_effect = FileNotFoundError("git: command not found")
+        with pytest.raises(FileNotFoundError):
+            ls_remote(
+                "https://git.kernel.org/foo",
+                proxy_hosts=_KERNEL_HOSTS,
+            )
+
+
+def test_ls_remote_propagates_timeout_expired() -> None:
+    """``subprocess.TimeoutExpired`` propagates from ``run_untrusted``
+    unchanged. Same contract as ``clone_repository`` and
+    ``fetch_commit`` — callers handling the (RuntimeError,
+    subprocess.TimeoutExpired) tuple cover both shapes."""
+    with patch("core.sandbox.run_untrusted") as mock_run:
+        mock_run.side_effect = subprocess.TimeoutExpired(
+            cmd=["git", "ls-remote"], timeout=20,
+        )
+        with pytest.raises(subprocess.TimeoutExpired):
+            ls_remote(
+                "https://git.kernel.org/foo",
+                proxy_hosts=_KERNEL_HOSTS,
+            )
+
+
+def test_ls_remote_resilient_to_non_utf8_replacement_chars() -> None:
+    """``errors="replace"`` plus the strict 40-char SHA regex means a
+    hostile remote returning non-UTF-8 bytes (here represented as
+    U+FFFD replacement chars) can't crash the helper — malformed
+    lines just fail the SHA-shape check and are skipped."""
+    # Real subprocess decode would have already replaced; simulate
+    # the post-decode shape directly.
+    stdout = (
+        "abc1234567890abc1234567890abc1234567890a\trefs/heads/main\n"
+        "\ufffd\ufffd\ufffdabc1234567890abc1234567890abc1234567\trefs/garbage\n"
+    )
+    with patch("core.sandbox.run_untrusted") as mock_run:
+        mock_run.return_value = _completed(0, stdout=stdout)
+        refs = ls_remote(
+            "https://git.kernel.org/foo",
+            proxy_hosts=_KERNEL_HOSTS,
+        )
+    assert refs == [
+        ("abc1234567890abc1234567890abc1234567890a", "refs/heads/main"),
+    ]
+
+
+def test_ls_remote_uses_strict_40char_sha_regex() -> None:
+    """Caller-supplied SHAs (``fetch_commit``) accept 4-40 hex; the
+    ls-remote parser is strict 40 because git always emits full
+    SHAs and a shorter "SHA" from a remote is malformed (or hostile)."""
+    # SHA at the lower bound the caller-input regex would accept (8
+    # chars) MUST be rejected by the output parser.
+    stdout = "deadbeef\trefs/heads/short\n"
+    with patch("core.sandbox.run_untrusted") as mock_run:
+        mock_run.return_value = _completed(0, stdout=stdout)
+        refs = ls_remote(
+            "https://git.kernel.org/foo",
+            proxy_hosts=_KERNEL_HOSTS,
+        )
+    assert refs == []  # nothing parsed
