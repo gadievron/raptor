@@ -315,6 +315,8 @@ RAPTOR is open source. Good places to start if you want to contribute:
 - Better firmware analysis coverage
 - Anything you think is missing
 
+Releases are tagged as `vX.Y.Z` and built automatically by CI. Commit prefixes determine what goes in the changelog: `feat:` for new features, `fix:` for bug fixes, `security:` for security changes, `docs:` for documentation. Anything without a prefix lands in "Other changes". No strict convention required, but it helps.
+
 Submit pull requests. Chat with us on the **#raptor** channel in the Prompt||GTFO Slack:
 https://join.slack.com/t/promptgtfo/shared_invite/zt-3kbaqgq2p-O8MAvwU1SPc10KjwJ8MN2w
 
