@@ -174,14 +174,29 @@ class OSVDiscoverer:
 
     @staticmethod
     def _normalize_repo(url: str) -> str:
+        """Convert OSV ``ranges[].repo`` shapes to a canonical HTTPS form.
+
+        OSV records carry repos in several shapes — git://, ssh://git@,
+        and bare ``git@host:path`` SCP-style. We normalise every shape
+        to ``https://<host>/<path>`` so downstream consumers (commit
+        fetchers, slug extractors) only need to handle one form.
+        """
         if not url:
             return ""
         if url.endswith(".git"):
             url = url[:-4]
         if url.startswith("git://"):
-            url = "https://" + url[len("git://") :]
+            url = "https://" + url[len("git://"):]
         elif url.startswith("ssh://git@"):
-            url = "https://" + url[len("ssh://git@") :]
+            url = "https://" + url[len("ssh://git@"):]
         elif url.startswith("git@"):
-            url = url.replace("git@", "https://", 1).replace(":", "/", 1)
+            # SCP-style: ``git@<host>:<path>`` (one colon, no scheme).
+            # The naive ``.replace("git@", "https://").replace(":", "/", 1)``
+            # broke because the second replace clobbered the ``://``
+            # separator from the first replace. Split on the FIRST colon
+            # explicitly so the host and path are unambiguous.
+            rest = url[len("git@"):]
+            if ":" in rest:
+                host, path = rest.split(":", 1)
+                url = f"https://{host}/{path}"
         return url
