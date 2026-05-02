@@ -12,9 +12,9 @@ Public API:
 
 import logging
 
-from .llm.client import LLMClient
-from .llm.config import LLMConfig, ModelConfig
-from .llm.detection import detect_llm_availability, LLMAvailability
+from core.llm.client import LLMClient
+from core.llm.config import LLMConfig, ModelConfig
+from core.llm.detection import detect_llm_availability, LLMAvailability
 from .agent import AutonomousSecurityAgentV2
 
 logger = logging.getLogger(__name__)

@@ -15,9 +15,10 @@ from typing import Any, Dict, List
 from core.logging import get_logger
 from packages.binary_analysis import CrashContext
 from packages.fuzzing import Crash
-from .llm.client import LLMClient, _is_auth_error
-from .llm.config import LLMConfig, detect_llm_availability
-from .llm.providers import ClaudeCodeProvider
+from core.llm.client import LLMClient, _is_auth_error
+from core.llm.config import LLMConfig
+from core.llm.detection import detect_llm_availability
+from core.llm.providers import ClaudeCodeProvider
 
 logger = get_logger()
 

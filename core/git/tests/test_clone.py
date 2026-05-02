@@ -408,7 +408,7 @@ def test_ls_remote_engages_egress_proxy(tmp_path: Path) -> None:
         ls_remote("https://git.kernel.org/foo", proxy_hosts=_KERNEL_HOSTS)
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("use_egress_proxy") is True
-        assert "git.kernel.org" in kwargs.get("proxy_hosts", [])
+        assert "git.kernel.org" == kwargs.get("proxy_hosts", [])[0]
         assert kwargs.get("timeout") == 20  # default
 
 

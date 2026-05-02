@@ -162,15 +162,17 @@ def _run_understand_prepass_unsafe(
 
         prompt = _build_understand_prompt(target, understand_dir)
         try:
-            # Stream stdout/stderr — pre-pass can take 15 min.
+            from core.llm.cc_adapter import CCDispatchConfig, build_cc_command
+            prepass_config = CCDispatchConfig(
+                claude_bin=claude_bin,
+                tools=_UNDERSTAND_TOOLS,
+                add_dirs=(str(_RAPTOR_DIR), str(target), str(understand_dir)),
+                budget_usd=_PREPASS_BUDGET_USD,
+                timeout_s=_PREPASS_TIMEOUT_S,
+                capture_json_envelope=False,
+            )
             proc = subprocess.run(
-                [claude_bin, "-p",
-                 "--no-session-persistence",
-                 "--allowed-tools", _UNDERSTAND_TOOLS,
-                 "--add-dir", str(_RAPTOR_DIR),
-                 "--add-dir", str(target),
-                 "--add-dir", str(understand_dir),
-                 "--max-budget-usd", _PREPASS_BUDGET_USD],
+                build_cc_command(prepass_config),
                 input=prompt, text=True,
                 timeout=_PREPASS_TIMEOUT_S,
             )
@@ -362,16 +364,17 @@ def _run_validate_postpass_unsafe(
                                         analysis_report, selection_file, len(selected))
 
         try:
-            # Stream output — multi-stage validate over many findings can run 30 min.
+            from core.llm.cc_adapter import CCDispatchConfig, build_cc_command
+            postpass_config = CCDispatchConfig(
+                claude_bin=claude_bin,
+                tools=_VALIDATE_TOOLS,
+                add_dirs=(str(_RAPTOR_DIR), str(target), str(agentic_out_dir), str(validate_dir)),
+                budget_usd=_POSTPASS_BUDGET_USD,
+                timeout_s=_POSTPASS_TIMEOUT_S,
+                capture_json_envelope=False,
+            )
             proc = subprocess.run(
-                [claude_bin, "-p",
-                 "--no-session-persistence",
-                 "--allowed-tools", _VALIDATE_TOOLS,
-                 "--add-dir", str(_RAPTOR_DIR),
-                 "--add-dir", str(target),
-                 "--add-dir", str(agentic_out_dir),
-                 "--add-dir", str(validate_dir),
-                 "--max-budget-usd", _POSTPASS_BUDGET_USD],
+                build_cc_command(postpass_config),
                 input=prompt, text=True,
                 timeout=_POSTPASS_TIMEOUT_S,
             )

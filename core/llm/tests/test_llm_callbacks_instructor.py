@@ -16,13 +16,13 @@ from pydantic import BaseModel
 # packages/llm_analysis/tests/test_llm_callbacks_instructor.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
-from packages.llm_analysis.llm.providers import (
+from core.llm.providers import (
     _dict_schema_to_pydantic,
     _coerce_to_schema,
     LLMProvider,
     LLMResponse,
 )
-from packages.llm_analysis.llm.config import ModelConfig
+from core.llm.config import ModelConfig
 
 
 class TestDictSchemaToPydanticSimple:

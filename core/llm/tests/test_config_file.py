@@ -10,11 +10,11 @@ from unittest.mock import patch, MagicMock
 # packages/llm_analysis/tests/test_config_file.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
-from packages.llm_analysis.llm.config import (
+from core.llm.config import (
     _get_configured_models, _get_best_thinking_model,
     _get_default_fallback_models, _model_config_from_entry,
 )
-from packages.llm_analysis.llm.model_data import PROVIDER_DEFAULT_MODELS, MODEL_COSTS, MODEL_LIMITS
+from core.llm.model_data import PROVIDER_DEFAULT_MODELS, MODEL_COSTS, MODEL_LIMITS
 
 
 class TestGetConfiguredModels:
@@ -141,7 +141,7 @@ class TestModelDefaulting:
             {"provider": "anthropic", "api_key": "sk-ant-test"}
         ]))
         with patch.dict(os.environ, {"RAPTOR_CONFIG": str(config)}):
-            import packages.llm_analysis.llm.config as cfg
+            import core.llm.config as cfg
             cfg._thinking_model_checked = False
             cfg._cached_thinking_model = None
             result = _get_best_thinking_model()
@@ -155,7 +155,7 @@ class TestModelDefaulting:
             {"provider": "openai", "api_key": "sk-test"}
         ]))
         with patch.dict(os.environ, {"RAPTOR_CONFIG": str(config)}):
-            import packages.llm_analysis.llm.config as cfg
+            import core.llm.config as cfg
             cfg._thinking_model_checked = False
             cfg._cached_thinking_model = None
             result = _get_best_thinking_model()
@@ -172,7 +172,7 @@ class TestModelDefaulting:
             "RAPTOR_CONFIG": str(config),
             "ANTHROPIC_API_KEY": "sk-ant-from-env",
         }):
-            import packages.llm_analysis.llm.config as cfg
+            import core.llm.config as cfg
             cfg._thinking_model_checked = False
             cfg._cached_thinking_model = None
             result = _get_best_thinking_model()
@@ -190,7 +190,7 @@ class TestTimeoutFromConfig:
              "api_key": "sk-test", "timeout": 300}
         ]))
         with patch.dict(os.environ, {"RAPTOR_CONFIG": str(config)}):
-            import packages.llm_analysis.llm.config as cfg
+            import core.llm.config as cfg
             cfg._thinking_model_checked = False
             cfg._cached_thinking_model = None
             result = _get_best_thinking_model()
@@ -204,7 +204,7 @@ class TestTimeoutFromConfig:
              "api_key": "sk-test"}
         ]))
         with patch.dict(os.environ, {"RAPTOR_CONFIG": str(config)}):
-            import packages.llm_analysis.llm.config as cfg
+            import core.llm.config as cfg
             cfg._thinking_model_checked = False
             cfg._cached_thinking_model = None
             result = _get_best_thinking_model()
@@ -221,8 +221,8 @@ class TestMigrationDetection:
         old_config.parent.mkdir(parents=True)
         old_config.write_text("model_list: []")
 
-        from packages.llm_analysis.llm.detection import _check_litellm_migration
-        with patch("packages.llm_analysis.llm.detection.Path.home", return_value=tmp_path):
+        from core.llm.detection import _check_litellm_migration
+        with patch("core.llm.detection.Path.home", return_value=tmp_path):
             _check_litellm_migration()
 
         captured = capsys.readouterr()
@@ -238,8 +238,8 @@ class TestMigrationDetection:
         new_config.parent.mkdir(parents=True)
         new_config.write_text("[]")
 
-        from packages.llm_analysis.llm.detection import _check_litellm_migration
-        with patch("packages.llm_analysis.llm.detection.Path.home", return_value=tmp_path):
+        from core.llm.detection import _check_litellm_migration
+        with patch("core.llm.detection.Path.home", return_value=tmp_path):
             _check_litellm_migration()
 
         captured = capsys.readouterr()
@@ -247,8 +247,8 @@ class TestMigrationDetection:
 
     def test_no_guidance_when_neither_exists(self, tmp_path, capsys):
         """Should not print when no configs exist."""
-        from packages.llm_analysis.llm.detection import _check_litellm_migration
-        with patch("packages.llm_analysis.llm.detection.Path.home", return_value=tmp_path):
+        from core.llm.detection import _check_litellm_migration
+        with patch("core.llm.detection.Path.home", return_value=tmp_path):
             _check_litellm_migration()
 
         captured = capsys.readouterr()
@@ -274,7 +274,7 @@ class TestAutoMigration:
         return old, new
 
     def test_migrates_basic_config(self, tmp_path):
-        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        from core.llm.detection import _try_auto_migrate
         old, new = self._make_litellm_config(tmp_path, """
 model_list:
   - model_name: my-claude
@@ -292,7 +292,7 @@ model_list:
         assert data["models"][0]["api_key"] == "sk-ant-real-key"
 
     def test_preserves_literal_api_keys(self, tmp_path):
-        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        from core.llm.detection import _try_auto_migrate
         old, new = self._make_litellm_config(tmp_path, """
 model_list:
   - model_name: gpt
@@ -305,7 +305,7 @@ model_list:
         assert data["models"][0]["api_key"] == "sk-literal-key-value"
 
     def test_env_var_keys_become_placeholders(self, tmp_path):
-        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        from core.llm.detection import _try_auto_migrate
         old, new = self._make_litellm_config(tmp_path, """
 model_list:
   - model_name: claude
@@ -320,7 +320,7 @@ model_list:
         assert data["models"][0]["api_key"] == "${ANTHROPIC_API_KEY}"
 
     def test_env_var_keys_omitted_when_set(self, tmp_path):
-        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        from core.llm.detection import _try_auto_migrate
         old, new = self._make_litellm_config(tmp_path, """
 model_list:
   - model_name: claude
@@ -334,7 +334,7 @@ model_list:
         assert "api_key" not in data["models"][0]
 
     def test_multiple_models_migrated(self, tmp_path):
-        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        from core.llm.detection import _try_auto_migrate
         old, new = self._make_litellm_config(tmp_path, """
 model_list:
   - model_name: claude
@@ -359,7 +359,7 @@ model_list:
         assert "gemini" in providers
 
     def test_sets_chmod_600(self, tmp_path):
-        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        from core.llm.detection import _try_auto_migrate
         old, new = self._make_litellm_config(tmp_path, """
 model_list:
   - model_name: claude
@@ -372,7 +372,7 @@ model_list:
         assert mode == "600"
 
     def test_does_not_modify_old_config(self, tmp_path):
-        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        from core.llm.detection import _try_auto_migrate
         original_content = """
 model_list:
   - model_name: claude
@@ -387,7 +387,7 @@ model_list:
         assert old.stat().st_mtime == old_mtime
 
     def test_returns_false_without_pyyaml(self, tmp_path):
-        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        from core.llm.detection import _try_auto_migrate
         old, new = self._make_litellm_config(tmp_path, "model_list: []")
         with patch.dict(sys.modules, {"yaml": None}):
             result = _try_auto_migrate(old, new)
@@ -395,13 +395,13 @@ model_list:
         assert not new.exists()
 
     def test_returns_false_for_empty_model_list(self, tmp_path):
-        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        from core.llm.detection import _try_auto_migrate
         old, new = self._make_litellm_config(tmp_path, "model_list: []")
         result = _try_auto_migrate(old, new)
         assert result is False
 
     def test_skips_entries_without_model(self, tmp_path):
-        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        from core.llm.detection import _try_auto_migrate
         old, new = self._make_litellm_config(tmp_path, """
 model_list:
   - model_name: broken
@@ -418,7 +418,7 @@ model_list:
         assert data["models"][0]["model"] == "claude-opus-4-6"
 
     def test_prints_needs_keys_warning(self, tmp_path, capsys):
-        from packages.llm_analysis.llm.detection import _try_auto_migrate
+        from core.llm.detection import _try_auto_migrate
         old, new = self._make_litellm_config(tmp_path, """
 model_list:
   - model_name: claude
@@ -437,19 +437,19 @@ class TestGenerateSampleConfig:
     """Test sample config generation."""
 
     def test_includes_all_default_providers(self):
-        from packages.llm_analysis.llm.detection import generate_sample_config
+        from core.llm.detection import generate_sample_config
         sample = generate_sample_config()
         for provider in PROVIDER_DEFAULT_MODELS:
             assert f'"provider": "{provider}"' in sample
 
     def test_uses_default_model_names(self):
-        from packages.llm_analysis.llm.detection import generate_sample_config
+        from core.llm.detection import generate_sample_config
         sample = generate_sample_config()
         for model in PROVIDER_DEFAULT_MODELS.values():
             assert f'"model": "{model}"' in sample
 
     def test_no_api_key_in_json_body(self):
-        from packages.llm_analysis.llm.detection import generate_sample_config
+        from core.llm.detection import generate_sample_config
         sample = generate_sample_config()
         lines = [l for l in sample.splitlines() if not l.strip().startswith("//")]
         data = json.loads("\n".join(lines))
@@ -457,7 +457,7 @@ class TestGenerateSampleConfig:
             assert "api_key" not in model
 
     def test_includes_commented_key_example(self):
-        from packages.llm_analysis.llm.detection import generate_sample_config
+        from core.llm.detection import generate_sample_config
         sample = generate_sample_config()
         assert "// " in sample
         assert "api_key" in sample
@@ -466,38 +466,38 @@ class TestGenerateSampleConfig:
 class TestCompromisedLitellmDetection:
     """Test litellm compromise detection and hard stop."""
 
-    @patch("packages.llm_analysis.llm.detection.Path.home")
+    @patch("core.llm.detection.Path.home")
     def test_182_8_causes_system_exit(self, mock_home, tmp_path):
         mock_home.return_value = tmp_path
-        from packages.llm_analysis.llm.detection import _check_litellm_installed
+        from core.llm.detection import _check_litellm_installed
         with patch("importlib.metadata.version", return_value="1.82.8"):
             with pytest.raises(SystemExit) as exc_info:
                 _check_litellm_installed()
             assert "1.82.8" in str(exc_info.value)
             assert "24518" in str(exc_info.value)
 
-    @patch("packages.llm_analysis.llm.detection.Path.home")
+    @patch("core.llm.detection.Path.home")
     def test_182_7_causes_system_exit(self, mock_home, tmp_path):
         mock_home.return_value = tmp_path
-        from packages.llm_analysis.llm.detection import _check_litellm_installed
+        from core.llm.detection import _check_litellm_installed
         with patch("importlib.metadata.version", return_value="1.82.7"):
             with pytest.raises(SystemExit) as exc_info:
                 _check_litellm_installed()
             assert "1.82.7" in str(exc_info.value)
 
-    @patch("packages.llm_analysis.llm.detection.Path.home")
+    @patch("core.llm.detection.Path.home")
     def test_safe_version_no_exit(self, mock_home, tmp_path, capsys):
         mock_home.return_value = tmp_path
-        from packages.llm_analysis.llm.detection import _check_litellm_installed
+        from core.llm.detection import _check_litellm_installed
         with patch("importlib.metadata.version", return_value="1.55.0"):
             _check_litellm_installed()
         captured = capsys.readouterr()
         assert "malicious" not in captured.out
 
-    @patch("packages.llm_analysis.llm.detection.Path.home")
+    @patch("core.llm.detection.Path.home")
     def test_182_8_shows_shell_removal(self, mock_home, tmp_path, capsys):
         mock_home.return_value = tmp_path
-        from packages.llm_analysis.llm.detection import _check_litellm_installed
+        from core.llm.detection import _check_litellm_installed
         with patch("importlib.metadata.version", return_value="1.82.8"):
             with pytest.raises(SystemExit):
                 _check_litellm_installed()
@@ -505,10 +505,10 @@ class TestCompromisedLitellmDetection:
         assert "Do NOT use pip" in captured.out
         assert "find /" in captured.out
 
-    @patch("packages.llm_analysis.llm.detection.Path.home")
+    @patch("core.llm.detection.Path.home")
     def test_182_7_shows_pip_removal(self, mock_home, tmp_path, capsys):
         mock_home.return_value = tmp_path
-        from packages.llm_analysis.llm.detection import _check_litellm_installed
+        from core.llm.detection import _check_litellm_installed
         with patch("importlib.metadata.version", return_value="1.82.7"):
             with pytest.raises(SystemExit):
                 _check_litellm_installed()
@@ -532,8 +532,8 @@ model_list:
 """)
         new_config = tmp_path / ".config" / "raptor" / "models.json"
 
-        from packages.llm_analysis.llm.detection import _check_litellm_installed
-        with patch("packages.llm_analysis.llm.detection.Path.home", return_value=tmp_path), \
+        from core.llm.detection import _check_litellm_installed
+        with patch("core.llm.detection.Path.home", return_value=tmp_path), \
              patch("importlib.metadata.version", return_value="1.55.0"):
             _check_litellm_installed()
 
@@ -550,8 +550,8 @@ model_list:
         new_config.parent.mkdir(parents=True)
         new_config.write_text('{"models": []}')
 
-        from packages.llm_analysis.llm.detection import _check_litellm_installed
-        with patch("packages.llm_analysis.llm.detection.Path.home", return_value=tmp_path), \
+        from core.llm.detection import _check_litellm_installed
+        with patch("core.llm.detection.Path.home", return_value=tmp_path), \
              patch("importlib.metadata.version", return_value="1.55.0"):
             _check_litellm_installed()
 
@@ -566,10 +566,10 @@ class TestConfigHasKeyedModelsSDKGating:
         config.write_text(json.dumps({"models": [
             {"provider": "anthropic", "model": "claude-opus-4-6", "api_key": "sk-ant-test"}
         ]}))
-        from packages.llm_analysis.llm.detection import _config_has_keyed_models
+        from core.llm.detection import _config_has_keyed_models
         with patch.dict(os.environ, {"RAPTOR_CONFIG": str(config)}), \
-             patch("packages.llm_analysis.llm.detection.ANTHROPIC_SDK_AVAILABLE", False), \
-             patch("packages.llm_analysis.llm.detection.OPENAI_SDK_AVAILABLE", False):
+             patch("core.llm.detection.ANTHROPIC_SDK_AVAILABLE", False), \
+             patch("core.llm.detection.OPENAI_SDK_AVAILABLE", False):
             assert _config_has_keyed_models() is False
 
     def test_returns_true_when_sdk_available(self, tmp_path):
@@ -577,9 +577,9 @@ class TestConfigHasKeyedModelsSDKGating:
         config.write_text(json.dumps({"models": [
             {"provider": "anthropic", "model": "claude-opus-4-6", "api_key": "sk-ant-test"}
         ]}))
-        from packages.llm_analysis.llm.detection import _config_has_keyed_models
+        from core.llm.detection import _config_has_keyed_models
         with patch.dict(os.environ, {"RAPTOR_CONFIG": str(config)}), \
-             patch("packages.llm_analysis.llm.detection.ANTHROPIC_SDK_AVAILABLE", True):
+             patch("core.llm.detection.ANTHROPIC_SDK_AVAILABLE", True):
             assert _config_has_keyed_models() is True
 
     def test_ollama_requires_openai_sdk(self, tmp_path):
@@ -587,10 +587,10 @@ class TestConfigHasKeyedModelsSDKGating:
         config.write_text(json.dumps({"models": [
             {"provider": "ollama", "model": "llama3", "api_key": "unused"}
         ]}))
-        from packages.llm_analysis.llm.detection import _config_has_keyed_models
+        from core.llm.detection import _config_has_keyed_models
         with patch.dict(os.environ, {"RAPTOR_CONFIG": str(config)}), \
-             patch("packages.llm_analysis.llm.detection.OPENAI_SDK_AVAILABLE", False), \
-             patch("packages.llm_analysis.llm.detection.ANTHROPIC_SDK_AVAILABLE", False):
+             patch("core.llm.detection.OPENAI_SDK_AVAILABLE", False), \
+             patch("core.llm.detection.ANTHROPIC_SDK_AVAILABLE", False):
             assert _config_has_keyed_models() is False
 
 
@@ -598,29 +598,29 @@ class TestWarnUnusableKeys:
     """Test warning when API keys are set but SDK is missing."""
 
     def test_warns_when_key_set_no_sdk(self):
-        from packages.llm_analysis.llm.detection import _warn_unusable_keys
+        from core.llm.detection import _warn_unusable_keys
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}), \
-             patch("packages.llm_analysis.llm.detection.ANTHROPIC_SDK_AVAILABLE", False), \
-             patch("packages.llm_analysis.llm.detection.OPENAI_SDK_AVAILABLE", False), \
-             patch("packages.llm_analysis.llm.detection.logger") as mock_logger:
+             patch("core.llm.detection.ANTHROPIC_SDK_AVAILABLE", False), \
+             patch("core.llm.detection.OPENAI_SDK_AVAILABLE", False), \
+             patch("core.llm.detection.logger") as mock_logger:
             _warn_unusable_keys()
         mock_logger.warning.assert_called()
         warn_msg = mock_logger.warning.call_args[0][0]
         assert "ANTHROPIC_API_KEY" in warn_msg
 
     def test_no_warning_when_sdk_available(self):
-        from packages.llm_analysis.llm.detection import _warn_unusable_keys
+        from core.llm.detection import _warn_unusable_keys
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}), \
-             patch("packages.llm_analysis.llm.detection.ANTHROPIC_SDK_AVAILABLE", True), \
-             patch("packages.llm_analysis.llm.detection.logger") as mock_logger:
+             patch("core.llm.detection.ANTHROPIC_SDK_AVAILABLE", True), \
+             patch("core.llm.detection.logger") as mock_logger:
             _warn_unusable_keys()
         mock_logger.warning.assert_not_called()
 
     def test_no_warning_when_no_key(self):
-        from packages.llm_analysis.llm.detection import _warn_unusable_keys
+        from core.llm.detection import _warn_unusable_keys
         with patch.dict(os.environ, {}, clear=False), \
-             patch("packages.llm_analysis.llm.detection.OPENAI_SDK_AVAILABLE", False), \
-             patch("packages.llm_analysis.llm.detection.logger") as mock_logger:
+             patch("core.llm.detection.OPENAI_SDK_AVAILABLE", False), \
+             patch("core.llm.detection.logger") as mock_logger:
             os.environ.pop("OPENAI_API_KEY", None)
             _warn_unusable_keys()
         mock_logger.warning.assert_not_called()
@@ -643,7 +643,7 @@ class TestFallbackModelsFromConfig:
             env = {k: v for k, v in os.environ.items()
                    if k not in ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "MISTRAL_API_KEY")}
             with patch.dict(os.environ, env, clear=True):
-                import packages.llm_analysis.llm.config as cfg
+                import core.llm.config as cfg
                 cfg._thinking_model_checked = False
                 cfg._cached_thinking_model = None
                 fallbacks = _get_default_fallback_models()
@@ -668,7 +668,7 @@ class TestFallbackModelsFromConfig:
             env_clean = {k: v for k, v in os.environ.items()
                          if k not in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "MISTRAL_API_KEY")}
             with patch.dict(os.environ, env_clean, clear=True):
-                import packages.llm_analysis.llm.config as cfg
+                import core.llm.config as cfg
                 cfg._thinking_model_checked = False
                 cfg._cached_thinking_model = None
                 fallbacks = _get_default_fallback_models()
@@ -696,7 +696,7 @@ class TestFallbackModelsFromConfig:
             env_clean = {k: v for k, v in os.environ.items()
                          if k not in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "MISTRAL_API_KEY")}
             with patch.dict(os.environ, env_clean, clear=True):
-                import packages.llm_analysis.llm.config as cfg
+                import core.llm.config as cfg
                 cfg._thinking_model_checked = False
                 cfg._cached_thinking_model = None
                 fallbacks = _get_default_fallback_models()

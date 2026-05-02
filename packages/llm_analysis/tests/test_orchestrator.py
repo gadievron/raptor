@@ -23,8 +23,6 @@ from packages.llm_analysis.orchestrator import (
 from packages.llm_analysis.cc_dispatch import (
     build_finding_prompt,
     build_schema,
-    parse_cc_result,
-    parse_cc_freeform,
 )
 from packages.llm_analysis.prompts.schemas import FINDING_RESULT_SCHEMA
 
@@ -320,111 +318,6 @@ class TestBuildFindingPrompt:
         assert "ground truth" in prompt
         assert "upstream validation pipeline" in prompt
         assert "GOT overwrite" in prompt
-
-
-class TestParseCCResult:
-    """Test CC output parsing."""
-
-    def test_valid_json(self):
-        """Clean JSON is parsed directly."""
-        result = parse_cc_result(
-            json.dumps({"finding_id": "f-001", "is_exploitable": True}),
-            "", "f-001",
-        )
-        assert result["finding_id"] == "f-001"
-        assert "error" not in result
-
-    def test_markdown_fenced_json(self):
-        """JSON wrapped in markdown fences is extracted."""
-        content = "Here is the result:\n```json\n" + json.dumps({
-            "finding_id": "f-001", "is_exploitable": False, "reasoning": "test"
-        }) + "\n```\n"
-        result = parse_cc_result(content, "", "f-001")
-        assert result["finding_id"] == "f-001"
-        assert "error" not in result
-
-    def test_empty_output(self):
-        """Empty stdout returns error dict."""
-        result = parse_cc_result("", "some error", "f-001")
-        assert result["finding_id"] == "f-001"
-        assert "error" in result
-
-    def test_invalid_json(self):
-        """Unparseable output returns error dict."""
-        result = parse_cc_result("This is not JSON at all", "", "f-001")
-        assert "error" in result
-
-    def test_json_embedded_in_text(self):
-        """JSON object embedded in surrounding text is extracted via raw_decode."""
-        content = 'I found that {"finding_id": "f-001", "is_exploitable": true, "reasoning": "vuln"} is the result.'
-        result = parse_cc_result(content, "", "f-001")
-        assert result["finding_id"] == "f-001"
-        assert "error" not in result
-
-    def test_multiple_json_fragments_takes_first(self):
-        """With multiple JSON objects, raw_decode takes the first valid one."""
-        content = 'prefix {"partial": true} and {"finding_id": "f-001", "is_exploitable": false, "reasoning": "safe"} end'
-        result = parse_cc_result(content, "", "f-001")
-        # raw_decode takes the first complete JSON object from first {
-        assert "error" not in result
-
-    def test_claude_output_format_json_envelope(self):
-        """claude -p --output-format json wraps result in metadata envelope."""
-        envelope = json.dumps({
-            "type": "result",
-            "subtype": "success",
-            "is_error": False,
-            "result": "",
-            "session_id": "abc-123",
-            "total_cost_usd": 0.15,
-            "structured_output": {
-                "finding_id": "f-001",
-                "is_true_positive": True,
-                "is_exploitable": True,
-                "exploitability_score": 0.9,
-                "reasoning": "Stack buffer overflow",
-            }
-        })
-        result = parse_cc_result(envelope, "", "f-001")
-        assert result["finding_id"] == "f-001"
-        assert result["is_exploitable"] is True
-        assert result["exploitability_score"] == 0.9
-        assert result["reasoning"] == "Stack buffer overflow"
-        assert "session_id" not in result  # envelope fields stripped
-
-
-class TestParseCCFreeform:
-    """Test free-form CC output parsing with JSON envelope."""
-
-    def test_extracts_content_and_cost(self):
-        envelope = json.dumps({
-            "type": "result",
-            "result": "Here is the exploit code:\n```python\nimport os\n```",
-            "total_cost_usd": 0.18,
-            "duration_ms": 12500,
-            "modelUsage": {"claude-sonnet-4-20250514": {}},
-            "usage": {"input_tokens": 1000, "output_tokens": 500},
-        })
-        parsed = parse_cc_freeform(envelope, "")
-        assert "exploit code" in parsed["content"]
-        assert parsed["cost_usd"] == 0.18
-        assert parsed["duration_seconds"] == 12.5
-        assert parsed["analysed_by"] == "claude-sonnet-4-20250514"
-        assert parsed["_tokens"] == 1500
-
-    def test_empty_output(self):
-        parsed = parse_cc_freeform("", "some error")
-        assert "error" in parsed
-
-    def test_non_json_fallback(self):
-        parsed = parse_cc_freeform("Just plain text output", "")
-        assert parsed["content"] == "Just plain text output"
-
-    def test_envelope_without_cost(self):
-        envelope = json.dumps({"type": "result", "result": "analysis text"})
-        parsed = parse_cc_freeform(envelope, "")
-        assert parsed["content"] == "analysis text"
-        assert "cost_usd" not in parsed
 
 
 class TestMergeResults:

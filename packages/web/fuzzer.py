@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.logging import get_logger
 from core.security.redaction import redact_secrets
-from packages.llm_analysis.llm.providers import LLMProvider
+from core.llm.providers import LLMProvider
 from packages.web.client import WebClient
 
 logger = get_logger()

@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 from core.json import save_json
 
 from core.logging import get_logger
-from packages.llm_analysis.llm.providers import LLMProvider
+from core.llm.providers import LLMProvider
 from packages.web.client import WebClient
 from packages.web.crawler import WebCrawler
 from packages.web.fuzzer import WebFuzzer

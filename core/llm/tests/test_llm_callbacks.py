@@ -13,19 +13,19 @@ from unittest.mock import patch, MagicMock
 # packages/llm_analysis/tests/test_llm_callbacks.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
-from packages.llm_analysis.llm.client import (
+from core.llm.client import (
     LLMClient,
     _is_auth_error,
     _is_quota_error,
     _sanitize_log_message,
 )
-from packages.llm_analysis.llm.config import LLMConfig, ModelConfig
+from core.llm.config import LLMConfig, ModelConfig
 
 
 class TestLLMClientInit:
     """Verify LLMClient initializes correctly without litellm."""
 
-    @patch("packages.llm_analysis.llm.config.detect_llm_availability")
+    @patch("core.llm.config.detect_llm_availability")
     def test_init_works_without_litellm(self, mock_detect):
         """LLMClient should initialize without importing litellm."""
         mock_detect.return_value = MagicMock(
@@ -48,7 +48,7 @@ class TestLLMClientInit:
         assert client.total_cost == 0.0
         assert client.request_count == 0
 
-    @patch("packages.llm_analysis.llm.config.detect_llm_availability")
+    @patch("core.llm.config.detect_llm_availability")
     def test_init_warns_when_no_llm_available(self, mock_detect):
         """LLMClient warns when no external LLM is available."""
         mock_detect.return_value = MagicMock(
@@ -61,7 +61,7 @@ class TestLLMClientInit:
 
         # Capture warning calls from the logger
         warning_messages = []
-        with patch("packages.llm_analysis.llm.client.logger") as mock_logger:
+        with patch("core.llm.client.logger") as mock_logger:
             mock_logger.warning = lambda msg, *a, **kw: warning_messages.append(msg)
             mock_logger.info = MagicMock()
             mock_logger.debug = MagicMock()
@@ -384,7 +384,7 @@ class TestSanitizeLogMessage:
 class TestBudgetChecking:
     """Verify budget checking works in LLMClient."""
 
-    @patch("packages.llm_analysis.llm.config.detect_llm_availability")
+    @patch("core.llm.config.detect_llm_availability")
     def test_check_budget_passes_under_limit(self, mock_detect):
         """Budget check passes when under limit."""
         mock_detect.return_value = MagicMock(
@@ -402,7 +402,7 @@ class TestBudgetChecking:
         client.total_cost = 5.0
         assert client._check_budget(estimated_cost=1.0) is True
 
-    @patch("packages.llm_analysis.llm.config.detect_llm_availability")
+    @patch("core.llm.config.detect_llm_availability")
     def test_check_budget_fails_over_limit(self, mock_detect):
         """Budget check fails when over limit."""
         mock_detect.return_value = MagicMock(
@@ -420,7 +420,7 @@ class TestBudgetChecking:
         client.total_cost = 9.5
         assert client._check_budget(estimated_cost=1.0) is False
 
-    @patch("packages.llm_analysis.llm.config.detect_llm_availability")
+    @patch("core.llm.config.detect_llm_availability")
     def test_check_budget_passes_when_tracking_disabled(self, mock_detect):
         """Budget check always passes when cost tracking is disabled."""
         mock_detect.return_value = MagicMock(

@@ -14,9 +14,9 @@ from unittest.mock import patch, MagicMock
 # packages/llm_analysis/tests/test_llm_callbacks_providers.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
-from packages.llm_analysis.llm.config import ModelConfig
-from packages.llm_analysis.llm.model_data import MODEL_COSTS
-import packages.llm_analysis.llm.providers as _providers_module
+from core.llm.config import ModelConfig
+from core.llm.model_data import MODEL_COSTS
+import core.llm.providers as _providers_module
 
 
 def _ensure_mock_sdk(module, attr_name):
@@ -40,13 +40,13 @@ def _ensure_mock_sdk(module, attr_name):
 class TestCreateProviderAnthropicRoute:
     """Verify create_provider returns AnthropicProvider for 'anthropic'."""
 
-    @patch("packages.llm_analysis.llm.providers.ANTHROPIC_SDK_AVAILABLE", True)
-    @patch("packages.llm_analysis.llm.providers.INSTRUCTOR_AVAILABLE", False)
+    @patch("core.llm.providers.ANTHROPIC_SDK_AVAILABLE", True)
+    @patch("core.llm.providers.INSTRUCTOR_AVAILABLE", False)
     def test_returns_anthropic_provider(self):
         """create_provider('anthropic') returns AnthropicProvider."""
         mock_anthropic, cleanup = _ensure_mock_sdk(_providers_module, 'anthropic')
         try:
-            from packages.llm_analysis.llm.providers import create_provider, AnthropicProvider
+            from core.llm.providers import create_provider, AnthropicProvider
             config = ModelConfig(
                 provider="anthropic",
                 model_name="claude-sonnet-4-6",
@@ -65,9 +65,9 @@ class TestCreateProviderOpenAIRoute:
         """Helper to create a provider with mocked OpenAI SDK."""
         mock_openai, cleanup = _ensure_mock_sdk(_providers_module, 'OpenAI')
         try:
-            with patch("packages.llm_analysis.llm.providers.OPENAI_SDK_AVAILABLE", True), \
-                 patch("packages.llm_analysis.llm.providers.INSTRUCTOR_AVAILABLE", False):
-                from packages.llm_analysis.llm.providers import create_provider, OpenAICompatibleProvider
+            with patch("core.llm.providers.OPENAI_SDK_AVAILABLE", True), \
+                 patch("core.llm.providers.INSTRUCTOR_AVAILABLE", False):
+                from core.llm.providers import create_provider, OpenAICompatibleProvider
                 config = ModelConfig(
                     provider=provider_name,
                     model_name=model_name,
@@ -85,9 +85,9 @@ class TestCreateProviderOpenAIRoute:
 
     def test_returns_native_provider_for_gemini(self):
         """create_provider('gemini') returns GeminiProvider when google-genai is installed."""
-        from packages.llm_analysis.llm.providers import GENAI_SDK_AVAILABLE
+        from core.llm.providers import GENAI_SDK_AVAILABLE
         if GENAI_SDK_AVAILABLE:
-            from packages.llm_analysis.llm.providers import GeminiProvider, create_provider as _create
+            from core.llm.providers import GeminiProvider, create_provider as _create
             config = ModelConfig(
                 provider="gemini", model_name="gemini-2.5-pro",
                 api_key="test-gemini-key",
@@ -112,11 +112,11 @@ class TestCreateProviderOpenAIRoute:
 class TestCreateProviderSDKUnavailable:
     """Verify create_provider raises RuntimeError when SDK is not available."""
 
-    @patch("packages.llm_analysis.llm.providers.OPENAI_SDK_AVAILABLE", False)
-    @patch("packages.llm_analysis.llm.providers.ANTHROPIC_SDK_AVAILABLE", False)
+    @patch("core.llm.providers.OPENAI_SDK_AVAILABLE", False)
+    @patch("core.llm.providers.ANTHROPIC_SDK_AVAILABLE", False)
     def test_raises_for_anthropic_without_sdk(self):
         """RuntimeError when neither Anthropic nor OpenAI SDK available for anthropic provider."""
-        from packages.llm_analysis.llm.providers import create_provider
+        from core.llm.providers import create_provider
 
         config = ModelConfig(
             provider="anthropic",
@@ -127,10 +127,10 @@ class TestCreateProviderSDKUnavailable:
         with pytest.raises(RuntimeError, match="Anthropic provider requires"):
             create_provider(config)
 
-    @patch("packages.llm_analysis.llm.providers.OPENAI_SDK_AVAILABLE", False)
+    @patch("core.llm.providers.OPENAI_SDK_AVAILABLE", False)
     def test_raises_for_openai_without_sdk(self):
         """RuntimeError when OpenAI SDK not available for openai provider."""
-        from packages.llm_analysis.llm.providers import create_provider
+        from core.llm.providers import create_provider
 
         config = ModelConfig(
             provider="openai",
@@ -141,10 +141,10 @@ class TestCreateProviderSDKUnavailable:
         with pytest.raises(RuntimeError, match="requires.*pip install openai"):
             create_provider(config)
 
-    @patch("packages.llm_analysis.llm.providers.OPENAI_SDK_AVAILABLE", False)
+    @patch("core.llm.providers.OPENAI_SDK_AVAILABLE", False)
     def test_raises_for_ollama_without_sdk(self):
         """RuntimeError when OpenAI SDK not available for ollama provider."""
-        from packages.llm_analysis.llm.providers import create_provider
+        from core.llm.providers import create_provider
 
         config = ModelConfig(
             provider="ollama",
@@ -161,7 +161,7 @@ class TestCalculateCostSplit:
 
     def _make_provider_instance(self, model_name, cost_per_1k=0.0):
         """Create a minimal provider instance for cost testing."""
-        from packages.llm_analysis.llm.providers import LLMProvider
+        from core.llm.providers import LLMProvider
 
         config = ModelConfig(
             provider="openai",
@@ -237,9 +237,9 @@ class TestThinkingModelFallback:
     def _make_ollama_provider(self):
         """Create an OpenAICompatibleProvider configured for Ollama."""
         mock_openai, cleanup = _ensure_mock_sdk(_providers_module, 'OpenAI')
-        with patch("packages.llm_analysis.llm.providers.OPENAI_SDK_AVAILABLE", True), \
-             patch("packages.llm_analysis.llm.providers.INSTRUCTOR_AVAILABLE", False):
-            from packages.llm_analysis.llm.providers import OpenAICompatibleProvider
+        with patch("core.llm.providers.OPENAI_SDK_AVAILABLE", True), \
+             patch("core.llm.providers.INSTRUCTOR_AVAILABLE", False):
+            from core.llm.providers import OpenAICompatibleProvider
             config = ModelConfig(
                 provider="ollama", model_name="qwen3:8b",
                 api_base="http://localhost:11434/v1",
@@ -351,9 +351,9 @@ class TestThinkingModelFallback:
     def _make_ollama_provider(self):
         """Create an OpenAICompatibleProvider configured for Ollama."""
         mock_openai, cleanup = _ensure_mock_sdk(_providers_module, 'OpenAI')
-        with patch("packages.llm_analysis.llm.providers.OPENAI_SDK_AVAILABLE", True), \
-             patch("packages.llm_analysis.llm.providers.INSTRUCTOR_AVAILABLE", False):
-            from packages.llm_analysis.llm.providers import OpenAICompatibleProvider
+        with patch("core.llm.providers.OPENAI_SDK_AVAILABLE", True), \
+             patch("core.llm.providers.INSTRUCTOR_AVAILABLE", False):
+            from core.llm.providers import OpenAICompatibleProvider
             config = ModelConfig(
                 provider="ollama", model_name="qwen3:8b",
                 api_base="http://localhost:11434/v1",
@@ -452,9 +452,9 @@ class TestContentFilterDetection:
     def _make_openai_provider(self):
         """Create an OpenAICompatibleProvider with mocked SDK."""
         mock_openai, cleanup = _ensure_mock_sdk(_providers_module, 'OpenAI')
-        with patch("packages.llm_analysis.llm.providers.OPENAI_SDK_AVAILABLE", True), \
-             patch("packages.llm_analysis.llm.providers.INSTRUCTOR_AVAILABLE", False):
-            from packages.llm_analysis.llm.providers import OpenAICompatibleProvider
+        with patch("core.llm.providers.OPENAI_SDK_AVAILABLE", True), \
+             patch("core.llm.providers.INSTRUCTOR_AVAILABLE", False):
+            from core.llm.providers import OpenAICompatibleProvider
             config = ModelConfig(
                 provider="openai", model_name="gpt-5.4",
                 api_key="test-key", api_base="https://api.openai.com/v1",

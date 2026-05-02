@@ -12,8 +12,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from core.config import RaptorConfig
-from packages.llm_analysis.llm.client import LLMClient
-from packages.llm_analysis.llm.config import ModelConfig, LLMConfig
+from core.llm.client import LLMClient
+from core.llm.config import ModelConfig, LLMConfig
 
 
 @pytest.fixture(autouse=True)

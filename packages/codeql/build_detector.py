@@ -810,17 +810,18 @@ Rules:
 
         try:
             logger.info("  Asking Claude Code for additional compiler flags...")
-            # Route through the RAPTOR-local egress proxy: hostname
-            # allowlist pins outbound to api.anthropic.com only, seccomp
-            # blocks UDP (no DNS exfil), proxy event log captures every
-            # CONNECT attempt in sandbox_info["proxy_events"].
+            from core.llm.cc_adapter import CCDispatchConfig, build_cc_command, strip_json_fences
+            config = CCDispatchConfig(
+                claude_bin=claude_bin,
+                tools="Read,Grep,Glob",
+                add_dirs=(str(self.repo_path),),
+                budget_usd="2.00",
+                timeout_s=180,
+                capture_json_envelope=False,
+            )
             repo_path = str(self.repo_path)
             result = _sandbox_run(
-                [claude_bin, "-p",
-                 "--no-session-persistence",
-                 "--allowed-tools", "Read,Grep,Glob",
-                 "--add-dir", str(self.repo_path),
-                 "--max-budget-usd", "2.00"],
+                build_cc_command(config),
                 target=repo_path, output=repo_path,
                 use_egress_proxy=True,
                 proxy_hosts=["api.anthropic.com"],
@@ -830,22 +831,12 @@ Rules:
             if result.returncode != 0 or not result.stdout.strip():
                 return None
 
-            content = result.stdout.strip()
-            if "```" in content:
-                parts = content.split("```")
-                for part in parts[1::2]:
-                    lines = part.strip().split("\n", 1)
-                    candidate = lines[1].strip() if len(lines) > 1 else part.strip()
-                    if "{" in candidate:
-                        content = candidate
-                        break
+            content = strip_json_fences(result.stdout.strip())
 
             import json
             try:
-                # Try strict parse first (entire content is JSON)
                 data = json.loads(content)
             except json.JSONDecodeError:
-                # Fallback: find first { and try to parse from there
                 try:
                     idx = content.index("{")
                     data = json.loads(content[idx:])
