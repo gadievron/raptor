@@ -433,34 +433,77 @@ def test_gh_compare_extracts_status_and_files(monkeypatch) -> None:
 # --- git_ls_remote ----------------------------------------------------------
 
 def test_git_ls_remote_parses_refs(monkeypatch) -> None:
-    class _Proc:
-        returncode = 0
-        stdout = "abc1234\trefs/heads/main\ndef5678\trefs/tags/v1.0\n"
-        stderr = ""
-
-    monkeypatch.setattr(tools_mod.subprocess, "run", lambda *a, **kw: _Proc())
-    out = json.loads(tools_mod._git_ls_remote_impl("https://example.org/foo.git"))
+    """Post-substrate-migration: ``_git_ls_remote_impl`` calls
+    :func:`core.git.ls_remote`. Stub the helper directly so this
+    test asserts the tool's args→output shaping, not the substrate
+    (substrate has its own E2E + unit tests in
+    ``core/git/tests/test_clone.py``)."""
+    fake_refs = [
+        ("abc1234567890abc1234567890abc1234567890a", "refs/heads/main"),
+        ("def1234567890def1234567890def1234567890b", "refs/tags/v1.0"),
+    ]
+    import core.git
+    monkeypatch.setattr(
+        core.git, "ls_remote",
+        lambda url, **kw: fake_refs,
+    )
+    # Use a host that's in ``_AGENT_FORGE_HOSTS`` so the real helper's
+    # allowlist check would pass too — keeps the test honest.
+    out = json.loads(tools_mod._git_ls_remote_impl(
+        "https://git.kernel.org/foo.git",
+    ))
     assert len(out["refs"]) == 2
-    assert out["refs"][0] == {"sha": "abc1234", "ref": "refs/heads/main"}
+    assert out["refs"][0]["sha"].startswith("abc1234567890")
+    assert out["refs"][0]["ref"] == "refs/heads/main"
 
 
 def test_git_ls_remote_handles_failure(monkeypatch) -> None:
-    class _Proc:
-        returncode = 128
-        stdout = ""
-        stderr = "fatal: bad URL"
+    """Substrate raises ``RuntimeError`` on git-failure; tool wraps
+    in JSON error."""
+    import core.git
 
-    monkeypatch.setattr(tools_mod.subprocess, "run", lambda *a, **kw: _Proc())
-    out = json.loads(tools_mod._git_ls_remote_impl("https://example.org/missing"))
+    def _raise(*a, **kw):
+        raise RuntimeError("fatal: bad URL")
+
+    monkeypatch.setattr(core.git, "ls_remote", _raise)
+    out = json.loads(tools_mod._git_ls_remote_impl(
+        "https://git.kernel.org/missing",
+    ))
     assert "error" in out
+
+
+def test_git_ls_remote_rejects_url_outside_forge_allowlist() -> None:
+    """Pre-substrate-migration the tool accepted any ``http(s)://``
+    URL — SSRF surface. Now the substrate's URL/proxy checks reject
+    URLs whose host isn't in ``_AGENT_FORGE_HOSTS``. No subprocess
+    fires; ``ls_remote`` raises ``ValueError`` and the tool wraps
+    it in a JSON error."""
+    out = json.loads(tools_mod._git_ls_remote_impl(
+        "https://evil.example.com/foo",
+    ))
+    assert "error" in out
+    assert "allowlist" in out["error"]
 
 
 # --- gitlab_commit ----------------------------------------------------------
 
 def test_gitlab_commit_extracts_fields(monkeypatch) -> None:
-    payload = {"id": "abcdef0123", "short_id": "abcdef0", "title": "Fix CVE", "message": "details", "parent_ids": ["xxx111"], "created_at": "2024-01-01"}
-    monkeypatch.setattr(tools_mod.requests, "get", lambda *a, **kw: _Resp(200, json_data=payload))
-    out = json.loads(tools_mod._gitlab_commit_impl("https://gitlab.freedesktop.org", "group/project", "abcdef0123"))
+    """Post-substrate-migration: ``_gitlab_commit_impl`` calls
+    ``_forge_client().get_json``. Stub the client at the seam so this
+    test asserts the tool's payload-shaping, not ``EgressClient`` plumbing
+    (covered by ``core/http`` tests)."""
+    payload = {"id": "abcdef0123", "short_id": "abcdef0", "title": "Fix CVE",
+               "message": "details", "parent_ids": ["xxx111"],
+               "created_at": "2024-01-01"}
+
+    class _StubClient:
+        def get_json(self, url, *, timeout, retries=0):
+            return payload
+
+    monkeypatch.setattr(tools_mod, "_forge_client", lambda: _StubClient())
+    out = json.loads(tools_mod._gitlab_commit_impl(
+        "https://gitlab.freedesktop.org", "group/project", "abcdef0123",
+    ))
     assert out["id"] == "abcdef0123"
     assert out["title"] == "Fix CVE"
     assert "xxx111" in out["parent_ids"]
@@ -469,9 +512,19 @@ def test_gitlab_commit_extracts_fields(monkeypatch) -> None:
 # --- cgit_fetch -------------------------------------------------------------
 
 def test_cgit_fetch_caps_body(monkeypatch) -> None:
-    big = "x" * (tools_mod._MAX_BYTES * 4)
-    monkeypatch.setattr(tools_mod.requests, "get", lambda *a, **kw: _Resp(200, text=big, url="https://x.org/y"))
-    out = json.loads(tools_mod._cgit_fetch_impl("https://x.org", "y/z", "abc"))
+    """Post-substrate-migration: ``_cgit_fetch_impl`` calls
+    ``_forge_client().get_bytes``. Stub at the seam and use a host that's
+    in ``_AGENT_FORGE_HOSTS`` so the test resembles the real call shape."""
+    big = b"x" * (tools_mod._MAX_BYTES * 4)
+
+    class _StubClient:
+        def get_bytes(self, url, *, timeout, max_bytes, retries=0):
+            return big[:max_bytes]
+
+    monkeypatch.setattr(tools_mod, "_forge_client", lambda: _StubClient())
+    out = json.loads(tools_mod._cgit_fetch_impl(
+        "https://git.kernel.org", "y/z", "abc",
+    ))
     assert len(out["body"]) <= tools_mod._MAX_BYTES
 
 

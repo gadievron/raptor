@@ -86,7 +86,7 @@ def test_no_surrender_when_verification_called() -> None:
     assert should_surrender_no_evidence(log, 2.00) is False
 
 
-# ---------- untried_classes + reflection hint ----------
+# ---------- untried_classes ----------
 
 def test_untried_classes_lists_remaining() -> None:
     log = ["osv_raw", "nvd_raw"]

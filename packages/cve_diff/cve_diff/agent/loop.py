@@ -531,6 +531,20 @@ class AgentLoop:
                     except TypeError as exc:
                         tool_output = json.dumps({"error": f"bad_arguments: {exc}"[:200]})
                     except Exception as exc:  # noqa: BLE001
+                        # Catch-all so a buggy tool doesn't crash the whole
+                        # loop. But silent swallowing makes future tool
+                        # development hard to debug — anything that ISN'T
+                        # a validation-class exception (ValueError /
+                        # KeyError / similar caller-error shapes) is most
+                        # likely a bug in the tool itself, log to stderr
+                        # so the operator sees it.
+                        if not isinstance(exc, (ValueError, KeyError, LookupError)):
+                            import sys
+                            print(
+                                f"warn: tool {name!r} raised "
+                                f"{type(exc).__name__}: {exc}",
+                                file=sys.stderr,
+                            )
                         tool_output = json.dumps({"error": f"{type(exc).__name__}: {exc}"[:200]})
                 # Capture confirmed (slug, sha) for the retry path on
                 # any verification-class tool success: gh_commit_detail,

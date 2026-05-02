@@ -17,14 +17,19 @@ Design notes:
 
 from __future__ import annotations
 
+import functools
 import json
 import re
 import subprocess
 import time
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
+from urllib.parse import quote
 
 import requests
+
+from core.http import HttpError
+from core.http.egress_backend import EgressClient
 
 from cve_diff.discovery.nvd import NvdDiscoverer
 from cve_diff.infra import github_client
@@ -32,6 +37,72 @@ from cve_diff.infra import github_client
 _TIMEOUT_S = 10.0
 _MAX_BYTES = 32 * 1024
 _USER_AGENT = "cve-diff-agent/0.1"
+
+# Forge allowlist for the LLM-supplied URL agent tools (``git_ls_remote``,
+# ``gitlab_commit``, ``cgit_fetch``). The egress proxy enforces this
+# at CONNECT — anything outside the set is refused regardless of where
+# the URL came from. Plus the proxy's private-IP / loopback / link-local
+# block runs unconditionally, closing SSRF and DNS-rebinding.
+#
+# Curated rather than wildcard-pattern because ``EgressClient`` requires
+# a literal hostname allowlist (no glob support today). New forges get
+# added when they show up in bench failures; conservative omission
+# (false-negative "this forge isn't supported") is preferable to a
+# permissive default that lets attacker-influenced URLs through.
+#
+# NOT included by design: ``localhost``, anything under ``*.local``,
+# RFC 1918 / link-local IPs (the proxy denies these regardless), any
+# host with userinfo in the URL (rejected at the URL-shape check
+# inside ``core.git.ls_remote``).
+_AGENT_FORGE_HOSTS: frozenset[str] = frozenset({
+    # Major commercial forges (GitHub itself goes through
+    # ``infra.github_client`` separately; api.github.com is included
+    # here for any direct-API call that bypasses the helper).
+    "github.com", "api.github.com", "codeload.github.com",
+    "objects.githubusercontent.com", "raw.githubusercontent.com",
+    "gitlab.com",
+    "bitbucket.org",
+    # Linux kernel + GNU project forges
+    "git.kernel.org",
+    "git.savannah.gnu.org", "git.savannah.nongnu.org",
+    "sourceware.org",
+    "gcc.gnu.org",
+    # cgit-style vendor forges (one CVE corpus each)
+    "git.tukaani.org",          # xz
+    "git.openssl.org",
+    "git.haproxy.org",
+    "git.busybox.net",
+    "git.zx2c4.com",            # WireGuard
+    "git.gnupg.org",
+    "git.musl-libc.org",
+    "git.qemu.org",
+    "git.libssh.org",
+    # Self-hosted GitLab (the common ones; agent encounters more as
+    # CVE corpora grow — extend as needed)
+    "gitlab.freedesktop.org",
+    "gitlab.kde.org",
+    "gitlab.gnome.org",
+    "gitlab.kitware.com",       # CMake
+    "gitlab.alpinelinux.org",
+    "gitlab.matrix.org",
+    "gitlab.suse.com",
+    # Distro / vendor-specific
+    "pagure.io",                # Fedora
+    "src.fedoraproject.org",
+    "opendev.org",              # OpenStack
+})
+
+
+@functools.lru_cache(maxsize=1)
+def _forge_client() -> EgressClient:
+    """Process-wide ``EgressClient`` for non-GitHub forge HTTP calls.
+
+    Cached so we reuse one urllib3 connection pool. Hostname allowlist
+    enforced at the proxy via ``_AGENT_FORGE_HOSTS``; private-IP block
+    enforced unconditionally. New forges that need to be reachable
+    must be added to ``_AGENT_FORGE_HOSTS`` first.
+    """
+    return EgressClient(allowed_hosts=_AGENT_FORGE_HOSTS, user_agent=_USER_AGENT)
 _OSV_BASE = "https://api.osv.dev/v1"
 _GH_API = "https://api.github.com"
 # GitHub retry budget: 3 attempts on 429 / 5xx, 1s base exponential
@@ -314,38 +385,51 @@ def _gh_compare_impl(slug: str, base: str, head: str) -> str:
 # ---------------------------------------------------------------- Non-GitHub forges
 
 def _git_ls_remote_impl(url: str) -> str:
-    if not url or not re.match(r"^https?://", url):
-        return _err("http(s) url required")
+    """Sandbox-routed ``git ls-remote`` via :func:`core.git.ls_remote`.
+
+    Pre-2026-05-02 used ``subprocess.run(["git", "ls-remote", url])``
+    with no allowlist — LLM-supplied URLs went straight to git with
+    no hostname check. ``core.git.ls_remote`` engages the egress
+    proxy with the forge allowlist + private-IP block, closing the
+    SSRF / DNS-rebinding surface (audit finding #6).
+    """
+    from core.git import ls_remote
     try:
-        proc = subprocess.run(
-            ["git", "ls-remote", "--heads", "--tags", url],
-            capture_output=True, text=True, timeout=20,
-        )
+        refs = ls_remote(url, proxy_hosts=_AGENT_FORGE_HOSTS, timeout=20)
+    except ValueError as exc:
+        # URL fails the urlparse / allowlist / scheme checks. Surface
+        # the helper's message verbatim — it's already operator-friendly
+        # ("URL host 'x' not in proxy_hosts allowlist", etc.).
+        return _err(str(exc))
     except subprocess.TimeoutExpired:
         return _err("timeout")
-    except OSError as exc:
-        return _err(f"git: {exc}")
-    if proc.returncode != 0:
-        return _err(f"git ls-remote failed: {proc.stderr.strip()[:200]}")
-    refs = [line.split("\t") for line in proc.stdout.strip().splitlines() if "\t" in line][:50]
-    return json.dumps({"refs": [{"sha": r[0], "ref": r[1]} for r in refs]})
+    except (RuntimeError, OSError) as exc:
+        return _err(f"git ls-remote failed: {str(exc)[:200]}")
+    return json.dumps({
+        "refs": [{"sha": sha, "ref": ref} for sha, ref in refs[:50]],
+    })
 
 
 def _gitlab_commit_impl(host: str, slug: str, sha: str) -> str:
+    """Sandbox-routed GitLab API call via :func:`_forge_client`.
+
+    Pre-2026-05-02 used raw ``requests.get`` — same SSRF / private-IP
+    surface as ``_git_ls_remote_impl``. EgressClient routes via the
+    proxy with hostname allowlist (``_AGENT_FORGE_HOSTS``).
+    """
     if not host or not slug or not sha:
         return _err("host, slug, sha required")
     host = host.rstrip("/")
-    project = requests.utils.quote(slug, safe="")
+    project = quote(slug, safe="")
     url = f"{host}/api/v4/projects/{project}/repository/commits/{sha}"
     try:
-        resp = requests.get(url, timeout=_TIMEOUT_S, headers={"User-Agent": _USER_AGENT})
-    except requests.RequestException as exc:
-        return _err(f"network: {exc}")
-    if resp.status_code != 200:
-        return _err(f"http {resp.status_code}")
-    try:
-        data = resp.json()
-    except ValueError:
+        data = _forge_client().get_json(url, timeout=int(_TIMEOUT_S), retries=0)
+    except HttpError as exc:
+        # ``HttpError`` covers transport failures (DNS, refused),
+        # non-2xx responses (with .status), and proxy-allowlist
+        # rejections. Surface a compact error string.
+        return _err(f"http {exc.status or 'error'}: {str(exc)[:120]}")
+    if not isinstance(data, dict):
         return _err("non-json")
     return json.dumps({
         "id": data.get("id", ""),
@@ -358,17 +442,26 @@ def _gitlab_commit_impl(host: str, slug: str, sha: str) -> str:
 
 
 def _cgit_fetch_impl(host: str, slug: str, sha: str) -> str:
+    """Sandbox-routed cgit fetch via :func:`_forge_client`.
+
+    Same migration as ``_gitlab_commit_impl`` — raw ``requests.get`` →
+    ``EgressClient`` with the forge allowlist + private-IP block.
+    cgit responses are HTML; we ``get_bytes`` capped at ``_MAX_BYTES``
+    and decode UTF-8 with ``errors="replace"`` so a malformed response
+    doesn't surface as ``UnicodeDecodeError``.
+    """
     if not host or not slug or not sha:
         return _err("host, slug, sha required")
     host = host.rstrip("/")
     url = f"{host}/{slug}/commit/?id={sha}"
     try:
-        resp = requests.get(url, timeout=_TIMEOUT_S, headers={"User-Agent": _USER_AGENT})
-    except requests.RequestException as exc:
-        return _err(f"network: {exc}")
-    if resp.status_code != 200:
-        return _err(f"http {resp.status_code}")
-    return json.dumps({"url": url, "body": resp.text[:_MAX_BYTES]})
+        body_bytes = _forge_client().get_bytes(
+            url, timeout=int(_TIMEOUT_S), max_bytes=_MAX_BYTES, retries=0,
+        )
+    except HttpError as exc:
+        return _err(f"http {exc.status or 'error'}: {str(exc)[:120]}")
+    body = body_bytes.decode("utf-8", errors="replace")
+    return json.dumps({"url": url, "body": body[:_MAX_BYTES]})
 
 
 _distro = None

@@ -568,10 +568,7 @@ def test_task_budget_disabled_via_flag_uses_messages_namespace(
 # ---------- CVE_DIFF_DISABLE_RULES env switch (cascade only) ----------
 
 def test_rules_disabled_skips_cascade(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With CVE_DIFF_DISABLE_RULES=1, the cascade-surrender rule is skipped.
-    The iter-3 reflection hint that this flag also gated is now retired
-    (2026-04-26); the flag survives only as the cascade kill-switch.
-    """
+    """With CVE_DIFF_DISABLE_RULES=1, the cascade-surrender rule is skipped."""
     monkeypatch.setenv("CVE_DIFF_DISABLE_RULES", "1")
     osv_tool = _tool("osv_raw", impl=lambda **_: '{"ok": true}')
     responses = [
