@@ -4,8 +4,12 @@ OSV (Open Source Vulnerabilities) discoverer.
 Primary source of metadata in the cascade (50% success rate on the reference
 project's measured runs, no API key, no effective rate limit).
 
-Ported from code-differ/packages/patch_analysis/osv_integration.py, with two
-intentional changes:
+Wraps :mod:`packages.osv` (shared OSV.dev wire-format client + parser)
+with cve-diff's domain mapping: ``OsvRecord`` → ``DiscoveryResult``
+with ``PatchTuple`` candidates extracted from references and GIT
+ranges. Wire-format parsing + HTTP transport live in :mod:`packages.osv`.
+
+Behaviour preserved:
 
 1. Parsing is a classmethod on plain dict input so it can be unit-tested
    against fixture JSON without going through HTTP.
@@ -13,15 +17,24 @@ intentional changes:
    metadata only; `introduced: '0'` is the OSV sentinel for "from beginning
    of history" and is dropped. This enforces the lesson that ruined Bug #1
    at the type boundary — see core/models.py.
+
+Behaviour changed (this rewire, 2026-05-02):
+
+* The legacy ``POST /v1/query`` 404-fallback is dropped. The body shape
+  the previous code sent (``{"queries": [...]}``) didn't match OSV's
+  ``/query`` endpoint contract, so the fallback returned ``None``
+  deterministically in production while looking like a working path in
+  tests via mocked responses. Removing it eliminates the latent
+  inconsistency. OSV's ``/vulns/<id>`` endpoint resolves CVE / GHSA /
+  DSA aliases server-side, so a separate alias-lookup pass isn't needed.
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any
 
-import requests
+from packages.osv import OsvClient, OsvRecord, parse_record as _shared_parse_record
 
 from cve_diff.core.models import (
     CommitSha,
@@ -29,65 +42,81 @@ from cve_diff.core.models import (
     IntroducedMarker,
     PatchTuple,
 )
+from cve_diff.core.url_re import (
+    GITHUB_COMMIT_URL_RE,
+    KERNEL_SHA_URL_RE,
+    LINUX_UPSTREAM_SLUG,
+)
 
-BASE_URL = "https://api.osv.dev/v1"
 DEFAULT_TIMEOUT_S = 10
 
+import re
+
 _COMMIT_SHA_RE = re.compile(r"^[a-f0-9]{7,40}$", re.IGNORECASE)
-_GITHUB_COMMIT_URL_RE = re.compile(r"github\.com/([^/]+/[^/]+)/commit/([a-f0-9]{7,40})")
-# Linux-kernel short-link patterns carrying the mainline SHA. kernel.dance
-# redirects to git.kernel.org; git.kernel.org/{linus,stable}/c/<sha> serve
-# mainline SHAs that are reachable from torvalds/linux (stable cherry-picks
-# preserve the original SHA when `git cherry-pick -x` is used).
-_KERNEL_SHA_URL_RE = re.compile(
-    r"(?:kernel\.dance/|git\.kernel\.org/(?:linus|stable)/c/)([a-f0-9]{7,40})",
-    re.IGNORECASE,
-)
-_LINUX_UPSTREAM = "https://github.com/torvalds/linux"
+_LINUX_UPSTREAM = f"https://github.com/{LINUX_UPSTREAM_SLUG}"
+
+
+def _build_default_client(timeout_s: int) -> OsvClient:
+    """Construct a stand-alone :class:`packages.osv.OsvClient` for the discoverer.
+
+    OSVDiscoverer is used outside the agent loop (cascade / bench paths),
+    so we build our own thin transport rather than reusing the agent's
+    egress proxy. ``UrllibClient`` (no host allowlist) is appropriate
+    here — the only host this module ever talks to is ``api.osv.dev``,
+    hard-coded by ``packages.osv.client.OSV_BASE_URL``.
+    """
+    from core.http.urllib_backend import UrllibClient
+    return OsvClient(http=UrllibClient(user_agent="cve-diff/0.1"))
 
 
 @dataclass
 class OSVDiscoverer:
+    """Domain wrapper around :class:`packages.osv.OsvClient`.
+
+    Maps schema-agnostic ``OsvRecord`` to cve-diff's ``DiscoveryResult``
+    (commit-SHA candidates from references and GIT ranges). The OSV
+    client is constructed lazily on first ``fetch()`` so tests can keep
+    constructing ``OSVDiscoverer()`` without HTTP setup.
+    """
+
     timeout_s: int = DEFAULT_TIMEOUT_S
+    client: OsvClient | None = None
 
     def fetch(self, cve_id: str) -> DiscoveryResult | None:
-        """GET /vulns/<cve>, with POST /query fallback on 404."""
-        try:
-            response = requests.get(f"{BASE_URL}/vulns/{cve_id}", timeout=self.timeout_s)
-        except requests.RequestException:
-            return None
+        """``GET /vulns/<cve_id>`` via the shared OSV client.
 
-        if response.status_code == 200:
-            return self.parse(response.json())
-        if response.status_code == 404:
-            return self._batch_query(cve_id)
-        return None
-
-    def _batch_query(self, cve_id: str) -> DiscoveryResult | None:
-        try:
-            response = requests.post(
-                f"{BASE_URL}/query",
-                json={"queries": [{"aliases": [cve_id]}]},
-                timeout=self.timeout_s,
-            )
-        except requests.RequestException:
+        Returns ``None`` on 404 / network error / parse failure (the
+        shared client logs and swallows these). OSV resolves CVE /
+        GHSA / DSA aliases server-side, so no separate alias-lookup
+        pass is needed.
+        """
+        client = self.client or _build_default_client(self.timeout_s)
+        record = client.get_vuln(cve_id)
+        if record is None:
             return None
-        if response.status_code != 200:
-            return None
-        data = response.json()
-        results = data.get("results", []) or []
-        if not results:
-            return None
-        vulns = results[0].get("vulns") or []
-        if not vulns:
-            return None
-        return self.parse(vulns[0])
+        return self._record_to_result(record)
 
     @classmethod
     def parse(cls, vuln: dict[str, Any]) -> DiscoveryResult:
-        """Extract PatchTuples + upstream-slug hints from an OSV record.
+        """Parse an OSV record dict into a :class:`DiscoveryResult`.
 
-        Emit order matters: `references[/commit/...]` tuples go first so the
+        Test-friendly entrypoint: takes the raw fixture JSON and runs
+        it through ``packages.osv.parse_record`` first, then through
+        cve-diff's domain mapping. cve-diff's domain mapping never reads
+        the OSV ``id`` (only ``references`` and ``affected[].ranges``),
+        so test fixtures that omit ``id`` get a synthetic placeholder
+        rather than failing the shared parser's sanity check — preserves
+        the legacy test-fixture shape.
+        """
+        if not vuln.get("id"):
+            vuln = {**vuln, "id": "OSV-FIXTURE-PLACEHOLDER"}
+        return cls._record_to_result(_shared_parse_record(vuln))
+
+    @classmethod
+    def _record_to_result(cls, rec: OsvRecord) -> DiscoveryResult:
+        """Extract PatchTuples + upstream-slug hints from an :class:`OsvRecord`.
+
+        Emit order matters: ``references[/commit/...]`` tuples go first so the
         cascade's "first best-scored wins" selection picks the advisory's
         actual bug-fix commit over the range's fixed-in-release-tag commit.
         """
@@ -102,14 +131,14 @@ class OSVDiscoverer:
         #   - kernel.dance/<sha> | git.kernel.org/{linus,stable}/c/<sha>
         #     → (torvalds/linux, sha)  — kernel short-links carry mainline SHAs.
         seen_refs: set[tuple[str, str]] = set()
-        for ref in vuln.get("references", []) or []:
-            url = ref.get("url", "") or ""
-            gh = _GITHUB_COMMIT_URL_RE.search(url)
+        for ref in rec.references:
+            url = ref.url or ""
+            gh = GITHUB_COMMIT_URL_RE.search(url)
             if gh:
                 repo = f"https://github.com/{gh.group(1)}"
                 commit = gh.group(2)
             else:
-                km = _KERNEL_SHA_URL_RE.search(url)
+                km = KERNEL_SHA_URL_RE.search(url)
                 if not km:
                     continue
                 repo = _LINUX_UPSTREAM
@@ -129,11 +158,11 @@ class OSVDiscoverer:
         # Pass 2: range events — skip a repo if Pass 1 already provided a fix
         # for it (keeps the ref-commit tuple as the preferred candidate).
         seen: set[tuple[str, str]] = {(t.repository_url, t.fix_commit) for t in tuples}
-        for affected in vuln.get("affected", []) or []:
-            for rng in affected.get("ranges", []) or []:
-                if rng.get("type") != "GIT":
+        for blk in rec.affected:
+            for rng in blk.ranges:
+                if rng.type != "GIT":
                     continue
-                repo = cls._normalize_repo(rng.get("repo") or "")
+                repo = cls._normalize_repo(rng.repo or "")
                 if not repo:
                     continue
                 if repo in repos_from_refs:
@@ -141,11 +170,11 @@ class OSVDiscoverer:
 
                 introduced_shas = [
                     e["introduced"]
-                    for e in rng.get("events", []) or []
+                    for e in rng.events
                     if e.get("introduced") and e["introduced"] != "0"
                     and _COMMIT_SHA_RE.match(e["introduced"])
                 ]
-                for event in rng.get("events", []) or []:
+                for event in rng.events:
                     fixed = event.get("fixed")
                     if not fixed:
                         continue
@@ -169,7 +198,7 @@ class OSVDiscoverer:
             source="osv",
             tuples=tuple(tuples),
             confidence=min(100, 20 + 40 * (1 if tuples else 0)),
-            raw=vuln,
+            raw=rec.raw,
         )
 
     @staticmethod
