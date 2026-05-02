@@ -65,8 +65,11 @@ class Project:
         """List run directories (unsorted). Shared by get_run_dirs and sweep."""
         if not self.output_path.exists():
             return []
+        generated_dirs = {"findings"}
         return [d for d in self.output_path.iterdir()
-                if d.is_dir() and not d.name.startswith((".", "_"))]
+                if d.is_dir()
+                and not d.name.startswith((".", "_"))
+                and d.name not in generated_dirs]
 
     def get_run_dirs(self, sweep=False) -> List[Path]:
         """List run directories sorted newest-first.

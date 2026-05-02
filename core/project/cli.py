@@ -411,6 +411,8 @@ def main():
             from .report import generate_project_report
             stats = generate_project_report(p)
             print(f"Report generated: {stats.get('report_dir', p.output_path / '_report')}")
+            if stats.get("findings_dir"):
+                print(f"  Findings directory: {stats['findings_dir']}")
             print(f"  Merged findings: {stats['findings']}")
 
         elif args.subcommand == "export":
