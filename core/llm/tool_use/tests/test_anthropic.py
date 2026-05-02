@@ -13,6 +13,11 @@ from typing import Any
 
 import pytest
 
+# AnthropicToolUseProvider's constructor requires the anthropic SDK;
+# CI matrix runs without it skip this whole file cleanly. Import
+# checks happen here (module level) so collection doesn't fail.
+pytest.importorskip("anthropic")
+
 from core.llm.tool_use import (
     CacheControl,
     Message,

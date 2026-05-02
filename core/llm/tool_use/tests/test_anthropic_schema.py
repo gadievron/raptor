@@ -21,15 +21,19 @@ from typing import Any
 
 import pytest
 
+# Skip this whole file in environments without the anthropic SDK
+# installed (CI matrix runs that don't pip install it). The provider
+# itself soft-imports and raises a clean RuntimeError on construction;
+# these tests can't run without the real types.
+anthropic_types = pytest.importorskip("anthropic.types")
+
 # Real SDK types — construction here validates fields against the
 # SDK's Pydantic schemas. If anything below fails to import or
 # construct, our wire-format assumptions in anthropic.py are stale.
-from anthropic.types import (                              # type: ignore[import-not-found]
-    Message,
-    TextBlock as SDKTextBlock,
-    ToolUseBlock as SDKToolUseBlock,
-    Usage,
-)
+Message = anthropic_types.Message
+SDKTextBlock = anthropic_types.TextBlock
+SDKToolUseBlock = anthropic_types.ToolUseBlock
+Usage = anthropic_types.Usage
 
 from core.llm.tool_use import (
     Message as OurMessage,
