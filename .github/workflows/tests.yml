@@ -37,6 +37,12 @@ jobs:
           source $VENV_PATH/bin/activate
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
+          # cve-diff lives under packages/cve_diff/ with its own
+          # pyproject.toml. Install it editable so its runtime deps
+          # (anthropic, typer, requests) are present for unit-test
+          # collection. The ``[test]`` extra picks up pytest-only
+          # extras declared in cve-diff's pyproject.
+          pip install -e 'packages/cve_diff[test]'
 
       - name: Verify venv exists
         run: test -d "$VENV_PATH" || (echo "venv missing at $VENV_PATH" && exit 1)
