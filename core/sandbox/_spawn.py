@@ -566,7 +566,19 @@ def run_sandboxed(
             os.set_inheritable(t_ready_w, True)
             _parent_fds.update({t_ready_r, t_ready_w})
 
-        child_pid = os.fork()
+        # Suppress Python 3.12+ DeprecationWarning about multi-threaded
+        # fork(). Our post-fork code does namespace setup via ctypes
+        # syscalls + Landlock + seccomp + execvp — no Python objects,
+        # no GIL acquisition, no malloc-arena access. posix_spawn()
+        # can't do the bespoke namespace setup, so we need raw fork.
+        # See module docstring for the fork-safety contract.
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", category=DeprecationWarning,
+                message=r".*fork.*may lead to deadlocks.*",
+            )
+            child_pid = os.fork()
     except BaseException:
         # Any failure before fork returns: close opened pipes AND the
         # mkdtemp stub. Without this, a pipe-exhaustion OSError or
@@ -764,9 +776,19 @@ def run_sandboxed(
                 seccomp_fn()
 
             # Step 12: pid-ns via a second fork. NEWPID only takes
-            # effect on a subsequent fork.
-            os.unshare(CLONE_NEWPID)
-            grand = os.fork()
+            # effect on a subsequent fork. This fork runs INSIDE the
+            # already-forked child (single-threaded by then — no other
+            # threads survived the parent fork) so the multi-threaded
+            # warning shouldn't fire here, but suppress defensively
+            # to match every other production fork() site.
+            import warnings as _warnings
+            with _warnings.catch_warnings():
+                _warnings.filterwarnings(
+                    "ignore", category=DeprecationWarning,
+                    message=r".*fork.*may lead to deadlocks.*",
+                )
+                os.unshare(CLONE_NEWPID)
+                grand = os.fork()
             if grand == 0:
                 # Grandchild runs as PID 1 in the new pid-ns.
                 if env is not None:
@@ -875,7 +897,18 @@ def run_sandboxed(
             # needs t_ready_w as its sync_fd. If we closed t_ready_w in
             # the parent before fork, the tracer would inherit a closed
             # fd and its sync write would silently fail.
-            tracer_pid = os.fork()
+            #
+            # Suppress Python 3.12+ multi-threaded-fork DeprecationWarning.
+            # Tracer subprocess does only fd-close + execvpe in the
+            # child path — no Python objects, no GIL. Same fork-safety
+            # contract as the main child fork above.
+            import warnings as _warnings
+            with _warnings.catch_warnings():
+                _warnings.filterwarnings(
+                    "ignore", category=DeprecationWarning,
+                    message=r".*fork.*may lead to deadlocks.*",
+                )
+                tracer_pid = os.fork()
             if tracer_pid == 0:
                 # ===== TRACER SUBPROCESS =====
                 # Close the read end — only the parent reads.

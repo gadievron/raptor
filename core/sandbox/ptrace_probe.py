@@ -175,7 +175,18 @@ def _run_probe() -> bool:
                             ctypes.c_void_p, ctypes.c_void_p]
 
     try:
-        pid = os.fork()
+        # Suppress Python 3.12+ DeprecationWarning about multi-threaded
+        # fork(). The probe's post-fork code is fork-safe: child does
+        # only bare libc syscalls (PTRACE_TRACEME, kill, _exit), no
+        # Python objects, no GIL acquisition. See module docstring
+        # "Fork-after-threads caveat" for the mitigation contract.
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", category=DeprecationWarning,
+                message=r".*fork.*may lead to deadlocks.*",
+            )
+            pid = os.fork()
     except OSError as e:
         logger.debug(f"ptrace probe: fork failed: {e}")
         return False

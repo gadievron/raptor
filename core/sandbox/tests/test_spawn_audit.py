@@ -413,7 +413,19 @@ class TestAuditModeTracerDeath:
         # via a pipe so we know what to watch for.
 
         pipe_r, pipe_w = os.pipe()
-        seizer_pid = os.fork()
+        # Suppress Python 3.12+ multi-threaded-fork DeprecationWarning.
+        # The seizer child does only os.pipe / os.fork / ptrace
+        # syscalls / os._exit — no Python objects, no GIL acquisition.
+        # Same fork-safety contract as production. The inner sleeper
+        # fork (line below) runs INSIDE the seizer child (single-
+        # threaded) so doesn't need the wrapper.
+        import warnings as _warnings
+        with _warnings.catch_warnings():
+            _warnings.filterwarnings(
+                "ignore", category=DeprecationWarning,
+                message=r".*fork.*may lead to deadlocks.*",
+            )
+            seizer_pid = os.fork()
         if seizer_pid == 0:
             # === seizer ===
             os.close(pipe_r)
