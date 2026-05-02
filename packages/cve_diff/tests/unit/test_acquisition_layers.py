@@ -2,6 +2,12 @@
 Acquisition layers — tested against local file:// repos so the suite is
 hermetic. Each test builds a tiny throwaway repo with two commits, then
 exercises the layer against a `file://` URL pointing at it.
+
+The ``_bypass_git_sandbox`` autouse fixture in ``conftest.py`` swaps
+``core.git.{clone_repository, fetch_commit}`` for plain-subprocess
+shims so file:// URLs work in tests; the acquisition layer's
+composition logic (cascade, retry per depth, ``_commit_exists`` post-
+check, error reporting) is still exercised in full.
 """
 
 from __future__ import annotations
@@ -196,7 +202,7 @@ def test_full_clone_acquires_old_commit(tmp_path):
         canonical_score=100,
     )
     dest = tmp_path / "dest"
-    report = FullCloneLayer(timeout_s=60).acquire(ref, dest)
+    report = FullCloneLayer().acquire(ref, dest)
     assert report.ok, report.detail
     out = subprocess.run(
         ["git", "-C", str(dest), "cat-file", "-e", f"{shas[0]}^{{commit}}"],
@@ -234,7 +240,7 @@ def test_full_clone_fails_on_unknown_sha(tmp_path):
         canonical_score=100,
     )
     dest = tmp_path / "dest"
-    report = FullCloneLayer(timeout_s=60).acquire(ref, dest)
+    report = FullCloneLayer().acquire(ref, dest)
     assert not report.ok
     assert "missing" in report.detail
 

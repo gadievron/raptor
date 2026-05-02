@@ -6,11 +6,19 @@ Wired by `discovery/repo_metadata.py` (pre-clone writeup-fork rejection) and
 callers already tolerate ``None`` on any failure, so this module's only job is
 to return ``dict | None`` per request and never raise for transport issues.
 
-Budget:
+Transport: ``core.http.EgressClient`` (sandbox-aware, hostname-allowlisted to
+``api.github.com``). Pre-rewire this module called ``requests.get`` directly,
+which bypassed the egress proxy. Now every outbound request goes through
+the same chokepoint as the rest of RAPTOR — refer to ``core/http/`` for the
+backoff schedule, retry policy, and size caps.
+
+Budget (caller-side, on top of the transport's own retry/backoff):
 - 50 req/h unauth (GitHub's real cap is 60/h; leave headroom).
 - 5000 req/h authed.
-- One retry on 5xx / timeout; no retry on 4xx.
-- 10s per-request timeout.
+- 10s per-attempt timeout (``timeout=`` kwarg on ``get_json``) — matches the
+  pre-rewire ``requests.get(timeout=10)`` semantics. ``total_timeout`` is
+  left at its default so the retry loop has room to back off + retry once.
+- ``retries=1`` so a 5xx hiccup gets one retry, then surfaces.
 - Per-slug memoization with ``functools.lru_cache`` so a bench run hits each
   slug at most once per endpoint for the lifetime of the process.
 """
@@ -23,15 +31,17 @@ import sys
 import threading
 from typing import Any, Optional
 
-import requests
+from core.http import HttpError
+from core.http.egress_backend import EgressClient
 
 from cve_diff.infra.rate_limit import TokenBucket
 
 _UNAUTH_CAPACITY = 50
 _AUTH_CAPACITY = 5000
 _ONE_HOUR = 3600.0
-_TIMEOUT_S = 10.0
+_TIMEOUT_S = 10
 _USER_AGENT = "cve-diff/0.1"
+_GITHUB_HOSTS = frozenset({"api.github.com"})
 
 _warned_token_missing = False
 _warned_rate_limited = False
@@ -94,11 +104,23 @@ def _bucket() -> TokenBucket:
     return TokenBucket(capacity=capacity, refill_per_second=capacity / _ONE_HOUR)
 
 
+@functools.lru_cache(maxsize=1)
+def _client() -> EgressClient:
+    """Process-wide HTTP client pinned to ``api.github.com``.
+
+    Cached so we reuse one urllib3 connection pool across the whole run —
+    repeated calls to the same host avoid per-request TCP+TLS setup.
+    EgressClient routes via ``core.sandbox.proxy``: hostname allowlist
+    enforced on every CONNECT, anything outside ``_GITHUB_HOSTS`` is
+    refused at the proxy layer.
+    """
+    return EgressClient(allowed_hosts=_GITHUB_HOSTS, user_agent=_USER_AGENT)
+
+
 def _headers() -> dict[str, str]:
     h = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": _USER_AGENT,
     }
     tok = _token()
     if tok:
@@ -109,34 +131,28 @@ def _headers() -> dict[str, str]:
 def _get(url: str) -> Optional[dict[str, Any]]:
     """GET ``url`` against the GitHub API. Returns JSON dict or None.
 
-    One retry on 5xx/timeout. 4xx is a definitive None. On 401/403/429 we
-    log a single line and then keep returning None for the rest of the run.
+    Returns None on any error (network, timeout, non-2xx). On 401/403/429
+    we also log a single line and bump the api_status counter; the rest
+    of the run keeps returning None for those statuses.
+
+    Retry policy: ``retries=1`` lets EgressClient retry once on transient
+    5xx / network errors. 4xx surfaces immediately as ``HttpError`` and
+    we translate to None.
     """
     if not _bucket().try_acquire():
         return None
-
-    for attempt in (1, 2):
-        try:
-            resp = requests.get(url, headers=_headers(), timeout=_TIMEOUT_S)
-        except (requests.Timeout, requests.ConnectionError):
-            if attempt == 1:
-                continue
-            return None
-
-        status = resp.status_code
-        if status == 200:
-            try:
-                data = resp.json()
-            except ValueError:
-                return None
-            return data if isinstance(data, dict) else None
-        if status in (401, 403, 429):
-            _warn_rate_limited(status)
-            return None
-        if status >= 500 and attempt == 1:
-            continue
+    try:
+        data = _client().get_json(
+            url,
+            timeout=_TIMEOUT_S,
+            headers=_headers(),
+            retries=1,
+        )
+    except HttpError as e:
+        if e.status in (401, 403, 429):
+            _warn_rate_limited(e.status)
         return None
-    return None
+    return data if isinstance(data, dict) else None
 
 
 @functools.lru_cache(maxsize=4096)
@@ -171,27 +187,20 @@ def commit_exists(slug: str, sha: str) -> Optional[bool]:
         return None
     if not _bucket().try_acquire():
         return None
-
-    url = f"https://api.github.com/repos/{slug}/commits/{sha}"
-    for attempt in (1, 2):
-        try:
-            resp = requests.get(url, headers=_headers(), timeout=_TIMEOUT_S)
-        except (requests.Timeout, requests.ConnectionError):
-            if attempt == 1:
-                continue
-            return None
-        status = resp.status_code
-        if status == 200:
-            return True
-        if status in (404, 422):
+    try:
+        _client().get_json(
+            f"https://api.github.com/repos/{slug}/commits/{sha}",
+            timeout=_TIMEOUT_S,
+            headers=_headers(),
+            retries=1,
+        )
+        return True
+    except HttpError as e:
+        if e.status in (404, 422):
             return False
-        if status in (401, 403, 429):
-            _warn_rate_limited(status)
-            return None
-        if status >= 500 and attempt == 1:
-            continue
+        if e.status in (401, 403, 429):
+            _warn_rate_limited(e.status)
         return None
-    return None
 
 
 @functools.lru_cache(maxsize=8192)
@@ -284,10 +293,13 @@ def get_parent_commit_files(slug: str, sha: str) -> Optional[list[str]]:
 def reset_for_tests() -> None:
     """Flush memoization + warning state. Tests only."""
     global _warned_token_missing, _warned_rate_limited
-    get_repo.cache_clear()
-    get_languages.cache_clear()
-    commit_exists.cache_clear()
-    _get_commit_cached.cache_clear()
-    _bucket.cache_clear()
+    # ``hasattr`` guard: tests may monkeypatch ``_client`` to a plain
+    # function or stub that doesn't expose ``cache_clear``.
+    for fn in (
+        get_repo, get_languages, commit_exists,
+        _get_commit_cached, _bucket, _client,
+    ):
+        if hasattr(fn, "cache_clear"):
+            fn.cache_clear()
     _warned_token_missing = False
     _warned_rate_limited = False
