@@ -18,22 +18,20 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Add parent directory to path for core imports
-# Add current directory to path for llm imports
-# packages/llm_analysis/agent.py -> repo root
-sys.path.insert(0, str(Path(__file__).parents[2]))
+# Also run as standalone subprocess: python3 packages/llm_analysis/agent.py
+sys.path.insert(0, str(Path(__file__).parents[2]))  # repo root
 
 from core.json import load_json, save_json
-sys.path.insert(0, str(Path(__file__).parent))
 from core.config import RaptorConfig
 from core.logging import get_logger
 from core.progress import HackerProgress
 from core.run.output import unique_run_suffix
 from core.sarif.parser import parse_sarif_findings, deduplicate_findings
 from core.inventory.lookup import lookup_function as _lookup_function
-from llm.client import LLMClient, _is_auth_error
-from llm.config import LLMConfig, detect_llm_availability
-from llm.providers import ClaudeCodeProvider
+from core.llm.client import LLMClient, _is_auth_error
+from core.llm.config import LLMConfig
+from core.llm.detection import detect_llm_availability
+from core.llm.providers import ClaudeCodeProvider
 
 logger = get_logger()
 

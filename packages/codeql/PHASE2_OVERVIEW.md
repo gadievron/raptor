@@ -200,7 +200,7 @@ Determine:
 **Purpose**: Orchestrates complete autonomous analysis pipeline.
 
 **Integrations**:
-- **LLM Client** (`packages/llm_analysis/llm/client.py`) - Multi-provider LLM support
+- **LLM Client** (`core/llm/client.py`) - Multi-provider LLM support
 - **ExploitValidator** (`packages/autonomous/exploit_validator.py`) - Compilation validation
 - **MultiTurnAnalyser** (`packages/autonomous/dialogue.py`) - Deep iterative analysis
 
@@ -448,7 +448,7 @@ out/codeql_acme-access_20251114_123456/
 
 Phase 2 seamlessly integrates with RAPTOR's existing autonomous system:
 
-- **LLM Client** (`packages/llm_analysis/llm/client.py`)
+- **LLM Client** (`core/llm/client.py`)
   - Multi-provider support (Claude, GPT-4, Ollama)
   - Automatic fallback
   - Cost tracking

@@ -113,7 +113,7 @@ class AutonomousCodeQLAnalyzer:
         Initialize autonomous analyzer.
 
         Args:
-            llm_client: LLM client from packages/llm_analysis/llm/client.py
+            llm_client: LLM client from core/llm/client.py
             exploit_validator: ExploitValidator from packages/autonomous/exploit_validator.py
             multi_turn_analyzer: MultiTurnAnalyser from packages/autonomous/dialogue.py (optional)
             enable_visualization: Enable dataflow visualizations (default: True)

@@ -108,7 +108,7 @@ class CostTracker:
         if is_cc:
             avg_cost = 0.20  # CC agents: observed ~$0.15-0.25/finding
         else:
-            from packages.llm_analysis.llm.model_data import MODEL_COSTS
+            from core.llm.model_data import MODEL_COSTS
             # Estimate ~2K input tokens + ~500 output tokens per analysis call
             rates = MODEL_COSTS.get(model_name, {})
             if rates:
@@ -203,7 +203,7 @@ def orchestrate(
         findings = findings[:max_findings]
 
     # Resolve model roles
-    from packages.llm_analysis.llm.config import resolve_model_roles
+    from core.llm.config import resolve_model_roles
     role_resolution = {"analysis_model": None, "code_model": None,
                        "consensus_models": [], "fallback_models": []}
     if llm_config and llm_config.primary_model:
@@ -238,7 +238,7 @@ def orchestrate(
 
     if llm_config and llm_config.primary_model:
         # External LLM: dispatch via generate_structured/generate
-        from packages.llm_analysis.llm.client import LLMClient
+        from core.llm.client import LLMClient
         client = LLMClient(llm_config)
 
         def dispatch_fn(prompt, schema, system_prompt, temperature, model):
