@@ -721,12 +721,29 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
 
         try:
             repo_path = str(self.repo_path)
+            # tool_paths: best-guess bind set for the Python interpreter
+            # — its bin dir AND its stdlib dir at sys.prefix/lib/
+            # pythonX.Y/. Without the stdlib dir, Python would die at
+            # `import encodings` (exit 126, no stderr) — caught and
+            # retried as Landlock-only by context.py's speculative-C
+            # retry. Worst case = same isolation as not passing
+            # tool_paths at all.
+            import sysconfig
+            from pathlib import Path as _P
+            _tps = []
+            _interp_dir = str(_P(sys.executable).resolve().parent)
+            _platstdlib = sysconfig.get_paths().get("platstdlib")
+            for _p in (_interp_dir, _platstdlib):
+                if _p and _P(_p).is_absolute() \
+                        and not _p.startswith(("/usr/", "/lib/", "/lib64/")):
+                    _tps.append(_p)
             result = _sandbox_run(
                 [sys.executable, str(script_path)],
                 block_network=True,
                 target=repo_path, output=repo_path,
                 cwd=self.repo_path,
                 env=env,
+                tool_paths=_tps or None,
                 capture_output=True, text=True, timeout=300,
             )
             # Script crash (not compilation failure) — treat as unknown

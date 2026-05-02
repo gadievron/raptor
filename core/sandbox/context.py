@@ -8,6 +8,7 @@ to each result.
 
 import logging
 import os
+import shutil
 import stat
 import subprocess
 from contextlib import contextmanager
@@ -44,6 +45,63 @@ def check_seccomp_available():
 logger = logging.getLogger(__name__)
 
 
+def _cmd_visible_in_mount_tree(cmd, target, output, extra_paths) -> bool:
+    """Check if cmd[0] resolves to a path visible inside the mount-ns
+    bind tree.
+
+    The mount-ns sandbox bind-mounts a fixed set of system directories
+    (see core.sandbox.mount_ns._SYSTEM_RO_DIRS), plus target/output/
+    /tmp (per-sandbox tmpfs replaces host /tmp), plus any extra
+    readable/tool paths the caller supplied. Anything else is invisible
+    inside the new rootfs — invoking it produces ENOENT (subprocess
+    exit 127) with empty stderr.
+
+    Returns True if cmd[0] resolves to a path within any bind-mount
+    prefix, False otherwise. Returns True (don't trigger fallback) when
+    cmd is empty or cmd[0] can't be resolved at all — in that case the
+    subprocess will fail with the normal command-not-found error
+    regardless of which path we take.
+    """
+    from .mount_ns import _SYSTEM_RO_DIRS
+    if not cmd:
+        return True
+    cmd0 = cmd[0]
+    # Resolve to absolute path. shutil.which honours $PATH for relative
+    # invocations; for absolute or "./relative" paths it returns the
+    # input unchanged if executable. Returns None if not findable.
+    resolved = shutil.which(cmd0) or cmd0
+    if not resolved or not os.path.isabs(resolved):
+        # Can't determine — let the call proceed; the subprocess will
+        # fail with a clear ENOENT if the binary doesn't exist anywhere.
+        return True
+    # Follow symlinks so we check the real binary path. A symlink at
+    # /usr/local/bin/X → /home/USER/bin/X resolves to the home path
+    # and would correctly fail the visibility check.
+    abs_path = os.path.realpath(resolved)
+    # System bind-mount prefixes (must match mount_ns._SYSTEM_RO_DIRS).
+    # /tmp is the per-sandbox tmpfs — host /tmp content is NOT visible,
+    # so a binary at /tmp/X would be invisible inside the sandbox; we
+    # deliberately do NOT add /tmp to the visible list.
+    for sysdir in _SYSTEM_RO_DIRS:
+        prefix = f"/{sysdir}"
+        if abs_path == prefix or abs_path.startswith(prefix + "/"):
+            return True
+    # target / output bind-mounts (visible at original absolute path).
+    for d in (target, output):
+        if d:
+            d_abs = os.path.realpath(d)
+            if abs_path == d_abs or abs_path.startswith(d_abs + "/"):
+                return True
+    # Caller-supplied extras (readable_paths + tool_paths union).
+    for d in (extra_paths or []):
+        if not d:
+            continue
+        d_abs = os.path.realpath(d)
+        if abs_path == d_abs or abs_path.startswith(d_abs + "/"):
+            return True
+    return False
+
+
 @contextmanager
 def sandbox(block_network: bool = False, target: str = None, output: str = None,
             map_root: bool = False, limits: dict = None,
@@ -52,7 +110,8 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             use_egress_proxy: bool = False, proxy_hosts: list = None,
             restrict_reads: bool = False, readable_paths: list = None,
             caller_label: str = None,
-            fake_home: bool = False):
+            fake_home: bool = False,
+            tool_paths: list = None):
     """Context manager for sandboxed subprocess execution.
 
     Each run() call inside the context runs the target command with the
@@ -826,6 +885,57 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         spawn_eligible = (use_mount
                           and not kwargs.get("pass_fds")
                           and kwargs.get("input") is None)
+        # Per-call check that cmd[0] is visible inside the mount-ns
+        # bind tree. The bind tree is fixed: standard system dirs,
+        # target/output, /tmp (per-sandbox tmpfs), and the union of
+        # readable_paths + tool_paths. Anything else (pip --user
+        # install at ~/.local/bin, homebrew at /opt/homebrew/bin,
+        # pyenv shims, ad-hoc /home/USER/bin) is invisible inside
+        # the new rootfs — the subprocess fails with ENOENT (exit
+        # 127) and an empty stderr that operators may misread as
+        # "tool found nothing" rather than "tool didn't run".
+        #
+        # When detection fires, fall back to Landlock-only for THIS
+        # call so the workflow proceeds. Operators see a one-time
+        # WARNING with the offending path so they can either install
+        # the tool in /usr/local/bin OR pass tool_paths=[<bin_dir>]
+        # to extend the bind list and keep mount-ns isolation.
+        if spawn_eligible and cmd:
+            _all_extra = list(effective_read_paths or []) + list(tool_paths or [])
+            _resolved = shutil.which(cmd[0]) or cmd[0]
+            # B fallback: cmd[0] not in mount-ns bind tree → skip
+            # mount-ns directly.
+            if not _cmd_visible_in_mount_tree(cmd, target, output, _all_extra):
+                # DEBUG (not WARNING): the workflow proceeds at
+                # Landlock-only isolation — same posture as Ubuntu
+                # default hosts where mount-ns never engages anyway.
+                # Operators don't need to act on this; debuggers
+                # investigating "why isn't mount-ns engaging" can
+                # enable DEBUG to see the per-call detail.
+                logger.debug(
+                    "Sandbox: Landlock-only for cmd[0]=%r "
+                    "(resolved=%r, outside mount-ns bind tree). "
+                    "Install under a system dir (/usr/local/bin) "
+                    "or pass tool_paths=[<dir>] to engage mount-ns.",
+                    cmd[0], _resolved,
+                )
+                spawn_eligible = False
+            # Speculative-C cache: cmd[0] previously failed mount-ns
+            # at exec (typical Python tool with native exec deps not
+            # in any reasonable bind set). Skip the doomed mount-ns
+            # attempt entirely — saves ~100-300ms per call. Cache is
+            # populated by the speculative-retry block further down
+            # on first failure for a given binary. No per-call log
+            # here (we already logged the INFO once when the cache
+            # entry was created).
+            elif _resolved in state._speculative_failure_cache:
+                logger.debug(
+                    "Sandbox: Landlock-only for cmd[0]=%r — known "
+                    "speculative-failure cache hit (mount-ns "
+                    "previously failed at exec for this binary)",
+                    cmd[0],
+                )
+                spawn_eligible = False
         # The try/finally that unregisters the proxy token must wrap
         # BOTH paths (spawn + subprocess.run). Without this, an
         # unexpected exception from _spawn.run_sandboxed (anything
@@ -839,6 +949,16 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                 try:
                     from . import _spawn as _spawn_mod
                     if _spawn_mod.mount_ns_available():
+                        # Union readable_paths + tool_paths into the
+                        # single readable_paths list _spawn forwards as
+                        # mount-ns extra_ro_paths. tool_paths is just a
+                        # named view of "extra dirs to bind-mount so a
+                        # caller-known tool's binary/deps are visible";
+                        # mount-ns layer doesn't need to distinguish.
+                        _readable_with_tools = list(effective_read_paths or [])
+                        for _tp in (tool_paths or []):
+                            if _tp and _tp not in _readable_with_tools:
+                                _readable_with_tools.append(_tp)
                         result = _spawn_mod.run_sandboxed(
                             cmd,
                             target=target, output=output,
@@ -846,7 +966,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                             nproc_limit=nproc_limit,
                             limits=effective_limits,
                             writable_paths=writable_paths or [],
-                            readable_paths=effective_read_paths,
+                            readable_paths=_readable_with_tools,
                             allowed_tcp_ports=list(allowed_tcp_ports)
                                 if allowed_tcp_ports else None,
                             seccomp_profile=seccomp_profile,
@@ -871,6 +991,93 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                             start_new_session=kwargs.get("start_new_session", True),
                         )
                         used_spawn = True
+                        # Speculative-C retry: if tool_paths was supplied
+                        # and the call exited 126/127 with empty stderr,
+                        # the bind set was almost certainly insufficient
+                        # (typical Python tool: bin dir bound but stdlib
+                        # at sys.prefix/lib/pythonX.Y was not — Python
+                        # dies at `import encodings` before its stderr
+                        # handler initialises). 126/127 with NON-empty
+                        # stderr is a normal tool failure (semgrep
+                        # arg-parse error, etc.) — leave alone. Empty
+                        # stderr is the give-away that the process
+                        # never reached its error path.
+                        #
+                        # On detection: re-run via the Landlock-only
+                        # subprocess path (works without mount-ns
+                        # bind-tree visibility). This makes the
+                        # tool_paths contract speculative — caller
+                        # passes a best-guess bind set, we try it, if
+                        # it doesn't work we degrade silently to B's
+                        # fallback. Worst-case isolation matches the
+                        # B-only outcome.
+                        _stderr_text = result.stderr or b""
+                        if isinstance(_stderr_text, bytes):
+                            _stderr_text = _stderr_text.decode(
+                                "utf-8", errors="replace")
+                        if (tool_paths
+                                and result.returncode in (126, 127)
+                                and not _stderr_text.strip()):
+                            # Populate the per-cmd cache so future
+                            # calls for the same binary skip mount-ns
+                            # directly (saves the doubled subprocess
+                            # setup cost for every Semgrep rule etc).
+                            # First-time-per-binary fires INFO so
+                            # operators see what's happening; cache-
+                            # hits on subsequent calls are silent.
+                            #
+                            # Lock around the populate so two
+                            # concurrent first-failures for the same
+                            # binary don't double-log. Lock scope is
+                            # tight (dict insert + log-once decision)
+                            # — held for microseconds.
+                            _resolved_cmd0 = (shutil.which(cmd[0])
+                                              or cmd[0])
+                            import threading as _threading
+                            with state._cache_lock:
+                                _first_seen = (
+                                    _resolved_cmd0
+                                    not in state._speculative_failure_cache
+                                )
+                                if _first_seen:
+                                    state._speculative_failure_cache[
+                                        _resolved_cmd0] = True
+                            if _first_seen:
+                                # ONE-TIME INFO per binary — concise.
+                                # The "why" detail (mount-ns failed
+                                # at exec, native-deps mismatch, etc.)
+                                # belongs in DEBUG, not in operator
+                                # output. Operator just needs to
+                                # know which binary and what isolation.
+                                logger.info(
+                                    "Sandbox: %r runs at Landlock-only "
+                                    "isolation.",
+                                    cmd[0],
+                                )
+                                # Companion DEBUG with the diagnostic
+                                # detail for operators investigating.
+                                logger.debug(
+                                    "Sandbox: %r mount-ns failed at "
+                                    "exec (rc=%d, no stderr — typical "
+                                    "of tools whose native deps live "
+                                    "outside the tool_paths bind set: "
+                                    "Python with sys.prefix/lib not "
+                                    "bound, semgrep with semgrep-core "
+                                    "outside install root, etc.). "
+                                    "Cached so subsequent calls to "
+                                    "this binary skip mount-ns "
+                                    "directly.",
+                                    cmd[0], result.returncode,
+                                )
+                            else:
+                                logger.debug(
+                                    "Sandbox: speculative-C cache "
+                                    "hit on cmd[0]=%r (rc=%d) — "
+                                    "Landlock-only fallback.",
+                                    cmd[0], result.returncode,
+                                )
+                            used_spawn = False
+                            # Fall through to subprocess path below.
                 except (FileNotFoundError, RuntimeError, OSError) as _spawn_err:
                     # _spawn raised mid-setup (uidmap uninstalled,
                     # kernel quirk, libc soname absent on minimal
@@ -1053,6 +1260,7 @@ def run(cmd: List[str], block_network: bool = False, target: str = None,
         restrict_reads: bool = False, readable_paths: list = None,
         caller_label: str = None,
         fake_home: bool = False,
+        tool_paths: list = None,
         **kwargs) -> subprocess.CompletedProcess:
     """Run a single command in a sandbox. Convenience wrapper.
 
@@ -1071,7 +1279,8 @@ def run(cmd: List[str], block_network: bool = False, target: str = None,
                  restrict_reads=restrict_reads,
                  readable_paths=readable_paths,
                  caller_label=caller_label,
-                 fake_home=fake_home) as _run:
+                 fake_home=fake_home,
+                 tool_paths=tool_paths) as _run:
         return _run(cmd, **kwargs)
 
 

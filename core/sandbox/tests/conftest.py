@@ -54,8 +54,16 @@ def _sandbox_state_guard():
         "_mount_path_cache", "_mkdir_path_cache",
     ]
     saved = {name: getattr(mod, name) for name in state_names}
+    # Snapshot+restore the speculative-failure cache as a deep copy
+    # — it's a dict, so a shallow alias would let test mutations
+    # bleed across tests via the shared dict object. A test that
+    # populates it (or expects it empty) must not see entries left
+    # over from a sibling test.
+    saved_spec_cache = dict(mod._speculative_failure_cache)
     try:
         yield
     finally:
         for name, value in saved.items():
             setattr(mod, name, value)
+        mod._speculative_failure_cache.clear()
+        mod._speculative_failure_cache.update(saved_spec_cache)

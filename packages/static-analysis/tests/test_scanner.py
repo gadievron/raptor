@@ -62,3 +62,62 @@ class TestRunCodeql:
         assert result == []
         mock_run.assert_not_called()
 
+
+_compute_python_tool_paths = _scanner_mod._compute_python_tool_paths
+
+
+class TestComputePythonToolPaths:
+    """Tool-path inference for Python tools. Reads cmd[0]'s shebang to
+    find the interpreter, then derives the stdlib dir from interp
+    path + version. Used as tool_paths kwarg so mount-ns can engage
+    for pip --user installed Python tools (semgrep is the original
+    case). The result is speculative — context.py's speculative-C
+    retry catches misses and falls back to Landlock-only."""
+
+    def test_empty_cmd_returns_empty(self):
+        assert _compute_python_tool_paths([]) == []
+
+    def test_unreadable_path_still_includes_bin_dir(self, tmp_path):
+        """Path doesn't exist as a file → no shebang, but the bin
+        dir IS still added (absolute path is recoverable)."""
+        bogus = tmp_path / "subdir" / "bogus-binary"
+        result = _compute_python_tool_paths([str(bogus)])
+        # Subdir is the bin dir.
+        assert any(p == str(tmp_path / "subdir") for p in result), \
+            f"expected bin dir in result, got {result!r}"
+
+    def test_skips_system_paths(self):
+        """Paths already in the mount-ns bind tree (/usr, /bin, etc.)
+        should be skipped — no point asking for a redundant bind."""
+        # /usr/bin/python3 → bin dir /usr/bin (skip), interp lib at
+        # /usr/lib/python3.X (skip). Net: should be empty.
+        result = _compute_python_tool_paths(["/usr/bin/python3"])
+        for path in result:
+            assert not path.startswith(("/usr/", "/lib/", "/lib64/")), \
+                f"{path!r} should have been filtered out"
+
+    def test_python_tool_with_shebang_returns_bin_and_stdlib(
+            self, tmp_path):
+        """A pip-style Python tool: bin/script with #!python shebang,
+        interpreter in same bin dir, stdlib at ../lib/pythonX.Y.
+        Synthesise this layout in tmp_path and verify both dirs
+        come back."""
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        lib_dir = tmp_path / "lib" / "python3.13"
+        lib_dir.mkdir(parents=True)
+        # Synthesise a Python interpreter file (need not be runnable;
+        # is_file() check is what the helper uses).
+        py = bin_dir / "python3.13"
+        py.write_text("#!/bin/sh\necho fake python\n")
+        py.chmod(0o755)
+        # Synthesise the script with shebang pointing at our fake.
+        script = bin_dir / "myscript"
+        script.write_text(f"#!{py}\nprint('hi')\n")
+        script.chmod(0o755)
+        result = _compute_python_tool_paths([str(script)])
+        assert str(bin_dir) in result, \
+            f"bin dir missing from {result!r}"
+        assert str(lib_dir) in result, \
+            f"stdlib dir missing from {result!r}"
+

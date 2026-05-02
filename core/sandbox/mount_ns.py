@@ -168,6 +168,21 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
     landlock_restrict_self() — Landlock blocks mount operations on kernel
     6.15+.
     """
+    # Absolutize target/output BEFORE any bind-mount work. A relative
+    # path here produces a malformed bind-target like
+    # "/root_path" + "out/X" → "/root_pathout/X" (no slash separator,
+    # wrong tree). Companion to the absolutize in
+    # core/sandbox/context.py at writable_paths construction —
+    # WITHOUT this, the writable_paths Landlock rule references the
+    # absolutized path while the bind-mount happens at the malformed
+    # path → Landlock rejects-open the writable rule with "Landlock
+    # writable path could not be opened" + the child can't write to
+    # output even via fallback. Discovered by E2E scan against
+    # /tmp/vulns where output= was passed relative.
+    if target:
+        target = os.path.abspath(target)
+    if output:
+        output = os.path.abspath(output)
     # 1. Make propagation private — our mounts do not leak back.
     _mount(None, "/", None, MS_REC | MS_PRIVATE)
 

@@ -116,12 +116,60 @@ All kwargs accepted by `sandbox()` and `run()` (and most by `run_untrusted()`):
 | `readable_paths` | `None` | Extra paths to add to the read allowlist. Ignored when `restrict_reads=False`. |
 | `fake_home` | `False` (`True` in `run_untrusted`) | Override child `HOME` + `XDG_*_HOME` to `{output}/.home/`. Requires `output`. |
 | `caller_label` | `None` | Short identifier stamped onto every proxy event emitted during this sandbox's lifetime. Lets you tell apart concurrent/sequential callers in `proxy-events.jsonl`. |
+| `tool_paths` | `None` | Extra dirs to bind-mount into the mount-ns sandbox so a non-system tool's binary + dependencies are visible. Speculative — if mount-ns engages with the supplied bind set but the tool fails at exec (typical Python tool with native exec deps not in any reasonable bind set), the sandbox automatically retries via Landlock-only. Worst-case: same isolation as not passing `tool_paths` at all. Per-cmd cache prevents repeated retry overhead within a process. See [Mount-ns tool visibility](#mount-ns-tool-visibility) below. |
 
 > **`env=` passthrough.** If you pass an explicit `env=` dict to `run()`, it
 > is forwarded verbatim to the child — `RaptorConfig.get_safe_env()` is NOT
 > applied (we log an INFO-level note when this happens). `env=None` or omitting
 > `env=` engages the safe-env path. Callers opting into custom `env=` own the
 > sanitisation of what they pass.
+
+### Mount-ns tool visibility
+
+The mount-ns sandbox bind-mounts a fixed set of system dirs (`/usr`,
+`/lib`, `/lib64`, `/etc`, `/bin`, `/sbin`) plus `target`/`output`
+plus a per-sandbox `/tmp` tmpfs. **Anything else is invisible inside
+the sandbox** — invoking a tool at `~/.local/bin/X`, `/opt/homebrew/bin/X`,
+or `~/bin/X` would otherwise produce ENOENT (subprocess exit 127)
+with empty stderr.
+
+Two mechanisms keep workflows running regardless of the tool's
+install location:
+
+**Auto-fallback (no caller cooperation needed).** If `cmd[0]`
+resolves to a path outside the mount-ns bind tree, the sandbox skips
+mount-ns and runs the call at Landlock-only isolation. The workflow
+proceeds; isolation matches the Ubuntu-default posture (where
+mount-ns never engages anyway because the apparmor sysctl gates
+unprivileged user-ns). Logged at DEBUG.
+
+**`tool_paths=` opt-in.** Callers that know their tool's install
+layout pass `tool_paths=[<bin_dir>, <lib_dir>, ...]`. Those dirs are
+bind-mounted read-only into the mount-ns sandbox so the tool is
+visible. **Speculative**: if the bind set turns out insufficient
+(mount-ns engages but the tool fails at exec — typical of Python
+tools whose native exec deps live outside any reasonable bind set),
+the sandbox automatically retries via Landlock-only. First failure
+per binary fires one INFO log; subsequent calls hit a per-cmd cache
+and skip the doomed mount-ns attempt directly.
+
+When to use what:
+
+- **Standalone binary in a system dir** (`/usr/local/bin/`): no
+  action needed; mount-ns engages cleanly.
+- **Standalone binary outside system dirs** (e.g. `/opt/foo/bin/foo`
+  with all deps in `/opt/foo/`): pass `tool_paths=["/opt/foo"]`.
+  Mount-ns engages with `/opt/foo` bind-mounted.
+- **Self-contained distribution** (codeql ships at
+  `~/.local/share/codeql/` with java/, lib/, packs/ siblings): pass
+  `tool_paths=[<codeql_install_dir>]`. Mount-ns engages.
+- **Python tools** (semgrep, etc.): pass `tool_paths=` covering the
+  bin dir + Python stdlib dir. Often works; sometimes the tool also
+  exec's native binaries from elsewhere — speculative retry catches
+  it. Worst case: same as no `tool_paths` (Landlock-only).
+
+The cache is per-process: a fresh RAPTOR invocation re-probes (so
+operators changing their install layout don't see stale cache hits).
 
 ### Read restriction (`restrict_reads` + `fake_home`)
 

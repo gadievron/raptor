@@ -103,6 +103,12 @@ class DatabaseManager:
         logger.info(f"Database manager initialized: {self.db_root}")
         logger.info(f"CodeQL CLI: {self.codeql_cli}")
 
+    def _sandbox_tool_paths(self) -> list:
+        """Mount-ns bind dirs needed for codeql to run. See QueryRunner
+        equivalent — same rationale (codeql install root rarely lives
+        in /usr/bin)."""
+        return [str(Path(self.codeql_cli).resolve().parent)]
+
     def _detect_codeql_cli(self) -> Optional[str]:
         """Detect CodeQL CLI path."""
         import os
@@ -577,6 +583,7 @@ class DatabaseManager:
                 block_network=True,
                 cwd=working_dir,
                 env=env,
+                tool_paths=self._sandbox_tool_paths(),
                 capture_output=True,
                 text=True,
                 timeout=RaptorConfig.CODEQL_TIMEOUT,

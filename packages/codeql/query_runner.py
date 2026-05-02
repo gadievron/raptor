@@ -110,6 +110,20 @@ class QueryRunner:
 
         logger.info(f"Query runner initialized with CodeQL: {self.codeql_cli}")
 
+    def _sandbox_tool_paths(self) -> list:
+        """Mount-ns bind dirs needed for codeql to run.
+
+        Returns the codeql binary's containing dir. The codeql install
+        layout typically places the binary at `<install_root>/codeql`
+        with lib/java/packs siblings — bind-mounting the parent directory
+        exposes the whole install root. Without this, mount-ns mode
+        would fall back to Landlock-only (per context.py's
+        `_cmd_visible_in_mount_tree` check) because codeql is rarely
+        in /usr/bin.
+        """
+        from pathlib import Path
+        return [str(Path(self.codeql_cli).resolve().parent)]
+
     def run_suite(
         self,
         database_path: Path,
@@ -247,6 +261,7 @@ class QueryRunner:
             result = sandbox_run(
                 cmd,
                 block_network=True,
+                tool_paths=self._sandbox_tool_paths(),
                 capture_output=True,
                 text=True,
                 timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,
@@ -282,12 +297,14 @@ class QueryRunner:
                         caller_label="codeql-pack-download",
                         target=str(codeql_cache),
                         output=str(codeql_cache),
+                        tool_paths=self._sandbox_tool_paths(),
                         capture_output=True, text=True, timeout=120,
                     )
                     if dl.returncode == 0:
                         logger.info(f"✓ Downloaded {pack_name} — retrying analysis")
                         result = sandbox_run(
                             cmd, block_network=True,
+                            tool_paths=self._sandbox_tool_paths(),
                             capture_output=True, text=True,
                             timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,
                         )
@@ -417,6 +434,7 @@ class QueryRunner:
             result = sandbox_run(
                 cmd,
                 block_network=True,
+                tool_paths=self._sandbox_tool_paths(),
                 capture_output=True,
                 text=True,
                 timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,

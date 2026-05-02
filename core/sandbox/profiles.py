@@ -49,4 +49,9 @@ _SANDBOX_KWARGS = frozenset({
     "restrict_reads", "readable_paths",
     "caller_label",
     "fake_home",
+    # tool_paths is sandbox()-level (extra dirs to bind-mount in
+    # mount-ns mode so operator-installed tools at non-standard
+    # paths — pip --user, pyenv, homebrew — are visible inside
+    # the sandbox). Passing to inner run() would silently no-op.
+    "tool_paths",
 })

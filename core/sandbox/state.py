@@ -67,6 +67,25 @@ _sandbox_unavailable_warned = False
 _net_and_tcp_allowlist_warned = False
 _seccomp_arch_missing_warned = False
 _mount_unavailable_warned = False
+# NOTE: B's mount-ns Landlock fallback logs at DEBUG (no warn-once
+# flag needed — workflow proceeds correctly at Landlock-only, same
+# posture as Ubuntu defaults). The speculative-C retry uses the
+# per-cmd cache below to avoid both repeated mount-ns attempts AND
+# repeated log noise — first failure for a given binary fires one
+# INFO line; subsequent calls are silent (cache-hit path).
+#
+# Per-cmd cache of "tool_paths bind set was insufficient for this
+# binary, mount-ns will fail at exec". Populated by context.py's
+# speculative-C retry on first failure for a given cmd[0]. Subsequent
+# calls for the same cmd[0] skip the mount-ns attempt entirely and
+# go straight to Landlock-only — saves the doubled subprocess setup
+# cost (mount-ns try + retry) on every scanner invocation.
+#
+# Keyed on the resolved path (shutil.which(cmd[0]) or cmd[0]) so two
+# spellings of the same binary share a cache entry. Process-local; a
+# fresh RAPTOR invocation re-probes (handles operator changing their
+# install layout between runs).
+_speculative_failure_cache: dict = {}
 
 
 def warn_once(flag_name: str) -> bool:

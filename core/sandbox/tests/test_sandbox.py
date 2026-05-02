@@ -526,9 +526,18 @@ class TestLandlockEnforcement(unittest.TestCase):
             try:
                 rel_out = "out/scan_relative_test"
                 os.makedirs(rel_out, exist_ok=True)
+                # Resolve to absolute for the shell command — the
+                # sandbox child's cwd may not survive pivot_root, so
+                # `out/X` (relative) wouldn't resolve from inside the
+                # sandbox even when output is correctly bind-mounted.
+                # The bind-mount itself is at the absolute path
+                # (mount_ns.setup_mount_ns absolutizes output), so
+                # writing to that absolute path inside the sandbox is
+                # the path the bind-mount actually exposes.
+                abs_out = os.path.abspath(rel_out)
                 with sandbox(target=target_abs, output=rel_out) as run:
                     result = run(
-                        ["sh", "-c", f"echo ok > {rel_out}/proof.txt"],
+                        ["sh", "-c", f"echo ok > {abs_out}/proof.txt"],
                         capture_output=True, text=True, timeout=10,
                     )
                 self.assertNotIn(
@@ -538,6 +547,11 @@ class TestLandlockEnforcement(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0,
                                  f"sandbox child failed: stderr={result.stderr!r}")
+                # Verify the write actually went through (proves the
+                # bind-mount is correctly wired, not just that Landlock
+                # didn't error).
+                self.assertTrue(os.path.exists(f"{rel_out}/proof.txt"),
+                                "bind-mount didn't deliver write to host")
             finally:
                 os.chdir(saved_cwd)
 
@@ -1574,6 +1588,223 @@ class TestSandboxObservability(unittest.TestCase):
         self.assertTrue(hasattr(result, "sandbox_info"))
         self.assertFalse(result.sandbox_info.get("crashed"))
         self.assertNotIn("signal", result.sandbox_info)
+
+
+class TestCmdVisibleInMountTree(unittest.TestCase):
+    """Unit tests for the helper that checks whether cmd[0] resolves to
+    a path visible inside the mount-ns bind tree. Drives the B fallback
+    behavior in context.py: when cmd[0] is invisible, the sandbox call
+    falls back to Landlock-only so the workflow doesn't silently die at
+    exit 127 (binary-not-found inside the new rootfs)."""
+
+    def test_system_bin_path_is_visible(self):
+        from core.sandbox.context import _cmd_visible_in_mount_tree
+        self.assertTrue(_cmd_visible_in_mount_tree(
+            ["/usr/bin/cat"], None, None, None))
+        self.assertTrue(_cmd_visible_in_mount_tree(
+            ["/bin/sh"], None, None, None))
+
+    def test_home_path_not_visible_by_default(self):
+        from core.sandbox.context import _cmd_visible_in_mount_tree
+        # ~/.local/bin/semgrep is the typical pip --user install location;
+        # this is the bug we're guarding against.
+        self.assertFalse(_cmd_visible_in_mount_tree(
+            ["/home/u/.local/bin/semgrep"], None, None, None))
+
+    def test_home_path_visible_when_extra_paths_cover_it(self):
+        from core.sandbox.context import _cmd_visible_in_mount_tree
+        self.assertTrue(_cmd_visible_in_mount_tree(
+            ["/home/u/.local/bin/semgrep"], None, None,
+            ["/home/u/.local/bin"]))
+
+    def test_target_path_is_visible(self):
+        from core.sandbox.context import _cmd_visible_in_mount_tree
+        # Binary inside the target dir (rare, but legal).
+        self.assertTrue(_cmd_visible_in_mount_tree(
+            ["/data/target/run.sh"], "/data/target", None, None))
+
+    def test_relative_cmd_falls_through_to_true(self):
+        """Can't resolve a non-PATH-findable cmd → don't trigger fallback;
+        let the subprocess fail naturally with ENOENT. The point of
+        the helper is to AVOID broken workflows, not to second-guess
+        a workflow that's already going to fail clearly."""
+        from core.sandbox.context import _cmd_visible_in_mount_tree
+        self.assertTrue(_cmd_visible_in_mount_tree(
+            ["nonexistent-binary-xyz"], None, None, None))
+
+    def test_empty_cmd_falls_through(self):
+        from core.sandbox.context import _cmd_visible_in_mount_tree
+        self.assertTrue(_cmd_visible_in_mount_tree([], None, None, None))
+
+
+class TestToolPathsKwarg(unittest.TestCase):
+    """C: the tool_paths kwarg is the explicit-opt-in companion to B's
+    auto-fallback. Callers that know their tool's install layout pass
+    tool_paths so mount-ns isolation engages instead of falling back to
+    Landlock-only."""
+
+    def test_tool_paths_accepted_by_sandbox(self):
+        from core.sandbox import sandbox
+        with sandbox(tool_paths=["/opt/foo/bin"]) as run:
+            pass
+
+    def test_tool_paths_accepted_by_top_level_run(self):
+        from core.sandbox import run as sandbox_run
+        try:
+            sandbox_run(["true"], tool_paths=["/opt/foo/bin"],
+                        capture_output=True, text=True, timeout=5)
+        except (RuntimeError, OSError, FileNotFoundError):
+            pass
+
+    def test_tool_paths_rejected_on_inner_run(self):
+        """tool_paths is sandbox()-level config; passing it to inner
+        run() means the caller misunderstands the API. Reject loudly
+        per the _SANDBOX_KWARGS guard in profiles.py."""
+        from core.sandbox import sandbox
+        with sandbox() as run:
+            with self.assertRaises(TypeError):
+                run(["true"], tool_paths=["/opt/foo/bin"])
+
+
+class TestSpeculativeToolPathsRetry(unittest.TestCase):
+    """When tool_paths was supplied AND the resulting mount-ns call
+    exits 126/127 with empty stderr, the sandbox infers the bind set
+    was insufficient (typical Python tool: bin dir bound, stdlib at
+    sys.prefix/lib not bound — Python dies before its stderr handler
+    starts) and re-runs via Landlock-only fallback.
+
+    These are structural-pin tests — we verify the contract is
+    documented in source rather than the runtime mechanism (which
+    requires real mount-ns prereqs).
+    """
+
+    def test_retry_branch_is_documented_in_source(self):
+        """The speculative-retry block MUST be present in context.py.
+        Pinned by source-grep so a future refactor that drops the
+        retry surfaces in CI immediately.
+        """
+        from pathlib import Path
+        from core.sandbox import context as _ctx
+        src = Path(_ctx.__file__).read_text()
+        for required in ("Speculative-C retry",
+                         "tool_paths",
+                         "(126, 127)",
+                         "Landlock-only"):
+            self.assertIn(required, src,
+                          f"speculative-C retry: missing {required!r}")
+
+    def test_signature_filter_uses_empty_stderr_check(self):
+        """The retry must NOT fire when stderr is non-empty — those
+        are normal tool failures (arg-parse errors etc.) we should
+        leave alone. Pinned by source-grep on the .strip() guard."""
+        from pathlib import Path
+        from core.sandbox import context as _ctx
+        src = Path(_ctx.__file__).read_text()
+        # The exact pattern the retry uses to gate on empty stderr.
+        self.assertIn("not _stderr_text.strip()", src,
+                      "speculative-C retry must filter on empty stderr")
+
+
+class TestSpeculativeFailureCache(unittest.TestCase):
+    """The per-cmd speculative-failure cache prevents repeated mount-ns
+    setup attempts for binaries known to fail at exec (typical Python
+    tools whose native exec deps live outside any reasonable bind set).
+
+    First failure for cmd[0]=X: populate cache, log INFO once.
+    Subsequent calls for X: cache-hit, skip mount-ns directly, DEBUG only.
+
+    Saves ~100-300ms per call across many sandbox invocations
+    (e.g. scanner.py running 10+ semgrep rule files per scan)."""
+
+    def test_cache_dict_exists(self):
+        from core.sandbox import state
+        self.assertTrue(hasattr(state, "_speculative_failure_cache"))
+        self.assertIsInstance(state._speculative_failure_cache, dict)
+
+    def test_cache_check_pinned_in_source(self):
+        """Both the cache POPULATE site (in retry block) and the
+        cache HIT site (in spawn-eligibility check) reference the
+        canonical attribute name."""
+        from pathlib import Path
+        from core.sandbox import context as _ctx
+        src = Path(_ctx.__file__).read_text()
+        self.assertIn("state._speculative_failure_cache[", src,
+                      "retry block must populate the cache")
+        self.assertIn("in state._speculative_failure_cache", src,
+                      "spawn-eligibility must check the cache")
+
+    def test_cache_populate_under_lock(self):
+        """Concurrent first-failures for the same binary must not
+        double-log. The cache populate is wrapped in state._cache_lock
+        so the read+insert+log-decision is atomic."""
+        from pathlib import Path
+        from core.sandbox import context as _ctx
+        src = Path(_ctx.__file__).read_text()
+        idx = src.find("state._speculative_failure_cache[")
+        assert idx > 0, "cache populate not found"
+        preceding = src[max(0, idx - 400):idx]
+        self.assertIn("state._cache_lock", preceding,
+                      "cache populate must be under state._cache_lock")
+
+    def test_cache_first_seen_logs_at_info(self):
+        """Operator-visibility contract: first failure per binary fires
+        ONE INFO log; cache-hit subsequent calls log at DEBUG only."""
+        from pathlib import Path
+        from core.sandbox import context as _ctx
+        src = Path(_ctx.__file__).read_text()
+        idx = src.find("if _first_seen:")
+        assert idx > 0, "first-seen branch missing"
+        block = src[idx:idx + 1500]
+        self.assertIn("logger.info(", block,
+                      "first-failure-per-binary must log at INFO")
+        self.assertIn("logger.debug(", block,
+                      "cache-hit subsequent calls must log at DEBUG")
+
+
+class TestMountNsToolPathFallbackContract(unittest.TestCase):
+    """B: structural pin that the helper exists with the canonical name
+    context.py's spawn-eligibility check uses. The fallback is
+    DEBUG-logged (no warn-once flag) — workflow proceeds correctly,
+    operator doesn't need to act. Functional fallback exercise lives
+    in test_spawn_mount_ns where real mount-ns prereqs are required."""
+
+    def test_fallback_logs_at_debug_not_warning(self):
+        """The B fallback message must be at DEBUG level — workflow
+        works, operator has nothing to fix. Pinned by source-grep
+        on the call-site usage."""
+        from pathlib import Path
+        from core.sandbox import context as _ctx
+        src = Path(_ctx.__file__).read_text()
+        # Find the CALL SITE (not the definition). The pattern
+        # `if not _cmd_visible_in_mount_tree(` only appears inside
+        # the spawn-eligibility check.
+        idx = src.find("if not _cmd_visible_in_mount_tree(")
+        assert idx > 0, "fallback call site missing"
+        # The fallback log call sits inside the `if not visible:`
+        # branch — within ~600 chars of the call site.
+        block = src[idx:idx + 600]
+        assert "logger.debug" in block, \
+            "B fallback should log at DEBUG (was WARNING — see " \
+            "user-feedback round on noise reduction)"
+        assert "logger.warning" not in block, \
+            "B fallback must NOT log at WARNING — workflow proceeds " \
+            "correctly, operator has nothing to fix"
+
+    def test_helper_distinguishes_inside_vs_outside(self):
+        """Both branches of the fallback decision pinned with the
+        canonical paths scanner.py / codeql call sites will produce
+        in production."""
+        from core.sandbox.context import _cmd_visible_in_mount_tree
+        # Pip --user install — the original bug case.
+        self.assertFalse(_cmd_visible_in_mount_tree(
+            ["/home/u/.local/bin/semgrep"], None, None, None))
+        # Same with explicit tool_paths — the fix path.
+        self.assertTrue(_cmd_visible_in_mount_tree(
+            ["/home/u/.local/bin/semgrep"], None, None,
+            ["/home/u/.local/bin"]))
+        # System-installed (operator-fix path).
+        self.assertTrue(_cmd_visible_in_mount_tree(
+            ["/usr/local/bin/semgrep"], None, None, None))
 
 
 if __name__ == "__main__":

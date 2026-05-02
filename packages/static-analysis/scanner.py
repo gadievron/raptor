@@ -61,6 +61,24 @@ def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None,
         if proxy_hosts else
         {"block_network": True}
     )
+    # tool_paths: speculative best-guess bind set so mount-ns isolation
+    # can engage. For Python tools we need (a) the script's bin dir
+    # and (b) the interpreter's stdlib dir at sys.prefix/lib/pythonX.Y.
+    #
+    # Outcome depends on the operator's install layout:
+    #
+    #   /usr/bin/semgrep (system install): cmd[0] already in mount
+    #     tree, helper returns []; mount-ns engages cleanly, full
+    #     isolation, silent.
+    #
+    #   ~/.local/bin/semgrep (pip --user) or /opt/homebrew/bin
+    #     (brew): helper returns [bin_dir, stdlib_dir]; mount-ns
+    #     tries with these. If semgrep then exec's native deps not
+    #     in the bind set (semgrep-core, etc.), context.py's
+    #     speculative-C retry catches the 126/empty-stderr and
+    #     falls back to Landlock-only. Workflow proceeds; debug-
+    #     level diagnostic only.
+    tool_paths = _compute_python_tool_paths(cmd)
     p = sandbox_run(
         cmd,
         target=target,
@@ -70,9 +88,94 @@ def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None,
         text=True,
         capture_output=True,
         timeout=timeout,
+        tool_paths=tool_paths or None,
         **net_kwargs,
     )
     return p.returncode, p.stdout, p.stderr
+
+
+def _compute_python_tool_paths(cmd) -> list:
+    """Best-guess bind dirs for a Python-tool sandbox call.
+
+    Reads cmd[0]'s shebang to find the interpreter, then computes:
+      - script's bin dir (so cmd[0] resolves)
+      - interpreter's bin dir (often same dir)
+      - interpreter's stdlib dir, derived from interpreter path +
+        version (e.g. /home/USER/bin/python3.13 →
+        /home/USER/lib/python3.13)
+
+    All paths are absolute. Skips dirs that already lie under a
+    standard mount-ns bind prefix (/usr, /lib, etc.) — no point
+    asking for a bind that's already there.
+
+    Returns [] when cmd is empty, the shebang can't be read, or
+    the layout doesn't match a recognisable Python install.
+    Speculative: a wrong guess is caught by context.py's
+    speculative-C retry (re-runs without tool_paths if the call
+    exits 126/127 with empty stderr).
+    """
+    import re
+    import sys
+    from pathlib import Path
+    if not cmd:
+        return []
+    cmd0 = cmd[0]
+    # Prefix-skip set — paths already in the mount-ns bind tree.
+    _SYS_PREFIXES = ("/usr/", "/lib/", "/lib64/", "/etc/", "/bin/", "/sbin/")
+    def _interesting(p: str) -> bool:
+        return p and not any(p == s.rstrip("/") or p.startswith(s)
+                             for s in _SYS_PREFIXES)
+    paths = set()
+    # 1. Script's bin dir.
+    if Path(cmd0).is_absolute():
+        bin_dir = str(Path(cmd0).resolve().parent)
+        if _interesting(bin_dir):
+            paths.add(bin_dir)
+    # 2. Read shebang to find the interpreter.
+    interp = None
+    try:
+        with open(cmd0, "rb") as f:
+            first_line = f.readline().decode("utf-8", errors="ignore").strip()
+        if first_line.startswith("#!"):
+            interp = first_line[2:].split()[0]
+    except (OSError, IndexError, UnicodeDecodeError):
+        pass
+    # 3. Interpreter's bin dir + stdlib dir.
+    # CRITICAL: use the UNRESOLVED interp path for stdlib computation,
+    # NOT Path.resolve(). Python's sys.prefix is computed from the path
+    # used to invoke the interpreter (i.e. sys.executable, which equals
+    # the unresolved shebang path). For an interpreter at
+    # /home/U/bin/python3.13 that's a symlink to /usr/bin/python3.13,
+    # Python sets sys.prefix=/home/U and looks for stdlib at
+    # /home/U/lib/python3.13. If we bind-mount the resolved location
+    # (/usr/lib/python3.13 — already in mount tree) Python won't find
+    # its stdlib because it's looking at sys.prefix-relative path.
+    # The bin dir IS still added via Path.resolve() (so symlink targets
+    # outside the mount tree get added too), but stdlib derivation
+    # MUST follow the unresolved path.
+    if interp and Path(interp).is_absolute() and Path(interp).is_file():
+        # Bin dir for the interpreter. Add both the resolved AND
+        # unresolved bin dirs so we cover the full symlink chain.
+        for p in {str(Path(interp).parent), str(Path(interp).resolve().parent)}:
+            if _interesting(p):
+                paths.add(p)
+        # Extract version from interpreter name. Try the SHEBANG name
+        # first (typically `python3.13` — version-stamped); fall back
+        # to the resolved name if the shebang name lacks a version.
+        candidate_names = [Path(interp).name, Path(interp).resolve().name]
+        ver = None
+        for name in candidate_names:
+            m = re.match(r"python(\d+\.\d+)", name)
+            if m:
+                ver = m.group(1)
+                break
+        if ver:
+            # Stdlib at sys.prefix/lib/pythonX.Y where sys.prefix is
+            # derived from the UNRESOLVED interp path (Python's view).
+            stdlib = Path(interp).parent.parent / "lib" / f"python{ver}"
+            if stdlib.is_dir() and _interesting(str(stdlib)):
+                paths.add(str(stdlib))
+    return sorted(paths)
 
 
 def run_single_semgrep(
