@@ -167,11 +167,27 @@ def extract_via_patch_url(cve_id: str, ref: RepoRef) -> DiffBundle | None:
         fetch=_no_languages_fetch,
     )
 
+    # ``commit_before`` would normally be the parent SHA, but a
+    # ``.patch`` URL response carries the diff body (and the commit's
+    # own SHA via the ``From <sha>`` header) without exposing the
+    # parent. Pre-2026-05-02 this slot held ``<sha>^`` — git's
+    # revspec for "parent of sha". That works for ``git diff
+    # <sha>^..<sha>`` (the extractor doesn't re-run git diff for
+    # patch-url-sourced bundles anyway — diff_text comes straight
+    # from the patch body), but it breaks downstream display:
+    # ``report/markdown.py``'s ``_commit_url(<sha>^)`` emits
+    # ``https://forge/.../commit/<sha>^`` which 404s, and
+    # ``report/osv_schema.py``'s ``diff_against`` field carries the
+    # bogus revspec into the OSV record. Setting it equal to
+    # ``commit_after`` keeps the ``CommitSha`` NewType contract
+    # honest (it's an actual SHA) and signals "parent unknown" to
+    # any consumer that compares the two.
+    fix_sha = (ref.fix_commit or "").lower()
     return DiffBundle(
         cve_id=cve_id,
         repo_ref=ref,
-        commit_before=CommitSha((ref.fix_commit or "").lower() + "^"),
-        commit_after=CommitSha((ref.fix_commit or "").lower()),
+        commit_before=CommitSha(fix_sha),
+        commit_after=CommitSha(fix_sha),
         diff_text=body,
         files_changed=len(file_names),
         bytes_size=len(body.encode("utf-8")),

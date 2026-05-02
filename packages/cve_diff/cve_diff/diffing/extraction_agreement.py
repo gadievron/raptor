@@ -28,8 +28,19 @@ from cve_diff.core.models import DiffBundle, RepoRef
 from cve_diff.diffing.extract_via_gitlab_api import extract_for_agreement
 
 # Pairwise thresholds: clone vs API byte counts are usually within a
-# few percent (mostly whitespace / line-ending differences). Above
-# this, we mark partial. Above 25%, disagree.
+# few percent (mostly whitespace / line-ending differences in how each
+# extractor renders the diff — git-diff vs GitHub API JSON vs the
+# .patch URL's raw body). Above ``_BYTES_AGREE_PCT`` we mark partial;
+# above ``_BYTES_PARTIAL_PCT`` we mark disagree.
+#
+# These thresholds are heuristic — chosen so a typical "render-only
+# difference" lands in agree, a meaningful "different parts of the
+# fix" lands in disagree, and the messy middle goes to partial. They
+# have NOT been formally calibrated against a labelled disagreement
+# corpus; if a future bench shows agree/partial/disagree distribution
+# is materially off, these are the knobs to tune. Not exposed as
+# config — operators shouldn't tune the boundary at runtime; bench
+# does it offline.
 _BYTES_AGREE_PCT = 0.05
 _BYTES_PARTIAL_PCT = 0.25
 # GitHub API caps at 300 files per /commits/{sha} response. When file
