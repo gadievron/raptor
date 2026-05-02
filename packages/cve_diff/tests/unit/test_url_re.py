@@ -49,6 +49,30 @@ def test_extract_slug_lowercases() -> None:
     assert extract_github_slug("https://github.com/Curl/Curl") == "curl/curl"
 
 
+def test_extract_slug_finds_embedded_url() -> None:
+    """``.search()``-not-``.match()``: the slug extractor must find a
+    GitHub URL even when there's leading prose. Pre-2026-05-02 used
+    ``.match()`` and silently dropped any URL not at position 0 —
+    OSV/NVD reference text routinely wraps the URL ("see fix at
+    https://github.com/...", "Mitigated by https://github.com/..."),
+    so the bug suppressed valid references from advisory pages.
+    """
+    cases = {
+        "see fix at https://github.com/torvalds/linux": "torvalds/linux",
+        "Mitigated by https://github.com/curl/curl/pull/1234": "curl/curl",
+        "Reference: https://github.com/python/cpython for details":
+            "python/cpython",
+    }
+    for url, expected in cases.items():
+        assert extract_github_slug(url) == expected, url
+
+
+def test_extract_slug_returns_none_for_no_match() -> None:
+    assert extract_github_slug("") is None
+    assert extract_github_slug("not a url") is None
+    assert extract_github_slug("https://example.com/foo/bar") is None
+
+
 # ---- GITHUB_COMMIT_URL_RE — already correct, just regression-cover
 
 def test_commit_url_re_keeps_dotted_repo_name() -> None:

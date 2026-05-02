@@ -119,6 +119,36 @@ class TestFiltersNonPatchTagged:
         assert result is None
 
 
+class TestExtractsEmbeddedUrls:
+    """Pre-2026-05-02 the NVD URL regex used ``.match()``, which only
+    matched at position 0. NVD references are routinely wrapped in
+    advisory text (``"Patch: <URL>"``, ``"See <URL> for details"``);
+    those references were silently dropped. ``.search()`` recovers them.
+    """
+
+    @responses.activate
+    def test_url_with_leading_prose_is_extracted(self) -> None:
+        responses.add(
+            responses.GET,
+            "https://services.nvd.nist.gov/rest/json/cves/2.0",
+            json=_nvd_payload([
+                {
+                    "url": (
+                        "Fixed by commit "
+                        "https://github.com/curl/curl/commit/"
+                        "172e54cda18412da73fd8eb4e444e8a5b371ca59"
+                    ),
+                    "tags": ["Patch"],
+                }
+            ]),
+            status=200,
+        )
+        result = NvdDiscoverer().fetch("CVE-2024-1234")
+        assert result is not None
+        assert len(result.tuples) == 1
+        assert result.tuples[0].repository_url == "https://github.com/curl/curl"
+
+
 class TestRejectsShortShas:
     @responses.activate
     def test_sha_below_seven_chars_rejected(self) -> None:

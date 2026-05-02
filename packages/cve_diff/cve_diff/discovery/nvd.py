@@ -187,10 +187,21 @@ class NvdDiscoverer:
             if "Patch" not in tags:
                 continue
             url = ref.get("url") or ""
-            m = _GITHUB_COMMIT_URL_RE.match(url)
+            # ``.search()`` not ``.match()``: NVD reference URLs are
+            # frequently embedded in advisory prose (``"Patch: <URL>"``,
+            # ``"See <URL> for details"``); ``.match()`` only succeeds
+            # at position 0 and silently dropped them. Parity with
+            # ``discovery/osv.py``'s ``_GITHUB_COMMIT_URL_RE.search()``.
+            m = _GITHUB_COMMIT_URL_RE.search(url)
             if not m:
                 continue
             slug = m.group(1).removesuffix(".git")
+            # ``removesuffix`` is a no-op on inputs without ``.git``,
+            # so a malformed regex group could survive into the slug.
+            # Defence-in-depth — reject anything that doesn't look
+            # like ``owner/repo``.
+            if not slug or slug.count("/") != 1:
+                continue
             sha = m.group(2).lower()
             key = (slug, sha)
             if key in seen:
