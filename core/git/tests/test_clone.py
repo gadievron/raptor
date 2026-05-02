@@ -43,8 +43,8 @@ def test_successful_clone_calls_sandbox(tmp_path: Path) -> None:
         cmd = mock_run.call_args.args[0]
         assert cmd[:4] == ["git", "clone", "--depth", "1"]
         kwargs = mock_run.call_args.kwargs
-        assert "github.com" in kwargs.get("proxy_hosts", [])
-        assert "codeload.github.com" in kwargs.get("proxy_hosts", [])
+        proxy_hosts = set(kwargs.get("proxy_hosts", []))
+        assert {"github.com", "codeload.github.com"} <= proxy_hosts
 
 
 def test_clone_failure_raises_runtime_error(tmp_path: Path) -> None:
@@ -65,7 +65,7 @@ def test_clone_engages_egress_proxy(tmp_path: Path) -> None:
         clone_repository("https://github.com/foo/bar", tmp_path / "out")
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("use_egress_proxy") is True
-        assert "github.com" in kwargs.get("proxy_hosts", [])
+        assert "github.com" == kwargs.get("proxy_hosts", [])[0]
 
 
 # ---------------------------------------------------------------------------
@@ -165,8 +165,8 @@ def test_fetch_into_fresh_dir_runs_init_then_remote_then_fetch(
     assert "proxy_hosts" not in init_kwargs
     assert "use_egress_proxy" not in init_kwargs
     assert fetch_kwargs.get("use_egress_proxy") is True
-    assert "github.com" in fetch_kwargs.get("proxy_hosts", [])
-    assert "codeload.github.com" in fetch_kwargs.get("proxy_hosts", [])
+    fetch_proxy_hosts = set(fetch_kwargs.get("proxy_hosts", []))
+    assert {"github.com", "codeload.github.com"} <= fetch_proxy_hosts
 
 
 def test_fetch_into_existing_repo_skips_init(tmp_path: Path) -> None:

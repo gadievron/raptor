@@ -41,9 +41,8 @@ class TestEgressClientWiring:
     def test_registers_hosts_with_proxy(self, mock_get_proxy):
         mock_get_proxy.return_value = self._stub_proxy()
         EgressClient(["api.osv.dev", "services.nvd.nist.gov"])
-        called_hosts = mock_get_proxy.call_args.args[0]
-        assert "api.osv.dev" in called_hosts
-        assert "services.nvd.nist.gov" in called_hosts
+        called_hosts = set(mock_get_proxy.call_args.args[0])
+        assert {"api.osv.dev", "services.nvd.nist.gov"} <= called_hosts
 
     @patch("core.sandbox.proxy.get_proxy")
     def test_uses_proxy_manager(self, mock_get_proxy):
