@@ -206,7 +206,7 @@ Examples:
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(parser)
     args = parser.parse_args()
-    apply_cli_args(args)
+    apply_cli_args(args, parser=parser)
 
     # Propagate --trust-repo via a module-level flag in cc_trust so every
     # in-process trust check (this module, build_detector, ...) agrees.
@@ -456,6 +456,24 @@ Examples:
     semgrep_proc = None
     codeql_proc = None
 
+    # Propagate sandbox CLI flags to the scanner subprocesses. Without
+    # this, `python raptor.py agentic --audit` would set audit mode in
+    # the agentic process but the actual sandbox-using subprocesses
+    # (scanner.py, codeql/agent.py) would inherit nothing — audit signal
+    # in the run dir would be empty even though --audit was requested.
+    # Discovered by E2E against /tmp/vulns: the outer process logged
+    # "audit engaged" but no sandbox-summary.json appeared in any
+    # subprocess's run dir.
+    sandbox_passthrough = []
+    if getattr(args, "sandbox", None) is not None:
+        sandbox_passthrough.extend(["--sandbox", args.sandbox])
+    if getattr(args, "no_sandbox", False):
+        sandbox_passthrough.append("--no-sandbox")
+    if getattr(args, "audit", False):
+        sandbox_passthrough.append("--audit")
+    if getattr(args, "audit_verbose", False):
+        sandbox_passthrough.append("--audit-verbose")
+
     if run_semgrep:
         print("\n[*] Running Semgrep analysis...")
         semgrep_cmd = [
@@ -463,6 +481,7 @@ Examples:
             str(script_root / "packages/static-analysis/scanner.py"),
             "--repo", str(repo_path),
             "--policy_groups", args.policy_groups,
+            *sandbox_passthrough,
         ]
         logger.info("Running: Scanning code with Semgrep")
         semgrep_proc = subprocess.Popen(
@@ -477,6 +496,7 @@ Examples:
             str(script_root / "packages/codeql/agent.py"),
             "--repo", str(repo_path),
             "--out", str(out_dir / "codeql"),
+            *sandbox_passthrough,
         ]
         if args.languages:
             codeql_cmd.extend(["--languages", args.languages])

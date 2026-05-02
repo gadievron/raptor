@@ -128,13 +128,33 @@ class TestSuggestedFix:
         s = summary_mod._suggested_fix("mystery")
         assert s  # non-empty
 
+    def test_network_audit_mode_says_would_be_blocked(self):
+        # Audit-mode network would-deny: the CONNECT was allowed, so the
+        # suggestion is about full-enforcement behaviour, not unblocking
+        # the current run.
+        s = summary_mod._suggested_fix("network", host="evil.com", audit=True)
+        assert "audit:" in s
+        assert "would be blocked" in s
+        assert "evil.com" in s
+        assert "--sandbox full" in s
+
+    def test_network_audit_mode_without_host(self):
+        s = summary_mod._suggested_fix("network", audit=True)
+        assert "audit:" in s
+        assert "would be blocked" in s
+
     def test_no_kwarg_flag_names_in_suggestions(self):
         # Regression for 2R1: suggestions MUST NOT reference --proxy-hosts,
         # --writable-paths, --readable-paths since none exist as actual CLI
         # flags (they're sandbox API kwargs only). Operators reading the
         # summary would otherwise look for flags that don't exist.
+        # Also covers proxy_hosts/writable_paths/readable_paths as bare
+        # words (kwarg-style action verbs), which were a regression in
+        # the audit-mode suggestion's first draft.
         for dt, kwargs in [
             ("network", {}), ("network", {"host": "x"}),
+            ("network", {"audit": True}),
+            ("network", {"host": "x", "audit": True}),
             ("write", {}), ("write", {"path": "/x"}),
             ("seccomp", {"profile": "full"}),
             ("seccomp", {"profile": "other"}),
@@ -143,6 +163,11 @@ class TestSuggestedFix:
             assert "--proxy-hosts" not in s, f"stale flag in {dt}: {s}"
             assert "--writable-paths" not in s, f"stale flag in {dt}: {s}"
             assert "--readable-paths" not in s, f"stale flag in {dt}: {s}"
+            # bare words too — "add to proxy_hosts" is the kwarg-style
+            # verb the round-2 fix removed; reject it from any branch
+            assert "proxy_hosts" not in s, f"kwarg verb in {dt}: {s}"
+            assert "writable_paths" not in s, f"kwarg verb in {dt}: {s}"
+            assert "readable_paths" not in s, f"kwarg verb in {dt}: {s}"
 
 
 class TestSummarizeAndWrite:
@@ -203,6 +228,59 @@ class TestSummarizeAndWrite:
         result = summary_mod.summarize_and_write(tmp_path)
         assert result is None
         assert not jsonl.exists()
+
+
+class TestRecordAuditDegraded:
+    """Per-call marker file when audit was requested but b2/b3 couldn't
+    actually run — distinguishes 'audit ran, no events' from 'audit
+    didn't run at all'."""
+
+    def test_writes_marker_with_required_fields(self, tmp_path):
+        summary_mod.record_audit_degraded(
+            tmp_path,
+            reason="mount-ns unavailable",
+            instructions="set sysctl=0",
+        )
+        marker = tmp_path / summary_mod.AUDIT_DEGRADED_FILE
+        assert marker.exists()
+        data = json.loads(marker.read_text())
+        assert data["audit_requested"] is True
+        assert data["audit_engaged"] is False
+        assert data["degraded"] is True
+        assert data["reason"] == "mount-ns unavailable"
+        assert data["instructions"] == "set sysctl=0"
+        assert "generated_at" in data
+
+    def test_idempotent_does_not_overwrite(self, tmp_path):
+        summary_mod.record_audit_degraded(
+            tmp_path, reason="first", instructions="",
+        )
+        first_text = (tmp_path / summary_mod.AUDIT_DEGRADED_FILE).read_text()
+        summary_mod.record_audit_degraded(
+            tmp_path, reason="second-should-be-ignored", instructions="",
+        )
+        second_text = (tmp_path / summary_mod.AUDIT_DEGRADED_FILE).read_text()
+        assert first_text == second_text, (
+            "marker must be idempotent — many sandbox calls per run "
+            "would otherwise rewrite it dozens of times"
+        )
+
+    def test_does_not_crash_on_missing_dir(self, tmp_path):
+        # Best-effort: marker write must not raise even if the run dir
+        # doesn't exist. The log warning is the primary signal.
+        summary_mod.record_audit_degraded(
+            tmp_path / "no-such-dir",
+            reason="test",
+            instructions="",
+        )
+        # parent.mkdir(parents=True, exist_ok=True) creates it, so the
+        # file SHOULD now exist — but the contract is "doesn't crash".
+        # We only assert no exception was raised.
+
+    def test_marker_filename_is_stable(self):
+        # Operator tooling will glob for this name across run dirs;
+        # changing it silently breaks downstream scripts.
+        assert summary_mod.AUDIT_DEGRADED_FILE == "sandbox-audit-degraded.json"
 
 
 class TestThreadSafety:

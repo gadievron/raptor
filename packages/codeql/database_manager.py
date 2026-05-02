@@ -414,7 +414,8 @@ class DatabaseManager:
         repo_path: Path,
         language: str,
         build_system: Optional[BuildSystem] = None,
-        force: bool = False
+        force: bool = False,
+        audit_run_dir: Optional[Path] = None,
     ) -> DatabaseResult:
         """
         Create CodeQL database.
@@ -423,6 +424,12 @@ class DatabaseManager:
             repo_path: Path to source code
             language: Programming language
             build_system: Build system info (None for no-build mode)
+            audit_run_dir: When --audit is engaged, where the tracer
+                should drop the audit JSONL. Decoupled from output= so
+                Landlock writable_paths isn't restricted (codeql
+                database create runs build subprocesses that write to
+                ~/.codeql, the database dir, and working_dir — none
+                of which can be safely listed as writable).
             force: Force recreation even if cached DB exists. Skips both
                 the initial cache check AND the race-absorbing re-check
                 — a sibling who promoted between our entry and our force
@@ -584,6 +591,12 @@ class DatabaseManager:
                 cwd=working_dir,
                 env=env,
                 tool_paths=self._sandbox_tool_paths(),
+                # Audit JSONL home (only used when --audit is engaged).
+                # Decoupled from output= because the build subprocess
+                # writes to working_dir / db_path / ~/.codeql, none of
+                # which can safely be enumerated as Landlock writable_
+                # paths without breaking real codeql workflows.
+                audit_run_dir=str(audit_run_dir) if audit_run_dir else None,
                 capture_output=True,
                 text=True,
                 timeout=RaptorConfig.CODEQL_TIMEOUT,
@@ -782,7 +795,8 @@ class DatabaseManager:
         repo_path: Path,
         language_build_map: Dict[str, Optional[BuildSystem]],
         force: bool = False,
-        max_workers: Optional[int] = None
+        max_workers: Optional[int] = None,
+        audit_run_dir: Optional[Path] = None,
     ) -> Dict[str, DatabaseResult]:
         """
         Create multiple databases in parallel.
@@ -792,6 +806,8 @@ class DatabaseManager:
             language_build_map: Dict mapping language -> BuildSystem
             force: Force recreation
             max_workers: Max parallel workers (default: RaptorConfig.MAX_CODEQL_WORKERS)
+            audit_run_dir: Forwarded to per-language create_database for
+                audit JSONL targeting (no Landlock impact).
 
         Returns:
             Dict mapping language -> DatabaseResult
@@ -809,7 +825,8 @@ class DatabaseManager:
                     repo_path,
                     lang,
                     build_system,
-                    force
+                    force,
+                    audit_run_dir,
                 ): lang
                 for lang, build_system in language_build_map.items()
             }

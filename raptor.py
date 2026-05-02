@@ -290,6 +290,62 @@ def show_mode_help(mode: str) -> None:
     subprocess.run([sys.executable, str(script_path), "--help"])
 
 
+# Help epilog used by both the no-args path and the explicit
+# --help/-h path. Centralised so the two help renderings cannot
+# drift apart silently. Indented inside main()'s argparse calls
+# via formatter_class=RawDescriptionHelpFormatter (which
+# preserves leading whitespace and newlines verbatim).
+_HELP_EPILOG = """
+Available Modes:
+  scan        - Static code analysis with Semgrep
+  fuzz        - Binary fuzzing with AFL++
+  web         - Web application security testing
+  agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
+  codeql      - CodeQL-only analysis
+  analyze     - LLM-powered vulnerability analysis (requires SARIF input)
+
+Examples:
+  # Full autonomous workflow
+  python3 raptor.py agentic --repo /path/to/code
+
+  # Static analysis only
+  python3 raptor.py scan --repo /path/to/code --policy_groups secrets,owasp
+
+  # Binary fuzzing
+  python3 raptor.py fuzz --binary /path/to/binary --duration 3600
+
+  # Web scanning
+  python3 raptor.py web --url https://example.com
+
+  # CodeQL analysis
+  python3 raptor.py codeql --repo /path/to/code --languages java
+
+  # LLM analysis of existing SARIF
+  python3 raptor.py analyze --repo /path/to/code --sarif findings.sarif
+
+Sandbox isolation (available on all modes):
+  --sandbox {full,debug,network-only,none}
+                        Force a sandbox profile (default: full)
+  --no-sandbox          Alias for --sandbox none
+  --audit               Log what enforcement WOULD have blocked
+                        (composes with --sandbox profiles other than 'none')
+  --audit-verbose       With --audit, log every traced syscall
+                        (strace-style diagnostic)
+
+  # Examples
+  python3 raptor.py agentic --repo /code --audit          # log + run
+  python3 raptor.py scan --repo /code --sandbox debug     # gdb-friendly
+  python3 raptor.py fuzz --binary /b --audit --audit-verbose  # full trace
+
+  # Get help for a specific mode
+  python3 raptor.py help scan
+  python3 raptor.py help fuzz
+  python3 raptor.py scan --help
+
+For more information, visit: https://github.com/gadievron/raptor
+"""
+
+
 def main():
     """Main entry point for unified RAPTOR launcher."""
     # Pre-process --trust-repo at the top level so it works in any position
@@ -306,41 +362,7 @@ def main():
         parser = argparse.ArgumentParser(
             description="RAPTOR - Unified Security Testing Launcher",
             formatter_class=argparse.RawDescriptionHelpFormatter,
-            epilog="""
-Available Modes:
-  scan        - Static code analysis with Semgrep
-  fuzz        - Binary fuzzing with AFL++
-  web         - Web application security testing
-  agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
-  codeql      - CodeQL-only analysis
-  analyze     - LLM-powered vulnerability analysis (requires SARIF input)
-
-Examples:
-  # Full autonomous workflow
-  python3 raptor.py agentic --repo /path/to/code
-
-  # Static analysis only
-  python3 raptor.py scan --repo /path/to/code --policy_groups secrets,owasp
-
-  # Binary fuzzing
-  python3 raptor.py fuzz --binary /path/to/binary --duration 3600
-
-  # Web scanning
-  python3 raptor.py web --url https://example.com
-
-  # CodeQL analysis
-  python3 raptor.py codeql --repo /path/to/code --languages java
-
-  # LLM analysis of existing SARIF
-  python3 raptor.py analyze --repo /path/to/code --sarif findings.sarif
-
-  # Get help for a specific mode
-  python3 raptor.py help scan
-  python3 raptor.py help fuzz
-  python3 raptor.py scan --help
-
-For more information, visit: https://github.com/gadievron/raptor
-        """
+            epilog=_HELP_EPILOG,
         )
         parser.print_help()
         return 0
@@ -354,41 +376,7 @@ For more information, visit: https://github.com/gadievron/raptor
         parser = argparse.ArgumentParser(
             description="RAPTOR - Unified Security Testing Launcher",
             formatter_class=argparse.RawDescriptionHelpFormatter,
-            epilog="""
-Available Modes:
-  scan        - Static code analysis with Semgrep
-  fuzz        - Binary fuzzing with AFL++
-  web         - Web application security testing
-  agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
-  codeql      - CodeQL-only analysis
-  analyze     - LLM-powered vulnerability analysis (requires SARIF input)
-
-Examples:
-  # Full autonomous workflow
-  python3 raptor.py agentic --repo /path/to/code
-
-  # Static analysis only
-  python3 raptor.py scan --repo /path/to/code --policy_groups secrets,owasp
-
-  # Binary fuzzing
-  python3 raptor.py fuzz --binary /path/to/binary --duration 3600
-
-  # Web scanning
-  python3 raptor.py web --url https://example.com
-
-  # CodeQL analysis
-  python3 raptor.py codeql --repo /path/to/code --languages java
-
-  # LLM analysis of existing SARIF
-  python3 raptor.py analyze --repo /path/to/code --sarif findings.sarif
-
-  # Get help for a specific mode
-  python3 raptor.py help scan
-  python3 raptor.py help fuzz
-  python3 raptor.py scan --help
-
-For more information, visit: https://github.com/gadievron/raptor
-        """
+            epilog=_HELP_EPILOG,
         )
         parser.print_help()
         return 0

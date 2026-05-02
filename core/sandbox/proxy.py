@@ -87,9 +87,102 @@ _DEFAULT_TOTAL_TIMEOUT = 3600.0      # absolute cap on a single tunnel
 _DEFAULT_MAX_TUNNELS = 64            # concurrent CONNECT tunnels
 _DEFAULT_BUFFER_SIZE = 64 * 1024     # relay buffer per direction
 
+# Canonical filename for the per-run proxy events JSONL. Written by
+# context.py (post-sandbox flush of unregister_sandbox events). Defined
+# here so consumers of the proxy module reference one source-of-truth
+# rather than the literal string.
+PROXY_EVENTS_FILENAME = "proxy-events.jsonl"
+
+# Canonical set of values the `result` field of a proxy event may take.
+# Test consumers (test_proxy_audit, test_e2e_sandbox) filter events by
+# this string — silent drift between proxy emits and consumer
+# expectations would cause filtered-by-result test queries to return
+# nothing. Pinned by structural test (test_audit_filter.py) that scans
+# proxy.py for `result="..."` literals and asserts membership in this
+# set.
+_PROXY_EVENT_RESULTS = frozenset({
+    # Connection succeeded (with or without bytes flowed yet)
+    "allowed",
+    # Gate 1 (hostname allowlist) deny — enforce mode
+    "denied_host",
+    # Gate 1 audit-mode would-deny (allow + log)
+    "would_deny_host",
+    # Gate 2 (resolved IP block / DNS-rebinding defense) deny —
+    # always enforcing, never audit-allowed. There is NO
+    # `would_deny_resolved_ip` event; in audit mode gate 2 still
+    # emits `denied_resolved_ip` AND additionally writes a
+    # supplementary record to summary via record_denial.
+    "denied_resolved_ip",
+    # DNS resolution failed (NXDOMAIN, timeout)
+    "dns_failed",
+    # Upstream (or backend) refused / unreachable
+    "upstream_failed",
+    # Total tunnel duration cap exceeded mid-relay
+    "timed_out",
+    # Malformed CONNECT line / bad headers
+    "bad_request",
+    # Unhandled exception in tunnel handler
+    "handler_error",
+})
+
 # Thread-safe singleton. `get_proxy()` is the sole entry point.
 _lock = threading.Lock()
 _instance: Optional["EgressProxy"] = None
+
+
+def _record_proxy_denial(host: str, port: int, resolved_ip: Optional[str],
+                         would_deny: str) -> None:
+    """Route a proxy-side audit-mode denial into the per-run sandbox
+    summary via core.sandbox.summary.record_denial.
+
+    Called for two cases in audit mode:
+    - gate 1 (host not in allowlist) audit-fall-through: the CONNECT
+      succeeds and the child sees nothing, so the proxy has to emit
+      the record itself or it never lands in the summary.
+    - gate 2 (resolved IP blocked) deny: gate 2 stays enforcing in
+      audit mode because it's the proxy's DNS-rebinding/DNS-poisoning
+      defense, but we ALSO call this so the attack signal lands in
+      sandbox-summary.json (not only in proxy-events.jsonl).
+
+    cmd_display uses the CONNECT description (always accurate) rather
+    than the originating sandbox's caller_label. The proxy is process-
+    wide and serves all registered sandboxes; there's no source-port→
+    sandbox mapping at this layer, so any caller-label attribution
+    would be a heuristic. Operators wanting attribution can cross-
+    reference proxy-events.jsonl which has the matching event with the
+    same host/port at the same timestamp.
+
+    Lazy import: keeps core.sandbox.summary out of proxy module load,
+    matching the lazy import already used in core/run/metadata.py.
+
+    Performance note: record_denial does sync open/write/close on the
+    asyncio event-loop thread. Each record is ~300 bytes and the
+    MAX_DENIALS_PER_RUN cap (10000) bounds worst-case I/O volume —
+    fine for normal disks. If audit-mode CONNECTs ever stall under
+    slow-fs / adversarial-fs conditions, wrap with asyncio.to_thread.
+    """
+    try:
+        from core.sandbox.summary import record_denial
+        # ASCII separator rather than Unicode arrow — record_denial
+        # writes the JSONL with ensure_ascii=True, so a "→" becomes the
+        # escape sequence "→" on disk and operators reading
+        # sandbox-summary.json see noise instead of the separator.
+        cmd = (f"<egress-proxy CONNECT {host}:{port}>" if resolved_ip is None
+               else f"<egress-proxy CONNECT {host}:{port} -> {resolved_ip}>")
+        details = {"host": host, "port": port,
+                   "would_deny": would_deny, "audit": True}
+        if resolved_ip is not None:
+            details["resolved_ip"] = resolved_ip
+        record_denial(cmd, 0, "network", **details)
+    except Exception:  # noqa: BLE001 — best-effort; never fail a CONNECT
+        # Deliberate scope: Exception, not BaseException. SystemExit and
+        # KeyboardInterrupt SHOULD propagate so the process can exit.
+        # record_denial is documented to never raise either of those —
+        # if a future change makes it raise SystemExit, the gate-2 deny
+        # path's `await self._write_error(...)` would be skipped because
+        # the exception escapes this helper. Don't introduce that path.
+        logger.debug("_record_proxy_denial: record_denial failed",
+                     exc_info=True)
 
 
 def _ip_is_blocked(ip_str: str) -> bool:
@@ -190,9 +283,37 @@ class EgressProxy:
                  max_tunnels: int = _DEFAULT_MAX_TUNNELS,
                  buffer_size: int = _DEFAULT_BUFFER_SIZE,
                  upstream_proxy: Optional[str] = None,
-                 no_proxy: Optional[str] = None):
+                 no_proxy: Optional[str] = None,
+                 audit_log_only: bool = False):
         self._hosts_lock = threading.Lock()
         self._allowed_hosts: Set[str] = {h.lower() for h in allowed_hosts}
+        # When True, gate 1 (hostname allowlist) emits a `would_deny_host`
+        # event AND a record_denial entry, then falls through to the
+        # connect path — operator workflows that hit gate 1 keep working
+        # but the policy violation is logged. Gate 2 (resolved-IP block)
+        # is the proxy's DNS-rebinding/DNS-poisoning defense and stays
+        # ENFORCING regardless: it has no legitimate-workflow false
+        # positives (an allowlisted hostname resolving to a private/
+        # loopback IP is purely an attack signal). In audit mode gate 2
+        # additionally records the deny into the summary.
+        #
+        # Operator-facing wiring: context.py engages this via
+        # acquire_audit_log_only() / release_audit_log_only() when an
+        # audit-mode sandbox enters/exits. The constructor kwarg here
+        # remains for direct test construction. Tests of the toggle
+        # itself MUST use the acquire/release API to exercise the ref-
+        # counting; concurrent mixed-profile sandbox correctness depends
+        # on it.
+        self._audit_log_only = audit_log_only
+        # Ref-count for concurrent acquire/release. Each audit-mode
+        # sandbox via use_egress_proxy=True acquires on entry, releases
+        # on exit. Gate 1 is in audit-log mode iff count > 0. Without
+        # this, mixed-profile concurrent sandboxes would race —
+        # specifically, a non-audit sandbox could see its CONNECTs
+        # silently downgraded to allow-and-log (security weakening)
+        # because a sibling audit sandbox flipped the singleton's flag.
+        self._audit_lock = threading.Lock()
+        self._audit_count = 1 if audit_log_only else 0
         self._idle_timeout = idle_timeout
         self._total_timeout = total_timeout
         self._max_tunnels = max_tunnels
@@ -212,9 +333,9 @@ class EgressProxy:
         self._no_proxy_patterns: list = _parse_no_proxy(no_proxy)
         # Event ring buffer for observability. Each entry is a dict:
         #   {"t": monotonic_seconds, "host": str, "port": int,
-        #    "result": "allowed"|"denied_host"|"denied_resolved_ip"|
-        #              "dns_failed"|"upstream_failed"|"timed_out"|
-        #              "bad_request",
+        #    "result": one of _PROXY_EVENT_RESULTS (see module-level
+        #              constant — pinned by structural test so any
+        #              new result string fires the test until added),
         #    "reason": str|None, "resolved_ip": str|None,
         #    "bytes_c2u": int, "bytes_u2c": int, "duration": float}
         # `t` uses time.monotonic() for monotonicity across clock jumps.
@@ -263,6 +384,67 @@ class EgressProxy:
         """Extend the allowlist. Idempotent. Thread-safe."""
         with self._hosts_lock:
             self._allowed_hosts.update(h.lower() for h in hosts)
+
+    def acquire_audit_log_only(self) -> None:
+        """Increment the audit-mode reference count and ensure
+        audit-log mode is engaged on the hostname gate.
+
+        Ref-counted to prevent concurrent mixed-profile sandboxes
+        from racing on the singleton: when an audit-mode sandbox
+        enters via use_egress_proxy=True, it acquires; on exit it
+        releases. The gate is in audit-log mode iff at least one
+        audit-mode sandbox is active. A concurrent NON-audit sandbox
+        does NOT release the count (it never acquired in the first
+        place), so its CONNECTs stay properly enforced.
+
+        Without ref-counting, a non-ref-counted setter on the
+        singleton (the design that pre-dated this acquire/release
+        API) would have allowed a sibling non-audit sandbox to
+        unset audit mode while an audit-mode peer was still active
+        — weakening the gate's enforcement under concurrent
+        mixed-profile usage. And vice-versa: an audit-mode set
+        would have allowed a non-audit peer's CONNECTs to non-
+        allowlisted hosts to slip through.
+
+        Gate 2 (resolved-IP block) is unaffected — it's the proxy's
+        DNS-rebinding defense and stays enforcing in every mode.
+        """
+        with self._audit_lock:
+            self._audit_count += 1
+            self._audit_log_only = (self._audit_count > 0)
+            # Log the first acquisition (security-property change
+            # visibility — matches the disable_from_cli WARNING style).
+            if self._audit_count == 1:
+                logger.warning(
+                    "egress proxy: hostname gate switched to "
+                    "AUDIT-LOG mode (CONNECT to non-allowlisted "
+                    "hosts will be ALLOWED and logged, not denied). "
+                    "Engaged by `--audit` flag."
+                )
+
+    def release_audit_log_only(self) -> None:
+        """Decrement the audit-mode reference count. When it reaches
+        zero, the hostname gate returns to enforcing mode.
+
+        Idempotent at zero — extra release()s are silently clamped
+        (defensive: an exception path that runs cleanup twice
+        shouldn't push the count negative). Logs the transition only
+        when count was actually decremented from 1 to 0; idempotent
+        zero-releases don't log so an over-eager cleanup path doesn't
+        spam the operator with misleading "returned to enforcing"
+        messages when nothing actually changed.
+        """
+        with self._audit_lock:
+            transitioned_to_zero = False
+            if self._audit_count > 0:
+                self._audit_count -= 1
+                transitioned_to_zero = (self._audit_count == 0)
+            self._audit_log_only = (self._audit_count > 0)
+            if transitioned_to_zero:
+                logger.info(
+                    "egress proxy: hostname gate returned to "
+                    "ENFORCING mode (no audit-mode sandbox active)"
+                )
 
     def is_host_allowed(self, host: str) -> bool:
         """Check if a host is in the allowlist (case-insensitive)."""
@@ -556,14 +738,45 @@ class EgressProxy:
 
         # Policy gate 1: hostname allowlist.
         if not self.is_host_allowed(host):
-            logger.warning(
-                f"egress proxy: DENY {host}:{port} — not in allowlist"
-            )
-            event.update(result="denied_host", reason="host not in allowlist",
-                         duration=time.monotonic() - t_start)
-            self._record(event)
-            await self._write_error(writer, 403, "Forbidden")
-            return
+            # Snapshot the audit-log flag under the audit lock at the
+            # decision point. The flag is mutated by acquire/release
+            # ref-counting from other threads; an unlocked read here
+            # (CPython-atomic for bools, but no happens-before edge
+            # against the increment in acquire_audit_log_only) could
+            # in principle read a stale True after a concurrent
+            # release dropped the count to zero. The snapshot pattern
+            # makes the race window explicit and the outcome
+            # consistent with the count value at the snapshot moment.
+            with self._audit_lock:
+                _audit_now = self._audit_log_only
+            if _audit_now:
+                # Audit mode: record the would-deny but proceed with the
+                # CONNECT. Use a distinct event result so consumers can
+                # tell audit-would-deny apart from real-deny in the same
+                # proxy-events.jsonl. The audit event captures intent;
+                # the later "allowed" event captures the actual outcome
+                # (so a single CONNECT in audit mode produces TWO event
+                # records — one would-deny, one allowed).
+                logger.warning(
+                    f"egress proxy: AUDIT would-deny {host}:{port} — "
+                    f"not in allowlist (audit mode: allowing)"
+                )
+                audit_event = {**event, "result": "would_deny_host",
+                               "reason": "host not in allowlist (audit mode)",
+                               "duration": time.monotonic() - t_start}
+                self._record(audit_event)
+                _record_proxy_denial(host, port, None,
+                                     "host_not_in_allowlist")
+                # Fall through to the connect path.
+            else:
+                logger.warning(
+                    f"egress proxy: DENY {host}:{port} — not in allowlist"
+                )
+                event.update(result="denied_host", reason="host not in allowlist",
+                             duration=time.monotonic() - t_start)
+                self._record(event)
+                await self._write_error(writer, 403, "Forbidden")
+                return
 
         # Decide path: direct or via upstream proxy.
         use_upstream = (self._upstream is not None
@@ -678,6 +891,22 @@ class EgressProxy:
             resolved_ip = sockaddr[0]
             event["resolved_ip"] = resolved_ip
             if _ip_is_blocked(resolved_ip):
+                # Gate 2 is the proxy's DNS-rebinding / IP-poisoning
+                # defense — always on whenever the proxy is in the loop,
+                # regardless of audit_log_only. Resolving an allowlisted
+                # hostname to a private/loopback/metadata IP has no
+                # legitimate workflow rationale; only DNS attacks land
+                # here. Blocking is unconditional.
+                #
+                # In audit mode we ALSO route the deny into the per-run
+                # summary via record_denial — operators reading
+                # sandbox-summary.json see the attack signal there, not
+                # only in proxy-events.jsonl. (Under full enforcement
+                # the child sees a 502 and observe.py picks it up via
+                # stderr pattern-matching; under audit the child also
+                # sees the deny but we surface it directly because the
+                # audit promise is "every policy/safety event lands in
+                # the summary".)
                 logger.warning(
                     f"egress proxy: DENY {host}:{port} — resolved to blocked "
                     f"IP {resolved_ip}"
@@ -686,6 +915,15 @@ class EgressProxy:
                              reason=f"resolved to blocked range: {resolved_ip}",
                              duration=time.monotonic() - t_start)
                 self._record(event)
+                # Snapshot under the audit lock — same reasoning as
+                # gate 1 above: ref-counted mutations from other
+                # threads need a happens-before edge to make the
+                # snapshot consistent with the count.
+                with self._audit_lock:
+                    _audit_now = self._audit_log_only
+                if _audit_now:
+                    _record_proxy_denial(host, port, resolved_ip,
+                                         "resolved_ip_blocked")
                 await self._write_error(writer, 403, "Forbidden")
                 return
 

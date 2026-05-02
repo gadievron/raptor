@@ -61,6 +61,12 @@ def redact_secrets(value: object, *, reveal_secrets: bool = False) -> str:
     RAPTOR defaults to redacting because scan artifacts and logs are often shared.
     Operators can pass ``reveal_secrets=True`` for local debugging/troubleshooting
     when retaining exact credentials in artifacts is intentional.
+
+    Suitable for FREE-FORM TEXT (log lines, error messages, command-line
+    args). For filesystem paths use ``redact_url_secrets_only`` instead —
+    paths can legitimately contain "Bearer X" or "Basic X" substrings as
+    filename components, and the Bearer/Basic header patterns generate
+    false positives in that context.
     """
     text = str(value)
     if reveal_secrets:
@@ -82,4 +88,27 @@ def redact_secrets(value: object, *, reveal_secrets: bool = False) -> str:
         text,
         flags=re.IGNORECASE,
     )
+    return text
+
+
+def redact_url_secrets_only(value: object, *,
+                             reveal_secrets: bool = False) -> str:
+    """Redact URL-embedded credentials only — no Bearer/Basic patterns.
+
+    For filesystem paths and other structured text where the Bearer/Basic
+    HTTP-header patterns would produce false positives. A path like
+    ``/tmp/Bearer abc123def456ghi789jkl.dat`` would be incorrectly
+    redacted by ``redact_secrets`` despite not actually being a credential
+    (it's a filename that happens to contain the substring "Bearer").
+
+    URL-shaped substrings still get redacted because:
+    - ``https://user:pass@host/path`` IS a credential leak regardless of
+      whether it appears in a path component or a free-form log line.
+    - URL pattern requires ``://`` so it doesn't false-match on filename
+      content.
+    """
+    text = str(value)
+    if reveal_secrets:
+        return text
+    text = re.sub(r"https?://[^\s'\"<>]+", _redact_url, text)
     return text

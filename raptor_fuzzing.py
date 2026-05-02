@@ -62,7 +62,7 @@ def main() -> None:
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(ap)
     args = ap.parse_args()
-    apply_cli_args(args)
+    apply_cli_args(args, parser=ap)
 
     binary_path = Path(args.binary).resolve()
     if not binary_path.exists():
