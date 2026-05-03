@@ -276,6 +276,144 @@ class LLMProvider(ABC):
             logger.error(f"Structured fallback failed (JSON parse or validation): {e}")
             raise
 
+    # ------------------------------------------------------------------
+    # Tool-use fallback — JSON-in-prompt protocol over plain generate().
+    # ------------------------------------------------------------------
+    #
+    # Synthesises a single tool-use turn for providers that can produce
+    # text but lack native tool/function calling (e.g., the Claude Code
+    # subprocess transport). Subclasses opt in by overriding ``turn`` to
+    # delegate here and flipping ``supports_tool_use`` to True.
+    #
+    # Limitations vs. native:
+    #   * one tool call per turn (parallel calls aren't reliably
+    #     synthesisable — the prompt asks for one at a time)
+    #   * ``CacheControl`` is ignored
+    #   * token counts come from the underlying ``generate()`` response;
+    #     cost flows through whatever ``track_usage`` records
+    # The loop itself is unchanged — it sees the same ``TurnResponse``
+    # shape native ``turn`` impls produce.
+
+    def _tool_use_fallback(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDef],
+        *,
+        system: Optional[str] = None,
+        max_tokens: int = 4096,
+        cache_control: CacheControl = CacheControl(),
+        **provider_specific: Any,
+    ) -> TurnResponse:
+        """Synthesise one tool-use round-trip via plain ``generate()``."""
+        del cache_control, provider_specific  # unused by fallback
+        tool_protocol = self._render_tool_protocol(tools) if tools else ""
+        sys_combined = "\n\n".join(s for s in (system, tool_protocol) if s) or None
+        rendered_prompt = self._render_messages_as_prompt(messages)
+
+        response = self.generate(
+            rendered_prompt,
+            system_prompt=sys_combined,
+            max_tokens=max_tokens,
+        )
+
+        text = response.content if response and response.content else ""
+        block, stop_reason = self._parse_fallback_response(text, tools)
+
+        return TurnResponse(
+            content=[block],
+            stop_reason=stop_reason,
+            input_tokens=getattr(response, "input_tokens", 0) or 0,
+            output_tokens=getattr(response, "output_tokens", 0) or 0,
+        )
+
+    @staticmethod
+    def _render_tool_protocol(tools: Sequence[ToolDef]) -> str:
+        """Render tool defs as a JSON-call protocol the model is asked
+        to follow. The model is told to emit one JSON object per call;
+        the parser tolerates ```json fences and surrounding whitespace
+        but not interleaved prose."""
+        lines = [
+            "You have access to the following tools. To call a tool,",
+            "respond with ONLY a JSON object in this exact shape:",
+            "```json",
+            '{"tool": "<tool_name>", "input": {...}}',
+            "```",
+            "Call only one tool per response. If you don't need a tool,",
+            "respond with normal text and no JSON.",
+            "",
+            "Available tools:",
+        ]
+        for t in tools:
+            schema_json = json.dumps(t.input_schema, indent=2)
+            lines.append(f"- name: {t.name}")
+            lines.append(f"  description: {t.description}")
+            lines.append(f"  input_schema: {schema_json}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _render_messages_as_prompt(messages: Sequence[Message]) -> str:
+        """Flatten conversation history into a single prompt string.
+
+        Tool calls/results are rendered as tagged sections so the model
+        can follow the protocol on subsequent turns. The role labels
+        match what we ask for in :meth:`_render_tool_protocol`."""
+        parts: list[str] = []
+        for msg in messages:
+            for block in msg.content:
+                if isinstance(block, TextBlock):
+                    parts.append(f"{msg.role}: {block.text}")
+                elif isinstance(block, ToolCall):
+                    parts.append(
+                        f"assistant called tool {block.name!r} "
+                        f"with input {json.dumps(block.input)}"
+                    )
+                elif isinstance(block, ToolResult):
+                    err = " [ERROR]" if block.is_error else ""
+                    parts.append(
+                        f"tool_result{err} for {block.tool_use_id}: "
+                        f"{block.content}"
+                    )
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _parse_fallback_response(
+        text: str, tools: Sequence[ToolDef],
+    ) -> tuple[Union[TextBlock, ToolCall], StopReason]:
+        """Extract a tool call (if any) or fall back to a text block.
+
+        Uses :func:`core.llm.cc_adapter.strip_json_fences` to find a
+        JSON payload inside ```json fences anywhere in the response —
+        not just at the start — so a model that adds short prose
+        before/after the fenced JSON still has its call recognised.
+        """
+        if not text or not tools:
+            return TextBlock(text=text or ""), StopReason.COMPLETE
+
+        from .cc_adapter import strip_json_fences
+        candidate = strip_json_fences(text).strip()
+        try:
+            parsed = json.loads(candidate)
+        except (json.JSONDecodeError, ValueError):
+            return TextBlock(text=text), StopReason.COMPLETE
+
+        if not isinstance(parsed, dict):
+            return TextBlock(text=text), StopReason.COMPLETE
+
+        name = parsed.get("tool")
+        inp = parsed.get("input")
+        if not isinstance(name, str) or not isinstance(inp, dict):
+            return TextBlock(text=text), StopReason.COMPLETE
+
+        if not any(t.name == name for t in tools):
+            # Model hallucinated a tool name — surface the raw text so
+            # the loop can see what happened rather than dispatching a
+            # bogus call.
+            return TextBlock(text=text), StopReason.COMPLETE
+
+        import uuid as _uuid
+        call_id = f"call_{_uuid.uuid4().hex[:12]}"
+        return ToolCall(id=call_id, name=name, input=inp), StopReason.NEEDS_TOOL_CALL
+
 
 def _coerce_to_schema(data: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
     """Coerce LLM output values to match schema types before Pydantic validation.
@@ -1552,6 +1690,211 @@ class ClaudeCodeProvider:
         }
 
 
+class ClaudeCodeLLMProvider(LLMProvider):
+    """Claude Code subprocess transport as a real :class:`LLMProvider`.
+
+    Wraps ``claude -p`` (via :mod:`core.llm.cc_adapter`) so consumers
+    that hold a :class:`ModelConfig` can transparently use the Claude
+    Code CLI when no SDK API key is configured. Supports tool-use via
+    the ABC's :meth:`_tool_use_fallback` (JSON-in-prompt protocol over
+    plain ``generate()``) — slower than native tool/function calling
+    and one tool call per turn, but functional on any backend that
+    just emits text.
+
+    Distinct from the :class:`ClaudeCodeProvider` stub above: this is
+    a real provider that does generation; the stub returns ``None`` to
+    signal "the surrounding orchestrator handles reasoning" and is
+    used by :mod:`packages.llm_analysis.agent` for prep-only mode.
+    """
+
+    is_stub = False
+
+    def __init__(
+        self,
+        config: ModelConfig,
+        *,
+        claude_bin: Optional[str] = None,
+        budget_usd: str = "1.00",
+        timeout_s: Optional[int] = None,
+    ) -> None:
+        super().__init__(config)
+        self._claude_bin = claude_bin or "claude"
+        self._budget_usd = budget_usd
+        # Per-call timeout: prefer explicit kwarg, then ModelConfig.timeout,
+        # then a generous default (Claude Code subprocess + tool-use can
+        # take several minutes on real workloads).
+        self._timeout_s = timeout_s or (config.timeout if config.timeout else 600)
+
+    def generate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        """Dispatch a prompt to ``claude -p`` and parse the JSON envelope."""
+        from .cc_adapter import (
+            CCDispatchConfig, build_cc_command, parse_cc_freeform,
+        )
+        import subprocess
+        import time as _time
+
+        full_prompt = (
+            f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+        )
+        cc_config = CCDispatchConfig(
+            claude_bin=self._claude_bin,
+            # Used as a pure-LLM substrate: disable CC's internal tools
+            # (Read/Grep/Glob default) so the subprocess can't scan cwd
+            # before answering. Tool-use happens at the loop layer above
+            # us via _tool_use_fallback's JSON-protocol synthesis.
+            tools="",
+            budget_usd=self._budget_usd,
+            timeout_s=self._timeout_s,
+            capture_json_envelope=True,
+        )
+        cmd = build_cc_command(cc_config)
+
+        start = _time.time()
+        try:
+            proc = subprocess.run(
+                cmd,
+                input=full_prompt,
+                text=True,
+                capture_output=True,
+                timeout=self._timeout_s,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(
+                f"claude -p timed out after {self._timeout_s}s"
+            ) from e
+        duration = _time.time() - start
+
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"claude -p exited with status {proc.returncode}: "
+                f"{(proc.stderr or '')[:500]}"
+            )
+
+        parsed = parse_cc_freeform(proc.stdout, proc.stderr)
+        content = parsed.get("content", "") or ""
+        cost = float(parsed.get("cost_usd", 0.0) or 0.0)
+        tokens = int(parsed.get("_tokens", 0) or 0)
+
+        # Best-effort token split: cc_adapter only surfaces total tokens;
+        # if the envelope had separate input/output we'd carry them, but
+        # parse_cc_freeform sums them. Attribute everything to output to
+        # avoid silently zeroing the counter.
+        self.track_usage(
+            tokens=tokens, cost=cost,
+            input_tokens=0, output_tokens=tokens,
+            duration=duration,
+        )
+
+        return LLMResponse(
+            content=content,
+            model=parsed.get("analysed_by", self.config.model_name),
+            provider="claudecode",
+            tokens_used=tokens,
+            cost=cost,
+            finish_reason="stop",
+            input_tokens=0,
+            output_tokens=tokens,
+            duration=duration,
+        )
+
+    def generate_structured(
+        self,
+        prompt: str,
+        schema: Dict[str, Any],
+        system_prompt: Optional[str] = None,
+    ) -> Tuple[Dict[str, Any], str]:
+        """Dispatch with ``--json-schema`` for structured output."""
+        from .cc_adapter import (
+            CCDispatchConfig, build_cc_command, parse_cc_structured,
+        )
+        import subprocess
+        import time as _time
+
+        full_prompt = (
+            f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+        )
+        cc_config = CCDispatchConfig(
+            claude_bin=self._claude_bin,
+            tools="",                                # see generate() comment
+            budget_usd=self._budget_usd,
+            timeout_s=self._timeout_s,
+            json_schema=schema,
+            capture_json_envelope=True,
+        )
+        cmd = build_cc_command(cc_config)
+
+        start = _time.time()
+        try:
+            proc = subprocess.run(
+                cmd,
+                input=full_prompt,
+                text=True,
+                capture_output=True,
+                timeout=self._timeout_s,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(
+                f"claude -p timed out after {self._timeout_s}s"
+            ) from e
+        duration = _time.time() - start
+
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"claude -p exited with status {proc.returncode}: "
+                f"{(proc.stderr or '')[:500]}"
+            )
+
+        result = parse_cc_structured(proc.stdout, proc.stderr)
+        if "error" in result and result["error"]:
+            raise RuntimeError(f"claude -p structured parse failed: {result['error']}")
+
+        # Track usage so structured calls show up alongside generate() in
+        # provider stats. cost/_tokens are set by extract_envelope_metadata
+        # inside parse_cc_structured when the envelope carries them.
+        cost = float(result.pop("cost_usd", 0.0) or 0.0)
+        tokens = int(result.pop("_tokens", 0) or 0)
+        result.pop("duration_seconds", None)
+        result.pop("analysed_by", None)
+        # parse_cc_structured injects ``finding_id`` (default "unknown")
+        # via setdefault — a CVE-aware behaviour leaking from
+        # cc_adapter's other consumers. Strip it so the consumer's
+        # schema isn't polluted with a field they didn't ask for.
+        result.pop("finding_id", None)
+        self.track_usage(
+            tokens=tokens, cost=cost,
+            input_tokens=0, output_tokens=tokens,
+            duration=duration,
+        )
+
+        return result, json.dumps(result, indent=2)
+
+    def supports_tool_use(self) -> bool: return True
+    def supports_prompt_caching(self) -> bool: return False
+    def supports_parallel_tools(self) -> bool: return False
+
+    def turn(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDef],
+        *,
+        system: Optional[str] = None,
+        max_tokens: int = 4096,
+        cache_control: CacheControl = CacheControl(),
+        **provider_specific: Any,
+    ) -> TurnResponse:
+        """Tool-use via the ABC's JSON-protocol fallback."""
+        return self._tool_use_fallback(
+            messages, tools,
+            system=system, max_tokens=max_tokens,
+            cache_control=cache_control, **provider_specific,
+        )
+
+
 def create_provider(config: ModelConfig) -> LLMProvider:
     """
     Factory function to create appropriate provider.
@@ -1567,6 +1910,8 @@ def create_provider(config: ModelConfig) -> LLMProvider:
         LLMProvider instance
     """
     provider = config.provider.lower()
+    if provider in ("claudecode", "claude_code", "claude-code"):
+        return ClaudeCodeLLMProvider(config)
     if provider == "anthropic":
         if ANTHROPIC_SDK_AVAILABLE:
             return AnthropicProvider(config)
