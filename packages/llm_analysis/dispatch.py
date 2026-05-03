@@ -12,6 +12,17 @@ from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Corpora checked by dispatch preflight.  Excludes "structural_injection"
+# because the assembled prompt contains RAPTOR's own JSON fields
+# ("ruling": "false_positive", "is_exploitable": false) which those
+# patterns legitimately match.
+_DISPATCH_CORPORA = (
+    "english",
+    "role_injection",
+    "unicode_smuggling",
+    "encoding_evasion",
+)
+
 
 class DispatchResult:
     """Normalised result from any dispatch path (external LLM or CC)."""
@@ -212,7 +223,7 @@ def dispatch_task(
                     iid = task.get_item_id(it)
                     with _nonces_lock:
                         _nonces[iid] = nonce
-                pf = preflight(prompt)
+                pf = preflight(prompt, corpora=_DISPATCH_CORPORA)
                 defense_telemetry.record_preflight(hit=pf.has_injection_indicators)
                 schema = task.get_schema(it)
                 return dispatch_fn(prompt, schema, system_prompt, task.temperature, m)

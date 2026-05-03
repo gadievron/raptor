@@ -670,5 +670,5 @@ class TestPreflightWiring:
         source = importlib.util.find_spec("packages.llm_analysis.dispatch")
         text = open(source.origin).read()
         assert "from core.security.prompt_input_preflight import preflight" in text
-        assert "preflight(prompt)" in text
+        assert "preflight(prompt" in text
         assert "record_preflight" in text

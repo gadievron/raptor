@@ -1,6 +1,13 @@
 # Structural / format-level injection patterns.
 # Detect attempts to break out of data context by injecting structural
 # elements that LLMs parse as role boundaries or system instructions.
+#
+# SCOPE: These patterns assume the input is attacker-controlled content
+# from a scanned target repo (source code, commit messages, issue text).
+# They WILL false-positive on RAPTOR's own JSON output (e.g. findings
+# with "ruling": "false_positive" or "is_exploitable": false).  Callers
+# should skip this corpus for agent-to-agent messages and RAPTOR findings
+# by passing corpora=(...) without "structural_injection" to preflight().
 
 # Fake role headers — model-specific delimiters injected in data.
 <\|(?:system|assistant|user|im_start|im_end)\|>

@@ -323,8 +323,11 @@ def orchestrate(
                 "Operator accepted weakened defenses for %s (probe error: %s)",
                 analysis_model_name, probe_result.error,
             )
-            print(f"  Envelope probe failed for {model_label} — using passthrough mode"
-                  f" (--accept-weakened-defenses)")
+            print(f"\n  *** DEFENSE WARNING: envelope probe failed for {model_label} ***")
+            print(f"  Running with reduced defences (--accept-weakened-defenses)")
+            print(f"  Reason: {probe_result.error}")
+            print(f"  Model-independent floor still applies (autofetch redaction,"
+                  f" control-char sanitisation, role separation)\n")
 
     # --- Per-finding analysis ---
     results_by_id = {}

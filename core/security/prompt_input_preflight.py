@@ -12,6 +12,15 @@ Patterns live in `injection_patterns/*.txt`. Each non-comment line is one
 regex. The corpus is loaded at import time. Adding a new attack pattern is
 a single-file edit; the public API does not change.
 
+Corpora whose filename contains ``_multiline`` are compiled with
+``re.MULTILINE | re.DOTALL`` so they can catch phrases split across line
+boundaries. All other corpora use ``re.IGNORECASE`` only (single-line
+matching) to keep false-positive rates low on large inputs.
+
+``preflight()`` accepts an optional ``corpora`` parameter to restrict which
+pattern files are checked. Pass ``corpora=("english_multiline",)`` for
+short, structured inputs where multiline detection is worthwhile.
+
 Suitable consumers: stages that produce *confidence verdicts* over short,
 structured inputs (SCA install-script review, /understand verdicts, /validate
 exploitability). Unsuitable for: bulk source-code analysis where every
@@ -53,13 +62,16 @@ def _load_patterns() -> dict[str, tuple[re.Pattern[str], ...]]:
     if not _PATTERNS_DIR.exists():
         return by_file
     for path in sorted(_PATTERNS_DIR.glob("*.txt")):
+        flags = re.IGNORECASE
+        if "_multiline" in path.stem:
+            flags |= re.MULTILINE | re.DOTALL
         compiled: list[re.Pattern[str]] = []
         for raw in path.read_text(encoding="utf-8").splitlines():
             stripped = raw.strip()
             if not stripped or stripped.startswith("#"):
                 continue
             try:
-                compiled.append(re.compile(stripped, re.IGNORECASE))
+                compiled.append(re.compile(stripped, flags))
             except re.error:
                 continue
         if compiled:
@@ -70,7 +82,11 @@ def _load_patterns() -> dict[str, tuple[re.Pattern[str], ...]]:
 _PATTERNS = _load_patterns()
 
 
-def preflight(content: str) -> PreflightResult:
+def preflight(
+    content: str,
+    *,
+    corpora: tuple[str, ...] | None = None,
+) -> PreflightResult:
     """Scan content for known injection-pattern indicators.
 
     Non-blocking: a hit produces a confidence haircut, never an exception.
@@ -79,9 +95,15 @@ def preflight(content: str) -> PreflightResult:
     missing corpus returns `confidence_haircut=1.0` (fail-open) so a
     misconfigured deployment cannot silently disable the rest of the
     pipeline by returning haircut-zero results.
+
+    *corpora* restricts which pattern files to check. ``None`` (default)
+    checks all loaded corpora. Pass a tuple of file stems to limit — e.g.
+    ``corpora=("english", "english_multiline")`` for short structured inputs.
     """
     indicators: list[str] = []
     for name, patterns in _PATTERNS.items():
+        if corpora is not None and name not in corpora:
+            continue
         if any(p.search(content) for p in patterns):
             indicators.append(name)
     if indicators:

@@ -1,0 +1,14 @@
+# Multiline variants of high-risk english.txt patterns.
+#
+# Compiled with re.MULTILINE | re.DOTALL | re.IGNORECASE so they catch
+# injection phrases split across line boundaries.  The single-line
+# english.txt corpus stays unchanged to keep false-positive rates low on
+# long inputs.  This corpus is opt-in: callers pass
+# corpora=("english_multiline",) for short, structured inputs only.
+#
+# See: PR #273 review — danielcuthbert
+
+ignore\s+(?:all\s+|the\s+)?(?:previous|prior|above|preceding)\s+(?:instructions|messages|rules|prompts)
+disregard\s+(?:all\s+|the\s+)?(?:previous|prior|above|preceding)\s+(?:instructions|messages|rules|prompts)
+forget\s+(?:all\s+|the\s+|everything\s+)?(?:previous|prior|above|preceding|you were told)
+your\s+(?:real|actual|new|true)\s+(?:task|goal|objective|purpose|mission)\s+is
