@@ -21,7 +21,6 @@ STATUS_COMPLETED = "completed"
 STATUS_FAILED = "failed"
 STATUS_CANCELLED = "cancelled"
 
-# Known command prefixes for inferring command type from directory names
 # Known command prefixes for inferring command type from directory names.
 # Includes both legacy prefixes (raptor_, autonomous, exploitability-validation)
 # and project-mode prefixes (agentic, validate, understand, fuzz, web).
@@ -46,11 +45,50 @@ _PREFIX_MAP = {
 }
 
 
-def _get_session_pid() -> Optional[int]:
-    """Get the PID of the Claude Code session (our parent process).
+def _find_claude_ancestor() -> Optional[int]:
+    """Walk the process tree to find the nearest 'claude' ancestor PID.
 
-    Returns None if not running inside Claude Code.
+    Returns the PID of the claude process, or None if not found.
+    Works from any depth: Bash tool calls, hooks, Python subprocesses.
     """
+    pid = os.getpid()
+    for _ in range(20):
+        try:
+            pid = os.getppid() if pid == os.getpid() else _read_ppid(pid)
+        except (OSError, ValueError):
+            return None
+        if pid <= 1:
+            return None
+        try:
+            comm = Path(f"/proc/{pid}/comm").read_text().strip()
+        except OSError:
+            return None
+        if comm == "claude":
+            return pid
+    return None
+
+
+def _read_ppid(pid: int) -> int:
+    """Read PPID from /proc/<pid>/stat (Linux-only)."""
+    stat = Path(f"/proc/{pid}/stat").read_text()
+    # Format: pid (comm) state ppid ...
+    # comm can contain spaces/parens, so find the last ')' first
+    close_paren = stat.rfind(")")
+    fields = stat[close_paren + 2:].split()
+    return int(fields[1])  # ppid is field index 1 after state
+
+
+def _get_session_pid() -> Optional[int]:
+    """Get the PID of the Claude Code session process.
+
+    Walks the ancestor tree to find the 'claude' process rather than
+    using getppid(), because the immediate parent varies by context
+    (Bash tool shell, hook sh wrapper, Python subprocess).
+    Falls back to CLAUDECODE env var check + getppid() on non-Linux.
+    """
+    ancestor = _find_claude_ancestor()
+    if ancestor is not None:
+        return ancestor
     if not os.environ.get("CLAUDECODE"):
         return None
     return os.getppid()
@@ -99,6 +137,7 @@ def start_run(output_dir: Path, command: str, extra: Dict[str, Any] = None,
     }
     if session_pid is not None:
         metadata["session_pid"] = session_pid
+        metadata["tool_pid"] = os.getppid()
     if target:
         metadata["target_path"] = str(target)
     # Mark this run as the active sandbox-summary recording target before

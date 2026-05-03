@@ -130,6 +130,42 @@ class TestRunLifecycle(unittest.TestCase):
             self.assertEqual(meta1["status"], "running")  # untouched
 
 
+class TestFindClaudeAncestor(unittest.TestCase):
+
+    def test_returns_int_in_claudecode(self):
+        """Inside Claude Code, _find_claude_ancestor returns the claude PID."""
+        import os
+        if not os.environ.get("CLAUDECODE"):
+            self.skipTest("Requires CLAUDECODE environment")
+        from core.run.metadata import _find_claude_ancestor
+        pid = _find_claude_ancestor()
+        self.assertIsNotNone(pid)
+        self.assertIsInstance(pid, int)
+        self.assertGreater(pid, 1)
+
+    def test_stable_across_calls(self):
+        """The claude ancestor PID should be the same every time."""
+        import os
+        if not os.environ.get("CLAUDECODE"):
+            self.skipTest("Requires CLAUDECODE environment")
+        from core.run.metadata import _find_claude_ancestor
+        pid1 = _find_claude_ancestor()
+        pid2 = _find_claude_ancestor()
+        self.assertEqual(pid1, pid2)
+
+    def test_matches_session_pid_in_metadata(self):
+        """session_pid stored by start_run should equal _find_claude_ancestor."""
+        import os
+        if not os.environ.get("CLAUDECODE"):
+            self.skipTest("Requires CLAUDECODE environment")
+        from core.run.metadata import _find_claude_ancestor
+        with TemporaryDirectory() as d:
+            out = Path(d) / "test-run"
+            start_run(out, "scan")
+            meta = load_json(out / RUN_METADATA_FILE)
+            self.assertEqual(meta["session_pid"], _find_claude_ancestor())
+
+
 class TestIsRunDirectory(unittest.TestCase):
 
     def test_with_metadata(self):

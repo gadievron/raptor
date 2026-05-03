@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Lifecycle hooks: auto-complete/fail runs left in 'running' state.
+
+Called by Claude Code hooks, NOT by the LLM.
+
+Modes:
+  stop          — complete orphaned single-call runs (tool_pid dead)
+  session-end   — fail any still-running runs (session is over)
+  tool-failure  — write failure marker (PostToolUseFailure signal)
+
+Stop only acts on single-call commands where tool_pid reliably
+brackets the run.  Multi-turn commands (validate, understand) are
+LLM-managed; Stop skips them, SessionEnd catches orphans.
+
+PostToolUseFailure writes a soft marker — doesn't change status.
+Stop checks the marker: present → fail, absent → complete.
+The LLM's explicit complete/fail always takes priority (status is
+already not-running, so hooks skip).
+"""
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]  # raptor/
+sys.path.insert(0, str(REPO_ROOT))
+
+FAILURE_MARKER = ".raptor-tool-failure"
+
+# Multi-turn commands where the LLM orchestrates across separate tool
+# calls.  tool_pid from start_run is dead by the next turn, so Stop
+# must not act — SessionEnd catches orphans instead.
+# Everything else is a single Bash call where tool_pid brackets the run.
+# If Task-based parallel runs are introduced, TaskCreated/TaskCompleted
+# hooks can bracket those the same way Stop brackets single-call runs.
+_MULTI_TURN_COMMANDS = frozenset({"validate", "understand"})
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] not in ("stop", "session-end", "tool-failure"):
+        print(f"Usage: {Path(__file__).name} stop|session-end|tool-failure",
+              file=sys.stderr)
+        sys.exit(1)
+
+    import json
+
+    event = sys.argv[1]
+
+    from core.run.metadata import (
+        _find_claude_ancestor, _pid_alive, complete_run, fail_run,
+        RUN_METADATA_FILE, STATUS_RUNNING,
+    )
+
+    session_pid = _find_claude_ancestor()
+    if session_pid is None:
+        return
+
+    scan_dirs = []
+    active = REPO_ROOT / ".active"
+    if active.is_symlink():
+        try:
+            project_dir = active.resolve()
+            if project_dir.is_dir():
+                scan_dirs.append(project_dir)
+        except OSError:
+            pass
+    out_dir = REPO_ROOT / "out"
+    if out_dir.is_dir():
+        scan_dirs.append(out_dir)
+
+    for parent in scan_dirs:
+        try:
+            children = list(parent.iterdir())
+        except OSError:
+            continue
+        for d in children:
+            try:
+                if not d.is_dir() or d.name.startswith((".", "_")):
+                    continue
+                meta_path = d / RUN_METADATA_FILE
+                if not meta_path.exists():
+                    continue
+                meta = json.loads(meta_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            if (meta.get("status") != STATUS_RUNNING
+                    or meta.get("session_pid") != session_pid):
+                continue
+
+            if event == "tool-failure":
+                try:
+                    (d / FAILURE_MARKER).write_text("")
+                except OSError:
+                    pass
+                continue
+
+            tool_pid = meta.get("tool_pid")
+            command = meta.get("command", "")
+
+            if event == "stop":
+                if command in _MULTI_TURN_COMMANDS:
+                    continue
+                if tool_pid and _pid_alive(tool_pid):
+                    continue
+                try:
+                    has_failure = (d / FAILURE_MARKER).exists()
+                except OSError:
+                    has_failure = False
+                try:
+                    if has_failure:
+                        fail_run(d, "tool exited with error")
+                    else:
+                        complete_run(d)
+                    (d / FAILURE_MARKER).unlink(missing_ok=True)
+                except Exception as e:
+                    print(f"lifecycle-hook: failed to finalize {d}: {e}",
+                          file=sys.stderr)
+            else:  # session-end
+                try:
+                    fail_run(d, "session ended without explicit completion")
+                    (d / FAILURE_MARKER).unlink(missing_ok=True)
+                except Exception as e:
+                    print(f"lifecycle-hook: failed to finalize {d}: {e}",
+                          file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()
