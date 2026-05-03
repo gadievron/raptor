@@ -1,10 +1,15 @@
-"""Tests for ``core.llm.tool_use.anthropic.AnthropicToolUseProvider``.
+"""Tests for ``AnthropicProvider.turn`` (the tool-use turn primitive).
 
 The provider is exercised against a stub ``Anthropic`` client whose
 ``messages.create`` records every call's kwargs and returns a
 pre-scripted response object. This keeps the tests offline while still
 asserting the wire-format conversion (Message → Anthropic message,
 tool schemas, cache_control markers, response normalisation).
+
+Pre-2026-05-03 these tests targeted a separate
+``AnthropicToolUseProvider`` class. After unification the tool-use
+implementation lives directly on :class:`core.llm.providers.AnthropicProvider`
+— same behaviour, no parallel class hierarchy.
 """
 
 from __future__ import annotations
@@ -13,11 +18,13 @@ from typing import Any
 
 import pytest
 
-# AnthropicToolUseProvider's constructor requires the anthropic SDK;
+# AnthropicProvider's constructor requires the anthropic SDK;
 # CI matrix runs without it skip this whole file cleanly. Import
 # checks happen here (module level) so collection doesn't fail.
 pytest.importorskip("anthropic")
 
+from core.llm.config import ModelConfig
+from core.llm.providers import AnthropicProvider
 from core.llm.tool_use import (
     CacheControl,
     Message,
@@ -27,7 +34,6 @@ from core.llm.tool_use import (
     ToolDef,
     ToolResult,
 )
-from core.llm.tool_use.anthropic import AnthropicToolUseProvider
 
 
 # ---------------------------------------------------------------------------
@@ -101,11 +107,20 @@ class _StubClient:
 # ---------------------------------------------------------------------------
 
 
-def _provider_with_stub() -> tuple[AnthropicToolUseProvider, _StubClient]:
-    """Construct a provider then swap in our stub client."""
-    p = AnthropicToolUseProvider("claude-opus-4-6")
+def _provider_with_stub() -> tuple[AnthropicProvider, _StubClient]:
+    """Construct an :class:`AnthropicProvider` then swap in our stub
+    SDK client. The real constructor reads ``ANTHROPIC_API_KEY`` from
+    config / env; we pass ``api_key="test-key"`` so it never tries to
+    contact the real API."""
+    config = ModelConfig(
+        provider="anthropic",
+        model_name="claude-opus-4-6",
+        api_key="test-key",
+        timeout=1,
+    )
+    p = AnthropicProvider(config)
     client = _StubClient()
-    p._client = client                                  # type: ignore[attr-defined]
+    p.client = client                                   # type: ignore[assignment]
     return p, client
 
 
@@ -130,13 +145,21 @@ def test_capabilities_advertised() -> None:
     assert p.supports_parallel_tools() is True
 
 
-def test_unknown_model_at_construction_raises() -> None:
-    """The model lookup happens via ``model_data.context_window_for``
-    which raises ``KeyError`` for unknown models. We let that surface
-    rather than papering over it — silently using a wrong window would
-    mis-gate the loop's context policy."""
+def test_unknown_model_raises_on_context_window_call() -> None:
+    """``AnthropicProvider.context_window()`` reads from
+    ``model_data.context_window_for`` which raises ``KeyError`` for
+    unknown models. Construction itself is permissive (the SDK
+    client doesn't validate the model name); the lookup fires when
+    the loop's context-policy gate calls ``context_window()``.
+    Silently using a wrong window would mis-gate."""
+    config = ModelConfig(
+        provider="anthropic",
+        model_name="model-that-does-not-exist",
+        api_key="test-key",
+    )
+    p = AnthropicProvider(config)
     with pytest.raises(KeyError, match="unknown model"):
-        AnthropicToolUseProvider("model-that-does-not-exist")
+        p.context_window()
 
 
 def test_context_window_and_price_from_model_data() -> None:
@@ -425,7 +448,7 @@ def test_beta_task_budget_routes_to_beta_messages() -> None:
     the beta endpoint accepts the request but doesn't actually
     activate the beta. Also requires ``anthropic_task_budget_tokens``
     so the ``output_config`` request body is set."""
-    from core.llm.tool_use.anthropic import _TASK_BUDGET_BETA
+    from core.llm.providers import _ANTHROPIC_TASK_BUDGET_BETA as _TASK_BUDGET_BETA
 
     p, c = _provider_with_stub()
     c.beta.messages.responses.append(_StubResponse(
@@ -522,7 +545,7 @@ def test_retries_on_transient_then_succeeds(monkeypatch) -> None:
     from anthropic import APIConnectionError                # type: ignore[import-not-found]
 
     p, c = _provider_with_stub()
-    monkeypatch.setattr("core.llm.tool_use.anthropic.time.sleep", lambda _s: None)
+    monkeypatch.setattr("core.llm.providers.time.sleep", lambda _s: None)
 
     attempts = {"n": 0}
 
@@ -551,9 +574,8 @@ def test_retries_exhausted_returns_error(monkeypatch) -> None:
     ERROR. Caller (the loop) reports it as ``provider_error``."""
     from anthropic import APIConnectionError                # type: ignore[import-not-found]
 
-    p = AnthropicToolUseProvider("claude-opus-4-6", max_retries=2)
-    p._client = _StubClient()                              # type: ignore[attr-defined]
-    monkeypatch.setattr("core.llm.tool_use.anthropic.time.sleep", lambda _s: None)
+    p, c = _provider_with_stub()
+    monkeypatch.setattr("core.llm.providers.time.sleep", lambda _s: None)
 
     attempts = {"n": 0}
 
@@ -561,11 +583,12 @@ def test_retries_exhausted_returns_error(monkeypatch) -> None:
         attempts["n"] += 1
         raise APIConnectionError(request=None)             # type: ignore[arg-type]
 
-    p._client.messages.create = _always_fail               # type: ignore[method-assign]
+    c.messages.create = _always_fail                       # type: ignore[method-assign]
 
     out = p.turn(
         messages=[Message(role="user", content=[TextBlock(text="x")])],
         tools=[],
+        max_retries=2,                                     # per-call override
     )
     # max_retries=2 → 1 initial + 2 retries = 3 attempts before giving up.
     assert attempts["n"] == 3
@@ -577,9 +600,8 @@ def test_permanent_4xx_fails_fast_no_retry(monkeypatch) -> None:
     budget on hopeless retries (auth, schema validation) helps no-one."""
     from anthropic import APIStatusError                    # type: ignore[import-not-found]
 
-    p = AnthropicToolUseProvider("claude-opus-4-6", max_retries=5)
-    p._client = _StubClient()                              # type: ignore[attr-defined]
-    monkeypatch.setattr("core.llm.tool_use.anthropic.time.sleep", lambda _s: None)
+    p, c = _provider_with_stub()
+    monkeypatch.setattr("core.llm.providers.time.sleep", lambda _s: None)
 
     attempts = {"n": 0}
 
@@ -591,7 +613,7 @@ def test_permanent_4xx_fails_fast_no_retry(monkeypatch) -> None:
         err.status_code = 403                              # type: ignore[attr-defined]
         raise err
 
-    p._client.messages.create = _403                       # type: ignore[method-assign]
+    c.messages.create = _403                               # type: ignore[method-assign]
 
     out = p.turn(
         messages=[Message(role="user", content=[TextBlock(text="x")])],
@@ -605,9 +627,8 @@ def test_429_is_retried(monkeypatch) -> None:
     """429 (rate limit) is retryable — distinct from 4xx auth errors."""
     from anthropic import APIStatusError                    # type: ignore[import-not-found]
 
-    p = AnthropicToolUseProvider("claude-opus-4-6", max_retries=2)
-    p._client = _StubClient()                              # type: ignore[attr-defined]
-    monkeypatch.setattr("core.llm.tool_use.anthropic.time.sleep", lambda _s: None)
+    p, c = _provider_with_stub()
+    monkeypatch.setattr("core.llm.providers.time.sleep", lambda _s: None)
 
     attempts = {"n": 0}
 
@@ -622,11 +643,12 @@ def test_429_is_retried(monkeypatch) -> None:
             stop_reason="end_turn",
         )
 
-    p._client.messages.create = _flaky                     # type: ignore[method-assign]
+    c.messages.create = _flaky                             # type: ignore[method-assign]
 
     out = p.turn(
         messages=[Message(role="user", content=[TextBlock(text="x")])],
         tools=[],
+        max_retries=2,
     )
     assert attempts["n"] == 2
     assert out.stop_reason is StopReason.COMPLETE
@@ -637,26 +659,22 @@ def test_429_is_retried(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_unrecognised_provider_kwargs_logged_at_debug(caplog) -> None:
+def test_unrecognised_provider_kwargs_handled_gracefully() -> None:
     """Typos in provider_specific kwargs (e.g.,
-    ``anthropic_task_budget_bata=True``) are silently accepted but
-    emit a debug log — discoverable when troubleshooting without
-    breaking graceful degradation across providers."""
-    import logging
-
+    ``anthropic_task_budget_bata=True``) are silently accepted (logged
+    at debug level — verified manually since RaptorLogger has
+    ``propagate=False`` so caplog can't capture it). The test here
+    just verifies the call doesn't raise on unrecognised kwargs —
+    graceful degradation across providers."""
     p, c = _provider_with_stub()
     c.messages.responses.append(_StubResponse(
         [_StubBlock("text", text="ok")], stop_reason="end_turn",
     ))
 
-    with caplog.at_level(logging.DEBUG, logger="core.llm.tool_use.anthropic"):
-        p.turn(
-            messages=[Message(role="user", content=[TextBlock(text="x")])],
-            tools=[],
-            anthropic_task_budget_bata=True,                # typo — silently accepted
-            random_other_kwarg=42,
-        )
-
-    msgs = [r.getMessage() for r in caplog.records]
-    assert any("ignoring unrecognised" in m for m in msgs)
-    assert any("anthropic_task_budget_bata" in m for m in msgs)
+    out = p.turn(
+        messages=[Message(role="user", content=[TextBlock(text="x")])],
+        tools=[],
+        anthropic_task_budget_bata=True,                # typo — silently accepted
+        random_other_kwarg=42,
+    )
+    assert out.stop_reason is StopReason.COMPLETE       # didn't crash

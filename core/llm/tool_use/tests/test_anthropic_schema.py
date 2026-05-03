@@ -35,13 +35,14 @@ SDKTextBlock = anthropic_types.TextBlock
 SDKToolUseBlock = anthropic_types.ToolUseBlock
 Usage = anthropic_types.Usage
 
+from core.llm.config import ModelConfig
+from core.llm.providers import AnthropicProvider
 from core.llm.tool_use import (
     Message as OurMessage,
     StopReason,
     TextBlock,
     ToolCall,
 )
-from core.llm.tool_use.anthropic import AnthropicToolUseProvider
 
 
 # ---------------------------------------------------------------------------
@@ -96,9 +97,15 @@ class _ClientWithRealResponse:
         self.beta = type("_Beta", (), {"messages": self.messages})()
 
 
-def _provider_with_real_response(response: Message) -> AnthropicToolUseProvider:
-    p = AnthropicToolUseProvider("claude-opus-4-6")
-    p._client = _ClientWithRealResponse(response)         # type: ignore[attr-defined]
+def _provider_with_real_response(response: Message) -> AnthropicProvider:
+    config = ModelConfig(
+        provider="anthropic",
+        model_name="claude-opus-4-6",
+        api_key="test-key",
+        timeout=1,
+    )
+    p = AnthropicProvider(config)
+    p.client = _ClientWithRealResponse(response)          # type: ignore[assignment]
     return p
 
 
@@ -121,7 +128,7 @@ def test_real_sdk_stop_reasons_match_our_mapping() -> None:
     metadata and asserts each value has a corresponding mapping.
     """
     import typing
-    from core.llm.tool_use.anthropic import _STOP_REASON_MAP
+    from core.llm.providers import _ANTHROPIC_STOP_REASON_MAP as _STOP_REASON_MAP
 
     # Pydantic stores the field's annotation; Optional[Literal[...]]
     # → Union[Literal[...], None]. Walk to find the Literal.

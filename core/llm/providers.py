@@ -9,9 +9,11 @@ JSON-in-prompt fallback for providers that lack native structured support.
 """
 
 import json
+import logging
 import sys
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from inspect import isclass
 from typing import Dict, Optional, Any, Tuple, Type, Union
 from dataclasses import dataclass
@@ -19,6 +21,19 @@ from pathlib import Path
 
 from core.logging import get_logger
 from .config import ModelConfig
+# Wire-shape types for tool-use turn primitive. These live in
+# ``core.llm.tool_use.types`` (zero dependencies on this module);
+# importing them here doesn't create a cycle.
+from .tool_use.types import (
+    CacheControl,
+    Message,
+    StopReason,
+    TextBlock,
+    ToolCall,
+    ToolDef,
+    ToolResult,
+    TurnResponse,
+)
 
 logger = get_logger()
 
@@ -104,6 +119,98 @@ class LLMProvider(ABC):
                            system_prompt: Optional[str] = None) -> Tuple[Dict[str, Any], str]:
         """Generate structured output matching the provided schema."""
         pass
+
+    # ------------------------------------------------------------------
+    # Tool-use primitives — opt-in per provider.
+    # ------------------------------------------------------------------
+    #
+    # Single-turn round-trip used by the agentic ``ToolUseLoop``
+    # runner in :mod:`core.llm.tool_use.loop`. Providers that natively
+    # support tool / function calling override :meth:`turn` and flip
+    # :meth:`supports_tool_use` to ``True``. Providers that can't
+    # (e.g., :class:`ClaudeCodeProvider`'s subprocess dispatcher) keep
+    # the defaults — calling :meth:`turn` raises ``NotImplementedError``.
+    #
+    # This is the same shape the now-retired ``ToolUseProvider``
+    # Protocol had; absorbing it onto :class:`LLMProvider` removes the
+    # parallel hierarchy + duplicate Anthropic SDK wiring that
+    # ``AnthropicToolUseProvider`` introduced.
+
+    def supports_tool_use(self) -> bool:
+        """``True`` when the bound model accepts tool/function-call
+        schemas in requests AND emits structured calls in responses.
+        Default ``False``; concrete providers override."""
+        return False
+
+    def supports_prompt_caching(self) -> bool:
+        """``True`` for providers with a per-region cache breakpoint
+        mechanism (Anthropic). The :class:`ToolUseLoop` only forwards
+        :class:`CacheControl` when this returns True; other providers
+        receive the struct but ignore it."""
+        return False
+
+    def supports_parallel_tools(self) -> bool:
+        """``True`` when the provider can return multiple
+        :class:`ToolCall` blocks in one assistant turn AND the loop
+        can dispatch them in parallel. The loop dispatches
+        sequentially today regardless — informational flag for v1."""
+        return False
+
+    def context_window(self) -> int:
+        """Total tokens the model accepts. Drives the loop's context-
+        policy enforcement. Sourced from :mod:`core.llm.model_data`
+        by default; raises ``KeyError`` on unknown models so
+        misconfiguration surfaces immediately."""
+        from .model_data import context_window_for
+        return context_window_for(self.config.model_name)
+
+    def estimate_tokens(self, text: str) -> int:
+        """Cheap pre-flight token estimator. Default heuristic
+        (4 chars/token) is good enough for the loop's context-policy
+        gate; providers with a real tokenizer can override for
+        accuracy."""
+        return max(len(text) // 4, 1)
+
+    def price_per_million(self) -> tuple[float, float]:
+        """``(input_per_million_usd, output_per_million_usd)`` for the
+        bound model. Cache-read / cache-write multipliers — when
+        relevant — are applied inside :meth:`compute_cost`, not here."""
+        from .model_data import price_for
+        return price_for(self.config.model_name, default=(0.0, 0.0))
+
+    def compute_cost(self, response: TurnResponse) -> float:
+        """USD cost of ``response`` given the bound model's pricing.
+
+        Default: standard input/output tokens at the model's per-M
+        rates, ignoring cache fields. Anthropic overrides to add the
+        documented 1.25× cache-write and 0.1× cache-read multipliers.
+        """
+        in_per_m, out_per_m = self.price_per_million()
+        return (
+            response.input_tokens * in_per_m
+            + response.output_tokens * out_per_m
+        ) / 1_000_000.0
+
+    def turn(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDef],
+        *,
+        system: Optional[str] = None,
+        max_tokens: int = 4096,
+        cache_control: CacheControl = CacheControl(),
+        **provider_specific: Any,
+    ) -> TurnResponse:
+        """Send one round-trip with tool/function-call schemas.
+
+        Default implementation raises ``NotImplementedError`` —
+        providers that can do tool-use override this method. Callers
+        that need to gate behaviour use :meth:`supports_tool_use`.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support tool-use; "
+            f"check ``supports_tool_use()`` before calling ``turn()``"
+        )
 
     def track_usage(self, tokens: int, cost: float,
                     input_tokens: int = 0, output_tokens: int = 0,
@@ -587,6 +694,216 @@ class OpenAICompatibleProvider(LLMProvider):
         # Fallback: JSON-in-prompt
         return self._structured_fallback(prompt, schema, pydantic_model, system_prompt)
 
+    # ------------------------------------------------------------------
+    # Tool-use turn primitive — OpenAI function-calling shape.
+    # ------------------------------------------------------------------
+    #
+    # Covers OpenAI / Gemini (via /openai compat) / Ollama / Mistral
+    # via the same SDK + base_url override that ``generate()`` uses.
+    # Function-calling shape: ``tools=[{type:"function", function:{...}}]``,
+    # response carries ``message.tool_calls = [{id, function:{name,arguments}}]``.
+    # No prompt caching (capability flag returns False); ``CacheControl``
+    # is silently ignored. Parallel tool calls are supported by OpenAI
+    # but not exploited by the loop today.
+
+    def supports_tool_use(self) -> bool: return True
+    def supports_prompt_caching(self) -> bool: return False
+    def supports_parallel_tools(self) -> bool: return True
+
+    def turn(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDef],
+        *,
+        system: Optional[str] = None,
+        max_tokens: int = 4096,
+        cache_control: CacheControl = CacheControl(),
+        max_retries: int = 3,
+        backoff_factor: float = 2.0,
+        **_unused: Any,
+    ) -> TurnResponse:
+        """Send one round-trip via OpenAI-compatible function calling.
+
+        ``cache_control`` is accepted but ignored — OpenAI-compat
+        endpoints don't expose a per-region cache mechanism. Caching
+        on the actual OpenAI endpoint is automatic (server-side) and
+        not driven by request fields.
+        """
+        if _unused:
+            logger.debug(
+                f"OpenAICompatibleProvider.turn: ignoring unrecognised "
+                f"kwargs: {sorted(_unused)}"
+            )
+
+        # ---- tools (function-calling shape) --------------------------
+        tool_schemas: list[Dict[str, Any]] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.input_schema,
+                },
+            }
+            for t in tools
+        ]
+
+        # ---- messages (OpenAI flat list with role markers) ----------
+        wire_messages: list[Dict[str, Any]] = []
+        if system:
+            wire_messages.append({"role": "system", "content": system})
+        for m in messages:
+            wire_messages.extend(_message_to_openai_wire(m))
+
+        # ---- dispatch (with retry on transient errors) ---------------
+        kwargs: Dict[str, Any] = {
+            "model": self.config.model_name,
+            "max_tokens": max_tokens,
+            "messages": wire_messages,
+        }
+        if tool_schemas:
+            kwargs["tools"] = tool_schemas
+
+        from openai import (                                # type: ignore[import-not-found]
+            APIConnectionError,
+            APIStatusError,
+        )
+        for attempt in range(max_retries + 1):
+            try:
+                resp = self.client.chat.completions.create(**kwargs)
+                break
+            except (APIConnectionError, APIStatusError) as exc:
+                if not _is_transient_openai(exc) or attempt >= max_retries:
+                    kind = "transient" if _is_transient_openai(exc) else "permanent"
+                    logger.warning(
+                        f"OpenAICompatibleProvider.turn: {kind} error "
+                        f"after {attempt + 1} attempt(s): {exc}"
+                    )
+                    return TurnResponse(
+                        content=[],
+                        stop_reason=StopReason.ERROR,
+                        input_tokens=0,
+                        output_tokens=0,
+                    )
+                delay = backoff_factor ** attempt
+                logger.info(
+                    f"OpenAICompatibleProvider.turn: transient error attempt "
+                    f"{attempt + 1}, retrying in {delay:.1f}s: {exc}"
+                )
+                time.sleep(delay)
+        else:
+            return TurnResponse(
+                content=[], stop_reason=StopReason.ERROR,
+                input_tokens=0, output_tokens=0,
+            )
+
+        # ---- normalise response --------------------------------------
+        if not resp.choices:
+            return TurnResponse(
+                content=[], stop_reason=StopReason.ERROR,
+                input_tokens=0, output_tokens=0,
+            )
+        choice = resp.choices[0]
+        msg = choice.message
+        stop = _OPENAI_FINISH_REASON_MAP.get(
+            choice.finish_reason or "", StopReason.ERROR,
+        )
+
+        out_blocks: list = []
+        if msg.content:
+            out_blocks.append(TextBlock(text=msg.content))
+        for tc in (msg.tool_calls or []):
+            try:
+                args = json.loads(tc.function.arguments)
+            except (TypeError, ValueError):
+                args = {}
+            out_blocks.append(ToolCall(
+                id=tc.id, name=tc.function.name, input=args,
+            ))
+
+        usage = resp.usage
+        return TurnResponse(
+            content=out_blocks,
+            stop_reason=stop,
+            input_tokens=(getattr(usage, "prompt_tokens", 0) or 0) if usage else 0,
+            output_tokens=(getattr(usage, "completion_tokens", 0) or 0) if usage else 0,
+            # OpenAI-compat doesn't surface per-region cache tokens.
+            cache_read_tokens=0,
+            cache_write_tokens=0,
+        )
+
+
+# ---------------------------------------------------------------------------
+# OpenAI tool-use helpers
+# ---------------------------------------------------------------------------
+
+# OpenAI's native finish_reason → our enum.
+_OPENAI_FINISH_REASON_MAP = {
+    "stop": StopReason.COMPLETE,
+    "tool_calls": StopReason.NEEDS_TOOL_CALL,
+    "length": StopReason.MAX_TOKENS,
+    "content_filter": StopReason.REFUSED,
+    "function_call": StopReason.NEEDS_TOOL_CALL,            # legacy alias
+}
+
+
+def _is_transient_openai(exc: BaseException) -> bool:
+    """Same shape as the Anthropic helper. 429 + 5xx retryable;
+    permanent 4xx fails fast."""
+    from openai import APIConnectionError, APIStatusError    # type: ignore[import-not-found]
+    if isinstance(exc, APIConnectionError):
+        return True
+    if isinstance(exc, APIStatusError):
+        status = getattr(exc, "status_code", None)
+        return status == 429 or (status is not None and 500 <= status < 600)
+    return False
+
+
+def _message_to_openai_wire(m: Message) -> list[Dict[str, Any]]:
+    """One :class:`Message` → 1+ OpenAI wire dicts.
+
+    OpenAI splits user messages with multiple :class:`ToolResult`\\ s
+    into N separate ``role:"tool"`` messages (each carrying its own
+    ``tool_call_id``), unlike Anthropic which packs them in one user
+    message's content array.
+    """
+    if m.role == "assistant":
+        text_parts: list[str] = []
+        tool_calls: list[Dict[str, Any]] = []
+        for b in m.content:
+            if isinstance(b, TextBlock):
+                text_parts.append(b.text)
+            elif isinstance(b, ToolCall):
+                tool_calls.append({
+                    "id": b.id,
+                    "type": "function",
+                    "function": {
+                        "name": b.name,
+                        "arguments": json.dumps(b.input),
+                    },
+                })
+        out: Dict[str, Any] = {"role": "assistant"}
+        if text_parts:
+            out["content"] = "".join(text_parts)
+        if tool_calls:
+            out["tool_calls"] = tool_calls
+        return [out]
+    # user role
+    out_msgs: list[Dict[str, Any]] = []
+    text_parts = []
+    for b in m.content:
+        if isinstance(b, TextBlock):
+            text_parts.append(b.text)
+        elif isinstance(b, ToolResult):
+            out_msgs.append({
+                "role": "tool",
+                "tool_call_id": b.tool_use_id,
+                "content": b.content,
+            })
+    if text_parts:
+        out_msgs.insert(0, {"role": "user", "content": "".join(text_parts)})
+    return out_msgs
+
 
 class AnthropicProvider(LLMProvider):
     """
@@ -732,6 +1049,290 @@ class AnthropicProvider(LLMProvider):
 
         # Fallback: JSON-in-prompt
         return self._structured_fallback(prompt, schema, pydantic_model, system_prompt)
+
+    # ------------------------------------------------------------------
+    # Tool-use turn primitive — Anthropic-native.
+    # ------------------------------------------------------------------
+    #
+    # Honours all three Anthropic cache regions (system / tools /
+    # history-through-index) via ``cache_control: {"type": "ephemeral"}``
+    # markers. Cost computation accounts for ``cache_read`` (0.1x input
+    # rate) and ``cache_creation`` (1.25x input rate) per Anthropic's
+    # documented multipliers. Beta task-budget endpoint via
+    # ``provider_specific={"anthropic_task_budget_beta": True,
+    # "anthropic_task_budget_tokens": N}``.
+
+    def supports_tool_use(self) -> bool: return True
+    def supports_prompt_caching(self) -> bool: return True
+    def supports_parallel_tools(self) -> bool: return True
+
+    def compute_cost(self, response: TurnResponse) -> float:
+        """Anthropic cost: standard input/output + cache_write (1.25x
+        input) + cache_read (0.1x input) per Anthropic's pricing."""
+        from .model_data import (
+            ANTHROPIC_CACHE_READ_MULTIPLIER,
+            ANTHROPIC_CACHE_WRITE_MULTIPLIER,
+        )
+        in_per_m, out_per_m = self.price_per_million()
+        return (
+            response.input_tokens * in_per_m
+            + response.output_tokens * out_per_m
+            + response.cache_write_tokens * in_per_m * ANTHROPIC_CACHE_WRITE_MULTIPLIER
+            + response.cache_read_tokens * in_per_m * ANTHROPIC_CACHE_READ_MULTIPLIER
+        ) / 1_000_000.0
+
+    def turn(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDef],
+        *,
+        system: Optional[str] = None,
+        max_tokens: int = 4096,
+        cache_control: CacheControl = CacheControl(),
+        anthropic_task_budget_beta: bool = False,
+        anthropic_task_budget_tokens: Optional[int] = None,
+        max_retries: int = 3,
+        backoff_factor: float = 2.0,
+        **_unused: Any,
+    ) -> TurnResponse:
+        """Send one round-trip to Anthropic.
+
+        Provider-specific kwargs:
+          * ``anthropic_task_budget_beta``: route via
+            ``client.beta.messages.create`` (cost-cap beta endpoint).
+            Activating the beta requires both this flag (sets the
+            ``betas=["task-budgets-..."]`` header) AND
+            ``anthropic_task_budget_tokens`` (sets the
+            ``output_config.task_budget`` request body).
+          * ``anthropic_task_budget_tokens``: total token budget
+            communicated to the model via
+            ``output_config: {task_budget: {type: "tokens", total: N}}``.
+            Required when ``anthropic_task_budget_beta=True``.
+          * ``max_retries`` / ``backoff_factor``: retry on transient
+            errors (connection / 429 / 5xx). Permanent 4xx fails
+            fast.
+        """
+        if anthropic_task_budget_beta and anthropic_task_budget_tokens is None:
+            raise ValueError(
+                "anthropic_task_budget_beta=True requires "
+                "anthropic_task_budget_tokens=N (total token budget the "
+                "model self-regulates against). Without it the beta "
+                "endpoint accepts the request but no budget is enforced."
+            )
+        if _unused:
+            logger.debug(
+                f"AnthropicProvider.turn: ignoring unrecognised "
+                f"kwargs: {sorted(_unused)}"
+            )
+
+        # ---- system block --------------------------------------------
+        # Anthropic accepts a string OR a content list. Use the list
+        # form when caching the system prompt so the cache_control
+        # marker can attach to it; otherwise the simpler string form.
+        system_arg: Optional[Union[str, list]]
+        if system:
+            if cache_control.system:
+                system_arg = [{
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }]
+            else:
+                system_arg = system
+        else:
+            system_arg = None
+
+        # ---- tools ---------------------------------------------------
+        tool_schemas: list[Dict[str, Any]] = [
+            {
+                "name": t.name,
+                "description": t.description,
+                "input_schema": t.input_schema,
+            }
+            for t in tools
+        ]
+        if cache_control.tools and tool_schemas:
+            last = dict(tool_schemas[-1])
+            last["cache_control"] = {"type": "ephemeral"}
+            tool_schemas[-1] = last
+
+        # ---- messages ------------------------------------------------
+        wire_messages = [_message_to_anthropic_wire(m) for m in messages]
+        if (
+            cache_control.history_through_index is not None
+            and 0 <= cache_control.history_through_index < len(wire_messages)
+        ):
+            _attach_anthropic_cache_marker(
+                wire_messages[cache_control.history_through_index],
+            )
+
+        # ---- dispatch (with retry on transient errors) ---------------
+        # Routing to ``client.beta.messages.create`` is necessary but
+        # not sufficient — the beta only activates when the beta name
+        # appears in the ``betas=[...]`` request parameter.
+        create_fn = (
+            self.client.beta.messages.create
+            if anthropic_task_budget_beta
+            else self.client.messages.create
+        )
+        kwargs: Dict[str, Any] = {
+            "model": self.config.model_name,
+            "max_tokens": max_tokens,
+            "messages": wire_messages,
+            "tools": tool_schemas if tool_schemas else None,
+        }
+        if anthropic_task_budget_beta:
+            kwargs["betas"] = [_ANTHROPIC_TASK_BUDGET_BETA]
+            kwargs["output_config"] = {
+                "task_budget": {
+                    "type": "tokens",
+                    "total": anthropic_task_budget_tokens,
+                },
+            }
+        if system_arg is not None:
+            kwargs["system"] = system_arg
+        send_kwargs = {k: v for k, v in kwargs.items() if v is not None}
+
+        from anthropic import (                              # type: ignore[import-not-found]
+            APIConnectionError,
+            APIError,
+            APIStatusError,
+        )
+        for attempt in range(max_retries + 1):
+            try:
+                resp = create_fn(**send_kwargs)
+                break
+            except (APIConnectionError, APIStatusError, APIError) as exc:
+                if not _is_transient_anthropic(exc) or attempt >= max_retries:
+                    kind = "transient" if _is_transient_anthropic(exc) else "permanent"
+                    logger.warning(
+                        f"AnthropicProvider.turn: {kind} error after "
+                        f"{attempt + 1} attempt(s): {exc}"
+                    )
+                    return TurnResponse(
+                        content=[],
+                        stop_reason=StopReason.ERROR,
+                        input_tokens=0,
+                        output_tokens=0,
+                    )
+                delay = backoff_factor ** attempt
+                logger.info(
+                    f"AnthropicProvider.turn: transient error attempt "
+                    f"{attempt + 1}, retrying in {delay:.1f}s: {exc}"
+                )
+                time.sleep(delay)
+        else:
+            return TurnResponse(
+                content=[], stop_reason=StopReason.ERROR,
+                input_tokens=0, output_tokens=0,
+            )
+
+        # ---- normalise response --------------------------------------
+        stop = _ANTHROPIC_STOP_REASON_MAP.get(
+            resp.stop_reason or "", StopReason.ERROR,
+        )
+        out_blocks: list = []
+        for block in resp.content:
+            block_type = getattr(block, "type", None)
+            if block_type == "text":
+                out_blocks.append(TextBlock(text=block.text))
+            elif block_type == "tool_use":
+                out_blocks.append(ToolCall(
+                    id=block.id,
+                    name=block.name,
+                    input=dict(block.input) if block.input else {},
+                ))
+
+        usage = resp.usage
+        return TurnResponse(
+            content=out_blocks,
+            stop_reason=stop,
+            input_tokens=(getattr(usage, "input_tokens", 0) or 0) if usage else 0,
+            output_tokens=(getattr(usage, "output_tokens", 0) or 0) if usage else 0,
+            cache_read_tokens=(
+                getattr(usage, "cache_read_input_tokens", 0) or 0
+            ) if usage else 0,
+            cache_write_tokens=(
+                getattr(usage, "cache_creation_input_tokens", 0) or 0
+            ) if usage else 0,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Anthropic tool-use helpers (module-level — used by
+# ``AnthropicProvider.turn``)
+# ---------------------------------------------------------------------------
+
+# Beta header name for Anthropic's task-budget endpoint. Activated by
+# the ``anthropic_task_budget_beta=True`` provider-specific kwarg —
+# routing to ``client.beta.messages.create`` is necessary BUT NOT
+# SUFFICIENT; the ``betas=[...]`` parameter must also be passed for
+# the server to actually honour the beta.
+_ANTHROPIC_TASK_BUDGET_BETA = "task-budgets-2026-03-13"
+
+# Anthropic's native stop_reason → our enum.
+_ANTHROPIC_STOP_REASON_MAP = {
+    "end_turn": StopReason.COMPLETE,
+    "stop_sequence": StopReason.COMPLETE,
+    "tool_use": StopReason.NEEDS_TOOL_CALL,
+    "pause_turn": StopReason.PAUSE_TURN,
+    "max_tokens": StopReason.MAX_TOKENS,
+    "refusal": StopReason.REFUSED,
+}
+
+
+def _is_transient_anthropic(exc: BaseException) -> bool:
+    """``True`` when ``exc`` is a connection / 429 / 5xx error worth
+    retrying. Permanent 4xx (auth, schema, not-found) are False so
+    callers fail fast instead of burning budget on hopeless retries."""
+    from anthropic import APIConnectionError, APIStatusError    # type: ignore[import-not-found]
+    if isinstance(exc, APIConnectionError):
+        return True
+    if isinstance(exc, APIStatusError):
+        status = getattr(exc, "status_code", None)
+        return status == 429 or (status is not None and 500 <= status < 600)
+    return False
+
+
+def _message_to_anthropic_wire(m: Message) -> Dict[str, Any]:
+    """Our :class:`Message` → Anthropic wire dict.
+
+    Anthropic accepts mixed content lists per turn — text, tool_use,
+    and tool_result blocks all live in the same ``content`` array;
+    role determines which subset is valid (assistant: text + tool_use;
+    user: text + tool_result).
+    """
+    out_content: list[Dict[str, Any]] = []
+    for block in m.content:
+        if isinstance(block, TextBlock):
+            out_content.append({"type": "text", "text": block.text})
+        elif isinstance(block, ToolCall):                  # assistant role only
+            out_content.append({
+                "type": "tool_use",
+                "id": block.id,
+                "name": block.name,
+                "input": block.input,
+            })
+        elif isinstance(block, ToolResult):                # user role only
+            out_content.append({
+                "type": "tool_result",
+                "tool_use_id": block.tool_use_id,
+                "content": block.content,
+                "is_error": block.is_error,
+            })
+    return {"role": m.role, "content": out_content}
+
+
+def _attach_anthropic_cache_marker(message: Dict[str, Any]) -> None:
+    """Mutate ``message["content"][-1]`` in-place to carry a
+    cache_control marker. Anthropic places the marker on the LAST
+    block of a region to cache everything preceding it within that
+    message."""
+    if not message["content"]:
+        return
+    last = dict(message["content"][-1])
+    last["cache_control"] = {"type": "ephemeral"}
+    message["content"][-1] = last
 
 
 class GeminiProvider(LLMProvider):
