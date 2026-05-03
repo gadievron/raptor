@@ -96,6 +96,7 @@ class ToolUseLoop:
         max_iterations: int = 50,
         max_cost_usd: float | None = None,
         max_seconds: float | None = None,
+        max_total_tokens: int | None = None,
         tool_timeout_s: float | None = None,
         context_policy: ContextPolicy = ContextPolicy.RAISE,
         max_tokens_per_turn: int = 4096,
@@ -128,6 +129,7 @@ class ToolUseLoop:
         self._max_iterations = max_iterations
         self._max_cost_usd = max_cost_usd
         self._max_seconds = max_seconds
+        self._max_total_tokens = max_total_tokens
         self._tool_timeout_s = tool_timeout_s
         self._context_policy = context_policy
         self._max_tokens_per_turn = max_tokens_per_turn
@@ -212,6 +214,34 @@ class ToolUseLoop:
                     total_output_tokens=total_output_tokens,
                     total_cost_usd=total_cost_usd,
                     terminated_by="max_seconds",
+                )
+
+            # ---- pre-flight: total-tokens budget ------------------------
+            # Sums input+output across turns. Cache-region tokens are
+            # accounted in ``compute_cost`` (and thus ``max_cost_usd``)
+            # but not added here — the cost cap is the load-bearing
+            # gate; this is a belt-and-braces parity check with
+            # consumer-side budgets like cve-diff's ``budget_tokens``.
+            if (
+                self._max_total_tokens is not None
+                and (total_input_tokens + total_output_tokens)
+                    >= self._max_total_tokens
+            ):
+                self._emit(LoopTerminated(
+                    reason="max_total_tokens",
+                    iterations=iteration,
+                    total_cost_usd=total_cost_usd,
+                ))
+                return ToolLoopResult(
+                    final_text="",
+                    terminal_tool_input=None,
+                    messages=messages,
+                    iterations=iteration,
+                    tool_calls_made=tool_calls_made,
+                    total_input_tokens=total_input_tokens,
+                    total_output_tokens=total_output_tokens,
+                    total_cost_usd=total_cost_usd,
+                    terminated_by="max_total_tokens",
                 )
 
             # ---- pre-flight: context window -----------------------------

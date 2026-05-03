@@ -357,6 +357,54 @@ def test_max_seconds_none_means_no_cap() -> None:
     assert out.terminated_by == "complete"
 
 
+# ---------------------------------------------------------------------------
+# max_total_tokens — cumulative input+output token cap
+# ---------------------------------------------------------------------------
+
+
+def test_max_total_tokens_terminates_pre_flight() -> None:
+    """Token budget caps the whole run on cumulative input+output.
+    Each turn here costs 100+50 = 150 tokens; cap=400 fires after 3
+    turns. Distinct termination reason from cost / iter / time so
+    callers can distinguish "we exhausted the token allowance" from
+    other budget classes."""
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "echo", {})),
+        _tool_call_response(("c2", "echo", {})),
+        _tool_call_response(("c3", "echo", {})),                   # never reached
+    ])
+    loop = ToolUseLoop(fp, [_echo_tool()], max_total_tokens=400)
+    out = loop.run("token-bounded")
+    assert out.terminated_by == "max_total_tokens"
+    assert len(fp.calls) <= 3                                       # gate fires before 3rd call
+
+
+def test_max_total_tokens_emits_loop_terminated_event() -> None:
+    """Subscribers see ``LoopTerminated(reason="max_total_tokens")``
+    distinct from other termination reasons."""
+    events: list[Any] = []
+    fp = _FakeProvider([_tool_call_response(("c", "echo", {}))] * 50)
+    loop = ToolUseLoop(
+        fp, [_echo_tool()],
+        max_total_tokens=1,                                         # immediate cap on iter 0+
+        events=events.append,
+    )
+    out = loop.run("hi")
+    # 1 token cap, 100+50 per turn → fires on iteration 1
+    assert out.terminated_by == "max_total_tokens"
+    terminated = [e for e in events if isinstance(e, LoopTerminated)]
+    assert len(terminated) == 1
+    assert terminated[0].reason == "max_total_tokens"
+
+
+def test_max_total_tokens_none_means_no_cap() -> None:
+    """Default behaviour preserved when ``max_total_tokens=None``."""
+    fp = _FakeProvider([_text_response("done")])
+    loop = ToolUseLoop(fp, [_echo_tool()])                          # no token cap
+    out = loop.run("hi")
+    assert out.terminated_by == "complete"
+
+
 def test_max_seconds_real_clock_e2e() -> None:
     """End-to-end against real ``time.monotonic`` (no monkeypatch).
 
