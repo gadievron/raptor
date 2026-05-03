@@ -1023,6 +1023,11 @@ def _message_to_openai_wire(m: Message) -> list[Dict[str, Any]]:
     assistant message with neither ``content`` nor ``tool_calls``,
     so the empty-string is the safe wire form. Empty user turns are
     skipped (the message has nothing to convey).
+
+    User turns carrying both text and tool_results emit the tool
+    messages first, then a trailing ``role:"user"`` text message —
+    OpenAI requires tool messages to immediately follow the prior
+    assistant's ``tool_calls`` (text in between breaks the link).
     """
     if m.role == "assistant":
         text_parts: list[str] = []
@@ -1060,7 +1065,7 @@ def _message_to_openai_wire(m: Message) -> list[Dict[str, Any]]:
                 "content": b.content,
             })
     if text_parts:
-        out_msgs.insert(0, {"role": "user", "content": "".join(text_parts)})
+        out_msgs.append({"role": "user", "content": "".join(text_parts)})
     return out_msgs
 
 
@@ -1724,6 +1729,27 @@ class ClaudeCodeProvider:
         }
 
 
+def _safe_subprocess_stderr(stderr: Optional[str], *, limit: int = 500) -> str:
+    """Sanitise subprocess stderr for inclusion in operator-facing
+    ``RuntimeError`` messages.
+
+    Per ``project_log_sanitisation_adoption.md`` (threats A + B):
+    redact credentials that the child process may have echoed
+    (``ANTHROPIC_API_KEY``, bearer tokens, ``user:pass@`` URLs) and
+    escape non-printable bytes (ANSI / BIDI / control bytes) so the
+    error message can't corrupt operator terminals or be reshared
+    with secrets intact.
+
+    Truncation happens *after* sanitisation so the limit applies to
+    the rendered length, not the raw byte count.
+    """
+    if not stderr:
+        return ""
+    from core.security.log_sanitisation import escape_nonprintable
+    from core.security.redaction import redact_secrets
+    return escape_nonprintable(redact_secrets(stderr))[:limit]
+
+
 class ClaudeCodeLLMProvider(LLMProvider):
     """Claude Code subprocess transport as a real :class:`LLMProvider`.
 
@@ -1806,7 +1832,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
         if proc.returncode != 0:
             raise RuntimeError(
                 f"claude -p exited with status {proc.returncode}: "
-                f"{(proc.stderr or '')[:500]}"
+                f"{_safe_subprocess_stderr(proc.stderr)}"
             )
 
         parsed = parse_cc_freeform(proc.stdout, proc.stderr)
@@ -1880,7 +1906,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
         if proc.returncode != 0:
             raise RuntimeError(
                 f"claude -p exited with status {proc.returncode}: "
-                f"{(proc.stderr or '')[:500]}"
+                f"{_safe_subprocess_stderr(proc.stderr)}"
             )
 
         result = parse_cc_structured(proc.stdout, proc.stderr)

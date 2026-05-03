@@ -129,6 +129,27 @@ def test_openai_wire_user_with_tool_results_only() -> None:
     assert out[1]["tool_call_id"] == "t2"
 
 
+def test_openai_wire_user_text_plus_tool_results_emits_text_last() -> None:
+    """OpenAI's strict ordering: tool messages must immediately follow
+    the prior assistant's tool_calls. A user-text message sandwiched
+    between assistant.tool_calls and the matching tool messages would
+    break the link and many shims reject the request. The converter
+    therefore emits tool messages first, then trailing user text —
+    so the chain remains: assistant.tool_calls → tool → tool → user."""
+    msg = Message(role="user", content=[
+        TextBlock(text="extra context"),
+        ToolResult(tool_use_id="t1", content="42"),
+        ToolResult(tool_use_id="t2", content="43"),
+    ])
+    out = _message_to_openai_wire(msg)
+    assert len(out) == 3
+    assert out[0]["role"] == "tool"
+    assert out[0]["tool_call_id"] == "t1"
+    assert out[1]["role"] == "tool"
+    assert out[1]["tool_call_id"] == "t2"
+    assert out[2] == {"role": "user", "content": "extra context"}
+
+
 def test_openai_wire_assistant_text_only_carries_content() -> None:
     """Plain text assistant — no tool_calls, content set."""
     msg = Message(role="assistant", content=[TextBlock(text="answer")])

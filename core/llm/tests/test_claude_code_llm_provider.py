@@ -225,6 +225,57 @@ def test_generate_nonzero_returncode_raises(monkeypatch) -> None:
         p.generate("hi")
 
 
+def test_generate_error_message_redacts_secrets_in_stderr(monkeypatch) -> None:
+    """CC subprocess stderr can contain credentials echoed by misconfig
+    (e.g., env var values, URLs with embedded creds). Per
+    project_log_sanitisation_adoption.md threat A, redact_secrets is
+    applied before the stderr lands in the operator-facing error."""
+    leaky = "fetch failed: https://user:s3cretpassword@api.example.com/v1/x"
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: _FakeCompleted(stdout="", stderr=leaky, returncode=1),
+    )
+    p = ClaudeCodeLLMProvider(_config())
+    with pytest.raises(RuntimeError) as ei:
+        p.generate("hi")
+    assert "s3cretpassword" not in str(ei.value)
+
+
+def test_generate_error_message_escapes_control_bytes_in_stderr(monkeypatch) -> None:
+    """Threat B: CC stderr containing ANSI / control bytes would
+    corrupt the operator's terminal if propagated verbatim. The
+    converter escapes them to a printable ``\\xHH`` form."""
+    nasty = "boom\x1b[31mfake red text\x1b[0m\x07"
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: _FakeCompleted(stdout="", stderr=nasty, returncode=1),
+    )
+    p = ClaudeCodeLLMProvider(_config())
+    with pytest.raises(RuntimeError) as ei:
+        p.generate("hi")
+    msg = str(ei.value)
+    # Raw ESC and BEL must not appear in the rendered message
+    assert "\x1b" not in msg
+    assert "\x07" not in msg
+    # But the printable parts of the stderr should still be visible
+    assert "fake red text" in msg
+
+
+def test_generate_structured_error_sanitises_stderr_too(monkeypatch) -> None:
+    """generate_structured uses the same sanitisation path."""
+    nasty = "fail \x1b[31m" + "Bearer abcdefghijklmnopqrstuvwxyz1234"
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: _FakeCompleted(stdout="", stderr=nasty, returncode=1),
+    )
+    p = ClaudeCodeLLMProvider(_config())
+    with pytest.raises(RuntimeError) as ei:
+        p.generate_structured("compute", {"type": "object"})
+    msg = str(ei.value)
+    assert "\x1b" not in msg
+    assert "abcdefghijklmnopqrstuvwxyz1234" not in msg
+
+
 def test_generate_timeout_wrapped_as_runtimeerror(monkeypatch) -> None:
     def fake_run(*a, **k):
         raise subprocess.TimeoutExpired(cmd="claude", timeout=30)
