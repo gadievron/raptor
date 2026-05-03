@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""Show or update RAPTOR resource tuning.
+
+Usage:
+  raptor-tune                Show resolved tuning values
+  raptor-tune max            Rewrite tuning.json to use all available resources
+  raptor-tune balanced       Rewrite tuning.json with conservative values
+  raptor-tune default        Rewrite tuning.json to shipped defaults
+"""
+import json
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.json import load_json_with_comments
+from core.tuning import load_tuning, _DEFAULTS
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_TUNING_PATH = _REPO_ROOT / "tuning.json"
+
+
+def _system_info() -> dict:
+    try:
+        pages = os.sysconf("SC_PHYS_PAGES")
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        total_ram_mb = pages * page_size // (1024 * 1024)
+    except (ValueError, OSError):
+        total_ram_mb = None
+    cpus = os.cpu_count()
+    return {"total_ram_mb": total_ram_mb, "cpus": cpus}
+
+
+def _max_values() -> dict:
+    """Use all available resources."""
+    info = _system_info()
+    cpus = info["cpus"] or 4
+    ram = info["total_ram_mb"]
+    return {
+        "codeql_ram_mb": max(2048, min(ram // 2, 32768)) if ram else 16384,
+        "codeql_threads": cpus,
+        "max_semgrep_workers": max(2, cpus),
+        "max_codeql_workers": max(1, cpus // 2),
+        "max_agentic_parallel": max(2, cpus),
+        "max_fuzz_parallel": max(1, cpus // 2),
+    }
+
+
+def _balanced_values() -> dict:
+    """Leave headroom for other workloads."""
+    info = _system_info()
+    cpus = info["cpus"] or 4
+    ram = info["total_ram_mb"]
+    return {
+        "codeql_ram_mb": max(2048, min(ram // 8, 8192)) if ram else 4096,
+        "codeql_threads": max(1, cpus // 2),
+        "max_semgrep_workers": max(1, cpus // 4),
+        "max_codeql_workers": 1,
+        "max_agentic_parallel": 2,
+        "max_fuzz_parallel": 1,
+    }
+
+
+def _default_values() -> dict:
+    return dict(_DEFAULTS)
+
+
+_PROFILES = {
+    "max": (_max_values, "use all available resources"),
+    "balanced": (_balanced_values, "leave headroom for other workloads"),
+    "default": (_default_values, "shipped defaults"),
+}
+
+_COMMENTS = {
+    "codeql_ram_mb": "MB of RAM for CodeQL analysis",
+    "codeql_threads": "CPUs for CodeQL (0 = all available)",
+    "max_semgrep_workers": "parallel Semgrep scans",
+    "max_codeql_workers": "parallel CodeQL database builds",
+    "max_agentic_parallel": "parallel Claude Code agents for analysis",
+    "max_fuzz_parallel": "ceiling for AFL++ parallel instances",
+}
+
+_KEY_ORDER = [
+    "codeql_ram_mb",
+    "codeql_threads",
+    "max_semgrep_workers",
+    "max_codeql_workers",
+    "max_agentic_parallel",
+    "max_fuzz_parallel",
+]
+
+
+def _write_tuning(values: dict) -> None:
+    """Write tuning.json with inline aligned comments."""
+    entries = []
+    for i, key in enumerate(_KEY_ORDER):
+        val_str = json.dumps(values[key])
+        comma = "," if i < len(_KEY_ORDER) - 1 else ""
+        entries.append((f'  "{key}": {val_str}{comma}', _COMMENTS[key]))
+    col = max(len(e) for e, _ in entries) + 2
+    lines = ["{"]
+    for entry, comment in entries:
+        lines.append(f"{entry:<{col}}// {comment}")
+    lines.append("}")
+    _TUNING_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _show() -> None:
+    """Show resolved tuning values with source info."""
+    t = load_tuning()
+    info = _system_info()
+    raw = load_json_with_comments(_TUNING_PATH) or {}
+
+    ram_label = f"{info['total_ram_mb']} MB" if info["total_ram_mb"] else "unknown"
+    print(f"Hardware: {info['cpus']} CPUs, {ram_label} RAM")
+    print(f"Config:   {_TUNING_PATH}")
+    print()
+
+    fields = [
+        ("codeql_ram_mb", t.codeql_ram_mb, "MB"),
+        ("codeql_threads", t.codeql_threads, "CPUs"),
+        ("max_semgrep_workers", t.max_semgrep_workers, ""),
+        ("max_codeql_workers", t.max_codeql_workers, ""),
+        ("max_agentic_parallel", t.max_agentic_parallel, ""),
+        ("max_fuzz_parallel", t.max_fuzz_parallel, ""),
+    ]
+    for name, value, unit in fields:
+        raw_val = raw.get(name, _DEFAULTS.get(name))
+        if raw_val == "auto":
+            shown = value
+            if name == "codeql_threads" and value == 0:
+                shown = f"all {info['cpus']}" if info["cpus"] else "all"
+            display = f"auto ({shown}{' ' + unit if unit else ''})"
+        else:
+            display = f"{value}{' ' + unit if unit else ''}"
+        print(f"  {name:25s} {display}")
+
+
+def main() -> int:
+    args = sys.argv[1:]
+
+    if not args:
+        _show()
+        return 0
+
+    profile = args[0]
+    if profile in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0
+
+    if profile not in _PROFILES:
+        print(f"Unknown profile: {profile}", file=sys.stderr)
+        print(f"Available: {', '.join(_PROFILES)}", file=sys.stderr)
+        return 1
+
+    gen_fn, description = _PROFILES[profile]
+    values = gen_fn()
+    _write_tuning(values)
+    print(f"tuning.json updated: {description}")
+    print()
+
+    for key in _KEY_ORDER:
+        val = values[key]
+        print(f"  {key:25s} {val}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

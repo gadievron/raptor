@@ -46,7 +46,7 @@ def main() -> None:
     ap.add_argument("--binary", required=True, help="Path to binary to fuzz")
     ap.add_argument("--corpus", help="Path to seed corpus directory (optional)")
     ap.add_argument("--duration", type=int, default=3600, help="Fuzzing duration in seconds (default: 3600)")
-    ap.add_argument("--parallel", type=int, default=1, help="Number of parallel AFL instances (default: 1)")
+    ap.add_argument("--parallel", type=int, default=1, help="Number of parallel AFL instances (default: 1, ceiling: tuning.json)")
     ap.add_argument("--max-crashes", type=int, default=10, help="Maximum crashes to analyse (default: 10)")
     ap.add_argument("--timeout", type=int, default=1000, help="Timeout per execution in ms (default: 1000)")
     ap.add_argument("--out", help="Output directory (default: out/fuzz_<binary_name>)")

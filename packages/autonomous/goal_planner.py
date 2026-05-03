@@ -210,7 +210,9 @@ class GoalPlanner:
             adapted["extra_flags"] = adapted.get("extra_flags", []) + ["-D"]
 
         if hints.get("parallel_instances"):
-            adapted["parallel"] = hints["parallel_instances"]
+            from core.tuning import get_tuning
+            ceiling = get_tuning().max_fuzz_parallel
+            adapted["parallel"] = min(hints["parallel_instances"], ceiling)
             logger.info(f"Goal: Using {adapted['parallel']} parallel instances")
 
         return adapted

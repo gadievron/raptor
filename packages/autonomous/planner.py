@@ -322,10 +322,12 @@ class FuzzingPlanner:
             logger.info("ASAN detected - reducing timeout")
             strategy["timeout"] = 500
 
-        # If no AFL instrumentation, use more parallel instances
+        # If no AFL instrumentation, use more parallel instances (capped by tuning)
         if not state.has_afl_instrumentation:
-            logger.info("No AFL instrumentation - increasing parallelisation")
-            strategy["parallel"] = min(4, strategy["parallel"] * 2)
+            from core.tuning import get_tuning
+            ceiling = get_tuning().max_fuzz_parallel
+            strategy["parallel"] = min(4, ceiling)
+            logger.info(f"No AFL instrumentation - parallelisation set to {strategy['parallel']}")
 
         # Learn from history
         if self.memory and state.current_strategy in state.successful_strategies:
