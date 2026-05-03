@@ -1773,6 +1773,43 @@ class GeminiProvider(LLMProvider):
             # Auth, network, quota — don't waste a second call
             raise
 
+    # ------------------------------------------------------------------
+    # Tool-use via JSON-protocol synthesis.
+    # ------------------------------------------------------------------
+    #
+    # The native google-genai SDK exposes Gemini's function-calling but
+    # this provider doesn't wire that up — operators wanting native
+    # function-calling install ``openai`` alongside ``google-genai`` and
+    # the factory routes through :class:`OpenAICompatibleProvider`
+    # against Gemini's OpenAI-compat endpoint.
+    #
+    # For users who installed ONLY the google-genai SDK (chosen for
+    # accurate ``thoughts_token_count`` cost tracking, server-side
+    # schema-constrained JSON), the synthesis fallback gives them
+    # tool-use without forcing an additional SDK install. Same pattern
+    # as :class:`ClaudeCodeLLMProvider`.
+
+    def supports_tool_use(self) -> bool: return True
+    def supports_prompt_caching(self) -> bool: return False
+    def supports_parallel_tools(self) -> bool: return False
+
+    def turn(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDef],
+        *,
+        system: Optional[str] = None,
+        max_tokens: int = 4096,
+        cache_control: CacheControl = CacheControl(),
+        **provider_specific: Any,
+    ) -> TurnResponse:
+        """Tool-use via the ABC's JSON-protocol fallback."""
+        return self._tool_use_fallback(
+            messages, tools,
+            system=system, max_tokens=max_tokens,
+            cache_control=cache_control, **provider_specific,
+        )
+
 
 class ClaudeCodeProvider:
     """
