@@ -389,6 +389,28 @@ def test_turn_tool_call_response_returns_needs_tool_call(monkeypatch) -> None:
     assert out.content[0].input == {"q": "x"}
 
 
+def test_turn_propagates_envelope_cost_to_compute_cost(monkeypatch) -> None:
+    """The whole reason cost_usd exists on TurnResponse: Claude Code
+    publishes total_cost_usd in its envelope, and we want the loop's
+    budget tracking to use that exact figure rather than a token-
+    derived approximation that's near-zero for non-billed models.
+    End-to-end: envelope cost → generate() → fallback → TurnResponse
+    → compute_cost."""
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: _FakeCompleted(
+            stdout=_envelope(result="answer", cost_usd=0.0337)
+        ),
+    )
+    p = ClaudeCodeLLMProvider(_config())
+    out = p.turn(
+        messages=[Message(role="user", content=[TextBlock(text="hi")])],
+        tools=[],
+    )
+    assert out.cost_usd == 0.0337
+    assert p.compute_cost(out) == 0.0337
+
+
 def test_turn_passes_system_through_to_subprocess(monkeypatch) -> None:
     """``system`` arg goes via the prompt (not a CLI flag) — our fallback
     appends the tool protocol to the system message before calling

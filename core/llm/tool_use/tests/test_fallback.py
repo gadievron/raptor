@@ -69,7 +69,7 @@ class _RecordingProvider(LLMProvider):
             model="claude-opus-4-6",
             provider="test",
             tokens_used=10,
-            cost=0.0,
+            cost=getattr(self, "_canned_cost", 0.0),
             finish_reason="stop",
             input_tokens=4,
             output_tokens=6,
@@ -383,6 +383,35 @@ def test_fallback_renders_full_message_history() -> None:
     assert "found 42" in rendered
     assert isinstance(out.content[0], TextBlock)
     assert "42" in out.content[0].text
+
+
+def test_fallback_propagates_cost_usd_from_generate_response() -> None:
+    """The whole point of plumbing cost_usd: providers that already
+    know the exact cost (CC envelope, future API-side cost
+    reporting) get it surfaced on the TurnResponse so the loop's
+    budget tracking matches the actual ledger rather than a
+    token-derived estimate."""
+    p = _RecordingProvider(["ok"])
+    p._canned_cost = 0.0729                                           # type: ignore[attr-defined]
+    out = p._tool_use_fallback(
+        messages=[_user("hi")],
+        tools=[],
+    )
+    assert out.cost_usd == 0.0729
+
+
+def test_fallback_cost_usd_zero_propagates_as_zero_not_none() -> None:
+    """``cost==0.0`` from a free local model (Ollama) is a known-zero,
+    distinct from "cost unknown". Should propagate as 0.0, not None,
+    so compute_cost returns 0.0 directly without falling back to the
+    token formula."""
+    p = _RecordingProvider(["ok"])
+    p._canned_cost = 0.0                                              # type: ignore[attr-defined]
+    out = p._tool_use_fallback(
+        messages=[_user("hi")],
+        tools=[],
+    )
+    assert out.cost_usd == 0.0
 
 
 def test_fallback_default_turn_still_raises_when_not_overridden() -> None:

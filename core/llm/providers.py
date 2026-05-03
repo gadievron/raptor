@@ -181,10 +181,16 @@ class LLMProvider(ABC):
     def compute_cost(self, response: TurnResponse) -> float:
         """USD cost of ``response`` given the bound model's pricing.
 
-        Default: standard input/output tokens at the model's per-M
+        If ``response.cost_usd`` is already populated (some providers
+        — e.g., Claude Code via the synthesis fallback — surface the
+        exact envelope cost), that value is returned directly so the
+        loop's budget tracking matches the provider's own ledger.
+        Otherwise: standard input/output tokens at the model's per-M
         rates, ignoring cache fields. Anthropic overrides to add the
         documented 1.25× cache-write and 0.1× cache-read multipliers.
         """
+        if response.cost_usd is not None:
+            return response.cost_usd
         in_per_m, out_per_m = self.price_per_million()
         return (
             response.input_tokens * in_per_m
@@ -319,11 +325,17 @@ class LLMProvider(ABC):
         text = response.content if response and response.content else ""
         block, stop_reason = self._parse_fallback_response(text, tools)
 
+        # Surface the underlying generate() cost on the TurnResponse so
+        # loop-side budget tracking reflects the actual provider charge,
+        # not a token-derived estimate that may be 0 (e.g., when the CC
+        # subprocess uses a model name absent from MODEL_COSTS).
+        cost = getattr(response, "cost", None)
         return TurnResponse(
             content=[block],
             stop_reason=stop_reason,
             input_tokens=getattr(response, "input_tokens", 0) or 0,
             output_tokens=getattr(response, "output_tokens", 0) or 0,
+            cost_usd=float(cost) if cost is not None else None,
         )
 
     @staticmethod
@@ -1004,6 +1016,13 @@ def _message_to_openai_wire(m: Message) -> list[Dict[str, Any]]:
     into N separate ``role:"tool"`` messages (each carrying its own
     ``tool_call_id``), unlike Anthropic which packs them in one user
     message's content array.
+
+    Empty assistant turns (``content=[]``, which the loop can produce
+    on ``StopReason.ERROR``) emit ``{"role": "assistant",
+    "content": ""}`` — most OpenAI-compatible backends reject an
+    assistant message with neither ``content`` nor ``tool_calls``,
+    so the empty-string is the safe wire form. Empty user turns are
+    skipped (the message has nothing to convey).
     """
     if m.role == "assistant":
         text_parts: list[str] = []
@@ -1025,6 +1044,8 @@ def _message_to_openai_wire(m: Message) -> list[Dict[str, Any]]:
             out["content"] = "".join(text_parts)
         if tool_calls:
             out["tool_calls"] = tool_calls
+        if not text_parts and not tool_calls:
+            out["content"] = ""
         return [out]
     # user role
     out_msgs: list[Dict[str, Any]] = []
@@ -1206,7 +1227,13 @@ class AnthropicProvider(LLMProvider):
 
     def compute_cost(self, response: TurnResponse) -> float:
         """Anthropic cost: standard input/output + cache_write (1.25x
-        input) + cache_read (0.1x input) per Anthropic's pricing."""
+        input) + cache_read (0.1x input) per Anthropic's pricing.
+
+        ``response.cost_usd``, when set, takes precedence — same
+        rationale as the ABC default.
+        """
+        if response.cost_usd is not None:
+            return response.cost_usd
         from .model_data import (
             ANTHROPIC_CACHE_READ_MULTIPLIER,
             ANTHROPIC_CACHE_WRITE_MULTIPLIER,
@@ -1439,6 +1466,11 @@ def _message_to_anthropic_wire(m: Message) -> Dict[str, Any]:
     and tool_result blocks all live in the same ``content`` array;
     role determines which subset is valid (assistant: text + tool_use;
     user: text + tool_result).
+
+    Empty :class:`Message`\\ s (``content=[]``) — which the loop can
+    produce when a turn returns ``StopReason.ERROR`` with no blocks —
+    are emitted as ``[{"type": "text", "text": ""}]`` so the wire
+    shape stays valid if a caller resumes from a failed run.
     """
     out_content: list[Dict[str, Any]] = []
     for block in m.content:
@@ -1458,6 +1490,8 @@ def _message_to_anthropic_wire(m: Message) -> Dict[str, Any]:
                 "content": block.content,
                 "is_error": block.is_error,
             })
+    if not out_content:
+        out_content.append({"type": "text", "text": ""})
     return {"role": m.role, "content": out_content}
 
 

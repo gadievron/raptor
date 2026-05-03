@@ -187,6 +187,13 @@ class TurnResponse:
     Cache-token fields are 0 on providers that lack prompt caching;
     this is informational, not a capability check — callers test
     ``provider.supports_prompt_caching()`` for capability.
+
+    ``cost_usd`` is populated when the provider already knows the
+    exact cost — e.g., Claude Code returns ``total_cost_usd`` in its
+    envelope; the fallback synthesis path plumbs that through. When
+    set, :meth:`LLMProvider.compute_cost` returns it directly and
+    skips the per-token formula. ``None`` (default) for native turn()
+    impls that compute cost from token counts.
     """
 
     content: list[TextBlock | ToolCall]
@@ -195,6 +202,7 @@ class TurnResponse:
     output_tokens: int
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
+    cost_usd: float | None = None
 
 
 # ---------------------------------------------------------------------------
