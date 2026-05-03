@@ -95,6 +95,7 @@ class ToolUseLoop:
         terminal_tool: str | None = None,
         max_iterations: int = 50,
         max_cost_usd: float | None = None,
+        max_seconds: float | None = None,
         tool_timeout_s: float | None = None,
         context_policy: ContextPolicy = ContextPolicy.RAISE,
         max_tokens_per_turn: int = 4096,
@@ -126,6 +127,7 @@ class ToolUseLoop:
         self._terminal_tool = terminal_tool
         self._max_iterations = max_iterations
         self._max_cost_usd = max_cost_usd
+        self._max_seconds = max_seconds
         self._tool_timeout_s = tool_timeout_s
         self._context_policy = context_policy
         self._max_tokens_per_turn = max_tokens_per_turn
@@ -165,6 +167,7 @@ class ToolUseLoop:
         total_cost_usd = 0.0
         tool_calls_made = 0
         terminal_tool_input: dict[str, Any] | None = None
+        wall_start = time.monotonic()
 
         for iteration in range(self._max_iterations):
             # ---- pre-flight: cost budget --------------------------------
@@ -181,6 +184,34 @@ class ToolUseLoop:
                     f"cost budget ${self._max_cost_usd:.4f} reached "
                     f"(cumulative ${total_cost_usd:.4f}); aborting "
                     "before next turn"
+                )
+
+            # ---- pre-flight: wall-clock budget --------------------------
+            # Caps the *whole run*, not per-turn. Useful when the loop
+            # is bounded by API latency on slow days (e.g., Anthropic
+            # 529-overloaded waves) where ``max_iterations`` and
+            # ``max_cost_usd`` haven't fired but the operator-side
+            # SLA has. Pre-flight only — a single in-flight ``turn()``
+            # can blow past the cap because we don't preempt it.
+            if (
+                self._max_seconds is not None
+                and (time.monotonic() - wall_start) >= self._max_seconds
+            ):
+                self._emit(LoopTerminated(
+                    reason="max_seconds",
+                    iterations=iteration,
+                    total_cost_usd=total_cost_usd,
+                ))
+                return ToolLoopResult(
+                    final_text="",
+                    terminal_tool_input=None,
+                    messages=messages,
+                    iterations=iteration,
+                    tool_calls_made=tool_calls_made,
+                    total_input_tokens=total_input_tokens,
+                    total_output_tokens=total_output_tokens,
+                    total_cost_usd=total_cost_usd,
+                    terminated_by="max_seconds",
                 )
 
             # ---- pre-flight: context window -----------------------------

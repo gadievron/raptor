@@ -301,6 +301,99 @@ def test_max_cost_usd_terminates_pre_flight() -> None:
     assert len(fp.calls) == 2
 
 
+def test_max_seconds_terminates_pre_flight(monkeypatch) -> None:
+    """Wall-clock budget caps the whole run. Pre-flight check before
+    each iteration; once elapsed >= max_seconds, the loop returns a
+    ``terminated_by="max_seconds"`` ToolLoopResult — distinct from
+    cost / iteration / context termination so callers can treat
+    "API was slow today" differently from "we made too many calls"."""
+    # Fake clock: each ``time.monotonic()`` call advances 4 seconds.
+    # First call (wall_start) → 0; second (iter 0 check) → 4;
+    # third (iter 1 check) → 8 → triggers cap at max_seconds=6.
+    clock = {"t": 0.0}
+    def _tick() -> float:
+        v = clock["t"]
+        clock["t"] += 4.0
+        return v
+    monkeypatch.setattr("core.llm.tool_use.loop.time.monotonic", _tick)
+
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "echo", {})),
+        _tool_call_response(("c2", "echo", {})),                   # never reached
+    ])
+    loop = ToolUseLoop(fp, [_echo_tool()], max_seconds=6.0)
+    out = loop.run("slow API")
+    assert out.terminated_by == "max_seconds"
+    assert len(fp.calls) == 1                                       # 1 turn before cap
+
+
+def test_max_seconds_emits_loop_terminated_event() -> None:
+    """The structured event stream surfaces ``LoopTerminated(reason=
+    "max_seconds")`` so subscribers can distinguish wall-clock cap
+    from other termination reasons."""
+    events: list[Any] = []
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "echo", {})),
+    ] * 50)
+    loop = ToolUseLoop(
+        fp, [_echo_tool()],
+        max_seconds=0.0,                                            # immediate cap
+        events=events.append,
+    )
+    out = loop.run("hi")
+    assert out.terminated_by == "max_seconds"
+    terminated = [e for e in events if isinstance(e, LoopTerminated)]
+    assert len(terminated) == 1
+    assert terminated[0].reason == "max_seconds"
+
+
+def test_max_seconds_none_means_no_cap() -> None:
+    """Default behaviour preserved: ``max_seconds=None`` (the default)
+    leaves the wall-clock check disabled. The loop runs to natural
+    completion regardless of how long it takes."""
+    fp = _FakeProvider([_text_response("done")])
+    loop = ToolUseLoop(fp, [_echo_tool()])                          # no max_seconds
+    out = loop.run("hi")
+    assert out.terminated_by == "complete"
+
+
+def test_max_seconds_real_clock_e2e() -> None:
+    """End-to-end against real ``time.monotonic`` (no monkeypatch).
+
+    Verifies the gate fires on actual wall-clock — catches bugs the
+    determinism-mocked tests above can't, e.g. ``time.time()`` vs
+    ``time.monotonic()`` mixups, sign errors in the elapsed
+    computation, or slipped imports of the clock function. ~1s of
+    test time; a slow-handler provider sleeps 0.3s per turn, the
+    cap fires after ~3 turns of a max_seconds=1.0 budget.
+    """
+    class _SlowProvider(_FakeProvider):
+        """Sleep mid-turn to consume real wall-clock between cap checks."""
+        def turn(self, messages, tools, *, system, max_tokens,
+                 cache_control, **provider_specific) -> TurnResponse:
+            time.sleep(0.3)
+            return super().turn(
+                messages, tools, system=system, max_tokens=max_tokens,
+                cache_control=cache_control, **provider_specific,
+            )
+
+    fp = _SlowProvider([
+        _tool_call_response(("c", "echo", {})) for _ in range(20)
+    ])
+    loop = ToolUseLoop(fp, [_echo_tool()], max_seconds=1.0)
+    out = loop.run("slow-api day")
+
+    assert out.terminated_by == "max_seconds"
+    # Expected ~3 turns at 0.3s/turn under a 1.0s cap, but timing slop
+    # under load (CI jitter, GC pauses) widens the window. The
+    # invariant is "the cap fired and bounded iterations" — exact count
+    # is timing-dependent.
+    assert 1 <= out.iterations <= 6
+    # Sanity: at least one turn ran (cap doesn't fire pre-flight on
+    # iter 0 because elapsed is ~0).
+    assert len(fp.calls) >= 1
+
+
 def test_cost_tracking_aggregates_across_turns() -> None:
     """``total_cost_usd`` reports the sum of provider.compute_cost()
     over all turns. With 2 turns at (100*3 + 50*15)/1M = $0.00105 each."""
