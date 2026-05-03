@@ -35,6 +35,10 @@ _mount_ns_available_cache = None
 _landlock_cache = None
 # Seccomp cache: None = unchecked, 0 = unavailable, CDLL handle = available.
 _libseccomp_cache = None
+# ptrace cache: None = unchecked, True/False = probed result. Used by
+# `--audit` to decide whether b2 (syscall audit via SCMP_ACT_TRACE)
+# and b3 (filesystem audit) can engage. Probed by core.sandbox.ptrace_probe.
+_ptrace_available_cache = None
 # User-supplied rlimit overrides from ~/.config/raptor/sandbox.json.
 _user_limits_cache = None
 # Resolved absolute paths to sandbox-setup binaries. We use absolute paths
@@ -55,6 +59,13 @@ _mkdir_path_cache = None
 # disable its own sandbox.
 _cli_sandbox_disabled = False   # True when --no-sandbox passed
 _cli_sandbox_profile = None     # str profile name when --sandbox <name> passed
+# Audit flags — orthogonal to profile. `--audit` engages audit mode on
+# the active profile (proxy log-and-allow + SCMP_ACT_TRACE + tracer);
+# `--verbose` (only with --audit) flips the tracer from filtered to
+# strace-style. Same prompt-injection-safety rule applies: only entry-
+# point argparse sets these, never env/config/repo content.
+_cli_sandbox_audit = False
+_cli_sandbox_audit_verbose = False
 
 # Degradation warnings are logged once per process, not once per sandbox()
 # context — kernel capability doesn't change at runtime and scan loops
@@ -67,6 +78,8 @@ _sandbox_unavailable_warned = False
 _net_and_tcp_allowlist_warned = False
 _seccomp_arch_missing_warned = False
 _mount_unavailable_warned = False
+_ptrace_unavailable_warned = False
+_audit_warned_no_spawn = False
 # NOTE: B's mount-ns Landlock fallback logs at DEBUG (no warn-once
 # flag needed — workflow proceeds correctly at Landlock-only, same
 # posture as Ubuntu defaults). The speculative-C retry uses the
@@ -102,6 +115,19 @@ def warn_once(flag_name: str) -> bool:
     import sys
     mod = sys.modules[__name__]
     with _cache_lock:
+        # AttributeError-on-typo defense: if a caller passes a flag
+        # name that doesn't exist on this module (typo, refactor
+        # missed an update), the bare getattr would raise an opaque
+        # AttributeError from inside state.py. Surface a clearer
+        # error that names the offending flag so the caller can
+        # find their typo immediately.
+        if not hasattr(mod, flag_name):
+            raise AttributeError(
+                f"warn_once: unknown flag {flag_name!r}. Add to "
+                f"core/sandbox/state.py module-level globals before "
+                f"using. (Likely a typo — most flag names follow "
+                f"the `_<feature>_warned_<reason>` pattern.)"
+            )
         if getattr(mod, flag_name):
             return False
         setattr(mod, flag_name, True)

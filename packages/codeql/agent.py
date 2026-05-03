@@ -270,7 +270,8 @@ class CodeQLAgent:
             db_results = self.database_manager.create_databases_parallel(
                 self.repo_path,
                 language_build_map,
-                force=force_db_creation
+                force=force_db_creation,
+                audit_run_dir=self.out_dir,
             )
 
             # Clean up synthesised build artifacts
@@ -569,7 +570,15 @@ Examples:
     parser.add_argument("--min-files", type=int, default=3, help="Minimum files to detect language")
     parser.add_argument("--codeql-cli", help="Path to CodeQL CLI (auto-detected if not specified)")
 
+    # Sandbox CLI flags (--sandbox / --no-sandbox / --audit / --audit-verbose)
+    # so the agentic-driven invocation can propagate audit mode into this
+    # subprocess. Without this, audit signal stops at the agentic process
+    # boundary because subprocesses parse a fresh argv.
+    from core.sandbox import add_cli_args, apply_cli_args
+    add_cli_args(parser)
+
     args = parser.parse_args()
+    apply_cli_args(args, parser=parser)
 
     # Parse languages
     languages = None
@@ -592,6 +601,17 @@ Examples:
             codeql_cli=args.codeql_cli
         )
 
+        # Make record_denial calls (proxy events, generic Landlock
+        # denials) write to THIS subprocess's out_dir. Without this,
+        # active_run_dir is None → record_denial is no-op → events
+        # are silently dropped. The lifecycle hook in raptor.py /
+        # raptor_codeql.py wires this for top-level invocations;
+        # for the agentic flow, codeql/agent.py runs as a subprocess
+        # and must wire it itself. summarize_and_write at end-of-
+        # main converts the JSONL to sandbox-summary.json.
+        from core.sandbox.summary import set_active_run_dir
+        set_active_run_dir(agent.out_dir)
+
         # Run analysis
         result = agent.run_autonomous_analysis(
             languages=languages,
@@ -603,6 +623,24 @@ Examples:
 
         # Print summary
         agent.print_summary(result)
+
+        # Aggregate any tracer-emitted .sandbox-denials.jsonl into
+        # sandbox-summary.json. The lifecycle hook (start_run /
+        # complete_run) lives in raptor.py / raptor_codeql.py for
+        # top-level invocations and in raptor_agentic.py for the
+        # agentic flow — neither covers THIS subprocess's out_dir
+        # when codeql/agent.py is invoked as a child of agentic.
+        # Without this call, audit JSONL produced inside codeql
+        # subprocess (e.g., via tool_paths-engaged mount-ns + tracer)
+        # would orphan in agent.out_dir/.sandbox-denials.jsonl.
+        # No-op if no JSONL was written (the common case today,
+        # since codeql calls don't engage mount-ns without target).
+        try:
+            from core.sandbox.summary import summarize_and_write
+            summarize_and_write(agent.out_dir)
+        except Exception as _e:
+            logger.debug("summarize_and_write at end of codeql/agent: "
+                         "%s", _e, exc_info=True)
 
         # Exit with appropriate code
         sys.exit(0 if result.success else 1)

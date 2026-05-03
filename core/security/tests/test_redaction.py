@@ -89,3 +89,52 @@ def test_can_keep_secrets_for_operator_debugging():
     value = f"https://example.test/?api_key={api_value} Authorization: {bearer}"
 
     assert redact_secrets(value, reveal_secrets=True) == value
+
+
+# ----- redact_url_secrets_only (path-specific redactor) -----
+
+from core.security.redaction import redact_url_secrets_only  # noqa: E402
+
+
+class TestRedactUrlSecretsOnly:
+    """Path-specific variant: URL credentials redacted, Bearer/Basic
+    NOT redacted (avoids false positives on filesystem paths
+    containing those substrings as filename components)."""
+
+    def test_url_with_userinfo_still_redacted(self):
+        # URL credentials must still be scrubbed even via the
+        # path-specific entry point.
+        value = "/cache/key/https://user:hunter2@example.com/x.html"
+        out = redact_url_secrets_only(value)
+        assert "hunter2" not in out
+        assert "[REDACTED]" in out
+
+    def test_bearer_substring_preserved(self):
+        # `redact_secrets` would have replaced this; the path-specific
+        # variant leaves it untouched (it's a filename, not a header).
+        value = "/tmp/Bearer abcdefghij1234567890abcdef.dat"
+        out = redact_url_secrets_only(value)
+        assert "abcdefghij1234567890abcdef" in out, (
+            f"Bearer-shaped substring wrongly redacted in path: {out!r}"
+        )
+
+    def test_basic_substring_preserved(self):
+        value = "/var/log/Basic deadbeef1234567890.log"
+        out = redact_url_secrets_only(value)
+        assert "deadbeef1234567890" in out
+
+    def test_clean_path_passes_through(self):
+        path = "/usr/lib/python3/site-packages/__init__.py"
+        assert redact_url_secrets_only(path) == path
+
+    def test_reveal_flag_honoured(self):
+        value = "https://user:secret@example.com/x"
+        assert redact_url_secrets_only(value, reveal_secrets=True) == value
+
+    def test_url_query_param_redaction_still_works(self):
+        # URL query-string secret keys (api_key, token, etc.) get
+        # redacted because URL parsing is still applied.
+        value = "/cache/https://example.com/?api_key=abcdefghijklmnop"
+        out = redact_url_secrets_only(value)
+        assert "abcdefghijklmnop" not in out
+        assert "api_key=[REDACTED]" in out

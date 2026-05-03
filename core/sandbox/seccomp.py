@@ -36,6 +36,35 @@ def _SCMP_ACT_ERRNO(errno_val):
     return 0x00050000 | (errno_val & 0x0000ffff)
 
 
+def _SCMP_ACT_TRACE(msg_num: int = 0):
+    """Construct the SCMP_ACT_TRACE action value.
+
+    When a syscall hits a TRACE-action rule, the kernel pauses the tracee
+    and notifies the attached ptrace tracer with PTRACE_EVENT_SECCOMP
+    (event code 7). The tracer reads the offending syscall via
+    PTRACE_GETREGSET and decides what to do (in audit mode: log + resume).
+
+    REQUIRES a tracer to be attached when the rule fires. If no tracer
+    is attached, the kernel default action is to kill the process with
+    SIGSYS. Used by `--audit` mode (orthogonal flag, composes with any
+    enforcement profile that has a seccomp filter) where
+    core/sandbox/tracer.py is the attached tracer; never use TRACE
+    without ensuring a tracer is wired in for the target's lifetime.
+    """
+    return 0x7ff00000 | (msg_num & 0x0000ffff)
+
+
+# Additional syscalls traced under audit mode (b3: filesystem path
+# audit + connect-attempt audit). These are NOT in the blocklist —
+# under enforcement they're allowed normally; under audit_mode they
+# get the TRACE action so the tracer logs each call and the operator
+# sees what files / connect targets the workload uses.
+_AUDIT_EXTRA_TRACE_SYSCALLS = (
+    "open", "openat", "openat2",  # b3: filesystem path coverage
+    "connect",                    # b3: outbound network attempts
+)
+
+
 # libseccomp comparison ops (scmp_compare)
 _SCMP_CMP_EQ = 4  # equal to
 
@@ -181,7 +210,8 @@ def check_seccomp_available() -> bool:
         return True
 
 
-def _make_seccomp_preexec(profile: str, block_udp: bool = False):
+def _make_seccomp_preexec(profile: str, block_udp: bool = False,
+                          audit_mode: bool = False):
     """Create a preexec_fn that installs the seccomp filter for `profile`.
 
     Runs POST-fork in the child. Same fork-safety rules as Landlock: capture
@@ -196,9 +226,23 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False):
     because UDP/DNS is needed for normal sandbox use (e.g. block_network=True
     with no proxy — DNS still used inside the net-ns for loopback lookups).
 
-    Returns None if libseccomp is unavailable or `profile == "none"`.
+    `audit_mode=True` swaps the deny action from SCMP_ACT_ERRNO(EPERM) to
+    SCMP_ACT_TRACE — the kernel pauses the tracee and notifies the
+    attached ptrace tracer (core/sandbox/tracer.py) instead of erroring
+    the syscall. Also adds open/openat/connect to the trace set for b3
+    filesystem + network audit coverage. CRITICAL: requires a ptrace
+    tracer to be attached for the target's lifetime; without it, the
+    kernel default action for unhandled TRACE is SIGSYS-kill the
+    process. The caller (_spawn.py) is responsible for ensuring tracer
+    is attached before any traced syscall fires.
+
+    Returns None if libseccomp is unavailable or the profile
+    indicates "no seccomp" — both falsy values (None, "") and the
+    literal string "none" are accepted as disable triggers, matching
+    callers that may convert via `profile_dict["seccomp"] or None`
+    (context.py) and callers that pass the raw profile name.
     """
-    if profile == "none" or not check_seccomp_available():
+    if not profile or profile == "none" or not check_seccomp_available():
         return None
 
     lib = state._libseccomp_cache  # CDLL captured at check time
@@ -229,6 +273,15 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False):
     blocked_syscalls = list(_SECCOMP_BLOCK_ALWAYS)
     if profile != "debug":
         blocked_syscalls += list(_SECCOMP_BLOCK_UNLESS_DEBUG)
+    # Audit mode: add b3 syscalls (open/openat/connect) to the trace
+    # set so the tracer logs every file path attempt and connect
+    # target. Under enforcement these aren't blocked at all (Landlock
+    # / egress proxy handle them at other layers); under audit they
+    # become observable via SCMP_ACT_TRACE.
+    audit_extra: list = []
+    if audit_mode:
+        audit_extra = [(name, _resolve(name))
+                       for name in _AUDIT_EXTRA_TRACE_SYSCALLS]
     resolved_blocks = [(name, _resolve(name)) for name in blocked_syscalls]
     # Sockets: filter by argument (family). Same syscall number, multiple rules.
     socket_num = _resolve("socket")
@@ -281,7 +334,18 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False):
                                      _SCMP_ACT_KILL_PROCESS)
 
                 errno_eperm = 1  # EPERM
-                deny = _SCMP_ACT_ERRNO(errno_eperm)
+                # Audit mode: swap the deny action from ERRNO to TRACE.
+                # Under TRACE, the kernel pauses on the offending syscall
+                # and notifies our ptrace tracer (core/sandbox/tracer.py)
+                # which logs the event and resumes the syscall. CRITICAL:
+                # with no tracer attached, the kernel default for TRACE
+                # is to SIGSYS the process — _spawn.py is responsible
+                # for ensuring the tracer is attached BEFORE any traced
+                # syscall fires.
+                if audit_mode:
+                    deny = _SCMP_ACT_TRACE(0)
+                else:
+                    deny = _SCMP_ACT_ERRNO(errno_eperm)
 
                 for name, num in resolved_blocks:
                     if num < 0:
@@ -291,6 +355,23 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False):
                     ret = lib.seccomp_rule_add_array(ctx, deny, num, 0, null_args)
                     if ret < 0:
                         _os_write(2, b"RAPTOR: seccomp add_rule failed\n")
+
+                # Audit-mode-only extras: open/openat/connect get the
+                # TRACE action so the tracer logs every file path and
+                # connect attempt for b3 coverage. Skipped under
+                # enforcement (these aren't blocked at the seccomp
+                # layer in any non-audit profile).
+                if audit_mode:
+                    trace_act = _SCMP_ACT_TRACE(0)
+                    for name, num in audit_extra:
+                        if num < 0:
+                            continue
+                        null_args = ctypes.POINTER(_ScmpArgCmp)()
+                        ret = lib.seccomp_rule_add_array(
+                            ctx, trace_act, num, 0, null_args,
+                        )
+                        if ret < 0:
+                            _os_write(2, b"RAPTOR: seccomp audit rule failed\n")
 
                 # socket() with blocked family — one rule per family
                 if socket_num >= 0:
@@ -376,10 +457,24 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False):
 
                 ret = lib.seccomp_load(ctx)
                 if ret < 0:
-                    _os_write(2, b"RAPTOR: seccomp_load failed\n")
+                    # Fail-closed (was: write to stderr + continue,
+                    # which silently fails OPEN — child execs without
+                    # seccomp despite operator running --sandbox full).
+                    # Match Landlock's posture: a security layer that
+                    # the operator asked for but fails to install MUST
+                    # NOT silently degrade enforcement.
+                    _os_write(2, b"RAPTOR: seccomp_load failed -- "
+                                 b"refusing to exec without filter\n")
+                    os._exit(126)
             finally:
                 lib.seccomp_release(ctx)
-        except Exception:
-            _os_write(2, b"RAPTOR: seccomp enforcement failed\n")
+        except BaseException:
+            # Fail-closed on any unexpected exception -- same reason.
+            # BaseException so SystemExit / KeyboardInterrupt also
+            # route through the safe-exit path rather than letting
+            # the child continue with no seccomp.
+            _os_write(2, b"RAPTOR: seccomp enforcement failed -- "
+                         b"refusing to exec without filter\n")
+            os._exit(126)
 
     return _apply_seccomp

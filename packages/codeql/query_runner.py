@@ -262,6 +262,12 @@ class QueryRunner:
                 cmd,
                 block_network=True,
                 tool_paths=self._sandbox_tool_paths(),
+                # audit_run_dir = where audit JSONL lands when --audit
+                # is set. Decoupled from output= so Landlock writable_
+                # paths isn't restricted (codeql analyze writes to
+                # ~/.codeql cache, the database dir, etc. — paths we
+                # can't safely enumerate as writable).
+                audit_run_dir=str(out_dir),
                 capture_output=True,
                 text=True,
                 timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,
@@ -305,6 +311,7 @@ class QueryRunner:
                         result = sandbox_run(
                             cmd, block_network=True,
                             tool_paths=self._sandbox_tool_paths(),
+                            audit_run_dir=str(out_dir),
                             capture_output=True, text=True,
                             timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,
                         )
@@ -435,6 +442,7 @@ class QueryRunner:
                 cmd,
                 block_network=True,
                 tool_paths=self._sandbox_tool_paths(),
+                audit_run_dir=str(out_dir),
                 capture_output=True,
                 text=True,
                 timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,

@@ -495,7 +495,7 @@ def main():
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(ap)
     args = ap.parse_args()
-    apply_cli_args(args)
+    apply_cli_args(args, parser=ap)
 
     start_time = time.time()
     tmp = Path(tempfile.mkdtemp(prefix="raptor_auto_"))
@@ -549,6 +549,17 @@ def main():
             # Collision-prevention via unique_run_suffix — see core/run/output.py.
             out_dir = RaptorConfig.get_out_dir() / f"scan_{repo_name}_{unique_run_suffix('_')}"
         out_dir.mkdir(parents=True, exist_ok=True)
+
+        # Make record_denial calls (proxy events, generic Landlock
+        # denials) write to THIS subprocess's out_dir. Without this,
+        # active_run_dir is None → record_denial is no-op → events
+        # silently dropped. The lifecycle hook in raptor.py wires
+        # this for top-level invocations; for the agentic flow,
+        # scanner.py runs as a subprocess and must wire it itself.
+        # summarize_and_write at end-of-main converts the JSONL to
+        # sandbox-summary.json.
+        from core.sandbox.summary import set_active_run_dir
+        set_active_run_dir(out_dir)
 
         # Manifest
         logger.info("Computing repository hash...")
@@ -669,6 +680,22 @@ def main():
             "duration": duration,
         }
         print(json.dumps(result, indent=2))
+        # Aggregate any tracer-emitted .sandbox-denials.jsonl into
+        # sandbox-summary.json. The lifecycle hook lives in raptor.py
+        # / raptor_agentic.py for top-level invocations — neither
+        # covers THIS subprocess's out_dir when scanner.py is invoked
+        # as a child of agentic. Without this call, audit JSONL
+        # produced inside scanner subprocess (when mount-ns + tracer
+        # actually engage for some Semgrep call) would orphan in
+        # out_dir/.sandbox-denials.jsonl. No-op if no JSONL was
+        # written (the common case today, since Semgrep hits B
+        # fallback via Landlock-only).
+        try:
+            from core.sandbox.summary import summarize_and_write
+            summarize_and_write(out_dir)
+        except Exception as _e:
+            logger.debug("summarize_and_write at end of scanner.py: "
+                         "%s", _e, exc_info=True)
         sys.exit(0)
     finally:
         if not args.keep:

@@ -72,6 +72,7 @@ _lock = threading.Lock()
 
 DENIALS_FILE = ".sandbox-denials.jsonl"
 SUMMARY_FILE = "sandbox-summary.json"
+AUDIT_DEGRADED_FILE = "sandbox-audit-degraded.json"
 
 # Per-run cap on recorded denials. A malicious target that triggers
 # thousands of network attempts (or any chatty workflow) would otherwise
@@ -210,6 +211,16 @@ def _suggested_fix(denial_type: str, **details: Any) -> str:
     if denial_type == "network":
         host = details.get("host")
         ctx = f" to `{host}`" if host else ""
+        if details.get("audit"):
+            # Audit-mode would-deny: informational only. The proxy_hosts
+            # allowlist is a sandbox API kwarg, not a CLI flag — per the
+            # round-2 PR #251 rule, suggestions must reference only
+            # operator-facing CLI flags, so we don't suggest "add this
+            # host to proxy_hosts". Operators wanting to keep the host
+            # allowed under full enforcement need to modify the calling
+            # code, which isn't a CLI affordance.
+            return (f"audit: outbound network{ctx} would be blocked under "
+                    f"`--sandbox full`")
         return (f"outbound network blocked{ctx}; use `--sandbox none` "
                 f"to allow network (or accept the block)")
     if denial_type == "write":
@@ -227,6 +238,48 @@ def _suggested_fix(denial_type: str, **details: Any) -> str:
         return ("syscall blocked by seccomp; use `--sandbox network-only` or "
                 "`--sandbox none` to drop seccomp")
     return "review denial; no specific suggestion available"
+
+
+def record_audit_degraded(run_dir: Path, *, reason: str,
+                          instructions: str = "") -> None:
+    """Write a marker file when --audit was requested but couldn't run.
+
+    Operators inspecting an output dir need to distinguish three states:
+      (1) audit ran, recorded events  → sandbox-summary.json present
+      (2) audit ran, no events        → no files (current convention)
+      (3) audit was requested but did NOT run on this host → THIS file
+
+    Without (3), an operator who runs `--audit` on Ubuntu 24.04 default
+    (apparmor sysctl=1) sees no summary and may interpret it as "audit
+    found nothing" rather than "audit didn't actually happen".
+
+    Idempotent across multiple sandbox calls in one run: writes once,
+    skips on subsequent calls. Safe to invoke from each per-call site
+    that detected degradation.
+    """
+    run_dir = Path(run_dir)
+    out = run_dir / AUDIT_DEGRADED_FILE
+    if out.exists():
+        return
+    payload = {
+        "audit_requested": True,
+        "audit_engaged": False,
+        "degraded": True,
+        "reason": reason,
+        "instructions": instructions,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tmp = out.with_name(f".~{out.name}.tmp")
+        tmp.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=True) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(tmp, out)
+    except OSError:
+        # Marker is best-effort. The log warning is the primary signal.
+        pass
 
 
 def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
@@ -265,6 +318,25 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
         except OSError:
             pass
         return None
+
+    # Enrich tracer-emitted records with `suggested_fix` if they lack it
+    # (the tracer subprocess doesn't have the suggestion logic;
+    # _suggested_fix lives here in summary). Records from
+    # record_denial already include the field. After this loop,
+    # every record in `denials` has a uniform `suggested_fix` field —
+    # operators parsing sandbox-summary.json don't need defensive
+    # `.get()` for cross-source consistency.
+    for d in denials:
+        if "suggested_fix" not in d:
+            # Build details from the record's keys (type-specific
+            # ones like host/path/profile/audit/etc.). _suggested_fix
+            # accepts arbitrary kwargs and uses .get() internally.
+            details = {k: v for k, v in d.items()
+                       if k not in ("ts", "cmd", "returncode", "type",
+                                    "suggested_fix")}
+            d["suggested_fix"] = _suggested_fix(
+                d.get("type", "unknown"), **details,
+            )
 
     by_type: Dict[str, int] = {}
     for d in denials:

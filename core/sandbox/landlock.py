@@ -121,9 +121,21 @@ def _landlock_functional_self_test() -> bool:
         we want minimal dependencies during startup.
     """
     import os
+    import warnings
     r, w = os.pipe()
     try:
-        pid = os.fork()
+        # Suppress Python 3.12+ DeprecationWarning about multi-threaded
+        # fork(). Our post-fork code is fork-safe: the child only does
+        # bare syscalls (Landlock test, _exit), no Python objects, no
+        # GIL acquisition, no malloc-arena access. The standard guidance
+        # ("use multiprocessing.spawn") doesn't apply — we need raw
+        # fork to keep the test minimal-dependency at startup.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", category=DeprecationWarning,
+                message=r".*fork.*may lead to deadlocks.*",
+            )
+            pid = os.fork()
     except OSError:
         # Both pipe ends leak unless we close them here — the finally
         # below only covers `r` (it expected the child to already have

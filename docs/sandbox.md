@@ -96,6 +96,209 @@ Profiles bundle layer settings into a single name for CLI use:
 
 CLI: `--sandbox <profile>` on any RAPTOR command that honours it.
 
+**Audit mode** is engaged orthogonally via `--audit` (and optionally
+`--audit-verbose` for strace-style output). It composes with any profile
+that has enforcement layers — i.e., `full` or `debug`. Combinations:
+
+| Invocation | Effect |
+|---|---|
+| `--sandbox full` (default) | full enforcement |
+| `--sandbox full --audit` | full layout, but proxy gate logs-and-allows + tracer logs would-be-blocked syscalls + filtered fs/connect tracing |
+| `--sandbox full --audit --audit-verbose` | same as above but tracer logs EVERY traced syscall (strace-style diagnosis) |
+| `--sandbox debug --audit` | gdb-friendly seccomp + audit signal — operators running `/crash-analysis` can also see what enforcement would have blocked |
+| `--sandbox network-only --audit` | only the egress-proxy gate audits (other layers off). Coherent but most layers no-op |
+| `--sandbox none --audit` | **error** — incoherent (nothing to audit against) |
+| `--audit-verbose` without `--audit` | **error** — audit-verbose only controls tracer output |
+
+### Audit mode in detail
+
+`--audit` (composed with any compatible profile) runs a workflow to
+completion AND records what enforcement WOULD have blocked. It's the
+soft-default fallback for the case where `full` is too strict for
+the workload but operators still want visibility into the policy
+violations — far better than reaching for `--sandbox none` (which
+loses all observability).
+
+Programmatic equivalent: `sandbox(profile=..., audit=True)` or
+`run(..., audit=True)`. The CLI flag composes with any profile
+automatically.
+
+Three layers, audit-mode each:
+
+| Layer | Mechanism | Behaviour |
+|---|---|---|
+| Network (egress proxy) — **only when `use_egress_proxy=True`** | hostname allowlist gate emits `would_deny_host` event AND records to `sandbox-summary.json`, then permits the CONNECT | resolved-IP block (DNS-rebinding defense) stays enforcing — purely-attack pattern, no legitimate-workflow false positives. Without the proxy, the namespace network block applies normally and there's nothing to audit-log. |
+| Syscalls (seccomp) | swaps deny action from `SCMP_ACT_ERRNO(EPERM)` to `SCMP_ACT_TRACE`; tracer logs each blocked syscall + resumes | the existing blocklist (ptrace, bpf, io_uring, etc.) is observed instead of EPERM'd |
+| Filesystem (`open` / `openat`) | tracer derefs path arg, resolves relative paths via `/proc/<pid>/cwd` and `/proc/<pid>/fd/<dirfd>`, matches against the Landlock allowlist | filtered mode logs only paths that would have been blocked; verbose mode logs every traced open. Symlink-following diverges from real Landlock (we don't readlink in the tracer) so a small number of edge cases over-report. |
+| Network (`connect` syscall) | tracer decodes sockaddr (AF_INET / AF_INET6) to `ip:port`, compares port against `allowed_tcp_ports` (typically the egress-proxy port) | filtered mode logs only would-be-blocked ports; verbose mode logs every connect attempt. Distinct from the egress-proxy row above — this catches direct `connect()` syscalls that don't go through the proxy. |
+
+The tracer is a Python subprocess (`core.sandbox.tracer`) running on
+the same host. It attaches to the target via `PTRACE_SEIZE` with
+`TRACEFORK | TRACEVFORK | TRACECLONE` so multi-process workloads
+(`make -j N`) audit every subprocess. `PTRACE_O_EXITKILL` ensures
+that if the tracer dies, the kernel cascades `SIGKILL` to all
+tracees rather than letting them `SIGSYS`-die on the next traced
+syscall.
+
+Records merge into the same `sandbox-summary.json` that
+`record_denial`'s `audit=True` entries write to — operators see one
+unified view across all three layers.
+
+**Degradation when ptrace is unavailable** (Yama scope 3, container
+`--cap-drop SYS_PTRACE`, restrictive container seccomp):
+
+- Network audit still works (no ptrace dependency).
+- Syscall + filesystem audit silently degrade to enforcement (the
+  `SCMP_ACT_TRACE` swap is skipped because TRACE without an attached
+  tracer SIGSYS-kills the target).
+- A one-time WARNING surfaces the degradation with workaround
+  pointers (run outside container, set `kernel.yama.ptrace_scope=1`).
+
+**Audit-coverage gaps (acknowledged):**
+
+- File operations performed via `io_uring` SQEs (submission queue
+  entries written to shared memory after `io_uring_setup`) bypass
+  the syscall layer entirely and are invisible to seccomp tracing.
+  Mitigation: every `io_uring_setup` audit record carries an
+  explicit `note` field warning that subsequent ring operations
+  by the same process are untraceable. RAPTOR's seccomp blocklist
+  already disallows `io_uring_setup` under `full`/`debug` (so the
+  ring never gets created in enforcement mode); under `--audit` it
+  is logged-and-allowed but operators see the gap explicitly in
+  the record.
+- Anti-debug detectable via `/proc/self/status`'s `TracerPid`
+  field, ptrace self-test, or syscall timing. Audit mode is for
+  operator workflows (gcc, make, python, claude sub-agents) — none
+  of which evade observation. Hiding ptrace presence from a
+  hostile tracee requires kernel-level instrumentation (out of
+  scope; see "Anti-debug surface" below).
+
+`openat2(2)` (Linux 5.6+) IS in the trace set. The flags-bit
+extraction reads the first 8 bytes of the `struct open_how`
+pointer via `process_vm_readv` — the same plumbing used for path
+strings. If the deref fails (bad pointer), the tracer
+conservatively treats the call as write-intent so the record is
+NOT silently dropped from filtered mode.
+
+**Audit-record integrity.** When `audit_run_dir=` is supplied
+explicitly (e.g. by `codeql/agent.py`, `query_runner.py`), the
+audit JSONL lives in a directory that is NOT in `writable_paths`,
+so the traced target cannot open it for append — a hostile target
+cannot inject false records. When `audit_run_dir` is omitted and
+the legacy `output=` fallback is used, the JSONL DOES live inside
+the target's writable surface and a hostile target could append
+garbage. Mitigations regardless of mode:
+
+- `O_NOFOLLOW` defends against symlink swaps (target can't
+  redirect the JSONL to a different file).
+- Records are operator-visible signal, not authoritative truth.
+
+**Recommendation:** for sandbox calls handling untrusted content
+where audit signal must survive a hostile target, pass
+`audit_run_dir=` explicitly to a directory the target cannot
+write to. The kwarg also avoids the Landlock writable-path
+restriction that comes with `output=`.
+
+**Performance.** Audit mode adds:
+
+- ~200 ms of fixed setup cost per sandbox call (tracer fork + execvpe
+  + PTRACE_SEIZE + sync handshake + teardown)
+- ~5 ms of per-traced-syscall overhead (kernel pauses tracee on
+  SCMP_ACT_TRACE → context switch to tracer → register read → path
+  resolution + allowlist check → PTRACE_CONT → context switch back)
+
+Measured on a Python startup + short script benchmark on Ubuntu 24.04
+/ Python 3.13: `--audit` ≈ `--audit --audit-verbose` ≈ 3.5x `--sandbox full`
+alone. The per-call setup cost dominates short workloads.
+
+Filtered (`--audit`) and unfiltered (`--audit --audit-verbose`) run at
+essentially the same speed — the filter only saves the JSONL write
+cost, not the per-syscall ptrace context switch. The OPERATOR-VISIBLE
+difference is record volume (filtered: a handful, verbose: thousands)
+not wall-clock time.
+
+Use audit mode for diagnosis, not routine work. Drop `--audit` for
+production scans (the profile alone runs at full speed).
+
+**Disk usage cap.** Both filtered and verbose modes are capped at
+`_MAX_RECORDS_PER_RUN = 10000` records per run (mirrors the
+non-tracer `record_denial` cap in `core/sandbox/summary.py`). Per
+record is bounded by `MAX_CMD_LEN = 2048` bytes after truncation —
+upper bound on the JSONL is ≈ 20 MB. On hitting the cap, the tracer
+emits `RAPTOR tracer: hit per-run record cap (10000); dropping
+further events` to stderr ONCE, then silently drops further events.
+This protects `/tmp` from runaway fuzz workloads but means a long
+verbose run loses tail-end signal — bias towards filtered mode for
+multi-hour workloads.
+
+**Anti-debug surface (acknowledged, acceptable).** Code in an
+audited sandbox can detect tracing via `/proc/self/status`'s
+`TracerPid` field, ptrace self-test, or syscall timing. Audit mode
+is for operator workflows (gcc, make, python, claude sub-agents) —
+none of which evade observation. RAPTOR is not a malware-analysis
+sandbox; if that use case ever lands, anti-anti-debug is a separate
+engineering effort.
+
+### What audit-mode output looks like
+
+After a `--audit` run completes, inspect the run's output directory.
+There are three possible states; each one writes a different file (or
+no file) so you can tell them apart at a glance:
+
+**1. Audit ran and recorded events** — `sandbox-summary.json` is
+present. Each entry includes an `audit: true` field so you can filter
+"would-have-been-blocked" events from real enforcement events
+(both can coexist — audit-mode keeps the network proxy in
+log-and-allow but hard-fails on a real Landlock denial elsewhere):
+
+```json
+{
+  "run_dir": "/path/to/run",
+  "generated_at": "2026-04-27T15:00:00Z",
+  "total_denials": 2,
+  "by_type": {"network": 1, "seccomp": 1},
+  "denials": [
+    {"ts": "2026-04-27T15:00:01Z",
+     "cmd": "claude --model gemini-2.5-pro",
+     "returncode": 0, "type": "network",
+     "host": "evil.example.com", "port": 443,
+     "audit": true,
+     "suggested_fix": "audit: outbound network to `evil.example.com` would be blocked under `--sandbox full`"},
+    {"ts": "2026-04-27T15:00:03Z",
+     "cmd": "make -j4",
+     "returncode": 0, "type": "seccomp", "syscall": "ptrace",
+     "audit": true,
+     "suggested_fix": "syscall blocked by seccomp; use `--sandbox debug` (allows ptrace) or `--sandbox network-only`/`--sandbox none` (drops seccomp)"}
+  ]
+}
+```
+
+**2. Audit ran, no enforcement events** — no `sandbox-summary.json`
+and no degraded marker. The workflow ran and nothing it did would
+have been blocked. (This is success.)
+
+**3. Audit was requested but didn't actually run** —
+`sandbox-audit-degraded.json` is present. Most often: Ubuntu 24.04
+default (`apparmor_restrict_unprivileged_userns=1`) blocks the
+mount-ns path, which the tracer needs to attach. Network audit (b1)
+still works, but syscall + filesystem audit (b2/b3) silently degrade
+to enforcement.
+
+```json
+{
+  "audit_requested": true,
+  "audit_engaged": false,
+  "degraded": true,
+  "reason": "mount-ns / spawn-path unavailable; tracer cannot attach",
+  "instructions": "set kernel.apparmor_restrict_unprivileged_userns=0 (Ubuntu 24.04+) and install the uidmap package; or rerun on a host where mount-ns is available.",
+  "generated_at": "2026-04-27T15:00:00Z"
+}
+```
+
+If you see this marker, follow the `instructions` field and rerun.
+Without the marker, an empty result genuinely means "audit ran,
+nothing would be blocked" — distinguishable from "audit didn't run".
+
 ## Configuration
 
 All kwargs accepted by `sandbox()` and `run()` (and most by `run_untrusted()`):
@@ -117,6 +320,7 @@ All kwargs accepted by `sandbox()` and `run()` (and most by `run_untrusted()`):
 | `fake_home` | `False` (`True` in `run_untrusted`) | Override child `HOME` + `XDG_*_HOME` to `{output}/.home/`. Requires `output`. |
 | `caller_label` | `None` | Short identifier stamped onto every proxy event emitted during this sandbox's lifetime. Lets you tell apart concurrent/sequential callers in `proxy-events.jsonl`. |
 | `tool_paths` | `None` | Extra dirs to bind-mount into the mount-ns sandbox so a non-system tool's binary + dependencies are visible. Speculative — if mount-ns engages with the supplied bind set but the tool fails at exec (typical Python tool with native exec deps not in any reasonable bind set), the sandbox automatically retries via Landlock-only. Worst-case: same isolation as not passing `tool_paths` at all. Per-cmd cache prevents repeated retry overhead within a process. See [Mount-ns tool visibility](#mount-ns-tool-visibility) below. |
+| `audit_run_dir` | `None` | Directory where audit JSONL lands when `--audit` is engaged. **Decoupled from `output=`** — passing this does NOT add the directory to Landlock `writable_paths`, so callers like `codeql analyze` (which legitimately writes to `~/.codeql`, the database dir, etc.) can collect audit signal without taking a writable-path restriction that would break the workflow. Falls back to `output=` when not supplied (preserves pre-existing behaviour). For untrusted-target audit, prefer `audit_run_dir=` over `output=` so a hostile target can't inject false records into the JSONL (the audit dir is unreachable from the target's writable surface). |
 
 > **`env=` passthrough.** If you pass an explicit `env=` dict to `run()`, it
 > is forwarded verbatim to the child — `RaptorConfig.get_safe_env()` is NOT
