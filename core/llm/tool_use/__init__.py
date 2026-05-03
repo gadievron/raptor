@@ -1,17 +1,21 @@
-"""Provider-agnostic tool-use loop substrate for ``core.llm``.
+"""Tool-use wire-shape types + multi-turn loop runner for ``core.llm``.
 
-This package owns the wire-shape types and the loop runner that turns
-those types into multi-turn agentic behaviour. Provider implementations
-(``AnthropicToolUseProvider``, etc.) are sibling modules that translate
-their native API onto these types and back.
+This package owns the wire-shape types (``Message`` / ``ToolDef`` /
+``ToolCall`` / ``ToolResult`` / ``TurnResponse`` / ...) and the loop
+runner (``ToolUseLoop``) that turns those types into multi-turn
+agentic behaviour. Tool-use *implementations* live on the existing
+:class:`core.llm.providers.LLMProvider` subclasses
+(``AnthropicProvider.turn``, ``OpenAICompatibleProvider.turn``) — one
+provider per backend, two ways to use it (single-shot ``generate()``
+or multi-turn ``turn()``).
 
-Phase 1 ships types-only + the loop + an Anthropic provider. Multi-
-provider support (OpenAI, Gemini, Ollama) follows in their own PRs as
-each provider's :meth:`ToolUseProvider.turn` lands.
+Pre-2026-05-03 a parallel ``ToolUseProvider`` Protocol +
+``AnthropicToolUseProvider`` shipped in this package. Both have been
+retired in favour of the unified ``LLMProvider`` API — there's now
+no duplicate Anthropic SDK wiring across two class hierarchies.
 """
 
 from .loop import ToolUseLoop
-from .providers import ToolUseProvider
 from .types import (
     CacheControl,
     ContextOverflow,
@@ -52,7 +56,6 @@ __all__ = [
     "ToolLoopResult",
     "ToolResult",
     "ToolUseLoop",
-    "ToolUseProvider",
     "TurnCompleted",
     "TurnResponse",
     "TurnStarted",

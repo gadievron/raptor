@@ -43,9 +43,11 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .providers import ToolUseProvider
+if TYPE_CHECKING:
+    from core.llm.providers import LLMProvider
+
 from .types import (
     CacheControl,
     ContextOverflow,
@@ -86,7 +88,7 @@ class ToolUseLoop:
 
     def __init__(
         self,
-        provider: ToolUseProvider,
+        provider: "LLMProvider",
         tools: Sequence[ToolDef],
         *,
         system: str | None = None,

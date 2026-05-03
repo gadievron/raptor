@@ -9,9 +9,11 @@ JSON-in-prompt fallback for providers that lack native structured support.
 """
 
 import json
+import logging
 import sys
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from inspect import isclass
 from typing import Dict, Optional, Any, Tuple, Type, Union
 from dataclasses import dataclass
@@ -19,6 +21,19 @@ from pathlib import Path
 
 from core.logging import get_logger
 from .config import ModelConfig
+# Wire-shape types for tool-use turn primitive. These live in
+# ``core.llm.tool_use.types`` (zero dependencies on this module);
+# importing them here doesn't create a cycle.
+from .tool_use.types import (
+    CacheControl,
+    Message,
+    StopReason,
+    TextBlock,
+    ToolCall,
+    ToolDef,
+    ToolResult,
+    TurnResponse,
+)
 
 logger = get_logger()
 
@@ -105,6 +120,104 @@ class LLMProvider(ABC):
         """Generate structured output matching the provided schema."""
         pass
 
+    # ------------------------------------------------------------------
+    # Tool-use primitives — opt-in per provider.
+    # ------------------------------------------------------------------
+    #
+    # Single-turn round-trip used by the agentic ``ToolUseLoop``
+    # runner in :mod:`core.llm.tool_use.loop`. Providers that natively
+    # support tool / function calling override :meth:`turn` and flip
+    # :meth:`supports_tool_use` to ``True``. Providers that can't
+    # (e.g., :class:`ClaudeCodeProvider`'s subprocess dispatcher) keep
+    # the defaults — calling :meth:`turn` raises ``NotImplementedError``.
+    #
+    # This is the same shape the now-retired ``ToolUseProvider``
+    # Protocol had; absorbing it onto :class:`LLMProvider` removes the
+    # parallel hierarchy + duplicate Anthropic SDK wiring that
+    # ``AnthropicToolUseProvider`` introduced.
+
+    def supports_tool_use(self) -> bool:
+        """``True`` when the bound model accepts tool/function-call
+        schemas in requests AND emits structured calls in responses.
+        Default ``False``; concrete providers override."""
+        return False
+
+    def supports_prompt_caching(self) -> bool:
+        """``True`` for providers with a per-region cache breakpoint
+        mechanism (Anthropic). The :class:`ToolUseLoop` only forwards
+        :class:`CacheControl` when this returns True; other providers
+        receive the struct but ignore it."""
+        return False
+
+    def supports_parallel_tools(self) -> bool:
+        """``True`` when the provider can return multiple
+        :class:`ToolCall` blocks in one assistant turn AND the loop
+        can dispatch them in parallel. The loop dispatches
+        sequentially today regardless — informational flag for v1."""
+        return False
+
+    def context_window(self) -> int:
+        """Total tokens the model accepts. Drives the loop's context-
+        policy enforcement. Sourced from :mod:`core.llm.model_data`
+        by default; raises ``KeyError`` on unknown models so
+        misconfiguration surfaces immediately."""
+        from .model_data import context_window_for
+        return context_window_for(self.config.model_name)
+
+    def estimate_tokens(self, text: str) -> int:
+        """Cheap pre-flight token estimator. Default heuristic
+        (4 chars/token) is good enough for the loop's context-policy
+        gate; providers with a real tokenizer can override for
+        accuracy."""
+        return max(len(text) // 4, 1)
+
+    def price_per_million(self) -> tuple[float, float]:
+        """``(input_per_million_usd, output_per_million_usd)`` for the
+        bound model. Cache-read / cache-write multipliers — when
+        relevant — are applied inside :meth:`compute_cost`, not here."""
+        from .model_data import price_for
+        return price_for(self.config.model_name, default=(0.0, 0.0))
+
+    def compute_cost(self, response: TurnResponse) -> float:
+        """USD cost of ``response`` given the bound model's pricing.
+
+        If ``response.cost_usd`` is already populated (some providers
+        — e.g., Claude Code via the synthesis fallback — surface the
+        exact envelope cost), that value is returned directly so the
+        loop's budget tracking matches the provider's own ledger.
+        Otherwise: standard input/output tokens at the model's per-M
+        rates, ignoring cache fields. Anthropic overrides to add the
+        documented 1.25× cache-write and 0.1× cache-read multipliers.
+        """
+        if response.cost_usd is not None:
+            return response.cost_usd
+        in_per_m, out_per_m = self.price_per_million()
+        return (
+            response.input_tokens * in_per_m
+            + response.output_tokens * out_per_m
+        ) / 1_000_000.0
+
+    def turn(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDef],
+        *,
+        system: Optional[str] = None,
+        max_tokens: int = 4096,
+        cache_control: CacheControl = CacheControl(),
+        **provider_specific: Any,
+    ) -> TurnResponse:
+        """Send one round-trip with tool/function-call schemas.
+
+        Default implementation raises ``NotImplementedError`` —
+        providers that can do tool-use override this method. Callers
+        that need to gate behaviour use :meth:`supports_tool_use`.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support tool-use; "
+            f"check ``supports_tool_use()`` before calling ``turn()``"
+        )
+
     def track_usage(self, tokens: int, cost: float,
                     input_tokens: int = 0, output_tokens: int = 0,
                     duration: float = 0.0) -> None:
@@ -168,6 +281,150 @@ class LLMProvider(ABC):
         except Exception as e:
             logger.error(f"Structured fallback failed (JSON parse or validation): {e}")
             raise
+
+    # ------------------------------------------------------------------
+    # Tool-use fallback — JSON-in-prompt protocol over plain generate().
+    # ------------------------------------------------------------------
+    #
+    # Synthesises a single tool-use turn for providers that can produce
+    # text but lack native tool/function calling (e.g., the Claude Code
+    # subprocess transport). Subclasses opt in by overriding ``turn`` to
+    # delegate here and flipping ``supports_tool_use`` to True.
+    #
+    # Limitations vs. native:
+    #   * one tool call per turn (parallel calls aren't reliably
+    #     synthesisable — the prompt asks for one at a time)
+    #   * ``CacheControl`` is ignored
+    #   * token counts come from the underlying ``generate()`` response;
+    #     cost flows through whatever ``track_usage`` records
+    # The loop itself is unchanged — it sees the same ``TurnResponse``
+    # shape native ``turn`` impls produce.
+
+    def _tool_use_fallback(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDef],
+        *,
+        system: Optional[str] = None,
+        max_tokens: int = 4096,
+        cache_control: CacheControl = CacheControl(),
+        **provider_specific: Any,
+    ) -> TurnResponse:
+        """Synthesise one tool-use round-trip via plain ``generate()``."""
+        del cache_control, provider_specific  # unused by fallback
+        tool_protocol = self._render_tool_protocol(tools) if tools else ""
+        sys_combined = "\n\n".join(s for s in (system, tool_protocol) if s) or None
+        rendered_prompt = self._render_messages_as_prompt(messages)
+
+        response = self.generate(
+            rendered_prompt,
+            system_prompt=sys_combined,
+            max_tokens=max_tokens,
+        )
+
+        text = response.content if response and response.content else ""
+        block, stop_reason = self._parse_fallback_response(text, tools)
+
+        # Surface the underlying generate() cost on the TurnResponse so
+        # loop-side budget tracking reflects the actual provider charge,
+        # not a token-derived estimate that may be 0 (e.g., when the CC
+        # subprocess uses a model name absent from MODEL_COSTS).
+        cost = getattr(response, "cost", None)
+        return TurnResponse(
+            content=[block],
+            stop_reason=stop_reason,
+            input_tokens=getattr(response, "input_tokens", 0) or 0,
+            output_tokens=getattr(response, "output_tokens", 0) or 0,
+            cost_usd=float(cost) if cost is not None else None,
+        )
+
+    @staticmethod
+    def _render_tool_protocol(tools: Sequence[ToolDef]) -> str:
+        """Render tool defs as a JSON-call protocol the model is asked
+        to follow. The model is told to emit one JSON object per call;
+        the parser tolerates ```json fences and surrounding whitespace
+        but not interleaved prose."""
+        lines = [
+            "You have access to the following tools. To call a tool,",
+            "respond with ONLY a JSON object in this exact shape:",
+            "```json",
+            '{"tool": "<tool_name>", "input": {...}}',
+            "```",
+            "Call only one tool per response. If you don't need a tool,",
+            "respond with normal text and no JSON.",
+            "",
+            "Available tools:",
+        ]
+        for t in tools:
+            schema_json = json.dumps(t.input_schema, indent=2)
+            lines.append(f"- name: {t.name}")
+            lines.append(f"  description: {t.description}")
+            lines.append(f"  input_schema: {schema_json}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _render_messages_as_prompt(messages: Sequence[Message]) -> str:
+        """Flatten conversation history into a single prompt string.
+
+        Tool calls/results are rendered as tagged sections so the model
+        can follow the protocol on subsequent turns. The role labels
+        match what we ask for in :meth:`_render_tool_protocol`."""
+        parts: list[str] = []
+        for msg in messages:
+            for block in msg.content:
+                if isinstance(block, TextBlock):
+                    parts.append(f"{msg.role}: {block.text}")
+                elif isinstance(block, ToolCall):
+                    parts.append(
+                        f"assistant called tool {block.name!r} "
+                        f"with input {json.dumps(block.input)}"
+                    )
+                elif isinstance(block, ToolResult):
+                    err = " [ERROR]" if block.is_error else ""
+                    parts.append(
+                        f"tool_result{err} for {block.tool_use_id}: "
+                        f"{block.content}"
+                    )
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _parse_fallback_response(
+        text: str, tools: Sequence[ToolDef],
+    ) -> tuple[Union[TextBlock, ToolCall], StopReason]:
+        """Extract a tool call (if any) or fall back to a text block.
+
+        Uses :func:`core.llm.cc_adapter.strip_json_fences` to find a
+        JSON payload inside ```json fences anywhere in the response —
+        not just at the start — so a model that adds short prose
+        before/after the fenced JSON still has its call recognised.
+        """
+        if not text or not tools:
+            return TextBlock(text=text or ""), StopReason.COMPLETE
+
+        from .cc_adapter import strip_json_fences
+        candidate = strip_json_fences(text).strip()
+        try:
+            parsed = json.loads(candidate)
+        except (json.JSONDecodeError, ValueError):
+            return TextBlock(text=text), StopReason.COMPLETE
+
+        if not isinstance(parsed, dict):
+            return TextBlock(text=text), StopReason.COMPLETE
+
+        name = parsed.get("tool")
+        inp = parsed.get("input")
+        if not isinstance(name, str) or not isinstance(inp, dict):
+            return TextBlock(text=text), StopReason.COMPLETE
+
+        if not any(t.name == name for t in tools):
+            # Model hallucinated a tool name — surface the raw text so
+            # the loop can see what happened rather than dispatching a
+            # bogus call.
+            return TextBlock(text=text), StopReason.COMPLETE
+
+        import uuid as _uuid
+        call_id = f"call_{_uuid.uuid4().hex[:12]}"
+        return ToolCall(id=call_id, name=name, input=inp), StopReason.NEEDS_TOOL_CALL
 
 
 def _coerce_to_schema(data: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
@@ -450,6 +707,15 @@ class OpenAICompatibleProvider(LLMProvider):
                 "For more reliable structured output: pip install instructor"
             )
 
+        # Flips on first detection that this provider's bound model
+        # rejects function-calling (older Ollama models, smaller
+        # Mistrals, custom finetunes, vLLM-served models without
+        # tool support, etc.). Subsequent ``turn()`` calls then go
+        # straight to the JSON-protocol synthesis fallback rather
+        # than wasting another round-trip. Per-instance, not
+        # persisted — a fresh process re-detects on first turn.
+        self._tool_use_unsupported = False
+
         logger.debug(f"Initialized OpenAICompatibleProvider: {config.model_name} (base_url={config.api_base})")
 
     def generate(self, prompt: str, system_prompt: Optional[str] = None,
@@ -586,6 +852,314 @@ class OpenAICompatibleProvider(LLMProvider):
 
         # Fallback: JSON-in-prompt
         return self._structured_fallback(prompt, schema, pydantic_model, system_prompt)
+
+    # ------------------------------------------------------------------
+    # Tool-use turn primitive — OpenAI function-calling shape.
+    # ------------------------------------------------------------------
+    #
+    # Covers OpenAI / Gemini (via /openai compat) / Ollama / Mistral
+    # via the same SDK + base_url override that ``generate()`` uses.
+    # Function-calling shape: ``tools=[{type:"function", function:{...}}]``,
+    # response carries ``message.tool_calls = [{id, function:{name,arguments}}]``.
+    # No prompt caching (capability flag returns False); ``CacheControl``
+    # is silently ignored. Parallel tool calls are supported by OpenAI
+    # but not exploited by the loop today.
+
+    def supports_tool_use(self) -> bool:
+        # Flips after a runtime-detected tool-rejection from the
+        # bound model — see ``turn()``.
+        return not self._tool_use_unsupported
+    def supports_prompt_caching(self) -> bool: return False
+    def supports_parallel_tools(self) -> bool: return True
+
+    def turn(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDef],
+        *,
+        system: Optional[str] = None,
+        max_tokens: int = 4096,
+        cache_control: CacheControl = CacheControl(),
+        max_retries: int = 3,
+        backoff_factor: float = 2.0,
+        **_unused: Any,
+    ) -> TurnResponse:
+        """Send one round-trip via OpenAI-compatible function calling.
+
+        ``cache_control`` is accepted but ignored — OpenAI-compat
+        endpoints don't expose a per-region cache mechanism. Caching
+        on the actual OpenAI endpoint is automatic (server-side) and
+        not driven by request fields.
+
+        Auto-detects tool-use rejection: if the bound model returns a
+        4xx error referencing tools/functions on the first attempt,
+        flips :attr:`_tool_use_unsupported` and routes through
+        :meth:`_tool_use_fallback` for this and all subsequent turns
+        (per-instance state). Models that natively support function
+        calling never hit this path.
+        """
+        if _unused:
+            logger.debug(
+                f"OpenAICompatibleProvider.turn: ignoring unrecognised "
+                f"kwargs: {sorted(_unused)}"
+            )
+
+        # Already detected this provider rejects tool/function calling.
+        # Synthesise via the ABC's JSON-protocol fallback rather than
+        # paying another wasted round-trip.
+        if self._tool_use_unsupported and tools:
+            return self._tool_use_fallback(
+                messages, tools,
+                system=system, max_tokens=max_tokens,
+                cache_control=cache_control,
+            )
+
+        # ---- tools (function-calling shape) --------------------------
+        tool_schemas: list[Dict[str, Any]] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.input_schema,
+                },
+            }
+            for t in tools
+        ]
+
+        # ---- messages (OpenAI flat list with role markers) ----------
+        wire_messages: list[Dict[str, Any]] = []
+        if system:
+            wire_messages.append({"role": "system", "content": system})
+        for m in messages:
+            wire_messages.extend(_message_to_openai_wire(m))
+
+        # ---- dispatch (with retry on transient errors) ---------------
+        kwargs: Dict[str, Any] = {
+            "model": self.config.model_name,
+            "max_tokens": max_tokens,
+            "messages": wire_messages,
+        }
+        if tool_schemas:
+            kwargs["tools"] = tool_schemas
+
+        from openai import (                                # type: ignore[import-not-found]
+            APIConnectionError,
+            APIStatusError,
+        )
+        for attempt in range(max_retries + 1):
+            try:
+                resp = self.client.chat.completions.create(**kwargs)
+                break
+            except (APIConnectionError, APIStatusError) as exc:
+                # Bound model doesn't support tool/function calling?
+                # Flip the per-instance flag and synthesise via the
+                # JSON-protocol fallback rather than retrying or
+                # giving up. Skips noise on the rest of the run.
+                if (
+                    tools
+                    and isinstance(exc, APIStatusError)
+                    and _is_tool_use_unsupported_error(exc)
+                ):
+                    logger.warning(
+                        f"OpenAICompatibleProvider.turn: model "
+                        f"{self.config.model_name!r} rejected tools — "
+                        f"falling back to JSON-protocol synthesis for "
+                        f"this provider instance: {exc}"
+                    )
+                    self._tool_use_unsupported = True
+                    return self._tool_use_fallback(
+                        messages, tools,
+                        system=system, max_tokens=max_tokens,
+                        cache_control=cache_control,
+                    )
+                if not _is_transient_openai(exc) or attempt >= max_retries:
+                    kind = "transient" if _is_transient_openai(exc) else "permanent"
+                    logger.warning(
+                        f"OpenAICompatibleProvider.turn: {kind} error "
+                        f"after {attempt + 1} attempt(s): {exc}"
+                    )
+                    return TurnResponse(
+                        content=[],
+                        stop_reason=StopReason.ERROR,
+                        input_tokens=0,
+                        output_tokens=0,
+                    )
+                delay = backoff_factor ** attempt
+                logger.info(
+                    f"OpenAICompatibleProvider.turn: transient error attempt "
+                    f"{attempt + 1}, retrying in {delay:.1f}s: {exc}"
+                )
+                time.sleep(delay)
+        else:
+            return TurnResponse(
+                content=[], stop_reason=StopReason.ERROR,
+                input_tokens=0, output_tokens=0,
+            )
+
+        # ---- normalise response --------------------------------------
+        if not resp.choices:
+            return TurnResponse(
+                content=[], stop_reason=StopReason.ERROR,
+                input_tokens=0, output_tokens=0,
+            )
+        choice = resp.choices[0]
+        msg = choice.message
+        stop = _OPENAI_FINISH_REASON_MAP.get(
+            choice.finish_reason or "", StopReason.ERROR,
+        )
+
+        out_blocks: list = []
+        if msg.content:
+            out_blocks.append(TextBlock(text=msg.content))
+        for tc in (msg.tool_calls or []):
+            try:
+                args = json.loads(tc.function.arguments)
+            except (TypeError, ValueError):
+                args = {}
+            out_blocks.append(ToolCall(
+                id=tc.id, name=tc.function.name, input=args,
+            ))
+
+        usage = resp.usage
+        return TurnResponse(
+            content=out_blocks,
+            stop_reason=stop,
+            input_tokens=(getattr(usage, "prompt_tokens", 0) or 0) if usage else 0,
+            output_tokens=(getattr(usage, "completion_tokens", 0) or 0) if usage else 0,
+            # OpenAI-compat doesn't surface per-region cache tokens.
+            cache_read_tokens=0,
+            cache_write_tokens=0,
+        )
+
+
+# ---------------------------------------------------------------------------
+# OpenAI tool-use helpers
+# ---------------------------------------------------------------------------
+
+# OpenAI's native finish_reason → our enum.
+_OPENAI_FINISH_REASON_MAP = {
+    "stop": StopReason.COMPLETE,
+    "tool_calls": StopReason.NEEDS_TOOL_CALL,
+    "length": StopReason.MAX_TOKENS,
+    "content_filter": StopReason.REFUSED,
+    "function_call": StopReason.NEEDS_TOOL_CALL,            # legacy alias
+}
+
+
+def _is_transient_openai(exc: BaseException) -> bool:
+    """Same shape as the Anthropic helper. 429 + 5xx retryable;
+    permanent 4xx fails fast."""
+    from openai import APIConnectionError, APIStatusError    # type: ignore[import-not-found]
+    if isinstance(exc, APIConnectionError):
+        return True
+    if isinstance(exc, APIStatusError):
+        status = getattr(exc, "status_code", None)
+        return status == 429 or (status is not None and 500 <= status < 600)
+    return False
+
+
+def _is_tool_use_unsupported_error(exc: BaseException) -> bool:
+    """Heuristic: does ``exc`` look like a 4xx rejection from the
+    bound model saying it doesn't support tool / function calling?
+
+    Conservative by design — false positives make us synthesise when
+    native would have worked (cheaper outcome — synthesis still
+    produces correct results, just slower per turn). False negatives
+    keep the existing fail-fast behaviour, which is what users see
+    without this detection at all.
+
+    Detects 4xx (not 429) responses whose error body mentions a
+    tool/function keyword alongside an unsupported/not-supported
+    phrase. Covers Ollama (``model 'X' does not support tools``),
+    Mistral, vLLM, and similar shims. OpenAI and Anthropic models
+    never produce this error class — every current model on those
+    providers supports tool-use natively.
+    """
+    from openai import APIStatusError                        # type: ignore[import-not-found]
+    if not isinstance(exc, APIStatusError):
+        return False
+    status = getattr(exc, "status_code", None)
+    if status is None or status >= 500 or status == 429:
+        return False                                         # transient or server-side
+
+    text = str(exc).lower()
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error", body)
+        if isinstance(err, dict):
+            text += " " + str(err.get("message", "")).lower()
+        elif isinstance(err, str):
+            text += " " + err.lower()
+
+    has_keyword = "tool" in text or "function call" in text or "function-call" in text
+    has_negation = (
+        "not support" in text
+        or "unsupported" in text
+        or "does not" in text
+        or "no support" in text
+    )
+    return has_keyword and has_negation
+
+
+def _message_to_openai_wire(m: Message) -> list[Dict[str, Any]]:
+    """One :class:`Message` → 1+ OpenAI wire dicts.
+
+    OpenAI splits user messages with multiple :class:`ToolResult`\\ s
+    into N separate ``role:"tool"`` messages (each carrying its own
+    ``tool_call_id``), unlike Anthropic which packs them in one user
+    message's content array.
+
+    Empty assistant turns (``content=[]``, which the loop can produce
+    on ``StopReason.ERROR``) emit ``{"role": "assistant",
+    "content": ""}`` — most OpenAI-compatible backends reject an
+    assistant message with neither ``content`` nor ``tool_calls``,
+    so the empty-string is the safe wire form. Empty user turns are
+    skipped (the message has nothing to convey).
+
+    User turns carrying both text and tool_results emit the tool
+    messages first, then a trailing ``role:"user"`` text message —
+    OpenAI requires tool messages to immediately follow the prior
+    assistant's ``tool_calls`` (text in between breaks the link).
+    """
+    if m.role == "assistant":
+        text_parts: list[str] = []
+        tool_calls: list[Dict[str, Any]] = []
+        for b in m.content:
+            if isinstance(b, TextBlock):
+                text_parts.append(b.text)
+            elif isinstance(b, ToolCall):
+                tool_calls.append({
+                    "id": b.id,
+                    "type": "function",
+                    "function": {
+                        "name": b.name,
+                        "arguments": json.dumps(b.input),
+                    },
+                })
+        out: Dict[str, Any] = {"role": "assistant"}
+        if text_parts:
+            out["content"] = "".join(text_parts)
+        if tool_calls:
+            out["tool_calls"] = tool_calls
+        if not text_parts and not tool_calls:
+            out["content"] = ""
+        return [out]
+    # user role
+    out_msgs: list[Dict[str, Any]] = []
+    text_parts = []
+    for b in m.content:
+        if isinstance(b, TextBlock):
+            text_parts.append(b.text)
+        elif isinstance(b, ToolResult):
+            out_msgs.append({
+                "role": "tool",
+                "tool_call_id": b.tool_use_id,
+                "content": b.content,
+            })
+    if text_parts:
+        out_msgs.append({"role": "user", "content": "".join(text_parts)})
+    return out_msgs
 
 
 class AnthropicProvider(LLMProvider):
@@ -732,6 +1306,303 @@ class AnthropicProvider(LLMProvider):
 
         # Fallback: JSON-in-prompt
         return self._structured_fallback(prompt, schema, pydantic_model, system_prompt)
+
+    # ------------------------------------------------------------------
+    # Tool-use turn primitive — Anthropic-native.
+    # ------------------------------------------------------------------
+    #
+    # Honours all three Anthropic cache regions (system / tools /
+    # history-through-index) via ``cache_control: {"type": "ephemeral"}``
+    # markers. Cost computation accounts for ``cache_read`` (0.1x input
+    # rate) and ``cache_creation`` (1.25x input rate) per Anthropic's
+    # documented multipliers. Beta task-budget endpoint via
+    # ``provider_specific={"anthropic_task_budget_beta": True,
+    # "anthropic_task_budget_tokens": N}``.
+
+    def supports_tool_use(self) -> bool: return True
+    def supports_prompt_caching(self) -> bool: return True
+    def supports_parallel_tools(self) -> bool: return True
+
+    def compute_cost(self, response: TurnResponse) -> float:
+        """Anthropic cost: standard input/output + cache_write (1.25x
+        input) + cache_read (0.1x input) per Anthropic's pricing.
+
+        ``response.cost_usd``, when set, takes precedence — same
+        rationale as the ABC default.
+        """
+        if response.cost_usd is not None:
+            return response.cost_usd
+        from .model_data import (
+            ANTHROPIC_CACHE_READ_MULTIPLIER,
+            ANTHROPIC_CACHE_WRITE_MULTIPLIER,
+        )
+        in_per_m, out_per_m = self.price_per_million()
+        return (
+            response.input_tokens * in_per_m
+            + response.output_tokens * out_per_m
+            + response.cache_write_tokens * in_per_m * ANTHROPIC_CACHE_WRITE_MULTIPLIER
+            + response.cache_read_tokens * in_per_m * ANTHROPIC_CACHE_READ_MULTIPLIER
+        ) / 1_000_000.0
+
+    def turn(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDef],
+        *,
+        system: Optional[str] = None,
+        max_tokens: int = 4096,
+        cache_control: CacheControl = CacheControl(),
+        anthropic_task_budget_beta: bool = False,
+        anthropic_task_budget_tokens: Optional[int] = None,
+        max_retries: int = 3,
+        backoff_factor: float = 2.0,
+        **_unused: Any,
+    ) -> TurnResponse:
+        """Send one round-trip to Anthropic.
+
+        Provider-specific kwargs:
+          * ``anthropic_task_budget_beta``: route via
+            ``client.beta.messages.create`` (cost-cap beta endpoint).
+            Activating the beta requires both this flag (sets the
+            ``betas=["task-budgets-..."]`` header) AND
+            ``anthropic_task_budget_tokens`` (sets the
+            ``output_config.task_budget`` request body).
+          * ``anthropic_task_budget_tokens``: total token budget
+            communicated to the model via
+            ``output_config: {task_budget: {type: "tokens", total: N}}``.
+            Required when ``anthropic_task_budget_beta=True``.
+          * ``max_retries`` / ``backoff_factor``: retry on transient
+            errors (connection / 429 / 5xx). Permanent 4xx fails
+            fast.
+        """
+        if anthropic_task_budget_beta and anthropic_task_budget_tokens is None:
+            raise ValueError(
+                "anthropic_task_budget_beta=True requires "
+                "anthropic_task_budget_tokens=N (total token budget the "
+                "model self-regulates against). Without it the beta "
+                "endpoint accepts the request but no budget is enforced."
+            )
+        if _unused:
+            logger.debug(
+                f"AnthropicProvider.turn: ignoring unrecognised "
+                f"kwargs: {sorted(_unused)}"
+            )
+
+        # ---- system block --------------------------------------------
+        # Anthropic accepts a string OR a content list. Use the list
+        # form when caching the system prompt so the cache_control
+        # marker can attach to it; otherwise the simpler string form.
+        system_arg: Optional[Union[str, list]]
+        if system:
+            if cache_control.system:
+                system_arg = [{
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }]
+            else:
+                system_arg = system
+        else:
+            system_arg = None
+
+        # ---- tools ---------------------------------------------------
+        tool_schemas: list[Dict[str, Any]] = [
+            {
+                "name": t.name,
+                "description": t.description,
+                "input_schema": t.input_schema,
+            }
+            for t in tools
+        ]
+        if cache_control.tools and tool_schemas:
+            last = dict(tool_schemas[-1])
+            last["cache_control"] = {"type": "ephemeral"}
+            tool_schemas[-1] = last
+
+        # ---- messages ------------------------------------------------
+        wire_messages = [_message_to_anthropic_wire(m) for m in messages]
+        if (
+            cache_control.history_through_index is not None
+            and 0 <= cache_control.history_through_index < len(wire_messages)
+        ):
+            _attach_anthropic_cache_marker(
+                wire_messages[cache_control.history_through_index],
+            )
+
+        # ---- dispatch (with retry on transient errors) ---------------
+        # Routing to ``client.beta.messages.create`` is necessary but
+        # not sufficient — the beta only activates when the beta name
+        # appears in the ``betas=[...]`` request parameter.
+        create_fn = (
+            self.client.beta.messages.create
+            if anthropic_task_budget_beta
+            else self.client.messages.create
+        )
+        kwargs: Dict[str, Any] = {
+            "model": self.config.model_name,
+            "max_tokens": max_tokens,
+            "messages": wire_messages,
+            "tools": tool_schemas if tool_schemas else None,
+        }
+        if anthropic_task_budget_beta:
+            kwargs["betas"] = [_ANTHROPIC_TASK_BUDGET_BETA]
+            kwargs["output_config"] = {
+                "task_budget": {
+                    "type": "tokens",
+                    "total": anthropic_task_budget_tokens,
+                },
+            }
+        if system_arg is not None:
+            kwargs["system"] = system_arg
+        send_kwargs = {k: v for k, v in kwargs.items() if v is not None}
+
+        from anthropic import (                              # type: ignore[import-not-found]
+            APIConnectionError,
+            APIError,
+            APIStatusError,
+        )
+        for attempt in range(max_retries + 1):
+            try:
+                resp = create_fn(**send_kwargs)
+                break
+            except (APIConnectionError, APIStatusError, APIError) as exc:
+                if not _is_transient_anthropic(exc) or attempt >= max_retries:
+                    kind = "transient" if _is_transient_anthropic(exc) else "permanent"
+                    logger.warning(
+                        f"AnthropicProvider.turn: {kind} error after "
+                        f"{attempt + 1} attempt(s): {exc}"
+                    )
+                    return TurnResponse(
+                        content=[],
+                        stop_reason=StopReason.ERROR,
+                        input_tokens=0,
+                        output_tokens=0,
+                    )
+                delay = backoff_factor ** attempt
+                logger.info(
+                    f"AnthropicProvider.turn: transient error attempt "
+                    f"{attempt + 1}, retrying in {delay:.1f}s: {exc}"
+                )
+                time.sleep(delay)
+        else:
+            return TurnResponse(
+                content=[], stop_reason=StopReason.ERROR,
+                input_tokens=0, output_tokens=0,
+            )
+
+        # ---- normalise response --------------------------------------
+        stop = _ANTHROPIC_STOP_REASON_MAP.get(
+            resp.stop_reason or "", StopReason.ERROR,
+        )
+        out_blocks: list = []
+        for block in resp.content:
+            block_type = getattr(block, "type", None)
+            if block_type == "text":
+                out_blocks.append(TextBlock(text=block.text))
+            elif block_type == "tool_use":
+                out_blocks.append(ToolCall(
+                    id=block.id,
+                    name=block.name,
+                    input=dict(block.input) if block.input else {},
+                ))
+
+        usage = resp.usage
+        return TurnResponse(
+            content=out_blocks,
+            stop_reason=stop,
+            input_tokens=(getattr(usage, "input_tokens", 0) or 0) if usage else 0,
+            output_tokens=(getattr(usage, "output_tokens", 0) or 0) if usage else 0,
+            cache_read_tokens=(
+                getattr(usage, "cache_read_input_tokens", 0) or 0
+            ) if usage else 0,
+            cache_write_tokens=(
+                getattr(usage, "cache_creation_input_tokens", 0) or 0
+            ) if usage else 0,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Anthropic tool-use helpers (module-level — used by
+# ``AnthropicProvider.turn``)
+# ---------------------------------------------------------------------------
+
+# Beta header name for Anthropic's task-budget endpoint. Activated by
+# the ``anthropic_task_budget_beta=True`` provider-specific kwarg —
+# routing to ``client.beta.messages.create`` is necessary BUT NOT
+# SUFFICIENT; the ``betas=[...]`` parameter must also be passed for
+# the server to actually honour the beta.
+_ANTHROPIC_TASK_BUDGET_BETA = "task-budgets-2026-03-13"
+
+# Anthropic's native stop_reason → our enum.
+_ANTHROPIC_STOP_REASON_MAP = {
+    "end_turn": StopReason.COMPLETE,
+    "stop_sequence": StopReason.COMPLETE,
+    "tool_use": StopReason.NEEDS_TOOL_CALL,
+    "pause_turn": StopReason.PAUSE_TURN,
+    "max_tokens": StopReason.MAX_TOKENS,
+    "refusal": StopReason.REFUSED,
+}
+
+
+def _is_transient_anthropic(exc: BaseException) -> bool:
+    """``True`` when ``exc`` is a connection / 429 / 5xx error worth
+    retrying. Permanent 4xx (auth, schema, not-found) are False so
+    callers fail fast instead of burning budget on hopeless retries."""
+    from anthropic import APIConnectionError, APIStatusError    # type: ignore[import-not-found]
+    if isinstance(exc, APIConnectionError):
+        return True
+    if isinstance(exc, APIStatusError):
+        status = getattr(exc, "status_code", None)
+        return status == 429 or (status is not None and 500 <= status < 600)
+    return False
+
+
+def _message_to_anthropic_wire(m: Message) -> Dict[str, Any]:
+    """Our :class:`Message` → Anthropic wire dict.
+
+    Anthropic accepts mixed content lists per turn — text, tool_use,
+    and tool_result blocks all live in the same ``content`` array;
+    role determines which subset is valid (assistant: text + tool_use;
+    user: text + tool_result).
+
+    Empty :class:`Message`\\ s (``content=[]``) — which the loop can
+    produce when a turn returns ``StopReason.ERROR`` with no blocks —
+    are emitted as ``[{"type": "text", "text": ""}]`` so the wire
+    shape stays valid if a caller resumes from a failed run.
+    """
+    out_content: list[Dict[str, Any]] = []
+    for block in m.content:
+        if isinstance(block, TextBlock):
+            out_content.append({"type": "text", "text": block.text})
+        elif isinstance(block, ToolCall):                  # assistant role only
+            out_content.append({
+                "type": "tool_use",
+                "id": block.id,
+                "name": block.name,
+                "input": block.input,
+            })
+        elif isinstance(block, ToolResult):                # user role only
+            out_content.append({
+                "type": "tool_result",
+                "tool_use_id": block.tool_use_id,
+                "content": block.content,
+                "is_error": block.is_error,
+            })
+    if not out_content:
+        out_content.append({"type": "text", "text": ""})
+    return {"role": m.role, "content": out_content}
+
+
+def _attach_anthropic_cache_marker(message: Dict[str, Any]) -> None:
+    """Mutate ``message["content"][-1]`` in-place to carry a
+    cache_control marker. Anthropic places the marker on the LAST
+    block of a region to cache everything preceding it within that
+    message."""
+    if not message["content"]:
+        return
+    last = dict(message["content"][-1])
+    last["cache_control"] = {"type": "ephemeral"}
+    message["content"][-1] = last
 
 
 class GeminiProvider(LLMProvider):
@@ -902,6 +1773,43 @@ class GeminiProvider(LLMProvider):
             # Auth, network, quota — don't waste a second call
             raise
 
+    # ------------------------------------------------------------------
+    # Tool-use via JSON-protocol synthesis.
+    # ------------------------------------------------------------------
+    #
+    # The native google-genai SDK exposes Gemini's function-calling but
+    # this provider doesn't wire that up — operators wanting native
+    # function-calling install ``openai`` alongside ``google-genai`` and
+    # the factory routes through :class:`OpenAICompatibleProvider`
+    # against Gemini's OpenAI-compat endpoint.
+    #
+    # For users who installed ONLY the google-genai SDK (chosen for
+    # accurate ``thoughts_token_count`` cost tracking, server-side
+    # schema-constrained JSON), the synthesis fallback gives them
+    # tool-use without forcing an additional SDK install. Same pattern
+    # as :class:`ClaudeCodeLLMProvider`.
+
+    def supports_tool_use(self) -> bool: return True
+    def supports_prompt_caching(self) -> bool: return False
+    def supports_parallel_tools(self) -> bool: return False
+
+    def turn(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDef],
+        *,
+        system: Optional[str] = None,
+        max_tokens: int = 4096,
+        cache_control: CacheControl = CacheControl(),
+        **provider_specific: Any,
+    ) -> TurnResponse:
+        """Tool-use via the ABC's JSON-protocol fallback."""
+        return self._tool_use_fallback(
+            messages, tools,
+            system=system, max_tokens=max_tokens,
+            cache_control=cache_control, **provider_specific,
+        )
+
 
 class ClaudeCodeProvider:
     """
@@ -951,6 +1859,232 @@ class ClaudeCodeProvider:
         }
 
 
+def _safe_subprocess_stderr(stderr: Optional[str], *, limit: int = 500) -> str:
+    """Sanitise subprocess stderr for inclusion in operator-facing
+    ``RuntimeError`` messages.
+
+    Per ``project_log_sanitisation_adoption.md`` (threats A + B):
+    redact credentials that the child process may have echoed
+    (``ANTHROPIC_API_KEY``, bearer tokens, ``user:pass@`` URLs) and
+    escape non-printable bytes (ANSI / BIDI / control bytes) so the
+    error message can't corrupt operator terminals or be reshared
+    with secrets intact.
+
+    Truncation happens *after* sanitisation so the limit applies to
+    the rendered length, not the raw byte count.
+    """
+    if not stderr:
+        return ""
+    from core.security.log_sanitisation import escape_nonprintable
+    from core.security.redaction import redact_secrets
+    return escape_nonprintable(redact_secrets(stderr))[:limit]
+
+
+class ClaudeCodeLLMProvider(LLMProvider):
+    """Claude Code subprocess transport as a real :class:`LLMProvider`.
+
+    Wraps ``claude -p`` (via :mod:`core.llm.cc_adapter`) so consumers
+    that hold a :class:`ModelConfig` can transparently use the Claude
+    Code CLI when no SDK API key is configured. Supports tool-use via
+    the ABC's :meth:`_tool_use_fallback` (JSON-in-prompt protocol over
+    plain ``generate()``) — slower than native tool/function calling
+    and one tool call per turn, but functional on any backend that
+    just emits text.
+
+    Distinct from the :class:`ClaudeCodeProvider` stub above: this is
+    a real provider that does generation; the stub returns ``None`` to
+    signal "the surrounding orchestrator handles reasoning" and is
+    used by :mod:`packages.llm_analysis.agent` for prep-only mode.
+    """
+
+    is_stub = False
+
+    def __init__(
+        self,
+        config: ModelConfig,
+        *,
+        claude_bin: Optional[str] = None,
+        budget_usd: str = "1.00",
+        timeout_s: Optional[int] = None,
+    ) -> None:
+        super().__init__(config)
+        self._claude_bin = claude_bin or "claude"
+        self._budget_usd = budget_usd
+        # Per-call timeout: prefer explicit kwarg, then ModelConfig.timeout,
+        # then a generous default (Claude Code subprocess + tool-use can
+        # take several minutes on real workloads).
+        self._timeout_s = timeout_s or (config.timeout if config.timeout else 600)
+
+    def generate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        """Dispatch a prompt to ``claude -p`` and parse the JSON envelope."""
+        from .cc_adapter import (
+            CCDispatchConfig, build_cc_command, parse_cc_freeform,
+        )
+        import subprocess
+        import time as _time
+
+        full_prompt = (
+            f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+        )
+        cc_config = CCDispatchConfig(
+            claude_bin=self._claude_bin,
+            # Used as a pure-LLM substrate: disable CC's internal tools
+            # (Read/Grep/Glob default) so the subprocess can't scan cwd
+            # before answering. Tool-use happens at the loop layer above
+            # us via _tool_use_fallback's JSON-protocol synthesis.
+            tools="",
+            budget_usd=self._budget_usd,
+            timeout_s=self._timeout_s,
+            capture_json_envelope=True,
+        )
+        cmd = build_cc_command(cc_config)
+
+        start = _time.time()
+        try:
+            proc = subprocess.run(
+                cmd,
+                input=full_prompt,
+                text=True,
+                capture_output=True,
+                timeout=self._timeout_s,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(
+                f"claude -p timed out after {self._timeout_s}s"
+            ) from e
+        duration = _time.time() - start
+
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"claude -p exited with status {proc.returncode}: "
+                f"{_safe_subprocess_stderr(proc.stderr)}"
+            )
+
+        parsed = parse_cc_freeform(proc.stdout, proc.stderr)
+        content = parsed.get("content", "") or ""
+        cost = float(parsed.get("cost_usd", 0.0) or 0.0)
+        tokens = int(parsed.get("_tokens", 0) or 0)
+
+        # Best-effort token split: cc_adapter only surfaces total tokens;
+        # if the envelope had separate input/output we'd carry them, but
+        # parse_cc_freeform sums them. Attribute everything to output to
+        # avoid silently zeroing the counter.
+        self.track_usage(
+            tokens=tokens, cost=cost,
+            input_tokens=0, output_tokens=tokens,
+            duration=duration,
+        )
+
+        return LLMResponse(
+            content=content,
+            model=parsed.get("analysed_by", self.config.model_name),
+            provider="claudecode",
+            tokens_used=tokens,
+            cost=cost,
+            finish_reason="stop",
+            input_tokens=0,
+            output_tokens=tokens,
+            duration=duration,
+        )
+
+    def generate_structured(
+        self,
+        prompt: str,
+        schema: Dict[str, Any],
+        system_prompt: Optional[str] = None,
+    ) -> Tuple[Dict[str, Any], str]:
+        """Dispatch with ``--json-schema`` for structured output."""
+        from .cc_adapter import (
+            CCDispatchConfig, build_cc_command, parse_cc_structured,
+        )
+        import subprocess
+        import time as _time
+
+        full_prompt = (
+            f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
+        )
+        cc_config = CCDispatchConfig(
+            claude_bin=self._claude_bin,
+            tools="",                                # see generate() comment
+            budget_usd=self._budget_usd,
+            timeout_s=self._timeout_s,
+            json_schema=schema,
+            capture_json_envelope=True,
+        )
+        cmd = build_cc_command(cc_config)
+
+        start = _time.time()
+        try:
+            proc = subprocess.run(
+                cmd,
+                input=full_prompt,
+                text=True,
+                capture_output=True,
+                timeout=self._timeout_s,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(
+                f"claude -p timed out after {self._timeout_s}s"
+            ) from e
+        duration = _time.time() - start
+
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"claude -p exited with status {proc.returncode}: "
+                f"{_safe_subprocess_stderr(proc.stderr)}"
+            )
+
+        result = parse_cc_structured(proc.stdout, proc.stderr)
+        if "error" in result and result["error"]:
+            raise RuntimeError(f"claude -p structured parse failed: {result['error']}")
+
+        # Track usage so structured calls show up alongside generate() in
+        # provider stats. cost/_tokens are set by extract_envelope_metadata
+        # inside parse_cc_structured when the envelope carries them.
+        cost = float(result.pop("cost_usd", 0.0) or 0.0)
+        tokens = int(result.pop("_tokens", 0) or 0)
+        result.pop("duration_seconds", None)
+        result.pop("analysed_by", None)
+        # parse_cc_structured injects ``finding_id`` (default "unknown")
+        # via setdefault — a CVE-aware behaviour leaking from
+        # cc_adapter's other consumers. Strip it so the consumer's
+        # schema isn't polluted with a field they didn't ask for.
+        result.pop("finding_id", None)
+        self.track_usage(
+            tokens=tokens, cost=cost,
+            input_tokens=0, output_tokens=tokens,
+            duration=duration,
+        )
+
+        return result, json.dumps(result, indent=2)
+
+    def supports_tool_use(self) -> bool: return True
+    def supports_prompt_caching(self) -> bool: return False
+    def supports_parallel_tools(self) -> bool: return False
+
+    def turn(
+        self,
+        messages: Sequence[Message],
+        tools: Sequence[ToolDef],
+        *,
+        system: Optional[str] = None,
+        max_tokens: int = 4096,
+        cache_control: CacheControl = CacheControl(),
+        **provider_specific: Any,
+    ) -> TurnResponse:
+        """Tool-use via the ABC's JSON-protocol fallback."""
+        return self._tool_use_fallback(
+            messages, tools,
+            system=system, max_tokens=max_tokens,
+            cache_control=cache_control, **provider_specific,
+        )
+
+
 def create_provider(config: ModelConfig) -> LLMProvider:
     """
     Factory function to create appropriate provider.
@@ -966,6 +2100,8 @@ def create_provider(config: ModelConfig) -> LLMProvider:
         LLMProvider instance
     """
     provider = config.provider.lower()
+    if provider in ("claudecode", "claude_code", "claude-code"):
+        return ClaudeCodeLLMProvider(config)
     if provider == "anthropic":
         if ANTHROPIC_SDK_AVAILABLE:
             return AnthropicProvider(config)
