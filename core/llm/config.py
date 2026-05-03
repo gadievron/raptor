@@ -189,92 +189,201 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
     return best_model
 
 
-def _get_default_primary_model() -> Optional['ModelConfig']:
+# ---------------------------------------------------------------------------
+# Per-provider config builders.
+# ---------------------------------------------------------------------------
+#
+# Each builder returns a ``ModelConfig`` if the provider is usable in the
+# current environment, otherwise ``None``. ``_get_default_primary_model``
+# iterates these in order; ``prefer=...`` re-orders the iteration so a
+# consumer can express its own preference (e.g., cve-diff prefers
+# Anthropic for cache-control savings) without depending on the default
+# autodetect order — which would silently regress consumer behaviour if
+# the default were ever re-tuned for other reasons.
+
+
+def _build_anthropic_config() -> Optional['ModelConfig']:
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        return None
+    default_model = PROVIDER_DEFAULT_MODELS["anthropic"]
+    limits = MODEL_LIMITS.get(default_model, {})
+    costs = MODEL_COSTS.get(default_model, {})
+    return ModelConfig(
+        provider="anthropic",
+        model_name=default_model,
+        api_key=os.getenv("ANTHROPIC_API_KEY"),
+        max_tokens=limits.get("max_output", 32000),
+        max_context=limits.get("max_context", 1000000),
+        temperature=0.7,
+        cost_per_1k_tokens=(costs.get("input", 0.015) + costs.get("output", 0.075)) / 2,
+    )
+
+
+def _build_openai_compat_config(provider_name: str) -> Optional['ModelConfig']:
+    """Generic builder for OpenAI / Gemini / Mistral — same shape, different env var + endpoint."""
+    env_var_map = {"openai": "OPENAI_API_KEY", "gemini": "GEMINI_API_KEY", "mistral": "MISTRAL_API_KEY"}
+    api_key = os.getenv(env_var_map[provider_name])
+    if not api_key:
+        return None
+    default_model = PROVIDER_DEFAULT_MODELS[provider_name]
+    limits = MODEL_LIMITS.get(default_model, {})
+    costs = MODEL_COSTS.get(default_model, {})
+    avg_cost = (costs.get("input", 0.005) + costs.get("output", 0.005)) / 2 if costs else 0.002
+    return ModelConfig(
+        provider=provider_name,
+        model_name=default_model,
+        api_key=api_key,
+        api_base=PROVIDER_ENDPOINTS[provider_name],
+        max_tokens=limits.get("max_output", 8192),
+        max_context=limits.get("max_context", 128000),
+        temperature=0.7,
+        cost_per_1k_tokens=avg_cost,
+    )
+
+
+def _build_ollama_config() -> Optional['ModelConfig']:
+    from core.config import RaptorConfig
+    ollama_models = _get_available_ollama_models()
+    if not ollama_models:
+        return None
+    preferred = ['mistral', 'qwen', 'codellama', 'llama', 'gemma', 'deepseek-coder', 'deepseek']
+    selected_model = ollama_models[0]
+    for pref in preferred:
+        for model in ollama_models:
+            if pref in model.lower():
+                selected_model = model
+                break
+        if selected_model != ollama_models[0]:
+            break
+    ollama_base = _validate_ollama_url(RaptorConfig.OLLAMA_HOST)
+    if selected_model not in MODEL_LIMITS:
+        logger.info(
+            f"Model '{selected_model}' not in MODEL_LIMITS — using defaults "
+            f"(max_context=32000, max_output=4096). Override in models.json if needed."
+        )
+    return ModelConfig(
+        provider="ollama",
+        model_name=selected_model,
+        api_base=f"{ollama_base}/v1",
+        max_tokens=4096,
+        temperature=0.7,
+        cost_per_1k_tokens=0.0,
+    )
+
+
+def _build_claudecode_config() -> Optional['ModelConfig']:
+    """Last-resort fallback: ``claude`` CLI on PATH, no API key needed.
+    Slower (subprocess + ``--json-schema`` structured output for
+    tool-use) but works for users who only have Claude Code installed.
+
+    ``timeout=300`` is calibrated from real-CC runs: simple turns are
+    5-15s, ``--json-schema`` against a rich tool catalog can push to
+    60-180s. 300s gives 2-3x headroom for worst case without letting
+    a single turn consume a whole ``ToolUseLoop.max_seconds`` budget.
+    Cloud APIs default to 120s in ``ModelConfig`` (well-tuned for
+    them); CC's subprocess + structured-output overhead needs more.
+    """
+    import shutil
+    if not shutil.which("claude"):
+        return None
+    default_model = PROVIDER_DEFAULT_MODELS["anthropic"]
+    limits = MODEL_LIMITS.get(default_model, {})
+    return ModelConfig(
+        provider="claudecode",
+        model_name=default_model,
+        api_key=None,
+        max_tokens=limits.get("max_output", 32000),
+        max_context=limits.get("max_context", 1000000),
+        temperature=0.7,
+        timeout=300,
+        cost_per_1k_tokens=0.0,
+    )
+
+
+_PROVIDER_BUILDERS = {
+    "anthropic":  _build_anthropic_config,
+    "openai":     lambda: _build_openai_compat_config("openai"),
+    "gemini":     lambda: _build_openai_compat_config("gemini"),
+    "mistral":    lambda: _build_openai_compat_config("mistral"),
+    "ollama":     _build_ollama_config,
+    "claudecode": _build_claudecode_config,
+}
+
+# Default order. Anthropic first (cache-control + task-budget beta —
+# the only provider where those matter natively). Ollama before
+# claudecode because Ollama is a deliberate operator setup; CC is the
+# absolute last resort.
+_DEFAULT_PROVIDER_ORDER = (
+    "anthropic", "openai", "gemini", "mistral", "ollama", "claudecode",
+)
+
+
+def _get_default_primary_model(
+    prefer: Optional[List[str]] = None,
+) -> Optional['ModelConfig']:
     """
     Get default primary model based on available providers.
 
-    Strategy:
-    1. Check if any external LLM is available (cached detection)
-    2. Try automatic thinking model selection (reads config file)
-    3. Fall back to API key detection with manual config
-    4. Fall back to Ollama if no cloud providers available
+    Resolution order:
+    1. **Preferred providers via env var** (when ``prefer`` set).
+       Try each named provider in order; skip silently if absent.
+    2. **Operator's thinking-model config** (``~/.config/raptor/models.json``).
+       Honoured even when ``prefer`` is set — picks up
+       provider+key combinations that don't fit the env-var
+       convention (e.g. Gemini via Vertex auth). When ``prefer`` is
+       set, only return it if its provider matches the preference.
+    3. **Default-order autodetect** via env var: Anthropic > OpenAI
+       > Gemini > Mistral > Ollama > Claude Code (subprocess,
+       absolute last resort).
+
+    ``prefer`` is lenient: unknown / unavailable preferred providers
+    are silently skipped. A consumer expresses preference via this
+    arg to avoid depending on the default-order convention staying
+    Anthropic-first — e.g. cve-diff prefers Anthropic for
+    ``cache_control`` + task-budget savings, and that linkage should
+    be explicit in code rather than coincidence with the default.
     """
-    # These are already imported at module level but we use them here
-    # for clarity — detect_llm_availability, _get_available_ollama_models,
-    # _validate_ollama_url come from .detection (imported at top of file)
-    from core.config import RaptorConfig
+    if isinstance(prefer, str):
+        prefer = [prefer]
+    prefer_set = set(prefer) if prefer else None
 
-    availability = detect_llm_availability()
-    if not availability.external_llm:
-        return None
+    # Step 1: preferred providers via env var (consumer's explicit
+    # signal — try them before any other detection).
+    if prefer:
+        for name in prefer:
+            builder = _PROVIDER_BUILDERS.get(name)
+            if builder is None:
+                logger.warning(
+                    f"_get_default_primary_model: unknown preferred "
+                    f"provider {name!r} — skipping"
+                )
+                continue
+            config = builder()
+            if config is not None:
+                return config
 
-    # Try automatic thinking model selection first
+    # Step 2: operator's thinking-model config (file-based; covers
+    # non-env-var setups like Gemini via Vertex). The operator's
+    # explicit choice beats env-var defaults — if they configured
+    # Gemini in ``~/.config/raptor/models.json``, respect that even
+    # when OPENAI_API_KEY happens to be set as an env var.
     thinking_model = _get_best_thinking_model()
     if thinking_model and thinking_model.api_key:
-        logger.info(f"Using automatic thinking model: {thinking_model.provider}/{thinking_model.model_name}")
+        logger.info(
+            f"Using automatic thinking model: "
+            f"{thinking_model.provider}/{thinking_model.model_name}"
+        )
         return thinking_model
 
-    # Fallback: Check for API keys manually
-    if os.getenv("ANTHROPIC_API_KEY"):
-        default_model = PROVIDER_DEFAULT_MODELS["anthropic"]
-        limits = MODEL_LIMITS.get(default_model, {})
-        costs = MODEL_COSTS.get(default_model, {})
-        return ModelConfig(
-            provider="anthropic",
-            model_name=default_model,
-            api_key=os.getenv("ANTHROPIC_API_KEY"),
-            max_tokens=limits.get("max_output", 32000),
-            max_context=limits.get("max_context", 1000000),
-            temperature=0.7,
-            cost_per_1k_tokens=(costs.get("input", 0.015) + costs.get("output", 0.075)) / 2,
-        )
-
-    for provider_name, env_var in [("openai", "OPENAI_API_KEY"), ("gemini", "GEMINI_API_KEY"), ("mistral", "MISTRAL_API_KEY")]:
-        api_key = os.getenv(env_var)
-        if api_key:
-            default_model = PROVIDER_DEFAULT_MODELS[provider_name]
-            limits = MODEL_LIMITS.get(default_model, {})
-            costs = MODEL_COSTS.get(default_model, {})
-            avg_cost = (costs.get("input", 0.005) + costs.get("output", 0.005)) / 2 if costs else 0.002
-            return ModelConfig(
-                provider=provider_name,
-                model_name=default_model,
-                api_key=api_key,
-                api_base=PROVIDER_ENDPOINTS[provider_name],
-                max_tokens=limits.get("max_output", 8192),
-                max_context=limits.get("max_context", 128000),
-                temperature=0.7,
-                cost_per_1k_tokens=avg_cost,
-            )
-
-    # Ollama — already confirmed available by detect_llm_availability()
-    ollama_models = _get_available_ollama_models()  # cached, no HTTP call
-    if ollama_models:
-        preferred = ['mistral', 'qwen', 'codellama', 'llama', 'gemma', 'deepseek-coder', 'deepseek']
-        selected_model = ollama_models[0]
-
-        for pref in preferred:
-            for model in ollama_models:
-                if pref in model.lower():
-                    selected_model = model
-                    break
-            if selected_model != ollama_models[0]:
-                break
-
-        ollama_base = _validate_ollama_url(RaptorConfig.OLLAMA_HOST)
-        if selected_model not in MODEL_LIMITS:
-            logger.info(
-                f"Model '{selected_model}' not in MODEL_LIMITS — using defaults "
-                f"(max_context=32000, max_output=4096). Override in models.json if needed."
-            )
-        return ModelConfig(
-            provider="ollama",
-            model_name=selected_model,
-            api_base=f"{ollama_base}/v1",
-            max_tokens=4096,
-            temperature=0.7,
-            cost_per_1k_tokens=0.0,
-        )
+    # Step 3: default-order autodetect via env vars. Skip providers
+    # already tried in step 1.
+    for name in _DEFAULT_PROVIDER_ORDER:
+        if prefer_set is not None and name in prefer_set:
+            continue
+        builder = _PROVIDER_BUILDERS[name]
+        config = builder()
+        if config is not None:
+            return config
 
     return None
 

@@ -5,7 +5,13 @@ use the Claude Code CLI without an SDK API key.
 Distinct from the legacy ``ClaudeCodeProvider`` stub (which returns
 ``None`` to signal "the surrounding orchestrator handles reasoning")
 — this one actually does generation via subprocess and supports
-tool-use through the ABC's JSON-protocol fallback.
+tool-use through CC's ``--json-schema`` structured-output mode.
+
+The ABC's :meth:`_tool_use_fallback` (JSON-in-prompt synthesis)
+does NOT work for CC: anti-injection training refuses to roleplay
+as a different agent system. The structured-output mode reframes
+the task as form-filling rather than roleplay and bypasses the
+guard.
 
 All subprocess interaction is monkeypatched; no real ``claude``
 binary is invoked.
@@ -418,10 +424,15 @@ def test_turn_text_response_returns_complete(monkeypatch) -> None:
 
 
 def test_turn_tool_call_response_returns_needs_tool_call(monkeypatch) -> None:
-    payload = '```json\n{"tool": "search", "input": {"q": "x"}}\n```'
+    """CC emits a ``tool_call``-shaped JSON via --json-schema; the
+    provider parses it into a ``ToolCall`` block."""
     monkeypatch.setattr(
         subprocess, "run",
-        lambda *a, **k: _FakeCompleted(stdout=_envelope(result=payload)),
+        lambda *a, **k: _FakeCompleted(stdout=_structured_envelope({
+            "type": "tool_call",
+            "tool_name": "search",
+            "tool_input": {"q": "x"},
+        })),
     )
     tool = ToolDef(
         name="search", description="search tool",
@@ -438,6 +449,135 @@ def test_turn_tool_call_response_returns_needs_tool_call(monkeypatch) -> None:
     assert isinstance(out.content[0], ToolCall)
     assert out.content[0].name == "search"
     assert out.content[0].input == {"q": "x"}
+
+
+def test_turn_complete_response_returns_complete(monkeypatch) -> None:
+    """When CC emits ``type=complete`` (no more tools to call), the
+    provider returns a ``TextBlock`` with the final answer."""
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: _FakeCompleted(stdout=_structured_envelope({
+            "type": "complete",
+            "final_text": "I'm done — the answer is 42.",
+        })),
+    )
+    tool = ToolDef(
+        name="search", description="search tool",
+        input_schema={"type": "object"},
+        handler=lambda i: "result",
+    )
+    p = ClaudeCodeLLMProvider(_config())
+    out = p.turn(
+        messages=[Message(role="user", content=[TextBlock(text="hi")])],
+        tools=[tool],
+    )
+
+    assert out.stop_reason is StopReason.COMPLETE
+    assert isinstance(out.content[0], TextBlock)
+    assert "the answer is 42" in out.content[0].text
+
+
+def test_turn_invokes_subprocess_with_json_schema(monkeypatch) -> None:
+    """Sanity: the subprocess command includes ``--json-schema`` so
+    CC honours the structured-output contract. (If we passed plain
+    text mode CC's anti-injection would refuse the request.)"""
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return _FakeCompleted(stdout=_structured_envelope({
+            "type": "complete",
+            "final_text": "ok",
+        }))
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    tool = ToolDef(
+        name="search", description="search tool",
+        input_schema={"type": "object"},
+        handler=lambda i: "result",
+    )
+    p = ClaudeCodeLLMProvider(_config())
+    p.turn(
+        messages=[Message(role="user", content=[TextBlock(text="hi")])],
+        tools=[tool],
+    )
+    assert "--json-schema" in captured["cmd"]
+    schema_idx = captured["cmd"].index("--json-schema") + 1
+    schema = json.loads(captured["cmd"][schema_idx])
+    # Discriminated union — must constrain ``type`` to the two valid
+    # branches and constrain ``tool_name`` to the registered tools.
+    assert schema["properties"]["type"]["enum"] == ["tool_call", "complete"]
+    assert schema["properties"]["tool_name"]["enum"] == ["search"]
+
+
+def test_turn_malformed_tool_call_falls_back_to_text(monkeypatch) -> None:
+    """If CC emits ``type=tool_call`` but the tool_name doesn't match
+    a registered tool (hallucination guard), we surface the raw result
+    as a text block rather than dispatching a bogus call."""
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: _FakeCompleted(stdout=_structured_envelope({
+            "type": "tool_call",
+            "tool_name": "fictional_tool_99",
+            "tool_input": {},
+        })),
+    )
+    tool = ToolDef(
+        name="search", description="search tool",
+        input_schema={"type": "object"},
+        handler=lambda i: "result",
+    )
+    p = ClaudeCodeLLMProvider(_config())
+    out = p.turn(
+        messages=[Message(role="user", content=[TextBlock(text="hi")])],
+        tools=[tool],
+    )
+    assert out.stop_reason is StopReason.COMPLETE
+    assert isinstance(out.content[0], TextBlock)
+
+
+def test_turn_no_tools_uses_plain_generate(monkeypatch) -> None:
+    """When ``tools=[]``, ``turn()`` skips the schema and falls back
+    to plain text generation. No ``--json-schema`` flag in the
+    command line."""
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return _FakeCompleted(stdout=_envelope(result="hello"))
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    p = ClaudeCodeLLMProvider(_config())
+    out = p.turn(
+        messages=[Message(role="user", content=[TextBlock(text="hi")])],
+        tools=[],
+    )
+    assert "--json-schema" not in captured["cmd"]
+    assert out.stop_reason is StopReason.COMPLETE
+    assert out.content[0].text == "hello"
+
+
+def test_turn_subprocess_error_returns_error_response(monkeypatch) -> None:
+    """When the underlying subprocess fails, return a ToolResponse
+    with stop_reason=ERROR instead of letting RuntimeError bubble up
+    — the loop expects a TurnResponse and converts its own ERROR
+    handling."""
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **k: _FakeCompleted(stdout="", stderr="auth", returncode=1),
+    )
+    tool = ToolDef(
+        name="search", description="search tool",
+        input_schema={"type": "object"},
+        handler=lambda i: "result",
+    )
+    p = ClaudeCodeLLMProvider(_config())
+    out = p.turn(
+        messages=[Message(role="user", content=[TextBlock(text="hi")])],
+        tools=[tool],
+    )
+    assert out.stop_reason is StopReason.ERROR
+    assert out.content == []
 
 
 def test_turn_propagates_envelope_cost_to_compute_cost(monkeypatch) -> None:
