@@ -707,6 +707,15 @@ class OpenAICompatibleProvider(LLMProvider):
                 "For more reliable structured output: pip install instructor"
             )
 
+        # Flips on first detection that this provider's bound model
+        # rejects function-calling (older Ollama models, smaller
+        # Mistrals, custom finetunes, vLLM-served models without
+        # tool support, etc.). Subsequent ``turn()`` calls then go
+        # straight to the JSON-protocol synthesis fallback rather
+        # than wasting another round-trip. Per-instance, not
+        # persisted — a fresh process re-detects on first turn.
+        self._tool_use_unsupported = False
+
         logger.debug(f"Initialized OpenAICompatibleProvider: {config.model_name} (base_url={config.api_base})")
 
     def generate(self, prompt: str, system_prompt: Optional[str] = None,
@@ -856,7 +865,10 @@ class OpenAICompatibleProvider(LLMProvider):
     # is silently ignored. Parallel tool calls are supported by OpenAI
     # but not exploited by the loop today.
 
-    def supports_tool_use(self) -> bool: return True
+    def supports_tool_use(self) -> bool:
+        # Flips after a runtime-detected tool-rejection from the
+        # bound model — see ``turn()``.
+        return not self._tool_use_unsupported
     def supports_prompt_caching(self) -> bool: return False
     def supports_parallel_tools(self) -> bool: return True
 
@@ -878,11 +890,28 @@ class OpenAICompatibleProvider(LLMProvider):
         endpoints don't expose a per-region cache mechanism. Caching
         on the actual OpenAI endpoint is automatic (server-side) and
         not driven by request fields.
+
+        Auto-detects tool-use rejection: if the bound model returns a
+        4xx error referencing tools/functions on the first attempt,
+        flips :attr:`_tool_use_unsupported` and routes through
+        :meth:`_tool_use_fallback` for this and all subsequent turns
+        (per-instance state). Models that natively support function
+        calling never hit this path.
         """
         if _unused:
             logger.debug(
                 f"OpenAICompatibleProvider.turn: ignoring unrecognised "
                 f"kwargs: {sorted(_unused)}"
+            )
+
+        # Already detected this provider rejects tool/function calling.
+        # Synthesise via the ABC's JSON-protocol fallback rather than
+        # paying another wasted round-trip.
+        if self._tool_use_unsupported and tools:
+            return self._tool_use_fallback(
+                messages, tools,
+                system=system, max_tokens=max_tokens,
+                cache_control=cache_control,
             )
 
         # ---- tools (function-calling shape) --------------------------
@@ -923,6 +952,27 @@ class OpenAICompatibleProvider(LLMProvider):
                 resp = self.client.chat.completions.create(**kwargs)
                 break
             except (APIConnectionError, APIStatusError) as exc:
+                # Bound model doesn't support tool/function calling?
+                # Flip the per-instance flag and synthesise via the
+                # JSON-protocol fallback rather than retrying or
+                # giving up. Skips noise on the rest of the run.
+                if (
+                    tools
+                    and isinstance(exc, APIStatusError)
+                    and _is_tool_use_unsupported_error(exc)
+                ):
+                    logger.warning(
+                        f"OpenAICompatibleProvider.turn: model "
+                        f"{self.config.model_name!r} rejected tools — "
+                        f"falling back to JSON-protocol synthesis for "
+                        f"this provider instance: {exc}"
+                    )
+                    self._tool_use_unsupported = True
+                    return self._tool_use_fallback(
+                        messages, tools,
+                        system=system, max_tokens=max_tokens,
+                        cache_control=cache_control,
+                    )
                 if not _is_transient_openai(exc) or attempt >= max_retries:
                     kind = "transient" if _is_transient_openai(exc) else "permanent"
                     logger.warning(
@@ -1007,6 +1057,49 @@ def _is_transient_openai(exc: BaseException) -> bool:
         status = getattr(exc, "status_code", None)
         return status == 429 or (status is not None and 500 <= status < 600)
     return False
+
+
+def _is_tool_use_unsupported_error(exc: BaseException) -> bool:
+    """Heuristic: does ``exc`` look like a 4xx rejection from the
+    bound model saying it doesn't support tool / function calling?
+
+    Conservative by design — false positives make us synthesise when
+    native would have worked (cheaper outcome — synthesis still
+    produces correct results, just slower per turn). False negatives
+    keep the existing fail-fast behaviour, which is what users see
+    without this detection at all.
+
+    Detects 4xx (not 429) responses whose error body mentions a
+    tool/function keyword alongside an unsupported/not-supported
+    phrase. Covers Ollama (``model 'X' does not support tools``),
+    Mistral, vLLM, and similar shims. OpenAI and Anthropic models
+    never produce this error class — every current model on those
+    providers supports tool-use natively.
+    """
+    from openai import APIStatusError                        # type: ignore[import-not-found]
+    if not isinstance(exc, APIStatusError):
+        return False
+    status = getattr(exc, "status_code", None)
+    if status is None or status >= 500 or status == 429:
+        return False                                         # transient or server-side
+
+    text = str(exc).lower()
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error", body)
+        if isinstance(err, dict):
+            text += " " + str(err.get("message", "")).lower()
+        elif isinstance(err, str):
+            text += " " + err.lower()
+
+    has_keyword = "tool" in text or "function call" in text or "function-call" in text
+    has_negation = (
+        "not support" in text
+        or "unsupported" in text
+        or "does not" in text
+        or "no support" in text
+    )
+    return has_keyword and has_negation
 
 
 def _message_to_openai_wire(m: Message) -> list[Dict[str, Any]]:

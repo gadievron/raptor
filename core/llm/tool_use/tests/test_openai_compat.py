@@ -520,3 +520,196 @@ def test_permanent_4xx_fails_fast(monkeypatch) -> None:
     )
     assert attempts["n"] == 1                                # no retries
     assert out.stop_reason is StopReason.ERROR
+
+
+# ---------------------------------------------------------------------------
+# Runtime detection — tool-use unsupported by the bound model
+# ---------------------------------------------------------------------------
+
+
+def _tool_unsupported_error(message: str = "model 'foo' does not support tools"):
+    """Build a 400 APIStatusError whose body matches the heuristic."""
+    from openai import APIStatusError                         # type: ignore[import-not-found]
+    err = APIStatusError.__new__(APIStatusError)
+    err.status_code = 400                                     # type: ignore[attr-defined]
+    err.body = {"error": {"message": message}}                # type: ignore[attr-defined]
+    err.message = message                                     # type: ignore[attr-defined]
+    return err
+
+
+def test_unit_is_tool_use_unsupported_error_recognises_400_with_keyword() -> None:
+    """The detection heuristic accepts only 4xx (not 429) errors whose
+    body mentions a tool/function keyword paired with a not-supported
+    phrase. Tested directly for clarity and to lock the heuristic."""
+    from core.llm.providers import _is_tool_use_unsupported_error
+    assert _is_tool_use_unsupported_error(
+        _tool_unsupported_error("model X does not support tools")
+    )
+    assert _is_tool_use_unsupported_error(
+        _tool_unsupported_error("function calling is not supported by this model")
+    )
+
+
+def test_unit_is_tool_use_unsupported_error_rejects_429() -> None:
+    """429 is transient — never treat as tool-rejection."""
+    from openai import APIStatusError
+    from core.llm.providers import _is_tool_use_unsupported_error
+    err = APIStatusError.__new__(APIStatusError)
+    err.status_code = 429                                     # type: ignore[attr-defined]
+    err.body = {"error": {"message": "rate limit exceeded; tools temporarily unavailable"}}  # type: ignore[attr-defined]
+    assert not _is_tool_use_unsupported_error(err)
+
+
+def test_unit_is_tool_use_unsupported_error_rejects_5xx() -> None:
+    """5xx is server-side / transient — never treat as tool-rejection,
+    even if the message happens to contain tool keywords."""
+    from openai import APIStatusError
+    from core.llm.providers import _is_tool_use_unsupported_error
+    err = APIStatusError.__new__(APIStatusError)
+    err.status_code = 503                                     # type: ignore[attr-defined]
+    err.body = {"error": {"message": "tools backend unavailable"}}  # type: ignore[attr-defined]
+    assert not _is_tool_use_unsupported_error(err)
+
+
+def test_unit_is_tool_use_unsupported_error_rejects_unrelated_4xx() -> None:
+    """A 401 auth failure or 400 schema error must NOT be treated as
+    tool-unsupported — those are user-fixable problems with their own
+    failure paths."""
+    from openai import APIStatusError
+    from core.llm.providers import _is_tool_use_unsupported_error
+    err = APIStatusError.__new__(APIStatusError)
+    err.status_code = 401                                     # type: ignore[attr-defined]
+    err.body = {"error": {"message": "invalid API key"}}      # type: ignore[attr-defined]
+    assert not _is_tool_use_unsupported_error(err)
+
+
+def test_unit_is_tool_use_unsupported_error_requires_negation_phrase() -> None:
+    """Pure mention of 'tools' / 'function' isn't enough — the error
+    must also say something is not supported. Otherwise a generic 400
+    that happens to mention tools (e.g., 'tools schema invalid') would
+    trigger a wrong fallback."""
+    from openai import APIStatusError
+    from core.llm.providers import _is_tool_use_unsupported_error
+    err = APIStatusError.__new__(APIStatusError)
+    err.status_code = 400                                     # type: ignore[attr-defined]
+    err.body = {"error": {"message": "tools[0].function.name: invalid"}}  # type: ignore[attr-defined]
+    assert not _is_tool_use_unsupported_error(err)
+
+
+def test_turn_falls_back_to_synthesis_on_tool_unsupported(monkeypatch) -> None:
+    """First sign of a tool-rejection: the next ``turn()`` synthesises
+    via the JSON-protocol fallback. Result is a valid TurnResponse —
+    same shape native turn() emits — so the loop continues."""
+    p, c = _provider_with_stub()
+    monkeypatch.setattr("core.llm.providers.time.sleep", lambda _s: None)
+
+    # generate() is what _tool_use_fallback calls — return a JSON
+    # tool-call that the parser will recognise.
+    def _generate(prompt, system_prompt=None, **kwargs):
+        from core.llm.providers import LLMResponse
+        return LLMResponse(
+            content='{"tool": "echo", "input": {"x": "hi"}}',
+            model="gpt-4o", provider="openai",
+            tokens_used=10, cost=0.0, finish_reason="stop",
+            input_tokens=4, output_tokens=6,
+        )
+    p.generate = _generate                                    # type: ignore[method-assign]
+
+    attempts = {"native": 0}
+    def _reject(**_kwargs: Any) -> Any:
+        attempts["native"] += 1
+        raise _tool_unsupported_error()
+
+    c.chat.completions.create = _reject                       # type: ignore[method-assign]
+
+    out = p.turn(
+        messages=[Message(role="user", content=[TextBlock(text="hi")])],
+        tools=[_echo_tool()],
+        max_retries=3,
+    )
+    assert attempts["native"] == 1                            # no retry on tool-rejection
+    assert out.stop_reason is StopReason.NEEDS_TOOL_CALL
+    assert isinstance(out.content[0], ToolCall)
+    assert out.content[0].name == "echo"
+    assert p._tool_use_unsupported is True
+    assert p.supports_tool_use() is False                     # capability flag flipped
+
+
+def test_turn_subsequent_calls_skip_native_when_unsupported(monkeypatch) -> None:
+    """After detection, subsequent turn() calls go straight to the
+    fallback — no wasted round-trip per turn."""
+    p, c = _provider_with_stub()
+    monkeypatch.setattr("core.llm.providers.time.sleep", lambda _s: None)
+
+    def _generate(prompt, system_prompt=None, **kwargs):
+        from core.llm.providers import LLMResponse
+        return LLMResponse(
+            content="text reply", model="gpt-4o", provider="openai",
+            tokens_used=10, cost=0.0, finish_reason="stop",
+            input_tokens=4, output_tokens=6,
+        )
+    p.generate = _generate                                    # type: ignore[method-assign]
+
+    # Pre-flip the flag (simulates "already detected on a prior call")
+    p._tool_use_unsupported = True
+
+    attempts = {"native": 0}
+    def _spy(**_kwargs: Any) -> Any:
+        attempts["native"] += 1
+        return _FakeResponse([_FakeChoice(_FakeMessage(content="x"))])
+
+    c.chat.completions.create = _spy                          # type: ignore[method-assign]
+
+    p.turn(
+        messages=[Message(role="user", content=[TextBlock(text="hi")])],
+        tools=[_echo_tool()],
+    )
+    assert attempts["native"] == 0                            # never tried native
+
+
+def test_turn_no_tools_uses_native_even_after_unsupported_flag(monkeypatch) -> None:
+    """The flag only short-circuits when tools were actually requested.
+    Plain text completions (``tools=[]``) keep using the native chat
+    endpoint — the tool-rejection didn't apply to text-only paths."""
+    p, c = _provider_with_stub()
+
+    p._tool_use_unsupported = True
+
+    attempts = {"native": 0}
+    def _ok(**_kwargs: Any) -> Any:
+        attempts["native"] += 1
+        return _FakeResponse([_FakeChoice(_FakeMessage(content="text"))])
+
+    c.chat.completions.create = _ok                           # type: ignore[method-assign]
+
+    out = p.turn(
+        messages=[Message(role="user", content=[TextBlock(text="hi")])],
+        tools=[],
+    )
+    assert attempts["native"] == 1
+    assert out.stop_reason is StopReason.COMPLETE
+
+
+def test_turn_unrelated_4xx_does_not_flip_flag(monkeypatch) -> None:
+    """A 401 or schema-error 400 must NOT flip the flag. Existing
+    fail-fast behaviour should be preserved."""
+    p, c = _provider_with_stub()
+    monkeypatch.setattr("core.llm.providers.time.sleep", lambda _s: None)
+
+    from openai import APIStatusError
+    err = APIStatusError.__new__(APIStatusError)
+    err.status_code = 401                                     # type: ignore[attr-defined]
+    err.body = {"error": {"message": "invalid api key"}}      # type: ignore[attr-defined]
+
+    def _401(**_kwargs: Any) -> Any:
+        raise err
+
+    c.chat.completions.create = _401                          # type: ignore[method-assign]
+
+    out = p.turn(
+        messages=[Message(role="user", content=[TextBlock(text="x")])],
+        tools=[_echo_tool()],
+        max_retries=3,
+    )
+    assert p._tool_use_unsupported is False                   # flag NOT flipped
+    assert out.stop_reason is StopReason.ERROR                # falls through to existing 4xx path
