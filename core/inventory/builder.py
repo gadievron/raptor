@@ -284,6 +284,20 @@ def _process_single_file(
         return None
 
     try:
+        try:
+            st = filepath.stat()
+            file_stat = [st.st_mtime_ns, st.st_size]
+        except OSError:
+            file_stat = None
+
+        # Fast path: if stat (mtime_ns + size) matches old entry, reuse
+        # without reading the file at all — skips I/O, hash, and parsing.
+        if old_files and rel_path in old_files:
+            old_entry = old_files[rel_path]
+            old_stat = old_entry.get('_stat')
+            if file_stat and old_stat and file_stat == old_stat:
+                return old_entry
+
         raw_bytes = filepath.read_bytes()
         content = raw_bytes.decode('utf-8', errors='ignore')
 
@@ -293,10 +307,11 @@ def _process_single_file(
         line_count = content.count('\n') + 1
         sha256 = sha256_bytes(raw_bytes)
 
-        # If file unchanged from previous inventory, reuse old entry (skip parsing)
+        # Fall back to SHA-256 comparison when stat changed but content didn't
         if old_files and rel_path in old_files:
             old_entry = old_files[rel_path]
             if old_entry.get('sha256') == sha256:
+                old_entry['_stat'] = file_stat
                 return old_entry
 
         tree_cache = {}
@@ -309,6 +324,7 @@ def _process_single_file(
             'lines': line_count,
             'sloc': sloc,
             'sha256': sha256,
+            '_stat': file_stat,
             'items': [item.to_dict() for item in items],
         }
 
