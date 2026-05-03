@@ -1,0 +1,33 @@
+# Structural / format-level injection patterns.
+# Detect attempts to break out of data context by injecting structural
+# elements that LLMs parse as role boundaries or system instructions.
+#
+# SCOPE: These patterns assume the input is attacker-controlled content
+# from a scanned target repo (source code, commit messages, issue text).
+# They WILL false-positive on RAPTOR's own JSON output (e.g. findings
+# with "ruling": "false_positive" or "is_exploitable": false).  Callers
+# should skip this corpus for agent-to-agent messages and RAPTOR findings
+# by passing corpora=(...) without "structural_injection" to preflight().
+
+# Fake role headers — model-specific delimiters injected in data.
+<\|(?:system|assistant|user|im_start|im_end)\|>
+\[INST\]|\[/INST\]
+<\|(?:start|end)_header_id\|>
+<<SYS>>|<</SYS>>
+
+# XML/HTML-style system prompt injection.
+<system\s*>|</system\s*>
+<instruction\s*>|</instruction\s*>
+
+# Markdown-fenced "system" blocks designed to look like role context.
+^\s*```\s*system\b
+^\s*---\s*\n\s*role:\s*system
+
+# JSON schema override — attacker tries to redefine output fields.
+"is_exploitable"\s*:\s*false
+"ruling"\s*:\s*"false_positive"
+"safe"\s*:\s*true
+"behaviours"\s*:\s*\[\s*\]
+
+# Multi-turn injection — fake assistant/user turn boundaries.
+(?:^|\n)\s*(?:assistant|AI|model)\s*:\s*(?:sure|okay|certainly|of course)

@@ -1,0 +1,18 @@
+# Instruction-pattern injections in English prose.
+# Each non-comment line is one regex (case-insensitive at runtime).
+# Conservative — designed to fire on a deliberate injection attempt without
+# matching natural language about prior conversation. Patterns require
+# explicit override / disregard / new-task framing.
+
+ignore (?:all |the )?(?:previous|prior|above|preceding) (?:instructions|messages|rules|prompts)
+disregard (?:all |the )?(?:previous|prior|above|preceding) (?:instructions|messages|rules|prompts)
+forget (?:all |the |everything )?(?:previous|prior|above|preceding|you were told)
+override (?:all |the |above|prior|previous|safety)
+your (?:real|actual|new|true) (?:task|goal|objective|purpose|mission) is
+new instructions:
+new task:
+^\s*\[?system\]?\s*[:>]
+respond (?:only |just )?with (?:the |a )?(?:following|word|phrase|number|message)
+print (?:only |just )?(?:the |a )?(?:following|word|phrase|message|verbatim)
+the user (?:is lying|is mistaken|is an attacker)
+end of (?:instructions|prompt|system message)

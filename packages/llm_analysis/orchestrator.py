@@ -144,6 +144,7 @@ def orchestrate(
     no_patches: bool = False,
     llm_config: Optional[Any] = None,
     block_cc_dispatch: bool = False,
+    accept_weakened_defenses: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Orchestrate vulnerability analysis via external LLM or Claude Code.
 
@@ -166,6 +167,9 @@ def orchestrate(
         no_exploits: Skip exploit generation.
         no_patches: Skip patch generation.
         llm_config: LLMConfig for external LLM dispatch (None = CC only).
+        accept_weakened_defenses: If True, allow PASSTHROUGH fallback when
+            the model fails the envelope probe. If False (default), abort
+            orchestration with a clear error instead of silently weakening.
 
     Returns:
         Orchestrated report dict, or None if orchestration was skipped.
@@ -192,7 +196,7 @@ def orchestrate(
         print("\n  No findings to analyse")
         return None
 
-    # Stamp repo_path so build_analysis_prompt_from_finding forwards it to
+    # Stamp repo_path so build_analysis_prompt_bundle_from_finding forwards it to
     # enrich_analysis_prompt; without this SAGE per-repo scoping (#198) makes
     # the enrichment a no-op for every finding on the dispatch path.
     for f in findings:
@@ -231,6 +235,10 @@ def orchestrate(
         AnalysisTask, ExploitTask, PatchTask, ConsensusTask, GroupAnalysisTask,
         RetryTask,
     )
+    from core.security.prompt_defense_profiles import (
+        CONSERVATIVE, PASSTHROUGH, get_profile_for,
+    )
+    from core.security.prompt_telemetry import defense_telemetry
 
     dispatch_mode = "none"
     dispatch_fn = None
@@ -278,14 +286,53 @@ def orchestrate(
             return None
 
         def dispatch_fn(prompt, schema, system_prompt, temperature, model):
-            return invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir)
+            # CC's invoke_cc_simple has no separate system_prompt slot — everything
+            # goes via stdin. Prepend the system prompt so the bundle migration's
+            # role-separated build_prompt (user-only) doesn't lose its instructions.
+            full = (system_prompt + "\n\n" + prompt) if system_prompt else prompt
+            return invoke_cc_simple(full, schema, repo_path, claude_bin, out_dir)
 
         dispatch_mode = "cc_dispatch"
+
+    # --- Canary probe: verify model handles the defense envelope ---
+    profile = CONSERVATIVE
+    if dispatch_fn and analysis_model_name:
+        profile = get_profile_for(analysis_model_name)
+        from core.security.envelope_probe import probe_envelope_compatibility
+        probe_result = probe_envelope_compatibility(
+            analysis_model_name, profile, dispatch_fn,
+        )
+        defense_telemetry.set_probe_result(analysis_model_name, probe_result.compatible)
+        if not probe_result.compatible:
+            if not accept_weakened_defenses:
+                print(f"\n  Envelope probe failed for {model_label}: {probe_result.error}")
+                print(f"  The model cannot honour the defense envelope — aborting.")
+                print(f"  To proceed with weakened defenses, re-run with --accept-weakened-defenses")
+                return None
+            from core.security.rule_of_two import (
+                NonInteractiveError, require_interactive_for_weakened_defenses,
+            )
+            try:
+                require_interactive_for_weakened_defenses()
+            except NonInteractiveError as e:
+                print(f"\n  {e}")
+                return None
+            profile = PASSTHROUGH
+            defense_telemetry.record_weakened_override(analysis_model_name, probe_result.error)
+            logger.warning(
+                "Operator accepted weakened defenses for %s (probe error: %s)",
+                analysis_model_name, probe_result.error,
+            )
+            print(f"\n  *** DEFENSE WARNING: envelope probe failed for {model_label} ***")
+            print(f"  Running with reduced defences (--accept-weakened-defenses)")
+            print(f"  Reason: {probe_result.error}")
+            print(f"  Model-independent floor still applies (autofetch redaction,"
+                  f" control-char sanitisation, role separation)\n")
 
     # --- Per-finding analysis ---
     results_by_id = {}
     analysis_results = dispatch_task(
-        AnalysisTask(), findings, dispatch_fn, role_resolution,
+        AnalysisTask(profile=profile), findings, dispatch_fn, role_resolution,
         results_by_id, cost_tracker, max_parallel,
     )
 
@@ -299,7 +346,8 @@ def orchestrate(
             dispatch_mode = "cc_fallback"
 
             def dispatch_fn(prompt, schema, system_prompt, temperature, model):
-                return invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir)
+                full = (system_prompt + "\n\n" + prompt) if system_prompt else prompt
+                return invoke_cc_simple(full, schema, repo_path, claude_bin, out_dir)
 
             analysis_results = dispatch_task(
                 AnalysisTask(), findings, dispatch_fn, role_resolution,
@@ -324,15 +372,15 @@ def orchestrate(
 
     # Stage F: self-consistency check + retry contradictions and low confidence
     dispatch_task(
-        RetryTask(results_by_id=results_by_id), findings, dispatch_fn, role_resolution,
-        results_by_id, cost_tracker, max_parallel,
+        RetryTask(results_by_id=results_by_id, profile=profile), findings,
+        dispatch_fn, role_resolution, results_by_id, cost_tracker, max_parallel,
     )
 
     # Consensus (if configured)
     consensus_models = role_resolution.get("consensus_models", [])
     if consensus_models:
         dispatch_task(
-            ConsensusTask(), findings, dispatch_fn, role_resolution,
+            ConsensusTask(profile=profile), findings, dispatch_fn, role_resolution,
             results_by_id, cost_tracker, max_parallel,
         )
 
@@ -342,13 +390,13 @@ def orchestrate(
     # so this is a no-op when CC already generated them.
     if not no_exploits:
         dispatch_task(
-            ExploitTask(), findings, dispatch_fn, role_resolution,
+            ExploitTask(profile=profile), findings, dispatch_fn, role_resolution,
             results_by_id, cost_tracker, max_parallel,
         )
 
     if not no_patches:
         dispatch_task(
-            PatchTask(), findings, dispatch_fn, role_resolution,
+            PatchTask(profile=profile), findings, dispatch_fn, role_resolution,
             results_by_id, cost_tracker, max_parallel,
         )
 
@@ -361,7 +409,7 @@ def orchestrate(
         print(f"\n  Structural grouping: {n} group{'s' if n != 1 else ''} found")
 
     # --- Group analysis ---
-    group_task = GroupAnalysisTask(results_by_id=results_by_id)
+    group_task = GroupAnalysisTask(results_by_id=results_by_id, profile=profile)
     group_results = dispatch_task(
         group_task, groups, dispatch_fn, role_resolution,
         results_by_id, cost_tracker, max_parallel,
@@ -389,6 +437,8 @@ def orchestrate(
         "mode": dispatch_mode,
         "analysis_model": (role_resolution.get("analysis_model").model_name
                           if role_resolution.get("analysis_model") else None),
+        "defense_profile": profile.name,
+        "weakened_defenses": accept_weakened_defenses and profile.name == "passthrough",
         "consensus_models": [m.model_name for m in consensus_models],
         "findings_dispatched": len(findings),
         "findings_analysed": sum(1 for r in per_finding_results if "error" not in r),
@@ -402,6 +452,9 @@ def orchestrate(
         "max_parallel": max_parallel,
         "cost": cost_tracker.get_summary(),
     }
+
+    if defense_telemetry.has_warnings:
+        merged["orchestration"]["defense_telemetry"] = defense_telemetry.summary()
 
     out_dir.mkdir(parents=True, exist_ok=True)
     from core.json import save_json

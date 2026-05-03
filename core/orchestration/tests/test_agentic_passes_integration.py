@@ -22,6 +22,19 @@ from core.orchestration.agentic_passes import (
 )
 from core.orchestration.understand_bridge import find_understand_output, load_understand_context
 
+# Assume interactive — these tests exercise pass mechanics, not Rule of Two.
+_interactive_patch = None
+
+def setUpModule():
+    global _interactive_patch
+    _interactive_patch = patch(
+        "core.security.rule_of_two.is_interactive", return_value=True,
+    )
+    _interactive_patch.start()
+
+def tearDownModule():
+    _interactive_patch.stop()
+
 
 def _make_target(tmp: Path) -> Path:
     """Create a minimal target repo with one Python file."""
@@ -54,26 +67,27 @@ def _make_agentic_out(tmp: Path, target: Path) -> Path:
 
 
 def _selective_subprocess(real_run, claude_writes=None, claude_returncode=0):
-    """Run lifecycle/build_checklist for real; mock only claude -p."""
-    def dispatcher(cmd, *args, **kwargs):
-        argv = cmd if isinstance(cmd, list) else [cmd]
-        program = Path(argv[0]).name
-        if program == "claude" or argv[0].endswith("/claude"):
-            # Simulate claude writing the requested files into the
-            # subprocess's --add-dir locations.
-            if claude_writes and claude_returncode == 0:
-                add_dirs = [argv[i + 1] for i, a in enumerate(argv) if a == "--add-dir"]
-                # The pre-pass expects context-map.json in understand_dir;
-                # the post-pass expects validation-report.md in validate_dir.
-                # In both cases we drop into the LAST --add-dir (the run dir).
-                target_dir = Path(add_dirs[-1]) if add_dirs else None
-                if target_dir:
-                    for name, content in claude_writes.items():
-                        (target_dir / name).write_text(content)
-            return MagicMock(returncode=claude_returncode, stdout="", stderr="")
-        # Lifecycle / build_checklist run for real.
+    """Run lifecycle/build_checklist for real; mock only claude -p.
+
+    Returns (subprocess_dispatcher, sandbox_dispatcher). The subprocess
+    dispatcher delegates non-claude calls to the real subprocess.run.
+    The sandbox dispatcher handles claude calls (sandbox_run receives
+    the claude -p invocation after the production code was migrated
+    from raw subprocess.run to sandbox.run for egress-proxy isolation).
+    """
+    def subprocess_dispatcher(cmd, *args, **kwargs):
         return real_run(cmd, *args, **kwargs)
-    return dispatcher
+
+    def sandbox_dispatcher(cmd, *args, **kwargs):
+        argv = cmd if isinstance(cmd, list) else [cmd]
+        if claude_writes and claude_returncode == 0:
+            add_dirs = [argv[i + 1] for i, a in enumerate(argv) if a == "--add-dir"]
+            target_dir = Path(add_dirs[-1]) if add_dirs else None
+            if target_dir:
+                for name, content in claude_writes.items():
+                    (target_dir / name).write_text(content)
+        return MagicMock(returncode=claude_returncode, stdout="", stderr="")
+    return subprocess_dispatcher, sandbox_dispatcher
 
 
 class PrepassIntegrationTests(unittest.TestCase):
@@ -95,22 +109,21 @@ class PrepassIntegrationTests(unittest.TestCase):
                 "sources": [], "sinks": [], "trust_boundaries": [],
             })
             from subprocess import run as real_subprocess_run
-            dispatcher = _selective_subprocess(
+            sub_disp, sbx_disp = _selective_subprocess(
                 real_subprocess_run,
                 claude_writes={"context-map.json": ctx_map_payload},
             )
             (tmp / "home").mkdir()
             (tmp / "out").mkdir()
-            # Redirect RAPTOR_OUT_DIR so the real lifecycle helpers write
-            # into our tmpdir, not the actual repo's out/.
             env_patch = patch.dict(os.environ, {
                 "HOME": str(tmp / "home"),
                 "RAPTOR_OUT_DIR": str(tmp / "out"),
             })
-            with env_patch, patch(
-                "core.orchestration.agentic_passes.subprocess.run",
-                side_effect=dispatcher,
-            ):
+            with env_patch, \
+                 patch("core.orchestration.agentic_passes.subprocess.run",
+                       side_effect=sub_disp), \
+                 patch("core.orchestration.agentic_passes.sandbox_run",
+                       side_effect=sbx_disp):
                 result = run_understand_prepass(
                     target=target, agentic_out_dir=agentic_out,
                     claude_bin="/fake/claude",
@@ -169,17 +182,19 @@ class PrepassIntegrationTests(unittest.TestCase):
                 "sink_details": [],
             })
             from subprocess import run as real_subprocess_run
+            sub_disp, sbx_disp = _selective_subprocess(
+                real_subprocess_run,
+                claude_writes={"context-map.json": ctx_map_payload},
+            )
             env_patch = patch.dict(os.environ, {
                 "HOME": str(tmp / "home"),
                 "RAPTOR_OUT_DIR": str(tmp / "out"),
             })
-            with env_patch, patch(
-                "core.orchestration.agentic_passes.subprocess.run",
-                side_effect=_selective_subprocess(
-                    real_subprocess_run,
-                    claude_writes={"context-map.json": ctx_map_payload},
-                ),
-            ):
+            with env_patch, \
+                 patch("core.orchestration.agentic_passes.subprocess.run",
+                       side_effect=sub_disp), \
+                 patch("core.orchestration.agentic_passes.sandbox_run",
+                       side_effect=sbx_disp):
                 prepass = run_understand_prepass(
                     target=target, agentic_out_dir=agentic_out,
                     claude_bin="/fake/claude",
@@ -229,22 +244,21 @@ class PrepassIntegrationTests(unittest.TestCase):
                 "sink_details": [],
             })
             from subprocess import run as real_subprocess_run
-            dispatcher = _selective_subprocess(
+            sub_disp, sbx_disp = _selective_subprocess(
                 real_subprocess_run,
                 claude_writes={"context-map.json": ctx_map_payload},
             )
             (tmp / "home").mkdir()
             (tmp / "out").mkdir()
-            # Redirect RAPTOR_OUT_DIR so the real lifecycle helpers write
-            # into our tmpdir, not the actual repo's out/.
             env_patch = patch.dict(os.environ, {
                 "HOME": str(tmp / "home"),
                 "RAPTOR_OUT_DIR": str(tmp / "out"),
             })
-            with env_patch, patch(
-                "core.orchestration.agentic_passes.subprocess.run",
-                side_effect=dispatcher,
-            ):
+            with env_patch, \
+                 patch("core.orchestration.agentic_passes.subprocess.run",
+                       side_effect=sub_disp), \
+                 patch("core.orchestration.agentic_passes.sandbox_run",
+                       side_effect=sbx_disp):
                 result = run_understand_prepass(
                     target=target, agentic_out_dir=agentic_out,
                     claude_bin="/fake/claude",
@@ -294,13 +308,15 @@ class PostpassIntegrationTests(unittest.TestCase):
                 "HOME": str(tmp / "home"),
                 "RAPTOR_OUT_DIR": str(tmp / "out"),
             })
-            with env_patch, patch(
-                "core.orchestration.agentic_passes.subprocess.run",
-                side_effect=_selective_subprocess(
-                    real_subprocess_run,
-                    claude_writes={"context-map.json": ctx_map_payload},
-                ),
-            ):
+            sub_disp1, sbx_disp1 = _selective_subprocess(
+                real_subprocess_run,
+                claude_writes={"context-map.json": ctx_map_payload},
+            )
+            with env_patch, \
+                 patch("core.orchestration.agentic_passes.subprocess.run",
+                       side_effect=sub_disp1), \
+                 patch("core.orchestration.agentic_passes.sandbox_run",
+                       side_effect=sbx_disp1):
                 prepass = run_understand_prepass(
                     target=target, agentic_out_dir=agentic_out,
                     claude_bin="/fake/claude",
@@ -312,13 +328,15 @@ class PostpassIntegrationTests(unittest.TestCase):
                 {"finding_id": "vuln-1", "is_exploitable": True,
                  "file_path": "handler.py", "start_line": 1},
             ])
-            with env_patch, patch(
-                "core.orchestration.agentic_passes.subprocess.run",
-                side_effect=_selective_subprocess(
-                    real_subprocess_run,
-                    claude_writes={"validation-report.md": "# Validation\n"},
-                ),
-            ):
+            sub_disp2, sbx_disp2 = _selective_subprocess(
+                real_subprocess_run,
+                claude_writes={"validation-report.md": "# Validation\n"},
+            )
+            with env_patch, \
+                 patch("core.orchestration.agentic_passes.subprocess.run",
+                       side_effect=sub_disp2), \
+                 patch("core.orchestration.agentic_passes.sandbox_run",
+                       side_effect=sbx_disp2):
                 postpass = run_validate_postpass(
                     target=target, agentic_out_dir=agentic_out,
                     analysis_report=report, claude_bin="/fake/claude",

@@ -1,0 +1,24 @@
+# Encoding-based evasion patterns.
+# Detect common encodings used to smuggle injection payloads past
+# text-level filters while remaining decodable by the LLM.
+
+# Base64-encoded common injection phrases.
+# "ignore previous instructions" → aWdub3JlIHByZXZpb3VzIGluc3RydWN0aW9ucw
+# "you are now DAN" → eW91IGFyZSBub3cgREFO
+# These are partial matches — the base64 block may be longer.
+aWdub3JlIHByZXZpb3Vz
+eW91IGFyZSBub3cgREFO
+eW91ciBuZXcgdGFzayBpcw
+bmV3IGluc3RydWN0aW9ucw
+
+# Hex-encoded injection fragments.
+# "ignore" = 69676e6f7265, "system:" = 73797374656d3a
+69676e6f726520(?:70726576696f7573|616c6c)
+73797374656d3a
+
+# ROT13 "vtaber cerivbhf vafgehpgvbaf" = "ignore previous instructions"
+vtaber\s+cerivbhf\s+vafgehpgvbaf
+
+# HTML entity encoded injection markers.
+# &#105;gnore = "ignore", &#115;ystem = "system"
+&#1[01]\d;(?:gnore|ystem|nstruct)

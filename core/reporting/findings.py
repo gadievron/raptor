@@ -6,6 +6,7 @@ Used by both /validate and /agentic pipelines.
 
 from typing import Any, Dict, List, Optional, Tuple
 
+from core.security.prompt_output_sanitise import sanitise_code, sanitise_string
 from .formatting import get_display_status, title_case_type, truncate_path
 from .spec import ReportSpec, ReportSection
 
@@ -160,33 +161,34 @@ def build_finding_detail(finding: Dict[str, Any], index: int) -> ReportSection:
     # Reasoning / analysis (from agentic or validate)
     reasoning = finding.get("reasoning") or finding.get("analysis")
     if reasoning:
-        lines.append(f"\n**Analysis:**\n{reasoning.strip()}")
+        lines.append(f"\n**Analysis:**\n{sanitise_string(str(reasoning).strip(), max_chars=3000)}")
 
     # Attack scenario
     attack = finding.get("attack_scenario")
     if attack:
-        lines.append(f"\n**Attack Scenario:**\n{attack.strip()}")
+        lines.append(f"\n**Attack Scenario:**\n{sanitise_string(str(attack).strip(), max_chars=2000)}")
 
     # Remediation
     remediation = finding.get("remediation")
     patch_code = finding.get("patch_code")
     if remediation:
-        lines.append(f"\n**Remediation:**\n{remediation.strip()}")
+        lines.append(f"\n**Remediation:**\n{sanitise_string(str(remediation).strip(), max_chars=2000)}")
     if patch_code:
-        lines.append(f"\n**Patch:**\n```\n{patch_code.strip()}\n```")
+        lines.append(f"\n**Patch:**\n```\n{sanitise_code(str(patch_code).strip())}\n```")
 
     # Key findings from feasibility
     feasibility = finding.get("feasibility", {})
     if isinstance(feasibility, dict):
         if feasibility.get("verdict"):
-            lines.append(f"\n**Feasibility:** {feasibility['verdict']}")
+            lines.append(f"\n**Feasibility:** {sanitise_string(str(feasibility['verdict']), max_chars=200)}")
         if feasibility.get("chain_breaks"):
-            lines.append(f"**Blockers:** {', '.join(feasibility['chain_breaks'][:3])}")
+            breaks = [sanitise_string(str(b), max_chars=200) for b in feasibility['chain_breaks'][:3]]
+            lines.append(f"**Blockers:** {', '.join(breaks)}")
 
     # Dataflow
     dataflow = finding.get("dataflow_summary")
     if dataflow:
-        lines.append(f"\n**Dataflow:** `{dataflow}`")
+        lines.append(f"\n**Dataflow:** `{sanitise_string(str(dataflow), max_chars=500)}`")
 
     return ReportSection(title=title, content="\n".join(lines))
 

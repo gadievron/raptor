@@ -195,6 +195,15 @@ Examples:
                        help="Sequential analysis in Phase 3 instead of parallel Phase 4 orchestration")
 
     parser.add_argument(
+        "--accept-weakened-defenses",
+        action="store_true",
+        help="Allow analysis to proceed when a model fails the defense envelope "
+             "probe. Without this flag, probe failure aborts orchestration. "
+             "With it, model-dependent defenses (envelope tags, datamarking, "
+             "base64) are disabled; model-independent floor still holds. "
+             "Logged in run metadata and flagged in the final report.",
+    )
+    parser.add_argument(
         "--trust-repo",
         action="store_true",
         help="Trust the target repo's config and skip safety checks. Currently "
@@ -723,6 +732,7 @@ Examples:
                 no_patches=args.no_patches,
                 llm_config=llm_config,
                 block_cc_dispatch=block_cc_dispatch,
+                accept_weakened_defenses=args.accept_weakened_defenses,
             )
         else:
             print("\n  No analysis report from Phase 3 — skipping orchestration")
@@ -1086,6 +1096,12 @@ Examples:
         warnings.append(f"{len(severity_mismatches)} high-severity finding(s) ruled as false positive — review recommended")
     if contradictions > 0:
         warnings.append(f"{contradictions} self-contradictory verdict(s) — reasoning conflicts with conclusion")
+    if orch_phase.get("weakened_defenses"):
+        warnings.append(
+            "Model-dependent defenses disabled (--accept-weakened-defenses). "
+            "Envelope tags, datamarking, and base64 wrapping were not applied. "
+            "Findings may be influenced by adversarial content in the target."
+        )
 
     # Output files — significant outputs only, not per-category SARIF
     outputs = final_report.get("outputs", {})
