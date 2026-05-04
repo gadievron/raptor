@@ -300,9 +300,16 @@ class ProjectManager:
             resolved_binaries.append(
                 str(Path(b).resolve()) if resolve_target else b)
 
+        # URLs (http:// / https://) are valid targets for web scans.
+        # Do not resolve them as filesystem paths -- store as-is.
+        is_url = target.startswith(("http://", "https://", "ftp://"))
+        resolved_target = (
+            target if (not resolve_target or is_url)
+            else str(Path(target).resolve())
+        )
         project = Project(
             name=name,
-            target=str(Path(target).resolve()) if resolve_target else target,
+            target=resolved_target,
             output_dir=output_dir,
             created=created or datetime.now(timezone.utc).isoformat(),
             description=description,
@@ -613,7 +620,8 @@ class ProjectManager:
         one project/store even though their ``target`` paths differ. Callers
         that have built an inventory pass its ``content_identity``; callers that
         haven't pass nothing and get the original path-only behaviour."""
-        resolved = str(Path(target).resolve())
+        is_url = target.startswith(("http://", "https://", "ftp://"))
+        resolved = target if is_url else str(Path(target).resolve())
         for project in self.list_projects():
             if project.target == resolved:
                 return project
