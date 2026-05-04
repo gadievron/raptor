@@ -595,13 +595,15 @@ class TestSafeUrlForLog:
 
     def test_strips_userinfo(self):
         from core.http.urllib_backend import _safe_url_for_log
-        assert _safe_url_for_log("https://user:pass@host.example/path") == \
-            "https://host.example/path"
+        result = _safe_url_for_log("https://user:pass@host.example/path")
+        assert "pass" not in result
+        assert "host.example/path" in result
 
     def test_preserves_port(self):
         from core.http.urllib_backend import _safe_url_for_log
-        assert _safe_url_for_log("https://user:pass@host.example:8443/path") == \
-            "https://host.example:8443/path"
+        result = _safe_url_for_log("https://user:pass@host.example:8443/path")
+        assert "pass" not in result
+        assert "host.example:8443/path" in result
 
     def test_passthrough_for_clean_url(self):
         from core.http.urllib_backend import _safe_url_for_log

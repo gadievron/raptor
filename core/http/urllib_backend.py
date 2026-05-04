@@ -76,26 +76,13 @@ assert len(_BACKOFF_SECONDS) == DEFAULT_RETRIES + 1, (
 
 
 def _safe_url_for_log(url: str) -> str:
-    """Strip userinfo from a URL for log output. Defence in depth — if
-    a URL with credentials slips past _validate_url somehow, this still
-    keeps the creds out of the audit trail.
+    """Strip credentials from a URL for log output.
 
-    NOTE: overlaps with ``core/security/redaction.py`` (tracked in
-    memory ``project_core_http_redaction_overlap``); when that module
-    grows a URL-aware redactor, replace this helper with a thin call
-    through to it."""
-    try:
-        parsed = _urlparse.urlsplit(url)
-        if parsed.username is None and parsed.password is None:
-            return url
-        host = parsed.hostname or ""
-        port = f":{parsed.port}" if parsed.port else ""
-        return _urlparse.urlunsplit((
-            parsed.scheme, f"{host}{port}", parsed.path,
-            parsed.query, parsed.fragment,
-        ))
-    except (ValueError, AttributeError):
-        return "<unparseable URL>"
+    Delegates to ``core.security.redaction`` which handles userinfo,
+    query-string secrets, and unparseable-URL fallback.
+    """
+    from core.security.redaction import redact_url_secrets_only
+    return redact_url_secrets_only(url)
 
 
 _DEFAULT_POOL_MAXSIZE = 10  # connections per (host, port) — see _new_pool_manager
