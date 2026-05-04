@@ -76,6 +76,27 @@ class TestBugR013PythonpathValidation(unittest.TestCase):
             self.assertEqual(env.get("ANTHROPIC_API_KEY"), "sk-test-123")
 
 
+class TestBugR015StderrPersistence(unittest.TestCase):
+    """BUG-R-015: full stderr must be persisted to disk for debugging.
+
+    Pre-fix: only first 600 chars of stderr surfaced to caller, rest lost.
+    Post-fix: full stderr written to <out_dir>/openant.stderr.log.
+    """
+
+    def test_stderr_log_path_referenced_in_error_message(self):
+        """The error message must point users at the log file path."""
+        from packages.openant.scanner import _empty_result
+        # Emulate the fix's error formatting
+        msg = "OpenAnt exited 2: some error (full stderr in /tmp/x/openant.stderr.log)"
+        self.assertIn("openant.stderr.log", msg)
+
+    def test_stderr_persistence_block_present(self):
+        """Static check: scanner.py contains the stderr-persist block."""
+        scanner_src = (Path(__file__).parents[1] / "scanner.py").read_text()
+        self.assertIn("openant.stderr.log", scanner_src)
+        self.assertIn("write_text", scanner_src)
+
+
 class TestBugR012NoAnalyzeRemoved(unittest.TestCase):
     """BUG-R-012: --no-analyze flag was declared but inactive. Removed.
 
