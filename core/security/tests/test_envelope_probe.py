@@ -222,6 +222,41 @@ class TestProbeEnvelopeCompatibility:
         assert not result.compatible
         assert "timed out" in result.error
 
+    def test_passes_analysis_model_object_to_dispatch_fn(self):
+        """The probe must forward its ``analysis_model`` argument
+        unchanged to dispatch_fn. Production dispatch_fn (in
+        ``packages/llm_analysis/orchestrator.py``) plumbs that into
+        ``client.generate_structured(model_config=...)`` which reads
+        ``.max_context`` etc. — passing a string here surfaces as
+        ``'str' object has no attribute 'max_context'`` once a model
+        is actually probed. Regression for the bug introduced in
+        PR #273 / fixed 2026-05-04."""
+        captured = {}
+
+        def recording_dispatch(prompt, schema, system_prompt, temperature, model):
+            captured["model"] = model
+            return FakeDispatchResult(result={"content": json.dumps({
+                "is_vulnerable": True,
+                "vulnerability_type": "buffer_overflow",
+                "confidence": 0.95,
+            })})
+
+        # Stub stand-in for ``ModelConfig`` — the probe must forward
+        # whatever object it was given, not extract fields from it.
+        class _StubModelConfig:
+            model_name = "test-model"
+            max_context = 200_000
+            provider = "test"
+
+        cfg = _StubModelConfig()
+        probe_envelope_compatibility(cfg, CONSERVATIVE, recording_dispatch)
+        # The probe forwarded the ModelConfig object verbatim, not its
+        # ``.model_name`` string.
+        assert captured["model"] is cfg
+        # Sanity: anything with ``.max_context`` works downstream
+        # (string would not).
+        assert hasattr(captured["model"], "max_context")
+
 
 # ============================================================
 # 4. Integration with telemetry probe cache

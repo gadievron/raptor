@@ -222,7 +222,8 @@ def orchestrate(
 
     # Print dispatch info
     n_consensus = len(role_resolution.get("consensus_models", []))
-    analysis_model_name = role_resolution.get("analysis_model").model_name if role_resolution.get("analysis_model") else ""
+    analysis_model = role_resolution.get("analysis_model")
+    analysis_model_name = analysis_model.model_name if analysis_model else ""
     is_cc_dispatch = not (llm_config and llm_config.primary_model)
     model_label = analysis_model_name or ("Claude Code" if is_cc_dispatch else "unknown")
     n = len(findings)
@@ -255,10 +256,17 @@ def orchestrate(
                     prompt=prompt, schema=schema, system_prompt=system_prompt,
                     model_config=model, temperature=temperature,
                 )
+                result = response.result
+                quality = 1.0
+                if isinstance(result, dict) and "error" not in result:
+                    from core.llm.response_validation import validate_structured_response
+                    validated = validate_structured_response(result, schema)
+                    result = validated.data
+                    quality = validated.quality
                 return DispatchResult(
-                    result=response.result, cost=response.cost,
+                    result=result, cost=response.cost,
                     tokens=response.tokens_used, model=response.model,
-                    duration=response.duration,
+                    duration=response.duration, quality=quality,
                 )
             else:
                 response = client.generate(
@@ -299,8 +307,13 @@ def orchestrate(
     if dispatch_fn and analysis_model_name:
         profile = get_profile_for(analysis_model_name)
         from core.security.envelope_probe import probe_envelope_compatibility
+        # Pass the full ModelConfig: dispatch_fn forwards its 5th arg
+        # to ``client.generate_structured(model_config=...)`` which
+        # needs ``.max_context`` etc. The probe falls back to a
+        # ``str(analysis_model_name)`` label for telemetry on the CC
+        # dispatch path (where the arg is unused anyway).
         probe_result = probe_envelope_compatibility(
-            analysis_model_name, profile, dispatch_fn,
+            analysis_model or analysis_model_name, profile, dispatch_fn,
         )
         defense_telemetry.set_probe_result(analysis_model_name, probe_result.compatible)
         if not probe_result.compatible:

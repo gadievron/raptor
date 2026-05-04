@@ -10,8 +10,8 @@ Usage (in orchestrator, after model resolution):
 
     from core.security.envelope_probe import probe_envelope_compatibility
 
-    result = probe_envelope_compatibility(model_id, profile, dispatch_fn)
-    defense_telemetry.set_probe_result(model_id, result.compatible)
+    result = probe_envelope_compatibility(model_config, profile, dispatch_fn)
+    defense_telemetry.set_probe_result(model_config.model_name, result.compatible)
     if not result.compatible:
         profile = PASSTHROUGH  # fall back for this model
 """
@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from core.security.prompt_envelope import (
     ModelDefenseProfile,
@@ -146,11 +147,21 @@ def evaluate_probe_response(raw_response: str, nonce: str) -> ProbeResult:
 
 
 def probe_envelope_compatibility(
-    model_id: str,
+    analysis_model: Any,
     profile: ModelDefenseProfile,
     dispatch_fn,
 ) -> ProbeResult:
     """Send a canary probe through the dispatch path.
+
+    ``analysis_model`` is the :class:`ModelConfig` (or anything with a
+    ``.model_name`` attribute) that the orchestrator picked. We pass it
+    *unchanged* to ``dispatch_fn`` because that's what the production
+    dispatch_fn expects (its 5th argument lands in
+    ``client.generate_structured(model_config=...)`` which reads
+    ``.max_context`` etc.). Pre-2026-05-04 the probe passed
+    ``model_name`` (a string) here, which surfaced as ``'str' object
+    has no attribute 'max_context'`` once a model was actually probed
+    via the live external-LLM path.
 
     dispatch_fn must accept (prompt, schema, system_prompt, temperature, model)
     and return a DispatchResult (or raise on failure). This is the same
@@ -160,9 +171,10 @@ def probe_envelope_compatibility(
     handled the envelope correctly.
     """
     system, user, nonce = build_canary_prompt(profile)
+    model_name = getattr(analysis_model, "model_name", None) or str(analysis_model)
 
     try:
-        result = dispatch_fn(user, None, system, 0.0, model_id)
+        result = dispatch_fn(user, None, system, 0.0, analysis_model)
         raw = ""
         if hasattr(result, "result") and isinstance(result.result, dict):
             raw = result.result.get("content", "") or json.dumps(result.result)
@@ -185,7 +197,7 @@ def probe_envelope_compatibility(
     if probe_result.compatible:
         logger.info(
             "Envelope probe passed for %s (profile: %s)",
-            model_id, profile.name,
+            model_name, profile.name,
         )
     else:
         logger.warning(
@@ -194,7 +206,7 @@ def probe_envelope_compatibility(
             "for this model. The model-independent floor (autofetch "
             "redaction, control-char sanitisation, role separation) still "
             "applies.",
-            model_id, profile.name, probe_result.error,
+            model_name, profile.name, probe_result.error,
         )
 
     return probe_result
