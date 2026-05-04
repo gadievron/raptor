@@ -1,0 +1,314 @@
+"""Coccinelle (spatch) runner — invoke rules and parse structured output.
+
+spatch 1.3 has no --json flag. We use Python scripting blocks injected into
+rules to emit structured COCCIRESULT lines on stdout that we parse here.
+
+For rules that already contain their own Python scripting (human-authored
+static rules), we parse their output directly. For rules without scripting,
+we wrap them with a reporting harness.
+"""
+
+import json
+import re
+import shutil
+import subprocess
+import time
+from pathlib import Path
+from typing import Dict, List, Optional
+
+from core.config import RaptorConfig
+
+from .models import SpatchMatch, SpatchResult
+
+RESULT_PREFIX = "COCCIRESULT:"
+_SPATCH_BIN = "spatch"
+_SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9_-]")
+
+
+def is_available() -> bool:
+    """Check whether spatch is on PATH."""
+    return shutil.which(_SPATCH_BIN) is not None
+
+
+def version() -> Optional[str]:
+    """Return the spatch version string, or None if unavailable."""
+    if not is_available():
+        return None
+    try:
+        proc = subprocess.run(
+            [_SPATCH_BIN, "--version"],
+            capture_output=True, text=True, timeout=10,
+        )
+        for line in proc.stdout.splitlines():
+            if line.startswith("spatch version"):
+                return line.split("spatch version", 1)[1].strip()
+        return proc.stdout.strip().splitlines()[0] if proc.stdout.strip() else None
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def run_rule(
+    target: Path,
+    rule: Path,
+    *,
+    include_dirs: Optional[List[Path]] = None,
+    no_includes: bool = False,
+    timeout: int = 300,
+    env: Optional[Dict[str, str]] = None,
+    defines: Optional[Dict[str, str]] = None,
+) -> SpatchResult:
+    """Run a single Coccinelle rule against a target.
+
+    Args:
+        target: File or directory to scan.
+        rule: Path to .cocci rule file.
+        include_dirs: Extra -I directories for header resolution.
+        no_includes: Pass --no-includes (recommended for untrusted targets).
+        timeout: Per-rule timeout in seconds.
+        env: Subprocess environment (use get_safe_env() for untrusted targets).
+        defines: Virtual identifier bindings passed as -D key=value.
+
+    Returns:
+        SpatchResult with matches parsed from COCCIRESULT lines.
+    """
+    rule = Path(rule)
+    target = Path(target)
+    rule_name = rule.stem
+
+    if not is_available():
+        return SpatchResult(
+            rule=rule_name, rule_path=str(rule),
+            errors=["spatch is not installed (coccinelle package not found on PATH)"],
+            returncode=-1,
+        )
+
+    if not rule.exists():
+        return SpatchResult(
+            rule=rule_name, rule_path=str(rule),
+            errors=[f"Rule file not found: {rule}"],
+            returncode=-1,
+        )
+
+    rule_text = rule.read_text()
+    needs_harness = RESULT_PREFIX not in rule_text and "script:python" not in rule_text
+
+    if needs_harness:
+        effective_rule = _inject_harness(rule_text, rule_name)
+    else:
+        effective_rule = None
+
+    cmd = [_SPATCH_BIN, "--sp-file", str(rule) if not effective_rule else "-"]
+
+    if target.is_dir():
+        cmd.extend(["--dir", str(target)])
+    else:
+        cmd.append(str(target))
+
+    if no_includes:
+        cmd.append("--no-includes")
+    if include_dirs:
+        for d in include_dirs:
+            cmd.extend(["-I", str(d)])
+
+    cmd.append("--very-quiet")
+
+    if defines:
+        for k, v in defines.items():
+            cmd.extend(["-D", f"{k}={v}"])
+
+    run_env = dict(env) if env is not None else RaptorConfig.get_safe_env()
+
+    start = time.monotonic()
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=run_env,
+            input=effective_rule,
+        )
+    except subprocess.TimeoutExpired:
+        return SpatchResult(
+            rule=rule_name, rule_path=str(rule),
+            errors=[f"Timeout after {timeout}s"],
+            returncode=-1,
+        )
+    except OSError as e:
+        return SpatchResult(
+            rule=rule_name, rule_path=str(rule),
+            errors=[str(e)],
+            returncode=-1,
+        )
+    elapsed = int((time.monotonic() - start) * 1000)
+
+    matches = _dedup_matches(
+        _parse_results(proc.stdout, rule_name) + _parse_results(proc.stderr, rule_name)
+    )
+    errors = _parse_errors(proc.stderr)
+
+    files_examined = _collect_files_examined(target, {m.file for m in matches})
+
+    return SpatchResult(
+        rule=rule_name,
+        rule_path=str(rule),
+        matches=matches,
+        files_examined=files_examined,
+        errors=errors,
+        elapsed_ms=elapsed,
+        returncode=proc.returncode,
+    )
+
+
+def run_rules(
+    target: Path,
+    rules_dir: Path,
+    *,
+    include_dirs: Optional[List[Path]] = None,
+    no_includes: bool = False,
+    timeout_per_rule: int = 300,
+    env: Optional[Dict[str, str]] = None,
+    defines: Optional[Dict[str, str]] = None,
+) -> List[SpatchResult]:
+    """Run all .cocci rules in a directory against a target.
+
+    Returns one SpatchResult per rule, in filename order.
+    """
+    rules_dir = Path(rules_dir)
+    if not rules_dir.is_dir():
+        return []
+
+    rule_paths = sorted(rules_dir.glob("*.cocci"))
+    if not rule_paths:
+        return []
+
+    if not is_available():
+        return [
+            SpatchResult(
+                rule="coccinelle",
+                errors=["spatch is not installed (coccinelle package not found on PATH)"],
+                returncode=-1,
+            )
+        ]
+
+    results = []
+    for rule_path in rule_paths:
+        result = run_rule(
+            target, rule_path,
+            include_dirs=include_dirs,
+            no_includes=no_includes,
+            timeout=timeout_per_rule,
+            env=env,
+            defines=defines,
+        )
+        results.append(result)
+
+    return results
+
+
+def _dedup_matches(matches: List[SpatchMatch]) -> List[SpatchMatch]:
+    """Remove duplicate matches (same file+line+col+rule), preserving order."""
+    seen: set = set()
+    result = []
+    for m in matches:
+        key = (m.file, m.line, m.column, m.rule)
+        if key not in seen:
+            seen.add(key)
+            result.append(m)
+    return result
+
+
+def _collect_files_examined(target: Path, match_files: set) -> List[str]:
+    """Build files_examined from the target path plus any match files.
+
+    spatch has no machine-readable log of which files it processed, so we
+    approximate: for a single file target we know exactly; for a directory
+    we enumerate *.c (spatch's default glob).
+    """
+    if target.is_file():
+        examined = {str(target)} | match_files
+    elif target.is_dir():
+        examined = {str(f) for f in target.rglob("*.c")} | match_files
+    else:
+        examined = set(match_files)
+    return sorted(examined)
+
+
+def _inject_harness(rule_text: str, rule_name: str) -> str:
+    """Wrap a plain SmPL rule with a Python reporting harness.
+
+    Adds an @script:python block that emits COCCIRESULT JSON lines for
+    each match. Binds the first position metavariable from the first
+    named rule — only correct for single-rule SmPL files. Multi-rule
+    files where the position variable is declared in a later rule will
+    produce an "unbound metavariable" error from spatch.
+
+    If no position metavariable is found, returns the rule unchanged
+    (matches won't produce structured output, but spatch still runs).
+    """
+    if not re.search(r"position\s+\w+", rule_text):
+        return rule_text
+
+    pos_match = re.search(r"position\s+(\w+)", rule_text)
+    pos_var = pos_match.group(1)
+
+    first_rule = re.search(r"@(\w+)@", rule_text)
+    if not first_rule:
+        return rule_text
+    rule_id = first_rule.group(1)
+
+    safe_name = _SAFE_NAME_RE.sub("_", rule_name)
+
+    harness = f"""
+
+@script:python@
+{pos_var} << {rule_id}.{pos_var};
+@@
+
+import json, sys
+for _p in {pos_var}:
+    _m = {{"file": _p.file, "line": int(_p.line), "col": int(_p.column), "line_end": int(_p.line_end), "col_end": int(_p.column_end), "rule": "{safe_name}"}}
+    sys.stderr.write("{RESULT_PREFIX}" + json.dumps(_m) + "\\n")
+"""
+    return rule_text + harness
+
+
+def _parse_results(output: str, rule_name: str) -> List[SpatchMatch]:
+    """Parse COCCIRESULT lines from spatch stdout or stderr."""
+    matches = []
+    for line in output.splitlines():
+        line = line.strip()
+        if line.startswith(RESULT_PREFIX):
+            json_str = line[len(RESULT_PREFIX):]
+            try:
+                d = json.loads(json_str)
+                d.setdefault("rule", rule_name)
+                matches.append(SpatchMatch.from_dict(d))
+            except (json.JSONDecodeError, ValueError):
+                continue
+    return matches
+
+
+_ERROR_PATTERNS = (
+    "parse error", "semantic error", "fatal error", "syntax error",
+    "unbound metavariable", "already tagged token", "metavariable not used",
+)
+
+
+def _parse_errors(stderr: str) -> List[str]:
+    """Extract error messages from spatch stderr, ignoring info lines."""
+    errors = []
+    for line in stderr.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith(RESULT_PREFIX):
+            continue
+        if line.startswith("init_defs_builtins:"):
+            continue
+        if line.startswith("HANDLING:"):
+            continue
+        low = line.lower()
+        if any(p in low for p in _ERROR_PATTERNS):
+            errors.append(line)
+    return errors
