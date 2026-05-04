@@ -196,9 +196,18 @@ class ConsensusTask(DispatchTask):
         return role_resolution.get("consensus_models", [])
 
     def select_items(self, findings, prior_results):
-        return [f for f in findings
-                if "error" not in prior_results.get(f.get("finding_id"), {"error": True})
-                and prior_results.get(f.get("finding_id"), {}).get("is_true_positive", True)]
+        selected = []
+        for f in findings:
+            fid = f.get("finding_id")
+            r = prior_results.get(fid, {"error": True})
+            if "error" in r:
+                continue
+            if not r.get("is_true_positive", True):
+                continue
+            if r.get("cross_family_agreed"):
+                continue
+            selected.append(f)
+        return selected
 
     def build_prompt(self, finding):
         bundle = build_analysis_prompt_bundle_from_finding(finding, profile=self.profile)
@@ -221,17 +230,15 @@ class ConsensusTask(DispatchTask):
         """Apply verdict rules across analysis + consensus results.
 
         Verdict rules:
-        - 1 consensus model: either says exploitable -> exploitable (conservative)
-        - 2+ consensus models: majority across analysis + all consensus
+        - 1 consensus model: flag disagreement but preserve primary verdict
+        - 2+ consensus models: majority across primary + all consensus
         """
-        # Group consensus results by finding_id
         consensus_by_finding: Dict[str, List[Dict]] = {}
         for r in results:
             fid = r.get("finding_id")
             if fid and "error" not in r:
                 consensus_by_finding.setdefault(fid, []).append(r)
 
-        # Apply verdicts to prior results (mutate in place)
         for fid, primary in prior_results.items():
             if isinstance(primary, dict) and "error" not in primary:
                 consensus_analyses = consensus_by_finding.get(fid, [])
@@ -243,13 +250,14 @@ class ConsensusTask(DispatchTask):
                 for ca in consensus_analyses:
                     verdicts.append(ca.get("is_exploitable", False))
 
+                disputed = not all(v == verdicts[0] for v in verdicts)
+
                 n_consensus = len(consensus_analyses)
                 if n_consensus == 1:
-                    final = any(verdicts)
+                    final = primary_exploitable
                 else:
                     final = sum(1 for v in verdicts if v) > len(verdicts) / 2
 
-                disputed = not all(v == verdicts[0] for v in verdicts)
                 primary["consensus"] = "disputed" if disputed else "agreed"
                 primary["is_exploitable"] = final
                 primary["consensus_analyses"] = [

@@ -411,11 +411,19 @@ def orchestrate(
 
     # Consensus (if configured)
     consensus_models = role_resolution.get("consensus_models", [])
+    consensus_budget_skipped = False
     if consensus_models:
+        consensus_task = ConsensusTask(profile=profile)
+        eligible = consensus_task.select_items(findings, results_by_id)
         dispatch_task(
-            ConsensusTask(profile=profile), findings, dispatch_fn, role_resolution,
+            consensus_task, findings, dispatch_fn, role_resolution,
             results_by_id, cost_tracker, max_parallel,
         )
+        if eligible and not any(
+            isinstance(r, dict) and r.get("consensus")
+            for r in results_by_id.values()
+        ):
+            consensus_budget_skipped = True
 
     # Exploit/patch generation — after final verdict
     # CC analysis may produce exploits/patches inline via schema. ExploitTask/PatchTask
@@ -461,6 +469,8 @@ def orchestrate(
     if group_analyses:
         merged["group_analyses"] = group_analyses
 
+    consensus_agreed = sum(1 for r in per_finding_results
+                           if r.get("consensus") == "agreed")
     consensus_disputes = sum(1 for r in per_finding_results
                              if r.get("consensus") == "disputed")
     cross_family_checked = sum(1 for r in per_finding_results
@@ -477,11 +487,13 @@ def orchestrate(
         "defense_profile": profile.name,
         "weakened_defenses": accept_weakened_defenses and profile.name == "passthrough",
         "consensus_models": [m.model_name for m in consensus_models],
+        "consensus_agreed": consensus_agreed,
+        "consensus_disputes": consensus_disputes,
+        "consensus_budget_skipped": consensus_budget_skipped,
         "findings_dispatched": len(findings),
         "findings_analysed": sum(1 for r in per_finding_results if "error" not in r),
         "findings_failed": sum(1 for r in per_finding_results if "error" in r),
         "structural_groups": len(groups),
-        "consensus_disputes": consensus_disputes,
         "cross_family_checked": cross_family_checked,
         "cross_family_disputes": cross_family_disputes,
         "low_confidence_retries": retries,
@@ -527,6 +539,15 @@ def orchestrate(
     thinking = cost_summary.get("thinking_tokens", 0)
     if thinking > 0:
         print(f"  Thinking tokens: {thinking:,}")
+    if consensus_agreed or consensus_disputes:
+        cn_parts = []
+        if consensus_agreed:
+            cn_parts.append(f"{consensus_agreed} agreed")
+        if consensus_disputes:
+            cn_parts.append(f"{consensus_disputes} disputed")
+        print(f"  Consensus: {', '.join(cn_parts)}")
+    elif consensus_budget_skipped:
+        print(f"  Consensus: skipped (budget > {int(ConsensusTask.budget_cutoff * 100)}%)")
     if cross_family_checked:
         cf_parts = [f"{cross_family_checked} cross-family checked"]
         if cross_family_disputes:

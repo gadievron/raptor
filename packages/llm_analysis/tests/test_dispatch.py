@@ -208,14 +208,26 @@ class TestConsensusTask:
         assert len(selected) == 1
         assert selected[0]["finding_id"] == "f-001"
 
-    def test_finalize_one_consensus_either_exploitable_wins(self):
+    def test_finalize_single_consensus_preserves_primary(self):
         task = ConsensusTask()
-        # Consensus says exploitable, primary says not
+        # Consensus says exploitable, primary says not — primary preserved, disputed
         consensus_results = [
             {"finding_id": "f-001", "is_exploitable": True, "analysed_by": "gemini",
              "reasoning": "yes"}
         ]
         prior = {"f-001": {"is_exploitable": False, "finding_id": "f-001"}}
+        task.finalize(consensus_results, prior)
+        assert prior["f-001"]["is_exploitable"] is False
+        assert prior["f-001"]["consensus"] == "disputed"
+
+    def test_finalize_single_consensus_primary_exploitable_preserved(self):
+        task = ConsensusTask()
+        # Primary says exploitable, consensus says not — primary preserved, disputed
+        consensus_results = [
+            {"finding_id": "f-001", "is_exploitable": False, "analysed_by": "gemini",
+             "reasoning": "no"}
+        ]
+        prior = {"f-001": {"is_exploitable": True, "finding_id": "f-001"}}
         task.finalize(consensus_results, prior)
         assert prior["f-001"]["is_exploitable"] is True
         assert prior["f-001"]["consensus"] == "disputed"
@@ -230,6 +242,35 @@ class TestConsensusTask:
         task.finalize(consensus_results, prior)
         assert prior["f-001"]["consensus"] == "agreed"
 
+    def test_finalize_multi_consensus_majority_wins(self):
+        task = ConsensusTask()
+        # 2 consensus models + primary: 2 exploitable vs 1 not → majority wins
+        consensus_results = [
+            {"finding_id": "f-001", "is_exploitable": True, "analysed_by": "gemini",
+             "reasoning": "yes"},
+            {"finding_id": "f-001", "is_exploitable": False, "analysed_by": "mistral",
+             "reasoning": "no"},
+        ]
+        prior = {"f-001": {"is_exploitable": True, "finding_id": "f-001"}}
+        task.finalize(consensus_results, prior)
+        # 2 of 3 say exploitable → majority = True
+        assert prior["f-001"]["is_exploitable"] is True
+        assert prior["f-001"]["consensus"] == "disputed"
+
+    def test_finalize_multi_consensus_majority_not_exploitable(self):
+        task = ConsensusTask()
+        consensus_results = [
+            {"finding_id": "f-001", "is_exploitable": False, "analysed_by": "gemini",
+             "reasoning": "no"},
+            {"finding_id": "f-001", "is_exploitable": False, "analysed_by": "mistral",
+             "reasoning": "no"},
+        ]
+        prior = {"f-001": {"is_exploitable": True, "finding_id": "f-001"}}
+        task.finalize(consensus_results, prior)
+        # 2 of 3 say not exploitable → majority = False
+        assert prior["f-001"]["is_exploitable"] is False
+        assert prior["f-001"]["consensus"] == "disputed"
+
     def test_skips_false_positives(self):
         task = ConsensusTask()
         findings = [_make_finding("f-001"), _make_finding("f-002"), _make_finding("f-003")]
@@ -241,6 +282,30 @@ class TestConsensusTask:
         selected = task.select_items(findings, prior)
         assert len(selected) == 1
         assert selected[0]["finding_id"] == "f-001"
+
+
+    def test_skips_cross_family_agreed(self):
+        task = ConsensusTask()
+        findings = [_make_finding("f-001"), _make_finding("f-002")]
+        prior = {
+            "f-001": {"is_exploitable": True, "cross_family_agreed": True},
+            "f-002": {"is_exploitable": True},
+        }
+        selected = task.select_items(findings, prior)
+        assert len(selected) == 1
+        assert selected[0]["finding_id"] == "f-002"
+
+    def test_consensus_reasoning_in_output(self):
+        task = ConsensusTask()
+        consensus_results = [
+            {"finding_id": "f-001", "is_exploitable": True, "analysed_by": "gemini",
+             "reasoning": "consensus reasoning text"}
+        ]
+        prior = {"f-001": {"is_exploitable": True, "finding_id": "f-001"}}
+        task.finalize(consensus_results, prior)
+        analyses = prior["f-001"]["consensus_analyses"]
+        assert len(analyses) == 1
+        assert analyses[0]["reasoning"] == "consensus reasoning text"
 
 
 class TestGroupAnalysisTask:

@@ -209,6 +209,13 @@ Examples:
              "Logged in run metadata and flagged in the final report.",
     )
     parser.add_argument(
+        "--consensus",
+        metavar="MODEL",
+        help="Add a consensus model for second-opinion analysis "
+             "(e.g. --consensus gpt-5.4). Can also be set via "
+             "role: \"consensus\" in models.json.",
+    )
+    parser.add_argument(
         "--trust-repo",
         action="store_true",
         help="Trust the target repo's config and skip safety checks. Currently "
@@ -725,6 +732,28 @@ Examples:
             if llm_env.external_llm:
                 from packages.llm_analysis import LLMConfig
                 llm_config = LLMConfig()
+
+            # --consensus flag: inject a consensus model
+            if args.consensus and llm_config:
+                from core.llm.config import _model_config_from_entry
+                from core.security.llm_family import family_of
+                _FAMILY_TO_PROVIDER = {
+                    "anthropic": "anthropic", "openai": "openai",
+                    "google": "gemini", "mistral": "mistral",
+                    "meta": "ollama", "ollama": "ollama",
+                }
+                provider = _FAMILY_TO_PROVIDER.get(
+                    family_of(args.consensus), "")
+                consensus_mc = _model_config_from_entry({
+                    "model": args.consensus,
+                    "provider": provider,
+                    "role": "consensus",
+                })
+                if consensus_mc.api_key:
+                    llm_config.fallback_models.append(consensus_mc)
+                else:
+                    print(f"\n  Warning: no API key found for consensus model {args.consensus}")
+                    print(f"  Set the provider's env var or add it to models.json")
 
             from packages.llm_analysis.orchestrator import orchestrate
             orchestration_result = orchestrate(
