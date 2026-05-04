@@ -1286,10 +1286,13 @@ Examples:
     # Mark run as completed
     try:
         from core.run import complete_run
+        orch_meta = (orchestration_result or {}).get("orchestration", {})
         complete_run(out_dir, extra={
             "findings_count": analysed_count,
             "exploitable_count": exploitable_count,
             "duration_seconds": round(workflow_duration, 1),
+            "analysis_model": orch_meta.get("analysis_model"),
+            "analysis_models": orch_meta.get("analysis_models", []),
         })
     except Exception as e:
         logger.debug(f"Run metadata: {e}")  # Optional — don't fail the pipeline

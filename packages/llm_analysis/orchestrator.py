@@ -635,8 +635,10 @@ def orchestrate(
         "mode": dispatch_mode,
         "multi_model": len(analysis_models_list) > 1,
         "analysis_model": (role_resolution.get("analysis_model").model_name
-                          if role_resolution.get("analysis_model") else None),
-        "analysis_models": [m.model_name for m in analysis_models_list],
+                          if role_resolution.get("analysis_model")
+                          else ("Claude Code" if is_cc_dispatch else None)),
+        "analysis_models": ([m.model_name for m in analysis_models_list]
+                           or (["Claude Code"] if is_cc_dispatch else [])),
         "defense_profile": profile.name,
         "weakened_defenses": accept_weakened_defenses and profile.name == "passthrough",
         "consensus_models": [m.model_name for m in consensus_models],

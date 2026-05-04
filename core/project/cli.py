@@ -760,7 +760,7 @@ def _print_diff(result):
 
 
 def _do_correlate(project, json_out=False):
-    """Cross-run finding correlation."""
+    """Cross-run finding correlation — action-oriented output."""
     import json
     from .correlate import correlate_project
 
@@ -772,38 +772,85 @@ def _do_correlate(project, json_out=False):
         return
 
     print(f"Project: {project.name}")
-    print(f"  Runs: {summary['runs']}")
-    print(f"  Unique findings: {summary['total_unique_findings']}")
-    print(f"  Persistent (2+ runs): {summary['persistent_findings']}")
-    if summary["tools_used"]:
-        print(f"  Tools: {', '.join(summary['tools_used'])}")
+    parts = [f"Runs: {summary['runs']}", f"Findings: {summary['total_unique_findings']}"]
+    if summary["disagreements"]:
+        parts.append(f"Disagreements: {summary['disagreements']}")
+    if summary["new_findings"]:
+        parts.append(f"New: {summary['new_findings']}")
+    if summary["potentially_resolved"]:
+        parts.append(f"Resolved?: {summary['potentially_resolved']}")
+    print(f"  {' | '.join(parts)}")
 
+    # --- Actions (primary output) ---
+    actions = result["actions"]
+    if actions:
+        _SIGILS = {
+            "disagreement": "[!]",
+            "new_finding": "[+]",
+            "resolved": "[~]",
+            "tool_gap": "[>]",
+        }
+        print(f"\n  Actions ({len(actions)})")
+        print(f"  {'─' * 60}")
+        for a in actions[:10]:
+            sigil = _SIGILS.get(a["category"], "[?]")
+            label = a["category"].upper().replace("_", " ")
+            print(f"  {sigil} {label}  {a['summary']}")
+            detail = a.get("detail", {})
+            if a["category"] == "disagreement":
+                for v in detail.get("verdicts", []):
+                    m = f" ({v['model']})" if v.get("model") else ""
+                    print(f"      {v['run']}: {v['status']}{m}")
+            elif a["category"] == "resolved":
+                absent = detail.get("absent_from", [])
+                if absent:
+                    print(f"      absent from: {', '.join(absent)}")
+        if len(actions) > 10:
+            print(f"  ... and {len(actions) - 10} more (use --json for full list)")
+    else:
+        print("\n  No actions — findings are consistent across runs.")
+
+    # --- Suggested next runs ---
+    suggested = result.get("tool_gaps", {}).get("suggested_next_runs", [])
+    if suggested:
+        print(f"\n  Next steps:")
+        for cmd in suggested:
+            print(f"    → {cmd}")
+
+    # --- Persistent findings (compact) ---
     persistent = result["persistent_findings"]
     if persistent:
-        print(f"\nPersistent findings:")
-        for pf in persistent[:20]:
-            loc = f"{pf['file']}:{pf['line']}" if pf.get("file") else "?"
-            vtype = pf.get("vuln_type", "")
-            status = pf.get("status", "")
-            runs = pf["runs_seen"]
-            print(f"  {loc:<40s}  {vtype:<20s}  {status:<16s}  {runs} runs")
-        if len(persistent) > 20:
-            print(f"  ... and {len(persistent) - 20} more")
+        display = persistent[:10]
+        rows = []
+        for pf in display:
+            models = ", ".join(pf.get("models", [])) or "—"
+            rows.append((
+                f"{pf['file']}:{pf['line']}" if pf.get("file") else "?",
+                pf.get("vuln_type", ""),
+                pf.get("status", ""),
+                f"{pf['runs_seen']} runs",
+                models,
+            ))
+        headers = ("Location", "Type", "Status", "Seen", "Models")
+        widths = [len(h) for h in headers]
+        for row in rows:
+            for i, cell in enumerate(row):
+                widths[i] = max(widths[i], len(cell))
+        fmt = (f"  {{:<{widths[0]}s}}  {{:<{widths[1]}s}}  {{:<{widths[2]}s}}"
+               f"  {{:>{widths[3]}s}}  {{:<{widths[4]}s}}")
+        print(f"\n  Persistent ({len(persistent)}):")
+        print(fmt.format(*headers))
+        print(f"  {'-' * widths[0]}  {'-' * widths[1]}  {'-' * widths[2]}  {'-' * widths[3]}  {'-' * widths[4]}")
+        for row in rows:
+            print(fmt.format(*row))
+        if len(persistent) > 10:
+            print(f"  ... and {len(persistent) - 10} more")
 
-    trends = result["trends"]
-    if trends:
-        print(f"\nTrends ({len(trends)} findings with history):")
-        for label, history in list(trends.items())[:10]:
-            statuses = " → ".join(h["status"] or "?" for h in history)
-            print(f"  {label}: {statuses}")
-        if len(trends) > 10:
-            print(f"  ... and {len(trends) - 10} more")
-
+    # --- Tool coverage (one line) ---
     tool_cov = result["tool_coverage"]
     if tool_cov:
-        print(f"\nTool coverage:")
-        for tool, files in tool_cov.items():
-            print(f"  {tool}: {len(files)} files")
+        cov_parts = [f"{tool}: {len(files)}" for tool, files in tool_cov.items()]
+        print(f"\n  Coverage: {', '.join(cov_parts)} files")
 
 
 def _do_clean(project, keep, dry_run, yes):
