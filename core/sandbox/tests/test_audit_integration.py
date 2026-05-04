@@ -203,8 +203,12 @@ class TestMaxRecordsCap:
 
     def test_tracer_and_summary_caps_match(self):
         # Both sides cap at 10000. Pin so a future divergence is
-        # caught.
-        from core.sandbox.tracer import _MAX_RECORDS_PER_RUN as t_cap
+        # caught. The tracer's cap moved into the shared
+        # core.sandbox.audit_budget module — the import target
+        # changed, the value did not.
+        from core.sandbox.audit_budget import (
+            DEFAULT_GLOBAL_CAP as t_cap,
+        )
         from core.sandbox.summary import (
             MAX_DENIALS_PER_RUN as s_cap,
         )

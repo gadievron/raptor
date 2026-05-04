@@ -39,6 +39,11 @@ _libseccomp_cache = None
 # `--audit` to decide whether b2 (syscall audit via SCMP_ACT_TRACE)
 # and b3 (filesystem audit) can engage. Probed by core.sandbox.ptrace_probe.
 _ptrace_available_cache = None
+# macOS sandbox-exec cache: None = unprobed, True/False = probed.
+# True iff /usr/bin/sandbox-exec exists AND a smoke-test invocation
+# under (allow default) baseline succeeds. Set by check_seatbelt_
+# available() in probes.py. Linux hosts always cache False.
+_seatbelt_available_cache = None
 # User-supplied rlimit overrides from ~/.config/raptor/sandbox.json.
 _user_limits_cache = None
 # Resolved absolute paths to sandbox-setup binaries. We use absolute paths
@@ -66,6 +71,11 @@ _cli_sandbox_profile = None     # str profile name when --sandbox <name> passed
 # point argparse sets these, never env/config/repo content.
 _cli_sandbox_audit = False
 _cli_sandbox_audit_verbose = False
+# Operator override of the global audit-record cap (default 10000;
+# see core.sandbox.audit_budget.DEFAULT_GLOBAL_CAP). None = use the
+# default; positive integer = override. Per-category and per-PID
+# sub-caps scale proportionally inside AuditBudget.__init__.
+_cli_sandbox_audit_budget = None
 
 # Degradation warnings are logged once per process, not once per sandbox()
 # context — kernel capability doesn't change at runtime and scan loops

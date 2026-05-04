@@ -13,6 +13,14 @@ developer manually flips the sysctl.
 
 from __future__ import annotations
 
+import sys as _sys
+import pytest as _pytest
+pytestmark = _pytest.mark.skipif(
+    _sys.platform != "linux",
+    reason="Linux-only sandbox internals (mount-ns / Landlock / seccomp / ptrace tracer / pid1 shim) — see core/sandbox/_macos_spawn.py for the macOS path",
+)
+
+
 import os
 import shutil
 import sys

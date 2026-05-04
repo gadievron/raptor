@@ -205,3 +205,56 @@ def check_mount_available() -> bool:
                 "To enable, run: sudo apt install uidmap"
             )
         return state._mount_available_cache
+
+
+def check_seatbelt_available() -> bool:
+    """macOS-only: check if `sandbox-exec` works for our use case.
+
+    Returns True iff:
+      - Running on darwin
+      - /usr/bin/sandbox-exec exists
+      - A smoke-test invocation under (allow default) baseline
+        succeeds (verifies SBPL parser + kernel support).
+
+    Cached per-process. Linux always returns False without invoking
+    sandbox-exec (saves the subprocess fork on every check).
+
+    The `(allow default)` baseline is the minimal SBPL profile that
+    lets dyld + libSystem load on modern macOS — pure deny-default
+    SIGABRT's the process before dyld can finish. Spike-validated
+    on macOS 26.4.1 (see scripts/macos_sandbox_spike.py).
+    """
+    import sys
+    if sys.platform != "darwin":
+        return False
+    if state._seatbelt_available_cache is not None:
+        return state._seatbelt_available_cache
+    with state._cache_lock:
+        if state._seatbelt_available_cache is not None:
+            return state._seatbelt_available_cache
+        sandbox_exec = "/usr/bin/sandbox-exec"
+        if not Path(sandbox_exec).exists():
+            state._seatbelt_available_cache = False
+            return False
+        # Smoke test: minimal valid profile + /usr/bin/true (always
+        # present on macOS). 5s timeout — sandbox-exec normally
+        # returns in <50ms; anything longer means a real problem.
+        profile = "(version 1)\n(allow default)\n"
+        try:
+            r = subprocess.run(
+                [sandbox_exec, "-p", profile, "/usr/bin/true"],
+                capture_output=True, timeout=5,
+            )
+            ok = (r.returncode == 0)
+        except (subprocess.TimeoutExpired, OSError):
+            ok = False
+        state._seatbelt_available_cache = ok
+        if not ok and state.warn_once("_sandbox_unavailable_warned"):
+            logger.warning(
+                "Sandbox: macOS sandbox-exec smoke test FAILED — "
+                "subprocesses will run without isolation. Verify "
+                "sandbox-exec works on this host: "
+                "`sandbox-exec -p '(version 1)(allow default)' "
+                "/usr/bin/true`"
+            )
+        return ok

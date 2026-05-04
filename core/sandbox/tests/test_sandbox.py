@@ -2,10 +2,13 @@
 
 import os
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+
+import pytest
 
 from core.sandbox import (
     _check_blocked,
@@ -1411,6 +1414,13 @@ class TestCliProfile(unittest.TestCase):
         self.assertFalse(mod_state._cli_sandbox_disabled)
 
 
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="Landlock is Linux-only; macOS uses seatbelt and the dispatch "
+           "in context.py suppresses the Landlock-unavailable warning when "
+           "use_seatbelt is engaged. These tests assert on the warning text "
+           "of an entire layer that doesn't exist on Darwin.",
+)
 class TestLandlockDegradationWarnings(unittest.TestCase):
     """When Landlock can't enforce what the caller asked for, warn loudly."""
 

@@ -20,6 +20,7 @@ import pytest
 from core.sandbox import probes
 from core.sandbox import ptrace_probe
 from core.sandbox import tracer as tracer_mod
+from core.sandbox import audit_budget
 
 
 pytestmark = pytest.mark.skipif(
@@ -893,7 +894,12 @@ class TestAuditConfigSchemaAgree:
         from core.sandbox import _spawn, tracer
 
         spawn_src = inspect.getsource(_spawn.run_sandboxed)
-        tracer_dispatch = inspect.getsource(tracer._handle_waitpid_event)
+        # Both the dispatch function (per-event filter logic) AND the
+        # trace() entry point (which reads one-shot config like the
+        # audit-budget cap at startup) must be considered — a key
+        # consumed in either is a contract the writer must honour.
+        tracer_dispatch = (inspect.getsource(tracer._handle_waitpid_event)
+                            + inspect.getsource(tracer.trace))
 
         # Extract keys written: pattern `"key":` inside audit_config dict.
         # Find audit_config = { ... } block specifically.
@@ -1225,16 +1231,19 @@ class TestFilterDispatchSeccomp:
             "allowed_tcp_ports": [],
         }
         traced = {1000}
-        rc, _ = tracer_mod._handle_waitpid_event(
+        budget = audit_budget.AuditBudget()
+        tracer_mod._handle_waitpid_event(
             1000, self._seccomp_event_status(),
             traced, 1000, self._make_arch_info(),
-            Path("/tmp"), 0, False,
+            Path("/tmp"), budget,
             audit_filter=audit_filter,
             **{k: v for k, v in helpers.items() if not k.startswith("_")},
         )
-        # Record dropped — count unchanged
-        assert rc == 0
+        # Record dropped by the audit filter (path matched the
+        # allowlist) BEFORE reaching the budget — write_record never
+        # called and budget.total_records stays at 0.
         assert helpers["_recorded"] == []
+        assert budget.total_records == 0
 
     def test_filtered_keeps_path_outside_allowlist(self):
         # /home/user/.ssh/id_rsa is NOT in the allowlist → recorded.
@@ -1246,19 +1255,21 @@ class TestFilterDispatchSeccomp:
             "allowed_tcp_ports": [],
         }
         traced = {1000}
-        rc, _ = tracer_mod._handle_waitpid_event(
+        budget = audit_budget.AuditBudget()
+        tracer_mod._handle_waitpid_event(
             1000, self._seccomp_event_status(),
             traced, 1000, self._make_arch_info(),
-            Path("/tmp"), 0, False,
+            Path("/tmp"), budget,
             audit_filter=audit_filter,
             **{k: v for k, v in helpers.items() if not k.startswith("_")},
         )
-        assert rc == 1
         assert len(helpers["_recorded"]) == 1
         assert helpers["_recorded"][0]["path"] == "/home/user/.ssh/id_rsa"
+        assert budget.total_records == 1
 
     def test_verbose_keeps_everything(self):
-        # Same allowlisted path, but verbose=True → still recorded.
+        # Same allowlisted path as test_filtered_drops_path_in_allowlist,
+        # but verbose=True → record kept (verbose disables filter).
         helpers = self._common_helpers(path_returned="/etc/hostname")
         audit_filter = {
             "verbose": True,
@@ -1267,27 +1278,37 @@ class TestFilterDispatchSeccomp:
             "allowed_tcp_ports": [],
         }
         traced = {1000}
-        rc, _ = tracer_mod._handle_waitpid_event(
+        budget = audit_budget.AuditBudget()
+        tracer_mod._handle_waitpid_event(
             1000, self._seccomp_event_status(),
             traced, 1000, self._make_arch_info(),
-            Path("/tmp"), 0, False,
+            Path("/tmp"), budget,
             audit_filter=audit_filter,
             **{k: v for k, v in helpers.items() if not k.startswith("_")},
         )
-        assert rc == 1
+        # Verbose mode bypasses the allowlist filter — the record IS
+        # written. write_record fake records into helpers["_recorded"].
+        assert len(helpers["_recorded"]) == 1, (
+            f"verbose=True should keep the record; got "
+            f"{helpers['_recorded']!r}"
+        )
+        assert budget.total_records == 1
 
     def test_no_filter_keeps_everything(self):
         # audit_filter=None → no filtering (legacy/default behaviour).
         helpers = self._common_helpers(path_returned="/etc/hostname")
         traced = {1000}
-        rc, _ = tracer_mod._handle_waitpid_event(
+        budget = audit_budget.AuditBudget()
+        tracer_mod._handle_waitpid_event(
             1000, self._seccomp_event_status(),
             traced, 1000, self._make_arch_info(),
-            Path("/tmp"), 0, False,
+            Path("/tmp"), budget,
             audit_filter=None,
             **{k: v for k, v in helpers.items() if not k.startswith("_")},
         )
-        assert rc == 1
+        # No filter → record kept regardless of path.
+        assert len(helpers["_recorded"]) == 1
+        assert budget.total_records == 1
 
 
 class TestEndToEndAuditVsAuditVerbose:

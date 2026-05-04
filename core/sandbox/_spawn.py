@@ -437,6 +437,13 @@ def run_sandboxed(
             # We signal this by setting read_allowlist to None in
             # the config, which the tracer treats as "skip all
             # read-intent filtering" (every read passes the filter).
+            # `audit_budget` propagates the parent's --audit-budget
+            # CLI override into the tracer subprocess. The tracer
+            # is a fresh Python interpreter so it doesn't inherit
+            # state._cli_sandbox_audit_budget; we must serialise
+            # the value through the same JSON channel as the
+            # filter config. None = use the AuditBudget default.
+            from . import state as _state
             audit_config = {
                 "verbose": bool(audit_verbose),
                 "writable_paths": _writable,
@@ -444,6 +451,9 @@ def run_sandboxed(
                                    else None),
                 "allowed_tcp_ports": list(allowed_tcp_ports)
                     if allowed_tcp_ports else [],
+                "audit_budget": getattr(
+                    _state, "_cli_sandbox_audit_budget", None,
+                ),
             }
             # mkstemp under /tmp; cleaned up after tracer exits.
             # If the write fails (disk full, EIO mid-flight), the
