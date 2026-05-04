@@ -704,7 +704,12 @@ Examples:
                     openant_extra_findings = raw
                 save_json(out_dir / "openant_findings.json", openant_extra_findings)
                 print(f"✓ OpenAnt: {len(openant_extra_findings)} unique finding(s)")
-                total_findings += len(openant_extra_findings)
+                # NOTE: do NOT add to total_findings here. total_findings feeds
+                # run_validation_phase which uses it to compute duplicates_removed
+                # = total_findings - unique_sarif_count. Adding OpenAnt findings
+                # before that call inflates the baseline and makes the dedup report
+                # show OpenAnt findings as "duplicates" (they're not SARIF findings).
+                # The count is added to validated_findings in the merge block below.
         except RuntimeError as e:
             logger.warning(f"OpenAnt not configured (continuing without it): {e}")
         except Exception as e:
@@ -732,11 +737,15 @@ Examples:
     # OpenAnt findings are already in Raptor finding schema; they bypass SARIF
     # conversion and join the post-validation pool directly.
     #
-    # Schema-validated merge (BUG-R-011 fragility hardening):
+    # Schema-validated merge (BUG-R-011 fragility hardening + BUG-R-016 format fix):
     # - load_json(strict=True): corrupted JSON raises instead of silently
     #   returning None (which would default to [] and lose data).
-    # - isinstance(existing, list): catches schema drift (someone wrote a
-    #   wrapper dict) before extend() corrupts the output.
+    # - Raptor's run_validation_phase() writes findings.json as a wrapped dict:
+    #   {"stage":"A","timestamp":...,"findings":[...]} — NOT a plain list.
+    #   The original isinstance(list) check always rejected this format and
+    #   silently dropped OpenAnt findings. Now handles both formats:
+    #   (a) dict with "findings" key — Raptor's current format
+    #   (b) plain list — backward compat for any legacy paths
     # Tests: packages/openant/tests/test_phase1b_integration.py
     if openant_extra_findings:
         validation_findings_path = out_dir / "validation" / "findings.json"
@@ -750,23 +759,42 @@ Examples:
                 )
                 existing = None
             if existing is not None:
-                if not isinstance(existing, list):
-                    logger.error(
-                        f"validation/findings.json is not a list "
-                        f"(got {type(existing).__name__}); skipping merge"
-                    )
-                elif not all(isinstance(f, dict) for f in existing):
-                    logger.error(
-                        "validation/findings.json contains non-dict "
-                        "elements; skipping merge"
-                    )
+                if isinstance(existing, dict) and "findings" in existing:
+                    # Raptor's wrapped dict format from convert_sarif_to_findings()
+                    findings_list = existing.get("findings", [])
+                    if not all(isinstance(f, dict) for f in findings_list):
+                        logger.error(
+                            "validation/findings.json findings list contains "
+                            "non-dict elements; skipping merge"
+                        )
+                    else:
+                        findings_list.extend(openant_extra_findings)
+                        existing["findings"] = findings_list
+                        save_json(validation_findings_path, existing)
+                        validated_findings += len(openant_extra_findings)
+                        logger.info(
+                            f"Merged {len(openant_extra_findings)} OpenAnt "
+                            f"findings into validation output (dict format)"
+                        )
+                elif isinstance(existing, list):
+                    # Plain list format (backward compat)
+                    if not all(isinstance(f, dict) for f in existing):
+                        logger.error(
+                            "validation/findings.json contains non-dict "
+                            "elements; skipping merge"
+                        )
+                    else:
+                        existing.extend(openant_extra_findings)
+                        save_json(validation_findings_path, existing)
+                        validated_findings += len(openant_extra_findings)
+                        logger.info(
+                            f"Merged {len(openant_extra_findings)} OpenAnt "
+                            f"findings into validation output (list format)"
+                        )
                 else:
-                    existing.extend(openant_extra_findings)
-                    save_json(validation_findings_path, existing)
-                    validated_findings += len(openant_extra_findings)
-                    logger.info(
-                        f"Merged {len(openant_extra_findings)} OpenAnt "
-                        f"findings into validation output"
+                    logger.error(
+                        f"validation/findings.json has unrecognized format "
+                        f"(got {type(existing).__name__}); skipping merge"
                     )
         else:
             (out_dir / "validation").mkdir(exist_ok=True)

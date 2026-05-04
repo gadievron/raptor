@@ -61,6 +61,10 @@ def _run_subprocess(
 
     Using PYTHONPATH (subprocess-scoped) instead of sys.path.insert prevents
     OpenAnt's `core/` package from shadowing Raptor's `core/` in this process.
+
+    cwd is set to config.core_path so that Python's implicit '' sys.path entry
+    (the working directory) resolves to openant-core rather than Raptor's repo
+    root — which also contains a `core/` package and would otherwise shadow it.
     """
     env = _build_subprocess_env(config)
     cmd = _build_command(repo_path, out_dir, config)
@@ -73,6 +77,7 @@ def _run_subprocess(
             text=True,
             timeout=config.timeout_seconds,
             env=env,
+            cwd=str(config.core_path),
         )
     except subprocess.TimeoutExpired:
         return _empty_result(

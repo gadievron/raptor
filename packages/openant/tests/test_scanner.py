@@ -167,6 +167,54 @@ class TestCleanupC1FileNotFoundHandling(unittest.TestCase):
                 _build_subprocess_env(config)
 
 
+class TestBugNewCwdIsolation(unittest.TestCase):
+    """BUG-NEW: cwd must be set to core_path in subprocess.run.
+
+    Root cause: Python always puts '' (cwd) first in sys.path for -m invocations.
+    Raptor has its own core/ package at the repo root. Without cwd=core_path,
+    running raptor_openant from the Raptor directory causes Python to find
+    Raptor's core/ (no scanner.py) before openant's core/ (has scanner.py),
+    giving ModuleNotFoundError: No module named 'core.scanner'.
+
+    Fix: subprocess.run(..., cwd=str(config.core_path)) so '' resolves to
+    openant-core, not the Raptor repo root.
+    """
+
+    def test_cwd_set_in_subprocess_run(self):
+        """Static check: scanner.py passes cwd= to subprocess.run."""
+        scanner_src = (Path(__file__).parents[1] / "scanner.py").read_text()
+        self.assertIn(
+            "cwd=",
+            scanner_src,
+            "subprocess.run must pass cwd= to ensure '' in sys.path resolves "
+            "to openant-core, not Raptor's repo root which also has a core/ package.",
+        )
+
+    def test_cwd_resolves_to_core_path(self):
+        """Static check: the cwd value uses core_path (not a hardcoded string)."""
+        scanner_src = (Path(__file__).parents[1] / "scanner.py").read_text()
+        self.assertIn(
+            "core_path",
+            scanner_src[scanner_src.find("cwd="):scanner_src.find("cwd=") + 60],
+        )
+
+    def test_would_fail_without_fix(self):
+        """Confirm Raptor's repo root has its OWN core/ package that would
+        shadow openant's core/ if cwd were not set to core_path."""
+        raptor_root = Path(__file__).parents[3]
+        raptor_core = raptor_root / "core"
+        self.assertTrue(
+            raptor_core.exists() and (raptor_core / "__init__.py").exists(),
+            "Raptor must have a core/__init__.py for the shadow bug to exist; "
+            "if this fails, the fix may no longer be needed",
+        )
+        # Raptor's core/ does NOT have scanner.py
+        self.assertFalse(
+            (raptor_core / "scanner.py").exists(),
+            "Raptor's core/scanner.py should not exist (it belongs to openant)",
+        )
+
+
 class TestBugR012NoAnalyzeRemoved(unittest.TestCase):
     """BUG-R-012: --no-analyze flag was declared but inactive. Removed.
 
