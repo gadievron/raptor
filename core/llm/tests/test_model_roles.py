@@ -80,11 +80,12 @@ class TestRoleValidation:
         with pytest.raises(ConfigError, match="without an analysis model"):
             resolve_model_roles(None, [m])
 
-    def test_multiple_analysis_raises(self):
+    def test_multiple_analysis_allowed(self):
         m1 = ModelConfig(provider="anthropic", model_name="opus", role="analysis")
         m2 = ModelConfig(provider="openai", model_name="gpt-5", role="analysis")
-        with pytest.raises(ConfigError, match="Multiple models"):
-            resolve_model_roles(m1, [m2])
+        result = resolve_model_roles(m1, [m2])
+        assert len(result["analysis_models"]) == 2
+        assert result["analysis_model"] == m1
 
     def test_fallback_only_raises(self):
         m = ModelConfig(provider="anthropic", model_name="opus", role="fallback")

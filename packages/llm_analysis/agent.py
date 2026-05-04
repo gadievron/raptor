@@ -1095,11 +1095,30 @@ def main() -> None:
     ap.add_argument("--checklist", help="Inventory checklist.json for function metadata lookup")
     ap.add_argument("--prep-only", action="store_true",
                     help="Skip LLM analysis; produce structured findings for external orchestration")
+    ap.add_argument("--max-parallel", type=int, default=3, help="Max parallel dispatch threads")
+
+    model_group = ap.add_argument_group(
+        "multi-model analysis",
+        "When any of these flags are provided, findings are prepped then "
+        "dispatched through the parallel orchestrator with role support.",
+    )
+    model_group.add_argument("--model", metavar="MODEL", action="append", default=[],
+                             help="Analysis model (repeatable for multi-model)")
+    model_group.add_argument("--consensus", metavar="MODEL",
+                             help="Blind second opinion model")
+    model_group.add_argument("--judge", metavar="MODEL",
+                             help="Non-blind review model")
 
     args = ap.parse_args()
 
     if not args.sarif and not args.findings:
         ap.error("Either --sarif or --findings is required")
+
+    _has_role_flags = any([
+        getattr(args, "model", []),
+        getattr(args, "consensus", None),
+        getattr(args, "judge", None),
+    ])
 
     # Suggest --findings if validation artifacts exist nearby
     if args.sarif and not args.findings:
@@ -1116,8 +1135,9 @@ def main() -> None:
         # Collision-prevention via unique_run_suffix — see core/run/output.py.
         out_dir = RaptorConfig.get_out_dir() / f"autonomous_v2_{unique_run_suffix('_')}"
 
-    # Initialize agent with LLM
-    agent = AutonomousSecurityAgentV2(repo_path, out_dir, prep_only=args.prep_only)
+    # When role flags are present, force prep-only then hand off to orchestrator
+    prep_only = args.prep_only or _has_role_flags
+    agent = AutonomousSecurityAgentV2(repo_path, out_dir, prep_only=prep_only)
 
     # Load checklist for metadata lookup
     checklist = None
@@ -1136,6 +1156,32 @@ def main() -> None:
     else:
         report = agent.process_findings(sarif_paths=args.sarif, max_findings=args.max_findings,
                                         checklist=checklist)
+
+    # Orchestrated path: role flags → prep then parallel dispatch
+    if _has_role_flags and report.get("mode") == "prep_only":
+        prep_report_path = out_dir / "autonomous_analysis_report.json"
+        if prep_report_path.exists():
+            from packages.llm_analysis.orchestrator import (
+                build_llm_config_from_flags, orchestrate,
+            )
+            llm_config = build_llm_config_from_flags(
+                models=args.model or [],
+                consensus=args.consensus,
+                judge=args.judge,
+            )
+            if llm_config:
+                result = orchestrate(
+                    prep_report_path=prep_report_path,
+                    repo_path=repo_path,
+                    out_dir=out_dir,
+                    max_parallel=args.max_parallel,
+                    max_findings=args.max_findings,
+                    llm_config=llm_config,
+                )
+                if result:
+                    return
+        print("\n  Orchestration skipped — check model/API key configuration")
+        return
 
     if report.get('mode') != 'prep_only':
         print("\n" + "=" * 70)

@@ -67,6 +67,13 @@ class AnalysisTask(DispatchTask):
         self.profile = profile
         self._tls = threading.local()
 
+    def get_models(self, role_resolution):
+        models = role_resolution.get("analysis_models", [])
+        if models:
+            return models
+        model = role_resolution.get("analysis_model")
+        return [model] if model else []
+
     def build_prompt(self, finding):
         bundle = build_analysis_prompt_bundle_from_finding(finding, profile=self.profile)
         self._tls.nonce = bundle.nonce
@@ -99,14 +106,32 @@ class ExploitTask(DispatchTask):
     temperature = 0.8
     budget_cutoff = 0.85
 
+    _SCA_REACHABILITY_FOR_EXPLOIT = ("likely_called", "imported")
+
     def __init__(self, profile: ModelDefenseProfile = CONSERVATIVE):
         self.profile = profile
         self._tls = threading.local()
 
     def select_items(self, findings, prior_results):
-        return [f for f in findings
-                if prior_results.get(f.get("finding_id"), {}).get("is_exploitable")
-                and not prior_results.get(f.get("finding_id"), {}).get("exploit_code")]
+        selected = []
+        for f in findings:
+            fid = f.get("finding_id", "")
+            prior = prior_results.get(fid, {})
+            if prior.get("exploit_code"):
+                continue
+            if prior.get("is_exploitable"):
+                selected.append(f)
+                continue
+            # SCA findings: select if reachable or KEV-listed
+            if f.get("rule_id", "").startswith("sca:vulnerable_dependency"):
+                sca = f.get("sca", {})
+                reachability = sca.get("reachability", "")
+                in_kev = sca.get("in_kev", False)
+                if reachability in self._SCA_REACHABILITY_FOR_EXPLOIT:
+                    selected.append(f)
+                elif in_kev and reachability != "not_reachable":
+                    selected.append(f)
+        return selected
 
     def build_prompt(self, finding):
         bundle = build_exploit_prompt_bundle_from_finding(finding, profile=self.profile)
@@ -149,9 +174,21 @@ class PatchTask(DispatchTask):
         self._tls = threading.local()
 
     def select_items(self, findings, prior_results):
-        return [f for f in findings
-                if prior_results.get(f.get("finding_id"), {}).get("is_exploitable")
-                and not prior_results.get(f.get("finding_id"), {}).get("patch_code")]
+        selected = []
+        for f in findings:
+            fid = f.get("finding_id", "")
+            prior = prior_results.get(fid, {})
+            if prior.get("patch_code"):
+                continue
+            if prior.get("is_exploitable"):
+                selected.append(f)
+                continue
+            # SCA findings with a known fix version get a manifest patch
+            if f.get("rule_id", "").startswith("sca:vulnerable_dependency"):
+                sca = f.get("sca", {})
+                if sca.get("fixed_version"):
+                    selected.append(f)
+        return selected
 
     def build_prompt(self, finding):
         bundle = build_patch_prompt_bundle_from_finding(finding, profile=self.profile)
@@ -265,6 +302,125 @@ class ConsensusTask(DispatchTask):
                      "is_exploitable": ca.get("is_exploitable"),
                      "reasoning": ca.get("reasoning", "")}
                     for ca in consensus_analyses
+                ]
+
+        return results
+
+
+class JudgeTask(DispatchTask):
+    """Non-blind review: judge sees primary reasoning and critiques it."""
+
+    name = "judge"
+    model_role = "judge"
+    budget_cutoff = 0.75
+
+    _JUDGE_ADDENDUM = (
+        "\n\n**Judge review mode:** The user message contains a "
+        "'primary-analysis-reasoning' untrusted block with the primary "
+        "analyst's verdict and reasoning. Your job is to critique this "
+        "analysis:\n"
+        "1. Is the reasoning sound? Does it follow from the evidence?\n"
+        "2. Did the analyst miss attack paths, sanitizer bypasses, or preconditions?\n"
+        "3. Is the verdict (is_exploitable, ruling) consistent with the reasoning?\n"
+        "4. Provide your own independent verdict using the same schema.\n\n"
+        "If you agree with the primary analysis, say so explicitly. "
+        "If you disagree, explain what was missed or incorrect."
+    )
+
+    def __init__(self, results_by_id=None, profile: ModelDefenseProfile = CONSERVATIVE):
+        self.results_by_id = results_by_id or {}
+        self.profile = profile
+        self._tls = threading.local()
+
+    def get_models(self, role_resolution):
+        return role_resolution.get("judge_models", [])
+
+    def select_items(self, findings, prior_results):
+        selected = []
+        for f in findings:
+            fid = f.get("finding_id")
+            r = prior_results.get(fid, {"error": True})
+            if "error" in r:
+                continue
+            if not r.get("is_true_positive", True):
+                continue
+            if r.get("cross_family_agreed"):
+                continue
+            selected.append(f)
+        return selected
+
+    def build_prompt(self, finding):
+        from core.security.prompt_envelope import UntrustedBlock
+
+        fid = finding.get("finding_id")
+        primary = self.results_by_id.get(fid, {})
+        primary_reasoning = (primary.get("reasoning") or "")[:2000]
+        primary_verdict = primary.get("is_exploitable", "unknown")
+        primary_ruling = primary.get("ruling", "unknown")
+
+        extra_blocks = (
+            UntrustedBlock(
+                content=(
+                    f"Primary verdict: is_exploitable={primary_verdict}, "
+                    f"ruling={primary_ruling}\n\n{primary_reasoning}"
+                ),
+                kind="primary-analysis-reasoning",
+                origin=f"judge:{fid}",
+            ),
+        )
+
+        bundle = build_analysis_prompt_bundle_from_finding(
+            finding, profile=self.profile, extra_blocks=extra_blocks,
+        )
+        self._tls.nonce = bundle.nonce
+        return _user_message_from_bundle(bundle)
+
+    def get_last_nonce(self) -> str:
+        return getattr(self._tls, "nonce", "")
+
+    def get_profile_name(self) -> str:
+        return self.profile.name
+
+    def get_schema(self, finding):
+        return build_analysis_schema(has_dataflow=finding.get("has_dataflow", False))
+
+    def get_system_prompt(self):
+        return _analysis_system_text(self.profile) + self._JUDGE_ADDENDUM
+
+    def finalize(self, results, prior_results):
+        """Apply judge verdicts: preserve primary (single), majority (multi)."""
+        judge_by_finding: Dict[str, List[Dict]] = {}
+        for r in results:
+            fid = r.get("finding_id")
+            if fid and "error" not in r:
+                judge_by_finding.setdefault(fid, []).append(r)
+
+        for fid, primary in prior_results.items():
+            if isinstance(primary, dict) and "error" not in primary:
+                judge_analyses = judge_by_finding.get(fid, [])
+                if not judge_analyses:
+                    continue
+
+                primary_exploitable = primary.get("is_exploitable", False)
+                verdicts = [primary_exploitable]
+                for ja in judge_analyses:
+                    verdicts.append(ja.get("is_exploitable", False))
+
+                disputed = not all(v == verdicts[0] for v in verdicts)
+
+                n_judges = len(judge_analyses)
+                if n_judges == 1:
+                    final = primary_exploitable
+                else:
+                    final = sum(1 for v in verdicts if v) > len(verdicts) / 2
+
+                primary["judge"] = "disputed" if disputed else "agreed"
+                primary["is_exploitable"] = final
+                primary["judge_analyses"] = [
+                    {"model": ja.get("analysed_by", "?"),
+                     "is_exploitable": ja.get("is_exploitable"),
+                     "reasoning": ja.get("reasoning", "")}
+                    for ja in judge_analyses
                 ]
 
         return results

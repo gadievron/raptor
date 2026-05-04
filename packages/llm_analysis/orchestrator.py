@@ -134,6 +134,86 @@ class CostTracker:
             return summary
 
 
+def build_llm_config_from_flags(
+    *,
+    models: Optional[List[str]] = None,
+    consensus: Optional[str] = None,
+    judge: Optional[str] = None,
+    auto_detect: bool = True,
+) -> Optional[Any]:
+    """Build an LLMConfig from CLI flags, shared by /agentic and /analyze.
+
+    Args:
+        models: List of analysis model names. Single entry = one primary.
+            Multiple = multi-model mode (each independently analyses).
+        consensus: Blind second-opinion model name.
+        judge: Non-blind review model name.
+        auto_detect: Try env vars / models.json if no --model given.
+
+    Returns LLMConfig or None if no model could be resolved.
+    """
+    from core.llm.config import LLMConfig, _model_config_from_entry, _get_configured_models
+    from core.llm.model_data import PROVIDER_ENV_KEYS
+    from core.security.llm_family import provider_of
+
+    models = models or []
+    llm_config = None
+
+    def _resolve_model(name: str, role: str):
+        provider = provider_of(name)
+        entry: Dict[str, Any] = {"model": name, "provider": provider, "role": role}
+        for cfg_entry in _get_configured_models():
+            if cfg_entry.get("model") == name and cfg_entry.get("api_key"):
+                entry["api_key"] = cfg_entry["api_key"]
+                break
+        mc = _model_config_from_entry(entry)
+        if not mc.api_key:
+            env_key = PROVIDER_ENV_KEYS.get(provider, "???")
+            print(f"\n  Error: no API key for --model {name}")
+            print(f"  Set {env_key} or add the key to models.json")
+            return None
+        return mc
+
+    if models:
+        primary_mc = _resolve_model(models[0], "analysis")
+        if primary_mc:
+            llm_config = LLMConfig(primary_model=primary_mc)
+            for extra in models[1:]:
+                mc = _resolve_model(extra, "analysis")
+                if mc:
+                    llm_config.fallback_models.append(mc)
+    elif auto_detect:
+        try:
+            llm_config = LLMConfig()
+        except Exception:
+            pass
+
+    # Consensus is redundant with 3+ analysis models
+    n_analysis = len(models)
+    if n_analysis >= 3 and consensus:
+        print(f"\n  Note: --consensus skipped — {n_analysis} analysis models "
+              f"already provide independent opinions")
+        consensus = None
+
+    role_flags = [
+        ("consensus", consensus),
+        ("judge", judge),
+    ]
+    has_role_flags = any(m for _, m in role_flags)
+    if has_role_flags and not llm_config:
+        print("\n  Warning: --consensus/--judge require a primary analysis model")
+        print("  Use --model MODEL, configure models.json, or set an API key env var")
+    if llm_config and has_role_flags:
+        for role, model_name in role_flags:
+            if not model_name:
+                continue
+            mc = _resolve_model(model_name, role)
+            if mc:
+                llm_config.fallback_models.append(mc)
+
+    return llm_config
+
+
 def orchestrate(
     prep_report_path: Path,
     repo_path: Path,
@@ -209,7 +289,8 @@ def orchestrate(
     # Resolve model roles
     from core.llm.config import resolve_model_roles
     role_resolution = {"analysis_model": None, "code_model": None,
-                       "consensus_models": [], "fallback_models": []}
+                       "consensus_models": [], "judge_models": [],
+                       "fallback_models": []}
     if llm_config and llm_config.primary_model:
         role_resolution = resolve_model_roles(
             llm_config.primary_model,
@@ -222,18 +303,32 @@ def orchestrate(
 
     # Print dispatch info
     n_consensus = len(role_resolution.get("consensus_models", []))
+    n_judge = len(role_resolution.get("judge_models", []))
     analysis_model = role_resolution.get("analysis_model")
     analysis_model_name = analysis_model.model_name if analysis_model else ""
     is_cc_dispatch = not (llm_config and llm_config.primary_model)
-    model_label = analysis_model_name or ("Claude Code" if is_cc_dispatch else "unknown")
+    analysis_models_all = role_resolution.get("analysis_models", [])
+    n_analysis = len(analysis_models_all)
+    if n_analysis > 1:
+        model_label = ", ".join(m.model_name for m in analysis_models_all)
+    else:
+        model_label = analysis_model_name or ("Claude Code" if is_cc_dispatch else "unknown")
     n = len(findings)
-    print(f"\n  {n} finding{'s' if n != 1 else ''} → {model_label}"
-          + (f" + {n_consensus} consensus model{'s' if n_consensus != 1 else ''}" if n_consensus else ""))
+    extras = []
+    if n_analysis > 1:
+        extras.append(f"{n_analysis} models")
+    if n_consensus:
+        extras.append(f"{n_consensus} consensus")
+    if n_judge:
+        extras.append(f"{n_judge} judge")
+    extra_str = f" ({', '.join(extras)})" if extras else ""
+    print(f"\n  {n} finding{'s' if n != 1 else ''} → {model_label}{extra_str}")
 
     # --- Build dispatch callable ---
     from packages.llm_analysis.dispatch import dispatch_task, DispatchResult
     from packages.llm_analysis.tasks import (
-        AnalysisTask, ExploitTask, PatchTask, ConsensusTask, GroupAnalysisTask,
+        AnalysisTask, ExploitTask, PatchTask,
+        ConsensusTask, JudgeTask, GroupAnalysisTask,
         RetryTask, CrossFamilyCheckTask,
     )
     from core.security.prompt_defense_profiles import (
@@ -303,20 +398,25 @@ def orchestrate(
         dispatch_mode = "cc_dispatch"
 
     # --- Canary probe: verify model handles the defense envelope ---
+    # Multi-model: probe each analysis model; use strictest compatible profile.
     profile = CONSERVATIVE
-    if dispatch_fn and analysis_model_name:
-        profile = get_profile_for(analysis_model_name)
+    _models_to_probe = analysis_models_all if len(analysis_models_all) > 1 else (
+        [analysis_model] if analysis_model else []
+    )
+    _probe_failed = False
+    if dispatch_fn and _models_to_probe:
         from core.security.envelope_probe import probe_envelope_compatibility
-        # Pass the full ModelConfig: dispatch_fn forwards its 5th arg
-        # to ``client.generate_structured(model_config=...)`` which
-        # needs ``.max_context`` etc. The probe falls back to a
-        # ``str(analysis_model_name)`` label for telemetry on the CC
-        # dispatch path (where the arg is unused anyway).
-        probe_result = probe_envelope_compatibility(
-            analysis_model or analysis_model_name, profile, dispatch_fn,
-        )
-        defense_telemetry.set_probe_result(analysis_model_name, probe_result.compatible)
-        if not probe_result.compatible:
+        profile = get_profile_for(analysis_model_name)
+        for _probe_model in _models_to_probe:
+            _pname = _probe_model.model_name if hasattr(_probe_model, "model_name") else str(_probe_model)
+            probe_result = probe_envelope_compatibility(
+                _probe_model, get_profile_for(_pname), dispatch_fn,
+            )
+            defense_telemetry.set_probe_result(_pname, probe_result.compatible)
+            if not probe_result.compatible:
+                _probe_failed = True
+                break
+        if _probe_failed:
             if not accept_weakened_defenses:
                 print(f"\n  Envelope probe failed for {model_label}: {probe_result.error}")
                 print(f"  The model cannot honour the defense envelope — aborting.")
@@ -368,10 +468,29 @@ def orchestrate(
             )
 
     # Index results for downstream tasks
+    # Multi-model: multiple results per finding — pick best as primary,
+    # attach all per-model analyses for correlation.
+    _multi_results: Dict[str, List[Dict]] = {}
     for r in analysis_results:
         fid = r.get("finding_id")
         if fid:
-            results_by_id[fid] = r
+            _multi_results.setdefault(fid, []).append(r)
+
+    n_analysis_models = len(role_resolution.get("analysis_models", []))
+    for fid, model_results in _multi_results.items():
+        if len(model_results) == 1:
+            results_by_id[fid] = model_results[0]
+        else:
+            primary = _select_primary_result(model_results)
+            primary["multi_model_analyses"] = [
+                {"model": r.get("analysed_by", "?"),
+                 "is_exploitable": r.get("is_exploitable"),
+                 "exploitability_score": r.get("exploitability_score"),
+                 "ruling": r.get("ruling"),
+                 "reasoning": r.get("reasoning", "")}
+                for r in model_results
+            ]
+            results_by_id[fid] = primary
 
     # --- Pipeline flow (maps to exploitation-validator stages) ---
     # Stage E (binary feasibility) runs in Phase 0 if --binary provided.
@@ -425,6 +544,31 @@ def orchestrate(
         ):
             consensus_budget_skipped = True
 
+    # Judge review (if configured) — sees primary reasoning, critiques it
+    judge_models = role_resolution.get("judge_models", [])
+    if judge_models:
+        dispatch_task(
+            JudgeTask(results_by_id=results_by_id, profile=profile),
+            findings, dispatch_fn, role_resolution,
+            results_by_id, cost_tracker, max_parallel,
+        )
+
+    # Multi-model correlation (pure Python, no LLM)
+    correlation = None
+    if n_analysis_models > 1:
+        from packages.llm_analysis.correlation import correlate_results
+        correlation = correlate_results(results_by_id)
+        # Apply confidence signals back to individual results
+        for fid, signal in correlation.get("confidence_signals", {}).items():
+            if fid in results_by_id:
+                results_by_id[fid]["multi_model_confidence"] = signal
+        corr_summary = correlation.get("summary", {})
+        n_corr = corr_summary.get("total_correlated", 0)
+        n_agreed = corr_summary.get("agreed", 0)
+        n_disputed = corr_summary.get("disputed", 0)
+        if n_corr:
+            print(f"\n  Correlation: {n_corr} findings — {n_agreed} agreed, {n_disputed} disputed")
+
     # Exploit/patch generation — after final verdict
     # CC analysis may produce exploits/patches inline via schema. ExploitTask/PatchTask
     # only select findings that are exploitable AND missing exploit_code/patch_code,
@@ -468,11 +612,17 @@ def orchestrate(
     merged["cross_finding_groups"] = groups
     if group_analyses:
         merged["group_analyses"] = group_analyses
+    if correlation:
+        merged["correlation"] = correlation
 
     consensus_agreed = sum(1 for r in per_finding_results
                            if r.get("consensus") == "agreed")
     consensus_disputes = sum(1 for r in per_finding_results
                              if r.get("consensus") == "disputed")
+    judge_agreed = sum(1 for r in per_finding_results
+                       if r.get("judge") == "agreed")
+    judge_disputes = sum(1 for r in per_finding_results
+                         if r.get("judge") == "disputed")
     cross_family_checked = sum(1 for r in per_finding_results
                                if r.get("cross_family_check"))
     cross_family_disputes = sum(1 for r in per_finding_results
@@ -480,16 +630,22 @@ def orchestrate(
     retries = sum(1 for r in per_finding_results if r.get("retried"))
     low_confidence = sum(1 for r in per_finding_results if r.get("low_confidence"))
 
+    analysis_models_list = role_resolution.get("analysis_models", [])
     merged["orchestration"] = {
         "mode": dispatch_mode,
+        "multi_model": len(analysis_models_list) > 1,
         "analysis_model": (role_resolution.get("analysis_model").model_name
                           if role_resolution.get("analysis_model") else None),
+        "analysis_models": [m.model_name for m in analysis_models_list],
         "defense_profile": profile.name,
         "weakened_defenses": accept_weakened_defenses and profile.name == "passthrough",
         "consensus_models": [m.model_name for m in consensus_models],
         "consensus_agreed": consensus_agreed,
         "consensus_disputes": consensus_disputes,
         "consensus_budget_skipped": consensus_budget_skipped,
+        "judge_models": [m.model_name for m in judge_models],
+        "judge_agreed": judge_agreed,
+        "judge_disputes": judge_disputes,
         "findings_dispatched": len(findings),
         "findings_analysed": sum(1 for r in per_finding_results if "error" not in r),
         "findings_failed": sum(1 for r in per_finding_results if "error" in r),
@@ -499,6 +655,7 @@ def orchestrate(
         "low_confidence_retries": retries,
         "low_confidence_remaining": low_confidence,
         "group_analyses": len(group_analyses),
+        "correlation": correlation.get("summary") if correlation else None,
         "elapsed_seconds": round(elapsed, 1),
         "max_parallel": max_parallel,
         "cost": cost_tracker.get_summary(),
@@ -509,6 +666,8 @@ def orchestrate(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     from core.json import save_json
+    if correlation:
+        save_json(out_dir / "correlation.json", correlation)
     out_path = out_dir / "orchestrated_report.json"
     save_json(out_path, merged)
     logger.info(f"Orchestrated report saved to {out_path}")
@@ -548,6 +707,13 @@ def orchestrate(
         print(f"  Consensus: {', '.join(cn_parts)}")
     elif consensus_budget_skipped:
         print(f"  Consensus: skipped (budget > {int(ConsensusTask.budget_cutoff * 100)}%)")
+    if judge_agreed or judge_disputes:
+        jg_parts = []
+        if judge_agreed:
+            jg_parts.append(f"{judge_agreed} agreed")
+        if judge_disputes:
+            jg_parts.append(f"{judge_disputes} disputed")
+        print(f"  Judge: {', '.join(jg_parts)}")
     if cross_family_checked:
         cf_parts = [f"{cross_family_checked} cross-family checked"]
         if cross_family_disputes:
@@ -611,6 +777,36 @@ def _auto_detect_cross_family_checker(primary_family: str) -> Optional[Any]:
             )
             return ModelConfig(provider=provider, model_name=model_name)
     return None
+
+
+def _select_primary_result(model_results: List[Dict]) -> Dict:
+    """Pick the best result from multiple models' analyses of the same finding.
+
+    Prefers: exploitable verdicts (conservative), then highest quality score,
+    then highest exploitability_score.
+    """
+    best = model_results[0]
+    for r in model_results[1:]:
+        if "error" in r:
+            continue
+        if "error" in best:
+            best = r
+            continue
+        r_expl = r.get("is_exploitable", False)
+        b_expl = best.get("is_exploitable", False)
+        if r_expl and not b_expl:
+            best = r
+        elif r_expl == b_expl:
+            r_q = r.get("_quality", 1.0)
+            b_q = best.get("_quality", 1.0)
+            if r_q > b_q:
+                best = r
+            elif r_q == b_q:
+                r_s = r.get("exploitability_score", 0) or 0
+                b_s = best.get("exploitability_score", 0) or 0
+                if r_s > b_s:
+                    best = r
+    return dict(best)
 
 
 def _check_self_consistency(results_by_id: Dict[str, Dict]) -> None:
@@ -797,3 +993,5 @@ def _structural_grouping(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         _add_group("shared_dataflow_ref", ref, list(fids_set))
 
     return groups
+
+

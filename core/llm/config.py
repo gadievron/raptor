@@ -554,7 +554,7 @@ def _get_default_fallback_models() -> List['ModelConfig']:
 # Model role resolution
 # ---------------------------------------------------------------------------
 
-VALID_ROLES = {"analysis", "code", "consensus", "fallback"}
+VALID_ROLES = {"analysis", "code", "consensus", "fallback", "judge"}
 
 
 def resolve_model_roles(
@@ -597,6 +597,7 @@ def resolve_model_roles(
             "analysis_model": all_models[0] if all_models else None,
             "code_model": all_models[0] if all_models else None,
             "consensus_models": [],
+            "judge_models": [],
             "fallback_models": all_models[1:] if len(all_models) > 1 else [],
         }
 
@@ -607,6 +608,7 @@ def resolve_model_roles(
     analysis = [m for m in all_models if m.role == "analysis"]
     code = [m for m in all_models if m.role == "code"]
     consensus = [m for m in all_models if m.role == "consensus"]
+    judge = [m for m in all_models if m.role == "judge"]
     fallbacks = [m for m in all_models if m.role == "fallback" or m.role is None]
 
     analysis_model = analysis[0] if analysis else (all_models[0] if all_models else None)
@@ -614,8 +616,10 @@ def resolve_model_roles(
 
     return {
         "analysis_model": analysis_model,
+        "analysis_models": analysis if analysis else ([all_models[0]] if all_models else []),
         "code_model": code_model,
         "consensus_models": consensus,
+        "judge_models": judge,
         "fallback_models": fallbacks,
     }
 
@@ -639,16 +643,18 @@ def _validate_model_roles(models: List['ModelConfig']) -> None:
     has_code = code_count > 0
     only_fallback = all(r == "fallback" for r in roles) if roles else False
 
+    has_judge = "judge" in roles
+
     if has_consensus and not has_analysis:
         raise ConfigError("Consensus models configured without an analysis model")
+
+    if has_judge and not has_analysis:
+        raise ConfigError("Judge models configured without an analysis model")
 
     if has_code and not has_analysis:
         raise ConfigError("Code model configured without an analysis model")
 
-    if analysis_count > 1:
-        raise ConfigError(
-            "Multiple models with role 'analysis'. Use 'consensus' for second opinions"
-        )
+    # Multiple analysis models is valid (multi-model mode)
 
     if code_count > 1:
         raise ConfigError(
@@ -661,17 +667,22 @@ def _validate_model_roles(models: List['ModelConfig']) -> None:
             "Set role to 'analysis' on at least one model."
         )
 
-    # Check for same model with two roles (by model_name + provider)
-    seen = {}
+    # Check for same model with two *incompatible* roles.
+    # analysis+consensus is the conflict (use consensus role instead).
+    # Same model for consensus+judge is fine — distinct tasks.
+    _CONFLICTING_PAIRS = {frozenset({"analysis", "consensus"})}
+    seen: dict[tuple[str, str], set[str]] = {}
     for m in models:
         if m.role:
             key = (m.provider, m.model_name)
-            if key in seen and seen[key] != m.role:
+            seen.setdefault(key, set()).add(m.role)
+    for key, model_roles in seen.items():
+        for pair in _CONFLICTING_PAIRS:
+            if pair <= model_roles:
                 raise ConfigError(
-                    f"Model {m.model_name} ({m.provider}) has conflicting roles: "
-                    f"'{seen[key]}' and '{m.role}'"
+                    f"Model {key[1]} ({key[0]}) has conflicting roles: "
+                    f"{sorted(pair)}"
                 )
-            seen[key] = m.role
 
 
 # ---------------------------------------------------------------------------

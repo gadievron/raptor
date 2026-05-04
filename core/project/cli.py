@@ -159,6 +159,13 @@ def main():
     p_clean.add_argument("--dry-run", action="store_true", help="Show what would be deleted")
     p_clean.add_argument("--yes", action="store_true", help="Skip confirmation")
 
+    # correlate
+    p_correlate = sub.add_parser("correlate", help="Cross-run finding correlation",
+                                 usage="raptor project correlate [<name>] [--json]", **_F)
+    p_correlate.add_argument("name", nargs="?", help="Project name")
+    p_correlate.add_argument("--json", dest="json_out", action="store_true",
+                             help="Output raw JSON instead of formatted table")
+
     # export
     p_export = sub.add_parser("export", help="Export project as zip",
                               usage="raptor project export <name> <path> [--force]", **_F)
@@ -392,6 +399,17 @@ def main():
         elif args.subcommand == "remove":
             mgr.remove_run(args.name, args.run, to_path=args.to)
             print(f"Removed '{args.run}' from project '{args.name}'")
+
+        elif args.subcommand == "correlate":
+            name = args.name or _get_active_project()
+            if not name:
+                print("No project specified.")
+                return
+            p = mgr.load(name)
+            if not p:
+                print(f"Project '{name}' not found.")
+                return
+            _do_correlate(p, json_out=args.json_out)
 
         elif args.subcommand == "diff":
             from .diff import diff_runs
@@ -739,6 +757,53 @@ def _print_diff(result):
         for c in result["changed"]:
             print(_yellow(f"  ~ {c['label']} ({c.get('status_before', '?')} → {c.get('status_after', '?')})"))
     print(f"Unchanged: {result['unchanged']}")
+
+
+def _do_correlate(project, json_out=False):
+    """Cross-run finding correlation."""
+    import json
+    from .correlate import correlate_project
+
+    result = correlate_project(project)
+    summary = result["summary"]
+
+    if json_out:
+        print(json.dumps(result, indent=2))
+        return
+
+    print(f"Project: {project.name}")
+    print(f"  Runs: {summary['runs']}")
+    print(f"  Unique findings: {summary['total_unique_findings']}")
+    print(f"  Persistent (2+ runs): {summary['persistent_findings']}")
+    if summary["tools_used"]:
+        print(f"  Tools: {', '.join(summary['tools_used'])}")
+
+    persistent = result["persistent_findings"]
+    if persistent:
+        print(f"\nPersistent findings:")
+        for pf in persistent[:20]:
+            loc = f"{pf['file']}:{pf['line']}" if pf.get("file") else "?"
+            vtype = pf.get("vuln_type", "")
+            status = pf.get("status", "")
+            runs = pf["runs_seen"]
+            print(f"  {loc:<40s}  {vtype:<20s}  {status:<16s}  {runs} runs")
+        if len(persistent) > 20:
+            print(f"  ... and {len(persistent) - 20} more")
+
+    trends = result["trends"]
+    if trends:
+        print(f"\nTrends ({len(trends)} findings with history):")
+        for label, history in list(trends.items())[:10]:
+            statuses = " → ".join(h["status"] or "?" for h in history)
+            print(f"  {label}: {statuses}")
+        if len(trends) > 10:
+            print(f"  ... and {len(trends) - 10} more")
+
+    tool_cov = result["tool_coverage"]
+    if tool_cov:
+        print(f"\nTool coverage:")
+        for tool, files in tool_cov.items():
+            print(f"  {tool}: {len(files)} files")
 
 
 def _do_clean(project, keep, dry_run, yes):

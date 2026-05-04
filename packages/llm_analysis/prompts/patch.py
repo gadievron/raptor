@@ -165,6 +165,8 @@ def build_patch_prompt_bundle_from_finding(
     extra_blocks: tuple[UntrustedBlock, ...] = (),
 ) -> PromptBundle:
     """Bundle equivalent of ``build_patch_prompt_from_finding``."""
+    if finding.get("rule_id", "").startswith("sca:"):
+        return build_sca_patch_prompt_bundle(finding, profile=profile)
     return build_patch_prompt_bundle(
         rule_id=finding.get("rule_id", "unknown"),
         file_path=finding.get("file_path", "unknown"),
@@ -178,4 +180,81 @@ def build_patch_prompt_bundle_from_finding(
         attack_path=attack_path,
         profile=profile,
         extra_blocks=extra_blocks,
+    )
+
+
+# ---------------------------------------------------------------------------
+# SCA manifest-level patches: version bumps in dependency files
+# ---------------------------------------------------------------------------
+
+SCA_PATCH_SYSTEM_PROMPT = """\
+You are a software engineer writing a minimal, safe dependency upgrade \
+patch for a manifest file.
+
+Create a unified diff that bumps the vulnerable dependency to the fixed \
+version.  Preserve the manifest's existing formatting, comments, and \
+pin style.  If the manifest uses exact pins, produce an exact pin.  \
+If it uses range pins, produce the tightest range that includes the fix.
+
+Only change the one dependency — do not touch unrelated lines."""
+
+
+def build_sca_patch_prompt_bundle(
+    finding: Dict[str, Any],
+    *,
+    profile: Optional[ModelDefenseProfile] = None,
+) -> PromptBundle:
+    """Build a patch prompt for an SCA finding (manifest version bump)."""
+    profile = profile or CONSERVATIVE
+    system = SCA_PATCH_SYSTEM_PROMPT
+
+    sca = finding.get("sca", {})
+    dep_name = sca.get("name", "unknown")
+    dep_version = sca.get("version", "")
+    ecosystem = sca.get("ecosystem", "")
+    fixed_version = sca.get("fixed_version", "")
+    manifest_path = sca.get("declared_in", finding.get("file_path", ""))
+    advisory = sca.get("advisory", {})
+    cve_id = ""
+    if advisory.get("aliases"):
+        cve_id = advisory["aliases"][0]
+    elif advisory.get("id"):
+        cve_id = advisory["id"]
+
+    context = (
+        f"Dependency: {ecosystem}/{dep_name}\n"
+        f"Current version: {dep_version}\n"
+        f"Fixed version: {fixed_version}\n"
+        f"Manifest: {manifest_path}\n"
+        f"Advisory: {cve_id}\n"
+    )
+
+    blocks: list[UntrustedBlock] = [
+        UntrustedBlock(
+            content=context,
+            kind="sca-upgrade-context",
+            origin=f"{ecosystem}/{dep_name}",
+        ),
+    ]
+
+    manifest_content = finding.get("code", "")
+    if manifest_content:
+        blocks.append(UntrustedBlock(
+            content=manifest_content,
+            kind="manifest-content",
+            origin=str(manifest_path),
+        ))
+
+    slots = {
+        "package": TaintedString(value=f"{ecosystem}/{dep_name}", trust="untrusted"),
+        "from_version": TaintedString(value=dep_version, trust="untrusted"),
+        "to_version": TaintedString(value=fixed_version, trust="untrusted"),
+        "manifest": TaintedString(value=str(manifest_path), trust="untrusted"),
+    }
+
+    return build_prompt(
+        system=system,
+        profile=profile,
+        untrusted_blocks=tuple(blocks),
+        slots=slots,
     )

@@ -227,9 +227,8 @@ def test_factory_routes_keyless_anthropic_to_openai_compat() -> None:
         provider = create_provider(config)
 
     assert isinstance(provider, OpenAICompatibleProvider)
-    # base_url is what OpenAI client will hit. Trailing slash present
-    # because the OpenAI SDK normalises base_url.
-    assert "api.anthropic.com" in str(provider.client.base_url)
+    from urllib.parse import urlparse
+    assert urlparse(str(provider.client.base_url)).hostname == "api.anthropic.com"
     # API key threaded through correctly so requests authenticate.
     assert provider.client.api_key == "test-anthropic-key"
 

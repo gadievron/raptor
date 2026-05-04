@@ -186,6 +186,9 @@ def dispatch_task(
         model_name = models[0].model_name if models[0] else ""
         total_calls = len(selected) * len(models)
         if cost_tracker.should_skip_phase(total_calls, model_name, task.budget_cutoff, task.name):
+            print(f"\n  {task.name}: skipped ({len(selected)} items) — "
+                  f"budget > {int(task.budget_cutoff * 100)}%"
+                  f"; raise --max-cost to include")
             return []
 
     # Build work items: (model, item) pairs
@@ -309,8 +312,9 @@ def dispatch_task(
                     with _nonces_lock:
                         nonce = _nonces.pop(item_id, "")
                     if nonce:
+                        model_id = getattr(model, "model_name", str(model))
                         defense_telemetry.record_response(
-                            model_id=model,
+                            model_id=model_id,
                             profile_name=profile_name,
                             nonce=nonce,
                             raw_response=err_str,

@@ -14,8 +14,8 @@ from packages.llm_analysis.dispatch import (
     _classify_error,
 )
 from packages.llm_analysis.tasks import (
-    AnalysisTask, ExploitTask, PatchTask, ConsensusTask, GroupAnalysisTask,
-    RetryTask,
+    AnalysisTask, ExploitTask, PatchTask, ConsensusTask,
+    GroupAnalysisTask, JudgeTask, RetryTask,
 )
 from packages.llm_analysis.orchestrator import CostTracker
 
@@ -100,6 +100,52 @@ class TestAnalysisTask:
     def test_system_prompt(self):
         task = AnalysisTask()
         assert task.get_system_prompt() is not None
+
+
+    def test_get_models_returns_analysis_models_list(self):
+        task = AnalysisTask()
+        m1 = MagicMock()
+        m2 = MagicMock()
+        resolution = {"analysis_models": [m1, m2]}
+        assert task.get_models(resolution) == [m1, m2]
+
+    def test_get_models_fallback_to_singular(self):
+        task = AnalysisTask()
+        m1 = MagicMock()
+        resolution = {"analysis_model": m1}
+        assert task.get_models(resolution) == [m1]
+
+
+class TestSelectPrimaryResult:
+    def test_prefers_exploitable(self):
+        from packages.llm_analysis.orchestrator import _select_primary_result
+        r1 = {"is_exploitable": False, "exploitability_score": 0.9, "analysed_by": "m1"}
+        r2 = {"is_exploitable": True, "exploitability_score": 0.5, "analysed_by": "m2"}
+        assert _select_primary_result([r1, r2])["analysed_by"] == "m2"
+
+    def test_prefers_higher_quality(self):
+        from packages.llm_analysis.orchestrator import _select_primary_result
+        r1 = {"is_exploitable": True, "_quality": 0.5, "analysed_by": "m1"}
+        r2 = {"is_exploitable": True, "_quality": 0.9, "analysed_by": "m2"}
+        assert _select_primary_result([r1, r2])["analysed_by"] == "m2"
+
+    def test_prefers_higher_score_on_tie(self):
+        from packages.llm_analysis.orchestrator import _select_primary_result
+        r1 = {"is_exploitable": True, "_quality": 1.0, "exploitability_score": 0.7, "analysed_by": "m1"}
+        r2 = {"is_exploitable": True, "_quality": 1.0, "exploitability_score": 0.9, "analysed_by": "m2"}
+        assert _select_primary_result([r1, r2])["analysed_by"] == "m2"
+
+    def test_skips_errors(self):
+        from packages.llm_analysis.orchestrator import _select_primary_result
+        r1 = {"error": "failed", "analysed_by": "m1"}
+        r2 = {"is_exploitable": False, "analysed_by": "m2"}
+        assert _select_primary_result([r1, r2])["analysed_by"] == "m2"
+
+    def test_single_result(self):
+        from packages.llm_analysis.orchestrator import _select_primary_result
+        r1 = {"is_exploitable": True, "analysed_by": "m1"}
+        result = _select_primary_result([r1])
+        assert result["analysed_by"] == "m1"
 
 
 class TestExploitTask:
@@ -619,3 +665,423 @@ class TestClassifyError:
 
     def test_empty_string(self):
         assert _classify_error("") == "error"
+
+
+class TestJudgeTask:
+    def test_gets_judge_models(self):
+        task = JudgeTask()
+        m1 = MagicMock()
+        resolution = {"judge_models": [m1]}
+        assert task.get_models(resolution) == [m1]
+
+    def test_selects_same_as_consensus(self):
+        task = JudgeTask()
+        findings = [_make_finding("f-001"), _make_finding("f-002"), _make_finding("f-003")]
+        prior = {
+            "f-001": {"is_exploitable": True},
+            "f-002": {"error": "failed"},
+            "f-003": {"is_exploitable": True, "cross_family_agreed": True},
+        }
+        selected = task.select_items(findings, prior)
+        assert len(selected) == 1
+        assert selected[0]["finding_id"] == "f-001"
+
+    def test_finalize_single_judge_preserves_primary(self):
+        task = JudgeTask()
+        judge_results = [
+            {"finding_id": "f-001", "is_exploitable": True, "analysed_by": "gpt-5",
+             "reasoning": "looks exploitable"}
+        ]
+        prior = {"f-001": {"is_exploitable": False, "finding_id": "f-001"}}
+        task.finalize(judge_results, prior)
+        assert prior["f-001"]["is_exploitable"] is False
+        assert prior["f-001"]["judge"] == "disputed"
+
+    def test_finalize_single_judge_agreed(self):
+        task = JudgeTask()
+        judge_results = [
+            {"finding_id": "f-001", "is_exploitable": True, "analysed_by": "gpt-5",
+             "reasoning": "confirmed"}
+        ]
+        prior = {"f-001": {"is_exploitable": True, "finding_id": "f-001"}}
+        task.finalize(judge_results, prior)
+        assert prior["f-001"]["is_exploitable"] is True
+        assert prior["f-001"]["judge"] == "agreed"
+
+    def test_finalize_multi_judge_majority(self):
+        task = JudgeTask()
+        judge_results = [
+            {"finding_id": "f-001", "is_exploitable": False, "analysed_by": "gpt-5",
+             "reasoning": "no"},
+            {"finding_id": "f-001", "is_exploitable": False, "analysed_by": "mistral",
+             "reasoning": "no"},
+        ]
+        prior = {"f-001": {"is_exploitable": True, "finding_id": "f-001"}}
+        task.finalize(judge_results, prior)
+        assert prior["f-001"]["is_exploitable"] is False
+        assert prior["f-001"]["judge"] == "disputed"
+
+    def test_judge_analyses_in_output(self):
+        task = JudgeTask()
+        judge_results = [
+            {"finding_id": "f-001", "is_exploitable": True, "analysed_by": "gpt-5",
+             "reasoning": "judge reasoning text"}
+        ]
+        prior = {"f-001": {"is_exploitable": True, "finding_id": "f-001"}}
+        task.finalize(judge_results, prior)
+        analyses = prior["f-001"]["judge_analyses"]
+        assert len(analyses) == 1
+        assert analyses[0]["reasoning"] == "judge reasoning text"
+        assert analyses[0]["model"] == "gpt-5"
+
+    def test_budget_cutoff(self):
+        assert JudgeTask.budget_cutoff == 0.75
+
+    def test_builds_prompt_includes_primary_reasoning(self):
+        results_by_id = {
+            "f-001": {
+                "is_exploitable": True,
+                "ruling": "validated",
+                "reasoning": "SQL injection via user input",
+            }
+        }
+        task = JudgeTask(results_by_id=results_by_id)
+        finding = _make_finding("f-001")
+        prompt = task.build_prompt(finding)
+        assert "SQL injection via user input" in prompt
+        assert "is_exploitable=True" in prompt
+
+
+class TestJudgeEdgeCases:
+    def test_finalize_no_judge_results_for_finding(self):
+        """Findings without judge results should be untouched."""
+        task = JudgeTask()
+        prior = {"f-001": {"is_exploitable": True, "finding_id": "f-001"}}
+        task.finalize([], prior)
+        assert "judge" not in prior["f-001"]
+        assert prior["f-001"]["is_exploitable"] is True
+
+    def test_finalize_skips_error_results(self):
+        task = JudgeTask()
+        judge_results = [
+            {"finding_id": "f-001", "error": "model failed"}
+        ]
+        prior = {"f-001": {"is_exploitable": True, "finding_id": "f-001"}}
+        task.finalize(judge_results, prior)
+        assert "judge" not in prior["f-001"]
+
+    def test_finalize_skips_error_prior(self):
+        task = JudgeTask()
+        judge_results = [
+            {"finding_id": "f-001", "is_exploitable": True, "analysed_by": "gpt-5",
+             "reasoning": "yes"}
+        ]
+        prior = {"f-001": {"error": "analysis failed"}}
+        task.finalize(judge_results, prior)
+        assert "judge" not in prior["f-001"]
+
+    def test_select_skips_false_positives(self):
+        task = JudgeTask()
+        findings = [_make_finding("f-001")]
+        prior = {"f-001": {"is_exploitable": False, "is_true_positive": False}}
+        assert task.select_items(findings, prior) == []
+
+    def test_select_includes_true_positive_default(self):
+        """is_true_positive defaults to True when missing."""
+        task = JudgeTask()
+        findings = [_make_finding("f-001")]
+        prior = {"f-001": {"is_exploitable": True}}
+        assert len(task.select_items(findings, prior)) == 1
+
+
+class TestProviderOf:
+    def test_claude_maps_to_anthropic(self):
+        from core.security.llm_family import provider_of
+        assert provider_of("claude-opus-4-6") == "anthropic"
+
+    def test_gemini_maps_to_gemini(self):
+        from core.security.llm_family import provider_of
+        assert provider_of("gemini-2.5-pro") == "gemini"
+
+    def test_gpt_maps_to_openai(self):
+        from core.security.llm_family import provider_of
+        assert provider_of("gpt-5.4") == "openai"
+
+    def test_unknown_returns_empty(self):
+        from core.security.llm_family import provider_of
+        assert provider_of("some-random-model") == ""
+
+    def test_ollama_prefix(self):
+        from core.security.llm_family import provider_of
+        assert provider_of("ollama/llama-3") == "ollama"
+
+
+class TestConfigRoleValidation:
+    def test_judge_without_analysis_raises(self):
+        from core.llm.config import _validate_model_roles, ConfigError
+        m = MagicMock()
+        m.role = "judge"
+        m.model_name = "gpt-5"
+        with pytest.raises(ConfigError, match="Judge.*without.*analysis"):
+            _validate_model_roles([m])
+
+    def test_judge_with_analysis_ok(self):
+        from core.llm.config import _validate_model_roles
+        analysis = MagicMock(); analysis.role = "analysis"; analysis.model_name = "gemini"
+        judge = MagicMock(); judge.role = "judge"; judge.model_name = "gpt-5"
+        _validate_model_roles([analysis, judge])
+
+    def test_resolve_roles_includes_judge(self):
+        from core.llm.config import resolve_model_roles
+        analysis = MagicMock(); analysis.role = "analysis"; analysis.model_name = "gemini"
+        judge = MagicMock(); judge.role = "judge"; judge.model_name = "gpt-5"
+        result = resolve_model_roles(analysis, [judge])
+        assert result["judge_models"] == [judge]
+        assert result["analysis_model"] == analysis
+
+    def test_multiple_analysis_models_allowed(self):
+        from core.llm.config import _validate_model_roles
+        m1 = MagicMock(); m1.role = "analysis"; m1.model_name = "gemini"
+        m2 = MagicMock(); m2.role = "analysis"; m2.model_name = "gpt-5"
+        _validate_model_roles([m1, m2])
+
+    def test_resolve_roles_returns_analysis_models_list(self):
+        from core.llm.config import resolve_model_roles
+        m1 = MagicMock(); m1.role = "analysis"; m1.model_name = "gemini"
+        m2 = MagicMock(); m2.role = "analysis"; m2.model_name = "gpt-5"
+        result = resolve_model_roles(m1, [m2])
+        assert len(result["analysis_models"]) == 2
+        assert result["analysis_model"] == m1
+
+
+class TestBuildLLMConfigFromFlags:
+    def test_no_flags_no_autodetect_returns_none(self):
+        from packages.llm_analysis.orchestrator import build_llm_config_from_flags
+        assert build_llm_config_from_flags(auto_detect=False) is None
+
+    def test_unknown_model_no_key_returns_none(self):
+        from packages.llm_analysis.orchestrator import build_llm_config_from_flags
+        result = build_llm_config_from_flags(models=["no-such-model"], auto_detect=False)
+        assert result is None
+
+    def test_role_flags_without_primary_returns_none(self):
+        from packages.llm_analysis.orchestrator import build_llm_config_from_flags
+        result = build_llm_config_from_flags(
+            consensus="gpt-5", auto_detect=False,
+        )
+        assert result is None
+
+    @patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"})
+    def test_single_model_flag(self):
+        from packages.llm_analysis.orchestrator import build_llm_config_from_flags
+        result = build_llm_config_from_flags(
+            models=["gemini-2.5-pro"], auto_detect=False,
+        )
+        assert result is not None
+        assert result.primary_model.model_name == "gemini-2.5-pro"
+
+    @patch.dict("os.environ", {"GEMINI_API_KEY": "test-key", "ANTHROPIC_API_KEY": "test-key-2"})
+    def test_model_with_role_flags(self):
+        from packages.llm_analysis.orchestrator import build_llm_config_from_flags
+        result = build_llm_config_from_flags(
+            models=["gemini-2.5-pro"],
+            consensus="claude-sonnet-4-6",
+            auto_detect=False,
+        )
+        assert result is not None
+        consensus_models = [m for m in result.fallback_models if m.role == "consensus"]
+        assert len(consensus_models) == 1
+        assert consensus_models[0].model_name == "claude-sonnet-4-6"
+
+    @patch.dict("os.environ", {"GEMINI_API_KEY": "test-key", "OPENAI_API_KEY": "test-key-2"})
+    def test_multi_model_flags(self):
+        from packages.llm_analysis.orchestrator import build_llm_config_from_flags
+        result = build_llm_config_from_flags(
+            models=["gemini-2.5-pro", "gpt-5"],
+            auto_detect=False,
+        )
+        assert result is not None
+        assert result.primary_model.model_name == "gemini-2.5-pro"
+        analysis_models = [m for m in result.fallback_models if m.role == "analysis"]
+        assert len(analysis_models) == 1
+        assert analysis_models[0].model_name == "gpt-5"
+
+    @patch.dict("os.environ", {"GEMINI_API_KEY": "k1", "OPENAI_API_KEY": "k2", "ANTHROPIC_API_KEY": "k3"})
+    def test_three_models_skips_consensus(self, capsys):
+        from packages.llm_analysis.orchestrator import build_llm_config_from_flags
+        result = build_llm_config_from_flags(
+            models=["gemini-2.5-pro", "gpt-5", "claude-opus-4-6"],
+            consensus="mistral-large-latest",
+            auto_detect=False,
+        )
+        assert result is not None
+        consensus_models = [m for m in result.fallback_models if m.role == "consensus"]
+        assert len(consensus_models) == 0
+        captured = capsys.readouterr()
+        assert "skipped" in captured.out.lower()
+
+
+# -----------------------------------------------------------------------
+# SCA integration tests
+# -----------------------------------------------------------------------
+
+def _make_sca_finding(
+    finding_id,
+    *,
+    reachability="likely_called",
+    in_kev=False,
+    fixed_version="9.0.3",
+):
+    """Create a minimal SCA finding for task selection tests."""
+    return {
+        "finding_id": finding_id,
+        "rule_id": "sca:vulnerable_dependency",
+        "file_path": "requirements.txt",
+        "start_line": 5,
+        "end_line": 5,
+        "level": "warning",
+        "message": "Vulnerable dependency",
+        "code": 'pytest>=7.0.0',
+        "surrounding_context": "",
+        "sca": {
+            "ecosystem": "PyPI",
+            "name": "pytest",
+            "version": "7.0.0",
+            "fixed_version": fixed_version,
+            "reachability": reachability,
+            "in_kev": in_kev,
+            "declared_in": "requirements.txt",
+            "advisory": {
+                "id": "GHSA-6w46-j5rx-g56g",
+                "aliases": ["CVE-2025-71176"],
+                "summary": "pytest has vulnerable tmpdir handling",
+            },
+        },
+    }
+
+
+class TestExploitTaskSCA:
+    """ExploitTask selection of SCA findings for reachability PoC."""
+
+    def test_selects_sca_with_likely_called(self):
+        task = ExploitTask()
+        findings = [_make_sca_finding("sca-001", reachability="likely_called")]
+        selected = task.select_items(findings, {})
+        assert len(selected) == 1
+
+    def test_selects_sca_with_imported(self):
+        task = ExploitTask()
+        findings = [_make_sca_finding("sca-001", reachability="imported")]
+        selected = task.select_items(findings, {})
+        assert len(selected) == 1
+
+    def test_selects_sca_kev_with_non_reachable(self):
+        task = ExploitTask()
+        findings = [_make_sca_finding("sca-001", reachability="not_evaluated", in_kev=True)]
+        selected = task.select_items(findings, {})
+        assert len(selected) == 1
+
+    def test_skips_sca_kev_with_not_reachable(self):
+        task = ExploitTask()
+        findings = [_make_sca_finding("sca-001", reachability="not_reachable", in_kev=True)]
+        selected = task.select_items(findings, {})
+        assert len(selected) == 0
+
+    def test_skips_sca_without_reachability_or_kev(self):
+        task = ExploitTask()
+        findings = [_make_sca_finding("sca-001", reachability="not_evaluated", in_kev=False)]
+        selected = task.select_items(findings, {})
+        assert len(selected) == 0
+
+    def test_skips_sca_with_existing_exploit(self):
+        task = ExploitTask()
+        findings = [_make_sca_finding("sca-001")]
+        prior = {"sca-001": {"exploit_code": "# already"}}
+        selected = task.select_items(findings, prior)
+        assert len(selected) == 0
+
+    def test_mixes_source_and_sca_findings(self):
+        task = ExploitTask()
+        findings = [
+            _make_finding("src-001"),
+            _make_sca_finding("sca-001", reachability="likely_called"),
+        ]
+        prior = {"src-001": {"is_exploitable": True}}
+        selected = task.select_items(findings, prior)
+        assert len(selected) == 2
+
+
+class TestPatchTaskSCA:
+    """PatchTask selection of SCA findings for manifest patches."""
+
+    def test_selects_sca_with_fix_version(self):
+        task = PatchTask()
+        findings = [_make_sca_finding("sca-001", fixed_version="9.0.3")]
+        selected = task.select_items(findings, {})
+        assert len(selected) == 1
+
+    def test_skips_sca_without_fix_version(self):
+        task = PatchTask()
+        findings = [_make_sca_finding("sca-001", fixed_version="")]
+        selected = task.select_items(findings, {})
+        assert len(selected) == 0
+
+    def test_skips_sca_with_existing_patch(self):
+        task = PatchTask()
+        findings = [_make_sca_finding("sca-001")]
+        prior = {"sca-001": {"patch_code": "# already"}}
+        selected = task.select_items(findings, prior)
+        assert len(selected) == 0
+
+    def test_sca_hygiene_not_selected(self):
+        task = PatchTask()
+        finding = _make_sca_finding("sca-001")
+        finding["rule_id"] = "sca:hygiene:lockfile_missing"
+        selected = task.select_items([finding], {})
+        assert len(selected) == 0
+
+
+class TestScaExploitPrompt:
+    """SCA-specific exploit prompt builder."""
+
+    def test_builds_sca_prompt(self):
+        from packages.llm_analysis.prompts.exploit import (
+            build_exploit_prompt_bundle_from_finding,
+        )
+        finding = _make_sca_finding("sca-001")
+        bundle = build_exploit_prompt_bundle_from_finding(finding)
+        user_msg = next(m.content for m in bundle.messages if m.role == "user")
+        assert "CVE-2025-71176" in user_msg
+        assert "pytest" in user_msg
+
+    def test_routes_source_findings_normally(self):
+        from packages.llm_analysis.prompts.exploit import (
+            build_exploit_prompt_bundle_from_finding,
+        )
+        finding = _make_finding("src-001")
+        bundle = build_exploit_prompt_bundle_from_finding(finding)
+        user_msg = next(m.content for m in bundle.messages if m.role == "user")
+        assert "sqli" in user_msg
+
+
+class TestScaPatchPrompt:
+    """SCA-specific patch prompt builder."""
+
+    def test_builds_sca_patch_prompt(self):
+        from packages.llm_analysis.prompts.patch import (
+            build_patch_prompt_bundle_from_finding,
+        )
+        finding = _make_sca_finding("sca-001")
+        bundle = build_patch_prompt_bundle_from_finding(finding)
+        user_msg = next(m.content for m in bundle.messages if m.role == "user")
+        assert "9.0.3" in user_msg
+        assert "pytest" in user_msg
+
+    def test_routes_source_findings_normally(self):
+        from packages.llm_analysis.prompts.patch import (
+            build_patch_prompt_bundle_from_finding,
+        )
+        finding = _make_finding("src-001")
+        bundle = build_patch_prompt_bundle_from_finding(finding)
+        user_msg = next(m.content for m in bundle.messages if m.role == "user")
+        assert "sqli" in user_msg or "db.py" in user_msg

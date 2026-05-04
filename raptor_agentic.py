@@ -154,6 +154,21 @@ Examples:
 
   # Focus validation on specific vulnerability type
   python3 raptor.py agentic --repo /path/to/code --vuln-type sql_injection
+
+  # Choose a specific analysis model (overrides models.json auto-detection)
+  python3 raptor.py agentic --repo /path/to/code --model gemini-2.5-pro
+
+  # Multi-model: N models independently analyse, results correlated
+  python3 raptor.py agentic --repo /path/to/code \\
+    --model gemini-2.5-pro --model gpt-5 --model claude-opus-4-6
+
+  # Single model + consensus second opinion
+  python3 raptor.py agentic --repo /path/to/code --model gemini-2.5-pro \\
+    --consensus claude-opus-4-6
+
+  # Single model + judge review
+  python3 raptor.py agentic --repo /path/to/code --model gemini-2.5-pro \\
+    --judge claude-opus-4-6
         """
     )
 
@@ -208,12 +223,32 @@ Examples:
              "base64) are disabled; model-independent floor still holds. "
              "Logged in run metadata and flagged in the final report.",
     )
-    parser.add_argument(
+    model_group = parser.add_argument_group(
+        "multi-model analysis",
+        "Choose which LLMs analyse findings. The primary model is auto-detected "
+        "from models.json / API key env vars unless --model overrides it. "
+        "Role models (consensus, judge) are optional additions.",
+    )
+    model_group.add_argument(
+        "--model",
+        metavar="MODEL",
+        action="append",
+        default=[],
+        help="Analysis model (repeatable). Single: --model gemini-2.5-pro. "
+             "Multi: --model gemini-2.5-pro --model gpt-5 — each independently "
+             "analyses every finding, then results are correlated.",
+    )
+    model_group.add_argument(
         "--consensus",
         metavar="MODEL",
-        help="Add a consensus model for second-opinion analysis "
-             "(e.g. --consensus gpt-5.4). Can also be set via "
-             "role: \"consensus\" in models.json.",
+        help="Blind second opinion — re-analyses each finding independently "
+             "without seeing the primary verdict. Majority vote decides.",
+    )
+    model_group.add_argument(
+        "--judge",
+        metavar="MODEL",
+        help="Non-blind review — sees and critiques the primary analysis "
+             "reasoning. Flags missed attack paths or flawed logic.",
     )
     parser.add_argument(
         "--trust-repo",
@@ -617,19 +652,80 @@ Examples:
                 for sarif in sarif_files:
                     all_sarif_files.append(Path(sarif))
 
-    # Check if we have any findings
+    # Check if we have any findings from source-code scanners.
+    # SCA may still contribute findings even when Semgrep/CodeQL found nothing,
+    # so we don't exit here — we proceed to the SCA phase first.
+    source_scan_empty = not all_sarif_files
+
+    # ========================================================================
+    # PHASE 1b: SOFTWARE COMPOSITION ANALYSIS
+    # ========================================================================
+    sca_metrics = {}
+    sca_out = out_dir / "sca"
+    try:
+        from packages.sca.agent import _find_sca_agent, run_sca_subprocess
+        sca_agent = _find_sca_agent()
+    except ImportError:
+        sca_agent = None
+
+    if sca_agent:
+        print("\n" + "=" * 70)
+        print("SOFTWARE COMPOSITION ANALYSIS")
+        print("=" * 70)
+        print("\n[*] Running SCA (dependencies, supply chain, reachability)...")
+        # Route via sandbox egress proxy so SCA's HTTP calls are
+        # hostname-allowlisted when --sandbox is active. The allowlist
+        # is SCA_ALLOWED_HOSTS (vuln feeds + registries + archives).
+        rc, sca_stdout, sca_stderr = run_sca_subprocess(
+            sca_agent,
+            original_repo_path,
+            sca_out,
+            sandbox_args=sandbox_passthrough,
+        )
+        if rc == 0:
+            sca_sarif = sca_out / "findings.sarif"
+            if sca_sarif.exists():
+                all_sarif_files.append(sca_sarif)
+            # Parse the one-line JSON summary from stdout
+            import json as _json
+            for line in reversed(sca_stdout.strip().splitlines()):
+                line = line.strip()
+                if line.startswith("{"):
+                    try:
+                        sca_metrics = _json.loads(line)
+                    except Exception:
+                        pass
+                    break
+            sca_findings_count = sca_metrics.get("vuln_findings", 0) + \
+                                 sca_metrics.get("supply_chain_findings", 0)
+            print(f"\n✓ SCA complete:")
+            print(f"  - Dependencies: {sca_metrics.get('deps_analysed', 0)}")
+            print(f"  - Vulnerability findings: {sca_metrics.get('vuln_findings', 0)}")
+            print(f"  - Supply chain findings: {sca_metrics.get('supply_chain_findings', 0)}")
+            print(f"  - Hygiene findings: {sca_metrics.get('hygiene_findings', 0)}")
+        else:
+            logger.warning(f"SCA failed (rc={rc}) — continuing without dep findings")
+            sca_findings_count = 0
+    else:
+        sca_findings_count = 0
+        if not source_scan_empty:
+            logger.info("raptor-sca not installed — skipping SCA phase")
+
     if not all_sarif_files:
         print("\n❌ No SARIF files generated from scanning")
         sys.exit(1)
 
     # Combine metrics
-    total_findings = semgrep_metrics.get('total_findings', 0) + codeql_metrics.get('total_findings', 0)
+    total_findings = (semgrep_metrics.get('total_findings', 0)
+                      + codeql_metrics.get('total_findings', 0)
+                      + sca_findings_count)
     scan_metrics = {
         'total_findings': total_findings,
         'total_files_scanned': semgrep_metrics.get('total_files_scanned', 0),
         'findings_by_severity': semgrep_metrics.get('findings_by_severity', {}),
         'semgrep': semgrep_metrics,
         'codeql': codeql_metrics,
+        'sca': sca_metrics,
     }
 
     sarif_files = all_sarif_files
@@ -639,6 +735,8 @@ Examples:
         print(f"  Semgrep: {semgrep_metrics.get('total_findings', 0)} findings")
     if codeql_metrics:
         print(f"  CodeQL: {codeql_metrics.get('total_findings', 0)} findings")
+    if sca_findings_count:
+        print(f"  SCA: {sca_findings_count} findings")
     print(f"SARIF files: {len(sarif_files)}")
 
     # ========================================================================
@@ -747,35 +845,16 @@ Examples:
         print("=" * 70)
 
         if analysis_report and analysis_report.exists():
-            # Build LLMConfig if external LLM is available
-            llm_config = None
-            if llm_env.external_llm:
-                from packages.llm_analysis import LLMConfig
-                llm_config = LLMConfig()
+            from packages.llm_analysis.orchestrator import (
+                build_llm_config_from_flags, orchestrate,
+            )
 
-            # --consensus flag: inject a consensus model
-            if args.consensus and llm_config:
-                from core.llm.config import _model_config_from_entry
-                from core.security.llm_family import family_of
-                _FAMILY_TO_PROVIDER = {
-                    "anthropic": "anthropic", "openai": "openai",
-                    "google": "gemini", "mistral": "mistral",
-                    "meta": "ollama", "ollama": "ollama",
-                }
-                provider = _FAMILY_TO_PROVIDER.get(
-                    family_of(args.consensus), "")
-                consensus_mc = _model_config_from_entry({
-                    "model": args.consensus,
-                    "provider": provider,
-                    "role": "consensus",
-                })
-                if consensus_mc.api_key:
-                    llm_config.fallback_models.append(consensus_mc)
-                else:
-                    print(f"\n  Warning: no API key found for consensus model {args.consensus}")
-                    print(f"  Set the provider's env var or add it to models.json")
-
-            from packages.llm_analysis.orchestrator import orchestrate
+            llm_config = build_llm_config_from_flags(
+                models=getattr(args, "model", []) or [],
+                consensus=getattr(args, "consensus", None),
+                judge=getattr(args, "judge", None),
+                auto_detect=llm_env.external_llm,
+            )
             orchestration_result = orchestrate(
                 prep_report_path=analysis_report,
                 repo_path=original_repo_path,
@@ -833,6 +912,7 @@ Examples:
         "tools_used": {
             "semgrep": not args.codeql_only,
             "codeql": args.codeql or args.codeql_only,
+            "sca": bool(sca_agent and sca_metrics),
         },
         "phases": {
             "scanning": {
@@ -1059,6 +1139,8 @@ Examples:
         print("   ✓ Scanned with CodeQL")
         if codeql_metrics.get('total_findings', 0) > 0:
             print("   ✓ Validated dataflow paths")
+    if sca_metrics:
+        print(f"   ✓ Analysed {sca_metrics.get('deps_analysed', 0)} dependencies (SCA)")
     if validation_result:
         print("   ✓ Deduplicated findings")
     print("   ✓ Analysed vulnerabilities")
@@ -1101,6 +1183,8 @@ Examples:
         via = None
 
     pipeline_parts = ["Scan"]
+    if sca_metrics:
+        pipeline_parts.append("SCA")
     if validation.get("completed"):
         pipeline_parts.append("Dedup")
     if analysed_count > 0:
@@ -1127,6 +1211,8 @@ Examples:
     codeql = scanning.get("codeql", {})
     if codeql.get("enabled"):
         extra_summary["CodeQL"] = codeql.get("findings", 0)
+    if sca_findings_count:
+        extra_summary["SCA"] = sca_findings_count
     if validation.get("completed"):
         extra_summary["After deduplication"] = validation.get("validated_findings", 0)
     if analysed_count > 0:

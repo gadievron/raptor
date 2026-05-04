@@ -26,7 +26,7 @@ VERY IMPORTANT: follow these steps in order.
 
 **Coverage:** When asked about coverage, run `libexec/raptor-coverage-summary` (no args = active project). Use `--detailed` for per-file table, `--gaps` for unreviewed functions. See `.claude/skills/coverage.md` for mark/unmark and the full API.
 
-**Note:** `/agentic` runs scan → dedup → prep → analysis (with validation methodology). Use `--sequential` to bypass parallel orchestration. Use `--understand` to pre-map the codebase before scanning, and `--validate` to run the full validation pipeline on exploitable findings afterwards. Both flags are opt-in.
+**Note:** `/agentic` runs scan → dedup → prep → analysis (with validation methodology). Use `--sequential` to bypass parallel orchestration. Use `--understand` to pre-map the codebase before scanning, and `--validate` to run the full validation pipeline on exploitable findings afterwards. Both flags are opt-in. Multi-model: `--model` is repeatable — multiple models each independently analyse every finding, then results are correlated; `--consensus` and `--judge` add optional review models.
 /crash-analysis - Autonomous crash root-cause analysis (see below)
 /oss-forensics - GitHub forensic investigation (see below)
 /create-skill - Save approaches (alpha)
@@ -45,6 +45,7 @@ Projects are opt-in named workspaces that corral analysis runs into a shared dir
 /project findings              # shows merged findings across runs
 /project coverage              # shows tool coverage summary
 /project report                # merged view across all runs
+/project correlate             # cross-run finding correlation
 /project clean --keep 3        # delete old runs
 /project none                  # clear active project
 ```

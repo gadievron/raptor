@@ -49,6 +49,26 @@ _MODEL_STEMS: tuple[tuple[str, Family], ...] = (
 )
 
 
+_FAMILY_TO_PROVIDER: dict[Family, str] = {
+    "anthropic": "anthropic",
+    "openai": "openai",
+    "google": "gemini",
+    "meta": "ollama",
+    "mistral": "mistral",
+    "ollama": "ollama",
+}
+
+
+def provider_for_family(family: Family) -> str:
+    """Map a model family to its provider string (for ModelConfig)."""
+    return _FAMILY_TO_PROVIDER.get(family, "")
+
+
+def provider_of(model_id: str) -> str:
+    """Shorthand: model identifier → provider string."""
+    return provider_for_family(family_of(model_id))
+
+
 def family_of(model_id: str) -> Family:
     """Return the model family for a model identifier.
 
