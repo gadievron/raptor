@@ -405,6 +405,50 @@ def test_max_total_tokens_none_means_no_cap() -> None:
     assert out.terminated_by == "complete"
 
 
+def test_provider_error_message_surfaces_on_loop_result() -> None:
+    """When the provider returns ``StopReason.ERROR`` with an
+    ``error_message`` populated, the loop forwards it onto both the
+    ``LoopTerminated`` event and ``ToolLoopResult.error_message`` so
+    callers can present the actual cause to operators rather than
+    seeing it only in warning logs."""
+    events: list[Any] = []
+    fp = _FakeProvider([
+        TurnResponse(
+            content=[],
+            stop_reason=StopReason.ERROR,
+            input_tokens=0, output_tokens=0,
+            error_message="permanent error after 1 attempt(s): 401 invalid api key",
+        ),
+    ])
+    loop = ToolUseLoop(fp, [_echo_tool()], events=events.append)
+    result = loop.run("hi")
+
+    assert result.terminated_by == "provider_error"
+    assert result.error_message is not None
+    assert "401" in result.error_message
+    terminated = [e for e in events if isinstance(e, LoopTerminated)]
+    assert len(terminated) == 1
+    assert terminated[0].error_message == result.error_message
+
+
+def test_provider_error_with_no_message_yields_none() -> None:
+    """Backward compat: providers that return ``ERROR`` without
+    ``error_message`` produce ``ToolLoopResult.error_message=None``,
+    same shape as pre-2026-05-04 behaviour. No spurious string."""
+    fp = _FakeProvider([
+        TurnResponse(
+            content=[],
+            stop_reason=StopReason.ERROR,
+            input_tokens=0, output_tokens=0,
+            # no error_message set
+        ),
+    ])
+    loop = ToolUseLoop(fp, [_echo_tool()])
+    result = loop.run("hi")
+    assert result.terminated_by == "provider_error"
+    assert result.error_message is None
+
+
 def test_max_seconds_real_clock_e2e() -> None:
     """End-to-end against real ``time.monotonic`` (no monkeypatch).
 

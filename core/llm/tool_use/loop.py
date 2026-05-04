@@ -343,10 +343,15 @@ class ToolUseLoop:
                 # (max_tokens / refused / provider_error) so callers can
                 # tell the difference.
                 term_reason = _stop_reason_to_term(response.stop_reason)
+                # Forward error_message from the provider's TurnResponse
+                # so callers can present the actual error rather than
+                # only seeing it in warning logs.
+                err = response.error_message
                 self._emit(LoopTerminated(
                     reason=term_reason,
                     iterations=iteration + 1,
                     total_cost_usd=total_cost_usd,
+                    error_message=err,
                 ))
                 return ToolLoopResult(
                     final_text=_join_text(response.content),
@@ -358,6 +363,7 @@ class ToolUseLoop:
                     total_output_tokens=total_output_tokens,
                     total_cost_usd=total_cost_usd,
                     terminated_by=term_reason,    # type: ignore[arg-type]
+                    error_message=err,
                 )
 
             # ---- dispatch tools -----------------------------------------

@@ -976,15 +976,14 @@ class OpenAICompatibleProvider(LLMProvider):
                     )
                 if not _is_transient_openai(exc) or attempt >= max_retries:
                     kind = "transient" if _is_transient_openai(exc) else "permanent"
-                    logger.warning(
-                        f"OpenAICompatibleProvider.turn: {kind} error "
-                        f"after {attempt + 1} attempt(s): {exc}"
-                    )
+                    err_msg = f"{kind} error after {attempt + 1} attempt(s): {exc}"
+                    logger.warning(f"OpenAICompatibleProvider.turn: {err_msg}")
                     return TurnResponse(
                         content=[],
                         stop_reason=StopReason.ERROR,
                         input_tokens=0,
                         output_tokens=0,
+                        error_message=err_msg,
                     )
                 delay = backoff_factor ** attempt
                 logger.info(
@@ -996,6 +995,7 @@ class OpenAICompatibleProvider(LLMProvider):
             return TurnResponse(
                 content=[], stop_reason=StopReason.ERROR,
                 input_tokens=0, output_tokens=0,
+                error_message="exhausted retries",
             )
         duration = time.monotonic() - t_start
 
@@ -1004,6 +1004,7 @@ class OpenAICompatibleProvider(LLMProvider):
             return TurnResponse(
                 content=[], stop_reason=StopReason.ERROR,
                 input_tokens=0, output_tokens=0,
+                error_message="empty choices in response",
             )
         choice = resp.choices[0]
         msg = choice.message
@@ -1493,15 +1494,14 @@ class AnthropicProvider(LLMProvider):
             except (APIConnectionError, APIStatusError, APIError) as exc:
                 if not _is_transient_anthropic(exc) or attempt >= max_retries:
                     kind = "transient" if _is_transient_anthropic(exc) else "permanent"
-                    logger.warning(
-                        f"AnthropicProvider.turn: {kind} error after "
-                        f"{attempt + 1} attempt(s): {exc}"
-                    )
+                    err_msg = f"{kind} error after {attempt + 1} attempt(s): {exc}"
+                    logger.warning(f"AnthropicProvider.turn: {err_msg}")
                     return TurnResponse(
                         content=[],
                         stop_reason=StopReason.ERROR,
                         input_tokens=0,
                         output_tokens=0,
+                        error_message=err_msg,
                     )
                 delay = backoff_factor ** attempt
                 logger.info(
@@ -1513,6 +1513,7 @@ class AnthropicProvider(LLMProvider):
             return TurnResponse(
                 content=[], stop_reason=StopReason.ERROR,
                 input_tokens=0, output_tokens=0,
+                error_message="exhausted retries",
             )
         duration = time.monotonic() - t_start
 
@@ -1591,6 +1592,14 @@ class AnthropicProvider(LLMProvider):
         minimum won't trigger spurious warnings, but real silent-
         no-op cases on production-sized prompts (cve-diff: 5K+ tokens
         of system + tools) still surface.
+
+        Scope: per-provider-instance. Each ``LLMClient`` builds its
+        own provider via ``_get_provider``, and a fresh agentic run
+        typically constructs a fresh client. Operators running the
+        same setup repeatedly will see the warning once per run —
+        loud enough to act on, not so loud as to hide in noise. A
+        cross-process / cross-run dedup would need module-level
+        state and isn't worth the complexity for a one-time signal.
         """
         if self._caching_warning_emitted:
             return
@@ -2240,11 +2249,13 @@ class ClaudeCodeLLMProvider(LLMProvider):
                 system_prompt=sys_combined,
             )
         except RuntimeError as exc:
-            logger.warning(f"ClaudeCodeLLMProvider.turn: subprocess error: {exc}")
+            err_msg = f"subprocess error: {exc}"
+            logger.warning(f"ClaudeCodeLLMProvider.turn: {err_msg}")
             return TurnResponse(
                 content=[],
                 stop_reason=StopReason.ERROR,
                 input_tokens=0, output_tokens=0,
+                error_message=err_msg,
             )
 
         # Per-call cost / tokens come from the response directly so

@@ -203,6 +203,7 @@ class TurnResponse:
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     cost_usd: float | None = None
+    error_message: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +351,7 @@ class LoopTerminated:
     ]
     iterations: int
     total_cost_usd: float
+    error_message: str | None = None
 
 
 LoopEvent = Union[
@@ -411,3 +413,4 @@ class ToolLoopResult:
         "context_overflow",
         "provider_error",
     ]
+    error_message: str | None = None

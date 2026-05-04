@@ -515,7 +515,9 @@ def test_standard_endpoint_does_not_carry_beta_kwargs() -> None:
 
 def test_api_error_returns_error_stop_reason() -> None:
     """Permanent API errors surface as ``StopReason.ERROR`` after
-    retries are exhausted (or immediately for non-transient errors)."""
+    retries are exhausted (or immediately for non-transient errors).
+    The error_message is populated so callers don't have to read the
+    warning log to know what failed."""
     from anthropic import APIConnectionError                # type: ignore[import-not-found]
 
     p, c = _provider_with_stub()
@@ -531,6 +533,8 @@ def test_api_error_returns_error_stop_reason() -> None:
     )
     assert out.stop_reason is StopReason.ERROR
     assert out.content == []
+    assert out.error_message is not None
+    assert "Connection error" in out.error_message or "APIConnectionError" in out.error_message or "error after" in out.error_message
 
 
 # ---------------------------------------------------------------------------
