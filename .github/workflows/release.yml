@@ -28,20 +28,33 @@ jobs:
         id: tag
         env:
           INPUT_TAG: ${{ github.event.inputs.tag }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "name=${INPUT_TAG}" >> "$GITHUB_OUTPUT"
           else
             echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate tag
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          if ! echo "${TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Tag '${TAG}' does not match vX.Y.Z format"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor HEAD origin/main 2>/dev/null; then
+            echo "::warning::Tagged commit is not on main — verify this is intentional"
           fi
 
       - name: Generate changelog
         id: changelog
         env:
           TAG: ${{ steps.tag.outputs.name }}
+          REPO: ${{ github.repository }}
         run: |
-          # Find the previous tag
-          PREV_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -v "^${TAG}$" | head -1)
+          PREV_TAG=$(git tag --sort=version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | awk -v tag="${TAG}" '$0 == tag {exit} {last=$0} END {print last}')
 
           if [ -z "$PREV_TAG" ]; then
             echo "No previous tag found, using all commits"
@@ -51,65 +64,92 @@ jobs:
             COMMITS=$(git log --pretty=format:"%s" "${PREV_TAG}..HEAD")
           fi
 
-          # Group commits into sections
-          FEATURES=$(echo "$COMMITS" | grep -iE '^feat(\(.+\))?:' | sed 's/^feat[^:]*:[[:space:]]*/- /' || true)
-          FIXES=$(echo "$COMMITS" | grep -iE '^fix(\(.+\))?:' | sed 's/^fix[^:]*:[[:space:]]*/- /' || true)
-          SECURITY=$(echo "$COMMITS" | grep -iE '^security(\(.+\))?:|^sec(\(.+\))?:' | sed 's/^sec[^:]*:[[:space:]]*/- /' || true)
-          DOCS=$(echo "$COMMITS" | grep -iE '^docs(\(.+\))?:' | sed 's/^docs[^:]*:[[:space:]]*/- /' || true)
-          OTHER=$(echo "$COMMITS" | grep -ivE '^(feat|fix|security|sec|docs)(\(.+\))?:' | sed 's/^/- /' || true)
+          FEATURES=$(echo "$COMMITS" | grep -iE '^feat(\(.+\))?:' | sed -E 's/^[^:]+:[[:space:]]*/- /' || true)
+          FIXES=$(echo "$COMMITS" | grep -iE '^fix(\(.+\))?:' | sed -E 's/^[^:]+:[[:space:]]*/- /' || true)
+          SECURITY=$(echo "$COMMITS" | grep -iE '^(security|sec)(\(.+\))?:' | sed -E 's/^[^:]+:[[:space:]]*/- /' || true)
+          DOCS=$(echo "$COMMITS" | grep -iE '^docs(\(.+\))?:' | sed -E 's/^[^:]+:[[:space:]]*/- /' || true)
+          OTHER=$(echo "$COMMITS" | grep -ivE '^(feat|fix|security|sec|docs|release|chore|ci|test|build|style)(\(.+\))?:' | sed 's/^/- /' || true)
 
-          # Build changelog
           CHANGELOG="## What's changed in ${TAG}"
           if [ -n "$PREV_TAG" ]; then
             CHANGELOG="${CHANGELOG} (since ${PREV_TAG})"
           fi
           CHANGELOG="${CHANGELOG}
 
-"
+          "
 
-          if [ -n "$FEATURES" ]; then
-            CHANGELOG="${CHANGELOG}### New features
-${FEATURES}
+          [ -n "$FEATURES" ] && CHANGELOG="${CHANGELOG}### New features
+          ${FEATURES}
 
-"
-          fi
+          "
+          [ -n "$SECURITY" ] && CHANGELOG="${CHANGELOG}### Security
+          ${SECURITY}
 
-          if [ -n "$SECURITY" ]; then
-            CHANGELOG="${CHANGELOG}### Security
-${SECURITY}
+          "
+          [ -n "$FIXES" ] && CHANGELOG="${CHANGELOG}### Bug fixes
+          ${FIXES}
 
-"
-          fi
+          "
+          [ -n "$DOCS" ] && CHANGELOG="${CHANGELOG}### Docs
+          ${DOCS}
 
-          if [ -n "$FIXES" ]; then
-            CHANGELOG="${CHANGELOG}### Bug fixes
-${FIXES}
+          "
+          [ -n "$OTHER" ] && CHANGELOG="${CHANGELOG}### Other changes
+          ${OTHER}
 
-"
-          fi
-
-          if [ -n "$DOCS" ]; then
-            CHANGELOG="${CHANGELOG}### Docs
-${DOCS}
-
-"
-          fi
-
-          if [ -n "$OTHER" ]; then
-            CHANGELOG="${CHANGELOG}### Other changes
-${OTHER}
-
-"
-          fi
+          "
 
           if [ -n "$PREV_TAG" ]; then
-            CHANGELOG="${CHANGELOG}**Full diff:** https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG}"
+            CHANGELOG="${CHANGELOG}**Full diff:** https://github.com/${REPO}/compare/${PREV_TAG}...${TAG}"
           fi
 
-          # Write to file and output (escape for multiline)
           echo "$CHANGELOG" > /tmp/changelog.md
           cat /tmp/changelog.md
           echo "file=/tmp/changelog.md" >> "$GITHUB_OUTPUT"
+
+      - name: Stamp release version
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          python3 -c "
+          import sys, re
+          tag = sys.argv[1]
+          ver = tag.lstrip('v')
+
+          # raptor-offset banner
+          text = open('raptor-offset').read()
+          def replace_banner(m):
+              prefix = m.group(1)
+              content = prefix + tag
+              pad = 76 - len(content)
+              return content + ' ' * pad + '║'
+          text = re.sub(r'(║\s+Based on Claude Code - )\S+[^║]*║', replace_banner, text)
+          open('raptor-offset', 'w').write(text)
+
+          # core/config.py VERSION
+          text = open('core/config.py').read()
+          text = re.sub(
+              r'^(\s+VERSION = \")[^\"]+(\")' ,
+              lambda m: m.group(1) + ver + m.group(2),
+              text, count=1, flags=re.MULTILINE)
+          open('core/config.py', 'w').write(text)
+          " "$TAG"
+          echo "Stamped:"
+          grep "Based on Claude Code" raptor-offset
+          grep 'VERSION = ' core/config.py | head -1
+
+      - name: Commit version stamp and update tag
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add raptor-offset core/config.py
+          if ! git diff --cached --quiet; then
+            git commit -m "release: stamp ${TAG}"
+            git tag -a -f "${TAG}" -m "Release ${TAG}"
+            git push --force origin "refs/tags/${TAG}"
+          fi
 
       - name: Build release archives
         env:
@@ -117,29 +157,11 @@ ${OTHER}
         run: |
           NAME="raptor-${TAG}"
 
-          # Create a clean export (no git history, no dev/output artifacts)
           git archive --format=tar --prefix="${NAME}/" HEAD | tar -x -C /tmp
 
-          # Remove things that don't belong in a release
           cd /tmp
-          rm -rf \
-            "${NAME}/out" \
-            "${NAME}/codeql_dbs" \
-            "${NAME}/.vscode" \
-            "${NAME}/docs/img"
-
-          # Remove Python cache and test fixtures
-          find "${NAME}" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-          find "${NAME}" -type d -name ".venv" -exec rm -rf {} + 2>/dev/null || true
-          find "${NAME}" -name "*.pyc" -delete 2>/dev/null || true
-
-          # Build zip
           zip -r "${NAME}.zip" "${NAME}" -x "*.DS_Store"
-
-          # Build tar.gz
           tar -czf "${NAME}.tar.gz" "${NAME}"
-
-          # Checksums
           sha256sum "${NAME}.zip" "${NAME}.tar.gz" > "${NAME}-checksums.txt"
 
           echo "Archives built:"
@@ -151,6 +173,8 @@ ${OTHER}
           TAG: ${{ steps.tag.outputs.name }}
         run: |
           NAME="raptor-${TAG}"
+
+          gh release delete "${TAG}" --yes 2>/dev/null || true
 
           gh release create "${TAG}" \
             --verify-tag \
