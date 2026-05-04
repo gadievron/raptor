@@ -947,6 +947,7 @@ class OpenAICompatibleProvider(LLMProvider):
             APIConnectionError,
             APIStatusError,
         )
+        t_start = time.monotonic()
         for attempt in range(max_retries + 1):
             try:
                 resp = self.client.chat.completions.create(**kwargs)
@@ -996,6 +997,7 @@ class OpenAICompatibleProvider(LLMProvider):
                 content=[], stop_reason=StopReason.ERROR,
                 input_tokens=0, output_tokens=0,
             )
+        duration = time.monotonic() - t_start
 
         # ---- normalise response --------------------------------------
         if not resp.choices:
@@ -1022,7 +1024,7 @@ class OpenAICompatibleProvider(LLMProvider):
             ))
 
         usage = resp.usage
-        return TurnResponse(
+        turn_response = TurnResponse(
             content=out_blocks,
             stop_reason=stop,
             input_tokens=(getattr(usage, "prompt_tokens", 0) or 0) if usage else 0,
@@ -1031,6 +1033,20 @@ class OpenAICompatibleProvider(LLMProvider):
             cache_read_tokens=0,
             cache_write_tokens=0,
         )
+        # Track usage so multi-turn loop spend rolls into provider
+        # stats. Symmetric with ``generate()`` and the Anthropic
+        # ``turn()`` impl. Without this, ``LLMClient.get_stats()``
+        # reports 0 cost / 0 tokens for tool-use no matter how many
+        # turns the loop ran for.
+        cost = self.compute_cost(turn_response)
+        self.track_usage(
+            tokens=turn_response.input_tokens + turn_response.output_tokens,
+            cost=cost,
+            input_tokens=turn_response.input_tokens,
+            output_tokens=turn_response.output_tokens,
+            duration=duration,
+        )
+        return turn_response
 
 
 # ---------------------------------------------------------------------------
@@ -1461,6 +1477,7 @@ class AnthropicProvider(LLMProvider):
             APIError,
             APIStatusError,
         )
+        t_start = time.monotonic()
         for attempt in range(max_retries + 1):
             try:
                 resp = create_fn(**send_kwargs)
@@ -1489,6 +1506,7 @@ class AnthropicProvider(LLMProvider):
                 content=[], stop_reason=StopReason.ERROR,
                 input_tokens=0, output_tokens=0,
             )
+        duration = time.monotonic() - t_start
 
         # ---- normalise response --------------------------------------
         stop = _ANTHROPIC_STOP_REASON_MAP.get(
@@ -1507,7 +1525,7 @@ class AnthropicProvider(LLMProvider):
                 ))
 
         usage = resp.usage
-        return TurnResponse(
+        turn_response = TurnResponse(
             content=out_blocks,
             stop_reason=stop,
             input_tokens=(getattr(usage, "input_tokens", 0) or 0) if usage else 0,
@@ -1519,6 +1537,20 @@ class AnthropicProvider(LLMProvider):
                 getattr(usage, "cache_creation_input_tokens", 0) or 0
             ) if usage else 0,
         )
+        # Track usage so multi-turn loop spend shows up alongside
+        # generate() in provider stats. Without this, ``LLMClient.
+        # get_stats()`` reports 0 cost / 0 tokens for tool-use even
+        # when the loop ran for many turns. Cost via ``compute_cost``
+        # so cache multipliers (1.25x write, 0.1x read) apply.
+        cost = self.compute_cost(turn_response)
+        self.track_usage(
+            tokens=turn_response.input_tokens + turn_response.output_tokens,
+            cost=cost,
+            input_tokens=turn_response.input_tokens,
+            output_tokens=turn_response.output_tokens,
+            duration=duration,
+        )
+        return turn_response
 
 
 # ---------------------------------------------------------------------------
