@@ -20,6 +20,16 @@ from typing import Any, Optional
 from core.config import RaptorConfig
 from core.logging import get_logger
 
+# Maximum bytes to persist from OpenAnt subprocess stderr. Generous upper bound
+# for any reasonable error trace; bounded so a misbehaving OpenAnt that spams
+# stderr in a tight loop cannot fill the disk.
+STDERR_MAX_BYTES = 1_000_000  # 1 MiB
+
+# Languages exposed by OpenAnt's --language CLI flag.
+# Zig and others may be auto-detected but are not valid --language values.
+# Source: `openant scan --help` → `--language {auto,python,javascript,go,c,ruby,php}`
+_OPENANT_CLI_LANGUAGES = {"auto", "python", "javascript", "go", "c", "ruby", "php"}
+
 from .config import OpenAntConfig
 
 logger = get_logger()
@@ -56,6 +66,10 @@ def _run_subprocess(
 
     Using PYTHONPATH (subprocess-scoped) instead of sys.path.insert prevents
     OpenAnt's `core/` package from shadowing Raptor's `core/` in this process.
+
+    cwd is set to config.core_path so that Python's implicit '' sys.path entry
+    (the working directory) resolves to openant-core rather than Raptor's repo
+    root — which also contains a `core/` package and would otherwise shadow it.
     """
     env = _build_subprocess_env(config)
     cmd = _build_command(repo_path, out_dir, config)
@@ -68,6 +82,7 @@ def _run_subprocess(
             text=True,
             timeout=config.timeout_seconds,
             env=env,
+            cwd=str(config.core_path),
         )
     except subprocess.TimeoutExpired:
         return _empty_result(
@@ -76,12 +91,20 @@ def _run_subprocess(
     except Exception as exc:  # noqa: BLE001
         return _empty_result(f"OpenAnt launch failed: {exc}")
 
-    # Persist full stderr so debugging isn't capped at the 600-char snippet
+    # Persist stderr so debugging isn't capped at the 600-char snippet
     # we surface to the caller. (Adversarial-audit finding: long warnings
     # could push the actual error past the truncation point.)
+    # Cap at STDERR_MAX_BYTES (1 MiB) so a misbehaving subprocess cannot
+    # fill the disk by spamming stderr in a tight loop.
     if proc.stderr:
         try:
-            (out_dir / "openant.stderr.log").write_text(proc.stderr)
+            stderr_to_write = proc.stderr[:STDERR_MAX_BYTES]
+            if len(proc.stderr) > STDERR_MAX_BYTES:
+                stderr_to_write += (
+                    f"\n\n[truncated — original was {len(proc.stderr)} bytes, "
+                    f"capped at {STDERR_MAX_BYTES}]\n"
+                )
+            (out_dir / "openant.stderr.log").write_text(stderr_to_write)
         except OSError:
             pass
 
@@ -109,18 +132,41 @@ def _run_subprocess(
     }
 
 
+def _find_venv_python(core_path: Path) -> str:
+    """Return the Python executable that has OpenAnt's tree-sitter bindings.
+
+    BUG-R-017: sys.executable (Raptor's Python) lacks tree-sitter-c,
+    tree-sitter-ruby, tree-sitter-php, tree-sitter-javascript. Those packages
+    are only installed in OpenAnt's own venv at core_path/.venv/bin/python3.
+    Prefer that venv Python; fall back to sys.executable if the venv is absent.
+
+    Uses os.access(path, os.X_OK) instead of .exists() to avoid returning a
+    venv Python that exists on disk but is not executable (e.g., wrong mode bits).
+    """
+    for candidate in ("python3", "python3.11", "python3.12", "python3.13", "python"):
+        venv_python = core_path / ".venv" / "bin" / candidate
+        if os.access(venv_python, os.X_OK):
+            return str(venv_python)
+    return sys.executable
+
+
 def _build_command(
     repo_path: Path,
     out_dir: Path,
     config: OpenAntConfig,
 ) -> list[str]:
+    python_exe = _find_venv_python(config.core_path)
+    # BUG-R-018: not all language names are valid --language CLI choices.
+    # Languages like 'zig' are auto-detected but not exposed as CLI values.
+    # Fall back to 'auto' for unrecognized language strings.
+    lang = config.language if config.language in _OPENANT_CLI_LANGUAGES else "auto"
     cmd: list[str] = [
-        sys.executable, "-m", "openant",
+        python_exe, "-m", "openant",
         "scan", str(repo_path),
         "--output", str(out_dir),
         "--model", config.model,
         "--level", config.level,
-        "--language", config.language,
+        "--language", lang,
         "--workers", str(config.workers),
         "--no-report",
     ]
