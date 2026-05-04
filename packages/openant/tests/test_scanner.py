@@ -216,22 +216,133 @@ class TestBugNewCwdIsolation(unittest.TestCase):
 
 
 class TestBugR012NoAnalyzeRemoved(unittest.TestCase):
-    """BUG-R-012: --no-analyze flag was declared but inactive. Removed.
-
-    Regression check: the flag must NOT appear in the launcher's argparse
-    spec (otherwise it would be silently accepted and mislead users).
-    """
+    """BUG-R-012: --no-analyze flag was declared but inactive. Removed."""
 
     def test_no_analyze_flag_absent(self):
-        # Read the launcher source and assert the flag is gone.
-        # parents[3] = raptor-integration root (this file is at
-        # raptor-integration/packages/openant/tests/test_scanner.py).
         launcher = Path(__file__).parents[3] / "raptor_openant.py"
         text = launcher.read_text()
         self.assertNotIn("--no-analyze", text,
                          "--no-analyze flag should be removed (BUG-R-012)")
         self.assertNotIn("no_analyze", text,
                          "no_analyze references should be removed")
+
+
+class TestBugR017VenvPythonSelection(unittest.TestCase):
+    """BUG-R-017: scanner must use OpenAnt venv Python, not sys.executable.
+
+    Pre-fix: _build_command used sys.executable (Raptor's Python 3.14) which
+    lacks tree_sitter_c, tree_sitter_ruby, tree_sitter_php, tree_sitter_javascript.
+    These bindings are only installed in OpenAnt's .venv.
+
+    Post-fix: _find_venv_python() checks core_path/.venv/bin/python3 first.
+    """
+
+    def test_venv_python_preferred_when_present(self):
+        """When .venv/bin/python3 exists in core_path, it must be used."""
+        from packages.openant.scanner import _find_venv_python
+        with tempfile.TemporaryDirectory() as tmp:
+            core = Path(tmp) / "openant-core"
+            venv_python = core / ".venv" / "bin" / "python3"
+            venv_python.parent.mkdir(parents=True)
+            venv_python.touch()
+            venv_python.chmod(0o755)
+
+            result = _find_venv_python(core)
+            self.assertEqual(result, str(venv_python))
+
+    def test_falls_back_to_sys_executable_when_no_venv(self):
+        """Without a venv, must fall back to sys.executable."""
+        from packages.openant.scanner import _find_venv_python
+        import sys
+        with tempfile.TemporaryDirectory() as tmp:
+            core = Path(tmp) / "openant-core-no-venv"
+            core.mkdir()
+            result = _find_venv_python(core)
+            self.assertEqual(result, sys.executable)
+
+    def test_build_command_uses_venv_python(self):
+        """_build_command must use the venv Python as the first command element."""
+        from packages.openant.scanner import _build_command
+        from packages.openant.config import OpenAntConfig
+        with tempfile.TemporaryDirectory() as tmp:
+            core = _make_fake_core(Path(tmp))
+            venv_python = core / ".venv" / "bin" / "python3"
+            venv_python.parent.mkdir(parents=True)
+            venv_python.touch()
+            venv_python.chmod(0o755)
+
+            config = OpenAntConfig(core_path=core)
+            cmd = _build_command(Path("/repo"), Path("/out"), config)
+            self.assertEqual(cmd[0], str(venv_python),
+                "First element of command must be venv Python, not sys.executable")
+
+    def test_static_check_sys_executable_only_as_fallback(self):
+        """scanner.py must reference sys.executable only as a fallback,
+        not as the primary Python for the subprocess command."""
+        scanner_src = (Path(__file__).parents[1] / "scanner.py").read_text()
+        # _find_venv_python must exist
+        self.assertIn("_find_venv_python", scanner_src)
+        # sys.executable must appear only inside _find_venv_python (fallback)
+        # and NOT in _build_command
+        build_cmd_idx = scanner_src.find("def _build_command")
+        venv_fn_idx = scanner_src.find("def _find_venv_python")
+        build_cmd_body = scanner_src[build_cmd_idx:venv_fn_idx]
+        self.assertNotIn("sys.executable", build_cmd_body,
+            "_build_command must not reference sys.executable directly (BUG-R-017)")
+
+
+class TestBugR018ZigLanguageFallback(unittest.TestCase):
+    """BUG-R-018: --language zig is not a valid OpenAnt CLI choice.
+
+    Pre-fix: _build_command passed --language zig to openant scan, which exited
+    with argparse error: invalid choice: 'zig'. Languages like zig are
+    auto-detected but not exposed in OpenAnt's --language CLI enum.
+
+    Post-fix: language values not in _OPENANT_CLI_LANGUAGES fall back to 'auto'.
+    """
+
+    def test_zig_maps_to_auto(self):
+        """config.language='zig' must produce --language auto in the command."""
+        from packages.openant.scanner import _build_command
+        from packages.openant.config import OpenAntConfig
+        with tempfile.TemporaryDirectory() as tmp:
+            core = _make_fake_core(Path(tmp))
+            config = OpenAntConfig(core_path=core, language="zig")
+            cmd = _build_command(Path("/repo"), Path("/out"), config)
+            lang_idx = cmd.index("--language")
+            self.assertEqual(cmd[lang_idx + 1], "auto",
+                "zig must map to auto (not a valid --language choice)")
+
+    def test_known_languages_pass_through_unchanged(self):
+        """python, c, ruby, php, go, javascript, auto must not be remapped."""
+        from packages.openant.scanner import _build_command, _OPENANT_CLI_LANGUAGES
+        from packages.openant.config import OpenAntConfig
+        for lang in _OPENANT_CLI_LANGUAGES - {"auto"}:
+            with tempfile.TemporaryDirectory() as tmp:
+                core = _make_fake_core(Path(tmp))
+                config = OpenAntConfig(core_path=core, language=lang)
+                cmd = _build_command(Path("/repo"), Path("/out"), config)
+                lang_idx = cmd.index("--language")
+                self.assertEqual(cmd[lang_idx + 1], lang,
+                    f"Known language '{lang}' must not be remapped to auto")
+
+    def test_unrecognized_language_maps_to_auto(self):
+        """Any unrecognized language (e.g., 'cobol') maps to auto."""
+        from packages.openant.scanner import _build_command
+        from packages.openant.config import OpenAntConfig
+        with tempfile.TemporaryDirectory() as tmp:
+            core = _make_fake_core(Path(tmp))
+            config = OpenAntConfig(core_path=core, language="cobol")
+            cmd = _build_command(Path("/repo"), Path("/out"), config)
+            lang_idx = cmd.index("--language")
+            self.assertEqual(cmd[lang_idx + 1], "auto")
+
+    def test_openant_cli_languages_constant_matches_known_set(self):
+        """Static check: _OPENANT_CLI_LANGUAGES contains the expected values."""
+        from packages.openant.scanner import _OPENANT_CLI_LANGUAGES
+        expected = {"auto", "python", "javascript", "go", "c", "ruby", "php"}
+        self.assertEqual(_OPENANT_CLI_LANGUAGES, expected,
+            "Update _OPENANT_CLI_LANGUAGES if OpenAnt adds new --language choices")
 
 
 if __name__ == "__main__":

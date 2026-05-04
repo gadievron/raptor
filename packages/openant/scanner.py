@@ -25,6 +25,11 @@ from core.logging import get_logger
 # stderr in a tight loop cannot fill the disk.
 STDERR_MAX_BYTES = 1_000_000  # 1 MiB
 
+# Languages exposed by OpenAnt's --language CLI flag.
+# Zig and others may be auto-detected but are not valid --language values.
+# Source: `openant scan --help` → `--language {auto,python,javascript,go,c,ruby,php}`
+_OPENANT_CLI_LANGUAGES = {"auto", "python", "javascript", "go", "c", "ruby", "php"}
+
 from .config import OpenAntConfig
 
 logger = get_logger()
@@ -127,18 +132,38 @@ def _run_subprocess(
     }
 
 
+def _find_venv_python(core_path: Path) -> str:
+    """Return the Python executable that has OpenAnt's tree-sitter bindings.
+
+    BUG-R-017: sys.executable (Raptor's Python) lacks tree-sitter-c,
+    tree-sitter-ruby, tree-sitter-php, tree-sitter-javascript. Those packages
+    are only installed in OpenAnt's own venv at core_path/.venv/bin/python3.
+    Prefer that venv Python; fall back to sys.executable if the venv is absent.
+    """
+    for candidate in ("python3", "python3.11", "python3.12", "python3.13", "python"):
+        venv_python = core_path / ".venv" / "bin" / candidate
+        if venv_python.exists():
+            return str(venv_python)
+    return sys.executable
+
+
 def _build_command(
     repo_path: Path,
     out_dir: Path,
     config: OpenAntConfig,
 ) -> list[str]:
+    python_exe = _find_venv_python(config.core_path)
+    # BUG-R-018: not all language names are valid --language CLI choices.
+    # Languages like 'zig' are auto-detected but not exposed as CLI values.
+    # Fall back to 'auto' for unrecognized language strings.
+    lang = config.language if config.language in _OPENANT_CLI_LANGUAGES else "auto"
     cmd: list[str] = [
-        sys.executable, "-m", "openant",
+        python_exe, "-m", "openant",
         "scan", str(repo_path),
         "--output", str(out_dir),
         "--model", config.model,
         "--level", config.level,
-        "--language", config.language,
+        "--language", lang,
         "--workers", str(config.workers),
         "--no-report",
     ]
