@@ -9,6 +9,7 @@ requests>=2.31.0
 # here too because we depend on it directly.
 urllib3>=2.0,<3.0
 pydantic>=2.9.2
+typer>=0.12
 
 # Structured output (works with both OpenAI and Anthropic SDKs)
 instructor>=1.0.0
