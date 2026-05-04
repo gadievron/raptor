@@ -1,7 +1,7 @@
-# Requirements specific to the `packages/web` module
-# These are installed by consumers of the web package or can be
-# installed in the devcontainer to enable web scanning/browser automation.
-# Exact pins per the project's "no loose deps" policy — see
-# requirements.txt for the rationale.
+# Requirements specific to the `packages/web` module.
+# Exact pins per the project's "no loose deps" policy.
 beautifulsoup4==4.14.3
 playwright==1.58.0
+requests==2.33.0
+pyyaml==6.0.3
+cryptography==46.0.3

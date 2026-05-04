@@ -195,7 +195,6 @@ class WebCrawler:
             return
 
         if len(self.visited_urls) >= self.max_pages:
-            logger.info(f"Max pages limit reached ({self.max_pages})")
             return
 
         if url in self.visited_urls:

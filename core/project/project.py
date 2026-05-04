@@ -230,9 +230,16 @@ class ProjectManager:
         if not output_dir:
             output_dir = str((DEFAULT_OUTPUT_BASE / name).resolve())
 
+        # URLs (http:// / https://) are valid targets for web scans.
+        # Do not resolve them as filesystem paths -- store as-is.
+        is_url = target.startswith(("http://", "https://", "ftp://"))
+        resolved_target = (
+            target if (not resolve_target or is_url)
+            else str(Path(target).resolve())
+        )
         project = Project(
             name=name,
-            target=str(Path(target).resolve()) if resolve_target else target,
+            target=resolved_target,
             output_dir=output_dir,
             created=created or datetime.now(timezone.utc).isoformat(),
             description=description,
@@ -527,8 +534,9 @@ class ProjectManager:
         return None
 
     def find_project_for_target(self, target: str) -> Optional[Project]:
-        """Auto-detect: find a project whose target matches the given path."""
-        resolved = str(Path(target).resolve())
+        """Auto-detect: find a project whose target matches the given path or URL."""
+        is_url = target.startswith(("http://", "https://", "ftp://"))
+        resolved = target if is_url else str(Path(target).resolve())
         for project in self.list_projects():
             if project.target == resolved:
                 return project

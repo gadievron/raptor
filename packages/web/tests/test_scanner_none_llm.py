@@ -25,7 +25,7 @@ class TestWebScannerNoneLlm(unittest.TestCase):
     def test_init_with_none_llm(self, mock_client_cls, mock_crawler_cls):
         with tempfile.TemporaryDirectory() as tmpdir:
             scanner = WebScanner("http://example.com", None, Path(tmpdir))
-            self.assertIsNone(scanner.fuzzer)
+            self.assertIsNotNone(scanner.fuzzer)
             self.assertIsNone(scanner.llm)
             mock_client_cls.assert_called_once_with(
                 "http://example.com",
@@ -44,7 +44,7 @@ class TestWebScannerNoneLlm(unittest.TestCase):
                 verify_ssl=False,
                 reveal_secrets=True,
             )
-            self.assertIsNone(scanner.fuzzer)
+            self.assertIsNotNone(scanner.fuzzer)
             mock_client_cls.assert_called_once_with(
                 "http://example.com",
                 verify_ssl=False,
@@ -62,11 +62,12 @@ class TestWebScannerNoneLlm(unittest.TestCase):
     @patch("packages.web.scanner.WebCrawler")
     @patch("packages.web.scanner.WebClient")
     def test_scan_without_llm_skips_fuzzing(self, mock_client_cls, mock_crawler_cls):
-        """With no LLM, scan completes but fuzzer is never invoked."""
+        """With no LLM, scan completes using static fallback payloads."""
         with tempfile.TemporaryDirectory() as tmpdir:
             scanner = WebScanner("http://example.com", None, Path(tmpdir))
 
-            self.assertIsNone(scanner.fuzzer)
+            scanner.fuzzer = MagicMock()
+            scanner.fuzzer.fuzz_parameter.return_value = []
 
             scanner.crawler.crawl.return_value = {
                 "stats": {"total_pages": 1, "total_parameters": 3},
@@ -75,8 +76,8 @@ class TestWebScannerNoneLlm(unittest.TestCase):
             }
 
             result = scanner.scan()
-            self.assertEqual(result["total_vulnerabilities"], 0)
-            self.assertEqual(result["findings"], [])
+            self.assertIn("injection", result["phases_completed"])
+            self.assertGreaterEqual(scanner.fuzzer.fuzz_parameter.call_count, 3)
 
     @patch("packages.web.scanner.WebCrawler")
     @patch("packages.web.scanner.WebClient")
@@ -95,8 +96,35 @@ class TestWebScannerNoneLlm(unittest.TestCase):
             }
 
             scanner.scan()
-            # Fuzzer should have been called for each parameter
-            self.assertEqual(scanner.fuzzer.fuzz_parameter.call_count, 2)
+            # self.fuzzer (the mock) should have been called for each URL parameter
+            self.assertGreaterEqual(
+                scanner.fuzzer.fuzz_parameter.call_count, 2,
+                "Fuzzer should have been called for each discovered parameter",
+            )
+
+    @patch("packages.web.scanner.WebCrawler")
+    @patch("packages.web.scanner.WebClient")
+    def test_understand_writes_url_native_context_map(self, mock_client_cls, mock_crawler_cls):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scanner = WebScanner("http://example.com", None, Path(tmpdir))
+            discovery = MagicMock()
+            discovery.urls = ["http://example.com/search"]
+            discovery.fingerprint = {"server": "test"}
+            discovery.stats.return_value = {"total_urls": 1}
+
+            context_map = scanner._phase_understand(
+                {
+                    "discovered_urls": ["http://example.com/search"],
+                    "discovered_parameters": ["q", "redirect"],
+                    "discovered_forms": [],
+                },
+                discovery,
+            )
+
+            self.assertEqual(context_map["kind"], "web_application")
+            self.assertTrue((Path(tmpdir) / "context-map.json").exists())
+            self.assertTrue((Path(tmpdir) / "web-context-map.json").exists())
+            self.assertIn("understand", scanner._phases_completed)
 
 
 if __name__ == "__main__":

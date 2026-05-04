@@ -10,7 +10,11 @@ class DummyLLM:
 
 
 def _response():
-    return SimpleNamespace(status_code=200, content=b"ok", text="sql syntax error")
+    return SimpleNamespace(
+        status_code=200,
+        content=b"ok",
+        text="You have an error in your SQL syntax near ''1'='1'",
+    )
 
 
 def test_web_crawler_redacts_secret_url_artifacts_by_default():

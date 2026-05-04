@@ -117,9 +117,12 @@ def get_output_dir(command: str, target_name: str = "", explicit_out: str = None
     if active:
         project_dir, project_name, project_target = active
 
-        # Validate target matches the project
+        # Validate target matches the project.
+        # Skip the check when the project target is a URL (web scans) --
+        # filesystem path comparison is meaningless for URL targets.
         effective_target = target_path or os.environ.get("RAPTOR_CALLER_DIR")
-        if effective_target and project_target:
+        project_is_url = project_target.startswith(("http://", "https://", "ftp://"))
+        if effective_target and project_target and not project_is_url:
             _check_target_mismatch(effective_target, project_name, project_target)
 
         # Project mode: command-YYYYMMDD-HHMMSS-pidNNNNN (hyphens throughout).

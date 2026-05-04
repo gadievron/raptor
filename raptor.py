@@ -381,6 +381,66 @@ def mode_fuzz(args: list) -> int:
                               "Starting binary fuzzing workflow...")
 
 
+def _run_web_with_lifecycle(web_script: Path, args: list) -> int:
+    """Lifecycle wrapper for web scans.
+
+    Web targets are URLs, not filesystem paths -- the standard
+    _run_with_lifecycle would pass the URL to the project system as a
+    target_path and trigger a TargetMismatchError or store a URL as a
+    directory path. This variant resolves the output directory without
+    a target_path and injects RAPTOR_DIR into the subprocess env so
+    core.* imports resolve correctly.
+    """
+    from core.config import RaptorConfig
+    from core.run.output import get_output_dir
+
+    # Resolve output dir without a filesystem target
+    try:
+        out_dir = get_output_dir("web", target_path=None)
+    except Exception as e:
+        print(f"✗ Could not resolve output directory: {e}", file=sys.stderr)
+        return 1
+
+    start_run(out_dir, "web", target=None)
+
+    if "--out" not in args:
+        args = args + ["--out", str(out_dir)]
+
+    print(f"\n[*] Running web application security scanner...\n")
+
+    # Build env: safe baseline + RAPTOR_DIR + LLM API keys.
+    # get_safe_env() strips API keys (they're dangerous for untrusted repo
+    # subprocesses) but the web scanner is our own trusted code, not target
+    # code, so it's safe to pass them through.
+    env = RaptorConfig.get_safe_env()
+    raptor_dir = str(Path(__file__).parent)
+    env["RAPTOR_DIR"] = raptor_dir
+    for key in (
+        "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
+        "RAPTOR_LLM_CMD", "RAPTOR_OUT_DIR",
+    ):
+        if key in os.environ:
+            env[key] = os.environ[key]
+
+    cmd = [sys.executable, str(web_script)] + args
+    try:
+        import subprocess
+        result = subprocess.run(cmd, env=env)
+        rc = result.returncode
+    except KeyboardInterrupt:
+        print("\n\nInterrupted by user")
+        rc = 130
+    except Exception as e:
+        print(f"\n✗ Error running web scanner: {e}")
+        rc = 1
+
+    if rc == 0:
+        complete_run(out_dir)
+    else:
+        fail_run(out_dir, error=f"exit code {rc}")
+    return rc
+
+
 def mode_web(args: list) -> int:
     """Run web application security testing."""
     script_root = Path(__file__).parent
@@ -390,11 +450,10 @@ def mode_web(args: list) -> int:
         print(f"✗ Web scanner not found: {web_script}")
         return 1
 
-    # Display alpha warning
-    print("\nWARNING: /web is a STUB and should not be relied upon. Consider a placeholder/in alpha.\n")
-
-    return _run_with_lifecycle("web", web_script, args,
-                              "Running web application scanner...")
+    # Web targets are URLs, not filesystem paths. Use _run_web_with_lifecycle
+    # rather than _run_with_lifecycle to avoid the project system treating
+    # the URL as a filesystem target_path.
+    return _run_web_with_lifecycle(web_script, args)
 
 
 def mode_agentic(args: list) -> int:
@@ -604,6 +663,10 @@ def main():
         print(f"\nAvailable modes: {', '.join(mode_handlers.keys())}")
         print("\nRun 'python3 raptor.py --help' for more information")
         return 1
+
+    if "-h" in remaining or "--help" in remaining:
+        show_mode_help(mode)
+        return 0
     
     # Execute the mode handler
     handler = mode_handlers[mode]
