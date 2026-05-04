@@ -163,7 +163,7 @@ def _run_script(script_path: Path, args: list) -> int:
     
     try:
         from core.config import RaptorConfig
-        result = subprocess.run(cmd, env=RaptorConfig.get_safe_env())
+        result = subprocess.run(cmd, env=RaptorConfig.get_llm_env())
         return result.returncode
     except KeyboardInterrupt:
         print("\n\nInterrupted by user")

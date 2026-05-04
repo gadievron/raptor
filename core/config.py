@@ -484,6 +484,32 @@ class RaptorConfig:
         env["PYTHONUNBUFFERED"] = "1"
         return env
 
+    # LLM provider API-key env vars.  These are intentionally NOT in
+    # SAFE_ENV_ALLOWLIST — untrusted-code subprocesses (CodeQL builds,
+    # fuzz harnesses) must never see credentials.  get_llm_env() layers
+    # them on top of get_safe_env() for our own LLM-calling scripts.
+    LLM_API_KEY_VARS = (
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "GEMINI_API_KEY",
+        "MISTRAL_API_KEY",
+    )
+
+    @staticmethod
+    def get_llm_env() -> dict:
+        """Return get_safe_env() plus any LLM API keys present in the
+        real environment.
+
+        Use this for spawning RAPTOR's own analysis scripts that may call
+        LLM providers.  Do NOT use for untrusted-code subprocesses.
+        """
+        env = RaptorConfig.get_safe_env()
+        for var in RaptorConfig.LLM_API_KEY_VARS:
+            val = os.environ.get(var)
+            if val:
+                env[var] = val
+        return env
+
     @staticmethod
     def get_git_env() -> dict:
         """

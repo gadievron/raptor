@@ -116,6 +116,42 @@ class TestSafeEnv:
                 assert name not in env, f"{name} leaked into safe env"
 
 
+class TestLlmEnv:
+    """get_llm_env() passes API keys that get_safe_env() blocks."""
+
+    def test_safe_env_blocks_api_keys(self):
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}):
+            env = RaptorConfig.get_safe_env()
+            assert "ANTHROPIC_API_KEY" not in env
+
+    def test_llm_env_passes_api_keys(self):
+        keys = {
+            "ANTHROPIC_API_KEY": "sk-ant-test",
+            "OPENAI_API_KEY": "sk-test",
+            "GEMINI_API_KEY": "AIza-test",
+            "MISTRAL_API_KEY": "mist-test",
+        }
+        with patch.dict(os.environ, keys):
+            env = RaptorConfig.get_llm_env()
+            for name, val in keys.items():
+                assert env.get(name) == val, f"{name} missing from llm env"
+
+    def test_llm_env_omits_unset_keys(self):
+        with patch.dict(os.environ, {}, clear=True):
+            os.environ["PATH"] = "/usr/bin"
+            os.environ["HOME"] = "/tmp"
+            env = RaptorConfig.get_llm_env()
+            for var in RaptorConfig.LLM_API_KEY_VARS:
+                assert var not in env
+
+    def test_llm_env_still_strips_dangerous(self):
+        with patch.dict(os.environ, {"LD_PRELOAD": "/tmp/evil.so",
+                                      "ANTHROPIC_API_KEY": "sk-ant-test"}):
+            env = RaptorConfig.get_llm_env()
+            assert "LD_PRELOAD" not in env
+            assert env.get("ANTHROPIC_API_KEY") == "sk-ant-test"
+
+
 # NOTE: `TestCheckRepoClaudeSettings` was removed — the function
 # `_check_repo_claude_settings` in raptor_agentic.py was superseded by
 # `check_repo_claude_trust` in `core/security/cc_trust.py` (PR #185).
