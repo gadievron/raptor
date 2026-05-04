@@ -459,15 +459,21 @@ class AutonomousSecurityAgentV2:
         try:
             logger.info("Sending dataflow to LLM for deep validation...")
 
-            validation, _response = self.llm.generate_structured(
+            raw_validation, _response = self.llm.generate_structured(
                 prompt=validation_prompt,
                 schema=validation_schema,
                 system_prompt=system_prompt
             )
 
-            if validation is None:
+            if raw_validation is None:
                 logger.info("No external LLM available — skipping dataflow validation")
                 return {}
+
+            from core.llm.response_validation import validate_structured_response
+            validated = validate_structured_response(raw_validation, validation_schema)
+            validation = validated.data
+            if validated.quality < 0.5:
+                logger.warning(f"Low-quality dataflow validation (q={validated.quality:.2f}), incomplete: {validated.incomplete}")
 
             logger.info("✓ Dataflow validation complete:")
             logger.info(f"  Source attacker-controlled: {validation.get('source_attacker_controlled')}")
@@ -562,15 +568,21 @@ class AutonomousSecurityAgentV2:
                 logger.info("Sending vulnerability to LLM for analysis...")
 
             # Use LLM for intelligent analysis
-            analysis, _full_response = self.llm.generate_structured(
+            raw_analysis, _full_response = self.llm.generate_structured(
                 prompt=prompt,
                 schema=analysis_schema,
                 system_prompt=system_prompt
             )
 
-            if analysis is None:
+            if raw_analysis is None:
                 logger.debug("Prep mode — Phase 4 will handle analysis")
                 return False
+
+            from core.llm.response_validation import validate_structured_response
+            validated = validate_structured_response(raw_analysis, analysis_schema)
+            analysis = validated.data
+            if validated.quality < 0.5:
+                logger.warning(f"Low-quality LLM response (q={validated.quality:.2f}), incomplete: {validated.incomplete}")
 
             vuln.exploitable = analysis.get("is_exploitable", False)
             vuln.exploitability_score = analysis.get("exploitability_score", 0.0)

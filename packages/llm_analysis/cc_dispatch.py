@@ -73,7 +73,18 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
     model = parsed.pop("analysed_by", "claude-code")
     duration = parsed.pop("duration_seconds", 0)
 
-    return DispatchResult(result=parsed, cost=cost, tokens=tokens, model=model, duration=duration)
+    quality = 1.0
+    if schema and isinstance(parsed, dict) and "error" not in parsed:
+        from core.llm.response_validation import validate_structured_response
+        validated = validate_structured_response(parsed, effective_schema)
+        parsed = validated.data
+        quality = validated.quality
+        if validated.quality < 0.5:
+            logger.warning("Low-quality CC response (q=%.2f), incomplete: %s",
+                           validated.quality, validated.incomplete)
+
+    return DispatchResult(result=parsed, cost=cost, tokens=tokens, model=model,
+                          duration=duration, quality=quality)
 
 
 def write_debug(

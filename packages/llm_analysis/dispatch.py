@@ -28,12 +28,14 @@ class DispatchResult:
     """Normalised result from any dispatch path (external LLM or CC)."""
 
     def __init__(self, result: Dict[str, Any], cost: float = 0.0,
-                 tokens: int = 0, model: str = "", duration: float = 0.0):
+                 tokens: int = 0, model: str = "", duration: float = 0.0,
+                 quality: float = 1.0):
         self.result = result
         self.cost = cost
         self.tokens = tokens
         self.model = model
         self.duration = duration
+        self.quality = quality
 
 
 class DispatchTask:
