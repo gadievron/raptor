@@ -27,7 +27,7 @@ def test_reachability_imported_threaded_into_findings_json(tmp_path: Path) -> No
 
     http = StubHttp()
     cache = JsonCache(root=tmp_path / "cache")
-    result = run_sca(target, out, RunOptions(), http=http, cache=cache)
+    result = run_sca(target, out, RunOptions(enable_llm_review=False, enable_triage=False), http=http, cache=cache)
     assert result.vuln_findings == 1
     rows = json.loads(result.findings_path.read_text())
     sca_row = [r for r in rows if r["vuln_type"] == "sca:vulnerable_dependency"][0]
@@ -87,7 +87,7 @@ def test_reachability_imported_for_used_python_dep(tmp_path: Path) -> None:
 
     http = Http()
     cache = JsonCache(root=tmp_path / "cache")
-    result = run_sca(target, out, RunOptions(), http=http, cache=cache)
+    result = run_sca(target, out, RunOptions(enable_llm_review=False, enable_triage=False), http=http, cache=cache)
     rows = json.loads(result.findings_path.read_text())
     sca_row = [r for r in rows if r["vuln_type"] == "sca:vulnerable_dependency"][0]
     assert sca_row["sca"]["reachability"]["verdict"] == "imported"

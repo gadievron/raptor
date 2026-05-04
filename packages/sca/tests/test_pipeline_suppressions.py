@@ -76,7 +76,7 @@ suppressions:
 """)
     out = tmp_path / "out"
     cache = JsonCache(root=tmp_path / "cache")
-    result = run_sca(target, out, RunOptions(),
+    result = run_sca(target, out, RunOptions(enable_llm_review=False, enable_triage=False),
                      http=StubHttp(), cache=cache)
     assert result.suppressed_findings >= 1
 
@@ -94,7 +94,7 @@ def test_no_suppression_file_means_no_suppressed_findings(
     target = _build_target(tmp_path)
     out = tmp_path / "out"
     cache = JsonCache(root=tmp_path / "cache")
-    result = run_sca(target, out, RunOptions(),
+    result = run_sca(target, out, RunOptions(enable_llm_review=False, enable_triage=False),
                      http=StubHttp(), cache=cache)
     assert result.suppressed_findings == 0
 
@@ -128,7 +128,7 @@ suppressions:
 """)
     out = tmp_path / "out"
     cache = JsonCache(root=tmp_path / "cache")
-    run_sca(target, out, RunOptions(), http=StubHttp(), cache=cache)
+    run_sca(target, out, RunOptions(enable_llm_review=False, enable_triage=False), http=StubHttp(), cache=cache)
     md = (out / "report.md").read_text()
     assert "Suppressed" in md
     assert "(suppressed: ack)" in md

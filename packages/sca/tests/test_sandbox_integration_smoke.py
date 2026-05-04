@@ -71,7 +71,7 @@ def test_egress_swap_is_transparent_to_findings(tmp_path: Path) -> None:
     out_a = tmp_path / "out_stub"
     result_a = run_sca(
         target=target, output_dir=out_a,
-        options=RunOptions(),
+        options=RunOptions(enable_llm_review=False, enable_triage=False),
         http=StubHttp(), cache=cache,
     )
     baseline = _read_json(result_a.findings_path)
@@ -93,7 +93,8 @@ def test_egress_swap_is_transparent_to_findings(tmp_path: Path) -> None:
 
     result_b = run_sca(
         target=target, output_dir=out_b,
-        options=RunOptions(offline=True),
+        options=RunOptions(offline=True, enable_llm_review=False,
+                           enable_triage=False),
         http=egress, cache=cache,
     )
     swapped = _read_json(result_b.findings_path)

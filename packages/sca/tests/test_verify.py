@@ -135,7 +135,7 @@ def test_findings_path_lets_caller_skip_baseline_run(tmp_path: Path) -> None:
     # Run once to produce the baseline findings.
     from packages.sca.pipeline import RunOptions, run_sca
     base_dir = tmp_path / "base"
-    base = run_sca(target, base_dir, RunOptions(), http=StubHttp(),
+    base = run_sca(target, base_dir, RunOptions(enable_llm_review=False, enable_triage=False), http=StubHttp(),
                    cache=cache)
     assert base.findings_path.exists()
 

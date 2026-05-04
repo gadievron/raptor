@@ -164,7 +164,7 @@ def test_run_sca_end_to_end_against_log4shell_fixture(tmp_path: Path) -> None:
     cache = JsonCache(root=tmp_path / "cache")
     result = run_sca(
         target=target, output_dir=out,
-        options=RunOptions(),
+        options=RunOptions(enable_llm_review=False, enable_triage=False),
         http=http, cache=cache,
     )
 
@@ -255,13 +255,13 @@ def test_run_sca_warm_cache_avoids_network_on_second_run(tmp_path: Path) -> None
 
     cache = JsonCache(root=tmp_path / "cache")
     http1 = StubHttp()
-    run_sca(target, out1, RunOptions(), http=http1, cache=cache)
+    run_sca(target, out1, RunOptions(enable_llm_review=False, enable_triage=False), http=http1, cache=cache)
     posts_first = len(http1.posts)
     gets_first = len(http1.gets)
 
     http2 = StubHttp()
     cache2 = JsonCache(root=tmp_path / "cache")     # same root, same data
-    result = run_sca(target, out2, RunOptions(), http=http2, cache=cache2)
+    result = run_sca(target, out2, RunOptions(enable_llm_review=False, enable_triage=False), http=http2, cache=cache2)
     assert http2.posts == []
     assert http2.gets == []
     assert result.cache_hits > 0

@@ -177,7 +177,7 @@ def test_tier_a_signals_all_present(tmp_path: Path) -> None:
     http = StubHttp()
     result = run_sca(
         target=target, output_dir=out,
-        options=RunOptions(),
+        options=RunOptions(enable_llm_review=False, enable_triage=False),
         http=http, cache=cache,
     )
 

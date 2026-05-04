@@ -865,6 +865,14 @@ Examples:
              "trust checks read the same signal.",
     )
 
+    # SCA integration
+    parser.add_argument("--sca", action="store_true",
+                        help="Run /sca dependency analysis between scanning and validation")
+    parser.add_argument("--skip-sca-review", action="store_true",
+                        help="Skip LLM review stages in /sca (mechanical-only)")
+    parser.add_argument("--skip-sca-triage", action="store_true",
+                        help="Skip LLM triage stage in /sca")
+
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(parser)
     args = parser.parse_args()
@@ -1548,6 +1556,51 @@ Examples:
     print(f"SARIF files: {len(sarif_files)}")
 
     # ========================================================================
+    # PHASE 1b: SCA — DEPENDENCY ANALYSIS (opt-in via --sca)
+    # ========================================================================
+    sca_result = None
+    sca_findings_path = None
+    if args.sca:
+        print("\n" + "=" * 70)
+        print("SCA — DEPENDENCY ANALYSIS")
+        print("=" * 70)
+
+        try:
+            from packages.sca.pipeline import run_sca, RunOptions as ScaRunOptions
+
+            sca_out = out_dir / "sca"
+            sca_out.mkdir(exist_ok=True)
+            sca_options = ScaRunOptions(
+                enable_llm_review=not args.skip_sca_review,
+                enable_triage=not args.skip_sca_triage,
+            )
+            sca_result = run_sca(
+                target=original_repo_path,
+                output_dir=sca_out,
+                options=sca_options,
+            )
+            sca_findings_path = sca_out / "findings.json"
+
+            print(f"\n✓ SCA complete:")
+            print(f"  - Dependencies analysed: {sca_result.deps_analysed}")
+            print(f"  - Vulnerability findings: {sca_result.vuln_findings}")
+            print(f"  - Hygiene findings: {sca_result.hygiene_findings}")
+            print(f"  - Supply-chain findings: {sca_result.supply_chain_findings}")
+            if sca_result.llm_reviews_run:
+                print(f"  - LLM reviews: {sca_result.llm_reviews_run}")
+            if sca_result.triage_run:
+                print(f"  - Triage: completed")
+            logger.info("SCA complete: %d vulns, %d hygiene, %d supply-chain",
+                        sca_result.vuln_findings, sca_result.hygiene_findings,
+                        sca_result.supply_chain_findings)
+        except ImportError:
+            print("⚠️  SCA package not available — skipping dependency analysis")
+            logger.warning("SCA import failed — packages/sca not installed")
+        except Exception as e:
+            print(f"⚠️  SCA failed: {e}")
+            logger.error("SCA phase failed: %s", e, exc_info=True)
+
+    # ========================================================================
     # PHASE 2: EXPLOITABILITY VALIDATION
     # ========================================================================
     # Run validation phase (handles all modes: skip, dedup-only, full validation)
@@ -1563,6 +1616,7 @@ Examples:
         skip_dedup=args.skip_dedup,
         skip_feasibility=not (args.binary or args.check_mitigations),
         external_llm=llm_env.external_llm,
+        sca_findings_path=sca_findings_path,
     )
 
     # ========================================================================
@@ -1758,6 +1812,16 @@ Examples:
                     "languages": list(codeql_metrics.get('languages_detected', {}).keys()) if codeql_metrics else [],
                 },
             },
+            "sca": {
+                "enabled": args.sca,
+                "completed": sca_result is not None,
+                "deps_analysed": sca_result.deps_analysed if sca_result else 0,
+                "vuln_findings": sca_result.vuln_findings if sca_result else 0,
+                "hygiene_findings": sca_result.hygiene_findings if sca_result else 0,
+                "supply_chain_findings": sca_result.supply_chain_findings if sca_result else 0,
+                "llm_reviews": sca_result.llm_reviews_run if sca_result else 0,
+                "triage_run": sca_result.triage_run if sca_result else False,
+            },
             "exploitability_validation": {
                 "completed": bool(validation_result),
                 "skipped": args.skip_dedup,
@@ -1780,6 +1844,8 @@ Examples:
         },
         "outputs": {
             "sarif_files": [str(f) for f in sarif_files],
+            "sca_findings": str(sca_findings_path) if sca_findings_path and sca_findings_path.exists() else None,
+            "sca_report": str(out_dir / "sca" / "report.md") if sca_result else None,
             "validation_report": str(out_dir / "validation" / "findings.json") if validation_result else None,
             "autonomous_report": str(analysis_report) if analysis_report and analysis_report.exists() else None,
             "orchestrated_report": str(out_dir / "orchestrated_report.json") if orchestration_result else None,

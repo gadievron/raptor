@@ -152,6 +152,11 @@ def _run_analyse(argv: List[str]) -> int:
                           if args.offline_db_path else None),
         enable_transitive_expansion=not args.no_resolve_transitive,
         fallback_registry_metadata=args.fallback_registry_metadata,
+        enable_llm_review=not args.skip_review,
+        enable_triage=not args.skip_triage,
+        review_maintainers=args.review_maintainers,
+        enable_llm_inline_installs=args.llm_inline_installs,
+        enable_impact_analysis=args.impact_analysis,
     )
 
     try:
@@ -309,6 +314,30 @@ def _parse_analyse_args(argv: Sequence[str]) -> argparse.Namespace:
              "workflow extraction of pip / apt / yum / dnf / apk installs",
     )
     parser.add_argument(
+        "--skip-review", action="store_true",
+        help="skip LLM behavioural review stages (install-hook, "
+             "maintainer-trust, version-diff)",
+    )
+    parser.add_argument(
+        "--skip-triage", action="store_true",
+        help="skip LLM triage ranking of findings",
+    )
+    parser.add_argument(
+        "--review-maintainers", action="store_true",
+        help="run LLM maintainer-trust review on all direct deps, "
+             "not just those with maintainer-churn findings",
+    )
+    parser.add_argument(
+        "--llm-inline-installs", action="store_true",
+        help="run LLM pass over Dockerfile/shell/GHA to find deps "
+             "the mechanical parser missed (default: off)",
+    )
+    parser.add_argument(
+        "--impact-analysis", action="store_true",
+        help="run LLM upgrade-impact analysis for proposed version bumps "
+             "(default: auto when --allow-major is set)",
+    )
+    parser.add_argument(
         "--cache-root",
         help="override default ~/.raptor/cache/sca cache root",
     )
@@ -361,6 +390,18 @@ def _print_summary(result) -> None:
         f"sca: in-KEV            {result.in_kev}",
         f"sca: supply-chain      {result.supply_chain_findings}",
         f"sca: hygiene findings  {result.hygiene_findings}",
+    ])
+    if result.llm_reviews_run or result.llm_reviews_failed:
+        lines.append(
+            f"sca: LLM reviews       {result.llm_reviews_run} enriched"
+            + (f", {result.llm_reviews_failed} failed"
+               if result.llm_reviews_failed else ""),
+        )
+    if result.triage_run:
+        lines.append("sca: LLM triage        done")
+    if result.llm_cost > 0:
+        lines.append(f"sca: LLM cost          ${result.llm_cost:.4f}")
+    lines.extend([
         f"sca: cache             {result.cache_hits} hits / "
         f"{result.cache_misses} misses",
         f"sca: findings.json     {result.findings_path}",

@@ -110,6 +110,78 @@ class AnalysisTask(DispatchTask):
         return out
 
 
+def _is_sca_finding(f: Dict) -> bool:
+    return f.get("source_type") == "dependency" or (
+        f.get("vuln_type", "").startswith("sca:")
+    )
+
+
+def _sca_exploit_priority(f: Dict) -> float:
+    """Score an SCA finding for exploit-target ranking (higher = better target)."""
+    sca = f.get("sca", {})
+    score = 0.0
+    if sca.get("in_kev"):
+        score += 50.0
+    epss = sca.get("epss")
+    if epss is not None:
+        score += float(epss) * 30.0
+    reach = sca.get("reachability", "not_evaluated")
+    if reach == "likely_called":
+        score += 20.0
+    elif reach == "imported":
+        score += 10.0
+    cvss = sca.get("cvss_score")
+    if cvss is not None:
+        score += float(cvss)
+    return score
+
+
+def _build_sca_exploit_prompt(finding: Dict) -> str:
+    """Build an exploit-oriented prompt for an SCA vulnerability finding."""
+    sca = finding.get("sca", {})
+    lines = [
+        f"Vulnerable dependency: {sca.get('ecosystem', '?')}/{sca.get('name', '?')}@{sca.get('version', '?')}",
+        f"Advisory: {finding.get('finding_id', 'unknown')}",
+        f"Severity: {finding.get('severity', 'unknown')}",
+        f"Description: {finding.get('description', 'N/A')}",
+    ]
+    if sca.get("cvss_score"):
+        lines.append(f"CVSS: {sca['cvss_score']}")
+    if sca.get("in_kev"):
+        lines.append("KEV: YES — known exploited in the wild")
+    if sca.get("epss"):
+        lines.append(f"EPSS: {sca['epss']:.1%}")
+    lines.append(f"Reachability: {sca.get('reachability', 'not_evaluated')}")
+    if sca.get("fixed_version"):
+        lines.append(f"Fixed in: {sca['fixed_version']}")
+    lines.append(f"Declared in: {finding.get('file_path', 'unknown')}")
+    lines.append("")
+    lines.append("Generate a proof-of-concept exploit that demonstrates this "
+                 "vulnerability is exploitable in a project that imports this "
+                 "dependency. Focus on the specific advisory and version.")
+    return "\n".join(lines)
+
+
+def _build_sca_patch_prompt(finding: Dict) -> str:
+    """Build a patch prompt for an SCA vulnerability finding."""
+    sca = finding.get("sca", {})
+    lines = [
+        f"Vulnerable dependency: {sca.get('ecosystem', '?')}/{sca.get('name', '?')}@{sca.get('version', '?')}",
+        f"Advisory: {finding.get('finding_id', 'unknown')}",
+        f"Severity: {finding.get('severity', 'unknown')}",
+        f"Description: {finding.get('description', 'N/A')}",
+    ]
+    if sca.get("fixed_version"):
+        lines.append(f"Fixed version: {sca['fixed_version']}")
+    lines.append(f"Manifest: {finding.get('file_path', 'unknown')}")
+    lines.append("")
+    lines.append("Generate a minimal patch that upgrades this dependency to "
+                 "the fixed version. Show the exact manifest change needed. "
+                 "If no fixed version exists, suggest a workaround or "
+                 "alternative package.")
+    return "\n".join(lines)
+
+
 class ExploitTask(DispatchTask):
     """Exploit PoC generation for exploitable findings."""
 
@@ -146,6 +218,8 @@ class ExploitTask(DispatchTask):
         return selected
 
     def build_prompt(self, finding):
+        if _is_sca_finding(finding):
+            return _build_sca_exploit_prompt(finding)
         # Phase D: inject source_intel structural evidence for
         # memory-corruption findings so the exploit generator sees the
         # same structural context the analysis step saw (allocations,
@@ -214,6 +288,8 @@ class PatchTask(DispatchTask):
         return selected
 
     def build_prompt(self, finding):
+        if _is_sca_finding(finding):
+            return _build_sca_patch_prompt(finding)
         # Phase D: inject source_intel structural evidence so the
         # patch generator sees the structural context (allocations,
         # hazards, sanitizer-shaped sites) when crafting a fix.

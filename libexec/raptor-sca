@@ -82,6 +82,18 @@ def _parse_analyse(argv):
     p.add_argument("--trust-repo", action="store_true",
                    help="treat the target as trusted (passes through to "
                         "future sandbox-gated operations)")
+    p.add_argument("--skip-review", action="store_true",
+                   help="skip LLM behavioural review stages")
+    p.add_argument("--skip-triage", action="store_true",
+                   help="skip LLM triage ranking of findings")
+    p.add_argument("--review-maintainers", action="store_true",
+                   help="run LLM maintainer-trust review on all direct deps")
+    p.add_argument("--llm-inline-installs", action="store_true",
+                   help="run LLM pass over Dockerfile/shell/GHA to find deps "
+                        "the mechanical parser missed")
+    p.add_argument("--impact-analysis", action="store_true",
+                   help="run LLM upgrade-impact analysis for proposed "
+                        "version bumps")
     p.add_argument("--cache-root")
     p.add_argument("-v", "--verbose", action="count", default=0)
     return p.parse_args(argv)
@@ -145,6 +157,11 @@ def _run_analyse(argv):
         use_offline_db=args.use_offline_db,
         offline_db_path=(Path(args.offline_db_path)
                           if args.offline_db_path else None),
+        enable_llm_review=not args.skip_review,
+        enable_triage=not args.skip_triage,
+        review_maintainers=args.review_maintainers,
+        enable_llm_inline_installs=args.llm_inline_installs,
+        enable_impact_analysis=args.impact_analysis,
     )
 
     try:

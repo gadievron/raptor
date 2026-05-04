@@ -21,7 +21,7 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence
 
 from core.json import JsonCache
 from . import SCA_CACHE_ROOT
@@ -113,6 +113,21 @@ class RunOptions:
                                                 # add operator triage
                                                 # cost; opt in via
                                                 # ``--fallback-registry-metadata``.
+    enable_llm_review: bool = True              # LLM behavioural review of
+                                                # install hooks, version
+                                                # diffs, maintainer trust.
+                                                # ``--skip-review`` disables.
+    enable_triage: bool = True                  # LLM triage ranking.
+                                                # ``--skip-triage`` disables.
+    review_maintainers: bool = False            # Force maintainer-trust
+                                                # review for all direct deps.
+    enable_llm_inline_installs: bool = False    # LLM pass over inline
+                                                # install files to catch
+                                                # missed deps.
+                                                # ``--llm-inline-installs``.
+    enable_impact_analysis: bool = False        # LLM upgrade-impact
+                                                # analysis for version bumps.
+                                                # ``--impact-analysis``.
 
 
 @dataclass
@@ -139,6 +154,10 @@ class RunResult:
     # gets the full breakdown.
     transitive_statuses: List = field(default_factory=list)
     transitive_added: int = 0
+    llm_reviews_run: int = 0
+    llm_reviews_failed: int = 0
+    triage_run: bool = False
+    llm_cost: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +232,20 @@ def run_sca(
                 len({d.ecosystem for d in new_transitives}),
             )
             raw_deps.extend(new_transitives)
+
+    # 1b. LLM inline-install review — ask the LLM to find deps the
+    #     mechanical parser missed in Dockerfiles, shell scripts, GHA
+    #     workflows. Opt-in via ``--llm-inline-installs``.
+    if options.enable_llm_inline_installs and not options.offline:
+        llm_inline_deps = _run_llm_inline_review(
+            manifests=manifests, raw_deps=raw_deps, target=target,
+        )
+        if llm_inline_deps:
+            logger.info(
+                "sca.pipeline: LLM inline-install review found %d "
+                "additional dep(s)", len(llm_inline_deps),
+            )
+            raw_deps.extend(llm_inline_deps)
 
     joined = join_deps(raw_deps)
     logger.info("sca.pipeline: %d manifests, %d deps after join",
@@ -322,7 +355,46 @@ def run_sca(
                 suppressed_total, _suppressions.SUPPRESS_FILENAME,
             )
 
-    # 8. Write artefacts.
+    # 8. LLM behavioural review + triage (best-effort; degrades to
+    #    mechanical-only when no LLM is available).
+    llm_reviews_run = 0
+    llm_reviews_failed = 0
+    triage_run = False
+    llm_cost = 0.0
+
+    if options.enable_llm_review and not options.offline:
+        llm_reviews_run, llm_reviews_failed, llm_cost = _run_llm_stages(
+            supply_chain_findings=supply_chain_findings,
+            vuln_findings=vuln_findings,
+            hygiene_findings=hygiene_findings,
+            canonical=canonical,
+            http=http,
+            options=options,
+            output_dir=output_dir,
+            target=target,
+        )
+
+    if options.enable_triage and not options.offline:
+        triage_run, triage_cost = _run_triage(
+            vuln_findings=vuln_findings,
+            hygiene_findings=hygiene_findings,
+            supply_chain_findings=supply_chain_findings,
+            output_dir=output_dir,
+        )
+        llm_cost += triage_cost
+
+    # 8b. LLM upgrade-impact analysis — for vuln findings with a known
+    #     fixed_version, classify whether the bump will break the project.
+    if options.enable_impact_analysis and not options.offline:
+        impact_cost = _run_upgrade_impact(
+            vuln_findings=vuln_findings,
+            canonical=canonical,
+            target=target,
+            output_dir=output_dir,
+        )
+        llm_cost += impact_cost
+
+    # 9. Write artefacts.
     findings_path = output_dir / "findings.json"
     report_path = output_dir / "report.md"
     write_findings_json(
@@ -379,7 +451,431 @@ def run_sca(
                    if f.in_kev and not f.suppressed),
         cache_hits=cache.hits,
         cache_misses=cache.misses,
+        llm_reviews_run=llm_reviews_run,
+        llm_reviews_failed=llm_reviews_failed,
+        triage_run=triage_run,
+        llm_cost=llm_cost,
     )
+
+
+# ---------------------------------------------------------------------------
+# LLM stages
+# ---------------------------------------------------------------------------
+
+def _run_llm_stages(
+    *,
+    supply_chain_findings,
+    vuln_findings,
+    hygiene_findings,
+    canonical,
+    http,
+    options,
+    output_dir,
+    target,
+) -> tuple:
+    """Run LLM review stages.  Returns (reviews_run, reviews_failed, cost)."""
+    from .llm import get_llm_client
+
+    client = get_llm_client()
+    if client is None:
+        logger.info("sca.pipeline: LLM unavailable — skipping review stages")
+        return (0, 0, 0.0)
+
+    reviews_run = 0
+    reviews_failed = 0
+    cost = 0.0
+
+    # Install-hook review: enrich existing mechanical findings.
+    try:
+        from .llm.install_hook_review import review_install_hooks
+        before = len([f for f in supply_chain_findings
+                      if f.evidence.get("llm_verdict")])
+        review_install_hooks(client, supply_chain_findings)
+        after = len([f for f in supply_chain_findings
+                     if f.evidence.get("llm_verdict")])
+        enriched = after - before
+        reviews_run += enriched
+        logger.info("sca.pipeline: LLM install-hook review enriched %d finding(s)",
+                     enriched)
+    except Exception:  # noqa: BLE001
+        reviews_failed += 1
+        logger.warning("sca.pipeline: install-hook LLM review failed",
+                        exc_info=True)
+
+    # Maintainer-trust review: for deps with maintainer-churn findings
+    # or when --review-maintainers is set.
+    try:
+        _run_maintainer_review(
+            client, supply_chain_findings, canonical, http, options,
+        )
+    except Exception:  # noqa: BLE001
+        reviews_failed += 1
+        logger.warning("sca.pipeline: maintainer-trust LLM review failed",
+                        exc_info=True)
+
+    # Version-diff review: compare against previous run's dep versions.
+    try:
+        vd_count = _run_version_diff_review(
+            client, canonical, supply_chain_findings, http, output_dir,
+        )
+        reviews_run += vd_count
+    except Exception:  # noqa: BLE001
+        reviews_failed += 1
+        logger.warning("sca.pipeline: version-diff LLM review failed",
+                        exc_info=True)
+
+    # Binary-in-tests review: judge whether test binaries are plausible.
+    try:
+        from .llm.binary_in_tests_review import review_binary_in_tests
+        bin_before = len([f for f in supply_chain_findings
+                          if f.evidence.get("llm_binary_verdict")])
+        review_binary_in_tests(client, supply_chain_findings, target)
+        bin_after = len([f for f in supply_chain_findings
+                         if f.evidence.get("llm_binary_verdict")])
+        reviews_run += (bin_after - bin_before)
+    except Exception:  # noqa: BLE001
+        reviews_failed += 1
+        logger.warning("sca.pipeline: binary-in-tests LLM review failed",
+                        exc_info=True)
+
+    # Cost accounting from the client.
+    try:
+        cost = client.total_cost
+    except Exception:  # noqa: BLE001
+        pass
+
+    return (reviews_run, reviews_failed, cost)
+
+
+def _run_maintainer_review(client, supply_chain_findings, canonical, http, options):
+    """Run maintainer-trust LLM review on flagged deps."""
+    from .llm.maintainer_trust import assess_maintainer_trust
+
+    # Identify deps that triggered maintainer-related mechanical findings.
+    flagged_keys = set()
+    for f in supply_chain_findings:
+        if f.kind in ("maintainer_change", "maintainer_account_change",
+                       "recent_publish"):
+            flagged_keys.add(f.dependency.key())
+
+    if not flagged_keys and not options.review_maintainers:
+        return
+
+    # When --review-maintainers, review all direct deps.
+    deps_to_review = []
+    for dep in canonical:
+        if dep.direct and (options.review_maintainers
+                            or dep.key() in flagged_keys):
+            deps_to_review.append(dep)
+
+    if not deps_to_review:
+        return
+
+    # Build metadata from registry clients.
+    from .registries.pypi import PyPIClient
+    from .registries.npm import NpmClient
+    from core.json import JsonCache
+    from . import SCA_CACHE_ROOT
+
+    cache = JsonCache(root=SCA_CACHE_ROOT)
+    pypi = PyPIClient(http, cache)
+    npm = NpmClient(http, cache)
+
+    for dep in deps_to_review[:20]:
+        meta = {}
+        try:
+            if dep.ecosystem == "PyPI":
+                meta = pypi.get_metadata(dep.name) or {}
+            elif dep.ecosystem == "npm":
+                meta = npm.get_metadata(dep.name) or {}
+            else:
+                continue
+        except Exception:  # noqa: BLE001
+            continue
+
+        verdict = assess_maintainer_trust(client, dep, meta)
+        if verdict is None:
+            continue
+
+        # Attach trust assessment to the finding's evidence.
+        for f in supply_chain_findings:
+            if f.dependency.key() == dep.key():
+                f.evidence["llm_trust_level"] = verdict.trust_level
+                f.evidence["llm_trust_summary"] = verdict.summary
+                f.evidence["llm_trust_concerns"] = list(verdict.concerns)
+
+    logger.info("sca.pipeline: LLM maintainer-trust reviewed %d dep(s)",
+                 len(deps_to_review))
+
+
+def _run_version_diff_review(client, canonical, supply_chain_findings, http, output_dir):
+    """Run LLM version-diff review on deps that changed since the last run.
+
+    Looks for a ``previous-deps.json`` in the output directory's sibling
+    (project-aware) or skips gracefully.  Returns count of enriched findings.
+    """
+    import json as _json_mod
+    from .llm.version_diff_review import review_version_diff
+
+    prev_path = _find_previous_deps(output_dir)
+    if prev_path is None:
+        logger.debug("sca.pipeline: no previous deps found — skipping version-diff review")
+        return 0
+
+    prev_deps: Dict = {}
+    try:
+        rows = _json_mod.loads(prev_path.read_text(encoding="utf-8"))
+        for row in rows:
+            key = (row.get("ecosystem", ""), row.get("name", ""))
+            prev_deps[key] = row.get("version", "")
+    except Exception:  # noqa: BLE001
+        logger.debug("sca.pipeline: failed to parse previous deps", exc_info=True)
+        return 0
+
+    if not prev_deps:
+        return 0
+
+    count = 0
+    for dep in canonical[:30]:
+        key = (dep.ecosystem, dep.name)
+        old_version = prev_deps.get(key)
+        if old_version is None or old_version == (dep.version or ""):
+            continue
+
+        old_dep = Dependency(
+            name=dep.name,
+            ecosystem=dep.ecosystem,
+            version=old_version,
+            source=dep.source,
+            manifest_path=dep.manifest_path,
+        )
+
+        verdict = review_version_diff(client, old_dep, dep, http)
+        if verdict is None:
+            continue
+
+        for f in supply_chain_findings:
+            if f.dependency.key() == dep.key():
+                f.evidence["llm_version_diff_verdict"] = verdict.verdict
+                f.evidence["llm_version_diff_summary"] = verdict.summary
+                if verdict.anomalies:
+                    f.evidence["llm_version_diff_anomalies"] = [
+                        a.model_dump() for a in verdict.anomalies
+                    ]
+        count += 1
+
+    logger.info("sca.pipeline: LLM version-diff reviewed %d dep(s)", count)
+    return count
+
+
+def _find_previous_deps(output_dir: Path) -> Optional[Path]:
+    """Locate the most recent sibling run's findings.json to extract dep versions."""
+    parent = output_dir.parent  # e.g., projects/<name>/runs/ or out/
+    if not parent.is_dir():
+        return None
+    candidates = []
+    for sibling in parent.iterdir():
+        if sibling == output_dir or not sibling.is_dir():
+            continue
+        findings = sibling / "findings.json"
+        if findings.exists():
+            candidates.append(findings)
+    if not candidates:
+        return None
+    # Most recent by mtime.
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0]
+
+
+def _run_triage(
+    *,
+    vuln_findings,
+    hygiene_findings,
+    supply_chain_findings,
+    output_dir,
+) -> tuple:
+    """Run LLM triage.  Returns (ran: bool, cost: float)."""
+    from .llm import get_llm_client
+    from .llm.triage import triage_findings
+    from .findings import write_findings_json
+    import json as _json_mod
+
+    all_findings = vuln_findings + hygiene_findings + supply_chain_findings
+    if not all_findings:
+        return (False, 0.0)
+
+    client = get_llm_client()
+    if client is None:
+        return (False, 0.0)
+
+    # Convert findings to dicts for the triage stage.
+    findings_path = output_dir / "findings.json"
+    if findings_path.exists():
+        rows = _json_mod.loads(findings_path.read_text(encoding="utf-8"))
+    else:
+        rows = []
+
+    sca_rows = [r for r in rows if r.get("vuln_type", "").startswith("sca:")]
+    cross_rows = [r for r in rows if not r.get("vuln_type", "").startswith("sca:")]
+
+    result = triage_findings(client, sca_rows, cross_rows or None)
+    if result is None:
+        return (False, 0.0)
+
+    # Write triage output.
+    triage_path = output_dir / "triage.json"
+    triage_path.write_text(
+        _json_mod.dumps(result.model_dump(), indent=2, default=str),
+        encoding="utf-8",
+    )
+    logger.info("sca.pipeline: LLM triage ranked %d finding(s) → %s",
+                 len(result.items), triage_path)
+
+    cost = 0.0
+    try:
+        cost = client.total_cost
+    except Exception:  # noqa: BLE001
+        pass
+
+    return (True, cost)
+
+
+# ---------------------------------------------------------------------------
+# LLM inline-install review
+# ---------------------------------------------------------------------------
+
+_INLINE_SOURCE_KINDS = {"dockerfile", "devcontainer", "shell_script", "gha_workflow"}
+
+
+def _run_llm_inline_review(
+    *,
+    manifests: List[Manifest],
+    raw_deps: List[Dependency],
+    target: Path,
+) -> List[Dependency]:
+    """Ask the LLM to find deps the mechanical parser missed in inline files.
+
+    Returns new deps (``parser_confidence="low"``, ``source_kind="llm_inline_review"``).
+    """
+    from .llm import get_llm_client
+    from .llm.inline_install_review import review_inline_installs
+
+    client = get_llm_client()
+    if client is None:
+        logger.info("sca.pipeline: LLM unavailable — skipping inline-install review")
+        return []
+
+    inline_manifests = [m for m in manifests if m.ecosystem == "Inline"]
+    if not inline_manifests:
+        return []
+
+    deps_by_file: Dict[Path, List[Dependency]] = defaultdict(list)
+    for d in raw_deps:
+        if d.source_kind in _INLINE_SOURCE_KINDS:
+            deps_by_file[d.declared_in].append(d)
+
+    all_new: List[Dependency] = []
+    for m in inline_manifests[:30]:
+        try:
+            content = m.path.read_text(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            continue
+        if not content.strip():
+            continue
+
+        source_kind = _classify_inline_source(m.path)
+        mechanical = deps_by_file.get(m.path, [])
+        new = review_inline_installs(
+            client, m.path, content, mechanical, source_kind,
+        )
+        all_new.extend(new)
+
+    return all_new
+
+
+# ---------------------------------------------------------------------------
+# LLM upgrade-impact analysis
+# ---------------------------------------------------------------------------
+
+def _run_upgrade_impact(
+    *,
+    vuln_findings: List[VulnFinding],
+    canonical: List[Dependency],
+    target: Path,
+    output_dir: Path,
+) -> float:
+    """Assess upgrade impact for vuln findings that have a known fix version.
+
+    Writes ``upgrade-impact.json`` to the output directory.
+    Returns LLM cost.
+    """
+    import json as _json_mod
+    from .llm import get_llm_client
+    from .llm.upgrade_impact_review import assess_upgrade_impact
+
+    client = get_llm_client()
+    if client is None:
+        logger.info("sca.pipeline: LLM unavailable — skipping upgrade-impact")
+        return 0.0
+
+    dep_by_key = {d.key(): d for d in canonical}
+    results = []
+
+    for vf in vuln_findings:
+        if vf.suppressed:
+            continue
+        if not vf.fixed_version:
+            continue
+        dep = dep_by_key.get(vf.dependency.key())
+        if dep is None:
+            continue
+        new_version = vf.fixed_version
+        verdict = assess_upgrade_impact(
+            client, dep, new_version, target,
+        )
+        if verdict is None:
+            continue
+        results.append({
+            "dep_key": vf.dependency.key(),
+            "old_version": dep.version,
+            "new_version": new_version,
+            "verdict": verdict.verdict,
+            "confidence": verdict.confidence,
+            "breaking_changes": [bc.model_dump() for bc in verdict.breaking_changes],
+            "summary": verdict.summary,
+        })
+
+    if results:
+        (output_dir / "upgrade-impact.json").write_text(
+            _json_mod.dumps(results, indent=2),
+            encoding="utf-8",
+        )
+        logger.info("sca.pipeline: LLM upgrade-impact assessed %d dep(s)",
+                     len(results))
+
+    cost = 0.0
+    try:
+        cost = client.total_cost
+    except Exception:  # noqa: BLE001
+        pass
+    return cost
+
+
+def _classify_inline_source(path: Path) -> str:
+    """Map a file path to the inline source_kind expected by the LLM reviewer."""
+    name = path.name.lower()
+    if "dockerfile" in name or name == "containerfile":
+        return "dockerfile"
+    if "devcontainer" in name:
+        return "devcontainer"
+    if path.suffix in (".sh", ".bash"):
+        return "shell_script"
+    if path.suffix in (".yml", ".yaml"):
+        parts = path.parts
+        for j in range(len(parts) - 2):
+            if parts[j] == ".github" and parts[j + 1] == "workflows":
+                return "gha_workflow"
+    return "shell_script"
 
 
 # ---------------------------------------------------------------------------
