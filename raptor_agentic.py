@@ -194,6 +194,19 @@ Examples:
     parser.add_argument("--sequential", action="store_true",
                        help="Sequential analysis in Phase 3 instead of parallel Phase 4 orchestration")
 
+    # Fuzzing integration (Phase 5: dynamic confirmation)
+    parser.add_argument("--fuzz", action="store_true",
+                       help="Run a short fuzzing campaign (AFL++ or libFuzzer) against --binary "
+                            "after SAST findings. Auto-detects target type and selects fuzzer "
+                            "based on host capabilities.")
+    parser.add_argument("--fuzz-duration", type=int, default=600,
+                       help="Fuzzing campaign duration in seconds when --fuzz is set (default: 600)")
+    parser.add_argument("--fuzz-corpus", help="Seed corpus for the fuzzing campaign")
+    parser.add_argument("--fuzz-dict", help="AFL/libFuzzer dictionary file")
+    parser.add_argument("--fuzz-plan-only", action="store_true",
+                       help="Print fuzzing campaign plan and exit without running. "
+                            "Use this to verify host capabilities before a long campaign.")
+
     parser.add_argument(
         "--trust-repo",
         action="store_true",
@@ -818,6 +831,81 @@ Examples:
 
     report_file = out_dir / "raptor_agentic_report.json"
     save_json(report_file, final_report)
+
+    # ========================================================================
+    # PHASE 5: DYNAMIC CONFIRMATION VIA FUZZING (optional)
+    # ========================================================================
+    # If --fuzz is set and a binary target is configured, run a short fuzzing
+    # campaign and merge any crashes into the final report. The fuzzing
+    # orchestrator handles platform compatibility, target type detection,
+    # and fuzzer selection automatically.
+    fuzzing_result = None
+    if getattr(args, "fuzz", False) or getattr(args, "fuzz_plan_only", False):
+        if not args.binary:
+            print("\n⚠️  --fuzz requires --binary <path>; skipping fuzz phase.")
+            logger.warning("--fuzz requested but no --binary specified")
+        else:
+            print("\n" + "=" * 70)
+            print("PHASE 5: Fuzzing")
+            print("=" * 70)
+            try:
+                from packages.fuzzing.orchestrator import FuzzingOrchestrator
+                orch = FuzzingOrchestrator(llm=None)
+                plan = orch.plan(Path(args.binary))
+                print(plan.summary())
+
+                if args.fuzz_plan_only:
+                    print("\n  --fuzz-plan-only set; not running campaign.")
+                elif not plan.can_run:
+                    print("\n  Cannot run fuzz campaign on this host. See blockers above.")
+                else:
+                    fuzz_out = out_dir / "fuzzing"
+                    fuzz_out.mkdir(parents=True, exist_ok=True)
+                    fuzzing_result = orch.execute(
+                        plan,
+                        out_dir=fuzz_out,
+                        duration_seconds=args.fuzz_duration,
+                        corpus_dir=Path(args.fuzz_corpus) if args.fuzz_corpus else None,
+                        dict_path=Path(args.fuzz_dict) if args.fuzz_dict else None,
+                    )
+                    final_report["outputs"]["fuzzing_result"] = str(fuzz_out / "fuzzing_plan.json")
+                    final_report["outputs"]["fuzzing_telemetry"] = str(fuzz_out / "fuzz-summary.json")
+                    print(f"   Fuzzing complete: {fuzzing_result}")
+                    save_json(report_file, final_report)
+
+                    # If --validate is set and fuzzing produced crashes, hand
+                    # them to the validation pipeline so they get the same
+                    # exploitability staging as SAST findings.
+                    if (
+                        args.validate
+                        and fuzzing_result
+                        and fuzzing_result.get("crashes", 0) > 0
+                    ):
+                        try:
+                            print(f"\n  Handing {fuzzing_result['crashes']} crashes to /validate...")
+                            from packages.binary_analysis import CrashAnalyser
+                            crash_analyser = CrashAnalyser(
+                                binary_path=Path(args.binary),
+                                output_dir=fuzz_out / "crash_analysis",
+                            )
+                            # Persist crash analysis for /validate to consume
+                            save_json(
+                                fuzz_out / "crashes_for_validation.json",
+                                {
+                                    "binary": str(args.binary),
+                                    "crashes_dir": fuzzing_result.get("crashes_dir", ""),
+                                    "stats": fuzzing_result.get("stats", {}),
+                                },
+                            )
+                            print(
+                                f"   Crash artefacts ready for /validate at "
+                                f"{fuzz_out / 'crashes_for_validation.json'}"
+                            )
+                        except Exception as e:
+                            logger.debug(f"Crash → validate handoff failed: {e}")
+            except Exception as e:
+                logger.error(f"Fuzz phase failed: {e}", exc_info=True)
+                print(f"\n  Fuzz phase error: {e}")
 
     # ========================================================================
     # SAGE: Post-scan storage — store findings for cross-run learning

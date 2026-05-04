@@ -26,6 +26,12 @@ logger = get_logger()
 class AFLRunner:
     """Manages AFL++ fuzzing campaigns."""
 
+    # AFL++ power schedules: explore (default), exploit, coe, fast, lin, quad,
+    # rare. See docs/AFLplusplus/docs/power_schedules.md.
+    _VALID_POWER_SCHEDULES = {
+        "explore", "exploit", "coe", "fast", "lin", "quad", "rare", "seek",
+    }
+
     def __init__(
         self,
         binary_path: Path,
@@ -36,14 +42,19 @@ class AFLRunner:
         check_sanitizers: bool = False,
         recompile_guide: bool = False,
         use_showmap: bool = False,
+        cmplog_binary: Optional[Path] = None,
+        power_schedule: str = "fast",
+        use_laf_intel: bool = True,
+        deterministic: bool = False,
+        custom_mutator: Optional[Path] = None,
     ):
         self.binary = Path(binary_path).resolve()
         if not self.binary.exists():
             raise FileNotFoundError(f"Binary not found: {binary_path}")
-        
+
         if not self.binary.is_file():
             raise ValueError(f"Path is not a file: {binary_path}")
-        
+
         if not self.binary.stat().st_mode & 0o111:  # Check if executable
             raise PermissionError(f"Binary is not executable: {binary_path}")
 
@@ -54,6 +65,26 @@ class AFLRunner:
         self.check_sanitizers = check_sanitizers
         self.recompile_guide = recompile_guide
         self.use_showmap = use_showmap
+
+        # AFL++ advanced features
+        self.cmplog_binary = Path(cmplog_binary).resolve() if cmplog_binary else None
+        if self.cmplog_binary and not self.cmplog_binary.exists():
+            raise FileNotFoundError(f"CmpLog binary not found: {cmplog_binary}")
+        if power_schedule not in self._VALID_POWER_SCHEDULES:
+            raise ValueError(
+                f"Invalid power schedule '{power_schedule}'. "
+                f"Choose from: {sorted(self._VALID_POWER_SCHEDULES)}"
+            )
+        self.power_schedule = power_schedule
+        self.use_laf_intel = use_laf_intel
+        self.deterministic = deterministic
+        self.custom_mutator = Path(custom_mutator).resolve() if custom_mutator else None
+        if self.custom_mutator and not self.custom_mutator.exists():
+            raise FileNotFoundError(f"Custom mutator not found: {custom_mutator}")
+
+        # Telemetry: instantiated lazily by run() to avoid creating
+        # the events file when callers only build commands for tests.
+        self.telemetry = None
 
         # Check AFL++ availability
         self.afl_fuzz = shutil.which("afl-fuzz")
@@ -312,10 +343,17 @@ class AFLRunner:
 
                 # Count unique crashes
                 if crashes_dir.exists():
-                    num_crashes = len([f for f in crashes_dir.iterdir() if f.name.startswith("id:")])
+                    crash_files = sorted(
+                        f for f in crashes_dir.iterdir() if f.name.startswith("id:")
+                    )
+                    num_crashes = len(crash_files)
 
                     if num_crashes > last_logged_crashes:
                         logger.info(f"Progress: {num_crashes} unique crashes found")
+                        # Telemetry: emit a per-crash event for new ones only
+                        if self.telemetry:
+                            for crash_path in crash_files[last_logged_crashes:]:
+                                self.telemetry.record_crash(str(crash_path), signal="afl")
                         last_logged_crashes = num_crashes
 
                     if max_crashes and num_crashes >= max_crashes:
@@ -332,11 +370,24 @@ class AFLRunner:
                         paths_found = stats.get('paths_found', 'N/A')
                         stability = stats.get('stability', 'N/A')
                         bitmap_cvg = stats.get('bitmap_cvg', 'N/A')
-                        
+
                         logger.info(f"Status: {elapsed:.0f}s elapsed | {execs_per_sec} exec/s | {total_execs} total execs | {paths_found} paths | {stability}% stable | {bitmap_cvg}% coverage")
+
+                        # Mirror to telemetry for live status line and JSONL trail
+                        if self.telemetry:
+                            try:
+                                self.telemetry.update_stats(
+                                    total_executions=int(stats.get("execs_done", 0) or 0),
+                                    executions_per_second=int(float(stats.get("execs_per_sec", 0) or 0)),
+                                    paths_found=int(stats.get("paths_found", 0) or 0),
+                                    corpus_size=int(stats.get("corpus_count", 0) or 0),
+                                    coverage_percent=float(str(stats.get("bitmap_cvg", "0")).rstrip("%") or 0),
+                                )
+                            except (ValueError, TypeError):
+                                pass
                     else:
                         logger.info(f"Status: {elapsed:.0f}s elapsed (no stats available yet)")
-                    
+
                     last_status_time = current_time
 
                 # Check if all processes are still running
@@ -450,7 +501,18 @@ class AFLRunner:
         timeout_ms: int,
         use_qemu: bool = False,
     ) -> List[str]:
-        """Build AFL command line."""
+        """Build AFL command line.
+
+        Wires up advanced AFL++ features when configured:
+          -p <schedule>        power schedule (default: fast)
+          -c <cmplog_binary>   CmpLog binary for input-to-state guidance
+          -d                   deterministic mutations off (faster startup)
+          -X <mutator.so>      custom mutator library
+          -x <dict>            dictionary for structured input
+
+        LAF-intel is a compile-time feature (AFL_LLVM_LAF_*), so it is
+        applied to the cmplog/main binary at compile time, not here.
+        """
         cmd = [self.afl_fuzz]
 
         # Input/output directories
@@ -470,12 +532,33 @@ class AFLRunner:
         # Timeout
         cmd.extend(["-t", str(timeout_ms)])
 
+        # Power schedule -- default 'fast' is faster than the legacy 'explore'.
+        # Different schedules suit different campaigns: 'explore' for breadth,
+        # 'exploit' to dig into known interesting paths, 'rare' to chase
+        # uncovered branches.
+        cmd.extend(["-p", self.power_schedule])
+
         # QEMU mode if not instrumented
         if use_qemu:
             cmd.append("-Q")
 
-        # Disable CPU affinity for now
-        cmd.append("-d")
+        # Skip deterministic mutations unless explicitly requested.
+        # Modern AFL++ guidance is to skip determinism on the main fuzzer
+        # since havoc is generally more effective per CPU second.
+        if not self.deterministic:
+            cmd.append("-d")
+
+        # CmpLog: input-to-state correspondence. The cmplog binary tracks
+        # comparison operands and feeds them back to the mutator. Massive
+        # win for parsers with magic numbers, version checks, checksums.
+        # Only attached to the main instance to avoid duplicating work.
+        if is_main and self.cmplog_binary:
+            cmd.extend(["-c", str(self.cmplog_binary)])
+
+        # Custom mutator library (.so), for grammar-aware or structure-aware
+        # mutators (libprotobuf-mutator, custom JSON mutators, LLM bridges).
+        if self.custom_mutator:
+            cmd.extend(["-X", str(self.custom_mutator)])
 
         # Dictionary if provided
         if self.dict_path and self.dict_path.exists():
