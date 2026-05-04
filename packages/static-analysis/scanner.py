@@ -31,6 +31,7 @@ from core.logging import get_logger
 from core.git import clone_repository
 from core.sarif.parser import generate_scan_metrics, validate_sarif
 from core.hash import sha256_tree
+from packages import semgrep as semgrep_pkg
 
 logger = get_logger()
 
@@ -206,21 +207,18 @@ def run_single_semgrep(
     if progress_callback:
         progress_callback(f"Scanning with {name}")
 
-    # Use full path to semgrep to avoid broken venv installations
+    # Build the semgrep argv via packages/semgrep/. Sandbox engagement,
+    # HOME redirect, and registry-pack proxy hosts remain scanner concerns
+    # below — packages/semgrep/ is pure invocation logic.
+    # Resolve binary explicitly to avoid broken-venv installations.
     semgrep_cmd = shutil.which("semgrep") or "/opt/homebrew/bin/semgrep"
-
-    cmd = [
-        semgrep_cmd,
-        "scan",
-        "--config", config,
-        "--quiet",
-        "--metrics", "off",
-        "--error",
-        "--sarif",
-        "--json-output", str(json_out),
-        "--timeout", str(RaptorConfig.SEMGREP_RULE_TIMEOUT),
-        str(repo_path),
-    ]
+    cmd = semgrep_pkg.build_cmd(
+        repo_path,
+        config,
+        json_output_path=json_out,
+        rule_timeout=RaptorConfig.SEMGREP_RULE_TIMEOUT,
+        semgrep_bin=semgrep_cmd,
+    )
 
     # Create clean environment without venv contamination or dangerous vars
     clean_env = RaptorConfig.get_safe_env()

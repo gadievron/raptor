@@ -453,7 +453,8 @@ class TestRunRuleIntegration:
 class TestShippedRulesIntegration:
     """Integration tests for the .cocci rules shipped in rules/."""
 
-    RULES_DIR = Path(__file__).resolve().parents[1] / "rules"  # packages/coccinelle/rules/
+    # parents[1] = packages/coccinelle, parents[3] = repo root
+    RULES_DIR = Path(__file__).resolve().parents[3] / "engine" / "coccinelle" / "rules"
 
     def test_missing_null_check_catches_deref(self, tmp_path):
         target = tmp_path / "test.c"
