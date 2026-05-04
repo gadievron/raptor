@@ -33,6 +33,7 @@ from cve_diff.pipeline import Pipeline
 from cve_diff.report import osv_schema
 
 _PER_CVE_TIMEOUT_S = 300  # 5 min. Any upstream-slice clone finishes well under.
+_PACKAGE_DATA_DIR = Path(__file__).resolve().parents[2] / "data"  # packages/cve_diff/data/
 
 
 class _PerCveTimeout(Exception):
@@ -559,15 +560,15 @@ def _render_html(summary: _BenchSummary) -> str:
 
 def bench(
     sample: Path = typer.Option(
-        Path("data/samples/mvp_2024_2026.json"),
+        _PACKAGE_DATA_DIR / "samples" / "mvp_2024_2026.json",
         "--sample",
         help="Path to a JSON sample file with `cves: [{cve_id: ...}, ...]`.",
     ),
     output_dir: Path = typer.Option(
-        Path("./bench_out"),
+        None,
         "--output-dir",
         "-o",
-        help="Per-CVE OSV reports + summary.{json,html} land here.",
+        help="Per-CVE OSV reports + summary.{json,html} land here (default: temp dir).",
     ),
     limit: int = typer.Option(0, "--limit", help="Stop after N CVEs (0 = all)."),
     workers: int = typer.Option(
@@ -593,6 +594,8 @@ def bench(
     ),
 ) -> None:
     """Run the pipeline across each CVE in a sample file."""
+    if output_dir is None:
+        output_dir = Path(tempfile.mkdtemp(prefix="cve-diff-bench-"))
     warn_if_token_missing()
     api_status.print_to_stderr(api_status.render_startup_banner())
     if health_check:
@@ -696,9 +699,9 @@ def _persist_summary(summary_path: Path, sample: Path) -> None:
     their bench dirs were cleaned before persistence.
     """
     try:
-        runs_dir = Path("data/runs")
+        runs_dir = _PACKAGE_DATA_DIR / "runs"
         if not runs_dir.is_dir():
-            return  # not running from a project checkout; skip silently.
+            return  # data/runs/ missing; skip silently.
         dest = runs_dir / f"{date.today():%Y%m%d}_{sample.stem}.json"
         shutil.copy2(summary_path, dest)
         typer.echo(f"persisted: {dest}")

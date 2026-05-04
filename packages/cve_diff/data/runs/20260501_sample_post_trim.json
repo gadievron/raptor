@@ -1,0 +1,237 @@
+{
+  "sample": "/tmp/sample_post_trim.json",
+  "total": 4,
+  "passed": 4,
+  "results": [
+    {
+      "cve_id": "CVE-2022-21676",
+      "ok": true,
+      "elapsed_s": 20.4,
+      "files_changed": 2,
+      "diff_bytes": 2244,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 5,
+      "agent_tokens": 54994,
+      "agent_cost_usd": 0.294777,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "gh_commit_detail",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2022-21676\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2022-21676\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"a70800d7e96da32f6e6622804ef659ebc58659db\", \"slug\": \"socketio/engine.io\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"c0e194d44933bd83bf9a4b126fca68ba7bf5098c\", \"slug\": \"socketio/engine.io\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"c0e194d44933bd83bf9a4b126fca68ba7bf5098c\", \"slug\": \"socketio/engine.io\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"c0e194d44933bd83bf9a4b126fca68ba7bf5098c\", \"outcome\": \"rescued\", \"rationale\": \"OSV references three FIX "
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 2,
+      "extraction_agree": "majority_agree"
+    },
+    {
+      "cve_id": "CVE-2023-38545",
+      "ok": true,
+      "elapsed_s": 43.9,
+      "files_changed": 3,
+      "diff_bytes": 3433,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 7,
+      "agent_tokens": 118058,
+      "agent_cost_usd": 0.78342,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "gh_commit_detail",
+        "gh_search_commits",
+        "gh_search_commits",
+        "check_diff_shape",
+        "gh_list_commits_by_path",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2023-38545\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2023-38545\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"172e54cda18412da73fd8eb4e444e8a5b371ca59\", \"slug\": \"curl/curl\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:curl/curl SOCKS5 heap buffer overflow CVE-2023-38545\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"repo:curl/curl socks5 hostname buffer too long\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"172e54cda18412da73fd8eb4e444e8a5b371ca59\", \"slug\": \"curl/curl\"}"
+        ],
+        [
+          "gh_list_commits_by_path",
+          "{\"path\": \"lib/socks.c\", \"since\": \"2023-10-01\", \"slug\": \"curl/curl\", \"until\": \"2023-10-12\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"fb4415d8aee6c1045be932a34fe6107c2f5ed147\", \"slug\": \"curl/curl\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"fb4415d8aee6c1045be932a34fe6107c2f5ed147\", \"slug\": \"curl/curl\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"fb4415d8aee6c1045be932a34fe6107c2f5ed147\", \"outcome\": \"rescued\", \"rationale\": \"CVE-2023-38545 is the cur"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 1,
+      "extraction_agree": "partial"
+    },
+    {
+      "cve_id": "CVE-2024-3094",
+      "ok": true,
+      "elapsed_s": 23.3,
+      "files_changed": 12,
+      "diff_bytes": 73537,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 4,
+      "agent_tokens": 53369,
+      "agent_cost_usd": 0.432525,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "gh_search_repos",
+        "gh_search_commits",
+        "gh_commit_detail",
+        "check_diff_shape",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2024-3094\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2024-3094\"}"
+        ],
+        [
+          "gh_search_repos",
+          "{\"query\": \"tukaani xz\"}"
+        ],
+        [
+          "gh_search_commits",
+          "{\"query\": \"CVE-2024-3094 repo:tukaani-project/xz\"}"
+        ],
+        [
+          "gh_commit_detail",
+          "{\"sha\": \"e93e13c8b3bec925c56e0c0b675d8000a0f7f754\", \"slug\": \"tukaani-project/xz\"}"
+        ],
+        [
+          "check_diff_shape",
+          "{\"sha\": \"e93e13c8b3bec925c56e0c0b675d8000a0f7f754\", \"slug\": \"tukaani-project/xz\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"e93e13c8b3bec925c56e0c0b675d8000a0f7f754\", \"outcome\": \"rescued\", \"rationale\": \"Commit message reads \\\"Re"
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": false,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 0,
+      "extraction_agree": "majority_agree"
+    },
+    {
+      "cve_id": "CVE-2024-7006",
+      "ok": true,
+      "elapsed_s": 44.0,
+      "files_changed": 1,
+      "diff_bytes": 403,
+      "shape": "source",
+      "error": "",
+      "error_class": "PASS",
+      "agent_iterations": 3,
+      "agent_tokens": 29195,
+      "agent_cost_usd": 0.145867,
+      "agent_tool_calls": [
+        "deterministic_hints",
+        "osv_raw",
+        "submit_result"
+      ],
+      "agent_tool_calls_with_args": [
+        [
+          "deterministic_hints",
+          "{\"cve_id\": \"CVE-2024-7006\"}"
+        ],
+        [
+          "osv_raw",
+          "{\"cve_id\": \"CVE-2024-7006\"}"
+        ],
+        [
+          "submit_result",
+          "{\"fix_commit\": \"df5886a551f949756015dfbfa65f45e872c73aa1\", \"outcome\": \"rescued\", \"rationale\": \"OSV affected range lists "
+        ]
+      ],
+      "reflection_fired": false,
+      "agent_model": "claude-opus-4-7",
+      "llm_retries": 0,
+      "meta_retry_attempted": true,
+      "post_submit_retry_attempted": false,
+      "bench_retry_attempted": false,
+      "consensus_agree": 0,
+      "extraction_agree": "majority_agree"
+    }
+  ]
+}

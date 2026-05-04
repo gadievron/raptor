@@ -152,6 +152,9 @@ app = typer.Typer(
     name="cve-diff",
     help="CVE patch analysis pipeline — discover, acquire, diff, and explain.",
     no_args_is_help=True,
+    add_completion=False,
+    rich_markup_mode=None,
+    context_settings={"max_content_width": 120},
 )
 
 
@@ -220,61 +223,49 @@ def _root(
 
 @app.command()
 def run(
-    cve_id: str,
+    cve_id: Annotated[
+        str,
+        typer.Argument(metavar="<CVE-ID>", help="CVE identifier, e.g. CVE-2023-38545."),
+    ],
     output_dir: Annotated[
         Path,
-        typer.Option("--output-dir", "-o", help="Where to write the OSV JSON + Markdown."),
+        typer.Option("--output-dir", "-o", help="Output directory for reports."),
     ] = Path("./out"),
     work_dir: Annotated[
         Path | None,
-        typer.Option("--work-dir", help="Where to clone repos. Defaults to a temp dir."),
+        typer.Option("--work-dir", help="Clone directory (default: temp dir)."),
     ] = None,
     keep_workdir: Annotated[
-        bool, typer.Option("--keep-workdir", help="Don't delete work_dir on success.")
+        bool, typer.Option("--keep-workdir", help="Keep clone directory after success.")
     ] = False,
     with_root_cause: Annotated[
         bool,
         typer.Option(
             "--with-root-cause",
-            help="Run LLM root-cause analysis (extra Anthropic API call). Off by default.",
+            help="Run LLM root-cause analysis (extra API call).",
         ),
     ] = False,
     model_id: Annotated[
         str,
-        typer.Option("--model", help="Model id used for root-cause analysis."),
+        typer.Option("--model", help="Model for root-cause analysis.", show_default=False),
     ] = "claude-opus-4-7",
     disk_limit_pct: Annotated[
         float,
-        typer.Option("--disk-limit-pct", help="Abort threshold for filesystem-used %."),
+        typer.Option("--disk-limit", help="Max filesystem usage %.", show_default=False),
     ] = 80.0,
     max_file_bytes: Annotated[
         int,
-        typer.Option(
-            "--max-file-bytes",
-            help="Per-file source-blob cap for DiffBundle.files[*].before/after_source. "
-                 "Default 131072 (128 KB) covers ~89%% of source files on the random_200 sample.",
-        ),
+        typer.Option("--max-file", help="Per-file source cap in bytes.", show_default=False),
     ] = 128 * 1024,
     quiet: Annotated[
         bool,
         typer.Option(
             "--quiet", "-q",
-            help="Suppress per-stage progress + API-key banner. By default cve-diff "
-                 "prints every stage transition + a startup banner showing API-key "
-                 "status and rate-limit events as they happen.",
+            help="Suppress progress and API-key banner.",
         ),
     ] = False,
 ) -> None:
-    """Run the full pipeline for a single CVE.
-
-    Exit codes:
-      0  success
-      4  unsupported source (closed-source vendor)
-      5  discovery failed — no canonical repo resolved
-      6  acquisition failed — clone/fetch cascade exhausted
-      7  identical fix/parent commits (would diff HEAD..HEAD)
-      9  root-cause analysis failed
-    """
+    """Discover, acquire, diff, and report the fix commit for a CVE."""
     warn_if_token_missing()
     cve_id = validate_cve_id(cve_id)
     # Both the agent loop and the optional root-cause analyzer now go

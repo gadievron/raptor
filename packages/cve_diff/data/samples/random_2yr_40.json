@@ -1,0 +1,248 @@
+{
+  "name": "random_2yr_40",
+  "description": "30 random 2024-2026 open-source CVEs (seed=20260421, disjoint from random_past_year_40) + 10 known-problem CVEs from prior bench failures (famous + random_past_year_40 misses).",
+  "seed": 20260421,
+  "size": 40,
+  "cves": [
+    {
+      "cve_id": "CVE-2024-0397",
+      "cvss": 8.6,
+      "year": 2024,
+      "description": "Python ssl module certificate verification bypass"
+    },
+    {
+      "cve_id": "CVE-2024-22667",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "Rust standard library race condition in Arc"
+    },
+    {
+      "cve_id": "CVE-2024-23651",
+      "cvss": 9.1,
+      "year": 2024,
+      "description": "BuildKit mount cache race condition allowing container escape"
+    },
+    {
+      "cve_id": "CVE-2024-23652",
+      "cvss": 9.1,
+      "year": 2024,
+      "description": "BuildKit arbitrary file access through cache mounts"
+    },
+    {
+      "cve_id": "CVE-2024-2379",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "HAProxy HTTP request smuggling"
+    },
+    {
+      "cve_id": "CVE-2024-24785",
+      "cvss": 7.9,
+      "year": 2024,
+      "description": "Go html/template improper sanitization"
+    },
+    {
+      "cve_id": "CVE-2024-27281",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "Ruby RDoc command injection vulnerability"
+    },
+    {
+      "cve_id": "CVE-2024-28182",
+      "cvss": 8.6,
+      "year": 2024,
+      "description": "nghttp2 HTTP/2 CONTINUATION frame denial of service"
+    },
+    {
+      "cve_id": "CVE-2024-28863",
+      "cvss": 8.1,
+      "year": 2024,
+      "description": "Node.js denial of service via HTTP server"
+    },
+    {
+      "cve_id": "CVE-2024-29256",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "containerd host memory exhaustion via malicious image"
+    },
+    {
+      "cve_id": "CVE-2024-29943",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "Firefox out-of-bounds memory access"
+    },
+    {
+      "cve_id": "CVE-2024-3056",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "MongoDB denial of service in aggregation"
+    },
+    {
+      "cve_id": "CVE-2024-32004",
+      "cvss": 8.1,
+      "year": 2024,
+      "description": "Git remote code execution via submodules"
+    },
+    {
+      "cve_id": "CVE-2024-33869",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "Ghostscript path traversal vulnerability"
+    },
+    {
+      "cve_id": "CVE-2024-35247",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "Linux kernel fpga subsystem use-after-free"
+    },
+    {
+      "cve_id": "CVE-2024-3638",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "zlib-ng out-of-bounds write"
+    },
+    {
+      "cve_id": "CVE-2024-3727",
+      "cvss": 8.3,
+      "year": 2024,
+      "description": "Samba client-side resource exhaustion"
+    },
+    {
+      "cve_id": "CVE-2024-3817",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "Go net/http denial of service"
+    },
+    {
+      "cve_id": "CVE-2024-38472",
+      "cvss": 8.1,
+      "year": 2024,
+      "description": "Apache HTTP Server SSRF vulnerability"
+    },
+    {
+      "cve_id": "CVE-2024-45492",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "libexpat integer overflow in function nextScaffoldPart"
+    },
+    {
+      "cve_id": "CVE-2024-4603",
+      "cvss": 8.1,
+      "year": 2024,
+      "description": "OpenSSL excessive time verifying DSA signatures"
+    },
+    {
+      "cve_id": "CVE-2024-47177",
+      "cvss": 9.1,
+      "year": 2024,
+      "description": "CUPS arbitrary command execution in filters"
+    },
+    {
+      "cve_id": "CVE-2024-5154",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "CRI-O arbitrary file write via container logs"
+    },
+    {
+      "cve_id": "CVE-2024-6100",
+      "cvss": 8.0,
+      "year": 2024,
+      "description": "Chromium type confusion in V8"
+    },
+    {
+      "cve_id": "CVE-2024-6409",
+      "cvss": 9.1,
+      "year": 2024,
+      "description": "OpenSSL memory corruption in TLS processing"
+    },
+    {
+      "cve_id": "CVE-2025-0158",
+      "cvss": 8.8,
+      "year": 2025,
+      "description": "Kubernetes ServiceAccount token exposure vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-0342",
+      "cvss": 8.8,
+      "year": 2025,
+      "description": "Linux kernel use-after-free in netfilter subsystem"
+    },
+    {
+      "cve_id": "CVE-2025-0344",
+      "cvss": 8.6,
+      "year": 2025,
+      "description": "Linux kernel out-of-bounds write in BPF verifier"
+    },
+    {
+      "cve_id": "CVE-2025-0504",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "sudo heap overflow in command parsing"
+    },
+    {
+      "cve_id": "CVE-2025-21262",
+      "cvss": 8.8,
+      "year": 2025,
+      "description": "Git arbitrary code execution via crafted repository"
+    },
+    {
+      "cve_id": "CVE-2017-12615",
+      "cvss": 0.0,
+      "year": 2017,
+      "description": "Apache Tomcat PUT JSP RCE"
+    },
+    {
+      "cve_id": "CVE-2022-0847",
+      "cvss": 0.0,
+      "year": 2022,
+      "description": "Linux kernel DirtyPipe"
+    },
+    {
+      "cve_id": "CVE-2024-3094",
+      "cvss": 0.0,
+      "year": 2024,
+      "description": "xz-utils upstream supply chain backdoor"
+    },
+    {
+      "cve_id": "CVE-2025-0161",
+      "cvss": 0.0,
+      "year": 2025,
+      "description": "prior random bench failure"
+    },
+    {
+      "cve_id": "CVE-2025-0289",
+      "cvss": 0.0,
+      "year": 2025,
+      "description": "prior random bench failure"
+    },
+    {
+      "cve_id": "CVE-2025-0343",
+      "cvss": 0.0,
+      "year": 2025,
+      "description": "prior random bench failure"
+    },
+    {
+      "cve_id": "CVE-2025-0702",
+      "cvss": 0.0,
+      "year": 2025,
+      "description": "prior random bench failure"
+    },
+    {
+      "cve_id": "CVE-2025-0732",
+      "cvss": 0.0,
+      "year": 2025,
+      "description": "prior random bench failure"
+    },
+    {
+      "cve_id": "CVE-2025-21509",
+      "cvss": 0.0,
+      "year": 2025,
+      "description": "prior random bench failure"
+    },
+    {
+      "cve_id": "CVE-2025-22553",
+      "cvss": 0.0,
+      "year": 2025,
+      "description": "prior random bench failure"
+    }
+  ]
+}

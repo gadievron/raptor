@@ -1,0 +1,248 @@
+{
+  "name": "random_40_2020_2025_v2",
+  "description": "40 open-source CVEs stratified by year (2020-2025) and CVSS severity. Seed=20260428. Validation sample for Action E + cleanup; excludes both random_200 and random_200_2020_2025.",
+  "seed": 20260428,
+  "size": 40,
+  "cves": [
+    {
+      "cve_id": "CVE-2022-26134",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "Atlassian Confluence Server OGNL injection RCE"
+    },
+    {
+      "cve_id": "CVE-2022-42703",
+      "cvss": 7.8,
+      "year": 2022,
+      "description": "Linux kernel use-after-free in memory management"
+    },
+    {
+      "cve_id": "CVE-2022-43680",
+      "cvss": 8.6,
+      "year": 2022,
+      "description": "libexpat use-after-free via XML_ResumeParser"
+    },
+    {
+      "cve_id": "CVE-2024-0450",
+      "cvss": 8.4,
+      "year": 2024,
+      "description": "Python zipfile module path traversal vulnerability"
+    },
+    {
+      "cve_id": "CVE-2024-0727",
+      "cvss": 8.6,
+      "year": 2024,
+      "description": "OpenSSL PKCS12 file processing denial of service"
+    },
+    {
+      "cve_id": "CVE-2024-21886",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "Xen x86 HVM hypercall page mishandling"
+    },
+    {
+      "cve_id": "CVE-2024-22052",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "OpenSSH user enumeration vulnerability"
+    },
+    {
+      "cve_id": "CVE-2024-22365",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "Linux PAM privilege escalation vulnerability"
+    },
+    {
+      "cve_id": "CVE-2024-23652",
+      "cvss": 9.1,
+      "year": 2024,
+      "description": "BuildKit arbitrary file access through cache mounts"
+    },
+    {
+      "cve_id": "CVE-2024-26581",
+      "cvss": 9.8,
+      "year": 2024,
+      "description": "Linux kernel netfilter nft_set_rbtree vulnerability. In the Linux kernel's netfilter component, rbtree lazy garbage collection on insert might collect an end interval element that has been just added "
+    },
+    {
+      "cve_id": "CVE-2024-27281",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "Ruby RDoc command injection vulnerability"
+    },
+    {
+      "cve_id": "CVE-2024-28219",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "pip arbitrary code execution during package extraction"
+    },
+    {
+      "cve_id": "CVE-2024-28849",
+      "cvss": 8.1,
+      "year": 2024,
+      "description": "npm tarball extraction path traversal"
+    },
+    {
+      "cve_id": "CVE-2024-29510",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "Ghostscript format string vulnerability"
+    },
+    {
+      "cve_id": "CVE-2024-2961",
+      "cvss": 9.0,
+      "year": 2024,
+      "description": "GNU C Library iconv buffer overflow"
+    },
+    {
+      "cve_id": "CVE-2024-2961",
+      "cvss": 8.3,
+      "year": 2024,
+      "description": "PHP iconv buffer overflow vulnerability"
+    },
+    {
+      "cve_id": "CVE-2024-31309",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "ImageMagick remote code execution"
+    },
+    {
+      "cve_id": "CVE-2024-3183",
+      "cvss": 8.8,
+      "year": 2024,
+      "description": "FreeRDP integer overflow leading to RCE"
+    },
+    {
+      "cve_id": "CVE-2024-32465",
+      "cvss": 8.4,
+      "year": 2024,
+      "description": "Git arbitrary code execution via crafted repository"
+    },
+    {
+      "cve_id": "CVE-2024-33870",
+      "cvss": 7.9,
+      "year": 2024,
+      "description": "Ghostscript arbitrary file creation"
+    },
+    {
+      "cve_id": "CVE-2024-3435",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "Mosquitto denial of service"
+    },
+    {
+      "cve_id": "CVE-2024-35195",
+      "cvss": 8.8,
+      "year": 2024,
+      "description": "PHP password_verify timing attack allowing authentication bypass"
+    },
+    {
+      "cve_id": "CVE-2024-3638",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "zlib-ng out-of-bounds write"
+    },
+    {
+      "cve_id": "CVE-2024-36901",
+      "cvss": 8.8,
+      "year": 2024,
+      "description": "Linux kernel IPv6 stack buffer overflow"
+    },
+    {
+      "cve_id": "CVE-2024-3772",
+      "cvss": 9.0,
+      "year": 2024,
+      "description": "Wireshark dissector crash leading to code execution"
+    },
+    {
+      "cve_id": "CVE-2024-3817",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "Go net/http denial of service"
+    },
+    {
+      "cve_id": "CVE-2024-45492",
+      "cvss": 8.2,
+      "year": 2024,
+      "description": "libexpat integer overflow in function nextScaffoldPart"
+    },
+    {
+      "cve_id": "CVE-2024-4693",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "QEMU out-of-bounds read in virtio-net"
+    },
+    {
+      "cve_id": "CVE-2024-47176",
+      "cvss": 9.0,
+      "year": 2024,
+      "description": "CUPS remote code execution via PPD manipulation"
+    },
+    {
+      "cve_id": "CVE-2024-5154",
+      "cvss": 7.8,
+      "year": 2024,
+      "description": "CRI-O arbitrary file write via container logs"
+    },
+    {
+      "cve_id": "CVE-2025-0004",
+      "cvss": 9.1,
+      "year": 2025,
+      "description": "Thunderbird use-after-free in networking code"
+    },
+    {
+      "cve_id": "CVE-2025-0161",
+      "cvss": 8.0,
+      "year": 2025,
+      "description": "CRI-O arbitrary file write via container logs"
+    },
+    {
+      "cve_id": "CVE-2025-0289",
+      "cvss": 9.0,
+      "year": 2025,
+      "description": "Rust std library race condition in Arc"
+    },
+    {
+      "cve_id": "CVE-2025-0508",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "musl libc DNS resolver vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-0601",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "BIND denial of service via crafted DNS query"
+    },
+    {
+      "cve_id": "CVE-2025-0604",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "Knot Resolver DNSSEC validation bypass"
+    },
+    {
+      "cve_id": "CVE-2025-0902",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "GStreamer integer overflow in plugin"
+    },
+    {
+      "cve_id": "CVE-2025-0903",
+      "cvss": 7.8,
+      "year": 2025,
+      "description": "VLC media player buffer overflow"
+    },
+    {
+      "cve_id": "CVE-2025-22553",
+      "cvss": 8.8,
+      "year": 2025,
+      "description": "Apache Tomcat denial of service via malformed request"
+    },
+    {
+      "cve_id": "CVE-2025-22883",
+      "cvss": 8.2,
+      "year": 2025,
+      "description": "Perl regex engine buffer overflow"
+    }
+  ]
+}

@@ -1,0 +1,1204 @@
+{
+  "cves": [
+    {
+      "cve_id": "CVE-2020-0367",
+      "cvss": 9.1,
+      "year": 2020,
+      "description": "There is a possible out of bounds write due to a missing bounds check.Product: AndroidVersions: Android SoCAndroid ID: A-162980455"
+    },
+    {
+      "cve_id": "CVE-2020-0445",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "There is a possible out of bounds write due to a missing bounds check.Product: AndroidVersions: Android SoCAndroid ID: A-168264527"
+    },
+    {
+      "cve_id": "CVE-2020-10283",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "The Micro Air Vehicle Link (MAVLink) protocol presents authentication mechanisms on its version 2.0 however according to its documentation, in order to maintain backwards compatibility, GCS and autopilot negotiate the version via the AUTOPILOT_VERSION message. Since this negotiation depends on the answer, an attacker may craft packages in a way that hints the autopilot to adopt version 1.0 of MAVL"
+    },
+    {
+      "cve_id": "CVE-2020-10377",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "A weak encryption vulnerability in Mitel MiVoice Connect Client before 214.100.1214.0 could allow an unauthenticated attacker to gain access to user credentials. A successful exploit could allow an attacker to access the system with compromised user credentials."
+    },
+    {
+      "cve_id": "CVE-2020-10557",
+      "cvss": 8.8,
+      "year": 2020,
+      "description": "An issue was discovered in AContent through 1.4. It allows the user to run commands on the server with a low-privileged account. The upload section in the file manager page contains an arbitrary file upload vulnerability via upload.php. The extension .php7 bypasses file upload restrictions."
+    },
+    {
+      "cve_id": "CVE-2020-11545",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "Project Worlds Official Car Rental System 1 is vulnerable to multiple SQL injection issues, as demonstrated by the email and parameters (account.php), uname and pass parameters (login.php), and id parameter (book_car.php) This allows an attacker to dump the MySQL database and to bypass the login authentication prompt."
+    },
+    {
+      "cve_id": "CVE-2020-11717",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "An issue was discovered in Programi 014 31.01.2020. It has multiple SQL injection vulnerabilities."
+    },
+    {
+      "cve_id": "CVE-2020-12830",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "Addressed multiple stack buffer overflow vulnerabilities that could allow an attacker to carry out escalation of privileges through unauthorized remote code execution in Western Digital My Cloud devices before 5.04.114."
+    },
+    {
+      "cve_id": "CVE-2020-12854",
+      "cvss": 8.8,
+      "year": 2020,
+      "description": "A remote code execution vulnerability was identified in SecZetta NEProfile 3.3.11. Authenticated remote adversaries can invoke code execution upon uploading a carefully crafted JPEG file as part of the profile avatar."
+    },
+    {
+      "cve_id": "CVE-2020-13557",
+      "cvss": 8.8,
+      "year": 2020,
+      "description": "A use after free vulnerability exists in the JavaScript engine of Foxit Software\u2019s Foxit PDF Reader, version 10.1.0.37527. A specially crafted PDF document can trigger reuse of previously free memory which can lead to arbitrary code execution. An attacker needs to trick the user to open the malicious file to trigger this vulnerability. If the browser plugin extension is enabled, visiting a malicio"
+    },
+    {
+      "cve_id": "CVE-2020-14080",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "TRENDnet TEW-827DRU devices through 2.06B04 contain a stack-based buffer overflow in the ssi binary. The overflow allows an unauthenticated user to execute arbitrary code by POSTing to apply_sec.cgi via the action ping_test with a sufficiently long ping_ipaddr key."
+    },
+    {
+      "cve_id": "CVE-2020-14157",
+      "cvss": 8.1,
+      "year": 2020,
+      "description": "The wireless-communication feature of the ABUS Secvest FUBE50001 device does not encrypt sensitive data such as PIN codes or IDs of used proximity chip keys (RFID tokens). This makes it easier for an attacker to disarm the wireless alarm system."
+    },
+    {
+      "cve_id": "CVE-2020-15434",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "This vulnerability allows remote attackers to execute arbitrary code on affected installations of CentOS Web Panel cwp-e17.0.9.8.923. Authentication is not required to exploit this vulnerability. The specific flaw exists within ajax_php_pecl.php. When parsing the canal parameter, the process does not properly validate a user-supplied string before using it to execute a system call. An attacker can"
+    },
+    {
+      "cve_id": "CVE-2020-18705",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "XML External Entities (XXE) in Quokka v0.4.0 allows remote attackers to execute arbitrary code via the component 'quokka/core/content/views.py'."
+    },
+    {
+      "cve_id": "CVE-2020-19693",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "An issue found in Espruino Espruino 6ea4c0a allows an attacker to execute arbitrrary code via oldFunc parameter of the jswrap_object.c:jswrap_function_replacewith endpoint."
+    },
+    {
+      "cve_id": "CVE-2020-20287",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "Unrestricted file upload vulnerability in the yccms 3.3 project. The xhUp function's improper judgment of the request parameters, triggers remote code execution."
+    },
+    {
+      "cve_id": "CVE-2020-21152",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "SQL Injection vulnerability in inxedu 2.0.6 allows attackers to execute arbitrary commands via the functionIds parameter to /saverolefunction."
+    },
+    {
+      "cve_id": "CVE-2020-21523",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "A Server-Side Freemarker template injection vulnerability in halo CMS v1.1.3 In the Edit Theme File function. The ftl file can be edited. This is the Freemarker template file. This file can cause arbitrary code execution when it is rendered in the background. exp: <#assign test=\"freemarker.template.utility.Execute\"?new()> ${test(\"touch /tmp/freemarkerPwned\")}"
+    },
+    {
+      "cve_id": "CVE-2020-21642",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "Directory Traversal vulnerability ZDBQAREFSUBDIR parameter in /zropusermgmt API in Zoho ManageEngine Analytics Plus before 4350 allows remote attackers to run arbitrary code."
+    },
+    {
+      "cve_id": "CVE-2020-21806",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "SQL Injection Vulnerability in ECTouch v2 via the shop page in index.php.."
+    },
+    {
+      "cve_id": "CVE-2020-22022",
+      "cvss": 8.8,
+      "year": 2020,
+      "description": "A heap-based Buffer Overflow vulnerability exists in FFmpeg 4.2 in filter_frame at libavfilter/vf_fieldorder.c, which might lead to memory corruption and other potential consequences."
+    },
+    {
+      "cve_id": "CVE-2020-2261",
+      "cvss": 8.8,
+      "year": 2020,
+      "description": "Jenkins Perfecto Plugin 1.17 and earlier executes a command on the Jenkins controller, allowing attackers with Job/Configure permission to run arbitrary commands on the Jenkins controller"
+    },
+    {
+      "cve_id": "CVE-2020-22983",
+      "cvss": 8.1,
+      "year": 2020,
+      "description": "A Server-Side Request Forgery (SSRF) vulnerability exists in MicroStrategy Web SDK 11.1 and earlier, allows remote unauthenticated attackers to conduct a server-side request forgery (SSRF) attack via the srcURL parameter to the shortURL task."
+    },
+    {
+      "cve_id": "CVE-2020-23360",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "oscommerce v2.3.4.1 has a functional problem in user registration and password rechecking, where a non-identical password can bypass the checks in /catalog/admin/administrators.php and /catalog/password_reset.php"
+    },
+    {
+      "cve_id": "CVE-2020-23685",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "SQL Injection vulnerability in 188Jianzhan v2.1.0, allows attackers to execute arbitrary code and gain escalated privileges, via the username parameter to login.php."
+    },
+    {
+      "cve_id": "CVE-2020-23960",
+      "cvss": 8.8,
+      "year": 2020,
+      "description": "Multiple cross-site request forgery (CSRF) vulnerabilities in the Admin Console in Fork before 5.8.3 allows remote attackers to perform unauthorized actions as administrator to (1) approve the mass of the user's comments, (2) restoring a deleted user, (3) installing or running modules, (4) resetting the analytics, (5) pinging the mailmotor api, (6) uploading things to the media library, (7) export"
+    },
+    {
+      "cve_id": "CVE-2020-24027",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "In Live Networks, Inc., liblivemedia version 20200625, there is a potential buffer overflow bug in the server handling of a RTSP \"PLAY\" command, when the command specifies seeking by absolute time."
+    },
+    {
+      "cve_id": "CVE-2020-24626",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "Unathenticated directory traversal in the ReceiverServlet class doPost() method can lead to arbitrary remote code execution in HPE Pay Per Use (PPU) Utility Computing Service (UCS) Meter version 1.9."
+    },
+    {
+      "cve_id": "CVE-2020-24949",
+      "cvss": 8.8,
+      "year": 2020,
+      "description": "Privilege escalation in PHP-Fusion 9.03.50 downloads/downloads.php allows an authenticated user (not admin) to send a crafted request to the server and perform remote command execution (RCE)."
+    },
+    {
+      "cve_id": "CVE-2020-25583",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "In FreeBSD 12.2-STABLE before r368250, 11.4-STABLE before r368253, 12.2-RELEASE before p1, 12.1-RELEASE before p11 and 11.4-RELEASE before p5 when processing a DNSSL option, rtsold(8) decodes domain name labels per an encoding specified in RFC 1035 in which the first octet of each label contains the label's length. rtsold(8) did not validate label lengths correctly and could overflow the destinati"
+    },
+    {
+      "cve_id": "CVE-2020-25747",
+      "cvss": 9.4,
+      "year": 2020,
+      "description": "The Telnet service of Rubetek RV-3406, RV-3409, and RV-3411 cameras (firmware versions v342, v339) can allow a remote attacker to gain access to RTSP and ONFIV services without authentication. Thus, the attacker can watch live streams from the camera, rotate the camera, change some settings (brightness, clarity, time), restart the camera, or reset it to factory settings."
+    },
+    {
+      "cve_id": "CVE-2020-26959",
+      "cvss": 8.8,
+      "year": 2020,
+      "description": "During browser shutdown, reference decrementing could have occured on a previously freed object, resulting in a use-after-free, memory corruption, and a potentially exploitable crash. This vulnerability affects Firefox < 83, Firefox ESR < 78.5, and Thunderbird < 78.5."
+    },
+    {
+      "cve_id": "CVE-2020-27376",
+      "cvss": 8.8,
+      "year": 2020,
+      "description": "Dr Trust USA iCheck Connect BP Monitor BP Testing 118 version 1.2.1 is vulnerable to Missing Authentication."
+    },
+    {
+      "cve_id": "CVE-2020-27687",
+      "cvss": 8.8,
+      "year": 2020,
+      "description": "ThingsBoard before v3.2 is vulnerable to Host header injection in password-reset emails. This allows an attacker to send malicious links in password-reset emails to victims, pointing to an attacker-controlled server. Lack of validation of the Host header allows this to happen."
+    },
+    {
+      "cve_id": "CVE-2020-27955",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "Git LFS 2.12.0 allows Remote Code Execution."
+    },
+    {
+      "cve_id": "CVE-2020-28270",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "Prototype pollution vulnerability in 'object-hierarchy-access' versions 0.2.0 through 0.32.0 allows attacker to cause a denial of service and may lead to remote code execution."
+    },
+    {
+      "cve_id": "CVE-2020-28960",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "Chichen Tech CMS v1.0 was discovered to contain multiple SQL injection vulnerabilities in the file product_list.php via the id and cid parameters."
+    },
+    {
+      "cve_id": "CVE-2020-29127",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "An issue was discovered on Fujitsu Eternus Storage DX200 S4 devices through 2020-11-25. After logging into the portal as a root user (using any web browser), the portal can be accessed with root privileges when the URI cgi-bin/csp?cspid={XXXXXXXXXX}&csppage=cgi_PgOverview&csplang=en is visited from a different web browser."
+    },
+    {
+      "cve_id": "CVE-2020-35775",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "CITSmart before 9.1.2.23 allows LDAP Injection."
+    },
+    {
+      "cve_id": "CVE-2020-36109",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "ASUS RT-AX86U router firmware below version under 9.0.0.4_386 has a buffer overflow in the blocking_request.cgi function of the httpd module that can cause code execution when an attacker constructs malicious data."
+    },
+    {
+      "cve_id": "CVE-2020-3775",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "Adobe Photoshop CC 2019 versions 20.0.8 and earlier, and Photoshop 2020 versions 21.1 and earlier have a buffer errors vulnerability. Successful exploitation could lead to arbitrary code execution."
+    },
+    {
+      "cve_id": "CVE-2020-5330",
+      "cvss": 8.1,
+      "year": 2020,
+      "description": "Dell EMC Networking X-Series firmware versions 3.0.1.2 and older, Dell EMC Networking PC5500 firmware versions 4.1.0.22 and older and Dell EMC PowerEdge VRTX Switch Modules firmware versions 2.0.0.77 and older contain an information disclosure vulnerability. A remote unauthenticated attacker could exploit this vulnerability to retrieve sensitive data by sending a specially crafted request to the a"
+    },
+    {
+      "cve_id": "CVE-2020-5504",
+      "cvss": 8.8,
+      "year": 2020,
+      "description": "In phpMyAdmin 4 before 4.9.4 and 5 before 5.0.1, SQL injection exists in the user accounts page. A malicious user could inject custom SQL in place of their own username when creating queries to this page. An attacker must have a valid MySQL account to access the server."
+    },
+    {
+      "cve_id": "CVE-2020-6137",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "SQL injection vulnerability exists in the password reset functionality of OS4Ed openSIS 7.3. The password_stf_email parameter in the password reset page /opensis/ResetUserInfo.php is vulnerable to SQL injection. An attacker can send an HTTP request to trigger this vulnerability."
+    },
+    {
+      "cve_id": "CVE-2020-6385",
+      "cvss": 8.8,
+      "year": 2020,
+      "description": "Insufficient policy enforcement in storage in Google Chrome prior to 80.0.3987.87 allowed a remote attacker to bypass site isolation via a crafted HTML page."
+    },
+    {
+      "cve_id": "CVE-2020-6552",
+      "cvss": 8.8,
+      "year": 2020,
+      "description": "Use after free in Blink in Google Chrome prior to 84.0.4147.125 allowed a remote attacker to potentially exploit heap corruption via a crafted HTML page."
+    },
+    {
+      "cve_id": "CVE-2020-6556",
+      "cvss": 8.8,
+      "year": 2020,
+      "description": "Heap buffer overflow in SwiftShader in Google Chrome prior to 84.0.4147.135 allowed a remote attacker to potentially exploit heap corruption via a crafted HTML page."
+    },
+    {
+      "cve_id": "CVE-2020-6622",
+      "cvss": 8.8,
+      "year": 2020,
+      "description": "stb stb_truetype.h through 1.22 has a heap-based buffer over-read in stbtt__buf_peek8."
+    },
+    {
+      "cve_id": "CVE-2020-6838",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "In mruby 2.1.0, there is a use-after-free in hash_values_at in mrbgems/mruby-hash-ext/src/hash-ext.c."
+    },
+    {
+      "cve_id": "CVE-2020-6959",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "The following versions of MAXPRO VMS and NVR, MAXPRO VMS:HNMSWVMS prior to Version VMS560 Build 595 T2-Patch, HNMSWVMSLT prior to Version VMS560 Build 595 T2-Patch, MAXPRO NVR: MAXPRO NVR XE prior to Version NVR 5.6 Build 595 T2-Patch, MAXPRO NVR SE prior to Version NVR 5.6 Build 595 T2-Patch, MAXPRO NVR PE prior to Version NVR 5.6 Build 595 T2-Patch, and MPNVRSWXX prior to Version NVR 5.6 Build 5"
+    },
+    {
+      "cve_id": "CVE-2020-7058",
+      "cvss": 8.8,
+      "year": 2020,
+      "description": "data_input.php in Cacti 1.2.8 allows remote code execution via a crafted Input String to Data Collection -> Data Input Methods -> Unix -> Ping Host. NOTE: the vendor has stated \"This is a false alarm."
+    },
+    {
+      "cve_id": "CVE-2020-7373",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "vBulletin 5.5.4 through 5.6.2 allows remote command execution via crafted subWidgets data in an ajax/render/widget_tabbedcontainer_tab_panel request. NOTE: this issue exists because of an incomplete fix for CVE-2019-16759. ALSO NOTE: CVE-2020-7373 is a duplicate of CVE-2020-17496. CVE-2020-17496 is the preferred CVE ID to track this vulnerability."
+    },
+    {
+      "cve_id": "CVE-2020-8434",
+      "cvss": 9.8,
+      "year": 2020,
+      "description": "Jenzabar JICS (aka Internet Campus Solution) before 9.0.1 Patch 3, 9.1 before 9.1.2 Patch 2, and 9.2 before 9.2.2 Patch 8 has session cookies that are a deterministic function of the username. There is a hard-coded password to supply a PBKDF feeding into AES to encrypt a username and base64 encode it to a client-side cookie for persistent session authentication. By knowing the key and algorithm, a"
+    },
+    {
+      "cve_id": "CVE-2020-8707",
+      "cvss": 8.8,
+      "year": 2020,
+      "description": "Buffer overflow in daemon for some Intel(R) Server Boards, Server Systems and Compute Modules before version 1.59 may allow an unauthenticated user to potentially enable escalation of privilege via adjacent access."
+    },
+    {
+      "cve_id": "CVE-2020-8841",
+      "cvss": 8.8,
+      "year": 2020,
+      "description": "An issue was discovered in TestLink 1.9.19. The relation_type parameter of the lib/requirements/reqSearch.php endpoint is vulnerable to authenticated SQL Injection."
+    },
+    {
+      "cve_id": "CVE-2020-9042",
+      "cvss": 8.8,
+      "year": 2020,
+      "description": "In Couchbase Server 6.0, credentials cached by a browser can be used to perform a CSRF attack if an administrator has used their browser to check the results of a REST API request."
+    },
+    {
+      "cve_id": "CVE-2020-9525",
+      "cvss": 8.1,
+      "year": 2020,
+      "description": "CS2 Network P2P through 3.x, as used in millions of Internet of Things devices, suffers from an authentication flaw that allows remote attackers to perform a man-in-the-middle attack, as demonstrated by eavesdropping on user video/audio streams, capturing credentials, and compromising devices."
+    },
+    {
+      "cve_id": "CVE-2021-20179",
+      "cvss": 8.1,
+      "year": 2021,
+      "description": "A flaw was found in pki-core. An attacker who has successfully compromised a key could use this flaw to renew the corresponding certificate over and over again, as long as it is not explicitly revoked. The highest threat from this vulnerability is to data confidentiality and integrity."
+    },
+    {
+      "cve_id": "CVE-2021-21190",
+      "cvss": 8.8,
+      "year": 2021,
+      "description": "Uninitialized data in PDFium in Google Chrome prior to 89.0.4389.72 allowed a remote attacker to obtain potentially sensitive information from process memory via a crafted PDF file."
+    },
+    {
+      "cve_id": "CVE-2021-21206",
+      "cvss": 8.8,
+      "year": 2021,
+      "description": "Use after free in Blink in Google Chrome prior to 89.0.4389.128 allowed a remote attacker to potentially exploit heap corruption via a crafted HTML page."
+    },
+    {
+      "cve_id": "CVE-2021-21248",
+      "cvss": 9.6,
+      "year": 2021,
+      "description": "OneDev is an all-in-one devops platform. In OneDev before version 4.0.3, there is a critical vulnerability involving the build endpoint parameters. InputSpec is used to define parameters of a Build spec. It does so by using dynamically generated Groovy classes. A user able to control job parameters can run arbitrary code on OneDev's server by injecting arbitrary Groovy code. The ultimate result is"
+    },
+    {
+      "cve_id": "CVE-2021-21658",
+      "cvss": 9.1,
+      "year": 2021,
+      "description": "Jenkins Nuget Plugin 1.0 and earlier does not configure its XML parser to prevent XML external entity (XXE) attacks."
+    },
+    {
+      "cve_id": "CVE-2021-21917",
+      "cvss": 8.8,
+      "year": 2021,
+      "description": "An exploitable SQL injection vulnerability exist in the \u2018group_list\u2019 page of the Advantech R-SeeNet 2.4.15 (30.07.2021). A specially-crafted HTTP request at '\u2018ord\u2019 parameter. An attacker can make authenticated HTTP requests to trigger this vulnerability. This can be done as any authenticated user or through cross-site request forgery."
+    },
+    {
+      "cve_id": "CVE-2021-22112",
+      "cvss": 8.8,
+      "year": 2021,
+      "description": "Spring Security 5.4.x prior to 5.4.4, 5.3.x prior to 5.3.8.RELEASE, 5.2.x prior to 5.2.9.RELEASE, and older unsupported versions can fail to save the SecurityContext if it is changed more than once in a single request.A malicious user cannot cause the bug to happen (it must be programmed in). However, if the application's intent is to only allow the user to run with elevated privileges in a small "
+    },
+    {
+      "cve_id": "CVE-2021-22429",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "There is a memory address out of bounds in smartphones. Successful exploitation of this vulnerability may cause malicious code to be executed."
+    },
+    {
+      "cve_id": "CVE-2021-22869",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "An improper access control vulnerability in GitHub Enterprise Server allowed a workflow job to execute in a self-hosted runner group it should not have had access to. This affects customers using self-hosted runner groups for access control. A repository with access to one enterprise runner group could access all of the enterprise runner groups within the organization because of improper authentic"
+    },
+    {
+      "cve_id": "CVE-2021-26195",
+      "cvss": 8.8,
+      "year": 2021,
+      "description": "An issue was discovered in JerryScript 2.4.0. There is a heap-buffer-overflow in lexer_parse_number in js-lexer.c file."
+    },
+    {
+      "cve_id": "CVE-2021-26814",
+      "cvss": 8.8,
+      "year": 2021,
+      "description": "Wazuh API in Wazuh from 4.0.0 to 4.0.3 allows authenticated users to execute arbitrary code with administrative privileges via /manager/files URI. An authenticated user to the service may exploit incomplete input validation on the /manager/files API to inject arbitrary code within the API service script."
+    },
+    {
+      "cve_id": "CVE-2021-26958",
+      "cvss": 8.8,
+      "year": 2021,
+      "description": "An issue was discovered in the xcb crate through 2021-02-04 for Rust. It has a soundness violation because transmutation to the wrong type can happen after xcb::base::cast_event uses std::mem::transmute to return a reference to an arbitrary type."
+    },
+    {
+      "cve_id": "CVE-2021-27362",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "The WPG plugin before 3.1.0.0 for IrfanView 4.57 has a Read Access Violation on Control Flow starting at WPG!ReadWPG_W+0x0000000000000133, which might allow remote attackers to execute arbitrary code."
+    },
+    {
+      "cve_id": "CVE-2021-27572",
+      "cvss": 8.1,
+      "year": 2021,
+      "description": "An issue was discovered in Emote Remote Mouse through 4.0.0.0. Authentication Bypass can occur via Packet Replay. Remote unauthenticated users can execute arbitrary code via crafted UDP packets even when passwords are set."
+    },
+    {
+      "cve_id": "CVE-2021-27708",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "Command Injection in TOTOLINK X5000R router with firmware v9.1.0u.6118_B20201102, and TOTOLINK A720R router with firmware v4.1.5cu.470_B20200911 allows remote attackers to execute arbitrary OS commands by sending a modified HTTP request. This occurs because the function executes glibc's system function with untrusted input. In the function, \"command\" parameter is directly passed to the attacker, a"
+    },
+    {
+      "cve_id": "CVE-2021-27797",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "Brocade Fabric OS before Brocade Fabric OS v8.2.1c, v8.1.2h, and all versions of Brocade Fabric OS v8.0.x and v7.x contain documented hard-coded credentials, which could allow attackers to gain access to the system."
+    },
+    {
+      "cve_id": "CVE-2021-28035",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "An issue was discovered in the stack_dst crate before 0.6.1 for Rust. Because of the push_inner behavior, a drop of uninitialized memory can occur upon a val.clone() panic."
+    },
+    {
+      "cve_id": "CVE-2021-28680",
+      "cvss": 8.1,
+      "year": 2021,
+      "description": "The devise_masquerade gem before 1.3 allows certain attacks when a password's salt is unknown. An application that uses this gem to let administrators masquerade/impersonate users loses one layer of security protection compared to a situation where Devise (without this extension) is used. If the server-side secret_key_base value became publicly known (for instance if it is committed to a public re"
+    },
+    {
+      "cve_id": "CVE-2021-30547",
+      "cvss": 8.8,
+      "year": 2021,
+      "description": "Out of bounds write in ANGLE in Google Chrome prior to 91.0.4472.101 allowed a remote attacker to potentially perform out of bounds memory access via a crafted HTML page."
+    },
+    {
+      "cve_id": "CVE-2021-30629",
+      "cvss": 8.8,
+      "year": 2021,
+      "description": "Use after free in Permissions in Google Chrome prior to 93.0.4577.82 allowed a remote attacker who had compromised the renderer process to potentially exploit heap corruption via a crafted HTML page."
+    },
+    {
+      "cve_id": "CVE-2021-31575",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "In Config Manager, there is a possible command injection due to improper input validation. This could lead to remote escalation of privilege from a proximal attacker with no additional execution privileges needed. User interaction is not needed for exploitation. Patch ID: A20210009; Issue ID: OSBNB00123234."
+    },
+    {
+      "cve_id": "CVE-2021-32671",
+      "cvss": 10.0,
+      "year": 2021,
+      "description": "Flarum is a forum software for building communities. Flarum's translation system allowed for string inputs to be converted into HTML DOM nodes when rendered. This change was made after v0.1.0-beta.16 (our last beta before v1.0.0) and was not noticed or documented. This allowed for any user to type malicious HTML markup within certain user input fields and have this execute on client browsers. The "
+    },
+    {
+      "cve_id": "CVE-2021-33014",
+      "cvss": 8.8,
+      "year": 2021,
+      "description": "An attacker can gain VxWorks Shell after login due to hard-coded credentials on a KUKA KR C4 control software for versions prior to 8.7 or any product running KSS."
+    },
+    {
+      "cve_id": "CVE-2021-33574",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "The mq_notify function in the GNU C Library (aka glibc) versions 2.32 and 2.33 has a use-after-free. It may use the notification thread attributes object (passed through its struct sigevent parameter) after it has been freed by the caller, leading to a denial of service (application crash) or possibly unspecified other impact."
+    },
+    {
+      "cve_id": "CVE-2021-3375",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "ActivePresenter 6.1.6 is affected by a memory corruption vulnerability that may result in a denial of service (DoS) or arbitrary code execution."
+    },
+    {
+      "cve_id": "CVE-2021-33962",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "China Mobile An Lianbao WF-1 router v1.0.1 is affected by an OS command injection vulnerability in the web interface /api/ZRUsb/pop_usb_device component."
+    },
+    {
+      "cve_id": "CVE-2021-34123",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "An issue was discovered on atasm, version 1.09. A stack-buffer-overflow vulnerability in function aprintf() in asm.c allows attackers to execute arbitrary code on the system via a crafted file."
+    },
+    {
+      "cve_id": "CVE-2021-35042",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "Django 3.1.x before 3.1.13 and 3.2.x before 3.2.5 allows QuerySet.order_by SQL injection if order_by is untrusted input from a client of a web application."
+    },
+    {
+      "cve_id": "CVE-2021-35393",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "Realtek Jungle SDK version v2.x up to v3.4.14B provides a 'WiFi Simple Config' server that implements both UPnP and SSDP protocols. The binary is usually named wscd or mini_upnpd and is the successor to miniigd. The server is vulnerable to a stack buffer overflow vulnerability that is present due to unsafe parsing of the UPnP SUBSCRIBE/UNSUBSCRIBE Callback header. Successful exploitation of this v"
+    },
+    {
+      "cve_id": "CVE-2021-36159",
+      "cvss": 9.1,
+      "year": 2021,
+      "description": "libfetch before 2021-07-26, as used in apk-tools, xbps, and other products, mishandles numeric strings for the FTP and HTTP protocols. The FTP passive mode implementation allows an out-of-bounds read because strtol is used to parse the relevant numbers into address bytes. It does not check if the line ends prematurely. If it does, the for-loop condition checks for the '\\0' terminator one byte too "
+    },
+    {
+      "cve_id": "CVE-2021-36548",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "A remote code execution (RCE) vulnerability in the component /admin/index.php?id=themes&action=edit_template&filename=blog of Monstra v3.0.4 allows attackers to execute arbitrary commands via a crafted PHP file."
+    },
+    {
+      "cve_id": "CVE-2021-36776",
+      "cvss": 8.8,
+      "year": 2021,
+      "description": "A Improper Access Control vulnerability in SUSE Rancher allows remote attackers impersonate arbitrary users. This issue affects: SUSE Rancher Rancher versions prior to 2.5.10."
+    },
+    {
+      "cve_id": "CVE-2021-37214",
+      "cvss": 8.8,
+      "year": 2021,
+      "description": "The employee management page of Flygo contains Insecure Direct Object Reference (IDOR) vulnerability. After being authenticated as a general user, remote attackers can manipulate the employee ID in specific parameters to arbitrary access employee's data, modify it, and then obtain administrator privilege and execute arbitrary command."
+    },
+    {
+      "cve_id": "CVE-2021-37315",
+      "cvss": 9.1,
+      "year": 2021,
+      "description": "Incorrect Access Control issue discoverd in Cloud Disk in ASUS RT-AC68U router firmware version before 3.0.0.4.386.41634 allows remote attackers to write arbitrary files via improper sanitation on the source for COPY and MOVE operations."
+    },
+    {
+      "cve_id": "CVE-2021-37549",
+      "cvss": 9.1,
+      "year": 2021,
+      "description": "In JetBrains YouTrack before 2021.1.11111, sandboxing in workflows was insufficient."
+    },
+    {
+      "cve_id": "CVE-2021-38360",
+      "cvss": 8.3,
+      "year": 2021,
+      "description": "The wp-publications WordPress plugin is vulnerable to restrictive local file inclusion via the Q_FILE parameter found in the ~/bibtexbrowser.php file which allows attackers to include local zip files and achieve remote code execution, in versions up to and including 0.0."
+    },
+    {
+      "cve_id": "CVE-2021-38383",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "OwnTone (aka owntone-server) through 28.1 has a use-after-free in net_bind() in misc.c."
+    },
+    {
+      "cve_id": "CVE-2021-39022",
+      "cvss": 8.8,
+      "year": 2021,
+      "description": "IBM Guardium Data Encryption (GDE) 4.0.0.0 and 5.0.0.0 saves user-provided information into a Comma-Separated Value (CSV) file, but it does not neutralize or incorrectly neutralizes special elements that could be interpreted as a command when the file is opened by spreadsheet software. IBM X-Force ID: 213858."
+    },
+    {
+      "cve_id": "CVE-2021-39271",
+      "cvss": 8.8,
+      "year": 2021,
+      "description": "OrbiTeam BSCW Classic before 7.4.3 allows authenticated remote code execution (RCE) during archive extraction via attacker-supplied Python code in the class attribute of a .bscw file. This is fixed in 5.0.12, 5.1.10, 5.2.4, 7.3.3, and 7.4.3."
+    },
+    {
+      "cve_id": "CVE-2021-39982",
+      "cvss": 9.1,
+      "year": 2021,
+      "description": "Phone Manager application has a Improper Privilege Management vulnerability.Successful exploitation of this vulnerability may read and write arbitrary files by tampering with Phone Manager notifications."
+    },
+    {
+      "cve_id": "CVE-2021-40595",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "SQL injection vulnerability in Sourcecodester Online Leave Management System v1 by oretnom23, allows attackers to execute arbitrary SQL commands via the username parameter to /leave_system/classes/Login.php."
+    },
+    {
+      "cve_id": "CVE-2021-42136",
+      "cvss": 9.0,
+      "year": 2021,
+      "description": "A stored Cross-Site Scripting (XSS) vulnerability in the Missing Data Codes functionality of REDCap before 11.4.0 allows remote attackers to execute JavaScript code in the client's browser by storing said code as a Missing Data Code value. This can then be leveraged to execute a Cross-Site Request Forgery attack to escalate privileges to administrator."
+    },
+    {
+      "cve_id": "CVE-2021-43297",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "A deserialization vulnerability existed in dubbo hessian-lite 3.2.11 and its earlier versions, which could lead to malicious code execution. Most Dubbo users use Hessian2 as the default serialization/deserialization protocol, during Hessian catch unexpected exceptions, Hessian will log out some imformation for users, which may cause remote command execution. This issue affects Apache Dubbo Apache "
+    },
+    {
+      "cve_id": "CVE-2021-43397",
+      "cvss": 8.8,
+      "year": 2021,
+      "description": "LiquidFiles before 3.6.3 allows remote attackers to elevate their privileges from Admin (or User Admin) to Sysadmin."
+    },
+    {
+      "cve_id": "CVE-2021-44835",
+      "cvss": 9.8,
+      "year": 2021,
+      "description": "An issue was discovered in Active Intelligent Visualization 5. The Vdc header is used in a SQL query without being sanitized. This causes SQL injection."
+    },
+    {
+      "cve_id": "CVE-2021-46424",
+      "cvss": 9.1,
+      "year": 2021,
+      "description": "Telesquare TLR-2005KSH 1.0.0 is affected by an arbitrary file deletion vulnerability that allows a remote attacker to delete any file, even system internal files, via a DELETE request."
+    },
+    {
+      "cve_id": "CVE-2021-46769",
+      "cvss": 8.8,
+      "year": 2021,
+      "description": "Insufficient syscall input validation in the ASP\nBootloader may allow a privileged attacker to execute arbitrary DMA copies,\nwhich can lead to code execution. \n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n"
+    },
+    {
+      "cve_id": "CVE-2022-0760",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "The Simple Link Directory WordPress plugin before 7.7.2 does not validate and escape the post_id parameter before using it in a SQL statement via the qcopd_upvote_action AJAX action (available to unauthenticated and authenticated users), leading to an unauthenticated SQL Injection"
+    },
+    {
+      "cve_id": "CVE-2022-1043",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "A flaw was found in the Linux kernel\u2019s io_uring implementation. This flaw allows an attacker with a local account to corrupt system memory, crash the system or escalate privileges."
+    },
+    {
+      "cve_id": "CVE-2022-1397",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "API Privilege Escalation in GitHub repository alextselegidis/easyappointments prior to 1.5.0. Full system takeover."
+    },
+    {
+      "cve_id": "CVE-2022-1587",
+      "cvss": 9.1,
+      "year": 2022,
+      "description": "An out-of-bounds read vulnerability was discovered in the PCRE2 library in the get_recurse_data_length() function of the pcre2_jit_compile.c file. This issue affects recursions in JIT-compiled regular expressions caused by duplicate data transfers."
+    },
+    {
+      "cve_id": "CVE-2022-1993",
+      "cvss": 8.1,
+      "year": 2022,
+      "description": "Path Traversal in GitHub repository gogs/gogs prior to 0.12.9."
+    },
+    {
+      "cve_id": "CVE-2022-22151",
+      "cvss": 8.1,
+      "year": 2022,
+      "description": "CAMS for HIS Log Server contained in the following Yokogawa Electric products fails to properly neutralize log outputs: CENTUM CS 3000 versions from R3.08.10 to R3.09.00, CENTUM VP versions from R4.01.00 to R4.03.00, from R5.01.00 to R5.04.20, and from R6.01.00 to R6.08.00, and Exaopc versions from R3.72.00 to R3.79.00."
+    },
+    {
+      "cve_id": "CVE-2022-22425",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "\"IBM InfoSphere Information Server 11.7 is potentially vulnerable to CSV Injection. A remote attacker could execute arbitrary commands on the system, caused by improper validation of csv file contents. IBM X-Force ID: 223598.\""
+    },
+    {
+      "cve_id": "CVE-2022-22509",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "In Phoenix Contact FL SWITCH Series 2xxx in version 3.00 an incorrect privilege assignment allows an low privileged user to enable full access to the device configuration."
+    },
+    {
+      "cve_id": "CVE-2022-22832",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "An issue was discovered in Servisnet Tessa 0.0.2. Authorization data is available via an unauthenticated /data-service/users/ request."
+    },
+    {
+      "cve_id": "CVE-2022-22986",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "Netcommunity OG410X and OG810X series (Netcommunity OG410Xa, OG410Xi, OG810Xa, and OG810Xi firmware Ver.2.28 and earlier) allow an attacker on the adjacent network to execute an arbitrary OS command via a specially crafted config file."
+    },
+    {
+      "cve_id": "CVE-2022-23125",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "This vulnerability allows remote attackers to execute arbitrary code on affected installations of Netatalk. Authentication is not required to exploit this vulnerability. The specific flaw exists within the copyapplfile function. When parsing the len element, the process does not properly validate the length of user-supplied data prior to copying it to a fixed-length stack-based buffer. An attacker"
+    },
+    {
+      "cve_id": "CVE-2022-23303",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "The implementations of SAE in hostapd before 2.10 and wpa_supplicant before 2.10 are vulnerable to side channel attacks as a result of cache access patterns. NOTE: this issue exists because of an incomplete fix for CVE-2019-9494."
+    },
+    {
+      "cve_id": "CVE-2022-23608",
+      "cvss": 8.1,
+      "year": 2022,
+      "description": "PJSIP is a free and open source multimedia communication library written in C language implementing standard based protocols such as SIP, SDP, RTP, STUN, TURN, and ICE. In versions up to and including 2.11.1 when in a dialog set (or forking) scenario, a hash key shared by multiple UAC dialogs can potentially be prematurely freed when one of the dialogs is destroyed . The issue may cause a dialog s"
+    },
+    {
+      "cve_id": "CVE-2022-24219",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "eliteCMS v1.0 was discovered to contain a SQL injection vulnerability via /admin/edit_page.php."
+    },
+    {
+      "cve_id": "CVE-2022-24872",
+      "cvss": 8.1,
+      "year": 2022,
+      "description": "Shopware is an open commerce platform based on Symfony Framework and Vue. Permissions set to sales channel context by admin-api are still usable within normal user session. Users are advised to update to the current version 6.4.10.1. For older versions of 6.1, 6.2, and 6.3, corresponding security measures are also available via a plugin. There are no known workarounds for this issue."
+    },
+    {
+      "cve_id": "CVE-2022-25643",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "seatd-launch in seatd 0.6.x before 0.6.4 allows removing files with escalated privileges when installed setuid root. The attack vector is a user-supplied socket pathname."
+    },
+    {
+      "cve_id": "CVE-2022-26992",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "Arris routers SBR-AC1900P 1.0.7-B05, SBR-AC3200P 1.0.7-B05 and SBR-AC1200P 1.0.5-B05 were discovered to contain a command injection vulnerability in the ddns function via the DdnsUserName, DdnsHostName, and DdnsPassword parameters. This vulnerability allows attackers to execute arbitrary commands via a crafted request."
+    },
+    {
+      "cve_id": "CVE-2022-27497",
+      "cvss": 8.6,
+      "year": 2022,
+      "description": "Null pointer dereference in firmware for Intel(R) AMT before version 11.8.93, 11.22.93, 11.12.93, 12.0.92, 14.1.67, 15.0.42, 16.1.25 may allow an unauthenticated user to potentially enable denial of service via network access."
+    },
+    {
+      "cve_id": "CVE-2022-28995",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "Rengine v1.0.2 was discovered to contain a remote code execution (RCE) vulnerability via the yaml configuration function."
+    },
+    {
+      "cve_id": "CVE-2022-29316",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "Complete Online Job Search System v1.0 was discovered to contain a SQL injection vulnerability via /eris/index.php?q=result&searchfor=advancesearch."
+    },
+    {
+      "cve_id": "CVE-2022-29639",
+      "cvss": 8.1,
+      "year": 2022,
+      "description": "TOTOLINK A3100R V4.1.2cu.5050_B20200504 and V4.1.2cu.5247_B20211129 were discovered to contain a command injection vulnerability via the magicid parameter in the function uci_cloudupdate_config."
+    },
+    {
+      "cve_id": "CVE-2022-29730",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "USR IOT 4G LTE Industrial Cellular VPN Router v1.0.36 was discovered to contain hard-coded credentials for its highest privileged account. The credentials cannot be altered through normal operation of the device."
+    },
+    {
+      "cve_id": "CVE-2022-29797",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "There is a buffer overflow vulnerability in CV81-WDM FW 01.70.49.29.46. Successful exploitation of this vulnerability may lead to privilege escalation."
+    },
+    {
+      "cve_id": "CVE-2022-30599",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "A flaw was found in moodle where an SQL injection risk was identified in Badges code relating to configuring criteria."
+    },
+    {
+      "cve_id": "CVE-2022-30981",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "An issue was discovered in Gentics CMS before 5.43.1. By uploading a malicious ZIP file, an attacker is able to deserialize arbitrary data and hence can potentially achieve Java code execution."
+    },
+    {
+      "cve_id": "CVE-2022-31115",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "opensearch-ruby is a community-driven, open source fork of elasticsearch-ruby. In versions prior to 2.0.1 the ruby `YAML.load` function was used instead of `YAML.safe_load`. As a result opensearch-ruby 2.0.0 and prior can lead to unsafe deserialization using YAML.load if the response is of type YAML. An attacker must be in control of an opensearch server and convince the victim to connect to it in"
+    },
+    {
+      "cve_id": "CVE-2022-3152",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "Unverified Password Change in GitHub repository phpfusion/phpfusion prior to 9.10.20."
+    },
+    {
+      "cve_id": "CVE-2022-31953",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "Rescue Dispatch Management System v1.0 is vulnerable to SQL Injection via /rdms/admin/incident_reports/view_report.php?id=."
+    },
+    {
+      "cve_id": "CVE-2022-33229",
+      "cvss": 8.2,
+      "year": 2022,
+      "description": "Information disclosure due to buffer over-read in Modem while using static array to process IPv4 packets."
+    },
+    {
+      "cve_id": "CVE-2022-33231",
+      "cvss": 9.3,
+      "year": 2022,
+      "description": "Memory corruption due to double free in core while initializing the encryption key."
+    },
+    {
+      "cve_id": "CVE-2022-33274",
+      "cvss": 8.4,
+      "year": 2022,
+      "description": "Memory corruption in android core due to improper validation of array index while returning feature ids after license authentication."
+    },
+    {
+      "cve_id": "CVE-2022-34380",
+      "cvss": 9.3,
+      "year": 2022,
+      "description": "Dell CloudLink 7.1.3 and all earlier versions contain an Authentication Bypass Using an Alternate Path or Channel Vulnerability. A high privileged local attacker may potentially exploit this vulnerability leading to authentication bypass and access the CloudLink system console. This is critical severity vulnerability as it allows attacker to take control of the system."
+    },
+    {
+      "cve_id": "CVE-2022-34427",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "Dell Container Storage Modules 1.2 contains an OS Command Injection in goiscsi and gobrick libraries. A remote unauthenticated attacker could exploit this vulnerability leading to modification of intended OS command execution."
+    },
+    {
+      "cve_id": "CVE-2022-35409",
+      "cvss": 9.1,
+      "year": 2022,
+      "description": "An issue was discovered in Mbed TLS before 2.28.1 and 3.x before 3.2.0. In some configurations, an unauthenticated attacker can send an invalid ClientHello message to a DTLS server that causes a heap-based buffer over-read of up to 255 bytes. This can cause a server crash or possibly information disclosure based on error responses. Affected configurations have MBEDTLS_SSL_DTLS_CLIENT_PORT_REUSE en"
+    },
+    {
+      "cve_id": "CVE-2022-36076",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "NodeBB Forum Software is powered by Node.js and supports either Redis, MongoDB, or a PostgreSQL database. Due to an unnecessarily strict conditional in the code handling the first step of the SSO process, the pre-existing logic that added (and later checked) a nonce was inadvertently rendered opt-in instead of opt-out. This re-exposed a vulnerability in that a specially crafted Man-in-the-Middle ("
+    },
+    {
+      "cve_id": "CVE-2022-36201",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "Doctor\u2019s Appointment System v1.0 is vulnerable to Blind SQLi via settings.php."
+    },
+    {
+      "cve_id": "CVE-2022-36279",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "A stack-based buffer overflow vulnerability exists in the httpd delfile.cgi functionality of Siretta QUARTZ-GOLD G5.0.1.5-210720-141020. A specially-crafted HTTP request can lead to remote code execution. An attacker can send an HTTP request to trigger this vulnerability."
+    },
+    {
+      "cve_id": "CVE-2022-36515",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "H3C GR-1200W MiniGRW1A0V100R006 was discovered to contain a stack overflow via the function addactionlist."
+    },
+    {
+      "cve_id": "CVE-2022-36517",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "H3C GR-1200W MiniGRW1A0V100R006 was discovered to contain a stack overflow via the function debug_wlan_advance."
+    },
+    {
+      "cve_id": "CVE-2022-36565",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "Incorrect access control in the install directory (C:\\Wamp64) of Wamp v3.2.6 and below allows authenticated attackers to execute arbitrary code via overwriting binaries located in the directory."
+    },
+    {
+      "cve_id": "CVE-2022-38297",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "UCMS v1.6.0 contains an authentication bypass vulnerability which is exploited via cookie poisoning."
+    },
+    {
+      "cve_id": "CVE-2022-38488",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "logrocket-oauth2-example through 2020-05-27 allows SQL injection via the /auth/register username parameter."
+    },
+    {
+      "cve_id": "CVE-2022-38545",
+      "cvss": 9.6,
+      "year": 2022,
+      "description": "Valine v1.4.18 was discovered to contain a remote code execution (RCE) vulnerability which allows attackers to execute arbitrary code via a crafted POST request."
+    },
+    {
+      "cve_id": "CVE-2022-38555",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "Linksys E1200 v1.0.04 is vulnerable to Buffer Overflow via ej_get_web_page_name."
+    },
+    {
+      "cve_id": "CVE-2022-38637",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "Hospital Management System v1.0 was discovered to contain multiple SQL injection vulnerabilities via the Username and Password parameters on the Login page."
+    },
+    {
+      "cve_id": "CVE-2022-3980",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "An XML External Entity (XEE) vulnerability allows server-side request forgery (SSRF) and potential code execution in Sophos Mobile managed on-premises between versions 5.0.0 and 9.7.4."
+    },
+    {
+      "cve_id": "CVE-2022-40887",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "SourceCodester Best Student Result Management System 1.0 is vulnerable to SQL Injection."
+    },
+    {
+      "cve_id": "CVE-2022-41436",
+      "cvss": 9.1,
+      "year": 2022,
+      "description": "An issue in OXHOO TP50 OXH1.50 allows unauthenticated attackers to access the administrative panel via browsing to the URL http://device_ip/index1.html."
+    },
+    {
+      "cve_id": "CVE-2022-41477",
+      "cvss": 9.1,
+      "year": 2022,
+      "description": "A security issue was discovered in WeBid <=1.2.2. A Server-Side Request Forgery (SSRF) vulnerability in the admin/theme.php file allows remote attackers to inject payloads via theme parameters to read files across directories."
+    },
+    {
+      "cve_id": "CVE-2022-41522",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "TOTOLINK NR1800X V9.1.0u.6279_B20210910 was discovered to contain an unauthenticated stack overflow via the \"main\" function."
+    },
+    {
+      "cve_id": "CVE-2022-41552",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "Server-Side Request Forgery (SSRF) vulnerability in Hitachi Infrastructure Analytics Advisor on Linux (Data Center Analytics, Analytics probe components), Hitachi Ops Center Analyzer on Linux (Hitachi Ops Center Analyzer detail view, Hitachi Ops Center Analyzer probe components) allows Server Side Request Forgery.\nThis issue affects Hitachi Infrastructure Analytics Advisor: from 2.0.0-00 through 4"
+    },
+    {
+      "cve_id": "CVE-2022-42541",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "Remote code execution"
+    },
+    {
+      "cve_id": "CVE-2022-42867",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "A use after free issue was addressed with improved memory management. This issue is fixed in Safari 16.2, tvOS 16.2, macOS Ventura 13.1, iOS 16.2 and iPadOS 16.2, watchOS 9.2. Processing maliciously crafted web content may lead to arbitrary code execution."
+    },
+    {
+      "cve_id": "CVE-2022-46289",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "Multiple out-of-bounds write vulnerabilities exist in the ORCA format nAtoms functionality of Open Babel 3.1.1 and master commit 530dbfa3. A specially-crafted malformed file can lead to arbitrary code execution. An attacker can provide a malicious file to trigger this vulnerability.nAtoms calculation wrap-around, leading to a small buffer allocation"
+    },
+    {
+      "cve_id": "CVE-2022-46292",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "Multiple out-of-bounds write vulnerabilities exist in the translationVectors parsing functionality in multiple supported formats of Open Babel 3.1.1 and master commit 530dbfa3. A specially-crafted malformed file can lead to arbitrary code execution. An attacker can provide a malicious file to trigger this vulnerability.This vulnerability affects the MOPAC file format, inside the Unit Cell Translat"
+    },
+    {
+      "cve_id": "CVE-2022-47615",
+      "cvss": 9.3,
+      "year": 2022,
+      "description": "Local File Inclusion vulnerability in\u00a0LearnPress \u2013 WordPress LMS Plugin <= 4.1.7.3.2 versions."
+    },
+    {
+      "cve_id": "CVE-2022-47618",
+      "cvss": 9.8,
+      "year": 2022,
+      "description": "Merit LILIN AH55B04 & AH55B08 DVR firm has hard-coded administrator credentials. An unauthenticated remote attacker can use these credentials to log in administrator page, to manipulate system or disrupt service."
+    },
+    {
+      "cve_id": "CVE-2022-47872",
+      "cvss": 8.8,
+      "year": 2022,
+      "description": "A Server-Side Request Forgery (SSRF) in maccms10 v2021.1000.2000 allows attackers to force the application to make arbitrary requests via a crafted payload injected into the Name parameter under the Interface address module."
+    },
+    {
+      "cve_id": "CVE-2023-0228",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Improper Authentication vulnerability in ABB Symphony Plus S+ Operations.This issue affects Symphony Plus S+ Operations: from 2.X through 2.1 SP2, 2.2, from 3.X through 3.3 SP1, 3.3 SP2.\n\n"
+    },
+    {
+      "cve_id": "CVE-2023-1597",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "The tagDiv Cloud Library WordPress plugin before 2.7 does not have authorisation and CSRF in an AJAX action accessible to both unauthenticated and authenticated users, allowing unauthenticated users to change arbitrary user metadata, which could lead to privilege escalation by setting themselves as an admin of the blog."
+    },
+    {
+      "cve_id": "CVE-2023-1837",
+      "cvss": 8.5,
+      "year": 2023,
+      "description": "Missing Authentication for critical function vulnerability in HYPR Server allows Authentication Bypass when using Legacy APIs.This issue affects HYPR Server: before 8.0 (with enabled Legacy APIs)\n\n"
+    },
+    {
+      "cve_id": "CVE-2023-1968",
+      "cvss": 10.0,
+      "year": 2023,
+      "description": "\nInstruments with Illumina Universal Copy Service v2.x are vulnerable due to binding to an unrestricted IP address. An unauthenticated malicious actor could use UCS to listen on all IP addresses, including those capable of accepting remote communications. \n\n\n\n\n\n\n\n"
+    },
+    {
+      "cve_id": "CVE-2023-22889",
+      "cvss": 9.8,
+      "year": 2023,
+      "description": "SmartBear Zephyr Enterprise through 7.15.0 mishandles user-defined input during report generation. This could lead to remote code execution by unauthenticated users."
+    },
+    {
+      "cve_id": "CVE-2023-2330",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "The Caldera Forms Google Sheets Connector WordPress plugin before 1.3 does not have CSRF check when updating its Access Code, which could allow attackers to make logged in admin change the access code to an arbitrary one via a CSRF attack"
+    },
+    {
+      "cve_id": "CVE-2023-24048",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Cross Site Request Forgery (CSRF) vulnerability in Connectize AC21000 G6 641.139.1.1256 allows attackers to gain control of the device via crafted GET request to /man_password.htm."
+    },
+    {
+      "cve_id": "CVE-2023-24241",
+      "cvss": 9.8,
+      "year": 2023,
+      "description": "Forget Heart Message Box v1.1 was discovered to contain a SQL injection vulnerability via the name parameter at /admin/loginpost.php."
+    },
+    {
+      "cve_id": "CVE-2023-25668",
+      "cvss": 9.8,
+      "year": 2023,
+      "description": "TensorFlow is an open source platform for machine learning. Attackers using Tensorflow prior to 2.12.0 or 2.11.1 can access heap memory which is not in the control of user, leading to a crash or remote code execution. The fix will be included in TensorFlow version 2.12.0 and will also cherrypick this commit on TensorFlow version 2.11.1."
+    },
+    {
+      "cve_id": "CVE-2023-26153",
+      "cvss": 8.3,
+      "year": 2023,
+      "description": "Versions of the package geokit-rails before 2.5.0 are vulnerable to Command Injection due to unsafe deserialisation of YAML within the 'geo_location' cookie. This issue can be exploited remotely via a malicious cookie value.\r\r**Note:**\r\r An attacker can use this vulnerability to execute commands on the host system."
+    },
+    {
+      "cve_id": "CVE-2023-26779",
+      "cvss": 9.8,
+      "year": 2023,
+      "description": "CleverStupidDog yf-exam v 1.8.0 is vulnerable to Deserialization which can lead to remote code execution (RCE)."
+    },
+    {
+      "cve_id": "CVE-2023-27068",
+      "cvss": 9.8,
+      "year": 2023,
+      "description": "Deserialization of Untrusted Data in Sitecore Experience Platform through 10.2 allows remote attackers to run arbitrary code via ValidationResult.aspx."
+    },
+    {
+      "cve_id": "CVE-2023-27074",
+      "cvss": 9.8,
+      "year": 2023,
+      "description": "BP Monitoring Management System v1.0 was discovered to contain a SQL injection vulnerability via the emailid parameter in the login page."
+    },
+    {
+      "cve_id": "CVE-2023-27238",
+      "cvss": 9.8,
+      "year": 2023,
+      "description": "LavaLite CMS v 9.0.0 was discovered to be vulnerable to web cache poisoning."
+    },
+    {
+      "cve_id": "CVE-2023-29214",
+      "cvss": 9.9,
+      "year": 2023,
+      "description": "XWiki Commons are technical libraries common to several other top level XWiki projects. Any user with edit rights can execute arbitrary Groovy, Python or Velocity code in XWiki leading to full access to the XWiki installation. The root cause is improper escaping of the included pages in the IncludedDocuments panel. The problem has been patched on XWiki 14.4.7, and 14.10."
+    },
+    {
+      "cve_id": "CVE-2023-29411",
+      "cvss": 9.8,
+      "year": 2023,
+      "description": "\nA CWE-306: Missing Authentication for Critical Function vulnerability exists that could allow\nchanges to administrative credentials, leading to potential remote code execution without\nrequiring prior authentication on the Java RMI interface. \n\n\n\n"
+    },
+    {
+      "cve_id": "CVE-2023-29475",
+      "cvss": 9.8,
+      "year": 2023,
+      "description": "inventory in Atos Unify OpenScape 4000 Platform and OpenScape 4000 Manager Platform 10 R1 before 10 R1.34.4 allows an unauthenticated attacker to run arbitrary commands on the platform operating system and achieve administrative access, aka OSFOURK-23543."
+    },
+    {
+      "cve_id": "CVE-2023-31098",
+      "cvss": 9.8,
+      "year": 2023,
+      "description": "Weak Password Requirements vulnerability in Apache Software Foundation Apache InLong.This issue affects Apache InLong: from 1.1.0 through 1.6.0.\u00a0\n\nWhen users change their password to a simple password (with any character or\nsymbol), attackers can easily guess the user's password and access the account.\n\nUsers are advised to upgrade to Apache InLong's 1.7.0 or cherry-pick  https://github.com/apache"
+    },
+    {
+      "cve_id": "CVE-2023-32530",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Vulnerable modules of Trend Micro Apex Central (on-premise) contain vulnerabilities which would allow authenticated users to perform a SQL injection that could lead to remote code execution.\r\n\r\nPlease note: an attacker must first obtain authentication on the target system in order to exploit these vulnerabilities.\r\n\r\nThis is similar to, but not identical to CVE-2023-32529."
+    },
+    {
+      "cve_id": "CVE-2023-33107",
+      "cvss": 8.4,
+      "year": 2023,
+      "description": "Memory corruption in Graphics Linux while assigning shared virtual memory region during IOCTL call."
+    },
+    {
+      "cve_id": "CVE-2023-33373",
+      "cvss": 9.8,
+      "year": 2023,
+      "description": "Connected IO v2.1.0 and prior keeps passwords and credentials in clear-text format, allowing attackers to exfiltrate the credentials and use them to impersonate the devices."
+    },
+    {
+      "cve_id": "CVE-2023-35030",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Cross-site request forgery (CSRF) vulnerability in the Layout module's SEO configuration in Liferay Portal 7.4.3.70 through 7.4.3.76, and Liferay DXP 7.4 update 70 through 76 allows remote attackers to execute arbitrary code in the scripting console via the `_com_liferay_layout_admin_web_portlet_GroupPagesPortlet_backURL` parameter."
+    },
+    {
+      "cve_id": "CVE-2023-35793",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "An issue was discovered in Cassia Access Controller 2.1.1.2303271039. Establishing a web SSH session to gateways is vulnerable to Cross Site Request Forgery (CSRF) attacks."
+    },
+    {
+      "cve_id": "CVE-2023-37503",
+      "cvss": 8.1,
+      "year": 2023,
+      "description": "HCL Compass is vulnerable to insecure password requirements. An attacker could easily guess the password and gain access to user accounts.\n"
+    },
+    {
+      "cve_id": "CVE-2023-37964",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "A cross-site request forgery (CSRF) vulnerability in Jenkins ElasticBox CI Plugin 5.0.1 and earlier allows attackers to connect to an attacker-specified URL using attacker-specified credentials IDs obtained through another method, capturing credentials stored in Jenkins."
+    },
+    {
+      "cve_id": "CVE-2023-39640",
+      "cvss": 9.8,
+      "year": 2023,
+      "description": "UpLight cookiebanner before 1.5.1 was discovered to contain a SQL injection vulnerability via the component Hook::getHookModuleExecList()."
+    },
+    {
+      "cve_id": "CVE-2023-39963",
+      "cvss": 8.1,
+      "year": 2023,
+      "description": "Nextcloud Server provides data storage for Nextcloud, an open source cloud platform. Starting in version 20.0.0 and prior to versions 20.0.14.15, 21.0.9.13, 22.2.10.14, 23.0.12.8, 24.0.12.5, 25.0.9, 26.0.4, and 27.0.1, a missing password confirmation allowed an attacker, after successfully stealing a session from a logged in user, to create app passwords for the victim. Nextcloud server versions 2"
+    },
+    {
+      "cve_id": "CVE-2023-41357",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Galaxy Software Services Corporation Vitals ESP is an online knowledge base management portal, it has insufficient filtering and validation during file upload. An authenticated remote attacker with general user privilege can exploit this vulnerability to upload and execute scripts onto arbitrary directories to perform arbitrary system operations or disrupt service."
+    },
+    {
+      "cve_id": "CVE-2023-42270",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Grocy <= 4.0.2 is vulnerable to Cross Site Request Forgery (CSRF)."
+    },
+    {
+      "cve_id": "CVE-2023-4584",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Memory safety bugs present in Firefox 116, Firefox ESR 102.14, Firefox ESR 115.1, Thunderbird 102.14, and Thunderbird 115.1. Some of these bugs showed evidence of memory corruption and we presume that with enough effort some of these could have been exploited to run arbitrary code. This vulnerability affects Firefox < 117, Firefox ESR < 102.15, Firefox ESR < 115.2, Thunderbird < 102.15, and Thunde"
+    },
+    {
+      "cve_id": "CVE-2023-45906",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Dreamer CMS v4.1.3 was discovered to contain a Cross-Site Request Forgery (CSRF) via the component /admin/user/add."
+    },
+    {
+      "cve_id": "CVE-2023-46498",
+      "cvss": 9.8,
+      "year": 2023,
+      "description": "An issue in EverShop NPM versions before v.1.0.0-rc.8 allows a remote attacker to obtain sensitive information and execute arbitrary code via the /deleteCustomer/route.json file."
+    },
+    {
+      "cve_id": "CVE-2023-46509",
+      "cvss": 9.8,
+      "year": 2023,
+      "description": "An issue in Contec SolarView Compact v.6.0 and before allows an attacker to execute arbitrary code via the texteditor.php component."
+    },
+    {
+      "cve_id": "CVE-2023-49379",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "JFinalCMS v5.0.0 was discovered to contain a Cross-Site Request Forgery (CSRF) vulnerability via the component /admin/friend_link/save."
+    },
+    {
+      "cve_id": "CVE-2023-50841",
+      "cvss": 8.5,
+      "year": 2023,
+      "description": "Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection') vulnerability in Repute Infosystems BookingPress \u2013 Appointment Booking Calendar Plugin and Online Scheduling Plugin.This issue affects BookingPress \u2013 Appointment Booking Calendar Plugin and Online Scheduling Plugin: from n/a through 1.0.72.\n\n"
+    },
+    {
+      "cve_id": "CVE-2023-51763",
+      "cvss": 9.8,
+      "year": 2023,
+      "description": "csv_builder.rb in ActiveAdmin (aka Active Admin) before 3.2.0 allows CSV injection."
+    },
+    {
+      "cve_id": "CVE-2023-5178",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "A use-after-free vulnerability was found in drivers/nvme/target/tcp.c` in `nvmet_tcp_free_crypto` due to a logical bug in the NVMe/TCP subsystem in the Linux kernel. This issue may allow a malicious user to cause a use-after-free and double-free problem, which may permit remote code execution or lead to local privilege escalation."
+    },
+    {
+      "cve_id": "CVE-2023-7024",
+      "cvss": 8.8,
+      "year": 2023,
+      "description": "Heap buffer overflow in WebRTC in Google Chrome prior to 120.0.6099.129 allowed a remote attacker to potentially exploit heap corruption via a crafted HTML page. (Chromium security severity: High)"
+    }
+  ]
+}
