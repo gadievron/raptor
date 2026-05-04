@@ -783,23 +783,40 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
             f"- {f['file']}: {f['error']}" for f in failures[:15]
         )
 
-        prompt = f"""I have a {language} project in {self.repo_path} with no build system.
-Compilation with {language == 'cpp' and 'gcc' or 'javac'} -w -c and auto-detected -I flags partially works,
-but {len(failures)} files fail.
+        from core.security.prompt_envelope import UntrustedBlock, build_prompt
+        from core.security.prompt_defense_profiles import CONSERVATIVE
 
-Sample errors:
-{failure_sample}
-
-Read the source files to understand what's needed. Then output ONLY a JSON
-object with two arrays — no other text:
-
-{{"includes": ["-Ipath1", "-Ipath2"], "defines": ["-DFOO", "-DBAR=1", "-include header.h"]}}
-
-Rules:
-- Only suggest -I, -D, -include, and -std flags
-- Do NOT invent #define values that aren't in the source
-- Paths should be relative to the project root
-"""
+        compiler = "gcc" if language == "cpp" else "javac"
+        system = (
+            f"I have a {language} project with no build system. "
+            f"Compilation with {compiler} -w -c and auto-detected -I flags "
+            f"partially works, but {len(failures)} files fail.\n\n"
+            "Read the source files to understand what's needed. Then output "
+            "ONLY a JSON object with two arrays — no other text:\n\n"
+            '{"includes": ["-Ipath1", "-Ipath2"], '
+            '"defines": ["-DFOO", "-DBAR=1", "-include header.h"]}\n\n'
+            "Rules:\n"
+            "- Only suggest -I, -D, -include, and -std flags\n"
+            "- Do NOT invent #define values that aren't in the source\n"
+            "- Paths should be relative to the project root"
+        )
+        bundle = build_prompt(
+            system=system,
+            profile=CONSERVATIVE,
+            untrusted_blocks=(
+                UntrustedBlock(
+                    content=str(self.repo_path),
+                    kind="project_path",
+                    origin="build_detector",
+                ),
+                UntrustedBlock(
+                    content=failure_sample,
+                    kind="compiler_errors",
+                    origin="build_detector",
+                ),
+            ),
+        )
+        prompt = next(m.content for m in bundle.messages if m.role == "user")
 
         from core.security.cc_trust import check_repo_claude_trust
         if check_repo_claude_trust(str(self.repo_path)):
