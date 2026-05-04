@@ -40,7 +40,6 @@ Or pass `--openant-core <path>` directly.
 | `--workers <n>` | `4` | Parallel analysis workers |
 | `--max-findings <n>` | `50` | Cap findings in report |
 | `--openant-core <path>` | `$OPENANT_CORE` | Path to openant-core |
-| `--no-analyze` | off | Skip Raptor LLM analysis of findings |
 
 ### Analysis levels
 
