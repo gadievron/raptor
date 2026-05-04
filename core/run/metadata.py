@@ -42,6 +42,7 @@ _PREFIX_MAP = {
     "web": "web",
     "crash-analysis": "crash-analysis",
     "oss-forensics": "oss-forensics",
+    "openant": "openant",
 }
 
 

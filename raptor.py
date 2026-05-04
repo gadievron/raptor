@@ -263,6 +263,19 @@ def mode_llm_analysis(args: list) -> int:
     return _run_script(llm_script, args)
 
 
+def mode_openant(args: list) -> int:
+    """Run OpenAnt AST+LLM source-code vulnerability scan."""
+    script_root = Path(__file__).parent
+    openant_script = script_root / "raptor_openant.py"
+
+    if not openant_script.exists():
+        print(f"✗ OpenAnt script not found: {openant_script}")
+        return 1
+
+    return _run_with_lifecycle("openant", openant_script, args,
+                              "Running OpenAnt LLM-powered source-code scan...")
+
+
 def show_mode_help(mode: str) -> None:
     """Show detailed help for a specific mode."""
     script_root = Path(__file__).parent
@@ -274,6 +287,7 @@ def show_mode_help(mode: str) -> None:
         'agentic': script_root / "raptor_agentic.py",
         'codeql': script_root / "raptor_codeql.py",
         'analyze': script_root / "packages/llm_analysis/agent.py",
+        'openant': script_root / "raptor_openant.py",
     }
     
     if mode not in mode_scripts:
@@ -303,6 +317,7 @@ Available Modes:
   agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
   codeql      - CodeQL-only analysis
   analyze     - LLM-powered vulnerability analysis (requires SARIF input)
+  openant     - OpenAnt AST+LLM source-code vulnerability scan
 
 Examples:
   # Full autonomous workflow
@@ -398,6 +413,7 @@ def main():
         'agentic': mode_agentic,
         'codeql': mode_codeql,
         'analyze': mode_llm_analysis,
+        'openant': mode_openant,
     }
     
     if mode not in mode_handlers:

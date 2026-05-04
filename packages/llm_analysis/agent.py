@@ -32,6 +32,7 @@ from core.llm.client import LLMClient, _is_auth_error
 from core.llm.config import LLMConfig
 from core.llm.detection import detect_llm_availability
 from core.llm.providers import ClaudeCodeProvider
+from packages.exploitability_validation.models import Feasibility
 
 logger = get_logger()
 
@@ -74,7 +75,6 @@ class VulnerabilityContext:
         self.metadata: Optional[Dict[str, Any]] = finding.get("metadata")
 
         # Feasibility data from validation pipeline (if available)
-        from packages.exploitability_validation.models import Feasibility
         self.feasibility: Dict[str, Any] = Feasibility.from_dict(finding.get("feasibility")).to_dict()
         self.attack_path_ref: Optional[str] = self.feasibility.get("attack_path_ref")
 

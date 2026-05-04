@@ -199,6 +199,19 @@ Examples:
     parser.add_argument("--sequential", action="store_true",
                        help="Sequential analysis in Phase 3 instead of parallel Phase 4 orchestration")
 
+    # OpenAnt integration
+    parser.add_argument("--openant", action="store_true",
+                        help="Run OpenAnt LLM semantic scan in addition to Semgrep/CodeQL")
+    parser.add_argument("--openant-only", action="store_true",
+                        help="Run OpenAnt only (skip Semgrep/CodeQL)")
+    parser.add_argument("--openant-core", default=os.environ.get("OPENANT_CORE"),
+                        help="Path to openant-core directory (default: $OPENANT_CORE)")
+    parser.add_argument("--openant-model", default="sonnet", choices=["opus", "sonnet"],
+                        help="OpenAnt LLM model (default: sonnet)")
+    parser.add_argument("--openant-level", default="reachable",
+                        choices=["all", "reachable", "codeql", "exploitable"],
+                        help="OpenAnt analysis depth (default: reachable)")
+
     parser.add_argument(
         "--accept-weakened-defenses",
         action="store_true",
@@ -469,8 +482,10 @@ Examples:
     codeql_metrics = {}
 
     # Launch scanners in parallel when both are enabled
-    run_semgrep = not args.codeql_only
-    run_codeql = (args.codeql or args.codeql_only) and not args.no_codeql
+    # --openant-only skips Semgrep/CodeQL entirely
+    _openant_only = getattr(args, "openant_only", False)
+    run_semgrep = not args.codeql_only and not _openant_only
+    run_codeql = (args.codeql or args.codeql_only) and not args.no_codeql and not _openant_only
 
     semgrep_cmd = None
     codeql_cmd = None
@@ -617,8 +632,8 @@ Examples:
                 for sarif in sarif_files:
                     all_sarif_files.append(Path(sarif))
 
-    # Check if we have any findings
-    if not all_sarif_files:
+    # Check if we have any findings (skip when --openant-only bypasses scanners)
+    if not all_sarif_files and not getattr(args, "openant_only", False):
         print("\n❌ No SARIF files generated from scanning")
         sys.exit(1)
 
@@ -640,6 +655,60 @@ Examples:
     if codeql_metrics:
         print(f"  CodeQL: {codeql_metrics.get('total_findings', 0)} findings")
     print(f"SARIF files: {len(sarif_files)}")
+
+    # ========================================================================
+    # PHASE 1b: OPENANT SEMANTIC SCAN (opt-in via --openant / --openant-only)
+    # ========================================================================
+    openant_extra_findings = []
+    if getattr(args, "openant", False) or getattr(args, "openant_only", False):
+        try:
+            from packages.openant import get_config, run_openant_scan, translate_pipeline_output, deduplicate_with_sarif
+            from packages.openant.config import OpenAntConfig
+
+            if getattr(args, "openant_core", None):
+                oa_config = OpenAntConfig(core_path=Path(args.openant_core))
+            else:
+                oa_config = get_config(raptor_dir=script_root)
+            oa_config.model = getattr(args, "openant_model", "sonnet")
+            oa_config.level = getattr(args, "openant_level", "reachable")
+
+            print("\n" + "=" * 70)
+            print("OPENANT SEMANTIC SCAN")
+            print("=" * 70)
+
+            oa_out = out_dir / "openant_scan"
+            oa_out.mkdir(exist_ok=True)
+            oa_result = run_openant_scan(
+                repo_path=str(original_repo_path),
+                out_dir=str(oa_out),
+                config=oa_config,
+            )
+
+            if oa_result.get("skipped"):
+                print(f"⚠️  OpenAnt unavailable: {oa_result.get('error', 'unknown')}")
+            else:
+                raw = translate_pipeline_output(
+                    oa_result.get("pipeline_output") or {},
+                    str(original_repo_path),
+                )
+                if raw and not getattr(args, "openant_only", False) and sarif_files:
+                    from core.sarif.parser import parse_sarif_findings
+                    sarif_flist = []
+                    for sf in sarif_files:
+                        sarif_flist.extend(parse_sarif_findings(str(sf)))
+                    merged, dropped = deduplicate_with_sarif(raw, sarif_flist)
+                    openant_extra_findings = [f for f in merged if f.get("tool") == "openant"]
+                    if dropped:
+                        print(f"  Deduped {dropped} OpenAnt finding(s) already in SARIF")
+                else:
+                    openant_extra_findings = raw
+                save_json(out_dir / "openant_findings.json", openant_extra_findings)
+                print(f"✓ OpenAnt: {len(openant_extra_findings)} unique finding(s)")
+                total_findings += len(openant_extra_findings)
+        except RuntimeError as e:
+            logger.warning(f"OpenAnt not configured (continuing without it): {e}")
+        except Exception as e:
+            logger.warning(f"OpenAnt scan failed (continuing): {e}")
 
     # ========================================================================
     # PHASE 2: EXPLOITABILITY VALIDATION

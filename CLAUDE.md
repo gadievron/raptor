@@ -21,6 +21,7 @@ VERY IMPORTANT: follow these steps in order.
 /scan /fuzz /web /agentic /codeql /analyze - Security testing
 /exploit /patch - Generate PoCs and fixes (beta)
 /validate - Exploitability validation pipeline (see below)
+/openant - OpenAnt AST+LLM source-code vulnerability scan (multi-language, semantic analysis)
 /understand - Code understanding: map attack surface, trace flows, hunt variants (see below)
 /diagram - Generate Mermaid visual maps from /understand or /validate output (see below)
 
@@ -249,6 +250,7 @@ very much a WIP but it could be of use for those wanting to see relationships an
 **When errors occur:** Load `tiers/recovery.md` (recovery protocol)
 **When requested:** Load `tiers/personas/[name].md` (expert personas)
 **When running /understand:** Load `.claude/skills/code-understanding/SKILL.md` (gates, config) plus the relevant mode file: `map.md`, `trace.md`, `hunt.md`, or `teach.md`
+**When running /openant:** Confirm `OPENANT_CORE` env var is set (or `--openant-core` passed); run `libexec/raptor-openant --repo <path>`.
 
 ---
 

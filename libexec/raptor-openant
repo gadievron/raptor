@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+#
+# raptor-openant — thin libexec wrapper around `python3 raptor.py openant`.
+#
+# Lets .claude/commands/openant.md invoke the OpenAnt pipeline via a stable
+# libexec command path that is allowlisted in .claude/settings.json, so the
+# slash command does not trigger a permission prompt for `python3 raptor.py`
+# on every run.
+#
+# Usage:
+#   libexec/raptor-openant --repo <path> [--model sonnet] [--level reachable] [...]
+#
+# All arguments pass through to raptor_openant.py via raptor.py.
+
+set -euo pipefail
+
+# Resolve symlinks so RAPTOR_DIR is correct even when this wrapper is
+# symlinked into ~/bin or similar.
+SCRIPT="$0"
+while [ -L "$SCRIPT" ]; do
+    DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+    SCRIPT="$(readlink "$SCRIPT")"
+    [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
+done
+RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+
+if [ ! -f "$RAPTOR_DIR/raptor.py" ]; then
+    echo "raptor-openant: cannot find raptor.py under $RAPTOR_DIR" >&2
+    echo "raptor-openant: (resolved from $SCRIPT)" >&2
+    exit 1
+fi
+
+exec python3 "$RAPTOR_DIR/raptor.py" openant "$@"

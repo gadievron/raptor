@@ -7,6 +7,7 @@
   "permissions": {
     "allow": [
       "Bash(libexec/raptor-agentic *)",
+      "Bash(libexec/raptor-openant *)",
       "Bash(libexec/raptor-build-checklist *)",
       "Bash(libexec/raptor-coverage-summary *)",
       "Bash(libexec/raptor-normalize-context-map *)",
