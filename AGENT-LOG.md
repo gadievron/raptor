@@ -58,8 +58,21 @@ reserved for the main Claude thread only — subagents are read-only for git.
 
 **[2026-05-05T01:05] [main-session]** ACTION: Smoke test run 3 — real source files per language (7 languages)
   Files: READ-ONLY: /tmp/openant-lang-smoke-20260505-005354/
-  Status: STARTED (Python stage running; 24/94 functions analyzed at time of log)
-  Notes: Script at /tmp/openant-lang-smoke.sh. Uses real parser source files for Python,
-         C/Ruby/PHP/Go/Zig use minimal sample files, JavaScript uses parsers/javascript/*.js.
+  Status: IN-PROGRESS (python/c/ruby/php/go/javascript PASS; zig running)
+  Notes: Python=0findings/1259s, C=1/25s, Ruby=2/31s, PHP=2/37s, Go=1/29s, JS=0/559s
+         Results at /tmp/openant-lang-smoke-20260505-005354/
+
+**[2026-05-05T01:30] [main-session]** ACTION: /work-audit — full session audit
+  Files: READ-ONLY (multiple)
+  Status: COMPLETED
+  Notes: Findings: Q (no Monitor on smoke test, now fixed), H (PR body stale test counts, fixed),
+         G (20-repos goal not yet started), B (JS empty-dir bug not logged, now logged as BUG-OA-004).
+
+**[2026-05-05T01:40] [main-session]** ACTION: Add FIXES-JUSTIFICATION.md + research third-party dep tracking
+  Files: WRITE: FIXES-JUSTIFICATION.md, bugs6.md (BUG-OA-004, BUG-R-019), openant-bugs.md (BUG-028)
+  Status: COMPLETED
+  Notes: PoC ran 4 scenarios. Key finding: OpenAnt detects well-known library sinks via training
+         knowledge (subprocess.run, yaml.load, render_template_string). Gap: bare method names in
+         indirect_calls (e.g. 'run' instead of 'subprocess.run') lose module context. Filed BUG-028.
 
 ---
