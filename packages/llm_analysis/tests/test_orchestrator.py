@@ -192,6 +192,59 @@ class TestOrchestrate:
         out_file = tmp_path / "orch" / "orchestrated_report.json"
         assert out_file.exists()
 
+    def test_sloppy_response_normalised_through_pipeline(self, tmp_path):
+        """Sloppy LLM output is normalised by response validation in cc_dispatch."""
+        findings = [_make_finding("f-001", "py/sql-injection", "db.py", 42)]
+        report = _make_prep_report(findings=findings)
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(report))
+
+        sloppy = {
+            "finding_id": "f-001",
+            "is_true_positive": "yes",          # string, not bool
+            "is_exploitable": "True",            # string, not bool
+            "exploitability_score": "0.85",      # string, not float
+            "severity_assessment": "HIGH",       # uppercase
+            "confidence": "Medium",              # title case
+            "ruling": "Validated",               # title case
+            "vuln_type": "sqli",                 # alias
+            "reasoning": "Input reaches query unsanitised.",
+            "attack_scenario": "Inject SQL via name parameter.",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+            "cwe_id": "CWE-89",
+        }
+        cc_results = [json.dumps(sloppy)]
+
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("packages.llm_analysis.orchestrator.shutil.which", return_value="/usr/bin/claude"), \
+             patch("packages.llm_analysis.cc_dispatch.subprocess.run",
+                   side_effect=_mock_subprocess_ok(cc_results)):
+            result = orchestrate(
+                prep_report_path=report_path,
+                repo_path=tmp_path,
+                out_dir=tmp_path / "orch",
+            )
+
+        assert result is not None
+        finding = result["results"][0]
+
+        # Bool coercion: string "True"/"yes" → True
+        assert finding["is_true_positive"] is True
+        assert finding["is_exploitable"] is True
+        assert finding["exploitable"] is True
+
+        # Numeric coercion: string "0.85" → 0.85
+        assert finding["exploitability_score"] == 0.85
+
+        # Domain normalisation: uppercase/titlecase → lowercase
+        # severity_assessment is overwritten by score_finding() from CVSS vector
+        # (9.8 = critical), so we check confidence and ruling instead
+        assert finding["confidence"] == "medium"
+        assert finding["ruling"] == "validated"
+
+        # Vuln type alias normalisation: "sqli" → "sql_injection"
+        assert finding["vuln_type"] == "sql_injection"
+
     def test_empty_findings(self, tmp_path):
         """No findings in report -> returns None."""
         report = _make_prep_report(findings=[])
