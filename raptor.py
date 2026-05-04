@@ -24,6 +24,7 @@ Available Modes:
     describe    - Pre-flight inspection: target type, tool readiness, cost estimate
     doctor      - Status report for local setup (no claude needed)
     frida       - Dynamic instrumentation via Frida (alpha)
+  openant     - OpenAnt AST+LLM source-code vulnerability scan
 
 Examples:
     # Full autonomous workflow
@@ -1305,6 +1306,7 @@ def _mode_help_scripts() -> dict:
         'agentic': script_root / "raptor_agentic.py",
         'codeql': script_root / "raptor_codeql.py",
         'analyze': script_root / "packages/llm_analysis/agent.py",
+        'openant': script_root / "raptor_openant.py",
     }
 
 
@@ -1312,6 +1314,20 @@ def _mode_help_scripts() -> dict:
 # argparse (no run lifecycle). Derived from _mode_help_scripts so it stays in
 # lockstep with what show_mode_help can actually render.
 _HELP_RENDER_MODES = frozenset(_mode_help_scripts().keys())
+
+
+
+def mode_openant(args: list) -> int:
+    """Run OpenAnt AST+LLM source-code vulnerability scan."""
+    script_root = Path(__file__).parent
+    openant_script = script_root / "raptor_openant.py"
+
+    if not openant_script.exists():
+        print(f"\u2717 OpenAnt script not found: {openant_script}")
+        return 1
+
+    return _run_with_lifecycle("openant", openant_script, args,
+                              "Running OpenAnt LLM-powered source-code scan...")
 
 
 def show_mode_help(mode: str, preamble: bool = True) -> None:
@@ -1336,6 +1352,7 @@ def show_mode_help(mode: str, preamble: bool = True) -> None:
             'doctor': mode_doctor,
             'sca': mode_sca,
             'frida': mode_frida,
+        'openant': mode_openant,
         }
         mode_handlers[mode](["--help"])
         return
@@ -1391,6 +1408,7 @@ Available Modes:
   describe    - Pre-flight inspection: target type, tool readiness, cost estimate
   doctor      - Status report for local setup (no claude needed)
   frida       - Dynamic instrumentation via Frida (alpha)
+  openant     - OpenAnt AST+LLM source-code vulnerability scan
 
 Examples:
   # Full autonomous workflow
@@ -1547,6 +1565,7 @@ def main():
         'doctor': mode_doctor,
         'describe': mode_describe,
         'frida': mode_frida,
+        'openant': mode_openant,
     }
     
     if mode not in mode_handlers:

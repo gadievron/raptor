@@ -45,6 +45,7 @@ When a `/command` fires:
 /agentic - Scan → dedup → analysis pipeline — `libexec/raptor-agentic --repo <path>`
 /exploit /patch - Generate PoCs and fixes (beta) — `python3 raptor.py agentic`
 /validate - Exploitability validation pipeline — `dispatch: skill`, see below
+/openant - OpenAnt AST+LLM source-code vulnerability scan (multi-language, semantic analysis)
 /understand - Code understanding — `dispatch: skill` (mode-routed: binary --map and multi-model --hunt/--trace go to `libexec/raptor-understand`; binary --study goes to `libexec/raptor-binary-study`; source-tree modes run in-session)
 /diagram - Mermaid visual maps — `libexec/raptor-render-diagrams <out-dir> [args]`
 /audit - Hypothesis-driven code audit — `dispatch: skill`, see below
@@ -375,6 +376,7 @@ The `/annotate` command attaches free-form prose to individual functions, stored
 **When errors occur:** Load `tiers/recovery.md` (recovery protocol)
 **When requested:** Load `tiers/personas/[name].md` (expert personas)
 **When running /understand:** Load `.claude/skills/code-understanding/SKILL.md` (gates, config) plus the relevant mode file: `map.md`, `trace.md`, `hunt.md`, `teach.md`, or `study.md`
+**When running /openant:** Confirm `OPENANT_CORE` env var is set (or `--openant-core` passed); run `libexec/raptor-openant --repo <path>`.
 
 ---
 

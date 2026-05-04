@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 
 # Add to path
@@ -1866,6 +1867,20 @@ Examples:
     )
     parser.add_argument("--sequential", action="store_true",
                        help="Sequential analysis in Phase 3 instead of parallel Phase 4 orchestration")
+
+    # OpenAnt integration
+    parser.add_argument("--openant", action="store_true",
+                        help="Run OpenAnt LLM semantic scan in addition to Semgrep/CodeQL")
+    parser.add_argument("--openant-only", action="store_true",
+                        help="Run OpenAnt only (skip Semgrep/CodeQL)")
+    parser.add_argument("--openant-core", default=os.environ.get("OPENANT_CORE"),
+                        help="Path to openant-core directory (default: $OPENANT_CORE)")
+    parser.add_argument("--openant-model", default="sonnet", choices=["opus", "sonnet"],
+                        help="OpenAnt LLM model (default: sonnet)")
+    parser.add_argument("--openant-level", default="reachable",
+                        choices=["all", "reachable", "codeql", "exploitable"],
+                        help="OpenAnt analysis depth (default: reachable)")
+
     parser.add_argument(
         "--rank", action="store_true",
         help=(
@@ -2717,8 +2732,10 @@ Examples:
     skip_scan = bool(import_sarif_files) and not args.also_scan
 
     # Launch scanners in parallel when both are enabled
-    run_semgrep = not args.codeql_only and not skip_scan
-    run_codeql = (args.codeql or args.codeql_only) and not args.no_codeql and not skip_scan
+    # --openant-only skips Semgrep/CodeQL entirely
+    _openant_only = getattr(args, "openant_only", False)
+    run_semgrep = not args.codeql_only and not skip_scan and not _openant_only
+    run_codeql = (args.codeql or args.codeql_only) and not args.no_codeql and not skip_scan and not _openant_only
 
     # Defensive guard for the "no scanners enabled" case.
     if not skip_scan and not (run_semgrep or run_codeql):
@@ -3308,6 +3325,60 @@ Examples:
             print(f"⚠️  SCA failed: {e}", file=sys.stderr)
             logger.exception("SCA phase failed: %s", e)  # noqa: TRY401
 
+
+    # ========================================================================
+    # PHASE 1b: OPENANT SEMANTIC SCAN (opt-in via --openant / --openant-only)
+    # ========================================================================
+    openant_extra_findings = []
+    if getattr(args, "openant", False) or getattr(args, "openant_only", False):
+        try:
+            from packages.openant import get_config, run_openant_scan, translate_pipeline_output, deduplicate_with_sarif
+            from packages.openant.config import OpenAntConfig
+
+            if getattr(args, "openant_core", None):
+                oa_config = OpenAntConfig(core_path=Path(args.openant_core))
+            else:
+                oa_config = get_config(raptor_dir=script_root)
+            oa_config.model = getattr(args, "openant_model", "sonnet")
+            oa_config.level = getattr(args, "openant_level", "reachable")
+
+            print("\n" + "=" * 70)
+            print("OPENANT SEMANTIC SCAN")
+            print("=" * 70)
+
+            oa_out = out_dir / "openant_scan"
+            oa_out.mkdir(exist_ok=True)
+            oa_result = run_openant_scan(
+                repo_path=str(original_repo_path),
+                out_dir=str(oa_out),
+                config=oa_config,
+            )
+
+            if oa_result.get("skipped"):
+                print(f"\u26a0\ufe0f  OpenAnt unavailable: {oa_result.get('error', 'unknown')}")
+            else:
+                raw = translate_pipeline_output(
+                    oa_result.get("pipeline_output") or {},
+                    str(original_repo_path),
+                )
+                if raw and not getattr(args, "openant_only", False) and sarif_files:
+                    from core.sarif.parser import parse_sarif_findings
+                    sarif_flist = []
+                    for sf in sarif_files:
+                        sarif_flist.extend(parse_sarif_findings(str(sf)))
+                    merged, dropped = deduplicate_with_sarif(raw, sarif_flist)
+                    openant_extra_findings = [f for f in merged if f.get("tool") == "openant"]
+                    if dropped:
+                        print(f"  Deduped {dropped} OpenAnt finding(s) already in SARIF")
+                else:
+                    openant_extra_findings = raw
+                save_json(out_dir / "openant_findings.json", openant_extra_findings)
+                print(f"\u2713 OpenAnt: {len(openant_extra_findings)} unique finding(s)")
+        except RuntimeError as e:
+            logger.warning("OpenAnt not configured (continuing without it): %s", e)
+        except Exception as e:
+            logger.warning("OpenAnt scan failed (continuing): %s", e)
+
     # ========================================================================
     # PHASE 2: EXPLOITABILITY VALIDATION
     # ========================================================================
@@ -3381,6 +3452,57 @@ Examples:
     # Phase 0); this covers the default autodetect + --binary-auto paths.
     if not getattr(args, "binary", None) and not getattr(args, "no_binary_oracle", False):
         apply_to_config(args, repo_path)
+
+
+    # Merge OpenAnt findings into validation output so Phase 3 picks them up.
+    if openant_extra_findings:
+        validation_findings_path = out_dir / "validation" / "findings.json"
+        if validation_findings_path.exists():
+            try:
+                existing = load_json(validation_findings_path) or []
+            except Exception as e:
+                logger.error(
+                    "validation/findings.json is corrupted; refusing to "
+                    "merge OpenAnt findings to avoid data loss: %s", e,
+                )
+                existing = None
+            if existing is not None:
+                if isinstance(existing, dict) and "findings" in existing:
+                    findings_list = existing.get("findings", [])
+                    findings_list.extend(openant_extra_findings)
+                    existing["findings"] = findings_list
+                    save_json(validation_findings_path, existing)
+                    validated_findings += len(openant_extra_findings)
+                    logger.info(
+                        "Merged %d OpenAnt findings into validation output (dict format)",
+                        len(openant_extra_findings),
+                    )
+                elif isinstance(existing, list):
+                    existing.extend(openant_extra_findings)
+                    save_json(validation_findings_path, existing)
+                    validated_findings += len(openant_extra_findings)
+                    logger.info(
+                        "Merged %d OpenAnt findings into validation output (list format)",
+                        len(openant_extra_findings),
+                    )
+                else:
+                    logger.error(
+                        "validation/findings.json has unrecognized format "
+                        "(got %s); skipping merge", type(existing).__name__,
+                    )
+        else:
+            (out_dir / "validation").mkdir(exist_ok=True)
+            save_json(validation_findings_path, {
+                "stage": "A",
+                "timestamp": datetime.now().isoformat(),
+                "source": "openant",
+                "findings": openant_extra_findings,
+            })
+            validated_findings = len(openant_extra_findings)
+            logger.info(
+                "Created validation/findings.json with %d OpenAnt findings",
+                len(openant_extra_findings),
+            )
 
     # ========================================================================
     # PHASE 3: AUTONOMOUS ANALYSIS
