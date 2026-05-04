@@ -1208,6 +1208,14 @@ class AnthropicProvider(LLMProvider):
                 "For more reliable structured output: pip install instructor"
             )
 
+        # Per-instance flag: have we warned about silent cache-failure
+        # for this model? Warns once per provider instance to avoid
+        # spam, since the silent-failure is a model-level property
+        # (claude-opus-4-5 and claude-opus-4-6 verified non-caching as
+        # of 2026-05-04 — Anthropic accepts the cache_control marker
+        # but doesn't honor it). See ``_maybe_warn_silent_cache_failure``.
+        self._caching_warning_emitted = False
+
         logger.debug(f"Initialized AnthropicProvider: {config.model_name}")
 
     def generate(self, prompt: str, system_prompt: Optional[str] = None,
@@ -1550,7 +1558,67 @@ class AnthropicProvider(LLMProvider):
             output_tokens=turn_response.output_tokens,
             duration=duration,
         )
+        self._maybe_warn_silent_cache_failure(turn_response, cache_control)
         return turn_response
+
+    def _maybe_warn_silent_cache_failure(
+        self,
+        response: TurnResponse,
+        cache_control: CacheControl,
+    ) -> None:
+        """Detect when ``cache_control`` markers are silently no-op'd.
+
+        Anthropic's published cacheable-region minimum is 1024 tokens
+        (Opus / Sonnet) or 2048 (Haiku 3.5). Empirically (2026-05-04)
+        some model versions enforce a higher de-facto minimum and
+        return ``cache_creation_input_tokens=0,
+        cache_read_input_tokens=0`` for cache_control opt-ins below
+        that minimum, with no error — silent no-op. Consumers planning
+        cost budgets around cache savings (cve-diff is the headline
+        case) won't see the savings, with no signal until the bill
+        comes in.
+
+        Warn once per provider instance when all conditions hold:
+          * ``cache_control`` was opt-in (caller asked for caching)
+          * ``input_tokens >= 8192`` — well above any observed model's
+            de-facto minimum, so a zero-cache outcome is a real signal,
+            not a "your request was too small" false positive
+          * ``cache_creation_input_tokens == 0`` AND
+            ``cache_read_input_tokens == 0``
+
+        The 8192 floor trades sensitivity for specificity: smaller
+        cacheable regions that legitimately fall below a model's
+        minimum won't trigger spurious warnings, but real silent-
+        no-op cases on production-sized prompts (cve-diff: 5K+ tokens
+        of system + tools) still surface.
+        """
+        if self._caching_warning_emitted:
+            return
+        requested = (
+            cache_control.system
+            or cache_control.tools
+            or cache_control.history_through_index is not None
+        )
+        if not requested:
+            return
+        if response.input_tokens < 8192:
+            return                                          # below threshold
+        if response.cache_read_tokens > 0 or response.cache_write_tokens > 0:
+            return                                          # caching is working
+        logger.warning(
+            f"AnthropicProvider: model {self.config.model_name!r} did not "
+            f"populate cache fields on a turn with cache_control opt-in "
+            f"and {response.input_tokens} input tokens — cache savings "
+            f"won't apply for requests this size. Common causes: (1) "
+            f"this model's de-facto cacheable-region minimum is higher "
+            f"than the documented 1024 tokens; (2) the cacheable subset "
+            f"(system + tools when those are opted in) is below the "
+            f"model's minimum even though total input is above 8192. "
+            f"Try a different model (claude-opus-4-7, "
+            f"claude-sonnet-4-5-20250929) or increase the cacheable "
+            f"region size. This warning fires once per provider instance."
+        )
+        self._caching_warning_emitted = True
 
 
 # ---------------------------------------------------------------------------
