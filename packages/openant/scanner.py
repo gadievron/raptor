@@ -139,10 +139,13 @@ def _find_venv_python(core_path: Path) -> str:
     tree-sitter-ruby, tree-sitter-php, tree-sitter-javascript. Those packages
     are only installed in OpenAnt's own venv at core_path/.venv/bin/python3.
     Prefer that venv Python; fall back to sys.executable if the venv is absent.
+
+    Uses os.access(path, os.X_OK) instead of .exists() to avoid returning a
+    venv Python that exists on disk but is not executable (e.g., wrong mode bits).
     """
     for candidate in ("python3", "python3.11", "python3.12", "python3.13", "python"):
         venv_python = core_path / ".venv" / "bin" / candidate
-        if venv_python.exists():
+        if os.access(venv_python, os.X_OK):
             return str(venv_python)
     return sys.executable
 
