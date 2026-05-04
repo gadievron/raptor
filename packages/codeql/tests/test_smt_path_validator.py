@@ -898,6 +898,20 @@ class TestPrecedence:
         assert r.feasible is True
 
     @_requires_z3
+    def test_multiplication_binds_tighter_than_shift(self):
+        """``a + b * c << d`` is C-parsed as ``(a + (b * c)) << d``.
+        a=1, b=2, c=3, d=1: ``(1 + 6) << 1 = 14``.  If shift bound
+        tighter than mul: ``a + b * (c << d) = 1 + 2*6 = 13``."""
+        r = check_path_feasibility([
+            PathCondition("a + b * c << d == 14", step_index=0),
+            PathCondition("a == 1", step_index=1),
+            PathCondition("b == 2", step_index=2),
+            PathCondition("c == 3", step_index=3),
+            PathCondition("d == 1", step_index=4),
+        ])
+        assert r.feasible is True
+
+    @_requires_z3
     def test_three_level_mix(self):
         """``a | b + c * d`` is ``a | (b + (c * d))``.  Values:
         a=0x10, b=2, c=3, d=4 → 0x10 | (2 + 12) = 0x10 | 14 = 0x1E."""
@@ -1024,3 +1038,56 @@ class TestParensGrouping:
             PathCondition("() + 1 > 0", step_index=0),
         ])
         assert "() + 1 > 0" in r.unknown
+
+    @_requires_z3
+    def test_relational_inside_parens_rejected(self):
+        """``(a == b) + 1 > 0`` — the relational regex splits at the first
+        ``==`` (inside the parens), so ``_parse_expr`` sees ``(a`` as the
+        LHS — unbalanced.  The condition goes to unknown regardless of the
+        specific rejection kind, which is the correct outcome."""
+        r = check_path_feasibility([
+            PathCondition("(a == b) + 1 > 0", step_index=0),
+        ])
+        assert "(a == b) + 1 > 0" in r.unknown
+
+    @_requires_z3
+    def test_relational_inside_rhs_parens_gives_unsupported_operator(self):
+        """``result == (a > b) + 1`` — the relational regex splits at
+        ``==``, giving ``_parse_expr`` the RHS text ``(a > b) + 1``.
+        Inside the paren group, ``>`` is a condition-level operator that
+        can't appear in an arithmetic subexpression.  Must reject with
+        UNSUPPORTED_OPERATOR, not UNBALANCED_PARENS."""
+        r = check_path_feasibility([
+            PathCondition("result == (a > b) + 1", step_index=0),
+        ])
+        assert "result == (a > b) + 1" in r.unknown
+        rej = next(x for x in r.unknown_reasons if x.text == "result == (a > b) + 1")
+        assert rej.kind is RejectionKind.UNSUPPORTED_OPERATOR
+
+    @_requires_z3
+    def test_deeply_nested_parens_within_limit(self):
+        """32-deep nesting is well within the 64-level cap."""
+        inner = "x"
+        for _ in range(32):
+            inner = f"({inner})"
+        r = check_path_feasibility([
+            PathCondition(f"{inner} == 42", step_index=0),
+        ])
+        assert r.feasible is True
+        assert r.model.get("x") == 42
+
+    @_requires_z3
+    def test_parens_exceeding_depth_limit_rejected(self):
+        """Nesting beyond _MAX_PAREN_DEPTH (64) is rejected to prevent
+        unbounded recursion from untrusted input."""
+        from packages.codeql.smt_path_validator import _MAX_PAREN_DEPTH
+        inner = "x"
+        for _ in range(_MAX_PAREN_DEPTH + 1):
+            inner = f"({inner})"
+        r = check_path_feasibility([
+            PathCondition(f"{inner} > 0", step_index=0),
+        ])
+        assert f"{inner} > 0" in r.unknown
+        rej = next(x for x in r.unknown_reasons if x.text == f"{inner} > 0")
+        assert rej.kind is RejectionKind.UNRECOGNIZED_FORM
+        assert "depth" in rej.detail

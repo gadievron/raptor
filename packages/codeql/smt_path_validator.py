@@ -187,11 +187,19 @@ _PRECEDENCE: Dict[str, int] = {
     '*':  4,
 }
 
+# Maximum nesting depth for parenthesised subexpressions.  The parser
+# recurses once per nesting level (_atom -> _climb -> _atom), so untrusted
+# input with deep nesting can blow the Python call stack.  64 levels is
+# far more than any real C condition would ever need.
+_MAX_PAREN_DEPTH = 64
+
 # Operator-shaped tokens we recognise but don't accept as binary operators
 # inside ``_parse_expr`` — they belong to the relational or bitmask layer
 # and reaching ``_parse_expr`` with one in operand-trailing position is a
-# user error rather than a malformed expression.
-_RELATIONAL_TOKENS = frozenset({'<=', '>=', '!=', '==', '<', '>', '&'})
+# user error rather than a malformed expression.  Named
+# ``_CONDITION_LEVEL_OPS`` (not ``_RELATIONAL_TOKENS``) because the set
+# includes ``&`` (bitwise AND in bitmask form), which is not relational.
+_CONDITION_LEVEL_OPS = frozenset({'<=', '>=', '!=', '==', '<', '>', '&'})
 
 
 def _parse_expr(
@@ -232,6 +240,7 @@ def _parse_expr(
         )
 
     pos = [0]
+    paren_depth = [0]
 
     def _atom() -> Union[Any, Rejection]:
         if pos[0] >= len(tokens):
@@ -241,15 +250,34 @@ def _parse_expr(
             )
         tok = tokens[pos[0]]
         if tok == '(':
+            paren_depth[0] += 1
+            if paren_depth[0] > _MAX_PAREN_DEPTH:
+                return Rejection(
+                    text, RejectionKind.UNRECOGNIZED_FORM,
+                    "parenthesis nesting exceeds depth limit",
+                )
             pos[0] += 1
             inner = _climb(0)
             if isinstance(inner, Rejection):
+                paren_depth[0] -= 1
                 return inner
             if pos[0] >= len(tokens) or tokens[pos[0]] != ')':
+                paren_depth[0] -= 1
+                # Check for a relational/bitmask operator that shouldn't
+                # appear inside a parenthesised arithmetic subexpression
+                # (e.g. ``(a == b) + 1``).  Without this, the user gets
+                # UNBALANCED_PARENS which misidentifies the problem.
+                if pos[0] < len(tokens) and tokens[pos[0]] in _CONDITION_LEVEL_OPS:
+                    return Rejection(
+                        text, RejectionKind.UNSUPPORTED_OPERATOR,
+                        f"relational operator {tokens[pos[0]]!r} cannot appear "
+                        f"inside a parenthesised arithmetic subexpression",
+                    )
                 return Rejection(
                     text, RejectionKind.UNBALANCED_PARENS,
                     "expected ')' to close subexpression",
                 )
+            paren_depth[0] -= 1
             pos[0] += 1
             return inner
         if tok == ')':
@@ -327,7 +355,7 @@ def _parse_expr(
                 text, RejectionKind.UNBALANCED_PARENS,
                 f"unexpected {leftover!r} in expression",
             )
-        if leftover in _RELATIONAL_TOKENS:
+        if leftover in _CONDITION_LEVEL_OPS:
             return Rejection(
                 text, RejectionKind.UNSUPPORTED_OPERATOR,
                 f"operator {leftover!r} not in {{+, -, *, |, >>, <<}}",
