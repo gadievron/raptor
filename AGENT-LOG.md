@@ -48,6 +48,18 @@ reserved for the main Claude thread only — subagents are read-only for git.
 **[2026-05-05T00:50] [main-session]** ACTION: Fix BUG-R-017 (venv Python) and BUG-R-018 (zig language fallback)
   Files: WRITE: packages/openant/scanner.py, packages/openant/tests/test_scanner.py
   Status: COMPLETED
-  Notes: 86 tests pass. Not yet committed.
+  Notes: 86 tests pass. Committed as 2fb1e85.
+
+**[2026-05-05T01:05] [main-session]** ACTION: Fix os.access(X_OK) vs .exists() in _find_venv_python (judge finding)
+  Files: WRITE: packages/openant/scanner.py
+  Status: COMPLETED
+  Notes: Changed venv_python.exists() → os.access(venv_python, os.X_OK) to check actual executability.
+         22/22 scanner tests pass, 86/86 total. Committed as 4be5050, pushed.
+
+**[2026-05-05T01:05] [main-session]** ACTION: Smoke test run 3 — real source files per language (7 languages)
+  Files: READ-ONLY: /tmp/openant-lang-smoke-20260505-005354/
+  Status: STARTED (Python stage running; 24/94 functions analyzed at time of log)
+  Notes: Script at /tmp/openant-lang-smoke.sh. Uses real parser source files for Python,
+         C/Ruby/PHP/Go/Zig use minimal sample files, JavaScript uses parsers/javascript/*.js.
 
 ---
