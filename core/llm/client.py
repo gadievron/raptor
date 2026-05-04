@@ -290,6 +290,29 @@ class LLMClient:
 
         return self.providers[key]
 
+    @property
+    def primary_provider(self) -> LLMProvider:
+        """The :class:`LLMProvider` for the configured ``primary_model``.
+
+        Exposed publicly so consumers that need direct provider access
+        — typically for tool-use loops via :class:`core.llm.tool_use.ToolUseLoop` —
+        can reach it without going through :meth:`generate`. Cached;
+        the same instance is returned across calls.
+
+        Raises ``RuntimeError`` if no primary model is configured (the
+        client should normally not have been constructed in that
+        case — :func:`packages.llm_analysis.get_client` returns
+        ``None`` instead).
+        """
+        if self.config.primary_model is None:
+            raise RuntimeError(
+                "LLMClient has no primary_model configured; cannot "
+                "expose primary_provider. Use packages.llm_analysis."
+                "get_client() which returns None when no provider is "
+                "available, instead of constructing LLMClient directly."
+            )
+        return self._get_provider(self.config.primary_model)
+
     def _get_cache_key(self, prompt: str, system_prompt: Optional[str], model: str) -> str:
         """Generate cache key for prompt."""
         content = f"{model}:{system_prompt or ''}:{prompt}"

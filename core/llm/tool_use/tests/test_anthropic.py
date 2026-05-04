@@ -515,7 +515,9 @@ def test_standard_endpoint_does_not_carry_beta_kwargs() -> None:
 
 def test_api_error_returns_error_stop_reason() -> None:
     """Permanent API errors surface as ``StopReason.ERROR`` after
-    retries are exhausted (or immediately for non-transient errors)."""
+    retries are exhausted (or immediately for non-transient errors).
+    The error_message is populated so callers don't have to read the
+    warning log to know what failed."""
     from anthropic import APIConnectionError                # type: ignore[import-not-found]
 
     p, c = _provider_with_stub()
@@ -531,6 +533,8 @@ def test_api_error_returns_error_stop_reason() -> None:
     )
     assert out.stop_reason is StopReason.ERROR
     assert out.content == []
+    assert out.error_message is not None
+    assert "Connection error" in out.error_message or "APIConnectionError" in out.error_message or "error after" in out.error_message
 
 
 # ---------------------------------------------------------------------------
@@ -678,3 +682,123 @@ def test_unrecognised_provider_kwargs_handled_gracefully() -> None:
         random_other_kwarg=42,
     )
     assert out.stop_reason is StopReason.COMPLETE       # didn't crash
+
+
+# ---------------------------------------------------------------------------
+# Silent cache-failure detection (model accepts cache_control but
+# doesn't honor it — verified with claude-opus-4-5 and claude-opus-4-6
+# on 2026-05-04)
+# ---------------------------------------------------------------------------
+
+
+def test_silent_cache_failure_warns_when_above_threshold() -> None:
+    """Model accepts the cache_control marker but reports
+    ``cache_creation_input_tokens=0, cache_read_input_tokens=0`` with
+    input well above the 8192-token threshold — silent no-op caching.
+    Empirical observation 2026-05-04: some Opus model versions enforce
+    higher de-facto cacheable-region minimums than the documented
+    1024 tokens, so requests in the 2K-5K range may silently no-op
+    despite cache_control opt-in. The 8192 floor catches the
+    production-sized cve-diff case."""
+    from core.llm.tool_use import CacheControl
+    p, c = _provider_with_stub()
+    # Above the 4096-token threshold; both cache fields zero.
+    c.messages.responses.append(_StubResponse(
+        [_StubBlock("text", text="ok")],
+        stop_reason="end_turn",
+        usage=_StubUsage(input_tokens=10000, output_tokens=10,
+                         cache_read_input_tokens=0,
+                         cache_creation_input_tokens=0),
+    ))
+
+    assert p._caching_warning_emitted is False
+    p.turn(
+        messages=[Message(role="user", content=[TextBlock(text="x")])],
+        tools=[],
+        cache_control=CacheControl(system=True, tools=True),
+    )
+    assert p._caching_warning_emitted is True
+
+
+def test_silent_cache_failure_warns_only_once_per_instance() -> None:
+    """Multiple offending turns on the same provider instance should
+    surface the warning once, not flood the log."""
+    from core.llm.tool_use import CacheControl
+    p, c = _provider_with_stub()
+    for _ in range(3):
+        c.messages.responses.append(_StubResponse(
+            [_StubBlock("text", text="ok")],
+            stop_reason="end_turn",
+            usage=_StubUsage(input_tokens=10000, output_tokens=10),
+        ))
+
+    for _ in range(3):
+        p.turn(
+            messages=[Message(role="user", content=[TextBlock(text="x")])],
+            tools=[],
+            cache_control=CacheControl(system=True, tools=True),
+        )
+    # Flag set once; no toggle.
+    assert p._caching_warning_emitted is True
+
+
+def test_silent_cache_failure_no_warn_when_caching_works() -> None:
+    """Working caching: ``cache_creation_input_tokens > 0`` on first
+    turn or ``cache_read_input_tokens > 0`` on subsequent turns. The
+    provider must NOT warn — caching is functioning."""
+    from core.llm.tool_use import CacheControl
+    p, c = _provider_with_stub()
+    # First turn: cache being created.
+    c.messages.responses.append(_StubResponse(
+        [_StubBlock("text", text="ok")],
+        stop_reason="end_turn",
+        usage=_StubUsage(input_tokens=10000, output_tokens=10,
+                         cache_creation_input_tokens=5000,
+                         cache_read_input_tokens=0),
+    ))
+    p.turn(
+        messages=[Message(role="user", content=[TextBlock(text="x")])],
+        tools=[],
+        cache_control=CacheControl(system=True, tools=True),
+    )
+    assert p._caching_warning_emitted is False
+
+
+def test_silent_cache_failure_no_warn_below_threshold() -> None:
+    """Below the 8192-token threshold the cacheable region may be
+    too small for caching to fire legitimately — cache_read=0,
+    cache_write=0 is correct, not a regression. The provider must
+    not warn (false positive avoidance)."""
+    from core.llm.tool_use import CacheControl
+    p, c = _provider_with_stub()
+    c.messages.responses.append(_StubResponse(
+        [_StubBlock("text", text="ok")],
+        stop_reason="end_turn",
+        usage=_StubUsage(input_tokens=4000, output_tokens=10),  # below 8192
+    ))
+    p.turn(
+        messages=[Message(role="user", content=[TextBlock(text="x")])],
+        tools=[],
+        cache_control=CacheControl(system=True, tools=True),
+    )
+    assert p._caching_warning_emitted is False
+
+
+def test_silent_cache_failure_no_warn_when_caching_not_requested() -> None:
+    """When ``cache_control`` is fully off (system=False, tools=False,
+    history=None), the consumer didn't ask for caching. Zero cache
+    activity is expected — no warning."""
+    from core.llm.tool_use import CacheControl
+    p, c = _provider_with_stub()
+    c.messages.responses.append(_StubResponse(
+        [_StubBlock("text", text="ok")],
+        stop_reason="end_turn",
+        usage=_StubUsage(input_tokens=10000, output_tokens=10),
+    ))
+    p.turn(
+        messages=[Message(role="user", content=[TextBlock(text="x")])],
+        tools=[],
+        cache_control=CacheControl(system=False, tools=False,
+                                    history_through_index=None),
+    )
+    assert p._caching_warning_emitted is False

@@ -203,6 +203,7 @@ class TurnResponse:
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     cost_usd: float | None = None
+    error_message: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +341,7 @@ class LoopTerminated:
         "max_iterations",            # loop hit max_iterations cap
         "max_cost_usd",              # cumulative cost crossed cap
         "max_seconds",               # wall-clock budget exceeded
+        "max_total_tokens",          # cumulative input+output tokens crossed cap
         "max_tokens",                # provider truncated response (no tool calls)
         "refused",                   # provider safety / content filter
         "tool_error",                # handler exception or timeout under terminate_on_handler_error
@@ -349,6 +351,7 @@ class LoopTerminated:
     ]
     iterations: int
     total_cost_usd: float
+    error_message: str | None = None
 
 
 LoopEvent = Union[
@@ -402,6 +405,7 @@ class ToolLoopResult:
         "max_iterations",
         "max_cost_usd",
         "max_seconds",
+        "max_total_tokens",
         "max_tokens",
         "refused",
         "tool_error",
@@ -409,3 +413,4 @@ class ToolLoopResult:
         "context_overflow",
         "provider_error",
     ]
+    error_message: str | None = None

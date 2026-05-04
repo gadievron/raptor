@@ -947,6 +947,7 @@ class OpenAICompatibleProvider(LLMProvider):
             APIConnectionError,
             APIStatusError,
         )
+        t_start = time.monotonic()
         for attempt in range(max_retries + 1):
             try:
                 resp = self.client.chat.completions.create(**kwargs)
@@ -975,15 +976,14 @@ class OpenAICompatibleProvider(LLMProvider):
                     )
                 if not _is_transient_openai(exc) or attempt >= max_retries:
                     kind = "transient" if _is_transient_openai(exc) else "permanent"
-                    logger.warning(
-                        f"OpenAICompatibleProvider.turn: {kind} error "
-                        f"after {attempt + 1} attempt(s): {exc}"
-                    )
+                    err_msg = f"{kind} error after {attempt + 1} attempt(s): {exc}"
+                    logger.warning(f"OpenAICompatibleProvider.turn: {err_msg}")
                     return TurnResponse(
                         content=[],
                         stop_reason=StopReason.ERROR,
                         input_tokens=0,
                         output_tokens=0,
+                        error_message=err_msg,
                     )
                 delay = backoff_factor ** attempt
                 logger.info(
@@ -995,13 +995,16 @@ class OpenAICompatibleProvider(LLMProvider):
             return TurnResponse(
                 content=[], stop_reason=StopReason.ERROR,
                 input_tokens=0, output_tokens=0,
+                error_message="exhausted retries",
             )
+        duration = time.monotonic() - t_start
 
         # ---- normalise response --------------------------------------
         if not resp.choices:
             return TurnResponse(
                 content=[], stop_reason=StopReason.ERROR,
                 input_tokens=0, output_tokens=0,
+                error_message="empty choices in response",
             )
         choice = resp.choices[0]
         msg = choice.message
@@ -1022,7 +1025,7 @@ class OpenAICompatibleProvider(LLMProvider):
             ))
 
         usage = resp.usage
-        return TurnResponse(
+        turn_response = TurnResponse(
             content=out_blocks,
             stop_reason=stop,
             input_tokens=(getattr(usage, "prompt_tokens", 0) or 0) if usage else 0,
@@ -1031,6 +1034,20 @@ class OpenAICompatibleProvider(LLMProvider):
             cache_read_tokens=0,
             cache_write_tokens=0,
         )
+        # Track usage so multi-turn loop spend rolls into provider
+        # stats. Symmetric with ``generate()`` and the Anthropic
+        # ``turn()`` impl. Without this, ``LLMClient.get_stats()``
+        # reports 0 cost / 0 tokens for tool-use no matter how many
+        # turns the loop ran for.
+        cost = self.compute_cost(turn_response)
+        self.track_usage(
+            tokens=turn_response.input_tokens + turn_response.output_tokens,
+            cost=cost,
+            input_tokens=turn_response.input_tokens,
+            output_tokens=turn_response.output_tokens,
+            duration=duration,
+        )
+        return turn_response
 
 
 # ---------------------------------------------------------------------------
@@ -1191,6 +1208,14 @@ class AnthropicProvider(LLMProvider):
                 "Instructor not installed — structured output will use JSON-in-prompt fallback. "
                 "For more reliable structured output: pip install instructor"
             )
+
+        # Per-instance flag: have we warned about silent cache-failure
+        # for this model? Warns once per provider instance to avoid
+        # spam, since the silent-failure is a model-level property
+        # (claude-opus-4-5 and claude-opus-4-6 verified non-caching as
+        # of 2026-05-04 — Anthropic accepts the cache_control marker
+        # but doesn't honor it). See ``_maybe_warn_silent_cache_failure``.
+        self._caching_warning_emitted = False
 
         logger.debug(f"Initialized AnthropicProvider: {config.model_name}")
 
@@ -1461,6 +1486,7 @@ class AnthropicProvider(LLMProvider):
             APIError,
             APIStatusError,
         )
+        t_start = time.monotonic()
         for attempt in range(max_retries + 1):
             try:
                 resp = create_fn(**send_kwargs)
@@ -1468,15 +1494,14 @@ class AnthropicProvider(LLMProvider):
             except (APIConnectionError, APIStatusError, APIError) as exc:
                 if not _is_transient_anthropic(exc) or attempt >= max_retries:
                     kind = "transient" if _is_transient_anthropic(exc) else "permanent"
-                    logger.warning(
-                        f"AnthropicProvider.turn: {kind} error after "
-                        f"{attempt + 1} attempt(s): {exc}"
-                    )
+                    err_msg = f"{kind} error after {attempt + 1} attempt(s): {exc}"
+                    logger.warning(f"AnthropicProvider.turn: {err_msg}")
                     return TurnResponse(
                         content=[],
                         stop_reason=StopReason.ERROR,
                         input_tokens=0,
                         output_tokens=0,
+                        error_message=err_msg,
                     )
                 delay = backoff_factor ** attempt
                 logger.info(
@@ -1488,7 +1513,9 @@ class AnthropicProvider(LLMProvider):
             return TurnResponse(
                 content=[], stop_reason=StopReason.ERROR,
                 input_tokens=0, output_tokens=0,
+                error_message="exhausted retries",
             )
+        duration = time.monotonic() - t_start
 
         # ---- normalise response --------------------------------------
         stop = _ANTHROPIC_STOP_REASON_MAP.get(
@@ -1507,7 +1534,7 @@ class AnthropicProvider(LLMProvider):
                 ))
 
         usage = resp.usage
-        return TurnResponse(
+        turn_response = TurnResponse(
             content=out_blocks,
             stop_reason=stop,
             input_tokens=(getattr(usage, "input_tokens", 0) or 0) if usage else 0,
@@ -1519,6 +1546,88 @@ class AnthropicProvider(LLMProvider):
                 getattr(usage, "cache_creation_input_tokens", 0) or 0
             ) if usage else 0,
         )
+        # Track usage so multi-turn loop spend shows up alongside
+        # generate() in provider stats. Without this, ``LLMClient.
+        # get_stats()`` reports 0 cost / 0 tokens for tool-use even
+        # when the loop ran for many turns. Cost via ``compute_cost``
+        # so cache multipliers (1.25x write, 0.1x read) apply.
+        cost = self.compute_cost(turn_response)
+        self.track_usage(
+            tokens=turn_response.input_tokens + turn_response.output_tokens,
+            cost=cost,
+            input_tokens=turn_response.input_tokens,
+            output_tokens=turn_response.output_tokens,
+            duration=duration,
+        )
+        self._maybe_warn_silent_cache_failure(turn_response, cache_control)
+        return turn_response
+
+    def _maybe_warn_silent_cache_failure(
+        self,
+        response: TurnResponse,
+        cache_control: CacheControl,
+    ) -> None:
+        """Detect when ``cache_control`` markers are silently no-op'd.
+
+        Anthropic's published cacheable-region minimum is 1024 tokens
+        (Opus / Sonnet) or 2048 (Haiku 3.5). Empirically (2026-05-04)
+        some model versions enforce a higher de-facto minimum and
+        return ``cache_creation_input_tokens=0,
+        cache_read_input_tokens=0`` for cache_control opt-ins below
+        that minimum, with no error — silent no-op. Consumers planning
+        cost budgets around cache savings (cve-diff is the headline
+        case) won't see the savings, with no signal until the bill
+        comes in.
+
+        Warn once per provider instance when all conditions hold:
+          * ``cache_control`` was opt-in (caller asked for caching)
+          * ``input_tokens >= 8192`` — well above any observed model's
+            de-facto minimum, so a zero-cache outcome is a real signal,
+            not a "your request was too small" false positive
+          * ``cache_creation_input_tokens == 0`` AND
+            ``cache_read_input_tokens == 0``
+
+        The 8192 floor trades sensitivity for specificity: smaller
+        cacheable regions that legitimately fall below a model's
+        minimum won't trigger spurious warnings, but real silent-
+        no-op cases on production-sized prompts (cve-diff: 5K+ tokens
+        of system + tools) still surface.
+
+        Scope: per-provider-instance. Each ``LLMClient`` builds its
+        own provider via ``_get_provider``, and a fresh agentic run
+        typically constructs a fresh client. Operators running the
+        same setup repeatedly will see the warning once per run —
+        loud enough to act on, not so loud as to hide in noise. A
+        cross-process / cross-run dedup would need module-level
+        state and isn't worth the complexity for a one-time signal.
+        """
+        if self._caching_warning_emitted:
+            return
+        requested = (
+            cache_control.system
+            or cache_control.tools
+            or cache_control.history_through_index is not None
+        )
+        if not requested:
+            return
+        if response.input_tokens < 8192:
+            return                                          # below threshold
+        if response.cache_read_tokens > 0 or response.cache_write_tokens > 0:
+            return                                          # caching is working
+        logger.warning(
+            f"AnthropicProvider: model {self.config.model_name!r} did not "
+            f"populate cache fields on a turn with cache_control opt-in "
+            f"and {response.input_tokens} input tokens — cache savings "
+            f"won't apply for requests this size. Common causes: (1) "
+            f"this model's de-facto cacheable-region minimum is higher "
+            f"than the documented 1024 tokens; (2) the cacheable subset "
+            f"(system + tools when those are opted in) is below the "
+            f"model's minimum even though total input is above 8192. "
+            f"Try a different model (claude-opus-4-7, "
+            f"claude-sonnet-4-5-20250929) or increase the cacheable "
+            f"region size. This warning fires once per provider instance."
+        )
+        self._caching_warning_emitted = True
 
 
 # ---------------------------------------------------------------------------
@@ -2061,11 +2170,43 @@ class ClaudeCodeLLMProvider(LLMProvider):
             duration=duration,
         )
 
-        return result, json.dumps(result, indent=2)
+        # Return ``StructuredResponse`` so callers (notably ``turn()``)
+        # can read per-call cost / tokens directly without racing on
+        # shared instance state. ``__iter__`` keeps the existing
+        # ``result, raw = client.generate_structured(...)`` tuple-
+        # unpack pattern working.
+        return StructuredResponse(
+            result=result,
+            raw=json.dumps(result, indent=2),
+            cost=cost,
+            tokens_used=tokens,
+            model=self.config.model_name,
+            provider="claudecode",
+            duration=duration,
+        )
 
     def supports_tool_use(self) -> bool: return True
     def supports_prompt_caching(self) -> bool: return False
     def supports_parallel_tools(self) -> bool: return False
+
+    # ------------------------------------------------------------------
+    # Tool-use via ``--json-schema`` structured output.
+    # ------------------------------------------------------------------
+    #
+    # The ABC's JSON-in-prompt synthesis (``_tool_use_fallback``) does
+    # *not* work for Claude Code. CC has anti-prompt-injection training
+    # that refuses to roleplay as a different agent system when a system
+    # prompt says "you have these tools, emit JSON to call them" — that
+    # framing is indistinguishable from an attacker injecting a fake
+    # tool schema, and CC correctly refuses.
+    #
+    # The fix: reframe the task as *structured output* via CC's
+    # ``--json-schema`` flag. Anti-injection guards roleplay, not
+    # form-filling. We give CC a discriminated-union schema (either
+    # ``tool_call`` or ``complete``) plus the tool catalog as
+    # reference material, and CC fills in the form. Verified
+    # empirically: CC honours the schema and produces valid tool
+    # calls or final answers for typical agent flows.
 
     def turn(
         self,
@@ -2077,11 +2218,236 @@ class ClaudeCodeLLMProvider(LLMProvider):
         cache_control: CacheControl = CacheControl(),
         **provider_specific: Any,
     ) -> TurnResponse:
-        """Tool-use via the ABC's JSON-protocol fallback."""
-        return self._tool_use_fallback(
-            messages, tools,
-            system=system, max_tokens=max_tokens,
-            cache_control=cache_control, **provider_specific,
+        """Tool-use via ``generate_structured`` with a discriminated
+        schema. Each turn, CC chooses either to call a tool (returning
+        name + input) or to finalise (returning text)."""
+        del cache_control, provider_specific            # unused by CC
+
+        # No tools → plain text generation. Skip the schema overhead.
+        if not tools:
+            rendered = LLMProvider._render_messages_as_prompt(messages)
+            response = self.generate(
+                rendered, system_prompt=system, max_tokens=max_tokens,
+            )
+            cost = getattr(response, "cost", None)
+            return TurnResponse(
+                content=[TextBlock(text=(response.content if response else "") or "")],
+                stop_reason=StopReason.COMPLETE,
+                input_tokens=getattr(response, "input_tokens", 0) or 0,
+                output_tokens=getattr(response, "output_tokens", 0) or 0,
+                cost_usd=float(cost) if cost is not None else None,
+            )
+
+        schema = self._build_turn_schema(tools)
+        sys_combined = self._build_turn_system_prompt(tools, extra=system)
+        rendered_history = self._render_history_for_cc(messages)
+
+        try:
+            response = self.generate_structured(
+                prompt=rendered_history,
+                schema=schema,
+                system_prompt=sys_combined,
+            )
+        except RuntimeError as exc:
+            err_msg = f"subprocess error: {exc}"
+            logger.warning(f"ClaudeCodeLLMProvider.turn: {err_msg}")
+            return TurnResponse(
+                content=[],
+                stop_reason=StopReason.ERROR,
+                input_tokens=0, output_tokens=0,
+                error_message=err_msg,
+            )
+
+        # Per-call cost / tokens come from the response directly so
+        # concurrent loops on the same provider don't race on shared
+        # ``self.total_cost`` state. ``StructuredResponse`` carries
+        # the values; the legacy ``(result, raw)`` tuple-unpack still
+        # works via ``__iter__``.
+        if isinstance(response, StructuredResponse):
+            result = response.result
+            cost_usd = response.cost
+            tokens = response.tokens_used
+        else:
+            # Defensive: a future provider might still return a tuple.
+            result, _ = response
+            cost_usd = 0.0
+            tokens = 0
+
+        return self._parse_turn_structured_result(
+            result, tools,
+            cost_usd=cost_usd,
+            # ``tokens_used`` from cc_adapter's envelope is already the
+            # input+output sum; we don't have a clean split, so attribute
+            # everything to output (consistent with ``generate()``'s
+            # behaviour for CC — see ``ClaudeCodeLLMProvider.generate``).
+            input_tokens=0,
+            output_tokens=tokens,
+        )
+
+    # ------------------------------------------------------------------
+    # turn() helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_turn_schema(tools: Sequence[ToolDef]) -> Dict[str, Any]:
+        """Discriminated-union schema CC fills in for one turn.
+
+        ``tool_name`` is constrained to the registered tool set so CC
+        can't hallucinate a name. ``tool_input`` is left as a generic
+        object — per-tool input validation happens at dispatch time
+        in :class:`ToolUseLoop`."""
+        return {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "enum": ["tool_call", "complete"],
+                    "description": (
+                        "tool_call to invoke a tool; complete to "
+                        "deliver the final answer."
+                    ),
+                },
+                "tool_name": {
+                    "type": "string",
+                    "enum": [t.name for t in tools],
+                    "description": (
+                        "Name of the tool to invoke (only when "
+                        "type=tool_call)."
+                    ),
+                },
+                "tool_input": {
+                    "type": "object",
+                    "description": (
+                        "Arguments object for the tool, matching its "
+                        "input_schema (only when type=tool_call)."
+                    ),
+                },
+                "final_text": {
+                    "type": "string",
+                    "description": (
+                        "Final answer text (only when type=complete)."
+                    ),
+                },
+            },
+            "required": ["type"],
+        }
+
+    @staticmethod
+    def _build_turn_system_prompt(
+        tools: Sequence[ToolDef],
+        *,
+        extra: Optional[str] = None,
+    ) -> str:
+        # The "do not invent values" instruction is critical and
+        # substrate-level (not consumer-specific): without it, the
+        # model sometimes calls verification tools (e.g.
+        # ``gh_commit_detail(slug=..., sha=...)``) with hallucinated
+        # arguments before the discovery tool that produces those
+        # values has been called. The mitigation costs nothing and
+        # generalises across consumers; per-consumer guardrails
+        # (cve-diff's verified-SHA gate, etc.) remain the
+        # belt-and-braces second line.
+        lines = [
+            "Decide the next action for an agentic tool-use loop. "
+            "Either invoke a tool to gather more information or "
+            "deliver a final answer. Output JSON matching the "
+            "provided schema.",
+            "",
+            "RULES:",
+            "1. When invoking a tool, the values you put in tool_input "
+            "MUST come from either the conversation history or the "
+            "user's request. Do not guess, invent, or recall from "
+            "training data — even values that look plausible (slugs, "
+            "SHAs, URLs, IDs, package names).",
+            "2. If you don't have a value the next tool needs, call "
+            "a discovery tool first to obtain it.",
+            "3. Call only one tool per response.",
+            "",
+            "TOOL CATALOG:",
+        ]
+        for t in tools:
+            lines.append(f"- {t.name}: {t.description}")
+            lines.append(
+                f"  input_schema: {json.dumps(t.input_schema)}"
+            )
+        if extra:
+            lines.extend(["", extra])
+        return "\n".join(lines)
+
+    @staticmethod
+    def _render_history_for_cc(messages: Sequence[Message]) -> str:
+        """Flatten conversation history into a prompt CC reads as
+        reference material. Roles labelled; tool-call/result blocks
+        rendered as descriptive text."""
+        parts: list[str] = ["CONVERSATION HISTORY:"]
+        for msg in messages:
+            for block in msg.content:
+                if isinstance(block, TextBlock):
+                    parts.append(f"{msg.role}: {block.text}")
+                elif isinstance(block, ToolCall):
+                    parts.append(
+                        f"assistant called tool {block.name!r} with "
+                        f"input {json.dumps(block.input)}"
+                    )
+                elif isinstance(block, ToolResult):
+                    err = " [error]" if block.is_error else ""
+                    parts.append(
+                        f"tool_result{err} for {block.tool_use_id}: "
+                        f"{block.content}"
+                    )
+        return "\n\n".join(parts)
+
+    def _parse_turn_structured_result(
+        self,
+        result: Dict[str, Any],
+        tools: Sequence[ToolDef],
+        *,
+        cost_usd: float = 0.0,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+    ) -> TurnResponse:
+        """Translate CC's structured response into a
+        :class:`TurnResponse`. Defensive against malformed output —
+        falls back to a text block if the result doesn't fit either
+        branch of the discriminated schema."""
+        usd: Optional[float] = float(cost_usd) if cost_usd else None
+        rtype = result.get("type")
+        if rtype == "tool_call":
+            name = result.get("tool_name")
+            inp = result.get("tool_input")
+            if (
+                isinstance(name, str)
+                and isinstance(inp, dict)
+                and any(t.name == name for t in tools)
+            ):
+                import uuid as _uuid
+                call_id = f"call_{_uuid.uuid4().hex[:12]}"
+                return TurnResponse(
+                    content=[ToolCall(id=call_id, name=name, input=inp)],
+                    stop_reason=StopReason.NEEDS_TOOL_CALL,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=usd,
+                )
+            # Malformed tool_call — surface the raw result as text so
+            # callers can see what went wrong rather than silently
+            # dropping it.
+            return TurnResponse(
+                content=[TextBlock(text=json.dumps(result))],
+                stop_reason=StopReason.COMPLETE,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=usd,
+            )
+        # Default to "complete" for type="complete" and any other
+        # unexpected discriminator value.
+        text = result.get("final_text") or ""
+        return TurnResponse(
+            content=[TextBlock(text=text)],
+            stop_reason=StopReason.COMPLETE,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=usd,
         )
 
 

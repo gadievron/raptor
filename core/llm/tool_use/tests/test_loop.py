@@ -357,6 +357,98 @@ def test_max_seconds_none_means_no_cap() -> None:
     assert out.terminated_by == "complete"
 
 
+# ---------------------------------------------------------------------------
+# max_total_tokens — cumulative input+output token cap
+# ---------------------------------------------------------------------------
+
+
+def test_max_total_tokens_terminates_pre_flight() -> None:
+    """Token budget caps the whole run on cumulative input+output.
+    Each turn here costs 100+50 = 150 tokens; cap=400 fires after 3
+    turns. Distinct termination reason from cost / iter / time so
+    callers can distinguish "we exhausted the token allowance" from
+    other budget classes."""
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "echo", {})),
+        _tool_call_response(("c2", "echo", {})),
+        _tool_call_response(("c3", "echo", {})),                   # never reached
+    ])
+    loop = ToolUseLoop(fp, [_echo_tool()], max_total_tokens=400)
+    out = loop.run("token-bounded")
+    assert out.terminated_by == "max_total_tokens"
+    assert len(fp.calls) <= 3                                       # gate fires before 3rd call
+
+
+def test_max_total_tokens_emits_loop_terminated_event() -> None:
+    """Subscribers see ``LoopTerminated(reason="max_total_tokens")``
+    distinct from other termination reasons."""
+    events: list[Any] = []
+    fp = _FakeProvider([_tool_call_response(("c", "echo", {}))] * 50)
+    loop = ToolUseLoop(
+        fp, [_echo_tool()],
+        max_total_tokens=1,                                         # immediate cap on iter 0+
+        events=events.append,
+    )
+    out = loop.run("hi")
+    # 1 token cap, 100+50 per turn → fires on iteration 1
+    assert out.terminated_by == "max_total_tokens"
+    terminated = [e for e in events if isinstance(e, LoopTerminated)]
+    assert len(terminated) == 1
+    assert terminated[0].reason == "max_total_tokens"
+
+
+def test_max_total_tokens_none_means_no_cap() -> None:
+    """Default behaviour preserved when ``max_total_tokens=None``."""
+    fp = _FakeProvider([_text_response("done")])
+    loop = ToolUseLoop(fp, [_echo_tool()])                          # no token cap
+    out = loop.run("hi")
+    assert out.terminated_by == "complete"
+
+
+def test_provider_error_message_surfaces_on_loop_result() -> None:
+    """When the provider returns ``StopReason.ERROR`` with an
+    ``error_message`` populated, the loop forwards it onto both the
+    ``LoopTerminated`` event and ``ToolLoopResult.error_message`` so
+    callers can present the actual cause to operators rather than
+    seeing it only in warning logs."""
+    events: list[Any] = []
+    fp = _FakeProvider([
+        TurnResponse(
+            content=[],
+            stop_reason=StopReason.ERROR,
+            input_tokens=0, output_tokens=0,
+            error_message="permanent error after 1 attempt(s): 401 invalid api key",
+        ),
+    ])
+    loop = ToolUseLoop(fp, [_echo_tool()], events=events.append)
+    result = loop.run("hi")
+
+    assert result.terminated_by == "provider_error"
+    assert result.error_message is not None
+    assert "401" in result.error_message
+    terminated = [e for e in events if isinstance(e, LoopTerminated)]
+    assert len(terminated) == 1
+    assert terminated[0].error_message == result.error_message
+
+
+def test_provider_error_with_no_message_yields_none() -> None:
+    """Backward compat: providers that return ``ERROR`` without
+    ``error_message`` produce ``ToolLoopResult.error_message=None``,
+    same shape as pre-2026-05-04 behaviour. No spurious string."""
+    fp = _FakeProvider([
+        TurnResponse(
+            content=[],
+            stop_reason=StopReason.ERROR,
+            input_tokens=0, output_tokens=0,
+            # no error_message set
+        ),
+    ])
+    loop = ToolUseLoop(fp, [_echo_tool()])
+    result = loop.run("hi")
+    assert result.terminated_by == "provider_error"
+    assert result.error_message is None
+
+
 def test_max_seconds_real_clock_e2e() -> None:
     """End-to-end against real ``time.monotonic`` (no monkeypatch).
 
