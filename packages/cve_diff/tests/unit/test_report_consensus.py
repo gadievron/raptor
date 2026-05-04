@@ -235,7 +235,7 @@ def test_nvd_patch_tagged_returns_not_found_when_no_patch_tag(monkeypatch) -> No
                 "references": [
                     {"url": "https://example.com/advisory",
                      "tags": ["Vendor Advisory"]},
-                    {"url": "https://github.com/x/y/commit/" + "a" * 40,
+                    {"url": "https://example.com/exploit",
                      "tags": ["Exploit"]},
                 ],
             },
