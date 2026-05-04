@@ -15,6 +15,7 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[4]))  # repo root
@@ -26,6 +27,7 @@ def _replay_merge(out_dir: Path, openant_findings: list) -> int:
     Handles both:
     (a) Raptor's wrapped dict format: {"stage":..., "findings":[...]}
     (b) plain list format (backward compat)
+    (c) no prior file: writes dict format (BUG-R-016-VARIANT fix)
 
     Returns count of merged findings, or raises on schema errors.
     """
@@ -50,8 +52,14 @@ def _replay_merge(out_dir: Path, openant_findings: list) -> int:
                 f"validation/findings.json has unrecognized format (got {type(existing).__name__})"
             )
     else:
+        # BUG-R-016-VARIANT: must write dict format so Phase 3 can call .get("findings")
         (out_dir / "validation").mkdir(exist_ok=True)
-        save_json(validation_findings_path, openant_findings)
+        save_json(validation_findings_path, {
+            "stage": "A",
+            "timestamp": datetime.now().isoformat(),
+            "source": "openant",
+            "findings": openant_findings,
+        })
     return len(openant_findings)
 
 
@@ -80,7 +88,12 @@ class TestBugR011OpenantFindingsMerge(unittest.TestCase):
             self.assertSetEqual(tools, {"semgrep", "openant"})
 
     def test_merge_when_no_findings_file_exists(self):
-        """--openant-only mode: no prior findings.json → created with OpenAnt findings."""
+        """--openant-only mode: no prior findings.json → created as dict with OpenAnt findings.
+
+        Post-BUG-R-016-VARIANT fix: the file is written as a wrapped dict
+        {"stage":..., "source":"openant", "findings":[...]}, not a plain list.
+        Phase 3 (agent.py) requires dict format for .get("findings") to work.
+        """
         from core.json import load_json
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)
@@ -88,9 +101,12 @@ class TestBugR011OpenantFindingsMerge(unittest.TestCase):
 
             count = _replay_merge(out_dir, openant_findings)
             self.assertEqual(count, 1)
-            merged = load_json(out_dir / "validation" / "findings.json")
-            self.assertEqual(len(merged), 1)
-            self.assertEqual(merged[0]["tool"], "openant")
+            result = load_json(out_dir / "validation" / "findings.json")
+            # Post-fix: result is a dict, not a plain list
+            self.assertIsInstance(result, dict)
+            findings = result.get("findings", [])
+            self.assertEqual(len(findings), 1)
+            self.assertEqual(findings[0]["tool"], "openant")
 
     def test_merge_when_findings_file_is_empty_list(self):
         """findings.json exists as empty list → OpenAnt findings appended cleanly."""
@@ -317,6 +333,107 @@ class TestBugR011RaptorAgenticMergeBlock(unittest.TestCase):
             "BUG-R-016",
             text,
             "Merge block comment must reference BUG-R-016 for traceability",
+        )
+
+
+class TestBugR016VariantOpeantonlyPath(unittest.TestCase):
+    """BUG-R-016-VARIANT: --openant-only writes plain list → Phase 3 crashes.
+
+    Pre-fix: the else branch (no prior findings.json) called
+      save_json(validation_findings_path, openant_extra_findings)
+    where openant_extra_findings is a plain Python list. Phase 3
+    (agent.py:_load_validated_findings → convert_validated_to_agent_format) calls
+    data.get("findings", []) which raises AttributeError: 'list' object has no
+    attribute 'get' when data is a list.
+
+    Post-fix: the else branch wraps the list:
+      save_json(validation_findings_path, {
+          "stage": "A", "timestamp": ..., "source": "openant",
+          "findings": openant_extra_findings,
+      })
+    """
+
+    def test_no_prior_file_writes_dict_not_plain_list(self):
+        """When no prior validation/findings.json exists, the file must be
+        written as a dict (not a plain list) so Phase 3 can call .get()."""
+        from core.json import load_json
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            openant_findings = [
+                {"finding_id": "openant:V1", "tool": "openant"},
+            ]
+            _replay_merge(out_dir, openant_findings)
+
+            result = load_json(out_dir / "validation" / "findings.json")
+            # Must be a dict, not a plain list
+            self.assertIsInstance(result, dict,
+                "else branch must write dict format (BUG-R-016-VARIANT)")
+            self.assertIn("findings", result)
+            self.assertEqual(result["findings"][0]["finding_id"], "openant:V1")
+
+    def test_no_prior_file_dict_has_required_stage_key(self):
+        """Written dict must have 'stage' key so Phase 3 metadata extraction works."""
+        from core.json import load_json
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            _replay_merge(out_dir, [{"finding_id": "openant:V1", "tool": "openant"}])
+            result = load_json(out_dir / "validation" / "findings.json")
+            self.assertIn("stage", result)
+
+    def test_no_prior_file_source_is_openant(self):
+        """Written dict source field must identify OpenAnt as the origin."""
+        from core.json import load_json
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            _replay_merge(out_dir, [{"finding_id": "openant:V1", "tool": "openant"}])
+            result = load_json(out_dir / "validation" / "findings.json")
+            self.assertEqual(result.get("source"), "openant")
+
+    def test_phase3_format_compatible_get_call_does_not_crash(self):
+        """Simulate Phase 3's data.get("findings", []) against the file the
+        else branch writes. Must not raise AttributeError."""
+        from core.json import load_json
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            openant_findings = [
+                {"finding_id": "openant:V1", "tool": "openant"},
+                {"finding_id": "openant:V2", "tool": "openant"},
+            ]
+            _replay_merge(out_dir, openant_findings)
+
+            data = load_json(out_dir / "validation" / "findings.json")
+            # This is what agent.py:_load_validated_findings does
+            try:
+                findings = data.get("findings", [])
+            except AttributeError as e:
+                self.fail(
+                    f"Phase 3's data.get('findings') raised AttributeError — "
+                    f"file was written as plain list, not dict. "
+                    f"BUG-R-016-VARIANT is not fixed. Error: {e}"
+                )
+            self.assertEqual(len(findings), 2)
+
+    def test_static_check_else_branch_writes_dict(self):
+        """Static check: raptor_agentic.py else branch must contain dict-format write."""
+        agentic = Path(__file__).parents[3] / "raptor_agentic.py"
+        text = agentic.read_text()
+        # The else branch must write a dict with "stage" and "findings" keys,
+        # not bare openant_extra_findings (which would be a plain list).
+        # Find the else block and check it has "stage" near openant_extra_findings.
+        else_idx = text.find('"stage": "A"')
+        self.assertGreater(else_idx, 0,
+            'raptor_agentic.py must contain dict with "stage": "A" in else branch')
+        # And "source": "openant" must be in the same block
+        self.assertIn('"source": "openant"', text,
+            'else branch must identify source as "openant" (BUG-R-016-VARIANT)')
+
+    def test_raptor_agentic_references_bug_r016_variant(self):
+        """The fix comment must reference BUG-R-016-VARIANT for traceability."""
+        agentic = Path(__file__).parents[3] / "raptor_agentic.py"
+        self.assertIn(
+            "BUG-R-016-VARIANT",
+            agentic.read_text(),
+            "raptor_agentic.py must reference BUG-R-016-VARIANT in comment",
         )
 
 

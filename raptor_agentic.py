@@ -20,6 +20,7 @@ import subprocess
 import sys
 
 import time
+from datetime import datetime
 from pathlib import Path
 
 # Add to path
@@ -797,8 +798,18 @@ Examples:
                         f"(got {type(existing).__name__}); skipping merge"
                     )
         else:
+            # No prior validation/findings.json (--openant-only or SARIF produced no file).
+            # BUG-R-016-VARIANT: must write dict format, NOT a plain list.
+            # Phase 3 (packages/llm_analysis/agent.py:_load_validated_findings) calls
+            # data.get("findings", []) which raises AttributeError if data is a plain
+            # list. All other Raptor validation paths write {"stage":..,"findings":[...]}.
             (out_dir / "validation").mkdir(exist_ok=True)
-            save_json(validation_findings_path, openant_extra_findings)
+            save_json(validation_findings_path, {
+                "stage": "A",
+                "timestamp": datetime.now().isoformat(),
+                "source": "openant",
+                "findings": openant_extra_findings,
+            })
             validated_findings += len(openant_extra_findings)
             logger.info(
                 f"Merged {len(openant_extra_findings)} OpenAnt findings "
