@@ -98,7 +98,7 @@ class TestRecordDenial:
 class TestSuggestedFix:
     def test_network_with_host(self):
         s = summary_mod._suggested_fix("network", host="evil.com")
-        assert "evil.com" in s
+        assert "`evil.com`" in s
         # Must reference an actual operator-facing flag, not the kwarg form.
         assert "--sandbox" in s
         assert "none" in s
@@ -135,7 +135,7 @@ class TestSuggestedFix:
         s = summary_mod._suggested_fix("network", host="evil.com", audit=True)
         assert "audit:" in s
         assert "would be blocked" in s
-        assert "evil.com" in s
+        assert "`evil.com`" in s
         assert "--sandbox full" in s
 
     def test_network_audit_mode_without_host(self):
