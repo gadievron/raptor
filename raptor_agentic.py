@@ -33,6 +33,11 @@ from core.security.cc_trust import check_repo_claude_trust, set_trust_override
 logger = get_logger()
 
 
+def _tuning_default(key: str) -> int:
+    from core.tuning import get_tuning
+    return getattr(get_tuning(), key)
+
+
 def run_command_streaming(cmd: list, description: str) -> tuple[int, str, str]:
     """
     Run a command and stream output in real-time while also capturing it.
@@ -185,8 +190,8 @@ Examples:
     parser.add_argument("--vuln-type", help="Vulnerability type to focus on (e.g., command_injection, sql_injection)")
 
     # Orchestration options
-    parser.add_argument("--max-parallel", type=int, default=3,
-                       help="Maximum parallel Claude Code agents for Phase 4 orchestration (default: 3)")
+    parser.add_argument("--max-parallel", type=int, default=None,
+                       help="Maximum parallel Claude Code agents for Phase 4 orchestration (default: from tuning.json)")
     parser.add_argument("--understand", action="store_true",
                         help="Run /understand --map before scanning for architectural context")
     parser.add_argument("--validate", action="store_true",
@@ -726,7 +731,7 @@ Examples:
                 prep_report_path=analysis_report,
                 repo_path=original_repo_path,
                 out_dir=out_dir,
-                max_parallel=args.max_parallel,
+                max_parallel=args.max_parallel if args.max_parallel is not None else _tuning_default("max_agentic_parallel"),
                 max_findings=args.max_findings,
                 no_exploits=args.no_exploits,
                 no_patches=args.no_patches,

@@ -70,6 +70,67 @@ class TestLoadJsonWithComments(unittest.TestCase):
             p.write_text("// only comments\n// nothing else\n")
             self.assertIsNone(load_json_with_comments(p))
 
+    def test_inline_trailing_comment(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "config.json"
+            p.write_text('{\n  "ram": 4096 // override default\n}\n')
+            self.assertEqual(load_json_with_comments(p), {"ram": 4096})
+
+    def test_inline_comment_preserves_url_in_string(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "config.json"
+            p.write_text('{"url": "https://example.com"} // a comment\n')
+            result = load_json_with_comments(p)
+            self.assertEqual(result["url"], "https://example.com")
+
+    def test_escaped_quote_in_string(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "config.json"
+            p.write_text('{"msg": "say \\"hello\\""} // note\n')
+            result = load_json_with_comments(p)
+            self.assertEqual(result["msg"], 'say "hello"')
+
+    def test_escaped_backslash_before_closing_quote(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "config.json"
+            # File content: {"p": "C:\\"} // comment
+            # JSON value is C:\  (one backslash)
+            p.write_text('{"p": "C:\\\\"} // comment\n')
+            result = load_json_with_comments(p)
+            self.assertEqual(result["p"], "C:\\")
+
+    def test_comment_above_and_inline(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "config.json"
+            p.write_text(
+                '// top comment\n'
+                '{\n'
+                '  // key comment\n'
+                '  "a": 1, // inline\n'
+                '  "b": 2\n'
+                '}\n'
+            )
+            self.assertEqual(load_json_with_comments(p), {"a": 1, "b": 2})
+
+    def test_hash_full_line_comment(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "config.json"
+            p.write_text('# a comment\n{"key": "value"}\n')
+            self.assertEqual(load_json_with_comments(p), {"key": "value"})
+
+    def test_hash_inline_comment(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "config.json"
+            p.write_text('{\n  "ram": 4096 # override\n}\n')
+            self.assertEqual(load_json_with_comments(p), {"ram": 4096})
+
+    def test_hash_inside_string_preserved(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "config.json"
+            p.write_text('{"color": "#fff"}\n')
+            result = load_json_with_comments(p)
+            self.assertEqual(result["color"], "#fff")
+
     def test_missing_file(self):
         self.assertIsNone(load_json_with_comments("/nonexistent/path.json"))
 

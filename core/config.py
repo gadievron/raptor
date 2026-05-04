@@ -11,6 +11,16 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 
+class classproperty:  # noqa: N801
+    """Descriptor that works like @property but on the class itself."""
+
+    def __init__(self, func):
+        self.fget = func
+
+    def __get__(self, obj, cls):
+        return self.fget(cls)
+
+
 class RaptorConfig:
     """Centralized configuration for RAPTOR framework."""
 
@@ -66,13 +76,29 @@ class RaptorConfig:
     HASH_CHUNK_SIZE = 1024 * 1024            # 1 MiB chunks for file hashing
     MAX_FILE_SIZE_FOR_HASH = 100 * 1024 * 1024  # 100 MiB max file size for hashing
 
-    # Parallel Processing
-    MAX_SEMGREP_WORKERS = 4          # Parallel Semgrep scans
-    MAX_CODEQL_WORKERS = 2           # Parallel CodeQL scans
+    # Parallel Processing and CodeQL Resources — driven by tuning.json
+    # Import is deferred to property access to avoid circular imports.
 
-    # CodeQL Resource Configuration
-    CODEQL_RAM_MB = 8192             # RAM for CodeQL analysis (8GB)
-    CODEQL_THREADS = 0               # 0 = use all available CPUs
+    @staticmethod
+    def _tuning():
+        from core.tuning import get_tuning
+        return get_tuning()
+
+    @classproperty
+    def MAX_SEMGREP_WORKERS(cls):
+        return cls._tuning().max_semgrep_workers
+
+    @classproperty
+    def MAX_CODEQL_WORKERS(cls):
+        return cls._tuning().max_codeql_workers
+
+    @classproperty
+    def CODEQL_RAM_MB(cls):
+        return cls._tuning().codeql_ram_mb
+
+    @classproperty
+    def CODEQL_THREADS(cls):
+        return cls._tuning().codeql_threads
 
     # CodeQL DB cache: grace period before _evict_stale_canonical evicts
     # a canonical that has no metadata yet. The promote sequence has a

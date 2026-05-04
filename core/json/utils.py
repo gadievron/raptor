@@ -7,7 +7,6 @@ serialization of Path/datetime objects.
 
 import json
 import os
-import re
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -34,19 +33,50 @@ def load_json(path: Union[str, Path], strict: bool = False) -> Optional[Any]:
         return None
 
 
-def load_json_with_comments(path: Union[str, Path]) -> Optional[Any]:
-    """Load a JSON file that may contain // line comments.
+def _strip_json_comments(text: str) -> str:
+    """Strip ``//`` and ``#`` comments from JSON text, respecting strings.
 
-    Strips comment lines before parsing. Used for config files
-    (e.g. ~/.config/raptor/models.json). Returns None on missing
-    file or parse error.
+    Handles full-line comments, inline trailing comments, and comment
+    characters inside quoted strings (e.g. ``"url": "https://x.com"``
+    or ``"color": "#fff"``).
+    """
+    result = []
+    for line in text.split('\n'):
+        in_string = False
+        i = 0
+        while i < len(line):
+            ch = line[i]
+            if ch == '\\' and in_string:
+                i += 2
+                continue
+            if ch == '"':
+                in_string = not in_string
+            elif not in_string:
+                if ch == '/' and line[i:i + 2] == '//':
+                    line = line[:i]
+                    break
+                if ch == '#':
+                    line = line[:i]
+                    break
+            i += 1
+        result.append(line)
+    return '\n'.join(result)
+
+
+def load_json_with_comments(path: Union[str, Path]) -> Optional[Any]:
+    """Load a JSON file that may contain ``//`` or ``#`` comments.
+
+    Strips full-line and inline comments before parsing, while
+    preserving comment characters inside quoted strings. Used for
+    config files (e.g. ``tuning.json``, ``models.json``). Returns
+    None on missing file or parse error.
     """
     p = Path(path)
     if not p.exists():
         return None
     try:
         text = p.read_text(encoding="utf-8")
-        stripped = re.sub(r'^\s*//.*$', '', text, flags=re.MULTILINE)
+        stripped = _strip_json_comments(text)
         if not stripped.strip():
             return None
         return json.loads(stripped)
