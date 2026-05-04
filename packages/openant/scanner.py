@@ -76,10 +76,20 @@ def _run_subprocess(
     except Exception as exc:  # noqa: BLE001
         return _empty_result(f"OpenAnt launch failed: {exc}")
 
+    # Persist full stderr so debugging isn't capped at the 600-char snippet
+    # we surface to the caller. (Adversarial-audit finding: long warnings
+    # could push the actual error past the truncation point.)
+    if proc.stderr:
+        try:
+            (out_dir / "openant.stderr.log").write_text(proc.stderr)
+        except OSError:
+            pass
+
     if proc.returncode not in (0, 1):
         snippet = (proc.stderr or "")[:600].strip()
         return _empty_result(
-            f"OpenAnt exited {proc.returncode}: {snippet}"
+            f"OpenAnt exited {proc.returncode}: {snippet} "
+            f"(full stderr in {out_dir}/openant.stderr.log)"
         )
 
     pipeline_output_path = out_dir / "pipeline_output.json"
