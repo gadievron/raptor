@@ -241,6 +241,7 @@ def dispatch_task(
                 dispatch_result = future.result()
                 processed = task.process_result(item, dispatch_result)
                 processed["finding_id"] = item_id  # Authoritative — overrides any LLM-set value
+                processed["_quality"] = getattr(dispatch_result, "quality", 1.0)
                 item_cost = processed.get("cost_usd", 0)
                 running_cost += item_cost
                 results.append(processed)
@@ -253,14 +254,18 @@ def dispatch_task(
                     raw = ""
                     if hasattr(dispatch_result, "result") and isinstance(dispatch_result.result, dict):
                         raw = dispatch_result.result.get("content", "")
+                    raw_text = raw or str(dispatch_result.result)
                     defense_telemetry.record_response(
                         model_id=processed.get("analysed_by", "unknown"),
                         profile_name=profile_name,
                         nonce=nonce,
-                        raw_response=raw or str(dispatch_result.result),
+                        raw_response=raw_text,
                         schema_accepted=True,
                         schema_retried=False,
                     )
+                    from core.security.prompt_envelope import nonce_leaked_in
+                    if nonce_leaked_in(nonce, raw_text):
+                        processed["_nonce_leaked"] = True
 
                 # Feed costs to tracker for budget enforcement
                 if item_cost > 0:

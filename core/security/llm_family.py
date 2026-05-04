@@ -25,22 +25,27 @@ from __future__ import annotations
 from typing import Iterable, Literal, Optional
 
 
-Family = Literal["anthropic", "openai", "google", "meta", "ollama", "unknown"]
+Family = Literal["anthropic", "openai", "google", "meta", "mistral", "ollama", "unknown"]
 
 
-_FAMILY_PREFIXES: tuple[tuple[str, Family], ...] = (
-    ("claude-", "anthropic"),
-    ("anthropic/", "anthropic"),
-    ("gpt-", "openai"),
-    ("o1-", "openai"),
-    ("o3-", "openai"),
-    ("openai/", "openai"),
-    ("gemini-", "google"),
-    ("gemini/", "google"),
-    ("google/", "google"),
-    ("llama-", "meta"),
-    ("meta-llama/", "meta"),
-    ("ollama/", "ollama"),
+_PROVIDER_STEMS: tuple[tuple[str, Family], ...] = (
+    ("anthropic", "anthropic"),
+    ("openai", "openai"),
+    ("gemini", "google"),
+    ("google", "google"),
+    ("meta-llama", "meta"),
+    ("mistral", "mistral"),
+    ("ollama", "ollama"),
+)
+
+_MODEL_STEMS: tuple[tuple[str, Family], ...] = (
+    ("claude", "anthropic"),
+    ("gpt", "openai"),
+    ("o1", "openai"),
+    ("o3", "openai"),
+    ("gemini", "google"),
+    ("llama", "meta"),
+    ("mistral", "mistral"),
 )
 
 
@@ -49,11 +54,16 @@ def family_of(model_id: str) -> Family:
 
     Matching is by prefix on the lowered identifier (so ``claude-opus-4-7``
     and ``anthropic/claude-haiku-4-5`` both resolve to ``"anthropic"``).
+    Provider routing prefixes (``provider/model``) are checked first so
+    that e.g. ``ollama/llama-3`` resolves to ``ollama`` not ``meta``.
     Unknown identifiers return ``"unknown"``.
     """
     needle = model_id.lower()
-    for prefix, family in _FAMILY_PREFIXES:
-        if needle.startswith(prefix):
+    for stem, family in _PROVIDER_STEMS:
+        if needle.startswith(stem + "/"):
+            return family
+    for stem, family in _MODEL_STEMS:
+        if needle.startswith(stem + "-"):
             return family
     return "unknown"
 

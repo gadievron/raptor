@@ -234,7 +234,7 @@ def orchestrate(
     from packages.llm_analysis.dispatch import dispatch_task, DispatchResult
     from packages.llm_analysis.tasks import (
         AnalysisTask, ExploitTask, PatchTask, ConsensusTask, GroupAnalysisTask,
-        RetryTask,
+        RetryTask, CrossFamilyCheckTask,
     )
     from core.security.prompt_defense_profiles import (
         CONSERVATIVE, PASSTHROUGH, get_profile_for,
@@ -378,10 +378,30 @@ def orchestrate(
     # Its results are in finding["feasibility"] and included in the prompt.
     #
     # AnalysisTask (above)  → Stages A-D: is this real? how exploitable?
+    # CrossFamilyCheckTask  → Re-check suspicious responses via different family
     # RetryTask             → Stage F: self-consistency check + retry
     # ConsensusTask         → Second model votes (if configured)
     # ExploitTask/PatchTask → Generate code (only for final-verdict exploitable)
     # GroupAnalysisTask     → Cross-finding patterns
+
+    # Cross-family re-check: suspicious responses (low quality / nonce leaked)
+    # re-dispatched through a model from a different training lineage.
+    if dispatch_mode == "external_llm" and analysis_model:
+        checker_model = _resolve_cross_family_checker(
+            analysis_model, role_resolution,
+        )
+        if checker_model:
+            checker_name = checker_model.model_name
+            checker_profile = get_profile_for(checker_name)
+            dispatch_task(
+                CrossFamilyCheckTask(
+                    checker_model=checker_model,
+                    results_by_id=results_by_id,
+                    profile=checker_profile,
+                ),
+                findings, dispatch_fn, role_resolution,
+                results_by_id, cost_tracker, max_parallel,
+            )
 
     # Stage F: self-consistency check + retry contradictions and low confidence
     dispatch_task(
@@ -443,6 +463,10 @@ def orchestrate(
 
     consensus_disputes = sum(1 for r in per_finding_results
                              if r.get("consensus") == "disputed")
+    cross_family_checked = sum(1 for r in per_finding_results
+                               if r.get("cross_family_check"))
+    cross_family_disputes = sum(1 for r in per_finding_results
+                                if r.get("cross_family_disputed"))
     retries = sum(1 for r in per_finding_results if r.get("retried"))
     low_confidence = sum(1 for r in per_finding_results if r.get("low_confidence"))
 
@@ -458,6 +482,8 @@ def orchestrate(
         "findings_failed": sum(1 for r in per_finding_results if "error" in r),
         "structural_groups": len(groups),
         "consensus_disputes": consensus_disputes,
+        "cross_family_checked": cross_family_checked,
+        "cross_family_disputes": cross_family_disputes,
         "low_confidence_retries": retries,
         "low_confidence_remaining": low_confidence,
         "group_analyses": len(group_analyses),
@@ -501,11 +527,69 @@ def orchestrate(
     thinking = cost_summary.get("thinking_tokens", 0)
     if thinking > 0:
         print(f"  Thinking tokens: {thinking:,}")
+    if cross_family_checked:
+        cf_parts = [f"{cross_family_checked} cross-family checked"]
+        if cross_family_disputes:
+            cf_parts.append(f"{cross_family_disputes} disputed")
+        print(f"  {', '.join(cf_parts)}")
     if groups:
         print(f"  Cross-finding groups: {len(groups)}")
     print(f"  Report: {out_path}")
 
     return merged
+
+
+def _resolve_cross_family_checker(
+    analysis_model: Any,
+    role_resolution: Dict[str, Any],
+) -> Optional[Any]:
+    """Pick a cross-family checker model from resolved roles or env auto-detect.
+
+    Returns a ModelConfig from a different training lineage than the
+    analysis model, or None if none is available.  Prefers models already
+    in the role resolution (consensus / fallback); falls back to
+    auto-detecting a cheap model from an env-var API key.
+    """
+    from core.security.llm_family import family_of, same_family
+
+    primary_name = analysis_model.model_name
+    primary_family = family_of(primary_name)
+
+    candidates = (
+        role_resolution.get("consensus_models", [])
+        + role_resolution.get("fallback_models", [])
+    )
+    for m in candidates:
+        if not same_family(primary_name, m.model_name):
+            logger.info("Cross-family checker: %s (from resolved roles)", m.model_name)
+            return m
+
+    return _auto_detect_cross_family_checker(primary_family)
+
+
+def _auto_detect_cross_family_checker(primary_family: str) -> Optional[Any]:
+    """Auto-detect a cheap cross-family model from environment API keys."""
+    import os
+    from core.llm.config import ModelConfig
+    from core.llm.model_data import PROVIDER_ENV_KEYS
+
+    _CHEAP_CHECKERS: dict[str, tuple[str, str]] = {
+        "anthropic": ("anthropic", "claude-haiku-4-5-20251001"),
+        "google": ("gemini", "gemini-2.5-flash"),
+        "openai": ("openai", "gpt-4.1-mini"),
+        "mistral": ("mistral", "mistral-small-latest"),
+    }
+    for family, (provider, model_name) in _CHEAP_CHECKERS.items():
+        if family == primary_family:
+            continue
+        env_key = PROVIDER_ENV_KEYS.get(provider)
+        if env_key and os.environ.get(env_key):
+            logger.info(
+                "Cross-family checker: %s (auto-detected from %s)",
+                model_name, env_key,
+            )
+            return ModelConfig(provider=provider, model_name=model_name)
+    return None
 
 
 def _check_self_consistency(results_by_id: Dict[str, Dict]) -> None:

@@ -454,3 +454,87 @@ class RetryTask(AnalysisTask):
             if not was_contradictory and not decisive:
                 prior_results[fid]["low_confidence"] = True
         return results
+
+
+class CrossFamilyCheckTask(AnalysisTask):
+    """Re-analyse suspicious findings through a model from a different family.
+
+    Triggers on low quality or nonce leakage.  If the checker disagrees
+    with the primary, takes the conservative (exploitable) verdict and
+    flags ``cross_family_disputed``.  Agreed verdicts get
+    ``cross_family_agreed``.
+    """
+
+    name = "cross-family-check"
+    QUALITY_THRESHOLD = 0.7
+
+    def __init__(self, checker_model, results_by_id=None,
+                 profile: ModelDefenseProfile = CONSERVATIVE):
+        super().__init__(profile=profile)
+        self.checker_model = checker_model
+        self.results_by_id = results_by_id or {}
+
+    def get_models(self, role_resolution):
+        return [self.checker_model]
+
+    def select_items(self, findings, prior_results):
+        selected = []
+        for f in findings:
+            fid = f.get("finding_id")
+            r = prior_results.get(fid, {})
+            if "error" in r:
+                continue
+            quality = r.get("_quality", 1.0)
+            nonce_leaked = r.get("_nonce_leaked", False)
+            if quality < self.QUALITY_THRESHOLD or nonce_leaked:
+                selected.append(f)
+        return selected
+
+    def finalize(self, results, prior_results):
+        from core.security.llm_family import same_family
+
+        for r in results:
+            fid = r.get("finding_id")
+            if not fid or "error" in r:
+                continue
+            primary = prior_results.get(fid, {})
+            if "error" in primary:
+                continue
+
+            actual_model = r.get("analysed_by", "unknown")
+            primary_model = primary.get("analysed_by", "unknown")
+            trigger = "nonce_leaked" if primary.get("_nonce_leaked") else "low_quality"
+
+            # Guard: LLMClient internal fallback can silently route
+            # through a same-family model, defeating the cross-family
+            # intent. If the actual responder is same-family as the
+            # primary, record the failure but don't adjudicate.
+            if same_family(primary_model, actual_model):
+                prior_results[fid]["cross_family_check"] = {
+                    "checker_model": actual_model,
+                    "intended_model": self.checker_model.model_name,
+                    "trigger": trigger,
+                    "verdict": "skipped — checker fell back to same family",
+                }
+                continue
+
+            primary_exploitable = primary.get("is_exploitable", False)
+            checker_exploitable = r.get("is_exploitable", False)
+
+            check_record = {
+                "checker_model": actual_model,
+                "checker_exploitable": checker_exploitable,
+                "checker_ruling": r.get("ruling"),
+                "trigger": trigger,
+            }
+
+            if primary_exploitable != checker_exploitable:
+                prior_results[fid]["is_exploitable"] = True
+                prior_results[fid]["cross_family_disputed"] = True
+                check_record["verdict"] = "disputed — conservative override"
+            else:
+                prior_results[fid]["cross_family_agreed"] = True
+                check_record["verdict"] = "agreed"
+
+            prior_results[fid]["cross_family_check"] = check_record
+        return results

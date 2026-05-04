@@ -39,10 +39,16 @@ def test_meta_models_resolve_to_meta():
 def test_ollama_resolves_to_ollama():
     assert family_of("ollama/llama3-8b") == "ollama"
     assert family_of("ollama/qwen2.5-7b") == "ollama"
+    assert family_of("ollama/llama-3.1-8b") == "ollama"  # not meta
+
+
+def test_mistral_family():
+    assert family_of("mistral-7b") == "mistral"
+    assert family_of("mistral-small-latest") == "mistral"
+    assert family_of("mistral/mistral-large") == "mistral"
 
 
 def test_unknown_models_resolve_to_unknown():
-    assert family_of("mistral-7b") == "unknown"
     assert family_of("custom-model-xyz") == "unknown"
     assert family_of("") == "unknown"
 
