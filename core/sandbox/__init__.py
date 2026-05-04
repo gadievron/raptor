@@ -475,6 +475,7 @@ from .preexec import _DEFAULT_LIMITS, _load_user_limits, _make_preexec_fn
 from .mount import _build_mount_script
 from .probes import (
     check_mount_available, check_net_available, check_sandbox_available,
+    check_seatbelt_available,
 )
 from .profiles import DEFAULT_PROFILE, PROFILES, _SANDBOX_KWARGS
 from .seccomp import check_seccomp_available

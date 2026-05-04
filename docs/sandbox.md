@@ -220,16 +220,18 @@ not wall-clock time.
 Use audit mode for diagnosis, not routine work. Drop `--audit` for
 production scans (the profile alone runs at full speed).
 
-**Disk usage cap.** Both filtered and verbose modes are capped at
-`_MAX_RECORDS_PER_RUN = 10000` records per run (mirrors the
-non-tracer `record_denial` cap in `core/sandbox/summary.py`). Per
-record is bounded by `MAX_CMD_LEN = 2048` bytes after truncation —
-upper bound on the JSONL is ≈ 20 MB. On hitting the cap, the tracer
-emits `RAPTOR tracer: hit per-run record cap (10000); dropping
-further events` to stderr ONCE, then silently drops further events.
-This protects `/tmp` from runaway fuzz workloads but means a long
-verbose run loses tail-end signal — bias towards filtered mode for
-multi-hour workloads.
+**Disk usage cap.** Both filtered and verbose modes are routed
+through `core.sandbox.audit_budget.AuditBudget` (default global
+cap 10000, mirrors `core/sandbox/summary.py`'s `MAX_DENIALS_PER_RUN`).
+Per record is bounded by `MAX_CMD_LEN = 2048` bytes after
+truncation — upper bound on the JSONL is ≈ 20 MB. The budget also
+enforces per-category sub-caps (file-write 3000, file-read-data
+2000, etc.) and per-PID caps (5000) so one chatty source can't
+squeeze out the others. Operators see `category_budget_exceeded`
+and `pid_budget_exceeded` markers in the JSONL when caps fire, and
+an `audit_summary` record at end-of-run with totals. Override the
+global cap via `--audit-budget=N` (sub-caps scale proportionally).
+See the "Audit budget" section below for the full mechanism.
 
 **Anti-debug surface (acknowledged, acceptable).** Code in an
 audited sandbox can detect tracing via `/proc/self/status`'s
@@ -747,21 +749,159 @@ pins the bit values against `/usr/include/linux/landlock.h`.
 
 ```
 core/sandbox/
-├── __init__.py     # public API + threat-model docstring
-├── context.py      # sandbox(), run(), run_trusted(), run_untrusted()
-├── profiles.py     # named profile definitions
-├── cli.py          # --sandbox / --no-sandbox argparse integration
-├── probes.py       # per-layer availability detection
-├── _spawn.py       # fork+newuidmap+pivot_root+Landlock+seccomp spawn path
-├── mount_ns.py     # ctypes mount() / pivot_root() for the _spawn path
-├── mount.py        # legacy shell-script mount builder (kept for tests)
-├── landlock.py     # Landlock ABI + rule construction + self-test
-├── seccomp.py      # seccomp-bpf syscall filters
-├── preexec.py      # preexec_fn composition (PR_SET_NO_NEW_PRIVS etc.)
-├── proxy.py        # HTTPS-CONNECT egress proxy
-├── observe.py      # sandbox_info attachment, SIGSYS decoding
-└── state.py        # singletons and per-process cached state
+├── __init__.py        # public API + threat-model docstring
+├── context.py         # sandbox(), run(), run_trusted(), run_untrusted()
+├── profiles.py        # named profile definitions
+├── cli.py             # --sandbox / --no-sandbox argparse integration
+├── probes.py          # per-layer availability detection
+├── _spawn.py          # Linux: fork+newuidmap+pivot_root+Landlock+seccomp
+├── mount_ns.py        # Linux: ctypes mount() / pivot_root() for _spawn
+├── mount.py           # Linux: legacy shell-script mount builder
+├── landlock.py        # Linux: Landlock ABI + rule construction
+├── seccomp.py         # Linux: seccomp-bpf syscall filters
+├── preexec.py         # POSIX: preexec_fn composition (rlimits)
+├── proxy.py           # cross-platform: HTTPS-CONNECT egress proxy
+├── observe.py         # cross-platform: sandbox_info attachment
+├── state.py           # cross-platform: singletons + cached state
+├── _macos_spawn.py    # macOS: sandbox-exec wrapper
+├── seatbelt.py        # macOS: SBPL profile generator
+└── seatbelt_audit.py  # macOS: `log stream` capture + JSONL append
 ```
 
 See the module docstring in `core/sandbox/__init__.py` for the current
 threat-model statement — what the sandbox does and does not protect against.
+
+## macOS backend
+
+On Darwin, the sandbox routes through `core.sandbox._macos_spawn`
+instead of the Linux `_spawn.run_sandboxed()`. The kwarg surface is
+identical — callers don't need to switch on platform — but the
+underlying mechanism is `sandbox-exec(1)` + the kernel `Sandbox.kext`
+applying an SBPL (Sandbox Profile Language) profile.
+
+### What works the same
+
+- `sandbox()`, `run()`, `run_trusted()`, `run_untrusted()` — same
+  context-manager + helper surface.
+- `block_network=True`, `allowed_tcp_ports=`, `use_egress_proxy=`,
+  `proxy_hosts=` — translated to SBPL `(deny network*)` / `(allow
+  network-outbound (remote tcp ...))` / loopback proxy port allow.
+- `target=`, `output=`, `writable_paths=` — translated to SBPL
+  `(deny file-write* (require-not (subpath ...)))`. Paths are
+  realpath-canonicalised because SBPL's `(subpath ...)` matches the
+  canonical resolved path (macOS has pervasive symlinks like `/var
+  → /private/var`).
+- `restrict_reads=True`, `readable_paths=` — translated to SBPL
+  `(deny file-read* (require-not ...))` with the same system-dirs
+  allowlist (`/usr`, `/System`, `/Library/Frameworks`, `/private/etc`,
+  `/dev`).
+- `fake_home=True` — env-side; sets `HOME` and `XDG_*_HOME` to the
+  per-sandbox `{output}/.home/`. Same env-mutation as Linux.
+- `audit=True` / `--audit` CLI flag — replaces the file-write deny
+  with `(allow file-write* (with report))`. The kernel emits a
+  Sandbox.kext log entry for each write; `seatbelt_audit.LogStreamer`
+  reads `log stream` ndjson output, parses with the spike-validated
+  regex, and appends records to `<run>/.sandbox-denials.jsonl`
+  matching the Linux ptrace-tracer schema. `summarize_and_write`
+  works unchanged.
+- `limits=` — POSIX setrlimit via the same preexec_fn pattern.
+- Sandbox-summary aggregation (`summarize_and_write`,
+  `record_audit_degraded`, `proxy-events.jsonl`) — identical
+  cross-platform.
+
+### What's different (platform limits)
+
+| Linux feature                | macOS status   | Why / mitigation                                               |
+| ---------------------------- | -------------- | -------------------------------------------------------------- |
+| PID namespace                | ⚠ absent       | No unprivileged equivalent on macOS. Host PIDs visible.        |
+| Mount namespace + pivot_root | ⚠ absent       | `restrict_reads=True` is the substitute (read-deny via SBPL).  |
+| `RLIMIT_NPROC` per-namespace | weaker         | macOS rlimit is per-UID host-wide. Lower the limit on Darwin.  |
+| `seccomp_profile=full`       | partial        | Mapped to `(deny process-info* (target others))` — coarse.     |
+| `audit_verbose` (per-syscall)| partial        | SBPL `(allow X (with report))` for an extended category set    |
+|                              |                | (file-read*, mach-lookup, process-exec*, process-fork, signal, |
+|                              |                | iokit-open, sysctl-read, process-info*). Coarser than seccomp's|
+|                              |                | per-syscall trace and no argv, but operationally similar.      |
+| `--audit-budget=N`           | full           | Same `audit_budget.AuditBudget` module on both backends —      |
+|                              |                | token-bucket + per-category + per-PID + 1-in-N sampling.       |
+| `map_root` (UID re-mapping)  | ⚠ absent       | macOS sandbox-exec keeps caller UID.                           |
+| `--sandbox debug` (lldb)     | full           | Same intent as Linux: full enforcement EXCEPT keep debugger    |
+|                              |                | introspection unrestricted. macOS skips the process-info-*     |
+|                              |                | denies under debug so lldb / sample / dtrace can attach.       |
+
+### macOS-specific operator notes
+
+- **First-run cost**: `check_seatbelt_available()` invokes
+  `sandbox-exec` with a minimal `(allow default)` profile against
+  `/usr/bin/true` once per process to verify the kernel sandbox is
+  functional. ~50ms.
+- **No `(deny default)`**: pure deny-default profiles SIGABRT modern
+  macOS binaries before dyld can load libSystem (spike-validated).
+  We always use `(allow default)` + targeted denies.
+- **Default exception list**: `/private/tmp` is always added to the
+  write-allowlist exception so standard `tempfile.mkstemp()` works.
+  This matches Linux's default `/tmp` writable.
+- **Audit log latency**: kernel → log subsystem → `log stream`
+  pipeline has ~tens-of-ms latency for steady-state and ~1.5s for a
+  cold first event. `LogStreamer.stop(drain_timeout=1.5)` accounts
+  for this; very short workloads may drop the last record.
+
+### Audit budget (cross-platform)
+
+Both backends route audit-record decisions through one shared module
+(`core.sandbox.audit_budget.AuditBudget`). The budget composes four
+mechanisms:
+
+1. **Global cap** — `--audit-budget=N` (default 10000). Hard ceiling
+   on records per run.
+2. **Per-category sub-cap** — file-read-metadata (500), file-write
+   (3000), mach-lookup (1000), etc. Stops one chatty category from
+   squeezing important low-volume categories out of the global pool.
+3. **Per-PID sub-cap** — default 5000. One spamming subprocess can't
+   dominate the JSONL.
+4. **Token-bucket refill** — burst capacity = cap, sustained rate =
+   refill rate. Long-running workloads at low steady-state never trip.
+5. **1-in-N post-cap sampling** — high-volume categories
+   (file-read-metadata, file-read-data, process-info, iokit-open,
+   sysctl-read) keep emitting a trickle even after their bucket
+   empties so operators see "still happening".
+
+Markers and a final summary record appear in the JSONL alongside
+data records — operators see `category_budget_exceeded`,
+`pid_budget_exceeded`, `category_budget_exceeded_sampling`, and
+`audit_summary` types in the same file.
+
+CLI:
+
+```bash
+raptor scan target/  --sandbox full --audit                    # default 10000
+raptor scan target/  --sandbox full --audit --audit-budget 100 # quick diag
+raptor scan target/  --sandbox full --audit --audit-verbose --audit-budget 50000  # long run
+```
+
+The defaults in `core.sandbox.audit_budget.DEFAULT_*` are tuned as
+starting heuristics for typical `/scan` and `/agentic` workloads.
+After first deployment, measure real workload distributions and
+re-tune if entire categories disappear into the dropped bucket
+(too tight) or the JSONL still bloats (too lax).
+
+### Backend selection
+
+`core/sandbox/context.py` dispatches at the spawn-eligibility check:
+
+```
+if sys.platform == "darwin":
+    use_seatbelt = use_sandbox and check_seatbelt_available()
+else:
+    use_mount = use_sandbox and ... and check_mount_available()
+```
+
+`spawn_eligible` triggers either backend; the post-run aggregation
+(proxy events, `_check_blocked` engagement booleans, sandbox-summary
+JSONL) is platform-independent.
+
+### Spike scripts
+
+Phase 0 design spikes are in `scripts/macos_sandbox_spike{1,2,3,4}.py`
+— each validates one assumption used by `seatbelt.py` /
+`seatbelt_audit.py`. Re-run them on a new macOS major version to
+confirm the SBPL idioms haven't drifted.

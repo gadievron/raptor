@@ -15,6 +15,14 @@ unavailable).
 
 from __future__ import annotations
 
+import sys as _sys
+import pytest as _pytest
+pytestmark = _pytest.mark.skipif(
+    _sys.platform != "linux",
+    reason="Linux-only sandbox internals (mount-ns / Landlock / seccomp / ptrace tracer / pid1 shim) — see core/sandbox/_macos_spawn.py for the macOS path",
+)
+
+
 import json
 import os
 import platform
@@ -294,8 +302,10 @@ class TestAuditModeBasicFlow:
         records = [json.loads(line) for line in
                    jsonl.read_text().splitlines() if line]
         # Don't assert exact count (Python startup does many opens)
-        # but DO assert at least one openat with audit=True.
-        openats = [r for r in records if r["syscall"] == "openat"]
+        # but DO assert at least one openat with audit=True. Skip
+        # control-plane records (audit_summary, *_budget_exceeded
+        # markers) which don't have a `syscall` field.
+        openats = [r for r in records if r.get("syscall") == "openat"]
         assert len(openats) > 0, (
             f"expected at least one openat audit record, got: {records!r}"
         )
@@ -367,8 +377,11 @@ for _ in range(3):
             jsonl.read_text().splitlines() if line
         ]
         # Records should bear MULTIPLE distinct target_pids — proves
-        # TRACEFORK/CLONE auto-attached the children.
-        traced_pids = {r["target_pid"] for r in records}
+        # TRACEFORK/CLONE auto-attached the children. Skip
+        # control-plane records (audit_summary, *_budget_exceeded
+        # markers) which don't have a target_pid.
+        traced_pids = {r["target_pid"] for r in records
+                        if "target_pid" in r}
         # Without TRACEFORK only one PID would ever appear. We expect
         # at least the parent + one child (in practice, parent + 3
         # since python forked 3 children), but the assertion just
@@ -413,19 +426,7 @@ class TestAuditModeTracerDeath:
         # via a pipe so we know what to watch for.
 
         pipe_r, pipe_w = os.pipe()
-        # Suppress Python 3.12+ multi-threaded-fork DeprecationWarning.
-        # The seizer child does only os.pipe / os.fork / ptrace
-        # syscalls / os._exit — no Python objects, no GIL acquisition.
-        # Same fork-safety contract as production. The inner sleeper
-        # fork (line below) runs INSIDE the seizer child (single-
-        # threaded) so doesn't need the wrapper.
-        import warnings as _warnings
-        with _warnings.catch_warnings():
-            _warnings.filterwarnings(
-                "ignore", category=DeprecationWarning,
-                message=r".*fork.*may lead to deadlocks.*",
-            )
-            seizer_pid = os.fork()
+        seizer_pid = os.fork()
         if seizer_pid == 0:
             # === seizer ===
             os.close(pipe_r)
@@ -579,7 +580,7 @@ class TestSandboxAuditProfile:
         ]
         # At least one openat record for /etc/hostname (could also
         # appear for python startup paths).
-        openats = [r for r in records if r["syscall"] == "openat"]
+        openats = [r for r in records if r.get("syscall") == "openat"]
         assert len(openats) > 0
         for r in openats:
             assert r["audit"] is True

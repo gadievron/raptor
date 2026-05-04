@@ -72,28 +72,47 @@ def _resolve_from_which(cmd: str, strip_suffix: str) -> Optional[str]:
 
 def detect_JAVA_HOME() -> Optional[str]:
     """Resolve JAVA_HOME from the host. See module docstring for order."""
+    import sys as _sys
     # 1. Debian/Ubuntu convention
     default_java = "/usr/lib/jvm/default-java"
     if os.path.isdir(default_java):
         return default_java
-    # 2. From `which java`
+    # 2. macOS's canonical helper. MUST run BEFORE the which-java
+    # heuristic on Darwin: `/usr/bin/java` is Apple's stub that
+    # exists even when no JDK is installed, so `which java` returns
+    # `/usr/bin/java` → strip /bin/java → JAVA_HOME = `/usr`. Setting
+    # `JAVA_HOME=/usr` makes the stub recursively re-exec itself
+    # (it finds `/usr/bin/javac` = the stub itself = infinite loop)
+    # and ANY subprocess that invokes javac under that env hangs
+    # indefinitely. Apple's java_home is the authoritative source on
+    # macOS — defer to it. Caught by macOS dogfooding of
+    # packages/codeql build synthesis.
+    if _sys.platform == "darwin":
+        macos_helper = "/usr/libexec/java_home"
+        if os.path.isfile(macos_helper) and os.access(macos_helper, os.X_OK):
+            try:
+                import subprocess
+                r = subprocess.run(
+                    [macos_helper], capture_output=True, text=True, timeout=5,
+                )
+                if r.returncode == 0 and r.stdout.strip():
+                    candidate = r.stdout.strip()
+                    if os.path.isdir(candidate):
+                        return candidate
+            except (OSError, subprocess.SubprocessError):
+                pass
+        # macOS without a JDK: don't fall through to the which-java
+        # heuristic — would hit the stub-loop trap above. Return None
+        # and let the caller's build tool surface the missing-
+        # toolchain error.
+        return None
+    # 3. From `which java` (Linux). Reject `/usr` itself as a
+    # defensive check: any host where the resolved java install
+    # root collapses to `/usr` is misconfigured (would hit the
+    # stub-loop on macOS, surely wrong on Linux too).
     home = _resolve_from_which("java", "bin/java")
-    if home and os.path.isdir(home):
+    if home and home != "/usr" and os.path.isdir(home):
         return home
-    # 3. macOS's canonical helper (no-op on Linux)
-    macos_helper = "/usr/libexec/java_home"
-    if os.path.isfile(macos_helper) and os.access(macos_helper, os.X_OK):
-        try:
-            import subprocess
-            r = subprocess.run(
-                [macos_helper], capture_output=True, text=True, timeout=5,
-            )
-            if r.returncode == 0 and r.stdout.strip():
-                candidate = r.stdout.strip()
-                if os.path.isdir(candidate):
-                    return candidate
-        except (OSError, subprocess.SubprocessError):
-            pass
     return None
 
 

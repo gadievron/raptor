@@ -37,6 +37,7 @@ def _sandbox_state_guard():
         # CLI overrides
         "_cli_sandbox_disabled", "_cli_sandbox_profile",
         "_cli_sandbox_audit", "_cli_sandbox_audit_verbose",
+        "_cli_sandbox_audit_budget",
         # Once-per-process warnings
         "_landlock_warned_unavailable", "_landlock_warned_abi_v4",
         "_landlock_warned_abi_v3", "_landlock_warned_abi_v2",
@@ -61,6 +62,12 @@ def _sandbox_state_guard():
         "_mount_ns_available_cache",
         "_libseccomp_cache", "_user_limits_cache",
         "_ptrace_available_cache",
+        # macOS sandbox-exec smoke-test result. Tests that mock
+        # check_seatbelt_available() without snapshotting would
+        # leak the mocked value into sibling tests on Linux hosts
+        # (where the cache otherwise stays at None and the function
+        # short-circuits to False on platform check).
+        "_seatbelt_available_cache",
         "_unshare_path_cache", "_prlimit_path_cache",
         "_mount_path_cache", "_mkdir_path_cache",
     ]

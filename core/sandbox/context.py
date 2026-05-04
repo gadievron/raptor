@@ -11,6 +11,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 from contextlib import contextmanager
 from typing import List, Optional
 
@@ -41,6 +42,8 @@ def check_mount_available():
     return _probes.check_mount_available()
 def check_seccomp_available():
     return _seccomp.check_seccomp_available()
+def check_seatbelt_available():
+    return _probes.check_seatbelt_available()
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +81,19 @@ def _audit_degrade_reason(b_fallback_reason, b_fallback_instr,
     """
     if b_fallback_reason:
         return (b_fallback_reason, b_fallback_instr)
-    if not check_mount_available():
+    if sys.platform == "darwin":
+        # macOS path. The only spawn-disabling host condition on
+        # darwin (after the pass_fds / input checks below) is
+        # sandbox-exec being missing or smoke-test-failing.
+        if not check_seatbelt_available():
+            return (
+                "macOS sandbox-exec is unavailable (smoke test "
+                "failed or /usr/bin/sandbox-exec missing)",
+                "verify `sandbox-exec -p '(version 1)(allow default)' "
+                "/usr/bin/true` succeeds on this host; reinstall "
+                "Command Line Tools if missing.",
+            )
+    elif not check_mount_available():
         return (
             "mount-ns blocked by host "
             "(apparmor_restrict_unprivileged_userns=1)",
@@ -549,10 +564,25 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
     # Explicitly disabled: no seccomp either (rlimits-only contract).
     if effectively_disabled:
         seccomp_profile = None
-    use_sandbox = not effectively_disabled and check_net_available()
-    # Truthy check to match the rest of the module — empty string / empty
-    # list are treated consistently as "not provided".
-    use_mount = use_sandbox and bool(target or output) and check_mount_available()
+    # Backend selection. Linux uses mount-ns + Landlock + seccomp gated
+    # on `check_net_available()` (the user-namespace foundation); macOS
+    # uses sandbox-exec / SBPL gated on `check_seatbelt_available()`.
+    # `use_sandbox` is the platform-aware "is some host-level isolation
+    # backend live for this call" flag — without the per-platform gate
+    # here, macOS would always see use_sandbox=False (no unshare
+    # binary) and silently never engage seatbelt. Both `use_mount` and
+    # `use_seatbelt` are derived from `use_sandbox` so the rest of the
+    # module reads them uniformly. Truthy check on target/output
+    # matches the rest of the module — empty string / empty list are
+    # treated consistently as "not provided".
+    if sys.platform == "darwin":
+        use_sandbox = not effectively_disabled and check_seatbelt_available()
+        use_mount = False
+        use_seatbelt = use_sandbox
+    else:
+        use_sandbox = not effectively_disabled and check_net_available()
+        use_mount = use_sandbox and bool(target or output) and check_mount_available()
+        use_seatbelt = False
 
     if effectively_disabled and not state._cli_sandbox_disabled:
         logger.info("Sandbox disabled for this call")
@@ -603,7 +633,14 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                 f"to. For a network allowlist, pass block_network=False."
             )
 
-    if not effectively_disabled and not use_mount and (target or output or allowed_tcp_ports):
+    # Skip the entire Landlock-availability warning block on macOS:
+    # seatbelt provides the equivalent enforcement (writable_paths,
+    # readable_paths, allowed_tcp_ports all flow into the SBPL profile).
+    # Without this gate, every macOS sandbox call would fire the
+    # "Landlock unavailable" warning even when seatbelt is fully
+    # engaged — confusing and Linux-flavoured.
+    if (not effectively_disabled and not use_mount and not use_seatbelt
+            and (target or output or allowed_tcp_ports)):
         if not check_landlock_available():
             if state.warn_once("_landlock_warned_unavailable"):
                 logger.warning(
@@ -921,7 +958,17 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         # ns + IPC ns + user ns, without network ns unless block_network
         # is also set (the egress proxy needs the shared net ns to be
         # reachable on loopback).
-        need_unshare = use_sandbox and (block_network or use_mount or restrict_reads)
+        # `need_unshare` gates the Linux user-namespace bootstrap
+        # (`unshare` + `prlimit` + pid1 shim). On macOS, isolation
+        # comes from sandbox-exec / SBPL — there is no `unshare`
+        # binary to resolve, and the seatbelt path runs through
+        # _macos_spawn instead. Without the use_seatbelt veto, an
+        # ineligible-for-spawn macOS call (or even a fully eligible
+        # one, since the unshare_cmd is built unconditionally below)
+        # tries to resolve `unshare` and crashes the sandbox call.
+        need_unshare = (use_sandbox
+                        and not use_seatbelt
+                        and (block_network or use_mount or restrict_reads))
 
         # Log active sandbox layers for this command. Cache the Landlock
         # probe locally so we don't reacquire the cache lock 2-3× per run().
@@ -1072,7 +1119,14 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         #     thread to avoid pipe-fill deadlock on large inputs)
         # (`stdin=<fd>` IS plumbed through _spawn.run_sandboxed, so we
         # only exclude `input=` here, not plain stdin=.)
-        spawn_eligible = (use_mount
+        # Either backend (Linux mount-ns or macOS seatbelt) routes through
+        # the spawn path; the same kwarg-compat gate applies to both
+        # (pass_fds / input= aren't plumbed through either backend's
+        # custom spawn implementation — Linux _spawn does its own
+        # os.fork() chain, macOS _macos_spawn wraps subprocess.run with
+        # sandbox-exec but still uses our preexec for rlimits, where
+        # input= would race against the writer-thread we don't have).
+        spawn_eligible = ((use_mount or use_seatbelt)
                           and not kwargs.get("pass_fds")
                           and kwargs.get("input") is None)
         # Track the audit-degraded reason so the audit-mode degraded
@@ -1092,7 +1146,10 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         # the new rootfs — the subprocess fails with ENOENT (exit
         # 127) and an empty stderr that operators may misread as
         # "tool found nothing" rather than "tool didn't run".
-        if spawn_eligible and cmd:
+        # macOS sandbox-exec doesn't change the filesystem view, so
+        # this check + the speculative-C cache it feeds are skipped
+        # on Darwin (use_mount is always False there).
+        if spawn_eligible and use_mount and cmd:
             _all_extra = list(effective_read_paths or []) + list(tool_paths or [])
             _resolved = shutil.which(cmd[0]) or cmd[0]
             # B fallback: cmd[0] not in mount-ns bind tree → skip
@@ -1200,7 +1257,51 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         # per-sandbox dict would grow unboundedly across a long
         # session with flaky sandboxes.
         try:
-            if spawn_eligible:
+            if spawn_eligible and use_seatbelt:
+                # macOS sandbox-exec path. No fork/pivot_root chain; no
+                # mount-ns fallback ladder. sandbox-exec wraps a single
+                # execvp with the SBPL profile applied via Sandbox.kext.
+                # No bind-tree visibility check, no speculative-C cache —
+                # the filesystem view is unchanged, so the typical
+                # mount-ns failure modes don't exist.
+                from . import _macos_spawn as _macos_mod
+                _audit_run_dir = (
+                    (audit_run_dir or output)
+                    if nonlocal_audit_mode else None
+                )
+                result = _macos_mod.run_sandboxed(
+                    cmd,
+                    target=target, output=output,
+                    block_network=block_network,
+                    nproc_limit=nproc_limit,
+                    limits=effective_limits,
+                    writable_paths=writable_paths or [],
+                    readable_paths=effective_read_paths or [],
+                    allowed_tcp_ports=list(allowed_tcp_ports)
+                        if allowed_tcp_ports else None,
+                    # Linux-only kwargs accepted for signature parity
+                    # with _spawn.run_sandboxed; ignored by SBPL backend.
+                    seccomp_profile=seccomp_profile,
+                    seccomp_block_udp=seccomp_block_udp,
+                    env=kwargs.get("env"),
+                    cwd=kwargs.get("cwd"),
+                    timeout=kwargs.get("timeout"),
+                    capture_output=kwargs.get("capture_output", False),
+                    text=kwargs.get("text", False),
+                    stdin=kwargs.get("stdin"),
+                    audit_mode=nonlocal_audit_mode,
+                    audit_run_dir=_audit_run_dir,
+                    audit_verbose=audit_verbose_active and nonlocal_audit_mode,
+                    restrict_reads=restrict_reads,
+                    use_egress_proxy=use_egress_proxy,
+                    proxy_port=(proxy_instance.port
+                                if proxy_instance is not None else None),
+                    fake_home=fake_home,
+                    map_root=map_root,
+                    start_new_session=kwargs.get("start_new_session", True),
+                )
+                used_spawn = True
+            elif spawn_eligible:
                 try:
                     from . import _spawn as _spawn_mod
                     if _spawn_mod.mount_ns_available():
@@ -1534,11 +1635,34 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             stderr_text = raw_stderr.decode("utf-8", errors="replace")
         else:
             stderr_text = ""
-        network_engaged = bool(need_unshare and block_network)
-        landlock_engaged = bool(
-            (writable_paths or allowed_tcp_ports) and landlock_available
+        # Engagement booleans tell _check_blocked which stderr patterns
+        # are admissible evidence of a sandbox firing. macOS via SBPL
+        # uses the SAME stderr patterns ("Permission denied",
+        # "PermissionError", connection refused, ...) — the kernel
+        # turns SBPL denies into the standard EACCES/EPERM errno that
+        # tools surface as the same messages — so we just OR in the
+        # seatbelt-equivalent for each layer:
+        #   network: SBPL (deny network*) is emitted when block_network
+        #     OR use_egress_proxy → network_engaged on the macOS side.
+        #   landlock: the seatbelt profile ALWAYS emits a write-deny
+        #     clause (the default exception list is /private/tmp +
+        #     output + writable_paths), so use_seatbelt itself is
+        #     sufficient signal that fs writes are gated.
+        #   seccomp: macOS has no real equivalent; we treat the
+        #     SBPL hardening clauses (Tier 1.4, deny process-info etc.)
+        #     as a coarse stand-in when seccomp_profile is requested.
+        network_engaged = bool(
+            (need_unshare and block_network)
+            or (use_seatbelt and (block_network or use_egress_proxy))
         )
-        seccomp_engaged = bool(seccomp_profile and check_seccomp_available())
+        landlock_engaged = bool(
+            ((writable_paths or allowed_tcp_ports) and landlock_available)
+            or use_seatbelt
+        )
+        seccomp_engaged = bool(
+            (seccomp_profile and check_seccomp_available())
+            or (use_seatbelt and seccomp_profile and seccomp_profile != "none")
+        )
         if stderr_text and (network_engaged or landlock_engaged or seccomp_engaged):
             _check_blocked(stderr_text, cmd_display, result.returncode,
                           result.sandbox_info,

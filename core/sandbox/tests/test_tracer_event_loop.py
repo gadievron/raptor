@@ -19,6 +19,14 @@ Status encoding cheatsheet (see man waitpid):
 
 from __future__ import annotations
 
+import sys as _sys
+import pytest as _pytest
+pytestmark = _pytest.mark.skipif(
+    _sys.platform != "linux",
+    reason="Linux-only sandbox internals (mount-ns / Landlock / seccomp / ptrace tracer / pid1 shim) — see core/sandbox/_macos_spawn.py for the macOS path",
+)
+
+
 import platform
 import signal
 import struct
@@ -117,12 +125,21 @@ def fake_helpers():
 
 
 def _dispatch(wpid, status, traced, target_pid, arch_info, helpers,
-              record_count=0, cap_warned=False, run_dir=Path("/tmp")):
+              budget=None, run_dir=Path("/tmp")):
     """Convenience wrapper to call _handle_waitpid_event with the
-    fake helpers from the fixture."""
-    return tracer._handle_waitpid_event(
+    fake helpers from the fixture.
+
+    Returns the budget so tests can assert on its state
+    (total_records, dropped_by_category, etc.). Constructs a fresh
+    budget per dispatch unless one is passed in for state-carrying
+    multi-event sequences.
+    """
+    from core.sandbox import audit_budget
+    if budget is None:
+        budget = audit_budget.AuditBudget()
+    tracer._handle_waitpid_event(
         wpid, status, traced, target_pid, arch_info,
-        run_dir, record_count, cap_warned,
+        run_dir, budget,
         ptrace_cont=helpers["ptrace_cont"],
         read_regs=helpers["read_regs"],
         decode_syscall=helpers["decode_syscall"],
@@ -130,6 +147,7 @@ def _dispatch(wpid, status, traced, target_pid, arch_info, helpers,
         get_event_msg=helpers["get_event_msg"],
         write_record=helpers["write_record"],
     )
+    return budget
 
 
 class TestExitedTracees:
@@ -138,7 +156,7 @@ class TestExitedTracees:
 
     def test_exited_tracee_removed_from_traced(self, arch_info, fake_helpers):
         traced = {1000, 1001, 1002}
-        rc, _ = _dispatch(
+        _dispatch(
             1001, _exit_status(0), traced, 1000, arch_info, fake_helpers,
         )
         assert traced == {1000, 1002}
@@ -172,12 +190,12 @@ class TestSeccompTraceEvent:
 
     def test_seccomp_event_writes_record(self, arch_info, fake_helpers):
         traced = {1000}
-        rc, cap = _dispatch(
+        budget = _dispatch(
             1000, _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP),
             traced, 1000, arch_info, fake_helpers,
         )
-        assert rc == 1, "record_count should increment"
-        assert cap is False
+        assert budget.total_records == 1, "budget should record one event"
+        assert not budget.dropped_by_category
         # write_record was called with openat
         records = fake_helpers["calls"]["write_record"]
         assert len(records) == 1
@@ -204,21 +222,28 @@ class TestSeccompTraceEvent:
         assert deref_calls[0] == (1000, 0xcafef00d)
 
     def test_record_cap_emits_one_warning(
-            self, arch_info, fake_helpers, monkeypatch, capfd):
-        # Lower the cap so the test runs fast.
-        monkeypatch.setattr(tracer, "_MAX_RECORDS_PER_RUN", 2)
+            self, arch_info, fake_helpers, tmp_path):
+        """Budget cap drops further records but still resumes the
+        tracee on every event. Uses a small AuditBudget for speed."""
+        from core.sandbox import audit_budget
+        # openat → file-read-metadata category. Cap that category at
+        # 2 with no refill so the third dispatch drops.
+        budget = audit_budget.AuditBudget(
+            category_caps={"file-read-metadata": 2},
+            refill_rates={"file-read-metadata": 0.0},
+            sampling_rates={},
+        )
         traced = {1000}
-        rc, cap = 0, False
         for _ in range(5):
-            rc, cap = _dispatch(
+            _dispatch(
                 1000, _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP),
                 traced, 1000, arch_info, fake_helpers,
-                record_count=rc, cap_warned=cap,
+                budget=budget, run_dir=tmp_path,
             )
         # 2 records persisted (cap), but ptrace_cont fired all 5 times.
         assert len(fake_helpers["calls"]["write_record"]) == 2
         assert len(fake_helpers["calls"]["ptrace_cont"]) == 5
-        assert cap is True
+        assert budget.dropped_by_category["file-read-metadata"] == 3
 
     def test_read_regs_failure_skips_record_but_resumes(
             self, arch_info):
@@ -230,17 +255,19 @@ class TestSeccompTraceEvent:
         def cont(pid, sig=0):
             calls.append((pid, sig))
             return True
+        from core.sandbox import audit_budget
+        budget = audit_budget.AuditBudget()
         traced = {1000}
-        rc, cap = tracer._handle_waitpid_event(
+        tracer._handle_waitpid_event(
             1000, _ptrace_event_status(tracer._PTRACE_EVENT_SECCOMP),
-            traced, 1000, arch_info, Path("/tmp"), 0, False,
+            traced, 1000, arch_info, Path("/tmp"), budget,
             read_regs=fail_read_regs, ptrace_cont=cont,
             decode_syscall=lambda *a: (0, [0]*6),
             read_tracee_string=lambda *a, **k: None,
             get_event_msg=lambda p: None,
             write_record=lambda *a, **k: True,
         )
-        assert rc == 0  # no record written
+        assert budget.total_records == 0  # no record written
         assert calls == [(1000, 0)]  # but tracee resumed
 
 
@@ -273,10 +300,12 @@ class TestNewTraceeEvents:
             calls.append((pid, sig))
             return True
 
+        from core.sandbox import audit_budget
+        budget = audit_budget.AuditBudget()
         traced = {1000}
         tracer._handle_waitpid_event(
             1000, _ptrace_event_status(tracer._PTRACE_EVENT_FORK),
-            traced, 1000, arch_info, Path("/tmp"), 0, False,
+            traced, 1000, arch_info, Path("/tmp"), budget,
             ptrace_cont=cont,
             read_regs=lambda *a: None,
             decode_syscall=lambda *a: (0, [0]*6),
@@ -377,10 +406,10 @@ class TestNonStoppedStatus:
         # by feeding a status that's not stopped/exited/signalled.
         traced = {1000}
         # 0xffff = WIFCONTINUED on Linux
-        rc, cap = _dispatch(
+        budget = _dispatch(
             1000, 0xffff, traced, 1000, arch_info, fake_helpers,
         )
         # No record, no resume, no set mutation
         assert traced == {1000}
-        assert rc == 0
+        assert budget.total_records == 0
         assert fake_helpers["calls"]["ptrace_cont"] == []

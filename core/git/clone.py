@@ -102,21 +102,37 @@ def _validate_writable_path(p: Path, *, role: str) -> None:
             f"paths are unsafe here — the sandbox writable scope "
             f"({role}.parent) would be cwd-dependent."
         )
-    # ``.resolve()`` follows symlinks so a pre-staged
-    # ``/tmp/work -> /`` symlink can't sneak past the root checks.
+    # Two checks against root, both required:
+    #
+    # 1. The RESOLVED form catches `/tmp/work -> /` symlink attacks
+    #    (caller passes /tmp/work, .resolve() reveals the parent IS
+    #    actually root after symlink follow-through).
+    #
+    # 2. The UNRESOLVED form catches macOS's pervasive
+    #    /etc → /private/etc, /var → /private/var, /tmp → /private/tmp
+    #    symlinks. With ONLY the resolved check, `/etc` on macOS
+    #    resolves to `/private/etc` whose parent is `/private` —
+    #    NOT root — so the validation passes and the sandbox becomes
+    #    writable in `/private`, which is host-wide system state on
+    #    macOS. The unresolved check sees `/etc`.parent == `/` and
+    #    refuses, matching the Linux-side semantic intent.
+    #
+    # Either form being root → reject. Caught by core/sandbox/tests/
+    # — first surfaced when the sandbox suite ran on macOS.
     resolved = p.resolve()
-    if resolved.parent == resolved:
-        raise ValueError(
-            f"{role}={str(p)!r} resolves to filesystem root; refusing "
-            f"to grant the sandbox write access to the entire "
-            f"filesystem"
-        )
-    if resolved.parent == Path(resolved.anchor):
-        raise ValueError(
-            f"{role}={str(p)!r} has filesystem root as its parent. "
-            f"Sandbox writable scope ({role}.parent) would be the "
-            f"entire root filesystem."
-        )
+    for label, candidate in (("resolved", resolved), ("literal", p)):
+        if candidate.parent == candidate:
+            raise ValueError(
+                f"{role}={str(p)!r} {label}-form is the filesystem "
+                f"root; refusing to grant the sandbox write access "
+                f"to the entire filesystem"
+            )
+        if candidate.parent == Path(candidate.anchor):
+            raise ValueError(
+                f"{role}={str(p)!r} {label}-form has filesystem root "
+                f"as its parent. Sandbox writable scope "
+                f"({role}.parent) would be the entire root filesystem."
+            )
 
 
 def clone_repository(

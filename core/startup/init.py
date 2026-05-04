@@ -304,53 +304,70 @@ def check_env(unavailable_features: set) -> tuple[list, list]:
     if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
         warnings.append("/oss-forensics unavailable — BigQuery not configured")
 
-    # Subprocess sandboxing. Namespaces and Landlock are independent — a
-    # system without user namespaces (e.g. restricted containers) can
-    # still have Landlock, which protects the filesystem side. Report
-    # whatever is actually available rather than an all-or-nothing flag.
+    # Subprocess sandboxing. Layers reported per-platform:
+    #   Linux: net + mount + landlock + seccomp (any combination — see
+    #     core/sandbox/__init__.py module docstring)
+    #   macOS: seatbelt (single integrated layer via sandbox-exec / SBPL)
+    # Probing is a one-shot subprocess (cached); we report whatever is
+    # actually available rather than an all-or-nothing flag.
     try:
-        from core.sandbox import (
-            check_net_available, check_mount_available, check_landlock_available,
-            check_seccomp_available,
-        )
-        net_ok = check_net_available()
-        mount_ok = check_mount_available() if net_ok else False
-        landlock_ok = check_landlock_available()
-        seccomp_ok = check_seccomp_available()
-        features = []
-        if net_ok:
-            features.append("net")
-        if mount_ok:
-            features.append("mount")
-        if landlock_ok:
-            features.append("landlock")
-        if seccomp_ok:
-            features.append("seccomp")
-        if features:
-            parts.append(f"sandbox ✓ ({'+'.join(features)})")
-            # Partial-sandbox warnings — name what's missing so users can
-            # decide whether the gap matters for their use case. (The
-            # banner's feature list already shows what IS active.)
-            if not net_ok:
+        if sys.platform == "darwin":
+            from core.sandbox import check_seatbelt_available
+            seatbelt_ok = check_seatbelt_available()
+            if seatbelt_ok:
+                parts.append("sandbox ✓ (seatbelt)")
+            else:
+                parts.append("sandbox ✗")
                 warnings.append(
-                    "Sandbox network isolation missing — user namespaces "
-                    "not supported on this kernel. Subprocesses can still "
-                    "reach the network unless the caller passes "
-                    "allowed_tcp_ports to sandbox()."
-                )
-            elif not landlock_ok:
-                warnings.append(
-                    "Sandbox Landlock filesystem restriction missing — "
-                    "kernel does not support Landlock (needs 5.13+). "
-                    "Network isolation still active; writes outside the "
-                    "output dir are NOT restricted."
+                    "Subprocess sandboxing unavailable — sandbox-exec "
+                    "smoke test failed. Verify Command Line Tools are "
+                    "installed and "
+                    "`sandbox-exec -p '(version 1)(allow default)' "
+                    "/usr/bin/true` succeeds on this host."
                 )
         else:
-            parts.append("sandbox ✗")
-            warnings.append(
-                "Subprocess sandboxing unavailable — neither user "
-                "namespaces nor Landlock are supported on this kernel"
+            from core.sandbox import (
+                check_net_available, check_mount_available,
+                check_landlock_available, check_seccomp_available,
             )
+            net_ok = check_net_available()
+            mount_ok = check_mount_available() if net_ok else False
+            landlock_ok = check_landlock_available()
+            seccomp_ok = check_seccomp_available()
+            features = []
+            if net_ok:
+                features.append("net")
+            if mount_ok:
+                features.append("mount")
+            if landlock_ok:
+                features.append("landlock")
+            if seccomp_ok:
+                features.append("seccomp")
+            if features:
+                parts.append(f"sandbox ✓ ({'+'.join(features)})")
+                # Partial-sandbox warnings — name what's missing so users
+                # can decide whether the gap matters for their use case.
+                # (The banner's feature list already shows what IS active.)
+                if not net_ok:
+                    warnings.append(
+                        "Sandbox network isolation missing — user "
+                        "namespaces not supported on this kernel. "
+                        "Subprocesses can still reach the network unless "
+                        "the caller passes allowed_tcp_ports to sandbox()."
+                    )
+                elif not landlock_ok:
+                    warnings.append(
+                        "Sandbox Landlock filesystem restriction missing "
+                        "— kernel does not support Landlock (needs "
+                        "5.13+). Network isolation still active; writes "
+                        "outside the output dir are NOT restricted."
+                    )
+            else:
+                parts.append("sandbox ✗")
+                warnings.append(
+                    "Subprocess sandboxing unavailable — neither user "
+                    "namespaces nor Landlock are supported on this kernel"
+                )
     except Exception:
         # Never let a sandbox-probe bug kill startup, but leave a trail
         # at DEBUG so the bug is findable instead of invisible.

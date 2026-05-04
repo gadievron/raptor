@@ -116,6 +116,62 @@ class TestApplyCliArgsValidation:
         assert state._cli_sandbox_audit_verbose is True
 
 
+class TestAuditBudgetFlag:
+    """`--audit-budget=N` overrides the default global cap and
+    propagates into core.sandbox.audit_budget.from_cli_state()."""
+
+    def test_audit_budget_flag_recognised(self, parser):
+        args = parser.parse_args(
+            ["--sandbox", "full", "--audit", "--audit-budget", "250"])
+        assert args.audit_budget == 250
+
+    def test_audit_budget_default_is_none(self, parser):
+        args = parser.parse_args(["--sandbox", "full", "--audit"])
+        assert args.audit_budget is None
+
+    def test_audit_budget_propagates_to_state(self, parser):
+        args = parser.parse_args(
+            ["--sandbox", "full", "--audit", "--audit-budget", "500"])
+        cli_mod.apply_cli_args(args)
+        assert state._cli_sandbox_audit_budget == 500
+
+    def test_audit_budget_picked_up_by_from_cli_state(self, parser):
+        args = parser.parse_args(
+            ["--sandbox", "full", "--audit", "--audit-budget", "777"])
+        cli_mod.apply_cli_args(args)
+        from core.sandbox import audit_budget
+        b = audit_budget.from_cli_state()
+        assert b.global_cap == 777
+
+    def test_audit_budget_without_audit_rejected(self, parser):
+        args = parser.parse_args(["--audit-budget", "500"])
+        with pytest.raises(ValueError, match="--audit-budget requires --audit"):
+            cli_mod.apply_cli_args(args)
+
+    def test_audit_budget_zero_rejected(self, parser):
+        args = parser.parse_args(
+            ["--sandbox", "full", "--audit", "--audit-budget", "0"])
+        with pytest.raises(ValueError,
+                            match="--audit-budget must be a positive integer"):
+            cli_mod.apply_cli_args(args)
+
+    def test_audit_budget_negative_rejected(self, parser):
+        args = parser.parse_args(
+            ["--sandbox", "full", "--audit", "--audit-budget", "-1"])
+        with pytest.raises(ValueError,
+                            match="--audit-budget must be a positive integer"):
+            cli_mod.apply_cli_args(args)
+
+    def test_audit_budget_above_upper_clamp_rejected(self, parser):
+        """Operator typo (one extra zero) shouldn't be able to
+        produce a 2GB JSONL. Upper-clamp at 10M records."""
+        args = parser.parse_args(
+            ["--sandbox", "full", "--audit",
+             "--audit-budget", "100000000"])
+        with pytest.raises(ValueError, match="exceeds the upper clamp"):
+            cli_mod.apply_cli_args(args)
+
+
 class TestRunUntrustedForwardsAuditKwargs:
     """run_untrusted is a thin convenience wrapper around run() — it
     forwards **kwargs. Audit kwargs should propagate. Covers the

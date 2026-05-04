@@ -473,7 +473,7 @@ def _start_lifecycle(command: str, target: Path) -> Optional[Path]:
     for line in reversed(proc.stdout.splitlines()):
         line = line.strip()
         if line.startswith("OUTPUT_DIR="):
-            return Path(line[len("OUTPUT_DIR="):])
+            return Path(line[len("OUTPUT_DIR="):]).resolve()
     logger.warning("lifecycle start %s did not emit OUTPUT_DIR=", command)
     return None
 

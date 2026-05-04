@@ -120,6 +120,17 @@ def add_cli_args(parser) -> None:
              "--audit. Distinct from any entry-point's own --verbose "
              "flag (which controls log level, not audit output).",
     )
+    parser.add_argument(
+        "--audit-budget", type=int, dest="audit_budget", default=None,
+        metavar="N",
+        help="With --audit: override the global audit-record cap "
+             "(default 10000). Per-category and per-PID sub-caps "
+             "scale proportionally — set higher for long-running "
+             "workloads under --audit-verbose, lower for quick "
+             "diagnostic runs where you only want the first few "
+             "events. The budget protects the JSONL from a chatty "
+             "target generating gigabytes of records.",
+    )
 
 
 def apply_cli_args(args, parser=None) -> None:
@@ -149,6 +160,7 @@ def apply_cli_args(args, parser=None) -> None:
     """
     audit = bool(getattr(args, "audit", False))
     verbose = bool(getattr(args, "audit_verbose", False))
+    budget = getattr(args, "audit_budget", None)
     no_sandbox = bool(getattr(args, "no_sandbox", False))
     profile = getattr(args, "sandbox", None)
 
@@ -163,6 +175,35 @@ def apply_cli_args(args, parser=None) -> None:
             "--audit-verbose requires --audit (audit-verbose only "
             "controls audit-mode tracer output)"
         )
+    if budget is not None:
+        if not audit:
+            _fail(
+                "--audit-budget requires --audit (the budget only "
+                "applies to audit-mode JSONL output)"
+            )
+        if budget <= 0:
+            _fail(
+                f"--audit-budget must be a positive integer; got "
+                f"{budget!r}. Use a small value (e.g. 100) for "
+                f"quick diagnostic runs, the default 10000 for "
+                f"normal use, or a larger value for long-running "
+                f"--audit-verbose sessions."
+            )
+        # Upper clamp: 10M records at the average ~200 bytes/record
+        # bound (cmd + path + serialised args) is ~2GB of JSONL.
+        # Anything past that almost certainly indicates an
+        # operator typo (one extra zero) rather than a real
+        # intent — fail loud rather than letting a runaway audit
+        # eat /tmp.
+        _AUDIT_BUDGET_MAX = 10_000_000
+        if budget > _AUDIT_BUDGET_MAX:
+            _fail(
+                f"--audit-budget={budget} exceeds the upper clamp "
+                f"({_AUDIT_BUDGET_MAX}). At ~200 bytes per record "
+                f"that's ~2GB of JSONL — almost certainly a typo. "
+                f"Lower the value or split into multiple shorter "
+                f"runs."
+            )
     if audit and (no_sandbox or profile == "none"):
         _fail(
             "--audit is incoherent with --sandbox none / --no-sandbox: "
@@ -183,3 +224,5 @@ def apply_cli_args(args, parser=None) -> None:
         )
     if verbose:
         state._cli_sandbox_audit_verbose = True
+    if budget is not None:
+        state._cli_sandbox_audit_budget = int(budget)

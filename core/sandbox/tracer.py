@@ -103,6 +103,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from . import audit_budget
+
 logger = logging.getLogger(__name__)
 
 # ----- ptrace request constants (see <sys/ptrace.h>) -----
@@ -143,12 +145,11 @@ _NEW_TRACEE_EVENTS = frozenset((
     _PTRACE_EVENT_FORK, _PTRACE_EVENT_VFORK, _PTRACE_EVENT_CLONE,
 ))
 
-# Per-record cap on JSONL writes from the tracer. Mirrors
-# MAX_DENIALS_PER_RUN in summary.py — protects against a chatty target
-# that would otherwise generate gigabytes of audit records. Once the
-# cap is hit, further events are silently dropped (with a one-time
-# warning to the tracer's stderr).
-_MAX_RECORDS_PER_RUN = 10000
+# Per-record cap moved to core.sandbox.audit_budget.AuditBudget so
+# the macOS seatbelt LogStreamer and Linux ptrace tracer share one
+# budget mechanism. See audit_budget.DEFAULT_GLOBAL_CAP for the
+# default ceiling and AuditBudget for the token-bucket / per-cat /
+# per-PID / sampling refinements.
 
 # JSONL file lives in the run dir. Same name as record_denial uses so
 # both writers append to the same aggregation target.
@@ -977,6 +978,31 @@ def _write_record(run_dir: Path, syscall_name: str, syscall_nr: int,
         return False
 
 
+def _write_record_dict(run_dir: Path, record: dict) -> bool:
+    """Append a pre-built record dict to the run's JSONL file.
+
+    Used for AuditBudget markers and the end-of-run summary —
+    structures that don't fit the syscall-shaped _write_record
+    signature. Same O_NOFOLLOW + O_APPEND atomicity as
+    _write_record and core.sandbox.summary.record_denial.
+    """
+    try:
+        line = json.dumps(record, ensure_ascii=True, default=str) + "\n"
+        jsonl_path = run_dir / _DENIALS_FILENAME
+        jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(
+            str(jsonl_path),
+            os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
+            0o600,
+        )
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
+            f.write(line)
+        return True
+    except OSError as e:
+        logger.debug(f"tracer: write_record_dict failed: {e}")
+        return False
+
+
 # ----- Event loop -----
 
 def _signal_ready(sync_fd: Optional[int]) -> None:
@@ -1062,8 +1088,21 @@ def trace(target_pid: int, run_dir: Path,
     _signal_ready(sync_fd)
 
     syscall_table = arch_info["syscall_table"]
-    record_count = 0
-    cap_warned = False
+    # Audit budget — shared with macOS seatbelt LogStreamer via
+    # core.sandbox.audit_budget. Token-bucket + per-category +
+    # per-PID sub-caps + 1-in-N post-cap sampling; markers and
+    # final summary appear in the JSONL alongside data records
+    # (see audit_budget.AuditBudget docstring). The budget is read
+    # from `audit_filter["audit_budget"]` (passed in via the
+    # filter-config JSON _spawn.py wrote at parent-side spawn time)
+    # because the tracer subprocess has its own fresh state module
+    # and can't inherit the parent's --audit-budget override
+    # through state._cli_sandbox_audit_budget directly.
+    from . import audit_budget as _audit_budget_mod
+    _budget_override = (
+        audit_filter.get("audit_budget") if audit_filter else None
+    )
+    budget = _audit_budget_mod.AuditBudget(global_cap=_budget_override)
 
     # Set of currently-traced PIDs. Starts with the original target;
     # grows when fork/vfork/clone events fire (kernel auto-attaches
@@ -1098,12 +1137,21 @@ def trace(target_pid: int, run_dir: Path,
             logger.error(f"tracer: waitpid failed: {e}")
             return 4
 
-        record_count, cap_warned = _handle_waitpid_event(
+        _handle_waitpid_event(
             wpid, status, traced, target_pid, arch_info,
-            run_dir, record_count, cap_warned,
+            run_dir, budget,
             audit_filter=audit_filter,
         )
 
+    # End-of-run summary record so the sandbox-summary aggregator
+    # has total/dropped counts even when the run didn't hit any cap.
+    try:
+        _write_record_dict(run_dir, budget.summary_record())
+    except OSError:
+        # Best-effort. Don't crash the tracer on a transient FS
+        # error during summary append.
+        logger.debug("tracer: summary record append failed",
+                     exc_info=True)
     return 0
 
 
@@ -1111,7 +1159,7 @@ def _handle_waitpid_event(
     wpid: int, status: int,
     traced: set, target_pid: int,
     arch_info: dict, run_dir: Path,
-    record_count: int, cap_warned: bool,
+    budget: "audit_budget.AuditBudget",
     *,
     audit_filter: Optional[dict] = None,
     # Injection points so tests can substitute synthetic helpers
@@ -1125,8 +1173,8 @@ def _handle_waitpid_event(
     write_record=None,
     resolve_path=None,
     decode_sockaddr=None,
-) -> tuple:
-    """Handle one waitpid event. Returns (new_record_count, new_cap_warned).
+) -> None:
+    """Handle one waitpid event.
 
     Mutates `traced` in place: removes exited PIDs, adds new tracees
     on FORK/VFORK/CLONE events. The wait loop calls this once per
@@ -1165,10 +1213,10 @@ def _handle_waitpid_event(
         # This tracee exited; remove from set. Loop ends when
         # `traced` is empty (all tracees gone).
         traced.discard(wpid)
-        return record_count, cap_warned
+        return
 
     if not os.WIFSTOPPED(status):
-        return record_count, cap_warned
+        return
 
     sig = os.WSTOPSIG(status)
     # Ptrace event codes are encoded in the upper 16 bits of status
@@ -1177,123 +1225,142 @@ def _handle_waitpid_event(
 
     if event == _PTRACE_EVENT_SECCOMP:
         # SECCOMP_RET_TRACE event: read syscall, decide whether to log.
-        if record_count < _MAX_RECORDS_PER_RUN:
-            regs = read_regs(wpid, arch_info)
-            if regs is not None:
-                nr, args = decode_syscall(regs, arch_info)
-                name = syscall_table.get(nr, f"unknown_{nr}")
+        # Budget enforcement is moved INSIDE this branch and runs
+        # AFTER syscall identification — we need the syscall name to
+        # evaluate per-category caps. The legacy fixed-cap approach
+        # has been replaced by core.sandbox.audit_budget.AuditBudget
+        # (token-bucket + per-category + per-PID + sampling).
+        regs = read_regs(wpid, arch_info)
+        if regs is not None:
+            nr, args = decode_syscall(regs, arch_info)
+            name = syscall_table.get(nr, f"unknown_{nr}")
 
-                # Default: log every event (audit-verbose / no filter).
-                # The filter logic below short-circuits to drop legitimate
-                # events when audit_filter is configured for filtered
-                # mode (i.e., the `audit` profile).
-                should_log = True
-                path = None
-                path_idx = _path_arg_index(name)
-                if path_idx is not None:
-                    path = read_tracee_string(wpid, args[path_idx])
+            # Default: log every event (audit-verbose / no filter).
+            # The filter logic below short-circuits to drop legitimate
+            # events when audit_filter is configured for filtered
+            # mode (i.e., the `audit` profile).
+            should_log = True
+            path = None
+            path_idx = _path_arg_index(name)
+            if path_idx is not None:
+                path = read_tracee_string(wpid, args[path_idx])
 
-                if audit_filter is not None and not audit_filter.get("verbose"):
-                    # Filtered mode: drop events that would have been
-                    # ALLOWED under enforcement. The signal then becomes
-                    # "what would have been blocked" — the operator's
-                    # actual question.
-                    if name in ("openat", "open", "openat2"):
-                        # Resolve path argument to absolute, check
-                        # against Landlock-equivalent allowlist.
-                        if path is not None:
-                            # openat / openat2 dirfd lives at args[0];
-                            # for open(), there is no dirfd, treat as
-                            # AT_FDCWD.
-                            dirfd = (args[0] if name in ("openat", "openat2")
-                                     else _AT_FDCWD)
-                            # Treat dirfd as signed — kernel passes
-                            # AT_FDCWD as -100 which arrives as a
-                            # very large unsigned in our regs.
-                            if dirfd > 0x7fffffffffffffff:
-                                dirfd = dirfd - (1 << 64)
-                            abs_path = resolve_path(wpid, path, dirfd)
-                            # Flag location differs by syscall:
-                            #   open(path, flags, mode)            → args[1]
-                            #   openat(dirfd, path, flags, mode)   → args[2]
-                            #   openat2(dirfd, path, &how, size)   → deref args[2]
-                            #     `struct open_how` { __u64 flags; __u64 mode;
-                            #                        __u64 resolve; }
-                            #     so flags = first 8 bytes of *args[2].
-                            if name == "openat2":
-                                # Best-effort struct read. If process_vm_readv
-                                # fails (bad pointer, stale memory), default
-                                # to write_intent=True so we don't silently
-                                # miss writes — over-reporting reads is
-                                # acceptable, missing writes is not.
-                                how_bytes = _read_tracee_bytes(wpid, args[2], 8)
-                                if how_bytes is not None and len(how_bytes) == 8:
-                                    import struct as _struct
-                                    flags = _struct.unpack("<Q", how_bytes)[0]
-                                else:
-                                    flags = _O_WRONLY  # safe default
+            if audit_filter is not None and not audit_filter.get("verbose"):
+                # Filtered mode: drop events that would have been
+                # ALLOWED under enforcement. The signal then becomes
+                # "what would have been blocked" — the operator's
+                # actual question.
+                if name in ("openat", "open", "openat2"):
+                    # Resolve path argument to absolute, check
+                    # against Landlock-equivalent allowlist.
+                    if path is not None:
+                        # openat / openat2 dirfd lives at args[0];
+                        # for open(), there is no dirfd, treat as
+                        # AT_FDCWD.
+                        dirfd = (args[0] if name in ("openat", "openat2")
+                                 else _AT_FDCWD)
+                        # Treat dirfd as signed — kernel passes
+                        # AT_FDCWD as -100 which arrives as a
+                        # very large unsigned in our regs.
+                        if dirfd > 0x7fffffffffffffff:
+                            dirfd = dirfd - (1 << 64)
+                        abs_path = resolve_path(wpid, path, dirfd)
+                        # Flag location differs by syscall:
+                        #   open(path, flags, mode)            → args[1]
+                        #   openat(dirfd, path, flags, mode)   → args[2]
+                        #   openat2(dirfd, path, &how, size)   → deref args[2]
+                        #     `struct open_how` { __u64 flags; __u64 mode;
+                        #                        __u64 resolve; }
+                        #     so flags = first 8 bytes of *args[2].
+                        if name == "openat2":
+                            # Best-effort struct read. If process_vm_readv
+                            # fails (bad pointer, stale memory), default
+                            # to write_intent=True so we don't silently
+                            # miss writes — over-reporting reads is
+                            # acceptable, missing writes is not.
+                            how_bytes = _read_tracee_bytes(wpid, args[2], 8)
+                            if how_bytes is not None and len(how_bytes) == 8:
+                                import struct as _struct
+                                flags = _struct.unpack("<Q", how_bytes)[0]
                             else:
-                                flags_idx = 2 if name == "openat" else 1
-                                flags = args[flags_idx]
-                            write_intent = _is_write_intent(flags)
-                            # When read_allowlist is None, Landlock is
-                            # in restrict_reads=False mode (allows all
-                            # reads). Reads can never be would-blocked,
-                            # so we drop them unconditionally and only
-                            # filter writes against writable_paths.
-                            if (not write_intent
-                                    and audit_filter.get("read_allowlist") is None):
+                                flags = _O_WRONLY  # safe default
+                        else:
+                            flags_idx = 2 if name == "openat" else 1
+                            flags = args[flags_idx]
+                        write_intent = _is_write_intent(flags)
+                        # When read_allowlist is None, Landlock is
+                        # in restrict_reads=False mode (allows all
+                        # reads). Reads can never be would-blocked,
+                        # so we drop them unconditionally and only
+                        # filter writes against writable_paths.
+                        if (not write_intent
+                                and audit_filter.get("read_allowlist") is None):
+                            should_log = False
+                        else:
+                            # .get with [] default — defensive
+                            # against malformed/partial configs.
+                            # Empty list → _path_in_allowlist
+                            # always False → record kept.
+                            allowlist = (
+                                audit_filter.get("writable_paths") or []
+                                if write_intent
+                                else audit_filter.get("read_allowlist") or []
+                            )
+                            if _path_in_allowlist(abs_path, allowlist):
                                 should_log = False
                             else:
-                                # .get with [] default — defensive
-                                # against malformed/partial configs.
-                                # Empty list → _path_in_allowlist
-                                # always False → record kept.
-                                allowlist = (
-                                    audit_filter.get("writable_paths") or []
-                                    if write_intent
-                                    else audit_filter.get("read_allowlist") or []
-                                )
-                                if _path_in_allowlist(abs_path, allowlist):
-                                    should_log = False
-                                else:
-                                    # Useful surface form: replace
-                                    # `path` with the resolved
-                                    # absolute (relative paths in
-                                    # the raw record are ambiguous
-                                    # to operators).
-                                    path = abs_path
-                    elif name == "connect":
-                        # Decode sockaddr at args[1], length at args[2].
-                        # If destination port is in the allowed set,
-                        # drop. Otherwise log with decoded ip:port in
-                        # the path field for operator readability.
-                        sock = decode_sockaddr(wpid, args[1], args[2])
-                        if sock is not None:
-                            family, port, ip = sock
-                            allowed_ports = audit_filter.get(
-                                "allowed_tcp_ports", [])
-                            if port in allowed_ports:
-                                should_log = False
-                            else:
-                                path = f"{ip}:{port} ({family})"
-                    # For seccomp blocklist syscalls (ptrace, bpf, etc.)
-                    # we don't filter — they're rare and ALWAYS
-                    # would-be-blocked under enforcement, so the audit
-                    # signal is exactly what the operator wants.
+                                # Useful surface form: replace
+                                # `path` with the resolved
+                                # absolute (relative paths in
+                                # the raw record are ambiguous
+                                # to operators).
+                                path = abs_path
+                elif name == "connect":
+                    # Decode sockaddr at args[1], length at args[2].
+                    # If destination port is in the allowed set,
+                    # drop. Otherwise log with decoded ip:port in
+                    # the path field for operator readability.
+                    sock = decode_sockaddr(wpid, args[1], args[2])
+                    if sock is not None:
+                        family, port, ip = sock
+                        allowed_ports = audit_filter.get(
+                            "allowed_tcp_ports", [])
+                        if port in allowed_ports:
+                            should_log = False
+                        else:
+                            path = f"{ip}:{port} ({family})"
+                # For seccomp blocklist syscalls (ptrace, bpf, etc.)
+                # we don't filter — they're rare and ALWAYS
+                # would-be-blocked under enforcement, so the audit
+                # signal is exactly what the operator wants.
 
-                if should_log and write_record(
-                        run_dir, name, nr, args, wpid, path=path):
-                    record_count += 1
-        elif not cap_warned:
-            os.write(2, (
-                f"RAPTOR tracer: hit per-run record cap "
-                f"({_MAX_RECORDS_PER_RUN}); dropping further events\n"
-            ).encode("ascii", errors="replace"))
-            cap_warned = True
+            if should_log:
+                decision, marker = budget.evaluate(name, wpid)
+                if marker is not None:
+                    _write_record_dict(run_dir, marker)
+                if decision == audit_budget.KEEP:
+                    write_record(run_dir, name, nr, args, wpid,
+                                 path=path)
+                # First-time global-cap exhaustion: emit a one-time
+                # stderr line. Restores the operator-visible cue
+                # the legacy tracer printed ("hit per-run record
+                # cap ..."). Per-category and per-PID drops show
+                # up as in-band JSONL markers AND in audit_summary
+                # at end-of-run, so they don't need stderr noise;
+                # only the global cap (which truncates audit
+                # entirely) gets the stderr ping.
+                if budget.pop_global_cap_notice():
+                    os.write(2, (
+                        f"RAPTOR tracer: audit-record global cap "
+                        f"({budget.global_cap}) reached; further "
+                        f"events dropped (sub-caps still apply; "
+                        f"sampling continues for high-volume "
+                        f"categories). End-of-run audit_summary "
+                        f"record has totals.\n"
+                    ).encode("ascii", errors="replace"))
         # Continue regardless — audit mode allows the syscall.
         ptrace_cont(wpid, 0)
-        return record_count, cap_warned
+        return
 
     if event in _NEW_TRACEE_EVENTS:
         # fork/vfork/clone — the tracee created a new process or
@@ -1306,12 +1373,12 @@ def _handle_waitpid_event(
         if new_pid is not None and new_pid > 0:
             traced.add(new_pid)
         ptrace_cont(wpid, 0)
-        return record_count, cap_warned
+        return
 
     if event == _PTRACE_EVENT_EXIT:
         # Tracee is about to exit; let it.
         ptrace_cont(wpid, 0)
-        return record_count, cap_warned
+        return
 
     # SIGSTOP from a newly-auto-attached tracee: kernel paused the
     # new child as part of TRACEFORK/CLONE delivery. Resume it
@@ -1330,7 +1397,7 @@ def _handle_waitpid_event(
         ptrace_cont(wpid, 0)
     else:
         ptrace_cont(wpid, sig if sig != signal.SIGTRAP else 0)
-    return record_count, cap_warned
+    return
 
 
 def _cli_main(argv: Optional[list] = None) -> int:
