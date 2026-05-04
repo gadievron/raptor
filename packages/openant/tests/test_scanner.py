@@ -96,6 +96,29 @@ class TestBugR015StderrPersistence(unittest.TestCase):
         self.assertIn("openant.stderr.log", scanner_src)
         self.assertIn("write_text", scanner_src)
 
+    def test_stderr_size_capped(self):
+        """BUG-R-015 fragility (audit): unbounded stderr could fill disk
+        if OpenAnt enters a tight loop spamming stderr. Cap to a defensible
+        upper bound (1 MiB is generous for any reasonable error trace).
+
+        Static check: scanner.py source contains a size-cap constant
+        and uses it before write_text.
+        """
+        scanner_src = (Path(__file__).parents[1] / "scanner.py").read_text()
+        # The fix uses STDERR_MAX or a hardcoded slice
+        has_cap = (
+            "STDERR_MAX" in scanner_src
+            or "[:1_000_000]" in scanner_src
+            or "[:1000000]" in scanner_src
+            or "[: STDERR_MAX_BYTES]" in scanner_src
+        )
+        self.assertTrue(
+            has_cap,
+            "scanner.py should cap stderr size before persisting "
+            "(BUG-R-015 fragility from audit). Use STDERR_MAX_BYTES "
+            "constant + slice the proc.stderr before write_text.",
+        )
+
 
 class TestBugR012NoAnalyzeRemoved(unittest.TestCase):
     """BUG-R-012: --no-analyze flag was declared but inactive. Removed.

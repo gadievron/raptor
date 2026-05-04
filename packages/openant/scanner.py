@@ -20,6 +20,11 @@ from typing import Any, Optional
 from core.config import RaptorConfig
 from core.logging import get_logger
 
+# Maximum bytes to persist from OpenAnt subprocess stderr. Generous upper bound
+# for any reasonable error trace; bounded so a misbehaving OpenAnt that spams
+# stderr in a tight loop cannot fill the disk.
+STDERR_MAX_BYTES = 1_000_000  # 1 MiB
+
 from .config import OpenAntConfig
 
 logger = get_logger()
@@ -76,12 +81,20 @@ def _run_subprocess(
     except Exception as exc:  # noqa: BLE001
         return _empty_result(f"OpenAnt launch failed: {exc}")
 
-    # Persist full stderr so debugging isn't capped at the 600-char snippet
+    # Persist stderr so debugging isn't capped at the 600-char snippet
     # we surface to the caller. (Adversarial-audit finding: long warnings
     # could push the actual error past the truncation point.)
+    # Cap at STDERR_MAX_BYTES (1 MiB) so a misbehaving subprocess cannot
+    # fill the disk by spamming stderr in a tight loop.
     if proc.stderr:
         try:
-            (out_dir / "openant.stderr.log").write_text(proc.stderr)
+            stderr_to_write = proc.stderr[:STDERR_MAX_BYTES]
+            if len(proc.stderr) > STDERR_MAX_BYTES:
+                stderr_to_write += (
+                    f"\n\n[truncated — original was {len(proc.stderr)} bytes, "
+                    f"capped at {STDERR_MAX_BYTES}]\n"
+                )
+            (out_dir / "openant.stderr.log").write_text(stderr_to_write)
         except OSError:
             pass
 

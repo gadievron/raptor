@@ -731,17 +731,51 @@ Examples:
     # Merge OpenAnt findings into validation output so Phase 3 picks them up.
     # OpenAnt findings are already in Raptor finding schema; they bypass SARIF
     # conversion and join the post-validation pool directly.
+    #
+    # Schema-validated merge (BUG-R-011 fragility hardening):
+    # - load_json(strict=True): corrupted JSON raises instead of silently
+    #   returning None (which would default to [] and lose data).
+    # - isinstance(existing, list): catches schema drift (someone wrote a
+    #   wrapper dict) before extend() corrupts the output.
+    # Tests: packages/openant/tests/test_phase1b_integration.py
     if openant_extra_findings:
         validation_findings_path = out_dir / "validation" / "findings.json"
         if validation_findings_path.exists():
-            existing = load_json(validation_findings_path) or []
-            existing.extend(openant_extra_findings)
-            save_json(validation_findings_path, existing)
+            try:
+                existing = load_json(validation_findings_path, strict=True) or []
+            except Exception as e:
+                logger.error(
+                    f"validation/findings.json is corrupted; refusing to "
+                    f"merge OpenAnt findings to avoid data loss: {e}"
+                )
+                existing = None
+            if existing is not None:
+                if not isinstance(existing, list):
+                    logger.error(
+                        f"validation/findings.json is not a list "
+                        f"(got {type(existing).__name__}); skipping merge"
+                    )
+                elif not all(isinstance(f, dict) for f in existing):
+                    logger.error(
+                        "validation/findings.json contains non-dict "
+                        "elements; skipping merge"
+                    )
+                else:
+                    existing.extend(openant_extra_findings)
+                    save_json(validation_findings_path, existing)
+                    validated_findings += len(openant_extra_findings)
+                    logger.info(
+                        f"Merged {len(openant_extra_findings)} OpenAnt "
+                        f"findings into validation output"
+                    )
         else:
             (out_dir / "validation").mkdir(exist_ok=True)
             save_json(validation_findings_path, openant_extra_findings)
-        validated_findings += len(openant_extra_findings)
-        logger.info(f"Merged {len(openant_extra_findings)} OpenAnt findings into validation output")
+            validated_findings += len(openant_extra_findings)
+            logger.info(
+                f"Merged {len(openant_extra_findings)} OpenAnt findings "
+                f"(no prior findings.json existed)"
+            )
 
     # ========================================================================
     # PHASE 3: AUTONOMOUS ANALYSIS
