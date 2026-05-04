@@ -131,7 +131,7 @@ def test_run_pass_emits_all_six_artifacts(tmp_path, monkeypatch):
 def test_run_unsupported_exits_4(tmp_path, monkeypatch):
     """Agent surrendering UnsupportedSource → exit code 4 + failure md."""
     _patch_agent_loop(monkeypatch, AgentSurrender(
-        reason="UnsupportedSource",
+        reason="unsupported_source",
         detail="closed-source firmware",
     ))
     out = tmp_path / "out"

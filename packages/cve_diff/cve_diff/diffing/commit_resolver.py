@@ -106,7 +106,7 @@ class CommitResolver:
     def _is_root_commit(repo_path: Path, sha: str) -> bool:
         try:
             result = subprocess.run(
-                ["git", "-C", str(repo_path), "rev-list", "--max-parents=0", "HEAD"],
+                ["git", "-C", str(repo_path), "rev-list", "--max-parents=0", "--all"],
                 capture_output=True,
                 text=True,
                 check=False,

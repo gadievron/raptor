@@ -1,47 +1,27 @@
-"""Thin resilient LLM client — Anthropic SDK direct.
+"""Thin resilient LLM client — delegates to core.llm substrate.
 
-Until 2026-05-01 this module wrapped the OpenAI SDK pointed at a local
-LiteLLM proxy. That added an operational dependency (running the proxy)
-and a translation hop for every call, even though the agent loop
-(``cve_diff/agent/loop.py``) already used the Anthropic SDK directly.
-This module is now also Anthropic-direct so the whole project speaks
-the same API.
+Until 2026-05-04 this module called the Anthropic SDK directly. Now it
+delegates to ``core.llm.providers.create_provider`` which handles
+provider abstraction (Anthropic / OpenAI-compat / Gemini / Ollama /
+Claude Code subprocess), retry, and cost calculation. This module
+preserves the public surface that the analyzer and agent loop depend on:
 
-Public surface preserved (analyzer + tests depend on it):
-
-  * ``ResilientLLMClient`` — class with ``.complete(model_id, prompt,
-    system=None, max_tokens=2048, temperature=None) -> LLMResponse``.
-  * ``LLMResponse`` — frozen dataclass with text, model_id,
-    input_tokens, output_tokens, retries, cost_usd.
-  * ``LLMCallFailed`` — wraps unrecoverable errors (after retries).
-  * ``CostBudgetExceeded`` — pre-flight block once cumulative cost
-    crosses ``max_cost_usd``.
-  * ``MODEL_PRICES`` — kept for the agent loop's cost accounting.
-
-Retry policy: same as before. Transient = APIConnectionError or 429 /
-5xx APIStatusError. Exponential backoff 2s, 4s, 8s. ``max_retries=3``
-by default. Permanent (4xx other than 429) raises immediately.
+  * ``ResilientLLMClient`` — ``.complete(model_id, prompt, ...)``
+  * ``LLMResponse`` — frozen dataclass with text, model_id, tokens, cost
+  * ``LLMCallFailed`` / ``CostBudgetExceeded`` — exception types
+  * ``MODEL_PRICES`` — agent loop's cost accounting (cache-aware pricing
+    lives in the provider; this table is the loop's fast-path fallback)
 """
 
 from __future__ import annotations
 
+import os
 import sys
-import time
 from dataclasses import dataclass, field
 
-from anthropic import (
-    Anthropic,
-    APIConnectionError,
-    APIError,
-    APIStatusError,
-)
+from core.llm.config import ModelConfig
+from core.llm.providers import create_provider, LLMProvider
 
-
-# Per-million-token USD prices. Keyed by substring matched
-# case-insensitively against the model id passed to `.complete()`.
-# Anthropic public list prices at 2026-04 — update here if they change.
-# A missing entry is loud (warning + treated as $0 so cost-abort can't
-# silently fail to fire).
 MODEL_PRICES: dict[str, tuple[float, float]] = {
     "opus": (15.0, 75.0),
     "sonnet": (3.0, 15.0),
@@ -55,7 +35,6 @@ class LLMResponse:
     model_id: str
     input_tokens: int
     output_tokens: int
-    retries: int
     cost_usd: float
 
 
@@ -64,13 +43,27 @@ class LLMCallFailed(RuntimeError):
 
 
 class CostBudgetExceeded(RuntimeError):
-    """Raised when cumulative cost on a client instance hits ``max_cost_usd``.
+    """Raised when cumulative cost on a client instance hits ``max_cost_usd``."""
 
-    The call that crosses the budget returns normally; the *next* call
-    is what gets blocked. A surprise-large response cannot be blocked
-    pre-flight (we don't know its cost until the response is back), but
-    subsequent calls in the same run cannot pile on.
+
+def _provider_for_model(model_id: str, timeout_s: float) -> LLMProvider:
+    """Build a provider from a model id string.
+
+    Uses Anthropic when ANTHROPIC_API_KEY is set; falls through to other
+    providers via the standard ``create_provider`` factory.
     """
+    provider_name = "anthropic"
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        provider_name = "claudecode"
+        api_key = None
+    config = ModelConfig(
+        provider=provider_name,
+        model_name=model_id,
+        api_key=api_key,
+        timeout=int(timeout_s),
+    )
+    return create_provider(config)
 
 
 @dataclass
@@ -81,16 +74,16 @@ class ResilientLLMClient:
     max_cost_usd: float = 0.10
     cumulative_cost_usd: float = field(default=0.0, init=False)
 
-    _warned_unknown_models: set[str] = field(
-        default_factory=set, init=False, repr=False
+    _provider_cache: dict[str, LLMProvider] = field(
+        default_factory=dict, init=False, repr=False
     )
 
-    def __post_init__(self) -> None:
-        # ANTHROPIC_API_KEY is read from the environment by the SDK
-        # itself; we don't pass it explicitly so the SDK's normal
-        # credential discovery (env var, ~/.anthropic, etc.) keeps
-        # working.
-        self._client = Anthropic(timeout=self.timeout_s)
+    def _get_provider(self, model_id: str) -> LLMProvider:
+        if model_id not in self._provider_cache:
+            self._provider_cache[model_id] = _provider_for_model(
+                model_id, self.timeout_s
+            )
+        return self._provider_cache[model_id]
 
     def complete(
         self,
@@ -107,75 +100,26 @@ class ResilientLLMClient:
                 "before next call"
             )
 
-        # Anthropic API takes ``system`` as a top-level field, not a
-        # message in the messages array. The OpenAI-compatible shim
-        # we used to have here mapped {role: system} into the messages
-        # list; we now pass it directly.
-        kwargs: dict[str, object] = {
-            "model": model_id,
-            "max_tokens": max_tokens,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-        if system:
-            kwargs["system"] = system
+        provider = self._get_provider(model_id)
+        kwargs: dict[str, object] = {"max_tokens": max_tokens}
         if temperature is not None:
             kwargs["temperature"] = temperature
+        try:
+            resp = provider.generate(prompt, system_prompt=system, **kwargs)
+        except Exception as exc:
+            raise LLMCallFailed(
+                f"LLM call ({model_id}) failed: {exc}"
+            ) from exc
 
-        for attempt in range(self.max_retries + 1):
-            try:
-                resp = self._client.messages.create(**kwargs)  # type: ignore[arg-type]
-                # Concatenate every text block in case Anthropic returns
-                # multiple. Today there's only one for non-tool-use
-                # completions; tool-use isn't used by this client.
-                text_parts: list[str] = []
-                for block in resp.content:
-                    if getattr(block, "type", None) == "text":
-                        text_parts.append(block.text)
-                text = "".join(text_parts).strip()
-                in_t = getattr(resp.usage, "input_tokens", 0) if resp.usage else 0
-                out_t = getattr(resp.usage, "output_tokens", 0) if resp.usage else 0
-                cost = self._price_call(model_id, in_t, out_t)
-                self.cumulative_cost_usd += cost
-                return LLMResponse(
-                    text=text,
-                    model_id=model_id,
-                    input_tokens=in_t,
-                    output_tokens=out_t,
-                    retries=attempt,
-                    cost_usd=cost,
-                )
-            except (APIConnectionError, APIStatusError, APIError) as exc:
-                if not _is_transient(exc) or attempt >= self.max_retries:
-                    raise LLMCallFailed(
-                        f"LLM call ({model_id}) failed after {attempt} retries: {exc}"
-                    ) from exc
-                time.sleep(self.backoff_factor ** (attempt + 1))
-        raise LLMCallFailed(
-            f"LLM call ({model_id}) exhausted retries without error — impossible"
+        text = (resp.content or "").strip()
+        in_t = resp.input_tokens
+        out_t = resp.output_tokens
+        cost = resp.cost
+        self.cumulative_cost_usd += cost
+        return LLMResponse(
+            text=text,
+            model_id=model_id,
+            input_tokens=in_t,
+            output_tokens=out_t,
+            cost_usd=cost,
         )
-
-    def _price_call(
-        self, model_id: str, input_tokens: int, output_tokens: int,
-    ) -> float:
-        key = model_id.lower()
-        for token, (in_per_M, out_per_M) in MODEL_PRICES.items():
-            if token in key:
-                return (input_tokens * in_per_M + output_tokens * out_per_M) / 1_000_000
-        if model_id not in self._warned_unknown_models:
-            self._warned_unknown_models.add(model_id)
-            print(
-                f"warn: no price entry for model '{model_id}' — cost will be "
-                "counted as $0 (cost abort cannot fire). Add an entry to "
-                "cve_diff.llm.client.MODEL_PRICES to fix.",
-                file=sys.stderr,
-            )
-        return 0.0
-
-
-def _is_transient(exc: Exception) -> bool:
-    if isinstance(exc, APIConnectionError):
-        return True
-    if isinstance(exc, APIStatusError):
-        status = getattr(exc, "status_code", None)
-        return status == 429 or (status is not None and 500 <= status < 600)
-    return False

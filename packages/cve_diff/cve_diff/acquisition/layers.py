@@ -87,6 +87,8 @@ def _clean_dest(dest: Path) -> None:
     """
     if not dest.is_absolute() or len(dest.parts) < 3:
         raise ValueError(f"_clean_dest refusing dangerous path: {dest!r}")
+    if dest.is_symlink():
+        raise ValueError(f"_clean_dest refusing symlink: {dest!r}")
     if dest.exists() and any(dest.iterdir()):
         subprocess.run(
             ["rm", "-rf", str(dest)],
@@ -199,7 +201,7 @@ class FullCloneLayer(AcquisitionLayer):
         # Disk guardrail: ask GitHub the repo size before cloning.
         # Only applies to github.com URLs; non-GitHub hosts skip the
         # check (most aren't multi-GB anyway).
-        from cve_diff.core.url_re import GITHUB_REPO_URL_RE
+        from core.url_patterns import GITHUB_REPO_URL_RE
         m = GITHUB_REPO_URL_RE.match(ref.repository_url)
         if m:
             try:

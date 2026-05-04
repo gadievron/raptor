@@ -156,7 +156,7 @@ def test_pipeline_raises_unsupported_source_on_agent_unsupported(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
     pipeline = Pipeline(
-        agent=_StubAgent(AgentSurrender(reason="UnsupportedSource", detail="firmware")),
+        agent=_StubAgent(AgentSurrender(reason="unsupported_source", detail="firmware")),
         disk_limit_pct=99.9,
     )
     with pytest.raises(UnsupportedSource):
@@ -233,7 +233,7 @@ def test_no_retry_on_unsupported_source(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
     surrender = AgentSurrender(
-        reason="UnsupportedSource",
+        reason="unsupported_source",
         detail="closed-source",
         verified_candidates=(("noise/repo", "abc1234"),),
     )

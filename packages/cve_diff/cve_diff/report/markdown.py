@@ -315,7 +315,7 @@ def _ref_hint(method: str, slug: str | None, sha: str | None) -> str:
     if method == "patch_url":
         # Forge-aware hint: GitHub uses `<slug>/commit/<sha>.patch`,
         # cgit uses the `?id=<sha>&format=patch` query.
-        from cve_diff.core.url_re import is_kernel_org_url
+        from core.url_patterns import is_kernel_org_url
         s = (slug or "").lower()
         # Hostname-anchored ``kernel.org`` check (closes the
         # incomplete-substring CodeQL footgun); ``cgit`` stays as a
@@ -423,7 +423,7 @@ def _single_source_reason(slug: str | None) -> str:
     """
     if not slug:
         return "no second extractor available"
-    from cve_diff.core.url_re import is_kernel_org_url
+    from core.url_patterns import is_kernel_org_url
     s = slug.lower()
     # Hostname-anchored ``kernel.org`` check (closes the
     # incomplete-substring CodeQL footgun); ``cgit`` /

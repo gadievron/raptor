@@ -81,54 +81,14 @@ def compute_extraction_agreement(
     return summary, list(extras)
 
 
-def _compare(clone: DiffBundle, api: DiffBundle) -> dict:
-    """Pairwise comparison preserved for callers that want a 2-source
-    verdict directly. Internally delegates to ``_compare_pair``. Returns
-    the historical dict shape so existing tests / on-disk Markdown
-    rendering keep working unchanged."""
-    paths_clone = {f.path for f in clone.files}
-    paths_api = {f.path for f in api.files}
-    union = paths_clone | paths_api
-    intersection = paths_clone & paths_api
-    overlap = (len(intersection) / len(union)) if union else 1.0
-
-    bytes_clone = max(clone.bytes_size, 1)  # avoid div-by-zero
-    pct_diff = abs(api.bytes_size - clone.bytes_size) / bytes_clone
-
-    api_truncated = api.files_changed >= _API_FILE_CAP
-
-    if api_truncated:
-        verdict = "partial"   # comparison advisory; API ran out of room
-    elif (
-        clone.files_changed == api.files_changed
-        and overlap == 1.0
-        and pct_diff <= _BYTES_AGREE_PCT
-    ):
-        verdict = "agree"
-    elif overlap >= 0.8 and pct_diff <= _BYTES_PARTIAL_PCT:
-        verdict = "partial"
-    else:
-        verdict = "disagree"
-
-    return {
-        "method": "clone+api",
-        "files_clone": clone.files_changed,
-        "files_api": api.files_changed,
-        "paths_overlap": round(overlap, 3),
-        "bytes_clone": clone.bytes_size,
-        "bytes_api": api.bytes_size,
-        "bytes_pct_diff": round(pct_diff, 3),
-        "api_truncated": api_truncated,
-        "verdict": verdict,
-    }
-
-
 def _compare_pair(a: DiffBundle, b: DiffBundle) -> str:
     """Return just the pairwise verdict (`agree`/`partial`/`disagree`).
 
     Used by the N-source summarizer where only the verdict label
-    matters. Reuses the same thresholds as `_compare`.
+    matters. Reuses the same thresholds as the old ``_compare``.
     """
+    if a.files_changed >= _API_FILE_CAP or b.files_changed >= _API_FILE_CAP:
+        return "partial"
     paths_a = {f.path for f in a.files}
     paths_b = {f.path for f in b.files}
     union = paths_a | paths_b

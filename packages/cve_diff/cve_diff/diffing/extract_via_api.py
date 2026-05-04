@@ -53,7 +53,7 @@ def _slug_of(repo_url: str) -> str | None:
     ``compute_extraction_agreement`` silently fall back to
     ``single_source`` for any repo with a dotted name.
     """
-    from cve_diff.core.url_re import extract_github_slug
+    from core.url_patterns import extract_github_slug
     return extract_github_slug(repo_url or "")
 
 

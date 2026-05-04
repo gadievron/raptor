@@ -42,7 +42,7 @@ from cve_diff.core.models import (
     IntroducedMarker,
     PatchTuple,
 )
-from cve_diff.core.url_re import (
+from core.url_patterns import (
     GITHUB_COMMIT_URL_RE,
     KERNEL_SHA_URL_RE,
     LINUX_UPSTREAM_SLUG,

@@ -101,7 +101,7 @@ def _flow_from_pipeline(
         # forge-detection still finds the right reason text.
         slug: str | None = None
         try:
-            from cve_diff.core.url_re import extract_github_slug
+            from core.url_patterns import extract_github_slug
             slug = extract_github_slug(bundle.repo_ref.repository_url or "")
         except Exception:  # noqa: BLE001 — slug is presentation-only
             slug = None

@@ -10,6 +10,7 @@ import json
 
 import pytest
 
+from core.http import HttpError
 from cve_diff.agent import tools as tools_mod
 from cve_diff.agent.tools import TOOLS, Tool
 
@@ -153,125 +154,97 @@ def test_oracle_check_requires_all_args() -> None:
     assert "error" in out
 
 
-def test_gh_get_retries_on_429_then_succeeds(monkeypatch) -> None:
-    """_gh_get must respect Retry-After on 429 then succeed on the next attempt."""
-    calls: list[tuple[int, str]] = []
+def test_gh_get_delegates_to_http_client(monkeypatch) -> None:
+    """_gh_get delegates to _http_client().get_json() with correct retries."""
+    calls: list[dict] = []
 
-    class _Resp:
-        def __init__(self, status: int, payload: dict | None = None, retry_after: str = "") -> None:
-            self.status_code = status
-            self._payload = payload or {}
-            self.headers = {"Retry-After": retry_after} if retry_after else {}
-        def json(self) -> dict:
-            return self._payload
+    class _StubClient:
+        def get_json(self, url, *, timeout, headers=None, retries=0, **kw):
+            calls.append({"url": url, "retries": retries})
+            return {"ok": True}
 
-    responses = [
-        _Resp(429, retry_after="0"),
-        _Resp(200, {"ok": True}),
-    ]
-
-    def fake_get(url: str, **kw):
-        calls.append((len(calls), url))
-        return responses[len(calls) - 1]
-
-    monkeypatch.setattr(tools_mod.requests, "get", fake_get)
-    monkeypatch.setattr(tools_mod.time, "sleep", lambda _s: None)
-    # Force the rate-limit bucket to always allow.
+    monkeypatch.setattr(tools_mod, "_http_client", lambda: _StubClient())
     monkeypatch.setattr(tools_mod.github_client, "_bucket", lambda: type("B", (), {"try_acquire": lambda self: True})())
+    monkeypatch.setattr(tools_mod.github_client, "_headers", lambda: {"Authorization": "Bearer test"})
 
-    out = tools_mod._gh_get("/test")
+    out = tools_mod._gh_get("/test", {"per_page": "20"})
     assert out == {"ok": True}
-    assert len(calls) == 2  # 1 retry after 429
+    assert len(calls) == 1
+    assert "per_page=20" in calls[0]["url"]
+    assert calls[0]["retries"] == tools_mod._GH_RETRIES
 
 
-def test_gh_get_retries_on_5xx(monkeypatch) -> None:
-    """_gh_get must retry on transient 5xx server errors."""
-    class _Resp:
-        def __init__(self, status: int, payload: dict | None = None) -> None:
-            self.status_code = status
-            self._payload = payload or {}
-            self.headers = {}
-        def json(self) -> dict:
-            return self._payload
+def test_gh_get_returns_none_on_http_error(monkeypatch) -> None:
+    """HttpError from the client maps to None."""
+    class _StubClient:
+        def get_json(self, url, **kw):
+            raise HttpError("rate limited", status=429)
 
-    responses = [_Resp(503), _Resp(502), _Resp(200, {"ok": True})]
-    call_count = [0]
-
-    def fake_get(url: str, **kw):
-        i = call_count[0]
-        call_count[0] += 1
-        return responses[i]
-
-    monkeypatch.setattr(tools_mod.requests, "get", fake_get)
-    monkeypatch.setattr(tools_mod.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(tools_mod, "_http_client", lambda: _StubClient())
     monkeypatch.setattr(tools_mod.github_client, "_bucket", lambda: type("B", (), {"try_acquire": lambda self: True})())
 
-    out = tools_mod._gh_get("/test")
-    assert out == {"ok": True}
-    assert call_count[0] == 3
+    assert tools_mod._gh_get("/test") is None
 
 
-def test_gh_get_fails_fast_on_4xx_other_than_429(monkeypatch) -> None:
-    """4xx other than 429 (404, 403, etc.) is a final answer — no retry."""
-    class _Resp:
-        status_code = 404
-        headers: dict = {}
-        def json(self): return {}
-
-    call_count = [0]
-    def fake_get(url: str, **kw):
-        call_count[0] += 1
-        return _Resp()
-
-    monkeypatch.setattr(tools_mod.requests, "get", fake_get)
-    monkeypatch.setattr(tools_mod.time, "sleep", lambda _s: None)
-    monkeypatch.setattr(tools_mod.github_client, "_bucket", lambda: type("B", (), {"try_acquire": lambda self: True})())
-
-    out = tools_mod._gh_get("/test")
-    assert out is None
-    assert call_count[0] == 1  # no retries on 404
+def test_gh_get_returns_none_when_bucket_exhausted(monkeypatch) -> None:
+    """Rate-limit bucket refusal returns None without making an HTTP call."""
+    monkeypatch.setattr(tools_mod.github_client, "_bucket", lambda: type("B", (), {"try_acquire": lambda self: False})())
+    assert tools_mod._gh_get("/test") is None
 
 
 # ============================================================================
 # BEHAVIOR TESTS: each tool exercised with realistic mocked HTTP responses.
-# Mocks are at the requests / subprocess / underlying-client boundary, not at
-# the SUT — the tool's parsing / extraction / transformation logic IS exercised.
+# Mocks are at the core.http client boundary, not at the SUT — the tool's
+# parsing / extraction / transformation logic IS exercised.
 # ============================================================================
 
 
-class _Resp:
-    """Minimal requests.Response-shaped object for monkeypatching."""
-    def __init__(self, status_code=200, json_data=None, text="", url=""):
-        self.status_code = status_code
-        self._json = json_data
-        self.text = text
-        self.url = url or ""
-        self.headers: dict = {}
+class _StubHttpClient:
+    """Mock core.http client returning canned responses for get_json/get_bytes."""
 
-    def json(self):
+    def __init__(self, json_data=None, raw_bytes=b"", status=200, error=None):
+        self._json = json_data
+        self._bytes = raw_bytes
+        self._status = status
+        self._error = error
+
+    def get_json(self, url, *, timeout=30, headers=None, retries=0, **kw):
+        if self._error:
+            raise self._error
+        if self._status == 404:
+            raise HttpError("not found", status=404)
+        if self._status != 200:
+            raise HttpError(f"http {self._status}", status=self._status)
         if self._json is None:
-            raise ValueError("no json")
+            raise HttpError("Response is not valid JSON: ...")
         return self._json
+
+    def get_bytes(self, url, *, timeout=30, max_bytes=50*1024*1024, headers=None, retries=0, **kw):
+        if self._error:
+            raise self._error
+        if self._status != 200:
+            raise HttpError(f"http {self._status}", status=self._status)
+        return self._bytes[:max_bytes]
 
 
 # --- osv_raw ----------------------------------------------------------------
 
 def test_osv_raw_parses_200_payload(monkeypatch) -> None:
     payload = {"id": "CVE-2023-38545", "references": [{"url": "https://x.com/y"}]}
-    monkeypatch.setattr(tools_mod.requests, "get", lambda *a, **kw: _Resp(200, json_data=payload))
+    monkeypatch.setattr(tools_mod, "_http_client", lambda: _StubHttpClient(json_data=payload))
     out = json.loads(tools_mod._osv_raw_impl("CVE-2023-38545"))
     assert out["id"] == "CVE-2023-38545"
     assert "references" in out
 
 
 def test_osv_raw_returns_not_found_on_404(monkeypatch) -> None:
-    monkeypatch.setattr(tools_mod.requests, "get", lambda *a, **kw: _Resp(404))
+    monkeypatch.setattr(tools_mod, "_http_client", lambda: _StubHttpClient(status=404))
     out = json.loads(tools_mod._osv_raw_impl("CVE-9999-0000"))
     assert out == {"not_found": True, "cve_id": "CVE-9999-0000"}
 
 
 def test_osv_raw_returns_error_on_non_json(monkeypatch) -> None:
-    monkeypatch.setattr(tools_mod.requests, "get", lambda *a, **kw: _Resp(200, json_data=None))
+    monkeypatch.setattr(tools_mod, "_http_client", lambda: _StubHttpClient(json_data=None))
     out = json.loads(tools_mod._osv_raw_impl("CVE-X"))
     assert "error" in out
 
@@ -295,14 +268,14 @@ def test_nvd_raw_returns_not_found_when_no_payload(monkeypatch) -> None:
 
 def test_osv_expand_aliases_extracts_ghsa_list(monkeypatch) -> None:
     payload = {"id": "CVE-2024-1234", "aliases": ["GHSA-aaaa-bbbb-cccc", "DSA-1234-1"]}
-    monkeypatch.setattr(tools_mod.requests, "get", lambda *a, **kw: _Resp(200, json_data=payload))
+    monkeypatch.setattr(tools_mod, "_http_client", lambda: _StubHttpClient(json_data=payload))
     out = json.loads(tools_mod._osv_expand_aliases_impl("CVE-2024-1234"))
     assert "GHSA-aaaa-bbbb-cccc" in out["aliases"]
     assert out["primary_id"] == "CVE-2024-1234"
 
 
 def test_osv_expand_aliases_returns_empty_on_404(monkeypatch) -> None:
-    monkeypatch.setattr(tools_mod.requests, "get", lambda *a, **kw: _Resp(404))
+    monkeypatch.setattr(tools_mod, "_http_client", lambda: _StubHttpClient(status=404))
     out = json.loads(tools_mod._osv_expand_aliases_impl("CVE-9999-0000"))
     assert out["aliases"] == []
 
@@ -317,7 +290,7 @@ def test_deterministic_hints_extracts_github_commit_from_osv_refs(monkeypatch) -
         ],
         "affected": [],
     }
-    monkeypatch.setattr(tools_mod.requests, "get", lambda *a, **kw: _Resp(200, json_data=osv))
+    monkeypatch.setattr(tools_mod, "_http_client", lambda: _StubHttpClient(json_data=osv))
     monkeypatch.setattr(tools_mod._nvd, "get_payload", lambda cve_id: None)
     out = json.loads(tools_mod._deterministic_hints_impl("CVE-2024-X"))
     assert any(h["slug"] == "foo/bar" and "osv_reference" in h["source"] for h in out["hints"])
@@ -330,7 +303,7 @@ def test_deterministic_hints_extracts_kernel_shortlink(monkeypatch) -> None:
         ],
         "affected": [],
     }
-    monkeypatch.setattr(tools_mod.requests, "get", lambda *a, **kw: _Resp(200, json_data=osv))
+    monkeypatch.setattr(tools_mod, "_http_client", lambda: _StubHttpClient(json_data=osv))
     monkeypatch.setattr(tools_mod._nvd, "get_payload", lambda cve_id: None)
     out = json.loads(tools_mod._deterministic_hints_impl("CVE-2024-X"))
     assert any(h["slug"] == "torvalds/linux" and "kernel_shortlink" in h["source"] for h in out["hints"])
@@ -344,7 +317,7 @@ def test_deterministic_hints_dedupes_same_slug_sha(monkeypatch) -> None:
         ],
         "affected": [],
     }
-    monkeypatch.setattr(tools_mod.requests, "get", lambda *a, **kw: _Resp(200, json_data=osv))
+    monkeypatch.setattr(tools_mod, "_http_client", lambda: _StubHttpClient(json_data=osv))
     monkeypatch.setattr(tools_mod._nvd, "get_payload", lambda cve_id: None)
     out = json.loads(tools_mod._deterministic_hints_impl("CVE-X"))
     matches = [h for h in out["hints"] if h["slug"] == "foo/bar"]
@@ -531,18 +504,18 @@ def test_cgit_fetch_caps_body(monkeypatch) -> None:
 # --- http_fetch -------------------------------------------------------------
 
 def test_http_fetch_caps_body_and_returns_url(monkeypatch) -> None:
-    big = "y" * (tools_mod._MAX_BYTES * 4)
-    monkeypatch.setattr(tools_mod.requests, "get", lambda *a, **kw: _Resp(200, text=big, url="https://final.example/redirected"))
+    big = b"y" * (tools_mod._MAX_BYTES * 4)
+    monkeypatch.setattr(tools_mod, "_forge_client", lambda: _StubHttpClient(raw_bytes=big))
     out = json.loads(tools_mod._http_fetch_impl("https://example.com/page"))
     assert out["status"] == 200
-    assert out["url"] == "https://final.example/redirected"
+    assert out["url"] == "https://example.com/page"
     assert len(out["body"]) <= tools_mod._MAX_BYTES
 
 
 # --- oracle_check -----------------------------------------------------------
 
 def test_oracle_check_returns_match_exact(monkeypatch) -> None:
-    from tools.oracle.types import OracleVerdict, Verdict
+    from packages.osv.verdicts import OracleVerdict, Verdict
 
     def fake_verify(cve_id, slug, sha):
         return OracleVerdict(
@@ -551,14 +524,14 @@ def test_oracle_check_returns_match_exact(monkeypatch) -> None:
             expected_slugs=("foo/bar",), expected_shas=(sha,),
         )
 
-    monkeypatch.setattr("tools.oracle.cross_check._verify_one", fake_verify)
+    monkeypatch.setattr("cve_diff.oracle.cross_check._verify_one", fake_verify)
     out = json.loads(tools_mod._oracle_check_impl("CVE-X", "foo/bar", "abc123"))
     assert out["verdict"] == "match_exact"
     assert out["is_pass"] is True
 
 
 def test_oracle_check_returns_likely_hallucination_with_expected_slugs(monkeypatch) -> None:
-    from tools.oracle.types import OracleVerdict, Verdict
+    from packages.osv.verdicts import OracleVerdict, Verdict
 
     def fake_verify(cve_id, slug, sha):
         return OracleVerdict(
@@ -568,7 +541,7 @@ def test_oracle_check_returns_likely_hallucination_with_expected_slugs(monkeypat
             expected_shas=("8824b7af409f51f1316e92e9887c2fd48c0b26d6",),
         )
 
-    monkeypatch.setattr("tools.oracle.cross_check._verify_one", fake_verify)
+    monkeypatch.setattr("cve_diff.oracle.cross_check._verify_one", fake_verify)
     out = json.loads(tools_mod._oracle_check_impl("CVE-2023-0210", "torvalds/linux", "797805d81baa"))
     assert out["verdict"] == "likely_hallucination"
     assert "cifsd-team/ksmbd" in out["expected_slugs"]

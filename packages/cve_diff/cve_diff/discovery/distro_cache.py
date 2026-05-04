@@ -23,6 +23,7 @@ this module returns reference URLs untouched.
 
 from __future__ import annotations
 
+import functools
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -30,12 +31,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import requests
+from core.http import HttpError, Response
+from core.http.urllib_backend import UrllibClient
+from core.json.cache import JsonCache
 
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "cve-diff" / "distro"
-_TIMEOUT_S = 10.0
+_TIMEOUT_S = 10
 _MAX_BYTES = 256 * 1024
 _USER_AGENT = "cve-diff-agent/0.1"
+_CACHE_TTL = 86400 * 7  # 7 days — distro advisory data changes slowly
 
 _DEBIAN_URL = "https://security-tracker.debian.org/tracker/{cve_id}"
 _UBUNTU_URL = "https://ubuntu.com/security/cves.json?q={cve_id}"
@@ -49,6 +53,11 @@ class DistroFetcher:
     cache_enabled: bool = True
     cache_dir: Path = field(default_factory=lambda: DEFAULT_CACHE_DIR)
     _mem: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
+    _disk: JsonCache | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.cache_enabled and self._disk is None:
+            self._disk = JsonCache(self.cache_dir)
 
     def fetch_all(self, cve_id: str) -> dict[str, dict[str, Any]]:
         """Fan out to 3 distros in parallel, return per-distro results."""
@@ -66,82 +75,60 @@ class DistroFetcher:
         key = (distro, cve_id)
         if key in self._mem:
             return self._mem[key]
-        if self.cache_enabled:
-            disk = self._read_disk(distro, cve_id)
-            if disk is not None:
-                self._mem[key] = disk
-                return disk
+        if self.cache_enabled and self._disk is not None:
+            hit = self._disk.get(f"{distro}/{cve_id}", ttl_seconds=_CACHE_TTL)
+            if isinstance(hit, dict):
+                self._mem[key] = hit
+                return hit
         result = fetcher(cve_id)
-        # Cache 200s and structural 404s (CVE not tracked there is a
-        # stable answer). Skip transient network errors so a retry can
-        # succeed.
-        if "error" not in result or result["error"].startswith("http "):
-            if self.cache_enabled:
-                self._write_disk(distro, cve_id, result)
+        err = result.get("error", "")
+        cacheable = (
+            "error" not in result
+            or (err.startswith("http ") and not err.startswith("http 5"))
+        )
+        if cacheable:
+            if self.cache_enabled and self._disk is not None:
+                self._disk.put(f"{distro}/{cve_id}", result, ttl_seconds=_CACHE_TTL)
         self._mem[key] = result
         return result
 
-    def _cache_path(self, distro: str, cve_id: str) -> Path:
-        safe = re.sub(r"[^A-Za-z0-9_-]", "_", cve_id)
-        return self.cache_dir / f"{distro}_{safe}.json"
 
-    def _read_disk(self, distro: str, cve_id: str) -> dict[str, Any] | None:
-        try:
-            raw = self._cache_path(distro, cve_id).read_text(encoding="utf-8")
-        except OSError:
-            return None
-        try:
-            data = json.loads(raw)
-        except ValueError:
-            return None
-        return data if isinstance(data, dict) else None
-
-    def _write_disk(self, distro: str, cve_id: str, payload: dict[str, Any]) -> None:
-        path = self._cache_path(distro, cve_id)
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(path.suffix + ".tmp")
-            tmp.write_text(json.dumps(payload), encoding="utf-8")
-            tmp.replace(path)
-        except OSError:
-            pass
+@functools.lru_cache(maxsize=1)
+def _client() -> UrllibClient:
+    return UrllibClient(user_agent=_USER_AGENT)
 
 
 def _is_cve_id(cve_id: str) -> bool:
     return bool(re.match(r"^CVE-\d{4}-\d{4,7}$", cve_id or ""))
 
 
-def _get(url: str) -> requests.Response | dict[str, Any]:
+def _get_response(url: str) -> Response | dict[str, Any]:
+    """GET ``url`` via ``UrllibClient``. Returns ``Response`` on success
+    or ``{"error": "..."}`` on any failure."""
     try:
-        resp = requests.get(url, timeout=_TIMEOUT_S, headers={"User-Agent": _USER_AGENT})
-    except requests.RequestException as exc:
+        return _client().request("GET", url, timeout=_TIMEOUT_S, retries=0)
+    except HttpError as exc:
+        if exc.status:
+            return {"error": f"http {exc.status}"}
         return {"error": f"network: {str(exc)[:200]}"}
-    return resp
 
 
-def _http_or_error(url: str) -> tuple[requests.Response | None, dict[str, Any] | None]:
-    """Return ``(resp, None)`` on a 200; ``(None, error_dict)`` otherwise.
-
-    Centralizes the error-shape contract for the per-distro fetchers below:
-    ``{"error": "network: ..."}`` from ``_get`` on RequestException,
-    ``{"error": "http <code>"}`` on non-200. Each fetcher then handles only
-    its own parse step.
-    """
-    resp = _get(url)
-    if isinstance(resp, dict):
-        return None, resp
-    if resp.status_code != 200:
-        return None, {"error": f"http {resp.status_code}"}
-    return resp, None
+def _http_or_error(url: str) -> tuple[Response | None, dict[str, Any] | None]:
+    """Return ``(resp, None)`` on a 200; ``(None, error_dict)`` otherwise."""
+    result = _get_response(url)
+    if isinstance(result, dict):
+        return None, result
+    if result.status != 200:
+        return None, {"error": f"http {result.status}"}
+    return result, None
 
 
 def _fetch_debian(cve_id: str) -> dict[str, Any]:
-    """Scrape Debian security-tracker HTML — extract anchor URLs +
-    'Fixed by:' notes line."""
+    """Scrape Debian security-tracker HTML — extract anchor URLs."""
     resp, err = _http_or_error(_DEBIAN_URL.format(cve_id=cve_id))
     if err:
         return err
-    body = resp.text[:_MAX_BYTES]
+    body = resp.body.decode("utf-8", errors="replace")[:_MAX_BYTES]
     refs: list[str] = []
     for href in _HREF_RE.findall(body):
         if (href.startswith("http://") or href.startswith("https://")) and href not in refs:
@@ -157,8 +144,8 @@ def _fetch_ubuntu(cve_id: str) -> dict[str, Any]:
         return err
     try:
         data = resp.json()
-    except ValueError:
-        return {"error": "non-json response"}
+    except Exception as exc:
+        return {"error": f"non-json response: {type(exc).__name__}"}
     cves = data.get("cves") or []
     match = next((c for c in cves if (c.get("id") or "").upper() == cve_id.upper()), None)
     if match is None:
@@ -183,8 +170,8 @@ def _fetch_redhat(cve_id: str) -> dict[str, Any]:
         return err
     try:
         data = resp.json()
-    except ValueError:
-        return {"error": "non-json response"}
+    except Exception as exc:
+        return {"error": f"non-json response: {type(exc).__name__}"}
     refs = list(data.get("references") or [])
     affected = data.get("affected_release") or []
     fix_version = affected[0].get("package") if affected and isinstance(affected[0], dict) else None

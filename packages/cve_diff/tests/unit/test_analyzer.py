@@ -93,7 +93,6 @@ def _stub_client(text: str) -> MagicMock:
         model_id="claude-opus-4-7",
         input_tokens=123,
         output_tokens=45,
-        retries=0,
         cost_usd=0.005,
     )
     return stub

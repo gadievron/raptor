@@ -28,15 +28,21 @@ agent's chosen pointer.
 
 from __future__ import annotations
 
+import functools
 from collections import Counter
 from dataclasses import dataclass
 
-from cve_diff.core.url_re import (
+from core.http.urllib_backend import UrllibClient
+from core.url_patterns import (
     GITHUB_COMMIT_URL_RE,
     KERNEL_SHA_URL_RE,
     LINUX_UPSTREAM_SLUG,
+    SHA_DISPLAY_LEN,
+    extract_github_slug,
     normalize_slug,
 )
+from packages.nvd import NvdClient
+from packages.osv import OsvClient
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +84,7 @@ class ConsensusReport:
         ps = normalize_slug(picked_slug or "")
         return (
             ps == self.consensus_slug
-            and (picked_sha or "").lower().startswith(self.consensus_sha[:12].lower())
+            and (picked_sha or "").lower().startswith(self.consensus_sha[:SHA_DISPLAY_LEN].lower())
         )
 
     def to_dict(self) -> dict:
@@ -103,11 +109,25 @@ def _extract_pair_from_url(url: str) -> tuple[str, str] | None:
     return None
 
 
+@functools.lru_cache(maxsize=1)
+def _osv_client() -> OsvClient:
+    return OsvClient(http=UrllibClient(user_agent="cve-diff-consensus/0.1"))
+
+
+@functools.lru_cache(maxsize=1)
+def _nvd_client() -> NvdClient:
+    return NvdClient()
+
+
+def _fetch_osv_raw(cve_id: str) -> dict | None:
+    record = _osv_client().get_vuln(cve_id)
+    return record.raw if record is not None else None
+
+
 # ------------------------------------------------------------------ method 1
 def _osv_references(cve_id: str) -> MethodResult:
     """Method 1: scan OSV's references[].url for github commits."""
-    from tools.oracle.osv_oracle import _fetch_osv  # reuse existing fetcher
-    payload = _fetch_osv(cve_id)
+    payload = _fetch_osv_raw(cve_id)
     if payload is None:
         return MethodResult("OSV references", False, detail="OSV 404 / network failure")
     for ref in payload.get("references") or []:
@@ -116,12 +136,10 @@ def _osv_references(cve_id: str) -> MethodResult:
             slug, sha = pair
             return MethodResult("OSV references", True, slug=slug, sha=sha,
                                 detail=ref.get("url", ""))
-    # Fall back to affected[].ranges[].events[].fixed
     for aff in payload.get("affected") or []:
         for rng in aff.get("ranges") or []:
             if (rng.get("type") or "").upper() != "GIT":
                 continue
-            from cve_diff.core.url_re import extract_github_slug
             slug = extract_github_slug(rng.get("repo") or "") or ""
             for ev in rng.get("events") or []:
                 sha = (ev.get("fixed") or "").lower()
@@ -134,9 +152,7 @@ def _osv_references(cve_id: str) -> MethodResult:
 # ------------------------------------------------------------------ method 2
 def _nvd_patch_tagged(cve_id: str) -> MethodResult:
     """Method 2: scan NVD's references[] with tags=['Patch']."""
-    from cve_diff.discovery.nvd import NvdDiscoverer
-    nvd = NvdDiscoverer()
-    payload = nvd.get_payload(cve_id)
+    payload = _nvd_client().get_payload(cve_id)
     if payload is None:
         return MethodResult("NVD Patch-tagged", False, detail="NVD 404 / network failure")
     for vuln in payload.get("vulnerabilities") or []:
@@ -168,7 +184,7 @@ def run_consensus(cve_id: str) -> ConsensusReport:
     for m in methods:
         if not m.found or not m.slug or not m.sha:
             continue
-        key = (m.slug.lower(), m.sha[:12].lower())
+        key = (m.slug.lower(), m.sha[:SHA_DISPLAY_LEN].lower())
         counts[key] += 1
         # Keep the longest SHA we've seen (different methods may publish
         # different abbreviation lengths).
@@ -205,7 +221,7 @@ def render_markdown(report: ConsensusReport) -> str:
     for m in report.methods:
         if m.found:
             lines.append(
-                f"| {m.name} | ✓ | {m.slug} / {m.sha[:12]} | "
+                f"| {m.name} | ✓ | {m.slug} / {m.sha[:SHA_DISPLAY_LEN]} | "
                 f"{(m.detail or '')[:80]} |"
             )
         else:
@@ -214,7 +230,7 @@ def render_markdown(report: ConsensusReport) -> str:
     if report.agreement_count >= 2:
         lines.append(
             f"**Both methods agree on "
-            f"`{report.consensus_slug}/{report.consensus_sha[:12]}`.**"
+            f"`{report.consensus_slug}/{report.consensus_sha[:SHA_DISPLAY_LEN]}`.**"
         )
     elif report.attempted_count == 0:
         lines.append("**No method found a fix-commit pointer for this CVE.**")

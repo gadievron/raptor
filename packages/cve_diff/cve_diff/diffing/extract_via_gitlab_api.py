@@ -18,10 +18,13 @@ This module:
 """
 from __future__ import annotations
 
+import functools
 import re
 from typing import Optional
+from urllib.parse import quote as _urlquote
 
-import requests
+from core.http import HttpError
+from core.http.urllib_backend import UrllibClient
 
 from cve_diff.core.exceptions import AnalysisError
 from cve_diff.core.models import CommitSha, DiffBundle, FileChange, RepoRef
@@ -32,7 +35,15 @@ from cve_diff.diffing.extract_via_api import (
 )
 
 
-_TIMEOUT_S = 10.0
+_TIMEOUT_S = 10
+_USER_AGENT = "cve-diff-gitlab/0.1"
+
+
+@functools.lru_cache(maxsize=1)
+def _client() -> UrllibClient:
+    return UrllibClient(user_agent=_USER_AGENT)
+
+
 _GITLAB_HOST_RE = re.compile(
     r"^(https?://(?:gitlab\.com|gitlab\.[^/]+))/"
     r"([^?#]+?)/?$",
@@ -82,23 +93,25 @@ def extract_via_gitlab_api(cve_id: str, ref: RepoRef) -> DiffBundle:
         )
 
     sha = (ref.fix_commit or "").strip().lower()
-    encoded = requests.utils.quote(slug, safe="")
+    encoded = _urlquote(slug, safe="")
     base = f"{host}/api/v4/projects/{encoded}/repository/commits/{sha}"
 
     try:
-        meta_resp = requests.get(base, timeout=_TIMEOUT_S)
-    except requests.RequestException as exc:
+        meta_resp = _client().request(
+            "GET", base, timeout=_TIMEOUT_S, retries=0,
+        )
+    except HttpError as exc:
         raise AnalysisError(
-            f"{cve_id}: GitLab commit API network error for {slug}@{sha[:12]}: {exc}"
+            f"{cve_id}: GitLab commit API error for {slug}@{sha[:12]}: {exc}"
         ) from exc
-    if meta_resp.status_code != 200:
+    if meta_resp.status != 200:
         raise AnalysisError(
-            f"{cve_id}: GitLab commit API returned http {meta_resp.status_code} "
+            f"{cve_id}: GitLab commit API returned http {meta_resp.status} "
             f"for {slug}@{sha[:12]}"
         )
     try:
         meta = meta_resp.json()
-    except ValueError as exc:
+    except Exception as exc:
         raise AnalysisError(
             f"{cve_id}: GitLab commit API returned non-JSON for {slug}@{sha[:12]}"
         ) from exc
@@ -112,18 +125,20 @@ def extract_via_gitlab_api(cve_id: str, ref: RepoRef) -> DiffBundle:
     parent_sha = parents[0].lower()
 
     try:
-        diff_resp = requests.get(f"{base}/diff", timeout=_TIMEOUT_S)
-    except requests.RequestException as exc:
+        diff_resp = _client().request(
+            "GET", f"{base}/diff", timeout=_TIMEOUT_S, retries=0,
+        )
+    except HttpError as exc:
         raise AnalysisError(
-            f"{cve_id}: GitLab diff API network error: {exc}"
+            f"{cve_id}: GitLab diff API error: {exc}"
         ) from exc
-    if diff_resp.status_code != 200:
+    if diff_resp.status != 200:
         raise AnalysisError(
-            f"{cve_id}: GitLab diff API returned http {diff_resp.status_code}"
+            f"{cve_id}: GitLab diff API returned http {diff_resp.status}"
         )
     try:
         diff_entries = diff_resp.json()
-    except ValueError as exc:
+    except Exception as exc:
         raise AnalysisError(
             f"{cve_id}: GitLab diff API returned non-JSON"
         ) from exc
@@ -214,7 +229,7 @@ def extract_for_agreement(
 
     results: list[tuple[str, DiffBundle]] = []
 
-    from cve_diff.core.url_re import is_github_url
+    from core.url_patterns import is_github_url
     url = ref.repository_url or ""
     # JSON API path (per-forge).
     if is_github_url(url):

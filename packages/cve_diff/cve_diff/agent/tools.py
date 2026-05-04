@@ -21,15 +21,14 @@ import functools
 import json
 import re
 import subprocess
-import time
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable
+from typing import Any, Callable
 from urllib.parse import quote
-
-import requests
 
 from core.http import HttpError
 from core.http.egress_backend import EgressClient
+from core.http.urllib_backend import UrllibClient
+from core.llm.tool_use.types import ToolDef
 
 from cve_diff.discovery.nvd import NvdDiscoverer
 from cve_diff.infra import github_client
@@ -103,17 +102,18 @@ def _forge_client() -> EgressClient:
     must be added to ``_AGENT_FORGE_HOSTS`` first.
     """
     return EgressClient(allowed_hosts=_AGENT_FORGE_HOSTS, user_agent=_USER_AGENT)
+
+
+@functools.lru_cache(maxsize=1)
+def _http_client() -> UrllibClient:
+    """Process-wide ``UrllibClient`` for OSV / NVD / general HTTP calls."""
+    return UrllibClient(user_agent=_USER_AGENT)
+
+
 _OSV_BASE = "https://api.osv.dev/v1"
 _GH_API = "https://api.github.com"
-# GitHub retry budget: 3 attempts on 429 / 5xx, 1s base exponential
-# backoff. 4xx other than 429 fail fast (likely client-side bug).
-# Mirrors the NVD pattern at cve_diff/discovery/nvd.py:137-171.
-_GH_RETRY_MAX = 3
-_GH_RETRY_BASE_S = 1.0
-# Re-export under the historical underscore-prefixed names so existing
-# call sites (including out-of-tree oracle/) keep working. Canonical
-# definitions live in cve_diff.core.url_re.
-from cve_diff.core.url_re import (  # noqa: E402
+_GH_RETRIES = 3
+from core.url_patterns import (  # noqa: E402
     GITHUB_COMMIT_URL_RE as _GITHUB_COMMIT_URL_RE,
     KERNEL_SHA_URL_RE as _KERNEL_SHA_URL_RE,
     LINUX_UPSTREAM_SLUG as _LINUX_UPSTREAM_SLUG,
@@ -137,47 +137,48 @@ class Tool:
             "input_schema": self.parameters,
         }
 
+    def to_tool_def(self) -> ToolDef:
+        """Convert to :class:`core.llm.tool_use.types.ToolDef`.
+
+        Wraps ``impl(**kwargs)`` into the ``handler(dict) -> str``
+        signature that :class:`ToolUseLoop` expects.
+        """
+        fn = self.impl
+        return ToolDef(
+            name=self.name,
+            description=self.description,
+            input_schema=self.parameters,
+            handler=lambda args, _fn=fn: _fn(**args),
+        )
+
 
 def _err(msg: str) -> str:
     return json.dumps({"error": msg[:300]})
 
 
+def _safe_json(data: Any, max_bytes: int = _MAX_BYTES) -> str:
+    """Serialize to valid JSON within ``max_bytes``."""
+    raw = json.dumps(data)
+    if len(raw) <= max_bytes:
+        return raw
+    return json.dumps({"truncated": True, "original_bytes": len(raw)})
+
+
 def _gh_get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any] | list | None:
     if not github_client._bucket().try_acquire():
         return None
-    delay = _GH_RETRY_BASE_S
-    for attempt in range(_GH_RETRY_MAX + 1):
-        try:
-            resp = requests.get(
-                f"{_GH_API}{path}",
-                params=params or {},
-                headers=github_client._headers(),
-                timeout=_TIMEOUT_S,
-            )
-        except requests.RequestException:
-            return None
-        if resp.status_code == 200:
-            try:
-                return resp.json()
-            except ValueError:
-                return None
-        # 429: rate-limited. Respect Retry-After when GitHub provides it.
-        if resp.status_code == 429 and attempt < _GH_RETRY_MAX:
-            retry_after = resp.headers.get("Retry-After", "")
-            try:
-                wait_s = max(float(retry_after), delay) if retry_after else delay
-            except ValueError:
-                wait_s = delay
-            time.sleep(wait_s)
-            delay *= 2
-            continue
-        # 5xx: transient server error.
-        if 500 <= resp.status_code < 600 and attempt < _GH_RETRY_MAX:
-            time.sleep(delay)
-            delay *= 2
-            continue
+    query = "&".join(f"{k}={quote(str(v), safe='')}" for k, v in (params or {}).items())
+    url = f"{_GH_API}{path}" + (f"?{query}" if query else "")
+    try:
+        data = _http_client().get_json(
+            url,
+            timeout=int(_TIMEOUT_S),
+            headers=github_client._headers(),
+            retries=_GH_RETRIES,
+        )
+    except HttpError:
         return None
-    return None
+    return data
 
 
 # ---------------------------------------------------------------- OSV + NVD
@@ -186,17 +187,14 @@ def _osv_raw_impl(cve_id: str) -> str:
     if not cve_id:
         return _err("cve_id required")
     try:
-        resp = requests.get(f"{_OSV_BASE}/vulns/{cve_id}", timeout=_TIMEOUT_S)
-    except requests.RequestException as exc:
-        return _err(f"network: {exc}")
-    if resp.status_code == 404:
-        return json.dumps({"not_found": True, "cve_id": cve_id})
-    if resp.status_code != 200:
-        return _err(f"http {resp.status_code}")
-    try:
-        return json.dumps(resp.json())[:_MAX_BYTES]
-    except ValueError:
-        return _err("non-json")
+        data = _http_client().get_json(
+            f"{_OSV_BASE}/vulns/{cve_id}", timeout=int(_TIMEOUT_S), retries=0,
+        )
+    except HttpError as exc:
+        if exc.status == 404:
+            return json.dumps({"not_found": True, "cve_id": cve_id})
+        return _err(f"http {exc.status or 'error'}: {str(exc)[:120]}")
+    return _safe_json(data)
 
 
 def _nvd_raw_impl(cve_id: str) -> str:
@@ -205,7 +203,7 @@ def _nvd_raw_impl(cve_id: str) -> str:
     payload = _nvd.get_payload(cve_id)
     if payload is None:
         return json.dumps({"not_found": True, "cve_id": cve_id})
-    return json.dumps(payload)[:_MAX_BYTES]
+    return _safe_json(payload)
 
 
 def _osv_expand_aliases_impl(identifier: str) -> str:
@@ -214,15 +212,11 @@ def _osv_expand_aliases_impl(identifier: str) -> str:
     if not identifier:
         return _err("identifier required")
     try:
-        resp = requests.get(f"{_OSV_BASE}/vulns/{identifier}", timeout=_TIMEOUT_S)
-    except requests.RequestException as exc:
-        return _err(f"network: {exc}")
-    if resp.status_code != 200:
+        data = _http_client().get_json(
+            f"{_OSV_BASE}/vulns/{identifier}", timeout=int(_TIMEOUT_S), retries=0,
+        )
+    except HttpError:
         return json.dumps({"aliases": []})
-    try:
-        data = resp.json()
-    except ValueError:
-        return _err("non-json")
     aliases = list(data.get("aliases") or [])
     return json.dumps({"aliases": aliases, "primary_id": data.get("id")})
 
@@ -235,32 +229,32 @@ def _deterministic_hints_impl(cve_id: str) -> str:
     hints: list[dict[str, str]] = []
     # OSV
     try:
-        resp = requests.get(f"{_OSV_BASE}/vulns/{cve_id}", timeout=_TIMEOUT_S)
-        if resp.status_code == 200:
-            data = resp.json()
-            for ref in data.get("references") or []:
-                url = ref.get("url") or ""
-                m = _GITHUB_COMMIT_URL_RE.search(url)
-                if m:
-                    hints.append({"slug": m.group(1), "sha": m.group(2), "source": "osv_reference"})
+        data = _http_client().get_json(
+            f"{_OSV_BASE}/vulns/{cve_id}", timeout=int(_TIMEOUT_S), retries=0,
+        )
+        for ref in data.get("references") or []:
+            url = ref.get("url") or ""
+            m = _GITHUB_COMMIT_URL_RE.search(url)
+            if m:
+                hints.append({"slug": m.group(1), "sha": m.group(2), "source": "osv_reference"})
+                continue
+            km = _KERNEL_SHA_URL_RE.search(url)
+            if km:
+                hints.append({"slug": _LINUX_UPSTREAM_SLUG, "sha": km.group(1), "source": "osv_kernel_shortlink"})
+        for aff in data.get("affected") or []:
+            for rng in aff.get("ranges") or []:
+                if (rng.get("type") or "").upper() != "GIT":
                     continue
-                km = _KERNEL_SHA_URL_RE.search(url)
-                if km:
-                    hints.append({"slug": _LINUX_UPSTREAM_SLUG, "sha": km.group(1), "source": "osv_kernel_shortlink"})
-            for aff in data.get("affected") or []:
-                for rng in aff.get("ranges") or []:
-                    if (rng.get("type") or "").upper() != "GIT":
-                        continue
-                    repo = rng.get("repo") or ""
-                    repo_slug = ""
-                    m = re.match(r"https?://github\.com/([^/]+/[^/.\s]+)", repo)
-                    if m:
-                        repo_slug = m.group(1)
-                    for ev in rng.get("events") or []:
-                        sha = ev.get("fixed") or ""
-                        if sha and repo_slug:
-                            hints.append({"slug": repo_slug, "sha": sha, "source": "osv_affected_fixed"})
-    except requests.RequestException:
+                repo = rng.get("repo") or ""
+                repo_slug = ""
+                m = re.match(r"https?://github\.com/([^/]+/[^/.\s]+)", repo)
+                if m:
+                    repo_slug = m.group(1)
+                for ev in rng.get("events") or []:
+                    sha = ev.get("fixed") or ""
+                    if sha and repo_slug:
+                        hints.append({"slug": repo_slug, "sha": sha, "source": "osv_affected_fixed"})
+    except HttpError:
         pass
     # NVD
     nvd_payload = _nvd.get_payload(cve_id)
@@ -464,7 +458,10 @@ def _cgit_fetch_impl(host: str, slug: str, sha: str) -> str:
     return json.dumps({"url": url, "body": body[:_MAX_BYTES]})
 
 
-_distro = None
+@functools.lru_cache(maxsize=1)
+def _distro_fetcher():
+    from cve_diff.discovery.distro_cache import DistroFetcher
+    return DistroFetcher()
 
 
 def _fetch_distro_advisory_impl(cve_id: str = "") -> str:
@@ -475,11 +472,7 @@ def _fetch_distro_advisory_impl(cve_id: str = "") -> str:
     """
     if not cve_id:
         return _err("cve_id required")
-    global _distro
-    if _distro is None:
-        from cve_diff.discovery.distro_cache import DistroFetcher
-        _distro = DistroFetcher()
-    results = _distro.fetch_all(cve_id)
+    results = _distro_fetcher().fetch_all(cve_id)
     candidates: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
     for distro_name, data in results.items():
@@ -500,7 +493,7 @@ def _fetch_distro_advisory_impl(cve_id: str = "") -> str:
                 if (slug, sha) not in seen:
                     seen.add((slug, sha))
                     candidates.append({"slug": slug, "sha": sha, "distro": distro_name, "via": url})
-    return json.dumps({"candidates": candidates, "distro_status": results})[:_MAX_BYTES * 8]
+    return _safe_json({"candidates": candidates, "distro_status": results}, max_bytes=_MAX_BYTES * 8)
 
 
 def _oracle_check_impl(cve_id: str = "", slug: str = "", sha: str = "") -> str:
@@ -526,7 +519,7 @@ def _oracle_check_impl(cve_id: str = "", slug: str = "", sha: str = "") -> str:
     if not cve_id or not slug or not sha:
         return _err("cve_id, slug, sha all required")
     try:
-        from tools.oracle.cross_check import _verify_one
+        from cve_diff.oracle.cross_check import _verify_one
     except ImportError as exc:
         return _err(f"oracle unavailable: {exc}")
     try:
@@ -575,12 +568,13 @@ def _http_fetch_impl(url: str) -> str:
     if not url or not re.match(r"^https?://", url):
         return _err("http(s) url required")
     try:
-        resp = requests.get(url, timeout=_TIMEOUT_S, headers={"User-Agent": _USER_AGENT})
-    except requests.RequestException as exc:
-        return _err(f"network: {exc}")
-    if resp.status_code != 200:
-        return _err(f"http {resp.status_code}")
-    return json.dumps({"url": resp.url, "status": resp.status_code, "body": resp.text[:_MAX_BYTES]})
+        body_bytes = _forge_client().get_bytes(
+            url, timeout=int(_TIMEOUT_S), max_bytes=_MAX_BYTES, retries=0,
+        )
+    except HttpError as exc:
+        return _err(f"http {exc.status or 'error'}: {str(exc)[:120]}")
+    body = body_bytes.decode("utf-8", errors="replace")
+    return json.dumps({"url": url, "status": 200, "body": body[:_MAX_BYTES]})
 
 
 # ---------------------------------------------------------------- Tool catalog

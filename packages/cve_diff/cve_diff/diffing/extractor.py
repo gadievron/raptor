@@ -14,7 +14,7 @@ from pathlib import Path
 from cve_diff.core.exceptions import AnalysisError
 from cve_diff.core.models import CommitSha, DiffBundle, FileChange, RepoRef
 from cve_diff.core.path_classifier import is_test_path
-from cve_diff.core.url_re import GITHUB_REPO_URL_RE, normalize_slug
+from core.url_patterns import GITHUB_REPO_URL_RE, normalize_slug
 from cve_diff.diffing import shape_dynamic
 from cve_diff.infra import github_client
 
@@ -139,9 +139,12 @@ def _show_blob(repo: Path, sha: CommitSha, path: str, timeout_s: int,
     )
     if completed.returncode != 0:
         return None
-    text = completed.stdout.decode("utf-8", errors="replace")
-    if len(text.encode("utf-8")) > cap_bytes:
-        return text[:cap_bytes] + "\n... [truncated]\n"
+    raw = completed.stdout
+    if len(raw) > cap_bytes:
+        raw = raw[:cap_bytes]
+    text = raw.decode("utf-8", errors="replace")
+    if len(completed.stdout) > cap_bytes:
+        text += "\n... [truncated]\n"
     return text
 
 

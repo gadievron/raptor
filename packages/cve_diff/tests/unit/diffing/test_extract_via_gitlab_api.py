@@ -12,10 +12,12 @@ clone bundle.
 """
 from __future__ import annotations
 
-import json
+import json as _json
+from typing import Any
 
 import pytest
 
+from core.http import HttpError, Response
 from cve_diff.core.exceptions import AnalysisError
 from cve_diff.core.models import CommitSha, RepoRef
 
@@ -62,28 +64,29 @@ def test_extract_via_gitlab_api_returns_bundle_on_success(
 
     captured_urls: list[str] = []
 
-    def fake_get(url, **_kw):
-        captured_urls.append(url)
-        # First call: fetch the commit (for parent_ids)
-        if "/commits/" in url and "/diff" not in url:
-            return _FakeResp(200, {
-                "id": "deadbeef0001",
-                "parent_ids": ["cafebabe9999"],
-                "title": "fix something",
-            })
-        # Second call: fetch the diff
-        if url.endswith("/diff"):
-            return _FakeResp(200, [
-                {"old_path": "src/foo.c", "new_path": "src/foo.c",
-                 "diff": "@@ -1,1 +1,1 @@\n-old\n+new\n",
-                 "new_file": False, "deleted_file": False},
-                {"old_path": "tests/test_foo.c", "new_path": "tests/test_foo.c",
-                 "diff": "@@ -1,1 +1,2 @@\n test\n+new test\n",
-                 "new_file": False, "deleted_file": False},
-            ])
-        return _FakeResp(404, {})
+    class _StubClient:
+        def request(self, method, url, *, timeout=None, retries=0, **kw):
+            captured_urls.append(url)
+            if "/commits/" in url and "/diff" not in url:
+                body = _json.dumps({
+                    "id": "deadbeef0001",
+                    "parent_ids": ["cafebabe9999"],
+                    "title": "fix something",
+                }).encode()
+                return Response(status=200, headers={}, body=body, url=url)
+            if url.endswith("/diff"):
+                body = _json.dumps([
+                    {"old_path": "src/foo.c", "new_path": "src/foo.c",
+                     "diff": "@@ -1,1 +1,1 @@\n-old\n+new\n",
+                     "new_file": False, "deleted_file": False},
+                    {"old_path": "tests/test_foo.c", "new_path": "tests/test_foo.c",
+                     "diff": "@@ -1,1 +1,2 @@\n test\n+new test\n",
+                     "new_file": False, "deleted_file": False},
+                ]).encode()
+                return Response(status=200, headers={}, body=body, url=url)
+            raise HttpError("HTTP 404", status=404)
 
-    monkeypatch.setattr(mod.requests, "get", fake_get)
+    monkeypatch.setattr(mod, "_client", lambda: _StubClient())
     bundle = mod.extract_via_gitlab_api(
         "CVE-9999-9999",
         RepoRef(
@@ -99,10 +102,8 @@ def test_extract_via_gitlab_api_returns_bundle_on_success(
     paths = [f.path for f in bundle.files]
     assert "src/foo.c" in paths
     assert "tests/test_foo.c" in paths
-    # The two API calls were made (commit metadata + diff)
     assert any("/commits/deadbeef0001/diff" in u for u in captured_urls)
     assert any("/commits/deadbeef0001" in u and "/diff" not in u for u in captured_urls)
-    # URL-encoded slug
     assert "libtiff%2Flibtiff" in captured_urls[0]
 
 
@@ -123,8 +124,12 @@ def test_extract_via_gitlab_api_refuses_non_gitlab_url() -> None:
 
 def test_extract_via_gitlab_api_raises_on_404(monkeypatch: pytest.MonkeyPatch) -> None:
     import cve_diff.diffing.extract_via_gitlab_api as mod
-    monkeypatch.setattr(mod.requests, "get",
-                        lambda *_a, **_k: _FakeResp(404, {}))
+
+    class _Stub:
+        def request(self, *a, **kw):
+            raise HttpError("HTTP 404", status=404)
+
+    monkeypatch.setattr(mod, "_client", lambda: _Stub())
     with pytest.raises(AnalysisError):
         mod.extract_via_gitlab_api(
             "CVE-9999-9999",
@@ -142,10 +147,16 @@ def test_extract_via_gitlab_api_raises_on_no_parent(
     """A root commit (parent_ids: []) propagates as a clear error,
     same shape as GitHub's API path for root commits."""
     import cve_diff.diffing.extract_via_gitlab_api as mod
-    monkeypatch.setattr(mod.requests, "get", lambda u, **_kw: (
-        _FakeResp(200, {"id": "deadbeef0001", "parent_ids": []})
-        if "/diff" not in u else _FakeResp(200, [])
-    ))
+
+    class _Stub:
+        def request(self, method, url, **kw):
+            if "/diff" not in url:
+                body = _json.dumps({"id": "deadbeef0001", "parent_ids": []}).encode()
+            else:
+                body = _json.dumps([]).encode()
+            return Response(status=200, headers={}, body=body, url=url)
+
+    monkeypatch.setattr(mod, "_client", lambda: _Stub())
     with pytest.raises(AnalysisError):
         mod.extract_via_gitlab_api(
             "CVE-9999-9999",
@@ -245,15 +256,6 @@ def test_extract_for_agreement_empty_for_unsupported(
 
 
 # --- helpers for the tests above ---
-
-class _FakeResp:
-    def __init__(self, status_code: int, body) -> None:
-        self.status_code = status_code
-        self._body = body
-
-    def json(self):
-        return self._body
-
 
 def _stub_bundle(cve_id: str):
     """Minimal DiffBundle for routing tests."""

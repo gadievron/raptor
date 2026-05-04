@@ -21,19 +21,26 @@ The auxiliary check must never abort the pipeline.
 """
 from __future__ import annotations
 
+import functools
 import re
 
-import requests
+from core.http import HttpError
+from core.http.urllib_backend import UrllibClient
 
 from cve_diff.core.models import CommitSha, DiffBundle, FileChange, RepoRef
 from cve_diff.core.path_classifier import is_test_path
-from cve_diff.core.url_re import extract_github_slug
+from core.url_patterns import extract_github_slug
 from cve_diff.diffing import shape_dynamic
 from cve_diff.diffing.extract_via_gitlab_api import _gitlab_host_and_slug
 
 _TIMEOUT_S = 10
 _USER_AGENT = "cve-diff/0.1 (+https://github.com/cve-diff)"
 _MAX_BYTES = 5_000_000  # 5MB cap on patch body
+
+
+@functools.lru_cache(maxsize=1)
+def _client() -> UrllibClient:
+    return UrllibClient(user_agent=_USER_AGENT)
 
 
 def _patch_url_for(ref: RepoRef) -> str | None:
@@ -71,7 +78,7 @@ def _patch_url_for(ref: RepoRef) -> str | None:
     # ``git.savannah.gnu.org`` shows up in two slightly different host
     # forms across NVD records, so a strict hostname check would miss
     # legitimate variants.
-    from cve_diff.core.url_re import is_kernel_org_url
+    from core.url_patterns import is_kernel_org_url
     low = url.lower()
     if is_kernel_org_url(url) or "/cgit/" in low or "git.savannah" in low:
         base = url.rstrip("/")
@@ -123,16 +130,14 @@ def extract_via_patch_url(cve_id: str, ref: RepoRef) -> DiffBundle | None:
     if url is None:
         return None
     try:
-        resp = requests.get(
-            url,
-            timeout=_TIMEOUT_S,
-            headers={"User-Agent": _USER_AGENT},
+        resp = _client().request(
+            "GET", url, timeout=_TIMEOUT_S, retries=0,
         )
-    except requests.RequestException:
+    except HttpError:
         return None
-    if resp.status_code != 200:
+    if resp.status != 200:
         return None
-    body = resp.text
+    body = resp.body.decode("utf-8", errors="replace")
     if not body or not body.strip():
         return None
     if len(body) > _MAX_BYTES:

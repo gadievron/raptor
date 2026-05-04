@@ -106,7 +106,7 @@ def test_rescued_rejects_empty_repo() -> None:
 def test_unsupported() -> None:
     out = discover_validator({"outcome": "unsupported", "rationale": "router firmware"}, _CTX)
     assert isinstance(out, AgentSurrender)
-    assert out.reason == "UnsupportedSource"
+    assert out.reason == "unsupported_source"
 
 
 def test_no_evidence() -> None:

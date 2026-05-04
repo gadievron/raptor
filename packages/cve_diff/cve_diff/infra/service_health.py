@@ -19,13 +19,16 @@ without delaying the main work. Each probe returns within ``timeout_s``
 
 from __future__ import annotations
 
+import functools
+import json
 import os
 import socket
 import subprocess
 import time
 from dataclasses import dataclass
 
-import requests
+from core.http import HttpError
+from core.http.urllib_backend import UrllibClient
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,83 +46,101 @@ class HealthResult:
         return f"  {status}  {self.name:<22} {latency}  {self.detail[:60]}{rl}"
 
 
-_TIMEOUT_S = 10.0
+_TIMEOUT_S = 10
 
 
-def _timed_get(url: str, headers: dict | None = None) -> tuple[float, requests.Response | None, str]:
-    """Return (latency_ms, response, error). One of response/error is filled."""
+@functools.lru_cache(maxsize=1)
+def _client() -> UrllibClient:
+    return UrllibClient(user_agent="cve-diff-health/0.1")
+
+
+def _timed_get(url: str, headers: dict | None = None) -> tuple[float, dict | bytes | None, int, str]:
+    """Return (latency_ms, body_or_none, status, error). ``body`` is parsed JSON
+    when the Content-Type looks like JSON, raw bytes otherwise."""
     start = time.monotonic()
     try:
-        resp = requests.get(url, headers=headers or {}, timeout=_TIMEOUT_S)
-        return ((time.monotonic() - start) * 1000.0, resp, "")
-    except requests.RequestException as exc:
-        return ((time.monotonic() - start) * 1000.0, None, str(exc)[:120])
+        resp = _client().request(
+            "GET", url, headers=headers, timeout=_TIMEOUT_S, retries=0,
+        )
+        elapsed = (time.monotonic() - start) * 1000.0
+        try:
+            body = resp.json()
+        except Exception:
+            body = resp.body
+        return (elapsed, body, resp.status, "")
+    except HttpError as exc:
+        return ((time.monotonic() - start) * 1000.0, None, exc.status or 0, str(exc)[:120])
+
+
+def _health_model() -> str:
+    """Current default Anthropic model from the shared model registry."""
+    try:
+        from core.llm.model_data import PROVIDER_DEFAULT_MODELS
+        return PROVIDER_DEFAULT_MODELS.get("anthropic", "claude-sonnet-4-6")
+    except Exception:
+        return "claude-sonnet-4-6"
 
 
 def probe_anthropic() -> HealthResult:
-    """Anthropic: HEAD on the messages endpoint without a body fails fast
-    but proves reachability. We don't actually invoke the LLM."""
+    """Anthropic: 1-token message to prove reachability."""
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
         return HealthResult("Anthropic API", False, 0,
                             detail="ANTHROPIC_API_KEY not set")
     start = time.monotonic()
+    body = json.dumps({"model": _health_model(), "max_tokens": 1,
+                       "messages": [{"role": "user", "content": "x"}]}).encode()
     try:
-        resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
+        resp = _client().request(
+            "POST", "https://api.anthropic.com/v1/messages",
+            body=body,
             headers={
                 "x-api-key": api_key,
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
             },
-            json={"model": "claude-opus-4-7", "max_tokens": 1,
-                  "messages": [{"role": "user", "content": "x"}]},
-            timeout=_TIMEOUT_S,
+            timeout=_TIMEOUT_S, retries=0,
         )
-    except requests.RequestException as exc:
-        return HealthResult("Anthropic API", False,
-                            (time.monotonic() - start) * 1000.0,
+    except HttpError as exc:
+        latency = (time.monotonic() - start) * 1000.0
+        status = exc.status or 0
+        if status == 401:
+            return HealthResult("Anthropic API", False, latency, detail="auth (401)")
+        if status == 529:
+            return HealthResult("Anthropic API", False, latency, detail="overloaded (529)")
+        if status == 429:
+            return HealthResult("Anthropic API", False, latency,
+                                detail="rate-limited (429)",
+                                rate_limit=str(exc.retry_after or ""))
+        return HealthResult("Anthropic API", False, latency,
                             detail=f"network: {str(exc)[:80]}")
     latency = (time.monotonic() - start) * 1000.0
-    # 200 = success (we sent a real ping). 401 = bad key. 529 = overloaded. 429 = rate-limited.
-    if resp.status_code == 200:
-        return HealthResult("Anthropic API", True, latency, detail="ok (1-token ping)")
-    if resp.status_code == 401:
-        return HealthResult("Anthropic API", False, latency, detail="auth (401)")
-    if resp.status_code == 529:
-        return HealthResult("Anthropic API", False, latency, detail="overloaded (529)")
-    if resp.status_code == 429:
-        return HealthResult("Anthropic API", False, latency,
-                            detail="rate-limited (429)",
-                            rate_limit=resp.headers.get("retry-after", ""))
-    return HealthResult("Anthropic API", False, latency, detail=f"http {resp.status_code}")
+    return HealthResult("Anthropic API", True, latency, detail="ok (1-token ping)")
 
 
 def probe_nvd() -> HealthResult:
     api_key = os.environ.get("NVD_API_KEY", "").strip()
     headers = {"apiKey": api_key} if api_key else {}
-    latency, resp, err = _timed_get(
+    latency, body, status, err = _timed_get(
         "https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=CVE-2016-5195",
         headers=headers,
     )
     if err:
         return HealthResult("NVD API", False, latency, detail=f"network: {err}")
-    if resp is None or resp.status_code != 200:
-        return HealthResult("NVD API", False, latency,
-                            detail=f"http {resp.status_code if resp else '?'}")
+    if status != 200:
+        return HealthResult("NVD API", False, latency, detail=f"http {status}")
     rl = "with API key (50 req/30s)" if api_key else "no API key (5 req/30s — slow)"
     return HealthResult("NVD API", True, latency, detail="ok", rate_limit=rl)
 
 
 def probe_osv() -> HealthResult:
-    latency, resp, err = _timed_get(
+    latency, body, status, err = _timed_get(
         "https://api.osv.dev/v1/vulns/CVE-2016-5195"
     )
     if err:
         return HealthResult("OSV API", False, latency, detail=f"network: {err}")
-    if resp is None or resp.status_code != 200:
-        return HealthResult("OSV API", False, latency,
-                            detail=f"http {resp.status_code if resp else '?'}")
+    if status != 200:
+        return HealthResult("OSV API", False, latency, detail=f"http {status}")
     return HealthResult("OSV API", True, latency, detail="ok")
 
 
@@ -134,16 +155,15 @@ def probe_github() -> HealthResult:
     headers = {"Accept": "application/vnd.github+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    latency, resp, err = _timed_get(
+    latency, body, status, err = _timed_get(
         "https://api.github.com/rate_limit",
         headers=headers,
     )
     if err:
         return HealthResult("GitHub API", False, latency, detail=f"network: {err}")
-    if resp is None or resp.status_code != 200:
-        return HealthResult("GitHub API", False, latency,
-                            detail=f"http {resp.status_code if resp else '?'}")
-    data = resp.json()
+    if status != 200:
+        return HealthResult("GitHub API", False, latency, detail=f"http {status}")
+    data = body if isinstance(body, dict) else {}
     core = (data.get("resources") or {}).get("core") or {}
     remaining = core.get("remaining", "?")
     limit = core.get("limit", "?")
@@ -152,38 +172,35 @@ def probe_github() -> HealthResult:
 
 
 def probe_debian() -> HealthResult:
-    latency, resp, err = _timed_get(
+    latency, body, status, err = _timed_get(
         "https://security-tracker.debian.org/tracker/CVE-2016-5195",
     )
     if err:
         return HealthResult("Debian tracker", False, latency, detail=f"network: {err}")
-    if resp is None or resp.status_code != 200:
-        return HealthResult("Debian tracker", False, latency,
-                            detail=f"http {resp.status_code if resp else '?'}")
+    if status != 200:
+        return HealthResult("Debian tracker", False, latency, detail=f"http {status}")
     return HealthResult("Debian tracker", True, latency, detail="ok")
 
 
 def probe_ubuntu() -> HealthResult:
-    latency, resp, err = _timed_get(
+    latency, body, status, err = _timed_get(
         "https://ubuntu.com/security/cves.json?q=CVE-2016-5195",
     )
     if err:
         return HealthResult("Ubuntu tracker", False, latency, detail=f"network: {err}")
-    if resp is None or resp.status_code != 200:
-        return HealthResult("Ubuntu tracker", False, latency,
-                            detail=f"http {resp.status_code if resp else '?'}")
+    if status != 200:
+        return HealthResult("Ubuntu tracker", False, latency, detail=f"http {status}")
     return HealthResult("Ubuntu tracker", True, latency, detail="ok")
 
 
 def probe_redhat() -> HealthResult:
-    latency, resp, err = _timed_get(
+    latency, body, status, err = _timed_get(
         "https://access.redhat.com/hydra/rest/securitydata/cve/CVE-2016-5195.json",
     )
     if err:
         return HealthResult("Red Hat tracker", False, latency, detail=f"network: {err}")
-    if resp is None or resp.status_code != 200:
-        return HealthResult("Red Hat tracker", False, latency,
-                            detail=f"http {resp.status_code if resp else '?'}")
+    if status != 200:
+        return HealthResult("Red Hat tracker", False, latency, detail=f"http {status}")
     return HealthResult("Red Hat tracker", True, latency, detail="ok")
 
 

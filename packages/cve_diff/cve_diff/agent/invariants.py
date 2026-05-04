@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from cve_diff.agent.types import AgentContext, AgentOutput, AgentResult, AgentSurrender
 from cve_diff.core.models import CommitSha, PatchTuple
-from cve_diff.core.url_re import extract_github_slug as _github_slug
+from core.url_patterns import extract_github_slug as _github_slug
 from cve_diff.diffing.commit_resolver import CommitResolver
 from cve_diff.infra import github_client
 
@@ -46,7 +46,7 @@ def discover_validator(payload: dict, ctx: AgentContext) -> AgentResult:
     rationale = (payload.get("rationale") or "")[:500]
 
     if outcome == "unsupported":
-        return AgentSurrender(reason="UnsupportedSource", detail=rationale)
+        return AgentSurrender(reason="unsupported_source", detail=rationale)
     if outcome == "no_evidence":
         return AgentSurrender(reason="no_evidence", detail=rationale)
     if outcome != "rescued":

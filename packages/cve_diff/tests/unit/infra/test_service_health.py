@@ -93,57 +93,55 @@ def test_probes_tuple_lists_dns_first() -> None:
 #
 # Each probe gets exercised on its success path, network-error path, and
 # non-200 path. Anthropic gets the auth/rate-limit/overload branches too.
-# ``requests`` is monkeypatched module-wide on ``service_health`` so we never
-# touch the network from these tests.
+# The ``_client()`` factory on ``service_health`` is monkeypatched so we
+# never touch the network from these tests.
 # ---------------------------------------------------------------------------
 
+import json as _json
 
-class _Resp:
-    """Stand-in for ``requests.Response`` covering the surface the probes use."""
-    def __init__(self, status_code: int, json_body: dict | None = None,
-                 headers: dict | None = None) -> None:
-        self.status_code = status_code
-        self._body = json_body or {}
-        self.headers = headers or {}
-
-    def json(self) -> dict:
-        return self._body
+from core.http import HttpError, Response
 
 
-class _ReqException(Exception):
-    """Stand-in for ``requests.RequestException`` so the probes' except clause matches."""
+def _stub_client(monkeypatch, *, request_fn=None):
+    """Install a fake ``_client()`` on ``service_health``.
 
-
-def _patch_requests(monkeypatch, *, get=None, post=None) -> None:
-    """Install fake `requests.get`/`requests.post` on the service_health module.
-
-    The probes catch ``requests.RequestException``, so the fake module must
-    expose that class — our ``_ReqException`` stands in for it.
+    ``request_fn(method, url, **kwargs)`` → ``Response``. If it raises
+    ``HttpError`` the probe's error path is exercised.
     """
-    fake = type("FakeRequests", (), {
-        "get": staticmethod(get) if get else staticmethod(lambda *a, **kw: _Resp(599)),
-        "post": staticmethod(post) if post else staticmethod(lambda *a, **kw: _Resp(599)),
-        "RequestException": _ReqException,
-    })
-    monkeypatch.setattr(service_health, "requests", fake)
+    class _FakeClient:
+        def request(self, method, url, **kw):
+            return request_fn(method, url, **kw)
+
+    monkeypatch.setattr(service_health, "_client", lambda: _FakeClient())
+
+
+def _ok_response(status=200, body=b"", json_body=None, headers=None):
+    if json_body is not None:
+        body = _json.dumps(json_body).encode()
+    return Response(status=status, headers=headers or {}, body=body, url="")
+
+
+def _error_response(status, retry_after=None):
+    raise HttpError(f"http {status}", status=status, retry_after=retry_after)
 
 
 # --- _timed_get ---
 
-def test_timed_get_success_returns_response_and_no_error(monkeypatch) -> None:
-    _patch_requests(monkeypatch, get=lambda *a, **kw: _Resp(200))
-    latency, resp, err = service_health._timed_get("https://example.com")
+def test_timed_get_success_returns_body_and_no_error(monkeypatch) -> None:
+    _stub_client(monkeypatch, request_fn=lambda m, u, **kw: _ok_response(200, json_body={"ok": True}))
+    latency, body, status, err = service_health._timed_get("https://example.com")
     assert err == ""
-    assert resp is not None and resp.status_code == 200
+    assert status == 200
+    assert isinstance(body, dict) and body.get("ok") is True
     assert latency >= 0
 
 
-def test_timed_get_network_failure_returns_error_and_no_response(monkeypatch) -> None:
-    def boom(*a, **kw):
-        raise _ReqException("connection refused")
-    _patch_requests(monkeypatch, get=boom)
-    latency, resp, err = service_health._timed_get("https://example.com")
-    assert resp is None
+def test_timed_get_network_failure_returns_error_and_no_body(monkeypatch) -> None:
+    def boom(m, u, **kw):
+        raise HttpError("connection refused")
+    _stub_client(monkeypatch, request_fn=boom)
+    latency, body, status, err = service_health._timed_get("https://example.com")
+    assert body is None
     assert "connection refused" in err
     assert latency >= 0
 
@@ -152,7 +150,7 @@ def test_timed_get_network_failure_returns_error_and_no_response(monkeypatch) ->
 
 def test_probe_anthropic_success_when_post_returns_200(monkeypatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    _patch_requests(monkeypatch, post=lambda *a, **kw: _Resp(200))
+    _stub_client(monkeypatch, request_fn=lambda m, u, **kw: _ok_response(200))
     r = service_health.probe_anthropic()
     assert r.ok is True
     assert "ok" in r.detail
@@ -160,7 +158,9 @@ def test_probe_anthropic_success_when_post_returns_200(monkeypatch) -> None:
 
 def test_probe_anthropic_marks_401_as_auth_failure(monkeypatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-bad")
-    _patch_requests(monkeypatch, post=lambda *a, **kw: _Resp(401))
+    def raise_401(m, u, **kw):
+        raise HttpError("unauthorized", status=401)
+    _stub_client(monkeypatch, request_fn=raise_401)
     r = service_health.probe_anthropic()
     assert r.ok is False
     assert "auth" in r.detail.lower()
@@ -168,7 +168,9 @@ def test_probe_anthropic_marks_401_as_auth_failure(monkeypatch) -> None:
 
 def test_probe_anthropic_marks_529_as_overloaded(monkeypatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    _patch_requests(monkeypatch, post=lambda *a, **kw: _Resp(529))
+    def raise_529(m, u, **kw):
+        raise HttpError("overloaded", status=529)
+    _stub_client(monkeypatch, request_fn=raise_529)
     r = service_health.probe_anthropic()
     assert r.ok is False
     assert "overloaded" in r.detail.lower()
@@ -176,7 +178,9 @@ def test_probe_anthropic_marks_529_as_overloaded(monkeypatch) -> None:
 
 def test_probe_anthropic_marks_429_as_rate_limited(monkeypatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    _patch_requests(monkeypatch, post=lambda *a, **kw: _Resp(429, headers={"retry-after": "30"}))
+    def raise_429(m, u, **kw):
+        raise HttpError("rate limited", status=429, retry_after=30)
+    _stub_client(monkeypatch, request_fn=raise_429)
     r = service_health.probe_anthropic()
     assert r.ok is False
     assert "rate" in r.detail.lower()
@@ -185,7 +189,9 @@ def test_probe_anthropic_marks_429_as_rate_limited(monkeypatch) -> None:
 
 def test_probe_anthropic_marks_other_http_codes_as_failure(monkeypatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    _patch_requests(monkeypatch, post=lambda *a, **kw: _Resp(503))
+    def raise_503(m, u, **kw):
+        raise HttpError("http 503", status=503)
+    _stub_client(monkeypatch, request_fn=raise_503)
     r = service_health.probe_anthropic()
     assert r.ok is False
     assert "503" in r.detail
@@ -193,9 +199,9 @@ def test_probe_anthropic_marks_other_http_codes_as_failure(monkeypatch) -> None:
 
 def test_probe_anthropic_handles_network_failure(monkeypatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    def boom(*a, **kw):
-        raise _ReqException("dns fail")
-    _patch_requests(monkeypatch, post=boom)
+    def boom(m, u, **kw):
+        raise HttpError("dns fail")
+    _stub_client(monkeypatch, request_fn=boom)
     r = service_health.probe_anthropic()
     assert r.ok is False
     assert "network" in r.detail
@@ -205,7 +211,7 @@ def test_probe_anthropic_handles_network_failure(monkeypatch) -> None:
 
 def test_probe_nvd_success_with_api_key_includes_authed_rate_hint(monkeypatch) -> None:
     monkeypatch.setenv("NVD_API_KEY", "abc")
-    _patch_requests(monkeypatch, get=lambda *a, **kw: _Resp(200))
+    _stub_client(monkeypatch, request_fn=lambda m, u, **kw: _ok_response(200))
     r = service_health.probe_nvd()
     assert r.ok is True
     assert "API key" in r.rate_limit
@@ -213,7 +219,7 @@ def test_probe_nvd_success_with_api_key_includes_authed_rate_hint(monkeypatch) -
 
 def test_probe_nvd_success_without_api_key_includes_unauthed_hint(monkeypatch) -> None:
     monkeypatch.delenv("NVD_API_KEY", raising=False)
-    _patch_requests(monkeypatch, get=lambda *a, **kw: _Resp(200))
+    _stub_client(monkeypatch, request_fn=lambda m, u, **kw: _ok_response(200))
     r = service_health.probe_nvd()
     assert r.ok is True
     assert "no API key" in r.rate_limit
@@ -221,7 +227,9 @@ def test_probe_nvd_success_without_api_key_includes_unauthed_hint(monkeypatch) -
 
 def test_probe_nvd_marks_non_200_as_failure(monkeypatch) -> None:
     monkeypatch.delenv("NVD_API_KEY", raising=False)
-    _patch_requests(monkeypatch, get=lambda *a, **kw: _Resp(503))
+    def raise_503(m, u, **kw):
+        raise HttpError("http 503", status=503)
+    _stub_client(monkeypatch, request_fn=raise_503)
     r = service_health.probe_nvd()
     assert r.ok is False
     assert "503" in r.detail
@@ -229,9 +237,9 @@ def test_probe_nvd_marks_non_200_as_failure(monkeypatch) -> None:
 
 def test_probe_nvd_marks_network_error(monkeypatch) -> None:
     monkeypatch.delenv("NVD_API_KEY", raising=False)
-    def boom(*a, **kw):
-        raise _ReqException("eof")
-    _patch_requests(monkeypatch, get=boom)
+    def boom(m, u, **kw):
+        raise HttpError("eof")
+    _stub_client(monkeypatch, request_fn=boom)
     r = service_health.probe_nvd()
     assert r.ok is False
     assert "network" in r.detail
@@ -240,22 +248,24 @@ def test_probe_nvd_marks_network_error(monkeypatch) -> None:
 # --- probe_osv ---
 
 def test_probe_osv_success(monkeypatch) -> None:
-    _patch_requests(monkeypatch, get=lambda *a, **kw: _Resp(200))
+    _stub_client(monkeypatch, request_fn=lambda m, u, **kw: _ok_response(200))
     r = service_health.probe_osv()
     assert r.ok is True
 
 
 def test_probe_osv_marks_non_200_as_failure(monkeypatch) -> None:
-    _patch_requests(monkeypatch, get=lambda *a, **kw: _Resp(404))
+    def raise_404(m, u, **kw):
+        raise HttpError("http 404", status=404)
+    _stub_client(monkeypatch, request_fn=raise_404)
     r = service_health.probe_osv()
     assert r.ok is False
     assert "404" in r.detail
 
 
 def test_probe_osv_marks_network_error(monkeypatch) -> None:
-    def boom(*a, **kw):
-        raise _ReqException("timeout")
-    _patch_requests(monkeypatch, get=boom)
+    def boom(m, u, **kw):
+        raise HttpError("timeout")
+    _stub_client(monkeypatch, request_fn=boom)
     r = service_health.probe_osv()
     assert r.ok is False
     assert "network" in r.detail
@@ -265,13 +275,7 @@ def test_probe_osv_marks_network_error(monkeypatch) -> None:
 
 def _patch_github_token(monkeypatch, *, gh_cli_returns: str | None = None,
                         env_token: str | None = None) -> None:
-    """Control where probe_github finds (or doesn't find) a token.
-
-    ``gh_cli_returns``: stdout of `gh auth token` (None = command absent).
-    ``env_token``: GITHUB_TOKEN env var (None = unset).
-    """
     if gh_cli_returns is None:
-        # `gh` not installed
         def fake_run(*a, **kw):
             raise FileNotFoundError("gh not found")
         monkeypatch.setattr(service_health.subprocess, "run", fake_run)
@@ -289,7 +293,7 @@ def _patch_github_token(monkeypatch, *, gh_cli_returns: str | None = None,
 def test_probe_github_success_with_gh_cli_token(monkeypatch) -> None:
     _patch_github_token(monkeypatch, gh_cli_returns="ghp_xxx\n")
     body = {"resources": {"core": {"remaining": 4500, "limit": 5000}}}
-    _patch_requests(monkeypatch, get=lambda *a, **kw: _Resp(200, json_body=body))
+    _stub_client(monkeypatch, request_fn=lambda m, u, **kw: _ok_response(200, json_body=body))
     r = service_health.probe_github()
     assert r.ok is True
     assert "4500/5000" in r.rate_limit
@@ -299,7 +303,7 @@ def test_probe_github_success_with_gh_cli_token(monkeypatch) -> None:
 def test_probe_github_falls_back_to_env_when_gh_cli_missing(monkeypatch) -> None:
     _patch_github_token(monkeypatch, gh_cli_returns=None, env_token="ghp_env")
     body = {"resources": {"core": {"remaining": 60, "limit": 60}}}
-    _patch_requests(monkeypatch, get=lambda *a, **kw: _Resp(200, json_body=body))
+    _stub_client(monkeypatch, request_fn=lambda m, u, **kw: _ok_response(200, json_body=body))
     r = service_health.probe_github()
     assert r.ok is True
 
@@ -307,7 +311,7 @@ def test_probe_github_falls_back_to_env_when_gh_cli_missing(monkeypatch) -> None
 def test_probe_github_marks_unauth_when_no_token(monkeypatch) -> None:
     _patch_github_token(monkeypatch, gh_cli_returns="", env_token=None)
     body = {"resources": {"core": {"remaining": 30, "limit": 60}}}
-    _patch_requests(monkeypatch, get=lambda *a, **kw: _Resp(200, json_body=body))
+    _stub_client(monkeypatch, request_fn=lambda m, u, **kw: _ok_response(200, json_body=body))
     r = service_health.probe_github()
     assert r.ok is True
     assert "unauth" in r.rate_limit
@@ -315,7 +319,9 @@ def test_probe_github_marks_unauth_when_no_token(monkeypatch) -> None:
 
 def test_probe_github_marks_non_200_as_failure(monkeypatch) -> None:
     _patch_github_token(monkeypatch, gh_cli_returns="ghp_xxx\n")
-    _patch_requests(monkeypatch, get=lambda *a, **kw: _Resp(401))
+    def raise_401(m, u, **kw):
+        raise HttpError("http 401", status=401)
+    _stub_client(monkeypatch, request_fn=raise_401)
     r = service_health.probe_github()
     assert r.ok is False
     assert "401" in r.detail
@@ -323,22 +329,21 @@ def test_probe_github_marks_non_200_as_failure(monkeypatch) -> None:
 
 def test_probe_github_marks_network_error(monkeypatch) -> None:
     _patch_github_token(monkeypatch, gh_cli_returns="ghp_xxx\n")
-    def boom(*a, **kw):
-        raise _ReqException("connection reset")
-    _patch_requests(monkeypatch, get=boom)
+    def boom(m, u, **kw):
+        raise HttpError("connection reset")
+    _stub_client(monkeypatch, request_fn=boom)
     r = service_health.probe_github()
     assert r.ok is False
     assert "network" in r.detail
 
 
 def test_probe_github_handles_gh_cli_timeout(monkeypatch) -> None:
-    """`gh auth token` timing out should fall back to env var, not crash."""
     def fake_run(*a, **kw):
         raise service_health.subprocess.TimeoutExpired(cmd="gh", timeout=2.0)
     monkeypatch.setattr(service_health.subprocess, "run", fake_run)
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_fallback")
     body = {"resources": {"core": {"remaining": 1000, "limit": 5000}}}
-    _patch_requests(monkeypatch, get=lambda *a, **kw: _Resp(200, json_body=body))
+    _stub_client(monkeypatch, request_fn=lambda m, u, **kw: _ok_response(200, json_body=body))
     r = service_health.probe_github()
     assert r.ok is True
 
@@ -354,7 +359,7 @@ import pytest
     service_health.probe_redhat,
 ])
 def test_distro_probes_succeed_on_200(probe, monkeypatch) -> None:
-    _patch_requests(monkeypatch, get=lambda *a, **kw: _Resp(200))
+    _stub_client(monkeypatch, request_fn=lambda m, u, **kw: _ok_response(200))
     r = probe()
     assert r.ok is True
 
@@ -365,7 +370,9 @@ def test_distro_probes_succeed_on_200(probe, monkeypatch) -> None:
     service_health.probe_redhat,
 ])
 def test_distro_probes_mark_non_200(probe, monkeypatch) -> None:
-    _patch_requests(monkeypatch, get=lambda *a, **kw: _Resp(503))
+    def raise_503(m, u, **kw):
+        raise HttpError("http 503", status=503)
+    _stub_client(monkeypatch, request_fn=raise_503)
     r = probe()
     assert r.ok is False
     assert "503" in r.detail
@@ -377,9 +384,9 @@ def test_distro_probes_mark_non_200(probe, monkeypatch) -> None:
     service_health.probe_redhat,
 ])
 def test_distro_probes_handle_network_failure(probe, monkeypatch) -> None:
-    def boom(*a, **kw):
-        raise _ReqException("connect refused")
-    _patch_requests(monkeypatch, get=boom)
+    def boom(m, u, **kw):
+        raise HttpError("connect refused")
+    _stub_client(monkeypatch, request_fn=boom)
     r = probe()
     assert r.ok is False
     assert "network" in r.detail

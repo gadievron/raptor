@@ -122,8 +122,8 @@ def test_matches_pipeline_pick_handles_case_and_prefix() -> None:
 
 def test_osv_references_returns_not_found_when_payload_none(monkeypatch) -> None:
     """OSV 404 / network failure → MethodResult with found=False."""
-    from tools.oracle import osv_oracle
-    monkeypatch.setattr(osv_oracle, "_fetch_osv", lambda _cve: None)
+    from cve_diff.report import consensus as mod
+    monkeypatch.setattr(mod, "_fetch_osv_raw", lambda _cve: None)
     r = _osv_references("CVE-9999-9999")
     assert r.found is False
     assert "OSV" in r.detail or "network" in r.detail
@@ -131,8 +131,8 @@ def test_osv_references_returns_not_found_when_payload_none(monkeypatch) -> None
 
 def test_osv_references_extracts_pair_from_references_url(monkeypatch) -> None:
     """OSV.references[].url with a github commit URL → MethodResult.found."""
-    from tools.oracle import osv_oracle
-    monkeypatch.setattr(osv_oracle, "_fetch_osv", lambda _cve: {
+    from cve_diff.report import consensus as mod
+    monkeypatch.setattr(mod, "_fetch_osv_raw", lambda _cve: {
         "references": [
             {"type": "ADVISORY", "url": "https://nvd.nist.gov/whatever"},
             {"type": "FIX",
@@ -148,8 +148,8 @@ def test_osv_references_extracts_pair_from_references_url(monkeypatch) -> None:
 def test_osv_references_falls_back_to_affected_ranges(monkeypatch) -> None:
     """When references[] has no commit URLs, the function falls back to
     affected[].ranges[].events[].fixed for a (repo, fixed_sha) tuple."""
-    from tools.oracle import osv_oracle
-    monkeypatch.setattr(osv_oracle, "_fetch_osv", lambda _cve: {
+    from cve_diff.report import consensus as mod
+    monkeypatch.setattr(mod, "_fetch_osv_raw", lambda _cve: {
         "references": [{"type": "WEB", "url": "https://example.com/blog"}],
         "affected": [{
             "ranges": [{
@@ -171,8 +171,8 @@ def test_osv_references_falls_back_to_affected_ranges(monkeypatch) -> None:
 def test_osv_references_returns_not_found_when_no_commit_url(monkeypatch) -> None:
     """All references are advisory URLs (no /commit/) → not found.
     The tracker-redirect-to-writeup case from the corpus."""
-    from tools.oracle import osv_oracle
-    monkeypatch.setattr(osv_oracle, "_fetch_osv", lambda _cve: {
+    from cve_diff.report import consensus as mod
+    monkeypatch.setattr(mod, "_fetch_osv_raw", lambda _cve: {
         "references": [
             {"type": "ADVISORY", "url": "https://nvd.nist.gov/vuln/detail/CVE-X"},
             {"type": "WEB", "url": "https://www.example.com/blog/cve-x"},
@@ -183,14 +183,18 @@ def test_osv_references_returns_not_found_when_no_commit_url(monkeypatch) -> Non
     assert "no commit URLs" in r.detail
 
 
+def _fake_nvd_client(payload):
+    """Return a mock NvdClient that always returns *payload*."""
+    class _Fake:
+        def get_payload(self, _cve_id):
+            return payload
+    return _Fake()
+
+
 def test_nvd_patch_tagged_returns_not_found_when_payload_none(monkeypatch) -> None:
     """NVD 404 / network failure → MethodResult with found=False."""
     from cve_diff.report import consensus as mod
-
-    class _FakeNvd:
-        def get_payload(self, _cve_id):
-            return None
-    monkeypatch.setattr("cve_diff.discovery.nvd.NvdDiscoverer", _FakeNvd)
+    monkeypatch.setattr(mod, "_nvd_client", lambda: _fake_nvd_client(None))
     r = _nvd_patch_tagged("CVE-9999-9999")
     assert r.found is False
     assert "NVD" in r.detail or "network" in r.detail
@@ -200,26 +204,22 @@ def test_nvd_patch_tagged_extracts_only_patch_tagged_refs(monkeypatch) -> None:
     """A reference with tags=['Patch'] and a github commit URL is the
     canonical signal. Other refs (Vendor Advisory, Press, etc.) are
     skipped even if their URL is a commit."""
-    class _FakeNvd:
-        def get_payload(self, _cve_id):
-            return {
-                "vulnerabilities": [{
-                    "cve": {
-                        "references": [
-                            {"url": "https://example.com/blog",
-                             "tags": ["Vendor Advisory"]},
-                            # Untagged commit URL — must be ignored
-                            {"url": "https://github.com/wrong/repo/commit/" + "f" * 40,
-                             "tags": ["Press"]},
-                            # The legit one
-                            {"url": "https://github.com/socketio/engine.io/commit/"
-                                    "c0e194d4493326a1a45f9eebd64bccf81d56fbf3",
-                             "tags": ["Patch"]},
-                        ],
-                    },
-                }],
-            }
-    monkeypatch.setattr("cve_diff.discovery.nvd.NvdDiscoverer", _FakeNvd)
+    from cve_diff.report import consensus as mod
+    monkeypatch.setattr(mod, "_nvd_client", lambda: _fake_nvd_client({
+        "vulnerabilities": [{
+            "cve": {
+                "references": [
+                    {"url": "https://example.com/blog",
+                     "tags": ["Vendor Advisory"]},
+                    {"url": "https://github.com/wrong/repo/commit/" + "f" * 40,
+                     "tags": ["Press"]},
+                    {"url": "https://github.com/socketio/engine.io/commit/"
+                            "c0e194d4493326a1a45f9eebd64bccf81d56fbf3",
+                     "tags": ["Patch"]},
+                ],
+            },
+        }],
+    }))
     r = _nvd_patch_tagged("CVE-2022-21676")
     assert r.found is True
     assert r.slug == "socketio/engine.io"
@@ -228,21 +228,19 @@ def test_nvd_patch_tagged_extracts_only_patch_tagged_refs(monkeypatch) -> None:
 
 def test_nvd_patch_tagged_returns_not_found_when_no_patch_tag(monkeypatch) -> None:
     """All references are present but none are tagged 'Patch' → not found."""
-    class _FakeNvd:
-        def get_payload(self, _cve_id):
-            return {
-                "vulnerabilities": [{
-                    "cve": {
-                        "references": [
-                            {"url": "https://example.com/advisory",
-                             "tags": ["Vendor Advisory"]},
-                            {"url": "https://example.com/exploit",
-                             "tags": ["Exploit"]},
-                        ],
-                    },
-                }],
-            }
-    monkeypatch.setattr("cve_diff.discovery.nvd.NvdDiscoverer", _FakeNvd)
+    from cve_diff.report import consensus as mod
+    monkeypatch.setattr(mod, "_nvd_client", lambda: _fake_nvd_client({
+        "vulnerabilities": [{
+            "cve": {
+                "references": [
+                    {"url": "https://example.com/advisory",
+                     "tags": ["Vendor Advisory"]},
+                    {"url": "https://github.com/x/y/commit/" + "a" * 40,
+                     "tags": ["Exploit"]},
+                ],
+            },
+        }],
+    }))
     r = _nvd_patch_tagged("CVE-X")
     assert r.found is False
     assert "no Patch-tagged" in r.detail

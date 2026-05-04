@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from core.http import HttpError, Response
 from cve_diff.core.models import RepoRef
 
 
@@ -107,26 +108,20 @@ def test_extract_via_patch_url_parses_unified_diff(monkeypatch) -> None:
     with the right file count, byte count, and per-file hunk counts."""
     from cve_diff.diffing import extract_via_patch_url as evpu
 
-    def fake_get(url, timeout=None, headers=None):
-        class R:
-            status_code = 200
-            text = SAMPLE_PATCH
-        return R()
-    monkeypatch.setattr(evpu, "requests", type("M", (), {
-        "get": staticmethod(fake_get),
-        "RequestException": Exception,
-    }))
+    class _Stub:
+        def request(self, method, url, **kw):
+            return Response(status=200, headers={}, body=SAMPLE_PATCH.encode(), url=url)
+
+    monkeypatch.setattr(evpu, "_client", lambda: _Stub())
 
     bundle = evpu.extract_via_patch_url("CVE-2022-21676", _ref())
     assert bundle is not None
     assert bundle.files_changed == 2
     paths = sorted(f.path for f in bundle.files)
     assert paths == ["lib/server.js", "lib/socket.js"]
-    # Hunk counts: lib/server.js has 2 `@@` hunks, lib/socket.js has 1
     by_path = {f.path: f.hunks_count for f in bundle.files}
     assert by_path["lib/server.js"] == 2
     assert by_path["lib/socket.js"] == 1
-    # Diff text retained as-is (the user can save it for audit)
     assert bundle.bytes_size == len(SAMPLE_PATCH.encode("utf-8"))
 
 
@@ -136,15 +131,11 @@ def test_extract_via_patch_url_returns_none_on_404(monkeypatch) -> None:
     unavailable", verdict adapts."""
     from cve_diff.diffing import extract_via_patch_url as evpu
 
-    def fake_get(url, timeout=None, headers=None):
-        class R:
-            status_code = 404
-            text = "Not Found"
-        return R()
-    monkeypatch.setattr(evpu, "requests", type("M", (), {
-        "get": staticmethod(fake_get),
-        "RequestException": Exception,
-    }))
+    class _Stub:
+        def request(self, method, url, **kw):
+            raise HttpError("HTTP 404", status=404)
+
+    monkeypatch.setattr(evpu, "_client", lambda: _Stub())
 
     bundle = evpu.extract_via_patch_url("CVE-2022-21676", _ref())
     assert bundle is None
@@ -164,15 +155,11 @@ def test_extract_via_patch_url_returns_none_on_empty_body(monkeypatch) -> None:
     None. (200 with empty body happens occasionally for moved repos.)"""
     from cve_diff.diffing import extract_via_patch_url as evpu
 
-    def fake_get(url, timeout=None, headers=None):
-        class R:
-            status_code = 200
-            text = "   \n   \n"
-        return R()
-    monkeypatch.setattr(evpu, "requests", type("M", (), {
-        "get": staticmethod(fake_get),
-        "RequestException": Exception,
-    }))
+    class _Stub:
+        def request(self, method, url, **kw):
+            return Response(status=200, headers={}, body=b"   \n   \n", url=url)
+
+    monkeypatch.setattr(evpu, "_client", lambda: _Stub())
 
     bundle = evpu.extract_via_patch_url("CVE-X", _ref())
     assert bundle is None
@@ -183,16 +170,11 @@ def test_extract_via_patch_url_swallows_network_errors(monkeypatch) -> None:
     third source. The agreement check adapts."""
     from cve_diff.diffing import extract_via_patch_url as evpu
 
-    class _RE(Exception):
-        pass
+    class _Stub:
+        def request(self, method, url, **kw):
+            raise HttpError("connection refused")
 
-    def fake_get(url, timeout=None, headers=None):
-        raise _RE("connection refused")
-
-    monkeypatch.setattr(evpu, "requests", type("M", (), {
-        "get": staticmethod(fake_get),
-        "RequestException": _RE,
-    }))
+    monkeypatch.setattr(evpu, "_client", lambda: _Stub())
 
     bundle = evpu.extract_via_patch_url("CVE-X", _ref())
     assert bundle is None
@@ -225,18 +207,11 @@ def test_extract_bundle_has_commit_before_equal_to_commit_after(
         "+new\n"
     )
 
-    class _Resp:
-        status_code = 200
-        text = body
-        url = "https://github.com/socketio/engine.io/commit/" + sha + ".patch"
+    class _Stub:
+        def request(self, method, url, **kw):
+            return Response(status=200, headers={}, body=body.encode(), url=url)
 
-    def fake_get(url, timeout=None, headers=None):
-        return _Resp()
-
-    monkeypatch.setattr(evpu, "requests", type("M", (), {
-        "get": staticmethod(fake_get),
-        "RequestException": Exception,
-    }))
+    monkeypatch.setattr(evpu, "_client", lambda: _Stub())
 
     bundle = evpu.extract_via_patch_url("CVE-X", _ref(sha=sha))
     assert bundle is not None

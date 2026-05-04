@@ -83,13 +83,3 @@ def _bypass_git_sandbox(monkeypatch):
     monkeypatch.setattr(layers_mod, "fetch_commit", _test_fetch_commit)
 
 
-@pytest.fixture
-def http(monkeypatch):
-    """Monkey-patches ``requests.get`` / ``requests.post`` so unit tests
-    don't need the ``responses`` library. Pre-2026-05-02 the discovery
-    + oracle test files imported ``responses``; with cve-diff trimming
-    its test-time deps, this fixture covers the same patterns
-    (URL-keyed canned responses, retry sequences, transport-error
-    injection, header capture) at zero external cost."""
-    from ._http_mock import HttpMock
-    return HttpMock(monkeypatch)

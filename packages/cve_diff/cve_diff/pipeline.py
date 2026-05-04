@@ -316,8 +316,8 @@ class Pipeline:
                     self._emit("extraction_agreement", "skipped",
                                {"reason": "no second source available"})
             except Exception as exc:  # noqa: BLE001 — never block on aux check
-                self._emit("extraction_agreement", "skipped",
-                           {"reason": str(exc)[:80]})
+                self._emit("extraction_agreement", "error",
+                           {"exc_type": type(exc).__name__, "reason": str(exc)[:80]})
 
         if self.enable_consensus:
             self._emit("consensus", "start", {})
@@ -331,8 +331,8 @@ class Pipeline:
                             "attempted": consensus.attempted_count,
                             "elapsed_s": round(time.monotonic() - t0, 1)})
             except Exception as exc:  # noqa: BLE001
-                self._emit("consensus", "skipped",
-                           {"reason": str(exc)[:80]})
+                self._emit("consensus", "error",
+                           {"exc_type": type(exc).__name__, "reason": str(exc)[:80]})
         # Pipeline reached the end cleanly → stage 5 (render) is "ok".
         # ``render`` doesn't have its own ``_emit`` event today (writing
         # the artifacts is the CLI's job, not the pipeline's), so we
@@ -503,7 +503,7 @@ class Pipeline:
     @staticmethod
     def _require_rescued(cve_id: str, result: AgentResult) -> PatchTuple:
         if isinstance(result, AgentSurrender):
-            if result.reason == "UnsupportedSource":
+            if result.reason == "unsupported_source":
                 raise UnsupportedSource(f"{cve_id}: {result.detail}")
             raise DiscoveryError(f"{cve_id}: agent surrendered ({result.reason}): {result.detail}")
         assert isinstance(result, AgentOutput)

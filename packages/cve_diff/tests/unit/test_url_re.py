@@ -1,9 +1,9 @@
-"""Tests for cve_diff/core/url_re.py — slug + commit URL parsing."""
+"""Tests for core/url_patterns — slug + commit URL parsing."""
 from __future__ import annotations
 
 import pytest
 
-from cve_diff.core.url_re import (
+from core.url_patterns import (
     GITHUB_COMMIT_URL_RE,
     extract_github_slug,
     is_github_url,

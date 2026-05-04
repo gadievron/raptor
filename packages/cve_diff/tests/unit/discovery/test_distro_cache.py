@@ -6,12 +6,13 @@ independently so a retry only re-hits the failed distro.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from core.http import HttpError, Response
+from cve_diff.discovery import distro_cache
 from cve_diff.discovery.distro_cache import DistroFetcher
 
 
@@ -20,16 +21,15 @@ def tmp_fetcher(tmp_path: Path) -> DistroFetcher:
     return DistroFetcher(cache_dir=tmp_path)
 
 
-def _fake_response(status: int, text: str = "", json_data=None):
-    class R:
-        status_code = status
-        @staticmethod
-        def json():
-            if json_data is None:
-                raise ValueError
-            return json_data
-    R.text = text
-    return R()
+def _ok_response(body: str | bytes = b"", status: int = 200) -> Response:
+    if isinstance(body, str):
+        body = body.encode()
+    return Response(status=status, headers={}, body=body, url="")
+
+
+def _json_response(data: dict, status: int = 200) -> Response:
+    import json
+    return Response(status=status, headers={}, body=json.dumps(data).encode(), url="")
 
 
 def test_invalid_cve_id(tmp_fetcher: DistroFetcher) -> None:
@@ -39,18 +39,17 @@ def test_invalid_cve_id(tmp_fetcher: DistroFetcher) -> None:
 
 def test_cache_hit_skips_http(tmp_fetcher: DistroFetcher, tmp_path: Path) -> None:
     cve = "CVE-2016-5195"
-    (tmp_path / "debian_CVE-2016-5195.json").write_text(
-        json.dumps({"status": "fixed", "fix_version": None, "references": ["x"]})
-    )
-    (tmp_path / "ubuntu_CVE-2016-5195.json").write_text(
-        json.dumps({"status": "released", "fix_version": None, "references": []})
-    )
-    (tmp_path / "redhat_CVE-2016-5195.json").write_text(
-        json.dumps({"status": "fixed", "fix_version": None, "references": []})
-    )
-    with patch("cve_diff.discovery.distro_cache.requests.get") as mock_get:
+    # Pre-populate the JsonCache for all 3 distros
+    for distro, payload in [
+        ("debian", {"status": "fixed", "fix_version": None, "references": ["x"]}),
+        ("ubuntu", {"status": "released", "fix_version": None, "references": []}),
+        ("redhat", {"status": "fixed", "fix_version": None, "references": []}),
+    ]:
+        tmp_fetcher._disk.put(f"{distro}/{cve}", payload, ttl_seconds=86400)
+
+    with patch.object(distro_cache, "_client") as mock_client:
         out = tmp_fetcher.fetch_all(cve)
-        assert mock_get.call_count == 0
+        mock_client.assert_not_called()
     assert out["debian"]["references"] == ["x"]
     assert out["ubuntu"]["status"] == "released"
 
@@ -58,22 +57,27 @@ def test_cache_hit_skips_http(tmp_fetcher: DistroFetcher, tmp_path: Path) -> Non
 def test_cache_miss_writes_disk(tmp_fetcher: DistroFetcher, tmp_path: Path) -> None:
     cve = "CVE-2016-5195"
 
-    def side(url, **kw):
+    def fake_request(method, url, **kw):
         if "debian" in url:
-            return _fake_response(200, text='<a href="https://github.com/o/r/commit/abc1234">x</a>')
+            return _ok_response('<a href="https://github.com/o/r/commit/abc1234">x</a>')
         if "ubuntu" in url:
-            return _fake_response(200, json_data={"cves": [{"id": cve, "references": ["https://x.example/y"]}]})
+            return _json_response({"cves": [{"id": cve, "references": ["https://x.example/y"]}]})
         if "redhat" in url:
-            return _fake_response(200, json_data={"references": ["https://r.example/z"], "affected_release": []})
+            return _json_response({"references": ["https://r.example/z"], "affected_release": []})
         raise AssertionError(url)
 
-    with patch("cve_diff.discovery.distro_cache.requests.get", side_effect=side):
+    class _FakeClient:
+        def request(self, method, url, **kw):
+            return fake_request(method, url, **kw)
+
+    with patch.object(distro_cache, "_client", return_value=_FakeClient()):
         out = tmp_fetcher.fetch_all(cve)
 
-    assert (tmp_path / "debian_CVE-2016-5195.json").exists()
-    assert (tmp_path / "ubuntu_CVE-2016-5195.json").exists()
-    assert (tmp_path / "redhat_CVE-2016-5195.json").exists()
-    assert any("github.com" in r for r in out["debian"]["references"])
+    # Verify entries were written to JsonCache
+    assert tmp_fetcher._disk.get(f"debian/{cve}", ttl_seconds=86400) is not None
+    assert tmp_fetcher._disk.get(f"ubuntu/{cve}", ttl_seconds=86400) is not None
+    assert tmp_fetcher._disk.get(f"redhat/{cve}", ttl_seconds=86400) is not None
+    assert "https://github.com/o/r/commit/abc1234" in out["debian"]["references"]
     assert out["ubuntu"]["references"] == ["https://x.example/y"]
     assert out["redhat"]["references"] == ["https://r.example/z"]
 
@@ -83,25 +87,31 @@ def test_per_distro_independence(tmp_fetcher: DistroFetcher, tmp_path: Path) -> 
     cve = "CVE-2016-5195"
     call_log: list[str] = []
 
-    def side(url, **kw):
+    def fake_request(method, url, **kw):
         call_log.append(url)
         if "debian" in url:
-            return _fake_response(200, text="ok")
+            return _ok_response("ok")
         if "ubuntu" in url:
-            return _fake_response(404)
+            raise HttpError("http 404", status=404)
         if "redhat" in url:
-            return _fake_response(404)
+            raise HttpError("http 404", status=404)
         raise AssertionError(url)
 
-    with patch("cve_diff.discovery.distro_cache.requests.get", side_effect=side):
+    class _FakeClient:
+        def request(self, method, url, **kw):
+            return fake_request(method, url, **kw)
+
+    with patch.object(distro_cache, "_client", return_value=_FakeClient()):
         tmp_fetcher.fetch_all(cve)
     first_call_count = len(call_log)
     assert first_call_count == 3
-    assert (tmp_path / "debian_CVE-2016-5195.json").exists()
-    assert (tmp_path / "ubuntu_CVE-2016-5195.json").exists()  # 404 cached too
+
+    # All results should be cached (404s too)
+    assert tmp_fetcher._disk.get(f"debian/{cve}", ttl_seconds=86400) is not None
+    assert tmp_fetcher._disk.get(f"ubuntu/{cve}", ttl_seconds=86400) is not None
 
     fresh = DistroFetcher(cache_dir=tmp_path)
-    with patch("cve_diff.discovery.distro_cache.requests.get", side_effect=side):
+    with patch.object(distro_cache, "_client", return_value=_FakeClient()):
         out = fresh.fetch_all(cve)
     assert len(call_log) == first_call_count, "second fetch should be all cache hits"
     assert out["ubuntu"]["error"] == "http 404"
@@ -109,16 +119,20 @@ def test_per_distro_independence(tmp_fetcher: DistroFetcher, tmp_path: Path) -> 
 
 def test_network_error_not_cached(tmp_fetcher: DistroFetcher, tmp_path: Path) -> None:
     cve = "CVE-2016-5195"
-    import requests
     call_log: list[str] = []
 
-    def side(url, **kw):
+    def fake_request(method, url, **kw):
         call_log.append(url)
-        raise requests.RequestException("boom")
+        raise HttpError("boom")
 
-    with patch("cve_diff.discovery.distro_cache.requests.get", side_effect=side):
+    class _FakeClient:
+        def request(self, method, url, **kw):
+            return fake_request(method, url, **kw)
+
+    with patch.object(distro_cache, "_client", return_value=_FakeClient()):
         out = tmp_fetcher.fetch_all(cve)
     for d in out.values():
         assert d["error"].startswith("network: ")
-    assert not (tmp_path / "debian_CVE-2016-5195.json").exists()
-    assert not (tmp_path / "ubuntu_CVE-2016-5195.json").exists()
+    # Network errors should NOT be cached
+    assert tmp_fetcher._disk.get(f"debian/{cve}", ttl_seconds=86400) is None
+    assert tmp_fetcher._disk.get(f"ubuntu/{cve}", ttl_seconds=86400) is None

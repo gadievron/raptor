@@ -30,41 +30,31 @@ def _bundle(*, files: list[str], bytes_size: int) -> DiffBundle:
     )
 
 
-def test_compare_agree_on_identical_paths_and_bytes() -> None:
+def test_compare_pair_agree_on_identical_paths_and_bytes() -> None:
     clone = _bundle(files=["src/a.c", "src/b.c"], bytes_size=1000)
     api = _bundle(files=["src/a.c", "src/b.c"], bytes_size=1010)  # 1% delta
-    out = ea._compare(clone, api)
-    assert out["verdict"] == "agree"
-    assert out["paths_overlap"] == 1.0
-    assert out["files_clone"] == 2
-    assert out["files_api"] == 2
+    assert ea._compare_pair(clone, api) == "agree"
 
 
-def test_compare_partial_when_paths_almost_match() -> None:
+def test_compare_pair_partial_when_paths_almost_match() -> None:
     clone = _bundle(files=["a", "b", "c", "d", "e"], bytes_size=1000)
     api = _bundle(files=["a", "b", "c", "d"], bytes_size=900)  # 4 of 5 paths
-    out = ea._compare(clone, api)
-    # paths_overlap = 4/5 = 0.8 → partial
-    assert out["verdict"] == "partial"
+    assert ea._compare_pair(clone, api) == "partial"
 
 
-def test_compare_disagrees_when_no_overlap() -> None:
+def test_compare_pair_disagrees_when_no_overlap() -> None:
     clone = _bundle(files=["src/a.c"], bytes_size=1000)
     api = _bundle(files=["docs/changelog.md"], bytes_size=200)
-    out = ea._compare(clone, api)
-    assert out["verdict"] == "disagree"
-    assert out["paths_overlap"] == 0.0
+    assert ea._compare_pair(clone, api) == "disagree"
 
 
-def test_compare_partial_when_api_truncated() -> None:
+def test_compare_pair_partial_when_api_truncated() -> None:
     """API caps at ~300 files — large refactors aren't real disagreements."""
     clone_paths = [f"src/file_{i}.c" for i in range(500)]
     api_paths = clone_paths[:300]  # API truncated
     clone = _bundle(files=clone_paths, bytes_size=200_000)
     api = _bundle(files=api_paths, bytes_size=120_000)
-    out = ea._compare(clone, api)
-    assert out["api_truncated"] is True
-    assert out["verdict"] == "partial"
+    assert ea._compare_pair(clone, api) == "partial"
 
 
 def test_compute_returns_none_for_unsupported_forge() -> None:
