@@ -124,8 +124,14 @@ def _build_command(
 def _build_subprocess_env(config: OpenAntConfig) -> dict[str, str]:
     safe = RaptorConfig.get_safe_env()
     safe["ANTHROPIC_API_KEY"] = os.environ.get("ANTHROPIC_API_KEY", "")
+    # Resolve to absolute path so .. / symlinks / relative components cannot be
+    # used to redirect Python's import resolution to an attacker-controlled dir
+    # if OPENANT_CORE is set to an untrusted value.
+    resolved = config.core_path.resolve(strict=True)
+    if not (resolved / "core" / "scanner.py").exists():
+        raise RuntimeError(f"PYTHONPATH target {resolved} is not an openant-core directory")
     existing_pythonpath = os.environ.get("PYTHONPATH", "")
-    core_str = str(config.core_path)
+    core_str = str(resolved)
     if existing_pythonpath:
         safe["PYTHONPATH"] = f"{core_str}{os.pathsep}{existing_pythonpath}"
     else:

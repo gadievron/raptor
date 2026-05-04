@@ -72,11 +72,6 @@ def main() -> int:
         help="Maximum findings to include in report (default: 50)",
     )
     parser.add_argument(
-        "--no-analyze",
-        action="store_true",
-        help="Skip Raptor LLM analysis of translated findings",
-    )
-    parser.add_argument(
         "--workers",
         type=int,
         default=4,

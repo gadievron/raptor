@@ -226,6 +226,12 @@ class TestInferCommandType(unittest.TestCase):
             out.mkdir()
             self.assertEqual(infer_command_type(out), "validate")
 
+    def test_from_openant_prefix(self):
+        with TemporaryDirectory() as d:
+            out = Path(d) / "openant_20260504_abc"
+            out.mkdir()
+            self.assertEqual(infer_command_type(out), "openant")
+
     def test_unknown(self):
         with TemporaryDirectory() as d:
             out = Path(d) / "mystery"

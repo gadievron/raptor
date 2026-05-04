@@ -728,6 +728,21 @@ Examples:
         external_llm=llm_env.external_llm,
     )
 
+    # Merge OpenAnt findings into validation output so Phase 3 picks them up.
+    # OpenAnt findings are already in Raptor finding schema; they bypass SARIF
+    # conversion and join the post-validation pool directly.
+    if openant_extra_findings:
+        validation_findings_path = out_dir / "validation" / "findings.json"
+        if validation_findings_path.exists():
+            existing = load_json(validation_findings_path) or []
+            existing.extend(openant_extra_findings)
+            save_json(validation_findings_path, existing)
+        else:
+            (out_dir / "validation").mkdir(exist_ok=True)
+            save_json(validation_findings_path, openant_extra_findings)
+        validated_findings += len(openant_extra_findings)
+        logger.info(f"Merged {len(openant_extra_findings)} OpenAnt findings into validation output")
+
     # ========================================================================
     # PHASE 3: AUTONOMOUS ANALYSIS
     # ========================================================================
