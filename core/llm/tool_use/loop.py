@@ -40,6 +40,8 @@ Every termination emits a :class:`LoopTerminated` event and returns a
 
 from __future__ import annotations
 
+import json
+import re
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -59,6 +61,7 @@ from .types import (
     StopReason,
     TextBlock,
     ToolCall,
+    ToolCallBlocked,
     ToolCallDispatched,
     ToolCallReturned,
     ToolDef,
@@ -170,6 +173,17 @@ class ToolUseLoop:
         tool_calls_made = 0
         terminal_tool_input: dict[str, Any] | None = None
         wall_start = time.monotonic()
+
+        # x-source: seed known_values from prompt + history
+        known_values: set[str] = set()
+        if next_message:
+            known_values |= _extract_tokens_from_text(next_message)
+        for msg in history:
+            for block in msg.content:
+                if isinstance(block, TextBlock):
+                    known_values |= _extract_tokens_from_text(block.text)
+                elif isinstance(block, ToolResult) and not block.is_error:
+                    known_values |= _extract_values_from_json(block.content)
 
         for iteration in range(self._max_iterations):
             # ---- pre-flight: cost budget --------------------------------
@@ -378,37 +392,67 @@ class ToolUseLoop:
                 tool_calls_made += 1
                 self._emit(ToolCallDispatched(iteration=iteration, call=call))
 
-                start = time.monotonic()
-                try:
-                    result = self._dispatch_one(call)
-                except ToolHandlerTimeout as exc:
-                    if self._terminate_on_handler_error:
-                        self._emit(LoopTerminated(
-                            reason="tool_error",
-                            iterations=iteration + 1,
-                            total_cost_usd=total_cost_usd,
-                        ))
-                        raise
-                    result = ToolResult(
-                        tool_use_id=call.id,
-                        content=str(exc),
-                        is_error=True,
-                    )
-                except Exception as exc:
-                    if self._terminate_on_handler_error:
-                        self._emit(LoopTerminated(
-                            reason="tool_error",
-                            iterations=iteration + 1,
-                            total_cost_usd=total_cost_usd,
-                        ))
-                        raise
-                    result = ToolResult(
-                        tool_use_id=call.id,
-                        content=f"handler error: {exc}",
-                        is_error=True,
-                    )
+                # ---- x-source pre-dispatch validation ----
+                discovered = _get_discovered_fields(
+                    self._tools_by_name.get(call.name),
+                )
+                blocked: dict[str, str] = {}
+                for field in discovered:
+                    val = call.input.get(field)
+                    if isinstance(val, str) and val not in known_values:
+                        blocked[field] = val
 
-                duration = time.monotonic() - start
+                if blocked:
+                    self._emit(ToolCallBlocked(
+                        iteration=iteration,
+                        call=call,
+                        blocked_fields=blocked,
+                    ))
+                    result = ToolResult(
+                        tool_use_id=call.id,
+                        content=(
+                            "x-source validation: "
+                            + ", ".join(
+                                f"{f}={v!r}" for f, v in sorted(blocked.items())
+                            )
+                            + " not found in prompt or prior tool outputs. "
+                            "Discover these values first."
+                        ),
+                        is_error=True,
+                    )
+                    duration = 0.0
+                else:
+                    start = time.monotonic()
+                    try:
+                        result = self._dispatch_one(call)
+                    except ToolHandlerTimeout as exc:
+                        if self._terminate_on_handler_error:
+                            self._emit(LoopTerminated(
+                                reason="tool_error",
+                                iterations=iteration + 1,
+                                total_cost_usd=total_cost_usd,
+                            ))
+                            raise
+                        result = ToolResult(
+                            tool_use_id=call.id,
+                            content=str(exc),
+                            is_error=True,
+                        )
+                    except Exception as exc:
+                        if self._terminate_on_handler_error:
+                            self._emit(LoopTerminated(
+                                reason="tool_error",
+                                iterations=iteration + 1,
+                                total_cost_usd=total_cost_usd,
+                            ))
+                            raise
+                        result = ToolResult(
+                            tool_use_id=call.id,
+                            content=f"handler error: {exc}",
+                            is_error=True,
+                        )
+                    duration = time.monotonic() - start
+
                 self._emit(ToolCallReturned(
                     iteration=iteration,
                     call_id=call.id,
@@ -427,6 +471,11 @@ class ToolUseLoop:
             # Append tool results as user message — this keeps multi-call
             # batches in one message, matching Anthropic's wire shape.
             messages.append(Message(role="user", content=list(tool_results)))
+
+            # x-source: grow known_values from successful results
+            for tr in tool_results:
+                if not tr.is_error:
+                    known_values |= _extract_values_from_json(tr.content)
 
             # ---- post-dispatch termination checks -----------------------
             if terminal_tool_input is not None:
@@ -666,3 +715,73 @@ def _stop_reason_to_term(reason: StopReason) -> str:
         StopReason.NEEDS_TOOL_CALL: "provider_error",  # impossible-state
         StopReason.PAUSE_TURN: "provider_error",       # impossible-state
     }.get(reason, "provider_error")
+
+
+# ---------------------------------------------------------------------------
+# x-source provenance helpers
+# ---------------------------------------------------------------------------
+
+_TOKEN_SPLIT = re.compile(r"[\s,;|\"'`(){}\[\]]+")
+_MIN_TOKEN_LEN = 3
+_MAX_KNOWN_VALUES = 50_000
+
+
+def _extract_tokens_from_text(text: str) -> set[str]:
+    """Split free text into candidate known-value tokens.
+
+    Splits on whitespace/punctuation, strips edge junk, includes
+    slash-split components (``"owner/repo"`` yields both the whole
+    string and ``"owner"``, ``"repo"``).
+    """
+    values: set[str] = set()
+    for raw in _TOKEN_SPLIT.split(text):
+        token = raw.strip(".,;:!?()[]{}\"'<>")
+        if len(token) < _MIN_TOKEN_LEN:
+            continue
+        values.add(token)
+        if "/" in token:
+            for part in token.split("/"):
+                if len(part) >= _MIN_TOKEN_LEN:
+                    values.add(part)
+    return values
+
+
+def _extract_values_from_json(text: str) -> set[str]:
+    """Walk a JSON tool result and collect leaf strings."""
+    try:
+        obj = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return _extract_tokens_from_text(text)
+
+    values: set[str] = set()
+
+    def _walk(node: Any, depth: int = 0) -> None:
+        if depth > 20 or len(values) >= _MAX_KNOWN_VALUES:
+            return
+        if isinstance(node, dict):
+            for v in node.values():
+                _walk(v, depth + 1)
+        elif isinstance(node, list):
+            for v in node:
+                _walk(v, depth + 1)
+        elif isinstance(node, str) and len(node) >= _MIN_TOKEN_LEN:
+            values.add(node)
+            if "/" in node:
+                for part in node.split("/"):
+                    if len(part) >= _MIN_TOKEN_LEN:
+                        values.add(part)
+
+    _walk(obj)
+    return values
+
+
+def _get_discovered_fields(tool: ToolDef | None) -> set[str]:
+    """Return field names annotated ``"x-source": "discovered"``."""
+    if tool is None:
+        return set()
+    props = tool.input_schema.get("properties", {})
+    return {
+        name
+        for name, schema in props.items()
+        if isinstance(schema, dict) and schema.get("x-source") == "discovered"
+    }

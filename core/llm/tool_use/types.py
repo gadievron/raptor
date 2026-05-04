@@ -104,6 +104,13 @@ class ToolDef:
     ``terminate_on_handler_error`` policy on the loop (default: feed
     the exception text back to the model as a ``ToolResult`` with
     ``is_error=True`` so the model can adapt).
+
+    **x-source provenance** (optional): each property in
+    ``input_schema`` may carry ``"x-source": "prompt"`` (value from
+    the operator prompt — trusted, not validated) or
+    ``"x-source": "discovered"`` (value from prior tool output —
+    validated against ``known_values`` before dispatch). Tools
+    without annotations are dispatched unconditionally.
     """
 
     name: str
@@ -322,6 +329,21 @@ class ToolCallReturned:
 
 
 @dataclass(frozen=True)
+class ToolCallBlocked:
+    """x-source validation blocked a tool call before dispatch.
+
+    One or more ``discovered`` fields contained values not present in
+    ``known_values`` (seeded from prompt + prior tool outputs). The
+    loop returns an ``is_error=True`` :class:`ToolResult` so the model
+    can discover the values first.
+    """
+
+    iteration: int
+    call: ToolCall
+    blocked_fields: dict[str, str]
+
+
+@dataclass(frozen=True)
 class LoopTerminated:
     """Emitted as the final event of a :meth:`ToolUseLoop.run` call.
 
@@ -358,6 +380,7 @@ LoopEvent = Union[
     TurnStarted,
     TurnCompleted,
     ToolCallDispatched,
+    ToolCallBlocked,
     ToolCallReturned,
     LoopTerminated,
 ]

@@ -856,3 +856,237 @@ def test_cache_breakpoint_count_reflects_optins_when_supported() -> None:
     loop.run("go")
     started = next(e for e in seen if isinstance(e, TurnStarted))
     assert started.cache_breakpoints == 2             # system + tools
+
+
+# ---------------------------------------------------------------------------
+# x-source provenance validation
+# ---------------------------------------------------------------------------
+
+from core.llm.tool_use import ToolCallBlocked
+
+
+def _discovered_tool(name: str = "lookup") -> ToolDef:
+    """Tool with a discovered field for x-source tests."""
+    return ToolDef(
+        name=name,
+        description="looks up a repo by slug",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "slug": {"type": "string", "x-source": "discovered"},
+            },
+            "required": ["slug"],
+        },
+        handler=lambda inp: f'{{"found": "{inp["slug"]}"}}',
+    )
+
+
+def _prompt_tool(name: str = "fetch_cve") -> ToolDef:
+    """Tool with a prompt field for x-source tests."""
+    return ToolDef(
+        name=name,
+        description="fetches a CVE by ID",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "cve_id": {"type": "string", "x-source": "prompt"},
+            },
+            "required": ["cve_id"],
+        },
+        handler=lambda inp: f'{{"id": "{inp["cve_id"]}"}}',
+    )
+
+
+def _mixed_tool() -> ToolDef:
+    """Tool with both prompt and discovered fields."""
+    return ToolDef(
+        name="check",
+        description="cross-checks a CVE against a repo",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "cve_id": {"type": "string", "x-source": "prompt"},
+                "slug":   {"type": "string", "x-source": "discovered"},
+                "sha":    {"type": "string", "x-source": "discovered"},
+            },
+            "required": ["cve_id", "slug", "sha"],
+        },
+        handler=lambda inp: '{"ok": true}',
+    )
+
+
+def test_xsource_blocks_hallucinated_discovered_field() -> None:
+    """A discovered field value not in prompt or prior outputs is blocked."""
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "lookup", {"slug": "hallucinated/repo"})),
+        _text_response("done"),
+    ])
+    events: list[LoopEvent] = []
+    loop = ToolUseLoop(fp, [_discovered_tool()], events=events.append)
+    result = loop.run("Analyze CVE-2024-1234")
+
+    blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
+    assert len(blocked) == 1
+    assert "slug" in blocked[0].blocked_fields
+    assert blocked[0].blocked_fields["slug"] == "hallucinated/repo"
+
+    returned = [e for e in events if isinstance(e, ToolCallReturned)]
+    assert returned[0].result.is_error
+    assert "x-source" in returned[0].result.content
+
+
+def test_xsource_passes_value_from_prompt() -> None:
+    """A discovered field whose value appears in the prompt is accepted."""
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "lookup", {"slug": "openssl/openssl"})),
+        _text_response("done"),
+    ])
+    events: list[LoopEvent] = []
+    loop = ToolUseLoop(fp, [_discovered_tool()], events=events.append)
+    result = loop.run("Check openssl/openssl for CVE-2024-1234")
+
+    blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
+    assert len(blocked) == 0
+    returned = [e for e in events if isinstance(e, ToolCallReturned)]
+    assert not returned[0].result.is_error
+
+
+def test_xsource_passes_value_from_prior_tool_output() -> None:
+    """A discovered field value from a prior tool result is accepted."""
+    source_tool = ToolDef(
+        name="hints",
+        description="returns hints",
+        input_schema={"type": "object", "properties": {
+            "cve_id": {"type": "string", "x-source": "prompt"},
+        }},
+        handler=lambda inp: '{"slug": "curl/curl", "sha": "abc123def"}',
+    )
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "hints", {"cve_id": "CVE-2024-1234"})),
+        _tool_call_response(("c2", "lookup", {"slug": "curl/curl"})),
+        _text_response("done"),
+    ])
+    events: list[LoopEvent] = []
+    loop = ToolUseLoop(
+        fp, [source_tool, _discovered_tool()], events=events.append,
+    )
+    result = loop.run("Analyze CVE-2024-1234")
+
+    blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
+    assert len(blocked) == 0
+
+
+def test_xsource_blocks_value_not_from_prior_output() -> None:
+    """Discovered value not matching any prior tool output is blocked."""
+    source_tool = ToolDef(
+        name="hints",
+        description="returns hints",
+        input_schema={"type": "object", "properties": {
+            "cve_id": {"type": "string", "x-source": "prompt"},
+        }},
+        handler=lambda inp: '{"slug": "curl/curl"}',
+    )
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "hints", {"cve_id": "CVE-2024-1234"})),
+        _tool_call_response(("c2", "lookup", {"slug": "wrong/repo"})),
+        _text_response("done"),
+    ])
+    events: list[LoopEvent] = []
+    loop = ToolUseLoop(
+        fp, [source_tool, _discovered_tool()], events=events.append,
+    )
+    result = loop.run("Analyze CVE-2024-1234")
+
+    blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
+    assert len(blocked) == 1
+    assert blocked[0].blocked_fields["slug"] == "wrong/repo"
+
+
+def test_xsource_prompt_field_not_validated() -> None:
+    """Prompt-annotated fields are never blocked, even with novel values."""
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "fetch_cve", {"cve_id": "CVE-9999-0000"})),
+        _text_response("done"),
+    ])
+    events: list[LoopEvent] = []
+    loop = ToolUseLoop(fp, [_prompt_tool()], events=events.append)
+    result = loop.run("go")
+
+    blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
+    assert len(blocked) == 0
+
+
+def test_xsource_no_annotations_means_no_validation() -> None:
+    """Tools without x-source annotations are dispatched unconditionally."""
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "echo", {"anything": "hallucinated"})),
+        _text_response("done"),
+    ])
+    events: list[LoopEvent] = []
+    loop = ToolUseLoop(fp, [_echo_tool()], events=events.append)
+    result = loop.run("go")
+
+    blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
+    assert len(blocked) == 0
+    returned = [e for e in events if isinstance(e, ToolCallReturned)]
+    assert not returned[0].result.is_error
+
+
+def test_xsource_mixed_tool_blocks_only_discovered() -> None:
+    """Only discovered fields are validated; prompt fields pass through."""
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "check", {
+            "cve_id": "CVE-2024-1234",
+            "slug": "hallucinated/repo",
+            "sha": "deadbeef123456",
+        })),
+        _text_response("done"),
+    ])
+    events: list[LoopEvent] = []
+    loop = ToolUseLoop(fp, [_mixed_tool()], events=events.append)
+    result = loop.run("Analyze CVE-2024-1234")
+
+    blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
+    assert len(blocked) == 1
+    assert "slug" in blocked[0].blocked_fields
+    assert "sha" in blocked[0].blocked_fields
+    assert "cve_id" not in blocked[0].blocked_fields
+
+
+def test_xsource_known_values_grow_across_turns() -> None:
+    """Values from turn N's output are available in turn N+1."""
+    tool_a = ToolDef(
+        name="search",
+        description="search",
+        input_schema={"type": "object", "properties": {
+            "q": {"type": "string", "x-source": "prompt"},
+        }},
+        handler=lambda inp: '{"results": [{"slug": "new-org/new-repo"}]}',
+    )
+    tool_b = _discovered_tool("lookup")
+
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "search", {"q": "CVE-2024-1234"})),
+        _tool_call_response(("c2", "lookup", {"slug": "new-org/new-repo"})),
+        _text_response("done"),
+    ])
+    events: list[LoopEvent] = []
+    loop = ToolUseLoop(fp, [tool_a, tool_b], events=events.append)
+    result = loop.run("Analyze CVE-2024-1234")
+
+    blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
+    assert len(blocked) == 0
+
+
+def test_xsource_slash_split_matches_components() -> None:
+    """Prompt text 'openssl/openssl' seeds both whole and components."""
+    fp = _FakeProvider([
+        _tool_call_response(("c1", "lookup", {"slug": "openssl"})),
+        _text_response("done"),
+    ])
+    events: list[LoopEvent] = []
+    loop = ToolUseLoop(fp, [_discovered_tool()], events=events.append)
+    result = loop.run("Check openssl/openssl")
+
+    blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
+    assert len(blocked) == 0
