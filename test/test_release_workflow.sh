@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# test_release_workflow.sh — simulate the release workflow against a temp repo
+# test_release_workflow.sh — simulate the release workflow against temp repo
 #
 # Creates a disposable git repo with synthetic commits and tags, then runs
 # each workflow step's logic and asserts expected outcomes.
