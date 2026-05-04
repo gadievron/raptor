@@ -120,6 +120,53 @@ class TestBugR015StderrPersistence(unittest.TestCase):
         )
 
 
+class TestCleanupC1FileNotFoundHandling(unittest.TestCase):
+    """Cleanup C-1 from /work-audit (2026-05-04):
+
+    raptor_openant.py only catches RuntimeError when building the OpenAnt
+    config. But scanner.py's _build_subprocess_env now uses
+    Path.resolve(strict=True) which raises FileNotFoundError on a
+    non-existent path. The two error types should be unified at the
+    boundary (either re-raise as RuntimeError, or catch both at the
+    raptor_openant.py boundary).
+
+    Audit C-1: 'Path.resolve(strict=True) raises FileNotFoundError not
+    RuntimeError — agent claimed both are handled. Checked: my code at
+    scanner.py:_build_subprocess_env doesn't actually catch
+    FileNotFoundError separately. The caller in raptor_openant.py:139-148
+    catches RuntimeError only — a non-existent OPENANT_CORE path would
+    raise FileNotFoundError, uncaught.'
+
+    The fix: scanner.py wraps Path.resolve(strict=True) and re-raises
+    as RuntimeError with a clear message. This unifies the boundary.
+    """
+
+    def test_nonexistent_core_path_raises_runtime_error_not_filenotfound(self):
+        """A non-existent core_path must raise RuntimeError (so
+        raptor_openant.py's `except RuntimeError` handles it) — NOT
+        FileNotFoundError, which would propagate as 'Fatal error'."""
+        from packages.openant.scanner import _build_subprocess_env
+        config = OpenAntConfig(core_path=Path("/nonexistent/openant-xyz-123"))
+        with self.assertRaises(RuntimeError) as ctx:
+            _build_subprocess_env(config)
+        # The error must be informative about openant-core
+        msg = str(ctx.exception).lower()
+        self.assertTrue(
+            "openant" in msg or "not found" in msg or "does not exist" in msg,
+            f"Error message should mention openant-core or non-existence; got: {ctx.exception}",
+        )
+
+    def test_decoy_directory_raises_runtime_error(self):
+        """A directory exists but lacks the marker → RuntimeError.
+        (Already covered by test_wrong_directory_raises but here
+        we re-pin it as part of the boundary contract.)"""
+        from packages.openant.scanner import _build_subprocess_env
+        with tempfile.TemporaryDirectory() as tmp:
+            config = OpenAntConfig(core_path=Path(tmp))
+            with self.assertRaises(RuntimeError):
+                _build_subprocess_env(config)
+
+
 class TestBugR012NoAnalyzeRemoved(unittest.TestCase):
     """BUG-R-012: --no-analyze flag was declared but inactive. Removed.
 

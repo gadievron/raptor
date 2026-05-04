@@ -150,7 +150,15 @@ def _build_subprocess_env(config: OpenAntConfig) -> dict[str, str]:
     # Resolve to absolute path so .. / symlinks / relative components cannot be
     # used to redirect Python's import resolution to an attacker-controlled dir
     # if OPENANT_CORE is set to an untrusted value.
-    resolved = config.core_path.resolve(strict=True)
+    # Re-raise FileNotFoundError as RuntimeError so callers have a single
+    # exception type to handle at the boundary (cleanup C-1 from /work-audit).
+    try:
+        resolved = config.core_path.resolve(strict=True)
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            f"OpenAnt core path does not exist: {config.core_path} "
+            f"(set OPENANT_CORE to a valid libs/openant-core directory)"
+        ) from e
     if not (resolved / "core" / "scanner.py").exists():
         raise RuntimeError(f"PYTHONPATH target {resolved} is not an openant-core directory")
     existing_pythonpath = os.environ.get("PYTHONPATH", "")
