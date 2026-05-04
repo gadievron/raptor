@@ -1,0 +1,13 @@
+# Exclude dev/CI files from release archives (git archive --export-ignore)
+.github/          export-ignore
+.claude/          export-ignore
+.devcontainer/    export-ignore
+.vscode/          export-ignore
+.gitattributes    export-ignore
+.env              export-ignore
+*.patch           export-ignore
+out/              export-ignore
+codeql_dbs/       export-ignore
+docs/img/         export-ignore
+test/             export-ignore
+conftest.py       export-ignore
