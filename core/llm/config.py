@@ -76,15 +76,23 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
 
     Returns ModelConfig for best available thinking model, or None if none found.
     """
+    # Cache successful resolutions only. Pre-fix `_thinking_model_checked`
+    # was set to True even when the result was None, so a process that
+    # probed once before the operator created `~/.config/raptor/models.json`
+    # would never see the new config in the same session — every
+    # subsequent call short-circuited to the cached None. Recomputing
+    # the lookup when the cached value is None is cheap (single JSON
+    # file read; the consumer's surrounding code is already doing
+    # network LLM calls), so the trade-off is clear: tiny re-probe cost
+    # vs. silent-stale-config bug.
     global _cached_thinking_model, _thinking_model_checked
-    if _thinking_model_checked:
+    if _thinking_model_checked and _cached_thinking_model is not None:
         return _cached_thinking_model
-
-    _thinking_model_checked = True
 
     models = _get_configured_models()
     if not models:
         _cached_thinking_model = None
+        _thinking_model_checked = False  # don't latch on negative result
         return None
 
     # Define priority order for thinking models (best first)
@@ -186,6 +194,8 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
         logger.info(f"Auto-selected thinking model: {best_model.provider}/{best_model.model_name} (score: {best_score})")
 
     _cached_thinking_model = best_model
+    # Latch the cache only on positive results (see header comment).
+    _thinking_model_checked = best_model is not None
     return best_model
 
 
