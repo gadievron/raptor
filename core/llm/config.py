@@ -789,7 +789,35 @@ class LLMConfig:
     max_cost_per_scan: float = 10.0  # USD
 
     def to_file(self, config_path: Path) -> None:
-        """Save configuration to JSON file with restrictive permissions."""
+        """Save a MINIMAL snapshot of this configuration to JSON.
+
+        **What this writes:** the primary model's provider+model_name
+        and the `enable_fallback` flag. NOTHING ELSE.
+
+        **What this does NOT write:**
+          * api_key / api_base — credentials should not be persisted to
+            on-disk config; round-trip via env vars / CLI flags.
+          * max_tokens / max_context / temperature / etc. — these are
+            looked up from the model registry by name at load time
+            so the persisted file stays small and stable across model
+            registry updates.
+          * fallback_models / specialized_models — multi-model setups
+            should be authored in `~/.config/raptor/models.json`
+            (the canonical operator config), not in a CLI-emitted
+            snapshot.
+          * Budget / retry / cache settings — defaults from
+            `LLMConfig` are intentionally re-applied each run so
+            operator changes take effect.
+
+        This file is intended for the CLI's "save current run config"
+        feature only. Callers that need full round-trip serialisation
+        should construct config explicitly from the operator's
+        `~/.config/raptor/models.json` rather than via this method.
+
+        Mode 0o600 so the file isn't world-readable even though it
+        deliberately omits credentials — defence in depth against
+        future field additions.
+        """
         from core.json import save_json
         primary = None
         if self.primary_model:
