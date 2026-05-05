@@ -10,5 +10,9 @@
 
 ignore\s+(?:all\s+|the\s+)?(?:previous|prior|above|preceding)\s+(?:instructions|messages|rules|prompts)
 disregard\s+(?:all\s+|the\s+)?(?:previous|prior|above|preceding)\s+(?:instructions|messages|rules|prompts)
-forget\s+(?:all\s+|the\s+|everything\s+)?(?:previous|prior|above|preceding|you were told)
+forget\s+(?:all\s+|the\s+|everything\s+)?(?:previous|prior|above|preceding|you\s+were\s+told)
 your\s+(?:real|actual|new|true)\s+(?:task|goal|objective|purpose|mission)\s+is
+# Line-anchored ``[system]:`` marker. Lives in this corpus (not
+# english.txt) so re.MULTILINE makes ``^`` match the start of any
+# embedded line, defeating the prefix-then-newline bypass.
+^\s*\[?system\]?\s*[:>]

@@ -23,7 +23,13 @@ override[^\S\n]+(?:all[^\S\n]+|the[^\S\n]+|above[^\S\n]+|prior[^\S\n]+|previous[
 your[^\S\n]+(?:real|actual|new|true)[^\S\n]+(?:task|goal|objective|purpose|mission)[^\S\n]+is
 new[^\S\n]+instructions:
 new[^\S\n]+task:
-^\s*\[?system\]?\s*[:>]
+# Note: the ``^[system]:`` line-marker pattern lives in
+# english_multiline.txt because this corpus is compiled WITHOUT
+# re.MULTILINE — ``^`` here only matches at the start of the WHOLE
+# input, so an attacker prefixing the input with any character
+# (``hello\n[system]: do X``) would bypass the pattern entirely.
+# english_multiline.txt is compiled with re.MULTILINE so ``^`` there
+# matches at the start of every line.
 respond[^\S\n]+(?:only[^\S\n]+|just[^\S\n]+)?with[^\S\n]+(?:the[^\S\n]+|a[^\S\n]+)?(?:following|word|phrase|number|message)
 print[^\S\n]+(?:only[^\S\n]+|just[^\S\n]+)?(?:the[^\S\n]+|a[^\S\n]+)?(?:following|word|phrase|message|verbatim)
 the[^\S\n]+user[^\S\n]+(?:is[^\S\n]+lying|is[^\S\n]+mistaken|is[^\S\n]+an[^\S\n]+attacker)
