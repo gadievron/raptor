@@ -554,7 +554,7 @@ def _get_default_fallback_models() -> List['ModelConfig']:
 # Model role resolution
 # ---------------------------------------------------------------------------
 
-VALID_ROLES = {"analysis", "code", "consensus", "fallback", "judge"}
+VALID_ROLES = {"analysis", "code", "consensus", "fallback", "judge", "aggregate"}
 
 
 def resolve_model_roles(
@@ -569,7 +569,8 @@ def resolve_model_roles(
 
     Returns:
         {analysis_model: ModelConfig, code_model: ModelConfig,
-         consensus_models: [ModelConfig], fallback_models: [ModelConfig]}
+         consensus_models: [ModelConfig], judge_models: [ModelConfig],
+         aggregate_models: [ModelConfig], fallback_models: [ModelConfig]}
 
     Raises:
         ConfigError on invalid role configurations.
@@ -577,9 +578,12 @@ def resolve_model_roles(
     if primary_model is None and not fallback_models:
         return {
             "analysis_model": None,
+            "analysis_models": [],
             "code_model": None,
             "consensus_models": [],
             "fallback_models": [],
+            "judge_models": [],
+            "aggregate_models": [],
         }
 
     all_models = []
@@ -595,9 +599,11 @@ def resolve_model_roles(
         # Default: first model = analysis + code, rest = fallback
         return {
             "analysis_model": all_models[0] if all_models else None,
+            "analysis_models": [all_models[0]] if all_models else [],
             "code_model": all_models[0] if all_models else None,
             "consensus_models": [],
             "judge_models": [],
+            "aggregate_models": [],
             "fallback_models": all_models[1:] if len(all_models) > 1 else [],
         }
 
@@ -609,6 +615,7 @@ def resolve_model_roles(
     code = [m for m in all_models if m.role == "code"]
     consensus = [m for m in all_models if m.role == "consensus"]
     judge = [m for m in all_models if m.role == "judge"]
+    aggregate = [m for m in all_models if m.role == "aggregate"]
     fallbacks = [m for m in all_models if m.role == "fallback" or m.role is None]
 
     analysis_model = analysis[0] if analysis else (all_models[0] if all_models else None)
@@ -620,6 +627,7 @@ def resolve_model_roles(
         "code_model": code_model,
         "consensus_models": consensus,
         "judge_models": judge,
+        "aggregate_models": aggregate,
         "fallback_models": fallbacks,
     }
 
@@ -644,6 +652,7 @@ def _validate_model_roles(models: List['ModelConfig']) -> None:
     only_fallback = all(r == "fallback" for r in roles) if roles else False
 
     has_judge = "judge" in roles
+    has_aggregate = "aggregate" in roles
 
     if has_consensus and not has_analysis:
         raise ConfigError("Consensus models configured without an analysis model")
@@ -651,8 +660,16 @@ def _validate_model_roles(models: List['ModelConfig']) -> None:
     if has_judge and not has_analysis:
         raise ConfigError("Judge models configured without an analysis model")
 
+    if has_aggregate and not has_analysis:
+        raise ConfigError("Aggregate model configured without an analysis model")
+
     if has_code and not has_analysis:
         raise ConfigError("Code model configured without an analysis model")
+
+    if roles.count("aggregate") > 1:
+        raise ConfigError(
+            "Multiple models with role 'aggregate'. Only one aggregate model is supported"
+        )
 
     # Multiple analysis models is valid (multi-model mode)
 
@@ -707,7 +724,7 @@ class ModelConfig:
     timeout: int = 120
     cost_per_1k_tokens: float = 0.0  # Fallback rate — used only when model not in MODEL_COSTS
     enabled: bool = True
-    role: Optional[str] = None  # "analysis", "code", "consensus", "fallback"
+    role: Optional[str] = None  # "analysis", "code", "consensus", "fallback", "judge", "aggregate"
 
 
 @dataclass

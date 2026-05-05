@@ -12,9 +12,10 @@ description: Full autonomous security workflow — scan, dedup, prep, analyse, c
 5. **Self-review**: catch contradictions, retry low confidence (Stage F)
 6. **Consensus**: multi-model second opinion (if `--consensus`)
 7. **Judge**: non-blind review of primary reasoning (if `--judge`)
-8. **Generate exploit PoCs** for exploitable findings
-9. **Generate secure patches** for confirmed vulnerabilities
-10. **Cross-finding analysis** (structural grouping, shared root causes)
+8. **Aggregate**: synthesize multi-model results for downstream use (if `--aggregate`)
+9. **Generate exploit PoCs** for exploitable findings
+10. **Generate secure patches** for confirmed vulnerabilities
+11. **Cross-finding analysis** (structural grouping, shared root causes)
 
 Nothing will be applied to your code - only generated in the out/ directory.
 
@@ -53,7 +54,8 @@ Findings are dispatched for parallel analysis via one of two paths:
 - **Both available**: uses external LLM, falls back to Claude Code if it fails
 
 Model roles determine which model analyses (analysis), writes code (code),
-provides second opinions (consensus), and reviews reasoning (judge).
+provides second opinions (consensus), reviews reasoning (judge), and
+synthesizes multi-model output for downstream use (aggregate).
 See the "Multi-model analysis" section below.
 
 If **neither** is available, the pipeline produces prep-only output. In that case,
@@ -78,9 +80,10 @@ The dispatch pipeline runs these tasks in sequence:
 4. **ConsensusTask** — blind second model votes on true positives (if `--consensus`)
 5. **JudgeTask** — non-blind review of primary reasoning (if `--judge`)
 6. **Correlation** — multi-model agreement matrix + confidence signals (if 2+ `--model`)
-7. **ExploitTask** — PoCs for final-verdict exploitable findings
-8. **PatchTask** — secure fixes for exploitable findings
-9. **GroupAnalysisTask** — cross-finding patterns (shared root cause, attack chaining)
+7. **AggregationTask** — final synthesis into `aggregation.json`, consumed by `agentic-report.md` (if `--aggregate`)
+8. **ExploitTask** — PoCs for final-verdict exploitable findings
+9. **PatchTask** — secure fixes for exploitable findings
+10. **GroupAnalysisTask** — cross-finding patterns (shared root cause, attack chaining)
 
 Cost tracking is real-time with adaptive budget cutoff.
 
@@ -95,6 +98,7 @@ By default, the primary model is auto-detected from `~/.config/raptor/models.jso
 | `--model MODEL` (repeatable) | Analysis | Each model independently analyses every finding. Multiple = multi-model correlation. |
 | `--consensus MODEL` | Blind second opinion | Re-analyses each finding independently (doesn't see the primary verdict). Majority vote decides the final ruling. Auto-skipped with 3+ `--model`. |
 | `--judge MODEL` | Non-blind review | Sees the primary analysis reasoning and critiques it. Flags missed attack paths, flawed logic, or inconsistent verdicts. |
+| `--aggregate MODEL` | Final synthesis | Aggregates the multi-model results into `aggregation.json` and the final `agentic-report.md`. Requires at least two `--model` values. |
 
 ```
 # Single model
@@ -102,6 +106,9 @@ By default, the primary model is auto-detected from `~/.config/raptor/models.jso
 
 # Multi-model — each analyses independently, results correlated
 /agentic --model gemini-2.5-pro --model gpt-5 --model claude-opus-4-6
+
+# Multi-model + downstream aggregation
+/agentic --model claude-opus-4-6 --model gpt-5.4 --aggregate claude-sonnet-4-6
 
 # Single model + consensus + judge
 /agentic --model gemini-2.5-pro --consensus gpt-5.4 --judge claude-opus-4-6

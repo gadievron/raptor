@@ -139,6 +139,7 @@ def build_llm_config_from_flags(
     models: Optional[List[str]] = None,
     consensus: Optional[str] = None,
     judge: Optional[str] = None,
+    aggregate: Optional[str] = None,
     auto_detect: bool = True,
 ) -> Optional[Any]:
     """Build an LLMConfig from CLI flags, shared by /agentic and /analyze.
@@ -148,6 +149,7 @@ def build_llm_config_from_flags(
             Multiple = multi-model mode (each independently analyses).
         consensus: Blind second-opinion model name.
         judge: Non-blind review model name.
+        aggregate: Final synthesis model name.
         auto_detect: Try env vars / models.json if no --model given.
 
     Returns LLMConfig or None if no model could be resolved.
@@ -198,10 +200,11 @@ def build_llm_config_from_flags(
     role_flags = [
         ("consensus", consensus),
         ("judge", judge),
+        ("aggregate", aggregate),
     ]
     has_role_flags = any(m for _, m in role_flags)
     if has_role_flags and not llm_config:
-        print("\n  Warning: --consensus/--judge require a primary analysis model")
+        print("\n  Warning: --consensus/--judge/--aggregate require a primary analysis model")
         print("  Use --model MODEL, configure models.json, or set an API key env var")
     if llm_config and has_role_flags:
         for role, model_name in role_flags:
@@ -290,7 +293,8 @@ def orchestrate(
     from core.llm.config import resolve_model_roles
     role_resolution = {"analysis_model": None, "code_model": None,
                        "consensus_models": [], "judge_models": [],
-                       "fallback_models": []}
+                       "aggregate_models": [], "fallback_models": [],
+                       "analysis_models": []}
     if llm_config and llm_config.primary_model:
         role_resolution = resolve_model_roles(
             llm_config.primary_model,
@@ -304,6 +308,7 @@ def orchestrate(
     # Print dispatch info
     n_consensus = len(role_resolution.get("consensus_models", []))
     n_judge = len(role_resolution.get("judge_models", []))
+    n_aggregate = len(role_resolution.get("aggregate_models", []))
     analysis_model = role_resolution.get("analysis_model")
     analysis_model_name = analysis_model.model_name if analysis_model else ""
     is_cc_dispatch = not (llm_config and llm_config.primary_model)
@@ -321,6 +326,8 @@ def orchestrate(
         extras.append(f"{n_consensus} consensus")
     if n_judge:
         extras.append(f"{n_judge} judge")
+    if n_aggregate:
+        extras.append(f"{n_aggregate} aggregate")
     extra_str = f" ({', '.join(extras)})" if extras else ""
     print(f"\n  {n} finding{'s' if n != 1 else ''} → {model_label}{extra_str}")
 
@@ -328,7 +335,7 @@ def orchestrate(
     from packages.llm_analysis.dispatch import dispatch_task, DispatchResult
     from packages.llm_analysis.tasks import (
         AnalysisTask, ExploitTask, PatchTask,
-        ConsensusTask, JudgeTask, GroupAnalysisTask,
+        AggregationTask, ConsensusTask, JudgeTask, GroupAnalysisTask,
         RetryTask, CrossFamilyCheckTask,
     )
     from core.security.prompt_defense_profiles import (
@@ -477,9 +484,10 @@ def orchestrate(
             _multi_results.setdefault(fid, []).append(r)
 
     n_analysis_models = len(role_resolution.get("analysis_models", []))
+    findings_by_id = {f.get("finding_id"): f for f in findings if f.get("finding_id")}
     for fid, model_results in _multi_results.items():
         if len(model_results) == 1:
-            results_by_id[fid] = model_results[0]
+            primary = model_results[0]
         else:
             primary = _select_primary_result(model_results)
             primary["multi_model_analyses"] = [
@@ -490,7 +498,11 @@ def orchestrate(
                  "reasoning": r.get("reasoning", "")}
                 for r in model_results
             ]
-            results_by_id[fid] = primary
+        source = findings_by_id.get(fid, {})
+        for key in ("rule_id", "file_path", "start_line", "message"):
+            if key not in primary and source.get(key) is not None:
+                primary[key] = source.get(key)
+        results_by_id[fid] = primary
 
     # --- Pipeline flow (maps to exploitation-validator stages) ---
     # Stage E (binary feasibility) runs in Phase 0 if --binary provided.
@@ -569,6 +581,26 @@ def orchestrate(
         if n_corr:
             print(f"\n  Correlation: {n_corr} findings — {n_agreed} agreed, {n_disputed} disputed")
 
+    # Final LLM aggregation over independent analysis outputs. This is distinct
+    # from consensus/judge: it produces a downstream artifact instead of
+    # changing per-finding verdicts.
+    aggregate_models = role_resolution.get("aggregate_models", [])
+    aggregation = None
+    if aggregate_models:
+        if n_analysis_models < 2:
+            print("\n  Aggregate: skipped — requires at least two analysis models")
+        else:
+            aggregate_payload = _build_aggregation_payload(results_by_id, correlation)
+            aggregate_results = dispatch_task(
+                AggregationTask(profile=profile), [aggregate_payload], dispatch_fn,
+                role_resolution, results_by_id, cost_tracker, max_parallel,
+            )
+            for r in aggregate_results:
+                if "error" not in r:
+                    aggregation = {k: v for k, v in r.items()
+                                   if not k.startswith("_") and k != "finding_id"}
+                    break
+
     # Exploit/patch generation — after final verdict
     # CC analysis may produce exploits/patches inline via schema. ExploitTask/PatchTask
     # only select findings that are exploitable AND missing exploit_code/patch_code,
@@ -614,6 +646,8 @@ def orchestrate(
         merged["group_analyses"] = group_analyses
     if correlation:
         merged["correlation"] = correlation
+    if aggregation:
+        merged["aggregation"] = aggregation
 
     consensus_agreed = sum(1 for r in per_finding_results
                            if r.get("consensus") == "agreed")
@@ -648,6 +682,8 @@ def orchestrate(
         "judge_models": [m.model_name for m in judge_models],
         "judge_agreed": judge_agreed,
         "judge_disputes": judge_disputes,
+        "aggregate_models": [m.model_name for m in aggregate_models],
+        "aggregated": aggregation is not None,
         "findings_dispatched": len(findings),
         "findings_analysed": sum(1 for r in per_finding_results if "error" not in r),
         "findings_failed": sum(1 for r in per_finding_results if "error" in r),
@@ -670,6 +706,8 @@ def orchestrate(
     from core.json import save_json
     if correlation:
         save_json(out_dir / "correlation.json", correlation)
+    if aggregation:
+        save_json(out_dir / "aggregation.json", aggregation)
     out_path = out_dir / "orchestrated_report.json"
     save_json(out_path, merged)
     logger.info(f"Orchestrated report saved to {out_path}")
@@ -716,6 +754,10 @@ def orchestrate(
         if judge_disputes:
             jg_parts.append(f"{judge_disputes} disputed")
         print(f"  Judge: {', '.join(jg_parts)}")
+    if aggregation:
+        aggregate_by = aggregation.get("analysed_by")
+        suffix = f" ({aggregate_by})" if aggregate_by else ""
+        print(f"  Aggregate: written{suffix}")
     if cross_family_checked:
         cf_parts = [f"{cross_family_checked} cross-family checked"]
         if cross_family_disputes:
@@ -779,6 +821,61 @@ def _auto_detect_cross_family_checker(primary_family: str) -> Optional[Any]:
             )
             return ModelConfig(provider=provider, model_name=model_name)
     return None
+
+
+def _build_aggregation_payload(
+    results_by_id: Dict[str, Dict],
+    correlation: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Build a compact, bounded payload for the aggregate model."""
+    findings = []
+    models_seen: set[str] = set()
+
+    for fid, result in sorted(results_by_id.items()):
+        if not isinstance(result, dict) or "error" in result:
+            continue
+
+        analyses = result.get("multi_model_analyses") or [{
+            "model": result.get("analysed_by", "unknown"),
+            "is_exploitable": result.get("is_exploitable"),
+            "exploitability_score": result.get("exploitability_score"),
+            "ruling": result.get("ruling"),
+            "reasoning": result.get("reasoning", ""),
+        }]
+        compact_analyses = []
+        for analysis in analyses:
+            model = analysis.get("model", "unknown")
+            models_seen.add(model)
+            compact_analyses.append({
+                "model": model,
+                "is_exploitable": analysis.get("is_exploitable"),
+                "exploitability_score": analysis.get("exploitability_score"),
+                "ruling": analysis.get("ruling"),
+                "reasoning": (analysis.get("reasoning") or "")[:600],
+            })
+
+        findings.append({
+            "finding_id": fid,
+            "rule_id": result.get("rule_id"),
+            "file_path": result.get("file_path"),
+            "start_line": result.get("start_line"),
+            "selected_verdict": {
+                "is_exploitable": result.get("is_exploitable"),
+                "exploitability_score": result.get("exploitability_score"),
+                "ruling": result.get("ruling"),
+                "confidence": result.get("confidence"),
+            },
+            "multi_model_confidence": result.get("multi_model_confidence"),
+            "analyses": compact_analyses,
+        })
+
+    return {
+        "models": sorted(models_seen),
+        "correlation_summary": (correlation or {}).get("summary", {}),
+        "confidence_signals": (correlation or {}).get("confidence_signals", {}),
+        "unique_insights": (correlation or {}).get("unique_insights", [])[:20],
+        "findings": findings,
+    }
 
 
 def _select_primary_result(model_results: List[Dict]) -> Dict:
@@ -995,5 +1092,3 @@ def _structural_grouping(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         _add_group("shared_dataflow_ref", ref, list(fids_set))
 
     return groups
-
-

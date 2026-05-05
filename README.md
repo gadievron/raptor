@@ -179,7 +179,13 @@ The **analysis dispatch layer** is the LLM that analyses individual vulnerabilit
       "provider": "openai",
       "model": "gpt-5.4",
       "api_key": "sk-...",
-      "role": "consensus"
+      "role": "analysis"
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "api_key": "sk-ant-...",
+      "role": "aggregate"
     }
   ]
 }
@@ -202,9 +208,19 @@ Model roles let you assign different models to different tasks:
 | `analysis` | Validates and analyses each finding (Stages A-D) |
 | `code` | Writes exploit PoCs and patch code |
 | `consensus` | Second-opinion vote on true positives |
+| `aggregate` | Synthesizes multi-model results into `aggregation.json` and the final `agentic-report.md` |
 | `fallback` | Used if the primary model fails or hits rate limits |
 
-If no roles are set, the first model in the list handles everything.
+If no roles are set, the first model in the list handles everything. For multi-model
+source-code analysis, configure at least two `analysis` models and one `aggregate`
+model, or pass them at runtime:
+
+```bash
+python3 raptor.py agentic --repo /code \
+  --model claude-opus-4-6 \
+  --model gpt-5.4 \
+  --aggregate claude-sonnet-4-6
+```
 
 Budget control:
 
