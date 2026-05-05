@@ -74,12 +74,19 @@ jobs:
       - name: Compile Python sources
         run: |
           source $VENV_PATH/bin/activate
-          python -m compileall -q core packages *.py
+          python -m compileall -q core packages libexec/tests *.py
 
       - name: Run unit tests
         run: |
           source $VENV_PATH/bin/activate
           pytest core packages
+
+      - name: Run libexec wrapper tests
+        run: |
+          source $VENV_PATH/bin/activate
+          # Keep this separate from `pytest core packages` to avoid pytest
+          # import-name collisions with other top-level tests packages.
+          pytest libexec/tests
 
   test-workflows:
     needs: deps
