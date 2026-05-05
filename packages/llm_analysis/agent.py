@@ -1108,6 +1108,8 @@ def main() -> None:
                              help="Blind second opinion model")
     model_group.add_argument("--judge", metavar="MODEL",
                              help="Non-blind review model")
+    model_group.add_argument("--aggregate", metavar="MODEL",
+                             help="Final synthesis model for multi-model results")
 
     args = ap.parse_args()
 
@@ -1118,6 +1120,7 @@ def main() -> None:
         getattr(args, "model", []),
         getattr(args, "consensus", None),
         getattr(args, "judge", None),
+        getattr(args, "aggregate", None),
     ])
 
     # Suggest --findings if validation artifacts exist nearby
@@ -1168,6 +1171,7 @@ def main() -> None:
                 models=args.model or [],
                 consensus=args.consensus,
                 judge=args.judge,
+                aggregate=args.aggregate,
             )
             if llm_config:
                 result = orchestrate(

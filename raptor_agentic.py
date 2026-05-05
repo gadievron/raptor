@@ -162,6 +162,10 @@ Examples:
   python3 raptor.py agentic --repo /path/to/code \\
     --model gemini-2.5-pro --model gpt-5 --model claude-opus-4-6
 
+  # Two analysis models + one aggregate model for downstream triage
+  python3 raptor.py agentic --repo /path/to/code \\
+    --model claude-opus-4-6 --model gpt-5.4 --aggregate claude-sonnet-4-6
+
   # Single model + consensus second opinion
   python3 raptor.py agentic --repo /path/to/code --model gemini-2.5-pro \\
     --consensus claude-opus-4-6
@@ -227,7 +231,7 @@ Examples:
         "multi-model analysis",
         "Choose which LLMs analyse findings. The primary model is auto-detected "
         "from models.json / API key env vars unless --model overrides it. "
-        "Role models (consensus, judge) are optional additions.",
+        "Role models (consensus, judge, aggregate) are optional additions.",
     )
     model_group.add_argument(
         "--model",
@@ -249,6 +253,13 @@ Examples:
         metavar="MODEL",
         help="Non-blind review — sees and critiques the primary analysis "
              "reasoning. Flags missed attack paths or flawed logic.",
+    )
+    model_group.add_argument(
+        "--aggregate",
+        metavar="MODEL",
+        help="Final synthesis model — aggregates multi-model analysis results "
+             "into a downstream triage artifact. Requires at least two "
+             "--model values.",
     )
     parser.add_argument(
         "--trust-repo",
@@ -853,6 +864,7 @@ Examples:
                 models=getattr(args, "model", []) or [],
                 consensus=getattr(args, "consensus", None),
                 judge=getattr(args, "judge", None),
+                aggregate=getattr(args, "aggregate", None),
                 auto_detect=llm_env.external_llm,
             )
             orchestration_result = orchestrate(

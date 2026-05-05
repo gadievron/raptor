@@ -14,7 +14,7 @@ from packages.llm_analysis.dispatch import (
     _classify_error,
 )
 from packages.llm_analysis.tasks import (
-    AnalysisTask, ExploitTask, PatchTask, ConsensusTask,
+    AggregationTask, AnalysisTask, ExploitTask, PatchTask, ConsensusTask,
     GroupAnalysisTask, JudgeTask, RetryTask,
 )
 from packages.llm_analysis.orchestrator import CostTracker
@@ -752,6 +752,37 @@ class TestJudgeTask:
         assert "is_exploitable=True" in prompt
 
 
+class TestAggregationTask:
+    def test_gets_aggregate_models(self):
+        task = AggregationTask()
+        m1 = MagicMock()
+        resolution = {"aggregate_models": [m1]}
+        assert task.get_models(resolution) == [m1]
+
+    def test_builds_prompt_from_payload(self):
+        task = AggregationTask()
+        payload = {
+            "models": ["claude-opus-4-6", "gpt-5"],
+            "correlation_summary": {"agreed": 1, "disputed": 0},
+            "findings": [{
+                "finding_id": "f-001",
+                "selected_verdict": {"is_exploitable": True},
+                "analyses": [
+                    {"model": "claude-opus-4-6", "reasoning": "reachable sink"},
+                    {"model": "gpt-5", "reasoning": "user input reaches sink"},
+                ],
+            }],
+        }
+        prompt = task.build_prompt(payload)
+        assert "f-001" in prompt
+        assert "claude-opus-4-6" in prompt
+        assert task.get_schema(payload)["required"][0] == "summary"
+
+    def test_item_id_is_stable(self):
+        task = AggregationTask()
+        assert task.get_item_id({}) == "aggregate"
+
+
 class TestJudgeEdgeCases:
     def test_finalize_no_judge_results_for_finding(self):
         """Findings without judge results should be untouched."""
@@ -831,6 +862,22 @@ class TestConfigRoleValidation:
         judge = MagicMock(); judge.role = "judge"; judge.model_name = "gpt-5"
         _validate_model_roles([analysis, judge])
 
+    def test_aggregate_without_analysis_raises(self):
+        from core.llm.config import _validate_model_roles, ConfigError
+        m = MagicMock()
+        m.role = "aggregate"
+        m.model_name = "claude-opus-4-6"
+        with pytest.raises(ConfigError, match="Aggregate.*without.*analysis"):
+            _validate_model_roles([m])
+
+    def test_multiple_aggregate_models_raises(self):
+        from core.llm.config import _validate_model_roles, ConfigError
+        analysis = MagicMock(); analysis.role = "analysis"; analysis.model_name = "gpt-5"
+        a1 = MagicMock(); a1.role = "aggregate"; a1.model_name = "claude-opus-4-6"
+        a2 = MagicMock(); a2.role = "aggregate"; a2.model_name = "gpt-5.4"
+        with pytest.raises(ConfigError, match="Multiple models with role 'aggregate'"):
+            _validate_model_roles([analysis, a1, a2])
+
     def test_resolve_roles_includes_judge(self):
         from core.llm.config import resolve_model_roles
         analysis = MagicMock(); analysis.role = "analysis"; analysis.model_name = "gemini"
@@ -838,6 +885,13 @@ class TestConfigRoleValidation:
         result = resolve_model_roles(analysis, [judge])
         assert result["judge_models"] == [judge]
         assert result["analysis_model"] == analysis
+
+    def test_resolve_roles_includes_aggregate(self):
+        from core.llm.config import resolve_model_roles
+        analysis = MagicMock(); analysis.role = "analysis"; analysis.model_name = "gemini"
+        aggregate = MagicMock(); aggregate.role = "aggregate"; aggregate.model_name = "claude-opus-4-6"
+        result = resolve_model_roles(analysis, [aggregate])
+        assert result["aggregate_models"] == [aggregate]
 
     def test_multiple_analysis_models_allowed(self):
         from core.llm.config import _validate_model_roles
@@ -892,6 +946,19 @@ class TestBuildLLMConfigFromFlags:
         consensus_models = [m for m in result.fallback_models if m.role == "consensus"]
         assert len(consensus_models) == 1
         assert consensus_models[0].model_name == "claude-sonnet-4-6"
+
+    @patch.dict("os.environ", {"OPENAI_API_KEY": "test-key", "ANTHROPIC_API_KEY": "test-key-2"})
+    def test_model_with_aggregate_flag(self):
+        from packages.llm_analysis.orchestrator import build_llm_config_from_flags
+        result = build_llm_config_from_flags(
+            models=["gpt-5", "claude-opus-4-6"],
+            aggregate="claude-opus-4-6",
+            auto_detect=False,
+        )
+        assert result is not None
+        aggregate_models = [m for m in result.fallback_models if m.role == "aggregate"]
+        assert len(aggregate_models) == 1
+        assert aggregate_models[0].model_name == "claude-opus-4-6"
 
     @patch.dict("os.environ", {"GEMINI_API_KEY": "test-key", "OPENAI_API_KEY": "test-key-2"})
     def test_multi_model_flags(self):
