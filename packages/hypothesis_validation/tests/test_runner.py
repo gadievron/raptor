@@ -367,3 +367,66 @@ class TestValidateAuditTrail:
         d = result.to_dict()
         assert d["verdict"] == "confirmed"
         assert d["evidence"][0]["tool"] == "cocci"
+
+
+class TestValidateProvenance:
+    """Every Evidence produced by the runner is stamped with the hash
+    of the hypothesis it was produced for, so downstream callers can
+    refuse to combine evidence across hypotheses."""
+
+    def test_evidence_carries_hypothesis_hash(self):
+        from packages.hypothesis_validation.provenance import hash_hypothesis
+
+        h = Hypothesis(claim="c", target=Path("/src"))
+        adapter = FakeAdapter("cocci", evidence=ToolEvidence(
+            tool="cocci", rule="r", success=True,
+            matches=[{"file": "a.c", "line": 1}],
+            summary="1 match",
+        ))
+        llm = FakeLLM([
+            {"tool": "cocci", "rule": "@r@\n@@\nx;\n",
+             "expected_evidence": "x", "reasoning": "..."},
+            {"verdict": "confirmed", "reasoning": "ok",
+             "matches_support_claim": True},
+        ])
+        result = validate(h, [adapter], llm)
+        assert result.evidence[0].refers_to == hash_hypothesis(h)
+
+    def test_distinct_hypotheses_produce_distinct_refers_to(self):
+        from packages.hypothesis_validation.provenance import hash_hypothesis
+
+        h1 = Hypothesis(claim="a", target=Path("/src"))
+        h2 = Hypothesis(claim="b", target=Path("/src"))
+        adapter = FakeAdapter("cocci", evidence=ToolEvidence(
+            tool="cocci", rule="r", success=True,
+            matches=[{"file": "a.c", "line": 1}],
+            summary="1 match",
+        ))
+        llm_script = [
+            {"tool": "cocci", "rule": "@r@\n@@\nx;\n",
+             "expected_evidence": "x", "reasoning": "..."},
+            {"verdict": "confirmed", "reasoning": "ok",
+             "matches_support_claim": True},
+        ]
+        r1 = validate(h1, [adapter], FakeLLM(list(llm_script)))
+        r2 = validate(h2, [adapter], FakeLLM(list(llm_script)))
+        assert r1.evidence[0].refers_to != r2.evidence[0].refers_to
+        assert r1.evidence[0].refers_to == hash_hypothesis(h1)
+        assert r2.evidence[0].refers_to == hash_hypothesis(h2)
+
+    def test_empty_rule_evidence_also_stamped(self):
+        # The empty-rule branch in validate() builds its own Evidence;
+        # provenance must still attach so the audit trail is complete.
+        from packages.hypothesis_validation.provenance import hash_hypothesis
+
+        h = Hypothesis(claim="c", target=Path("/src"))
+        adapter = FakeAdapter("cocci", evidence=ToolEvidence(
+            tool="cocci", rule="", success=True, matches=[], summary="",
+        ))
+        llm = FakeLLM([
+            {"tool": "cocci", "rule": "   ",  # whitespace-only → empty
+             "expected_evidence": "x", "reasoning": "..."},
+        ])
+        result = validate(h, [adapter], llm)
+        assert result.inconclusive
+        assert result.evidence[0].refers_to == hash_hypothesis(h)

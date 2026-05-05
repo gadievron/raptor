@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Protocol
 
 from .adapters.base import ToolAdapter, ToolEvidence
 from .hypothesis import Hypothesis
+from .provenance import hash_hypothesis
 from .result import Evidence, ValidationResult, Verdict
 from .verdict import verdict_from
 
@@ -219,6 +220,7 @@ def validate(
             evidence=[Evidence(
                 tool=tool_name, rule="", summary="(empty rule)",
                 success=False, error="LLM returned an empty rule",
+                refers_to=hash_hypothesis(hypothesis),
             )],
             iterations=1,
             reasoning="LLM returned an empty rule.",
@@ -239,6 +241,7 @@ def validate(
         matches=tool_evidence.matches,
         success=tool_evidence.success,
         error=tool_evidence.error,
+        refers_to=hash_hypothesis(hypothesis),
     )
 
     verdict, reasoning = _evaluate(
