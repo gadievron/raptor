@@ -17,6 +17,26 @@ from core.llm.config import (
 from core.llm.model_data import PROVIDER_DEFAULT_MODELS, MODEL_COSTS, MODEL_LIMITS
 
 
+@pytest.fixture(autouse=True)
+def _restore_thinking_model_cache():
+    """Snapshot core.llm.config's module-level cache before each test and
+    restore after. Many tests in this file deliberately poke
+    `_thinking_model_checked` / `_cached_thinking_model` to force a
+    re-evaluation against tmp_path config; without restore, the module
+    is left in an inconsistent state and later tests in the suite (e.g.
+    packages/llm_analysis/tests/test_dispatch.py::test_multi_model_flags)
+    re-read the real environment and pick up unintended fallbacks.
+    """
+    import core.llm.config as cfg
+    saved_checked = getattr(cfg, "_thinking_model_checked", None)
+    saved_cached = getattr(cfg, "_cached_thinking_model", None)
+    try:
+        yield
+    finally:
+        cfg._thinking_model_checked = saved_checked
+        cfg._cached_thinking_model = saved_cached
+
+
 class TestGetConfiguredModels:
     """Test config file reading with various formats."""
 
