@@ -29,7 +29,61 @@ import functools
 import os
 import sys
 import threading
-from typing import Any, Optional
+from typing import Any, Callable, Optional
+
+
+class _CacheInfo:
+    """Minimal stand-in for ``functools.lru_cache``'s ``CacheInfo`` so
+    callers using ``cache_info()`` (e.g. ``get_commit``'s hit/miss
+    telemetry) keep working after the lru_cache → _cache_unless_none swap."""
+    __slots__ = ("hits", "misses", "currsize")
+
+    def __init__(self, hits: int, misses: int, currsize: int):
+        self.hits = hits
+        self.misses = misses
+        self.currsize = currsize
+
+
+def _cache_unless_none(func: Callable) -> Callable:
+    """Memoise the function but DO NOT cache None results.
+
+    `functools.lru_cache` caches every return value forever — including
+    `None` from a transient 429/auth failure. After the rate limit
+    refills, the cache still returns the poisoned `None` for the lifetime
+    of the process. This wrapper stores only non-None hits and re-calls
+    on cache miss for None.
+    """
+    cache: dict = {}
+    cache_lock = threading.Lock()
+    stats = {"hits": 0, "misses": 0}
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        key = args + tuple(sorted(kwargs.items()))
+        with cache_lock:
+            if key in cache:
+                stats["hits"] += 1
+                return cache[key]
+            stats["misses"] += 1
+        result = func(*args, **kwargs)
+        if result is not None:
+            with cache_lock:
+                cache[key] = result
+        return result
+
+    def cache_clear() -> None:
+        with cache_lock:
+            cache.clear()
+            stats["hits"] = 0
+            stats["misses"] = 0
+
+    def cache_info() -> _CacheInfo:
+        with cache_lock:
+            return _CacheInfo(stats["hits"], stats["misses"], len(cache))
+
+    wrapper.cache_clear = cache_clear  # type: ignore[attr-defined]
+    wrapper.cache_info = cache_info  # type: ignore[attr-defined]
+    return wrapper
 
 from core.http import HttpError
 from core.http.egress_backend import EgressClient
@@ -155,7 +209,7 @@ def _get(url: str) -> Optional[dict[str, Any]]:
     return data if isinstance(data, dict) else None
 
 
-@functools.lru_cache(maxsize=4096)
+@_cache_unless_none
 def get_repo(slug: str) -> Optional[dict[str, Any]]:
     """``GET /repos/{slug}`` — fork/archived/stars/created_at/language/size."""
     if not slug or "/" not in slug:
@@ -163,7 +217,7 @@ def get_repo(slug: str) -> Optional[dict[str, Any]]:
     return _get(f"https://api.github.com/repos/{slug}")
 
 
-@functools.lru_cache(maxsize=4096)
+@_cache_unless_none
 def get_languages(slug: str) -> Optional[dict[str, Any]]:
     """``GET /repos/{slug}/languages`` — used by shape_dynamic."""
     if not slug or "/" not in slug:
@@ -171,7 +225,7 @@ def get_languages(slug: str) -> Optional[dict[str, Any]]:
     return _get(f"https://api.github.com/repos/{slug}/languages")
 
 
-@functools.lru_cache(maxsize=8192)
+@_cache_unless_none
 def commit_exists(slug: str, sha: str) -> Optional[bool]:
     """Return True if ``sha`` resolves in ``slug``, False on 404, None on skip.
 
@@ -203,7 +257,7 @@ def commit_exists(slug: str, sha: str) -> Optional[bool]:
         return None
 
 
-@functools.lru_cache(maxsize=8192)
+@_cache_unless_none
 def _get_commit_cached(slug: str, sha: str) -> Optional[dict[str, Any]]:
     """Inner cached implementation of ``get_commit``. Wrapped by the
     public ``get_commit`` so we can record hit/miss counters via
