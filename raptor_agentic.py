@@ -896,10 +896,15 @@ Examples:
         print("\n" + "=" * 70)
         print("VALIDATE POST-PASS")
         print("=" * 70)
+        validate_input_report = (
+            out_dir / "orchestrated_report.json"
+            if orchestration_result
+            else (analysis_report if analysis_report else out_dir / "autonomous" / "autonomous_analysis_report.json")
+        )
         postpass_result = run_validate_postpass(
             target=original_repo_path,
             agentic_out_dir=out_dir,
-            analysis_report=analysis_report if analysis_report else out_dir / "autonomous" / "autonomous_analysis_report.json",
+            analysis_report=validate_input_report,
             block_cc_dispatch=block_cc_dispatch,
         )
         if postpass_result.ran:
@@ -966,6 +971,7 @@ Examples:
             "validation_report": str(out_dir / "validation" / "findings.json") if validation_result else None,
             "autonomous_report": str(analysis_report) if analysis_report and analysis_report.exists() else None,
             "orchestrated_report": str(out_dir / "orchestrated_report.json") if orchestration_result else None,
+            "aggregation_report": str(out_dir / "aggregation.json") if orchestration_result and orchestration_result.get("aggregation") else None,
             "exploits_directory": str(autonomous_out / "exploits") if autonomous_out else None,
             "patches_directory": str(autonomous_out / "patches") if autonomous_out else None,
             "exploit_feasibility": str(out_dir / "exploit_feasibility.txt") if mitigation_result else None,
@@ -1097,6 +1103,11 @@ Examples:
         print(f"   Patches generated: {patches_count}")
     if (args.codeql or args.codeql_only) and analysis.get('dataflow_validated', 0) > 0:
         print(f"   Dataflow paths validated: {analysis.get('dataflow_validated', 0)}")
+    aggregation = orchestration_result.get("aggregation", {}) if orchestration_result else {}
+    if aggregation:
+        summary = str(aggregation.get("summary") or "").strip()
+        if summary:
+            print(f"   Aggregate synthesis: {summary[:120]}{'...' if len(summary) > 120 else ''}")
     from core.reporting import (
         FINDINGS_COLUMNS, render_console_table, render_report, build_findings_spec,
         build_findings_rows, build_findings_summary, findings_summary_line,
@@ -1173,6 +1184,8 @@ Examples:
             via = mode
         n = orch.get('findings_analysed', 0)
         print(f"   ✓ Analysed {n} finding{'s' if n != 1 else ''} via {via}")
+        if orch.get("aggregated"):
+            print("   ✓ Aggregated multi-model findings")
     print("\nReview the outputs and apply patches as needed.")
 
     # Generate markdown report
@@ -1241,6 +1254,9 @@ Examples:
     cost = cost_summary.get("total_cost", 0)
     if cost > 0:
         extra_summary["Cost"] = f"${cost:.2f}"
+    if aggregation:
+        aggregate_model = aggregation.get("analysed_by")
+        extra_summary["Aggregate synthesis"] = aggregate_model or "completed"
 
     # Warnings
     warnings = []
@@ -1260,6 +1276,8 @@ Examples:
     output_files = []
     if outputs.get("orchestrated_report"):
         output_files.append(outputs["orchestrated_report"])
+    if outputs.get("aggregation_report"):
+        output_files.append(outputs["aggregation_report"])
     if outputs.get("autonomous_report"):
         output_files.append(outputs["autonomous_report"])
     sarif_files = outputs.get("sarif_files", [])
@@ -1270,12 +1288,17 @@ Examples:
         output_files.append(sarif_files[0])
     output_files.append("agentic-report.md")
 
+    extra_sections = []
+    if aggregation:
+        extra_sections.append(_build_aggregation_report_section(aggregation))
+
     spec = build_findings_spec(
         analysed_results,
         title="RAPTOR Agentic Security Report",
         metadata=metadata,
         extra_summary=extra_summary,
         warnings=warnings,
+        extra_sections=extra_sections,
         output_files=output_files,
         include_details=False,
     )
@@ -1305,6 +1328,8 @@ Examples:
             "duration_seconds": round(workflow_duration, 1),
             "analysis_model": orch_meta.get("analysis_model"),
             "analysis_models": orch_meta.get("analysis_models", []),
+            "aggregate_models": orch_meta.get("aggregate_models", []),
+            "aggregated": orch_meta.get("aggregated", False),
         })
     except Exception as e:
         logger.debug(f"Run metadata: {e}")  # Optional — don't fail the pipeline
@@ -1320,6 +1345,68 @@ Examples:
 
 
 from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE
+
+
+def _build_aggregation_report_section(aggregation):
+    """Render aggregate-model synthesis for the final agentic report."""
+    from core.reporting import ReportSection
+    from core.security.prompt_output_sanitise import sanitise_string
+
+    def _text(value, max_chars=1500):
+        return sanitise_string(str(value or "").strip(), max_chars=max_chars)
+
+    lines = []
+    analysed_by = aggregation.get("analysed_by")
+    if analysed_by:
+        lines.append(f"**Model:** `{_text(analysed_by, max_chars=200)}`")
+
+    summary = _text(aggregation.get("summary"), max_chars=2000)
+    if summary:
+        lines.append(f"\n**Summary:**\n{summary}")
+
+    model_agreement = _text(aggregation.get("model_agreement"), max_chars=1500)
+    if model_agreement:
+        lines.append(f"\n**Model Agreement:**\n{model_agreement}")
+
+    high_confidence = aggregation.get("highest_confidence_findings") or []
+    if isinstance(high_confidence, list) and high_confidence:
+        lines.append("\n**Highest Confidence Findings:**")
+        for item in high_confidence[:10]:
+            if not isinstance(item, dict):
+                continue
+            fid = _text(item.get("finding_id"), max_chars=120)
+            verdict = _text(item.get("verdict"), max_chars=120)
+            confidence = _text(item.get("confidence"), max_chars=120)
+            reason = _text(item.get("reason"), max_chars=300)
+            lines.append(f"- `{fid}`: {verdict} ({confidence}) — {reason}")
+
+    disputed = aggregation.get("disputed_findings") or []
+    if isinstance(disputed, list) and disputed:
+        lines.append("\n**Disputed Findings:**")
+        for item in disputed[:10]:
+            if not isinstance(item, dict):
+                continue
+            fid = _text(item.get("finding_id"), max_chars=120)
+            disagreement = _text(item.get("disagreement"), max_chars=300)
+            needed = _text(item.get("resolution_needed"), max_chars=300)
+            lines.append(f"- `{fid}`: {disagreement}. Resolution needed: {needed}")
+
+    actions = aggregation.get("recommended_next_actions") or []
+    if isinstance(actions, list) and actions:
+        lines.append("\n**Recommended Next Actions:**")
+        for action in actions[:10]:
+            lines.append(f"- {_text(action, max_chars=300)}")
+
+    risk_notes = aggregation.get("risk_notes") or []
+    if isinstance(risk_notes, list) and risk_notes:
+        lines.append("\n**Risk Notes:**")
+        for note in risk_notes[:10]:
+            lines.append(f"- {_text(note, max_chars=300)}")
+
+    return ReportSection(
+        title="Aggregate Synthesis",
+        content="\n".join(lines) if lines else "Aggregate synthesis was requested, but the model returned no reportable fields.",
+    )
 
 
 def _postprocess_findings(results):

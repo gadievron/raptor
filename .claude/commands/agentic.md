@@ -80,7 +80,7 @@ The dispatch pipeline runs these tasks in sequence:
 4. **ConsensusTask** — blind second model votes on true positives (if `--consensus`)
 5. **JudgeTask** — non-blind review of primary reasoning (if `--judge`)
 6. **Correlation** — multi-model agreement matrix + confidence signals (if 2+ `--model`)
-7. **AggregationTask** — final synthesis into `aggregation.json` (if `--aggregate`)
+7. **AggregationTask** — final synthesis into `aggregation.json`, consumed by `agentic-report.md` (if `--aggregate`)
 8. **ExploitTask** — PoCs for final-verdict exploitable findings
 9. **PatchTask** — secure fixes for exploitable findings
 10. **GroupAnalysisTask** — cross-finding patterns (shared root cause, attack chaining)
@@ -98,7 +98,7 @@ By default, the primary model is auto-detected from `~/.config/raptor/models.jso
 | `--model MODEL` (repeatable) | Analysis | Each model independently analyses every finding. Multiple = multi-model correlation. |
 | `--consensus MODEL` | Blind second opinion | Re-analyses each finding independently (doesn't see the primary verdict). Majority vote decides the final ruling. Auto-skipped with 3+ `--model`. |
 | `--judge MODEL` | Non-blind review | Sees the primary analysis reasoning and critiques it. Flags missed attack paths, flawed logic, or inconsistent verdicts. |
-| `--aggregate MODEL` | Final synthesis | Aggregates the multi-model results into `aggregation.json` for later pipeline/reporting use. Requires at least two `--model` values. |
+| `--aggregate MODEL` | Final synthesis | Aggregates the multi-model results into `aggregation.json` and the final `agentic-report.md`. Requires at least two `--model` values. |
 
 ```
 # Single model

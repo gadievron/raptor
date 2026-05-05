@@ -208,7 +208,7 @@ Model roles let you assign different models to different tasks:
 | `analysis` | Validates and analyses each finding (Stages A-D) |
 | `code` | Writes exploit PoCs and patch code |
 | `consensus` | Second-opinion vote on true positives |
-| `aggregate` | Synthesizes multi-model results into `aggregation.json` for downstream use |
+| `aggregate` | Synthesizes multi-model results into `aggregation.json` and the final `agentic-report.md` |
 | `fallback` | Used if the primary model fails or hits rate limits |
 
 If no roles are set, the first model in the list handles everything. For multi-model
