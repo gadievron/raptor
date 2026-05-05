@@ -774,8 +774,19 @@ class LLMConfig:
             "fallback_enabled": self.enable_fallback,
         }, mode=0o600)
 
-    def get_model_for_task(self, task_type: str) -> ModelConfig:
-        """Get the appropriate model for a specific task type."""
+    def get_model_for_task(self, task_type: str) -> Optional[ModelConfig]:
+        """Get the model registered for `task_type`, falling back to
+        ``primary_model``. Returns None if neither is configured.
+
+        The signature was previously typed `-> ModelConfig` despite
+        the `return self.primary_model` falling through to a field
+        that is `Optional[ModelConfig]` — a typing lie that caused
+        downstream callers to skip None-guards and crash with
+        AttributeError on `None.max_context` / `None.provider` /
+        etc. Caller `LLMClient.generate` now also guards (batch 080),
+        but the signature should match reality so type-checkers
+        catch new callers that miss the guard.
+        """
         if task_type in self.specialized_models:
             model = self.specialized_models[task_type]
             if model.enabled:
