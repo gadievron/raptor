@@ -599,6 +599,7 @@ def orchestrate(
                 if "error" not in r:
                     aggregation = {k: v for k, v in r.items()
                                    if not k.startswith("_") and k != "finding_id"}
+                    _drop_hallucinated_finding_ids(aggregation, results_by_id)
                     break
 
     # Exploit/patch generation — after final verdict
@@ -821,6 +822,33 @@ def _auto_detect_cross_family_checker(primary_family: str) -> Optional[Any]:
             )
             return ModelConfig(provider=provider, model_name=model_name)
     return None
+
+
+def _drop_hallucinated_finding_ids(
+    aggregation: Dict[str, Any],
+    results_by_id: Dict[str, Dict],
+) -> None:
+    """Remove items whose finding_id doesn't match a real finding.
+
+    The aggregate model occasionally invents finding IDs. We filter rather
+    than fail so partial output is still useful.
+    """
+    valid_ids = set(results_by_id.keys())
+    for key in ("highest_confidence_findings", "disputed_findings"):
+        items = aggregation.get(key)
+        if not isinstance(items, list):
+            continue
+        kept = [
+            it for it in items
+            if isinstance(it, dict) and it.get("finding_id") in valid_ids
+        ]
+        dropped = len(items) - len(kept)
+        if dropped:
+            logger.info(
+                f"Aggregate: dropped {dropped} item{'s' if dropped != 1 else ''} "
+                f"with unknown finding_id from {key}"
+            )
+        aggregation[key] = kept
 
 
 def _build_aggregation_payload(

@@ -208,12 +208,13 @@ Model roles let you assign different models to different tasks:
 | `analysis` | Validates and analyses each finding (Stages A-D) |
 | `code` | Writes exploit PoCs and patch code |
 | `consensus` | Second-opinion vote on true positives |
-| `aggregate` | Synthesizes multi-model results into `aggregation.json` and the final `agentic-report.md` |
+| `aggregate` | Optional. LLM-written narrative synthesis on top of the deterministic multi-model correlation, written to `aggregation.json` and the final `agentic-report.md` |
 | `fallback` | Used if the primary model fails or hits rate limits |
 
 If no roles are set, the first model in the list handles everything. For multi-model
-source-code analysis, configure at least two `analysis` models and one `aggregate`
-model, or pass them at runtime:
+source-code analysis, configure two or more `analysis` models — you'll get the
+deterministic correlation by default. The `aggregate` role is optional and adds an
+LLM-written summary on top:
 
 ```bash
 python3 raptor.py agentic --repo /code \

@@ -433,7 +433,7 @@ class AggregationTask(DispatchTask):
     name = "aggregate"
     model_role = "aggregate"
     temperature = 0.2
-    budget_cutoff = 0.80
+    budget_cutoff = 0.95
 
     _SYSTEM_TEXT = (
         "You are the final security-analysis aggregator for a multi-model "
@@ -511,8 +511,14 @@ class AggregationTask(DispatchTask):
                         "type": "object",
                         "properties": {
                             "finding_id": {"type": "string"},
-                            "verdict": {"type": "string"},
-                            "confidence": {"type": "string"},
+                            "verdict": {
+                                "type": "string",
+                                "enum": ["exploitable", "not_exploitable", "uncertain"],
+                            },
+                            "confidence": {
+                                "type": "string",
+                                "enum": ["high", "medium", "low"],
+                            },
                             "reason": {"type": "string"},
                         },
                         "required": ["finding_id", "verdict", "confidence", "reason"],

@@ -98,7 +98,7 @@ By default, the primary model is auto-detected from `~/.config/raptor/models.jso
 | `--model MODEL` (repeatable) | Analysis | Each model independently analyses every finding. Multiple = multi-model correlation. |
 | `--consensus MODEL` | Blind second opinion | Re-analyses each finding independently (doesn't see the primary verdict). Majority vote decides the final ruling. Auto-skipped with 3+ `--model`. |
 | `--judge MODEL` | Non-blind review | Sees the primary analysis reasoning and critiques it. Flags missed attack paths, flawed logic, or inconsistent verdicts. |
-| `--aggregate MODEL` | Final synthesis | Aggregates the multi-model results into `aggregation.json` and the final `agentic-report.md`. Requires at least two `--model` values. |
+| `--aggregate MODEL` | Final synthesis (optional) | LLM-written narrative summary on top of the deterministic correlation. Adds top findings, disputed findings, and recommended next actions to `aggregation.json` and the final `agentic-report.md`. Without it, you still get the correlation results. Requires at least two `--model` values. |
 
 ```
 # Single model

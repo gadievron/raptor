@@ -782,6 +782,64 @@ class TestAggregationTask:
         task = AggregationTask()
         assert task.get_item_id({}) == "aggregate"
 
+    def test_schema_constrains_verdict_and_confidence(self):
+        task = AggregationTask()
+        schema = task.get_schema({})
+        finding_props = schema["properties"]["highest_confidence_findings"]["items"]["properties"]
+        assert finding_props["verdict"]["enum"] == ["exploitable", "not_exploitable", "uncertain"]
+        assert finding_props["confidence"]["enum"] == ["high", "medium", "low"]
+
+
+class TestDropHallucinatedFindingIds:
+    def test_drops_unknown_ids(self):
+        from packages.llm_analysis.orchestrator import _drop_hallucinated_finding_ids
+        aggregation = {
+            "highest_confidence_findings": [
+                {"finding_id": "real-1", "verdict": "exploitable",
+                 "confidence": "high", "reason": "ok"},
+                {"finding_id": "ghost", "verdict": "exploitable",
+                 "confidence": "high", "reason": "made up"},
+            ],
+            "disputed_findings": [
+                {"finding_id": "real-2", "disagreement": "x", "resolution_needed": "y"},
+                {"finding_id": "phantom", "disagreement": "x", "resolution_needed": "y"},
+            ],
+        }
+        results_by_id = {"real-1": {}, "real-2": {}}
+        _drop_hallucinated_finding_ids(aggregation, results_by_id)
+        assert [f["finding_id"] for f in aggregation["highest_confidence_findings"]] == ["real-1"]
+        assert [f["finding_id"] for f in aggregation["disputed_findings"]] == ["real-2"]
+
+    def test_keeps_all_when_all_real(self):
+        from packages.llm_analysis.orchestrator import _drop_hallucinated_finding_ids
+        aggregation = {
+            "highest_confidence_findings": [
+                {"finding_id": "a", "verdict": "exploitable",
+                 "confidence": "high", "reason": "ok"},
+            ],
+        }
+        _drop_hallucinated_finding_ids(aggregation, {"a": {}})
+        assert len(aggregation["highest_confidence_findings"]) == 1
+
+    def test_handles_missing_lists(self):
+        from packages.llm_analysis.orchestrator import _drop_hallucinated_finding_ids
+        aggregation = {"summary": "ok"}
+        _drop_hallucinated_finding_ids(aggregation, {})
+        assert aggregation == {"summary": "ok"}
+
+    def test_handles_non_dict_items(self):
+        from packages.llm_analysis.orchestrator import _drop_hallucinated_finding_ids
+        aggregation = {
+            "highest_confidence_findings": [
+                "not-a-dict",
+                {"finding_id": "real", "verdict": "exploitable",
+                 "confidence": "high", "reason": "ok"},
+            ],
+        }
+        _drop_hallucinated_finding_ids(aggregation, {"real": {}})
+        assert len(aggregation["highest_confidence_findings"]) == 1
+        assert aggregation["highest_confidence_findings"][0]["finding_id"] == "real"
+
 
 class TestJudgeEdgeCases:
     def test_finalize_no_judge_results_for_finding(self):

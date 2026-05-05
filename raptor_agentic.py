@@ -257,9 +257,11 @@ Examples:
     model_group.add_argument(
         "--aggregate",
         metavar="MODEL",
-        help="Final synthesis model — aggregates multi-model analysis results "
-             "into a downstream triage artifact. Requires at least two "
-             "--model values.",
+        help="Optional. LLM-written synthesis on top of the deterministic "
+             "multi-model correlation. Adds a narrative summary, top findings, "
+             "and recommended next actions to the report. Requires at least "
+             "two --model values; without --aggregate you still get the "
+             "correlation results.",
     )
     parser.add_argument(
         "--trust-repo",
