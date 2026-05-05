@@ -640,7 +640,9 @@ def bench(
                     summary.passed += 1
                 _echo_result(i, n, r)
                 _flush()
-        summary.results.sort(key=lambda x: x.cve_id)
+    # Sort in BOTH modes so summary.json ordering is deterministic
+    # regardless of workers count (was sorted only in the parallel branch).
+    summary.results.sort(key=lambda x: x.cve_id)
 
     # Bench-layer retry pass: re-run CVEs whose error class is
     # transient (LLM outage / network blip / per-CVE timeout). Settled
@@ -711,7 +713,13 @@ def _persist_summary(summary_path: Path, sample: Path) -> None:
 
 # Error classes the bench-layer retry pass re-runs. Anything else is a
 # conclusive outcome.
-_TRANSIENT_CLASSES = frozenset({"llm_error", "PerCveTimeout"})
+# Transient = network/API blip during the agent or acquisition.
+# AcquisitionError covers "git clone died mid-fetch"; client_init_failed
+# covers a transient API auth flake (rate limit, DNS hiccup). Settled
+# outcomes (UnsupportedSource / no_evidence / budget_*) stay in.
+_TRANSIENT_CLASSES = frozenset({
+    "llm_error", "PerCveTimeout", "AcquisitionError", "client_init_failed",
+})
 
 
 def _run_bench_retry_pass(

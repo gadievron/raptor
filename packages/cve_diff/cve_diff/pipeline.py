@@ -445,7 +445,10 @@ class Pipeline:
         # UnsupportedSource = closed-source, no_evidence = exhausted
         # search, model_stopped_without_submit = bug, client_init_failed
         # = config error.
-        if result.reason not in ("budget_cost_usd", "budget_iterations", "budget_tokens", "budget_s", "llm_error"):
+        # `budget_tokens` is documented but never emitted by the agent
+        # loop (see AgentLoop.surrender — only cost / iterations / s).
+        # Kept as an alias the loop *could* emit in a future change.
+        if result.reason not in ("budget_cost_usd", "budget_iterations", "budget_s", "llm_error"):
             return None
         if not result.verified_candidates:
             return None
