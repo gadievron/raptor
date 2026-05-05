@@ -285,11 +285,17 @@ def extract_for_agreement(
     # Patch-URL path: works on GitHub, GitLab, cgit. Independent of the
     # JSON path — we get triangulation when both succeed and at least
     # one second source when the JSON path is unavailable (cgit).
+    #
+    # Catch only the exception classes the extractor can plausibly raise
+    # in the wild (network, parse, custom analysis errors). The previous
+    # bare ``except Exception`` also swallowed programming bugs
+    # (AttributeError, TypeError, NameError) — silently turning real
+    # crashes into "third source unavailable" with no log signal.
     try:
         b = extract_via_patch_url(cve_id, ref)
         if b is not None:
             results.append(("patch_url", b))
-    except Exception:  # noqa: BLE001 — auxiliary, never block
+    except (HttpError, AnalysisError, OSError, UnicodeError):
         pass
 
     return results
