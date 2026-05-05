@@ -121,13 +121,14 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
             for sf in sarif_files:
                 try:
                     sarif = json.loads(sf.read_text())
-                    for run in sarif.get("runs", []):
-                        for result in run.get("results", []):
+                    for run in (sarif.get("runs") or []):
+                        for result in (run.get("results") or []):
+                            locs = result.get("locations") or [{}]
                             findings.append({
                                 "rule_id": result.get("ruleId", "unknown"),
                                 "level": result.get("level", "warning"),
-                                "message": result.get("message", {}).get("text", ""),
-                                "file_path": (result.get("locations", [{}])[0]
+                                "message": (result.get("message") or {}).get("text", ""),
+                                "file_path": (locs[0]
                                               .get("physicalLocation", {})
                                               .get("artifactLocation", {})
                                               .get("uri", "unknown")),

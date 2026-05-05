@@ -31,12 +31,16 @@ def extract_dataflow_path(code_flows: List[Dict[str, Any]]) -> Optional[Dict[str
     try:
         # Get the first code flow (typically the most relevant)
         flow = code_flows[0]
-        thread_flows = flow.get("threadFlows", [])
+        # `.get(k, default)` returns the value (None) when the key is
+        # present-but-null. SARIF emitters legitimately produce
+        # `"threadFlows": null` when no flow is available — guard with
+        # `or []` so the next [0] doesn't TypeError on None.
+        thread_flows = flow.get("threadFlows") or []
         if not thread_flows:
             return None
 
         # Get all locations in the dataflow path
-        locations = thread_flows[0].get("locations", [])
+        locations = thread_flows[0].get("locations") or []
         if len(locations) < 2:  # Need at least source and sink
             return None
 
@@ -112,7 +116,7 @@ def deduplicate_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 def _result_key(result: Dict[str, Any]) -> Tuple[str, str, int]:
     """Dedup key for a SARIF result: (ruleId, uri, startLine)."""
     rule_id = result.get("ruleId", "")
-    locs = result.get("locations", [{}])
+    locs = result.get("locations") or [{}]
     phys = locs[0].get("physicalLocation", {}) if locs else {}
     uri = phys.get("artifactLocation", {}).get("uri", "")
     line = phys.get("region", {}).get("startLine", 0)
@@ -139,7 +143,7 @@ def merge_sarif(sarif_paths: List[str]) -> Dict[str, Any]:
         sarif_data = load_sarif(Path(sarif_path))
         if not sarif_data:
             continue
-        for run in sarif_data.get("runs", []):
+        for run in (sarif_data.get("runs") or []):
             tool_name = run.get("tool", {}).get("driver", {}).get("name", "unknown")
             if tool_name not in tool_runs:
                 tool_runs[tool_name] = {
@@ -265,7 +269,7 @@ def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
 
     findings: List[Dict[str, Any]] = []
 
-    runs = data.get("runs", [])
+    runs = data.get("runs") or []
     print(f"[SARIF Parser] Found {len(runs)} run(s) in SARIF file")
     
     for run_idx, run in enumerate(runs):
@@ -283,7 +287,7 @@ def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
 
         for result in results:
             finding_id = (
-                result.get("fingerprints", {}).get("matchBasedId/v1")
+                (result.get("fingerprints") or {}).get("matchBasedId/v1")
                 or result.get("ruleId")
                 or str(hash(json.dumps(result)))
             )
@@ -294,7 +298,7 @@ def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
             snippet = region.get("snippet", {}).get("text", "")
 
             # Extract dataflow path if present
-            code_flows = result.get("codeFlows", [])
+            code_flows = result.get("codeFlows") or []
             dataflow_path = extract_dataflow_path(code_flows) if code_flows else None
 
             rule_id = result.get("ruleId")
@@ -397,7 +401,7 @@ def generate_scan_metrics(sarif_paths: List[str]) -> Dict[str, Any]:
         if not sarif_data:
             continue
 
-        for run in sarif_data.get("runs", []):
+        for run in (sarif_data.get("runs") or []):
             tool_name = get_tool_name(run)
             if tool_name not in metrics["tools_used"]:
                 metrics["tools_used"].append(tool_name)
