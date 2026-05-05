@@ -123,8 +123,17 @@ def evaluate_probe_response(raw_response: str, nonce: str) -> ProbeResult:
             error=error,
         )
 
+    # `parsed` may be a list / number / string / null — all valid JSON
+    # but lacking `.get`. Guard before calling. Pre-fix the
+    # `parsed.get("is_vulnerable")` line raised AttributeError on every
+    # non-dict response (e.g. a model emitting `[true]` or just `true`),
+    # which propagated out of `evaluate_probe_response` and crashed
+    # the orchestrator's probe loop instead of recording an
+    # incompatible-model result.
     valid_json = isinstance(parsed, dict) and "is_vulnerable" in parsed
-    correct_verdict = bool(parsed.get("is_vulnerable"))
+    correct_verdict = (
+        bool(parsed.get("is_vulnerable")) if isinstance(parsed, dict) else False
+    )
 
     compatible = valid_json and correct_verdict and not nonce_leaked
 
