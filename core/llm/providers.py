@@ -690,9 +690,15 @@ def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']]):
             python_type = Opt[python_type]
             default_value = None
 
-        # Nullable fields should default to None even if required in the schema —
-        # LLMs frequently omit nullable fields rather than explicitly returning null
-        if nullable and default_value is ...:
+        # Nullable + REQUIRED: keep `...` (no default) so Pydantic
+        # enforces presence — the LLM must emit the field, even if the
+        # value is `null`. The previous behaviour of forcing
+        # `default_value = None` for every nullable field silently
+        # accepted omission, defeating the schema's `required` set.
+        # Nullable + NOT required: default to None (the omission case
+        # is what "not required" means; LLMs habitually omit
+        # null-valued non-required fields and we should accept that).
+        if nullable and default_value is ... and not is_required:
             default_value = None
 
         # Create field definition
