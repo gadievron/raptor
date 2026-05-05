@@ -86,13 +86,21 @@ def main(argv: Sequence[str]) -> int:
         enable_epss=True,
         enable_reachability=True,
         enable_supply_chain=True,
-        # ``--no-llm`` here disables both prepass-LLM and the
-        # major-bump impact analyser further down. Without this
-        # propagation, ``fix --no-llm`` would still pay the LLM
-        # behavioural-review + triage cost during the scan phase
-        # (~7-15s on a fresh process).
-        enable_llm_review=not args.no_llm,
-        enable_triage=not args.no_llm,
+        # ``fix`` never uses the scan-phase LLM stages: triage just
+        # ranks findings (we apply all of them regardless), and the
+        # behavioural-review stages enrich findings we don't act on.
+        # Always off here — saves ~7s LLM-client init + variable
+        # per-finding cost on every scan.
+        enable_llm_review=False,
+        enable_triage=False,
+        # ``--llm-inline-installs`` is opt-in: an LLM sweep over
+        # Dockerfiles / shell / GHA workflow ``run:`` blocks to find
+        # deps the mechanical parser missed. Only useful for ``fix``
+        # when the operator suspects coverage gaps; off by default
+        # because of the per-file LLM cost.
+        enable_llm_inline_installs=(
+            args.llm_inline_installs and not args.no_llm
+        ),
     )
     try:
         result = run_sca(target=target, output_dir=out_dir, options=options)
@@ -901,7 +909,14 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     p.add_argument("--offline", action="store_true",
                    help="skip all network calls; use cache only")
     p.add_argument("--no-llm", action="store_true",
-                   help="skip LLM impact analysis (mechanical mode only)")
+                   help="skip LLM impact analysis on major-bump CVEs "
+                        "(mechanical mode only). Also disables "
+                        "--llm-inline-installs if both are set.")
+    p.add_argument("--llm-inline-installs", action="store_true",
+                   help="run an LLM pass over Dockerfile / shell / "
+                        ".github/workflows ``run:`` blocks to find "
+                        "deps the mechanical parser missed. Off by "
+                        "default; pay-as-you-go LLM cost.")
     p.add_argument("--no-hash-pin", action="store_true",
                    help="skip hash-pinning .github/workflows actions "
                         "(default: rewrite mutable refs like @v6 to "
