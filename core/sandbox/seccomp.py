@@ -325,8 +325,33 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
 
     _os_write = os.write
 
+    # Resolve libc.prctl in the parent so the child doesn't have to dlopen.
+    # PR_SET_NO_NEW_PRIVS is a hard prerequisite for seccomp_load() unless
+    # the caller has CAP_SYS_ADMIN. Landlock's preexec sets it when it's
+    # configured; without Landlock (no writable_paths and no allowed_tcp_ports),
+    # nobody set NNP and seccomp_load fails with EPERM — silently degrading
+    # to "no seccomp" before this commit's fail-closed change at load,
+    # and to a hard exit (126) afterwards. Either way the operator's
+    # filter never installed. Set NNP unconditionally inside _apply_seccomp
+    # so the filter installs regardless of whether Landlock ran. NNP is
+    # one-way / idempotent: calling it twice (once from Landlock, once
+    # from here) is a no-op.
+    _libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6",
+                        use_errno=True)
+    _libc.prctl.restype = ctypes.c_int
+    _libc.prctl.argtypes = [
+        ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
+        ctypes.c_ulong, ctypes.c_ulong,
+    ]
+    _PR_SET_NO_NEW_PRIVS = 38
+
     def _apply_seccomp():
         try:
+            if _libc.prctl(_PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
+                _os_write(2, b"RAPTOR: prctl(PR_SET_NO_NEW_PRIVS) failed -- "
+                             b"seccomp filter cannot be installed\n")
+                os._exit(126)
+
             ctx = lib.seccomp_init(_SCMP_ACT_ALLOW)
             if not ctx:
                 _os_write(2, b"RAPTOR: seccomp_init failed\n")
