@@ -1386,14 +1386,18 @@ def _handle_waitpid_event(
     # stay stopped). All other unrelated signals are passed
     # through to preserve original signal semantics.
     #
-    # M1: also `traced.add(wpid)` here — defensive against the
-    # FORK_EVENT-add path missing this PID (e.g. GETEVENTMSG
-    # failed). Set is idempotent so a duplicate add is harmless;
-    # the worst-case-without-this is the loop terminating with
-    # tracees still alive, leading to SIGSYS/SIGKILL of the
-    # orphaned tracee mid-workflow.
+    # The kernel always delivers the parent's PTRACE_EVENT_FORK /
+    # VFORK / CLONE BEFORE the child's auto-attached SIGSTOP, so by
+    # the time we see the child's SIGSTOP it should already be in
+    # `traced` from the FORK-event branch above. Pre-fix this branch
+    # also did `traced.add(wpid)` "defensively" against a missed
+    # GETEVENTMSG, but that masked real GETEVENTMSG bugs (we'd never
+    # know the FORK path was failing) AND would silently grow the
+    # traced set with any SIGSTOP'd pid that wpid != target_pid even
+    # if the FORK event was never seen. Trust the kernel ordering;
+    # if the FORK path fails, surface it via the missing-from-traced
+    # signal rather than papering over it.
     if sig == signal.SIGSTOP and wpid != target_pid:
-        traced.add(wpid)
         ptrace_cont(wpid, 0)
     else:
         ptrace_cont(wpid, sig if sig != signal.SIGTRAP else 0)

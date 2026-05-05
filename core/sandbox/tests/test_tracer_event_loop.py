@@ -325,14 +325,20 @@ class TestSigstopFromAutoAttachedTracee:
 
     def test_sigstop_from_new_tracee_is_consumed(
             self, arch_info, fake_helpers):
-        traced = {1000}  # target_pid=1000; 99999 is a new tracee
+        # In production, the kernel always delivers the parent's
+        # PTRACE_EVENT_FORK before the child's auto-attached SIGSTOP,
+        # so by the time SIGSTOP fires the new tracee is already in
+        # `traced` from the FORK-event branch. Set up that precondition
+        # explicitly here.
+        traced = {1000, 99999}  # 99999 already added by FORK event
         _dispatch(
             99999, _stop_status(signal.SIGSTOP),
             traced, 1000, arch_info, fake_helpers,
         )
-        # PTRACE_CONT with sig=0 (NOT signal.SIGSTOP)
+        # PTRACE_CONT with sig=0 (NOT signal.SIGSTOP) — the SIGSTOP
+        # is consumed, not forwarded.
         assert fake_helpers["calls"]["ptrace_cont"] == [(99999, 0)]
-        # M1 defensive: traced grows even if FORK_EVENT-add path missed it
+        # 99999 stays in traced (we don't remove on SIGSTOP).
         assert 99999 in traced
 
     def test_sigstop_to_target_pid_is_passed_through(
