@@ -145,12 +145,20 @@ def probe_osv() -> HealthResult:
 
 
 def probe_github() -> HealthResult:
+    # `gh auth token` returns non-zero with an empty stdout when the user
+    # isn't logged in (no exception raised). The previous code only fell
+    # back to $GITHUB_TOKEN on exec failure (TimeoutExpired/FileNotFoundError),
+    # so a logged-out gh would shadow a perfectly good env-var token and
+    # the probe would report "(unauth)" despite credentials being present.
+    # Fall back whenever gh's stdout is empty for any reason.
     token = ""
     try:
         out = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True,
                              timeout=2.0)
-        token = out.stdout.strip()
+        token = (out.stdout or "").strip()
     except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    if not token:
         token = os.environ.get("GITHUB_TOKEN", "").strip()
     headers = {"Accept": "application/vnd.github+json"}
     if token:
