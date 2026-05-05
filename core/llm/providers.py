@@ -1139,14 +1139,34 @@ def _is_tool_use_unsupported_error(exc: BaseException) -> bool:
         elif isinstance(err, str):
             text += " " + err.lower()
 
-    has_keyword = "tool" in text or "function call" in text or "function-call" in text
-    has_negation = (
-        "not support" in text
-        or "unsupported" in text
-        or "does not" in text
-        or "no support" in text
+    # Tighter heuristic — pre-fix `"does not" in text` matched
+    # unrelated 4xx negations (`does not have permission`, `does not
+    # include billing`, `does not match expected schema`) producing
+    # false-positive synthesis fallback when native tool-use was
+    # actually broken for an UNRELATED reason. Require a phrase that
+    # actually links the negation to tool/function support.
+    has_unsupported_phrase = any(
+        phrase in text for phrase in (
+            "does not support tools",
+            "does not support tool",
+            "does not support function",
+            "doesn't support tools",
+            "doesn't support tool",
+            "doesn't support function",
+            "no tool support",
+            "no function support",
+            "tools are not supported",
+            "tool calls not supported",
+            "tool calling not supported",
+            "function calling not supported",
+            "function calls not supported",
+            "function calling is not supported",
+            "function calls are not supported",
+            "tools unsupported",
+            "tool_use not supported",
+        )
     )
-    return has_keyword and has_negation
+    return has_unsupported_phrase
 
 
 def _message_to_openai_wire(m: Message) -> list[Dict[str, Any]]:
