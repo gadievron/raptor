@@ -30,90 +30,45 @@ Public API:
     if result.verdict == "confirmed":
         for ev in result.evidence:
             print(f"{ev.tool}: {ev.summary}")
+
+Optional structured fields on Hypothesis (source/sink/flow_steps/
+sanitizers/smt_constraints), evidence provenance (Evidence.refers_to +
+hash_hypothesis), the verdict ladder (verdict_from/aggregate), and the
+must_progress iteration guard are all additive — see docs/design/
+typed-plan-layer.md.
 """
 
-from .hypothesis import Hypothesis
+from .hypothesis import Hypothesis, SourceLocation, SinkLocation, FlowStep
 from .result import Evidence, ValidationResult
 from .adapters.base import ToolAdapter, ToolCapability, ToolInvocation, ToolEvidence
-
-# Typed-plan layer (additive — see docs/design/typed-plan-layer.md).
-# These imports are intentionally lazy-friendly: each module is independent
-# and pulling them in here gives callers one canonical import location.
-from .types import (
-    AdapterQuery,
-    AdapterSpec,
-    Cost,
-    Effect,
-    FlowStep,
-    Match,
-    SinkKind,
-    SinkLocation,
-    SourceKind,
-    SourceLocation,
-    TypedHypothesis,
-    Verdict,
-)
-from .verdict import aggregate, meet, verdict_from
+from .verdict import verdict_from, aggregate
 from .provenance import (
     HypothesisHash,
     ProvenanceMismatch,
     ensure_same_provenance,
     hash_hypothesis,
-    stamp,
 )
-from .prompt_lens import (
-    Lens,
-    PromptCtx,
-    neutralise_matches,
-    neutralise_tags,
-    prompt_lens,
-)
-from .adapter_spec import from_tool_adapter
-from .iteration import (
-    IterationStalled,
-    IterationStep,
-    info_content,
-    must_progress,
-)
+from .iteration import IterationStep, IterationStalled, uncertainty, must_progress
 
 __all__ = [
-    # Legacy single-shot surface (Phase A)
     "Hypothesis",
+    "SourceLocation",
+    "SinkLocation",
+    "FlowStep",
     "ValidationResult",
     "Evidence",
     "ToolAdapter",
     "ToolCapability",
     "ToolInvocation",
     "ToolEvidence",
-    # Typed-plan layer
-    "AdapterQuery",
-    "AdapterSpec",
-    "Cost",
-    "Effect",
-    "FlowStep",
-    "Match",
-    "SinkKind",
-    "SinkLocation",
-    "SourceKind",
-    "SourceLocation",
-    "TypedHypothesis",
-    "Verdict",
-    "aggregate",
-    "meet",
     "verdict_from",
+    "aggregate",
     "HypothesisHash",
     "ProvenanceMismatch",
-    "ensure_same_provenance",
     "hash_hypothesis",
-    "stamp",
-    "Lens",
-    "PromptCtx",
-    "neutralise_matches",
-    "neutralise_tags",
-    "prompt_lens",
-    "from_tool_adapter",
-    "IterationStalled",
+    "ensure_same_provenance",
     "IterationStep",
-    "info_content",
+    "IterationStalled",
+    "uncertainty",
     "must_progress",
 ]

@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Protocol
 from .adapters.base import ToolAdapter, ToolEvidence
 from .hypothesis import Hypothesis
 from .result import Evidence, ValidationResult, Verdict
+from .verdict import verdict_from
 
 
 _SYSTEM_PROMPT = """\
@@ -356,7 +357,10 @@ def _evaluate(
 
     Even if the LLM returns "confirmed", we downgrade to inconclusive when
     the tool failed or produced no matches. This is the architectural
-    invariant: verdicts derive from tool evidence, not LLM opinion.
+    invariant: verdicts derive from tool evidence, not LLM opinion. The
+    downgrade ladder lives in `verdict.verdict_from`; we call it here
+    rather than inlining so multi-adapter / iteration callers get the
+    same rules without copy-paste.
     """
     if not evidence.success:
         return "inconclusive", f"Tool '{evidence.tool}' did not run successfully: {evidence.error}"
@@ -374,11 +378,10 @@ def _evaluate(
         except Exception:
             return "refuted", f"Tool ran cleanly with no matches: {evidence.summary}"
         data = _extract_data(response) or {}
-        verdict = data.get("verdict", "refuted")
-        if verdict not in ("confirmed", "refuted", "inconclusive"):
-            verdict = "refuted"
-        if verdict == "confirmed":
-            verdict = "refuted"  # LLM can't claim confirmed without matches
+        claim = data.get("verdict", "refuted")
+        if claim not in ("confirmed", "refuted", "inconclusive"):
+            claim = "refuted"
+        verdict = verdict_from(evidence, claim)
         reasoning = data.get("reasoning", "") or evidence.summary
         return verdict, reasoning
 
@@ -393,14 +396,7 @@ def _evaluate(
         return "inconclusive", f"LLM evaluation failed; matches present: {evidence.summary}"
 
     data = _extract_data(response) or {}
-    verdict = data.get("verdict", "inconclusive")
-    if verdict not in ("confirmed", "refuted", "inconclusive"):
-        verdict = "inconclusive"
+    claim = data.get("verdict", "inconclusive")
+    verdict = verdict_from(evidence, claim)
     reasoning = data.get("reasoning", "") or evidence.summary
-
-    # If LLM says refuted but matches are present, downgrade to inconclusive —
-    # the matches deserve a human look.
-    if verdict == "refuted" and evidence.matches:
-        verdict = "inconclusive"
-
     return verdict, reasoning

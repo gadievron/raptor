@@ -52,8 +52,14 @@ class Evidence:
     error: str = ""
     """Error message when success=False."""
 
+    refers_to: str = ""
+    """Stable hash of the hypothesis this evidence was produced for.
+    Empty string means "unknown" (e.g. evidence built before provenance
+    tracking was wired up). The runner refuses to combine evidence whose
+    non-empty `refers_to` values differ — see `provenance.py`."""
+
     def to_dict(self) -> dict:
-        return {
+        d = {
             "tool": self.tool,
             "rule": self.rule,
             "summary": self.summary,
@@ -61,6 +67,11 @@ class Evidence:
             "success": self.success,
             "error": self.error,
         }
+        # Only emit refers_to when populated, so the legacy serialized
+        # shape stays untouched for callers that don't set it.
+        if self.refers_to:
+            d["refers_to"] = self.refers_to
+        return d
 
 
 @dataclass

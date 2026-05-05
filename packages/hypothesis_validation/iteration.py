@@ -1,96 +1,102 @@
-"""Iteration step skeletons — exported but not wired in.
+"""Iteration progress guard — standalone, not yet wired in.
 
-Per the design doc, the deferred iteration loop is where the typed
-substrate earns its keep: each iteration step gets a Hoare-style
-postcondition that uncertainty must strictly decrease before another
-LLM call is permitted. This file defines the types and the
-`must_progress` guard; wiring them into `runner.validate` is a
-separate, follow-on PR.
+A future iteration loop wants a precondition: each refinement step must
+strictly reduce uncertainty before another LLM call is permitted. The
+IEEE-ISTAS 2025 result PR #309 cites — 37.6% more critical findings
+after five rounds of pure self-critique — is exactly the failure mode
+this guard prevents. A "refine" that does not strictly progress is
+rejected before any tool runs; a loop that cannot progress terminates
+by construction.
 
-The IEEE-ISTAS 2025 result PR #309 cites — 37.6% more critical findings
-after five rounds of self-critique — is the failure mode `must_progress`
-prevents. A "refine" that does not strictly progress is rejected before
-any tool runs; a loop that cannot progress terminates by construction.
+Two pieces, both standalone (no runner wiring yet):
+
+    IterationStep                      one round of (hypothesis, evidence)
+    must_progress(prev, curr)          raise IterationStalled if not strict
+
+`uncertainty` is the metric the guard checks. We define it as the count
+of evidence items that are *not yet conclusive* — tool failures plus
+clean-but-no-match results that the LLM has not yet ruled on. Strict
+progress means this count must go down between steps. The metric is
+deliberately coarse for now; a future revision can swap it for a real
+entropy measure once the evidence schema stabilises.
 """
 
-from __future__ import annotations
+from dataclasses import dataclass, field
+from typing import List
 
-from typing import Any, List, Optional
-
-from pydantic import BaseModel, ConfigDict, model_validator
-
-from .types import TypedHypothesis, Verdict
-from .verdict import aggregate
-
-
-class IterationStep(BaseModel):
-    """One round of the LLM↔tool loop, sealed against ungrounded verdicts.
-
-    The `grounded` validator enforces the substrate's core invariant:
-    the recorded verdict must equal the lattice aggregation over the
-    evidence list. A step that violates this is impossible to construct
-    — the type system rejects it at parse time rather than at runtime.
-    """
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    hypothesis: TypedHypothesis
-    evidence: List[Any]
-    verdict: Verdict
-    rationale: str = ""
-
-    @model_validator(mode="after")
-    def grounded(self) -> "IterationStep":
-        derived = aggregate(self.evidence, llm_claim=self.verdict)
-        if derived != self.verdict:
-            raise ValueError(
-                f"verdict {self.verdict.value!r} not grounded in evidence "
-                f"(derived: {derived.value!r})"
-            )
-        return self
-
-
-def info_content(step: IterationStep) -> int:
-    """Coarse uncertainty measure: count of grounded evidence items.
-
-    Higher = more grounded; the `must_progress` guard requires this to
-    strictly increase between steps. A future revision can replace this
-    with a real entropy measure once the evidence schema stabilises;
-    until then count is a monotone proxy that keeps the type-level
-    invariant honest without committing to a particular metric.
-    """
-    return sum(
-        1
-        for e in step.evidence
-        if getattr(e, "success", True) and (getattr(e, "matches", []) or getattr(e, "matches", []) == [])
-    )
+from .hypothesis import Hypothesis
+from .result import Evidence
 
 
 class IterationStalled(RuntimeError):
-    """Raised by `must_progress` when an iteration would not make progress."""
+    """Raised by `must_progress` when an iteration would not progress."""
+
+
+@dataclass
+class IterationStep:
+    """One round of the LLM↔tool loop.
+
+    Plain dataclass — no validators, no Pydantic. The runner that owns
+    iteration enforces invariants externally (via `must_progress`).
+    """
+
+    hypothesis: Hypothesis
+    evidence: List[Evidence] = field(default_factory=list)
+
+
+def uncertainty(step: IterationStep) -> int:
+    """How many evidence items remain unresolved.
+
+    Counts evidence that did not produce a clean answer:
+      - tool failures (success=False)
+      - tool ran but produced no matches (the runner falls back to LLM
+        opinion here, so it's only "resolved" once the LLM has spoken;
+        for the purposes of this metric we count it as residual
+        uncertainty until then)
+
+    A future revision that tracks per-evidence verdicts can refine this
+    to count items still pending evaluation rather than items missing
+    matches. Today's coarse metric is enough to make `must_progress`
+    enforce monotonicity without committing to a particular shape.
+    """
+    n = 0
+    for e in step.evidence:
+        if not getattr(e, "success", True):
+            n += 1
+            continue
+        if not getattr(e, "matches", []):
+            n += 1
+    return n
 
 
 def must_progress(prev: IterationStep, curr: IterationStep) -> None:
-    """Hoare postcondition for one refinement step.
+    """Hoare postcondition: uncertainty must strictly decrease.
 
     Two conditions, both required:
-      1. The hypothesis itself must change (no rerunning the same claim).
-      2. Information content must strictly increase (more grounded
-         evidence than before — a refine that adds no evidence is
+      1. The hypothesis itself must change (no rerunning the same claim
+         and calling it a refinement).
+      2. Uncertainty must strictly decrease (more grounded evidence
+         than before — a refine that adds no new conclusive evidence is
          rejected before any tool runs).
+
+    Raises IterationStalled with a specific reason on either failure.
+    The caller is responsible for halting the loop on the exception;
+    this function is intentionally side-effect-free apart from raising.
     """
     if curr.hypothesis == prev.hypothesis:
-        raise IterationStalled("refine produced an identical hypothesis")
-    if info_content(curr) <= info_content(prev):
+        raise IterationStalled("refinement produced an identical hypothesis")
+    prev_u = uncertainty(prev)
+    curr_u = uncertainty(curr)
+    if curr_u >= prev_u:
         raise IterationStalled(
-            f"information content did not increase "
-            f"(prev={info_content(prev)}, curr={info_content(curr)})"
+            f"uncertainty did not strictly decrease "
+            f"(prev={prev_u}, curr={curr_u})"
         )
 
 
 __all__ = [
     "IterationStep",
     "IterationStalled",
-    "info_content",
+    "uncertainty",
     "must_progress",
 ]
