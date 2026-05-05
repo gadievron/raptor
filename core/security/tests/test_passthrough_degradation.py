@@ -92,8 +92,13 @@ class TestPassthroughProfileShape:
     def test_slots_rendered_as_plain_text(self):
         bundle = _build()
         user = _usr(bundle)
-        assert "rule_id: CWE-120" in user
-        assert "file_path: f.c" in user
+        # Slot rendering carries a per-slot trust tag now so the model
+        # can see that these came from an untrusted source even in the
+        # PASSTHROUGH (non-disciplined) profile. Pre-fix this fallback
+        # path emitted bare `name: value` lines indistinguishable from
+        # trusted slots.
+        assert "rule_id (untrusted): CWE-120" in user
+        assert "file_path (untrusted): f.c" in user
 
     def test_no_priming_text_in_system(self):
         bundle = _build()

