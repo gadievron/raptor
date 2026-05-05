@@ -93,12 +93,13 @@ def extract_via_api(
         )
 
     parents = payload.get("parents") or []
-    if not parents or not isinstance(parents[0], dict) or not parents[0].get("sha"):
+    parent_sha_raw = parents[0].get("sha") if parents and isinstance(parents[0], dict) else None
+    if not isinstance(parent_sha_raw, str):
         raise AnalysisError(
             f"{cve_id}: commit {slug}@{sha[:12]} has no parent — "
             f"can't compute fix^..fix via API (root commit)"
         )
-    parent_sha = parents[0]["sha"].lower()
+    parent_sha = parent_sha_raw.lower()
 
     files_raw = payload.get("files") or []
     if not isinstance(files_raw, list):
