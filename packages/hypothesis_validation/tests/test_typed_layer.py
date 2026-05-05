@@ -27,15 +27,20 @@ from packages.hypothesis_validation import (
     Hypothesis,
     IterationStalled,
     IterationStep,
+    Posterior,
     ProvenanceMismatch,
     SinkLocation,
     SourceLocation,
+    UNIFORM_PRIOR,
     aggregate,
     ensure_same_provenance,
     hash_hypothesis,
     must_progress,
+    posterior_from,
+    posterior_update,
     uncertainty,
     verdict_from,
+    verdict_from_posterior,
 )
 from packages.hypothesis_validation.adapters.base import ToolEvidence
 
@@ -561,3 +566,204 @@ class TestMustProgress:
         # Both have uncertainty 0; equal is not strictly less.
         with pytest.raises(IterationStalled):
             must_progress(prev, curr)
+
+
+# 5. Bayesian posterior aggregation -------------------------------------------
+
+
+def _ev(success=True, matches=None, error=""):
+    return ToolEvidence(
+        tool="t", rule="r",
+        success=success,
+        matches=matches or [],
+        error=error,
+    )
+
+
+class TestPosterior:
+    """Beta-Bernoulli arithmetic and basic invariants."""
+
+    def test_uniform_prior_mean_is_half(self):
+        assert UNIFORM_PRIOR.mean == 0.5
+        assert UNIFORM_PRIOR.strength == 2.0
+
+    def test_mean_handles_degenerate_strength_zero(self):
+        # Defensive: a caller that constructs (0, 0) should not get
+        # ZeroDivisionError. The default-constructor path can't reach
+        # this state, but explicit construction can.
+        p = Posterior(alpha=0.0, beta=0.0)
+        assert p.mean == 0.5
+
+    def test_update_confirming_increments_alpha(self):
+        p = posterior_update(UNIFORM_PRIOR, confirms=True)
+        assert p.alpha == 2.0
+        assert p.beta == 1.0
+        assert p.mean > 0.5
+
+    def test_update_refuting_increments_beta(self):
+        p = posterior_update(UNIFORM_PRIOR, confirms=False)
+        assert p.alpha == 1.0
+        assert p.beta == 2.0
+        assert p.mean < 0.5
+
+    def test_posterior_is_frozen(self):
+        # Mutating updates would alias-bug iteration loops.
+        p = Posterior(1.0, 1.0)
+        with pytest.raises(Exception):
+            p.alpha = 99.0  # type: ignore[misc]
+
+    def test_weight_scales_update(self):
+        p1 = posterior_update(UNIFORM_PRIOR, confirms=True, weight=1.0)
+        p3 = posterior_update(UNIFORM_PRIOR, confirms=True, weight=3.0)
+        assert p3.alpha == p1.alpha + 2.0
+        assert p3.mean > p1.mean
+
+
+class TestPosteriorFrom:
+    """Aggregating evidence lists into a posterior."""
+
+    def test_empty_evidence_returns_prior(self):
+        assert posterior_from([]) == UNIFORM_PRIOR
+
+    def test_all_confirming_concentrates_above_half(self):
+        evs = [_ev(matches=[{"file": "a", "line": 1}]) for _ in range(5)]
+        p = posterior_from(evs)
+        assert p.mean > 0.8
+        assert p.strength == UNIFORM_PRIOR.strength + 5
+
+    def test_all_refuting_concentrates_below_half(self):
+        evs = [_ev(matches=[]) for _ in range(5)]
+        p = posterior_from(evs)
+        assert p.mean < 0.2
+
+    def test_mixed_evidence_reflects_ratio(self):
+        # 3 confirms, 1 refute → posterior mean should sit near 4/6 ≈ 0.67.
+        evs = (
+            [_ev(matches=[{"file": "a", "line": 1}]) for _ in range(3)] +
+            [_ev(matches=[]) for _ in range(1)]
+        )
+        p = posterior_from(evs)
+        # Beta(4, 2) mean = 4/6 = 0.667
+        assert abs(p.mean - 4.0 / 6.0) < 1e-9
+
+    def test_tool_failure_does_not_update(self):
+        # Failed tool runs are no-ops — they don't shift alpha or beta.
+        evs = [_ev(success=False, error="boom"), _ev(success=False, error="boom")]
+        p = posterior_from(evs)
+        assert p == UNIFORM_PRIOR
+
+    def test_strength_increases_monotonically(self):
+        # Each non-failure observation adds 1 to strength.
+        p0 = posterior_from([])
+        p1 = posterior_from([_ev(matches=[{"file": "a", "line": 1}])])
+        p2 = posterior_from([
+            _ev(matches=[{"file": "a", "line": 1}]),
+            _ev(matches=[]),
+        ])
+        assert p1.strength > p0.strength
+        assert p2.strength > p1.strength
+
+    def test_custom_prior_is_respected(self):
+        # Strong prior shifts the posterior even with one observation.
+        strong = Posterior(alpha=10.0, beta=1.0)  # mean ≈ 0.91
+        evs = [_ev(matches=[])]  # one refute
+        p = posterior_from(evs, prior=strong)
+        # Beta(10, 2) mean = 10/12 ≈ 0.833 — still high despite refute.
+        assert p.mean > 0.8
+
+    def test_accepts_evidence_dataclass_too(self):
+        # `Evidence` (from result.py) has the same .success/.matches
+        # surface as ToolEvidence; posterior_from should accept either.
+        evs = [
+            Evidence(tool="t", rule="r", summary="s",
+                     matches=[{"file": "a", "line": 1}], success=True),
+            Evidence(tool="u", rule="r", summary="s",
+                     matches=[], success=True),
+        ]
+        p = posterior_from(evs)
+        # Beta(2, 2) mean = 0.5
+        assert p.mean == 0.5
+
+
+class TestVerdictFromPosterior:
+    """Threshold projection from continuous posterior to 3-valued verdict."""
+
+    def test_high_mean_confirms(self):
+        p = Posterior(alpha=10.0, beta=1.0)  # mean ≈ 0.91
+        assert verdict_from_posterior(p) == "confirmed"
+
+    def test_low_mean_refutes(self):
+        p = Posterior(alpha=1.0, beta=10.0)  # mean ≈ 0.09
+        assert verdict_from_posterior(p) == "refuted"
+
+    def test_middling_is_inconclusive(self):
+        # Uniform prior with no evidence → mean = 0.5 → inconclusive.
+        assert verdict_from_posterior(UNIFORM_PRIOR) == "inconclusive"
+        # One observation either way is also still inconclusive at
+        # default thresholds — guards against a single false positive.
+        p_one = posterior_update(UNIFORM_PRIOR, confirms=True)
+        assert verdict_from_posterior(p_one) == "inconclusive"
+
+    def test_three_confirms_tips_to_confirmed_at_default(self):
+        # Beta(4, 1) mean = 0.8 — exactly at the threshold; > 0.8 wins.
+        # We need 4 confirms to clear it.
+        p = UNIFORM_PRIOR
+        for _ in range(4):
+            p = posterior_update(p, confirms=True)
+        assert verdict_from_posterior(p) == "confirmed"
+
+    def test_thresholds_are_tunable(self):
+        # Looser thresholds let a single observation tip the verdict.
+        p = posterior_update(UNIFORM_PRIOR, confirms=True)  # mean ≈ 0.667
+        assert verdict_from_posterior(p, confirm_threshold=0.6) == "confirmed"
+
+    def test_invalid_thresholds_raise(self):
+        with pytest.raises(ValueError):
+            verdict_from_posterior(UNIFORM_PRIOR, confirm_threshold=0.3,
+                                    refute_threshold=0.5)
+        with pytest.raises(ValueError):
+            verdict_from_posterior(UNIFORM_PRIOR, confirm_threshold=1.5)
+        with pytest.raises(ValueError):
+            verdict_from_posterior(UNIFORM_PRIOR, refute_threshold=-0.1)
+
+
+class TestPosteriorPreservesSignal:
+    """The headline property: posterior aggregation does NOT collapse
+    multi-evidence signal the way the 3-valued lattice does."""
+
+    def test_three_confirms_one_refute_distinguishable_from_one_each(self):
+        # The verdict lattice would call both of these "inconclusive"
+        # (any disagreement collapses). The posterior keeps them apart.
+        many_signal = (
+            [_ev(matches=[{"file": "a", "line": 1}]) for _ in range(3)] +
+            [_ev(matches=[])]
+        )
+        balanced = [_ev(matches=[{"file": "a", "line": 1}]), _ev(matches=[])]
+
+        p_many = posterior_from(many_signal)
+        p_bal = posterior_from(balanced)
+
+        # Both means are above 0.5 (more confirms than refutes), but
+        # `many_signal` is meaningfully more confident.
+        assert p_many.mean > p_bal.mean
+        # Strength reflects how much evidence informed the answer.
+        assert p_many.strength > p_bal.strength
+
+    def test_aggregate_collapses_where_posterior_does_not(self):
+        # Pin the contrast against the legacy meet-based aggregator.
+        evs = (
+            [_ev(matches=[{"file": "a", "line": 1}]) for _ in range(3)] +
+            [_ev(matches=[])]
+        )
+        # Under the lattice: 3 "confirmed" and 1 "refuted" → meet → inconclusive.
+        legacy = aggregate(evs, "confirmed")
+        assert legacy == "inconclusive"
+
+        # Under the posterior: 3 confirms vs 1 refute → mean > 0.5,
+        # quantified rather than collapsed.
+        p = posterior_from(evs)
+        assert p.mean > 0.5
+        # The threshold readout still says inconclusive at strict
+        # defaults, but the underlying signal is preserved for callers
+        # that read p.mean directly (i.e. ranking-based triage).
+        assert 0.5 < p.mean < 0.8

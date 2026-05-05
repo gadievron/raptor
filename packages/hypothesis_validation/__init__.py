@@ -55,6 +55,13 @@ from .provenance import (
     hash_hypothesis,
 )
 from .iteration import IterationStep, IterationStalled, uncertainty, must_progress
+from .posterior import (
+    Posterior,
+    UNIFORM_PRIOR,
+    posterior_from,
+    update as posterior_update,
+    verdict_from_posterior,
+)
 
 __all__ = [
     "Hypothesis",
@@ -78,4 +85,9 @@ __all__ = [
     "IterationStalled",
     "uncertainty",
     "must_progress",
+    "Posterior",
+    "UNIFORM_PRIOR",
+    "posterior_from",
+    "posterior_update",
+    "verdict_from_posterior",
 ]
