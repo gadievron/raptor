@@ -175,55 +175,68 @@ def test_pip_compile_path(monkeypatch, tmp_path: Path) -> None:
     assert b"django==4.2.10" in res.proposed_lockfile
 
 
-def test_pip_dry_run_fallback(monkeypatch, tmp_path: Path) -> None:
-    """No pip-compile → fall back to pip install --dry-run."""
+def test_pip_no_system_pipcompile_falls_back_to_venv(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """No system pip-compile → resolver goes straight to the venv
+    pipeline (which always works given network access to PyPI)."""
     (tmp_path / "requirements.txt").write_text(
         "django>=4.0\n", encoding="utf-8")
-    calls = _patch_run(monkeypatch, [
+    venv_dir = _resolver_venv_dir(tmp_path)
+    plan = [
         (lambda c: c == ["pip", "--version"],
          _FakeProc(returncode=0, stdout="pip 23.0")),
+        # No system pip-compile — probe returns non-zero.
         (lambda c: c == ["pip-compile", "--version"],
          _FakeProc(returncode=127)),
-        (lambda c: c[:2] == ["pip", "install"],
-         _FakeProc(returncode=0, stdout="Would install django-4.2.10")),
-    ])
-    res = PipResolver().dry_run(tmp_path)
-    assert res.success is True
-    # Always passes --only-binary=:all: to avoid sdist setup.py runs.
-    install_call = next(c for c in calls if c[:2] == ["pip", "install"])
-    assert "--only-binary=:all:" in install_call
+        # Fall straight to combined venv pipeline.
+        (lambda c: c[0] == "sh" and len(c) >= 3
+                   and "venv" in c[2] and "pip-compile" in c[2],
+         _FakeProc(returncode=0, stdout="django==4.2.10\n")),
+    ]
+    _patch_run_with_callable(monkeypatch, plan)
+    try:
+        res = PipResolver().dry_run(tmp_path)
+        assert res.success is True, f"got: {res.error!r}"
+        assert b"django==4.2.10" in (res.proposed_lockfile or b"")
+    finally:
+        if venv_dir.exists():
+            import shutil
+            shutil.rmtree(venv_dir, ignore_errors=True)
 
 
-def test_pip_resolver_failure(monkeypatch, tmp_path: Path) -> None:
+def test_pip_resolver_failure_propagates_via_venv(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """If both system pip-compile AND the venv pipeline fail, the
+    venv pipeline's error message is what the operator sees.
+    """
     (tmp_path / "requirements.txt").write_text(
         "impossible>=99\n", encoding="utf-8")
-    _patch_run(monkeypatch, [
+    venv_dir = _resolver_venv_dir(tmp_path)
+    plan = [
         (lambda c: c == ["pip", "--version"],
          _FakeProc(returncode=0, stdout="pip 23.0")),
         (lambda c: c == ["pip-compile", "--version"],
          _FakeProc(returncode=0, stdout="pip-compile 7.0")),
-        (lambda c: c[0] == "pip-compile",
+        # System pip-compile fails with 'Cannot satisfy'.
+        (lambda c: c[0] == "pip-compile" and "--output-file" in c,
          _FakeProc(returncode=2, stderr="Cannot satisfy")),
-    ])
-    res = PipResolver().dry_run(tmp_path)
-    assert res.success is False
-    assert "Cannot satisfy" in (res.error or "")
-
-
-def test_pep668_detection() -> None:
-    """`_is_pep668_failure` matches the marker substrings pip emits."""
-    from packages.sca.resolvers.pip import _is_pep668_failure
-    # Real-world stderr from system pip on Debian / Ubuntu.
-    assert _is_pep668_failure(
-        "error: externally-managed-environment\n"
-        "× This environment is externally managed\n"
-    )
-    # Case insensitive.
-    assert _is_pep668_failure("EXTERNALLY-MANAGED-ENVIRONMENT")
-    # Doesn't false-positive on unrelated errors.
-    assert not _is_pep668_failure("ERROR: No matching distribution")
-    assert not _is_pep668_failure("")
-    assert not _is_pep668_failure(None or "")
+        # Venv pipeline ALSO fails (manifest is impossible).
+        (lambda c: c[0] == "sh" and len(c) >= 3 and "venv" in c[2],
+         _FakeProc(returncode=2, stderr="Cannot satisfy in venv too")),
+    ]
+    _patch_run_with_callable(monkeypatch, plan)
+    try:
+        res = PipResolver().dry_run(tmp_path)
+        assert res.success is False
+        # Venv pipeline's error surfaces (the system attempt's error
+        # is logged at debug, not propagated).
+        assert "Cannot satisfy" in (res.error or "")
+    finally:
+        if venv_dir.exists():
+            import shutil
+            shutil.rmtree(venv_dir, ignore_errors=True)
 
 
 def _make_pep668_plan(venv_dir: Path, lockfile_text: str = "django==4.2.10\n"):
@@ -254,19 +267,17 @@ def _make_pep668_plan(venv_dir: Path, lockfile_text: str = "django==4.2.10\n"):
         # First pip-compile — system Python, refused by PEP 668.
         (lambda c: c[0] == "pip-compile" and "--output-file" in c,
          _FakeProc(returncode=1, stderr=pep668_stderr)),
-        # venv create — also creates the bin/python file the resolver
-        # checks for after the call returns.
-        (lambda c: len(c) >= 3 and c[1:3] == ["-m", "venv"],
-         _create_files_then_succeed),
-        # ensurepip bootstrap
-        (lambda c: "ensurepip" in c,
-         _FakeProc(returncode=0)),
-        # pip install pip-tools inside the venv
-        (lambda c: "pip-tools" in c,
-         _FakeProc(returncode=0)),
-        # venv pip-compile retry — succeeds.
-        (lambda c: c[0].endswith("pip-compile") and "--output-file" in c,
+        # Combined venv pipeline (``sh -c "venv && ensurepip && pip
+        # install pip-tools && pip-compile"`` runs as a single
+        # sandbox call). The script string contains "venv" + the
+        # lockfile text via pip-compile.
+        (lambda c: c[0] == "sh" and len(c) >= 3
+                   and "venv" in c[2] and "pip-compile" in c[2],
          _FakeProc(returncode=0, stdout=lockfile_text)),
+        # Fallback for the dry-run combined pipeline.
+        (lambda c: c[0] == "sh" and len(c) >= 3
+                   and "venv" in c[2] and "--dry-run" in c[2],
+         _FakeProc(returncode=0)),
     ]
 
 
@@ -286,22 +297,38 @@ def _patch_run_with_callable(monkeypatch, plan):
     return calls
 
 
+def _resolver_venv_dir(project_dir: Path) -> Path:
+    """Compute the venv path the resolver would use for ``project_dir``.
+
+    Mirrors ``PipResolver._venv_dir`` so tests can target the same
+    location for pre-mocking and cleanup assertions.
+    """
+    return PipResolver()._venv_dir(project_dir)
+
+
 def test_pip_compile_pep668_falls_back_to_venv(
     monkeypatch, tmp_path: Path,
 ) -> None:
     """System pip-compile blocked by PEP 668 → resolver retries via
     an ephemeral venv and succeeds."""
-    import os as _os
     (tmp_path / "requirements.txt").write_text(
         "django>=4.0\n", encoding="utf-8")
-    venv_dir = tmp_path / f".raptor-sca-venv-{_os.getpid()}"
+    venv_dir = _resolver_venv_dir(tmp_path)
     _patch_run_with_callable(monkeypatch, _make_pep668_plan(venv_dir))
-
-    res = PipResolver().dry_run(tmp_path)
-    assert res.success is True, \
-        f"expected success, got error: {res.error!r}"
-    assert res.proposed_lockfile is not None
-    assert b"django==4.2.10" in res.proposed_lockfile
+    try:
+        res = PipResolver().dry_run(tmp_path)
+        assert res.success is True, \
+            f"expected success, got error: {res.error!r}"
+        assert res.proposed_lockfile is not None
+        assert b"django==4.2.10" in res.proposed_lockfile
+    finally:
+        # Test-side cleanup — the resolver's cleanup is inside _run
+        # which is monkeypatched, so the dir we pre-created may
+        # outlive the test if the resolver's finally clause never
+        # ran a real shutil.rmtree.
+        if venv_dir.exists():
+            import shutil
+            shutil.rmtree(venv_dir, ignore_errors=True)
 
 
 def test_pep668_fallback_cleans_up_venv(
@@ -309,15 +336,14 @@ def test_pep668_fallback_cleans_up_venv(
 ) -> None:
     """The ephemeral venv directory is removed after the resolver
     finishes, success or failure."""
-    import os as _os
     (tmp_path / "requirements.txt").write_text(
         "django>=4.0\n", encoding="utf-8")
-    venv_dir = tmp_path / f".raptor-sca-venv-{_os.getpid()}"
+    venv_dir = _resolver_venv_dir(tmp_path)
     _patch_run_with_callable(monkeypatch, _make_pep668_plan(venv_dir))
 
     PipResolver().dry_run(tmp_path)
 
-    # Venv directory should be removed.
+    # Venv directory should be removed by the resolver's finally clause.
     assert not venv_dir.exists(), (
         f"venv leaked at {venv_dir}; contents: "
         f"{list(venv_dir.rglob('*')) if venv_dir.exists() else '(gone)'}"

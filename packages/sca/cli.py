@@ -550,10 +550,14 @@ def _format_transitive_line(result) -> Optional[str]:
     eco_list = ", ".join(sorted(set(top_ecos))[:4])
     # Resolver error messages can carry embedded newlines (pip's
     # "externally-managed-environment" output is a multi-line block).
-    # Collapse whitespace so the summary stays one line and reads
-    # cleanly alongside the rest of the run output.
+    # Collapse whitespace so the summary stays one line. Truncate
+    # only at very long lengths — earlier 90-char cap silently hid
+    # critical context (e.g., the full path the resolver couldn't
+    # find a manifest in).
     collapsed = " ".join(top_reason.split())
-    return (f"raptor-sca: transitive        skipped — {collapsed[:90]} "
+    if len(collapsed) > 200:
+        collapsed = collapsed[:197] + "..."
+    return (f"raptor-sca: transitive        skipped — {collapsed} "
             f"({eco_list})")
 
 
