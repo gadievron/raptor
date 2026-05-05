@@ -353,8 +353,25 @@ def _render_begin_end_marker(block: UntrustedBlock, nonce: str, profile: ModelDe
 
 def _render_passthrough(block: UntrustedBlock, nonce: str, profile: ModelDefenseProfile) -> str:
     rendered = _content_for_envelope(block.content, profile)
-    kind = block.kind or "content"
-    origin = f" (from {block.origin})" if block.origin else ""
+    # kind / origin are caller-supplied. The passthrough envelope uses
+    # `--- kind (from origin) ---` as its boundary; if either field
+    # contains a newline OR the literal `---` sequence, the boundary
+    # can be smuggled and the model sees envelope content as outside-
+    # the-envelope. Strip newlines (collapse to single space) and
+    # neutralise the dash sequence to `-‐-` (middle dash is U+2010,
+    # a Unicode hyphen — visually similar but doesn't match the ASCII
+    # boundary regex any consumer might use).
+    def _safe_label(s: str) -> str:
+        if not s:
+            return s
+        # Collapse all whitespace (incl. CR/LF/TAB) to single spaces.
+        s = re.sub(r'\s+', ' ', s)
+        # Neutralise `---` runs (any 3+ dashes).
+        s = re.sub(r'-{3,}', lambda m: '-‐' + '-' * (len(m.group(0)) - 2), s)
+        return s.strip()
+    kind = _safe_label(block.kind) or "content"
+    origin_field = _safe_label(block.origin) if block.origin else ""
+    origin = f" (from {origin_field})" if origin_field else ""
     return f'--- {kind}{origin} ---\n{rendered}\n---'
 
 
