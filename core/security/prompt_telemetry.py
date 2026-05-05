@@ -88,7 +88,27 @@ class DefenseTelemetry:
         self._weakened_overrides: dict[str, str] = {}
 
     def reset(self) -> None:
-        """Clear all counters. Call at the start of each run."""
+        """Clear all counters AND the once-per-run warning latches.
+
+        **Contract: call this at the START of every analysis run.**
+
+        Required because:
+          * The module-level `defense_telemetry` singleton persists
+            for the entire process lifetime — without reset, a second
+            run inside the same process inherits counters and warning
+            latches from the first.
+          * Several internal latches (`_nonce_leak_warned`,
+            `_schema_warned`, `_preflight_warned`) suppress repeated
+            log warnings to one-per-process; if the prior run already
+            tripped them, the new run's actual issues stay silent.
+          * The `summary()` output is meant to describe ONE run;
+            without reset, you get the cumulative-since-process-start
+            view which is harder to reason about.
+
+        Wired into `packages/llm_analysis/orchestrator.orchestrate()`
+        on every entry. New orchestration entry points must call this
+        too.
+        """
         with self._lock:
             self._models.clear()
             self._preflight = _PreflightStats()

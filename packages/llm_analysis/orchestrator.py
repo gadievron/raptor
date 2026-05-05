@@ -281,6 +281,19 @@ def orchestrate(
         print("\n  No findings to analyse")
         return None
 
+    # Reset the per-run defense telemetry singleton. The singleton
+    # accumulates per-model counters (response shape, schema retries,
+    # nonce-leak warnings) and is process-wide; without an explicit
+    # reset here, a long-lived orchestrator (e.g. running back-to-back
+    # via the supervisor or in test harnesses that re-invoke
+    # orchestrate without process restart) would carry state from the
+    # prior run into this one, mis-attributing counters and producing
+    # one-shot warnings that wouldn't fire again until process restart.
+    # Keep the call here (not at module import time) so callers that
+    # construct their own DefenseTelemetry don't get clobbered.
+    from core.security import prompt_telemetry as _pt
+    _pt.defense_telemetry.reset()
+
     # Stamp repo_path so build_analysis_prompt_bundle_from_finding forwards it to
     # enrich_analysis_prompt; without this SAGE per-repo scoping (#198) makes
     # the enrichment a no-op for every finding on the dispatch path.
