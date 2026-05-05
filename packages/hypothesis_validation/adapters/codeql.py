@@ -164,7 +164,12 @@ class CodeQLAdapter(ToolAdapter):
             env = RaptorConfig.get_safe_env()
 
         # codeql wants the .ql in a query pack alongside a qlpack.yml.
-        # Generate both in a temp dir.
+        # Generate both in a temp dir, then `codeql pack install` so that
+        # the LLM's query can resolve standard-library imports
+        # (semmle.python.security.dataflow.*, etc.) which the pack's
+        # dependencies pull in. Without the install step, queries that
+        # use anything beyond the bare `import python` core fail to
+        # compile.
         try:
             with TemporaryDirectory(prefix="codeql_hv_") as tmp:
                 pack_dir = Path(tmp) / "hv-pack"
@@ -174,6 +179,27 @@ class CodeQLAdapter(ToolAdapter):
 
                 query_file.write_text(rule)
                 qlpack.write_text(_qlpack_yaml(rule))
+
+                runner = (
+                    make_sandbox_runner(target=self._database_path)
+                    if self._sandbox else subprocess.run
+                )
+
+                # Install pack dependencies (downloads or links the
+                # standard library packs the query may import).
+                # Cached after first run so subsequent invocations are
+                # fast. Failure here doesn't abort — the query may not
+                # need any external imports.
+                try:
+                    runner(
+                        [self._codeql_bin, "pack", "install", str(pack_dir)],
+                        capture_output=True, text=True,
+                        timeout=120, env=env,
+                    )
+                except Exception as e:
+                    # Pack install is best-effort. If the query has no
+                    # external imports it will still compile.
+                    pass
 
                 sarif_path = Path(tmp) / "result.sarif"
                 cmd = [
@@ -185,10 +211,6 @@ class CodeQLAdapter(ToolAdapter):
                     f"--output={sarif_path}",
                     "--no-rerun",
                 ]
-                runner = (
-                    make_sandbox_runner(target=self._database_path)
-                    if self._sandbox else subprocess.run
-                )
                 try:
                     proc = runner(
                         cmd, capture_output=True, text=True,

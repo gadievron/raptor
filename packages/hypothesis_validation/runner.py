@@ -20,7 +20,6 @@ inconclusive AND a refined rule is suggested, re-run the adapter with the
 refined rule, up to N iterations. Currently `iterations` is fixed at 1.
 """
 
-import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
 
@@ -107,19 +106,13 @@ based on the concrete evidence above.
 # Tag-forgery defence: an attacker-controlled match (file path, message)
 # that contains "</untrusted_tool_output>" could trick the LLM into thinking
 # the untrusted block has ended and the next tokens are trusted instructions.
-# Replace the leading "<" of any literal envelope tag with "&lt;" so the
-# model sees a visibly-broken tag rather than a forged closing one.
-_FORGED_TAG_RE = re.compile(
-    r"</?\s*untrusted_tool_output\b",
-    re.IGNORECASE,
+# Delegate to core.security.prompt_envelope.neutralize_tag_forgery — the
+# canonical defence for any prompt envelope in the codebase. Its regex
+# is strictly broader than what we need locally (covers slot/document/
+# untrusted_text tags too) so we get defence-in-depth for free.
+from core.security.prompt_envelope import (
+    neutralize_tag_forgery as _neutralize_forged_tags,
 )
-
-
-def _neutralize_forged_tags(text: str) -> str:
-    return _FORGED_TAG_RE.sub(
-        lambda m: "&lt;" + m.group(0)[1:],
-        text,
-    )
 
 
 _TOOL_SELECTION_SCHEMA = {

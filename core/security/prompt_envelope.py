@@ -238,8 +238,14 @@ def _datamark(content: str) -> str:
     return re.sub(r'\s', lambda m: m.group(0) + _DATAMARK_SENTINEL, content)
 
 
-def _neutralize_tag_forgery(content: str) -> str:
+def neutralize_tag_forgery(content: str) -> str:
     """Escape sequences in untrusted content that could forge envelope structure.
+
+    Public utility for any prompt-envelope defence — both build_prompt's
+    internal pipeline and any caller building its own envelope (e.g. the
+    hypothesis_validation runner, IRIS dataflow validation) should route
+    untrusted content through this helper before interpolating it into
+    a prompt.
 
     After newline-preservation was added, an attacker can place a fake
     closing tag on its own line — visually identical to the real one from
@@ -278,6 +284,11 @@ def _neutralize_tag_forgery(content: str) -> str:
     return _ENVELOPE_TAG_RE.sub(_escape_match, content)
 
 
+# Back-compat alias — keep the underscore name working in case other
+# modules still import it. Prefer `neutralize_tag_forgery` going forward.
+_neutralize_tag_forgery = neutralize_tag_forgery
+
+
 def _content_for_envelope(content: str, profile: ModelDefenseProfile) -> str:
     """Apply the per-profile defence pipeline to a single untrusted block.
 
@@ -296,7 +307,7 @@ def _content_for_envelope(content: str, profile: ModelDefenseProfile) -> str:
         content = _strip_autofetch_markup(content)
     content = _escape_for_envelope(content)
     if not profile.base64_code:
-        content = _neutralize_tag_forgery(content)
+        content = neutralize_tag_forgery(content)
     if profile.datamarking:
         content = _datamark(content)
     if profile.base64_code:

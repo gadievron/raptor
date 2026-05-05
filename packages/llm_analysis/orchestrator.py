@@ -228,6 +228,8 @@ def orchestrate(
     llm_config: Optional[Any] = None,
     block_cc_dispatch: bool = False,
     accept_weakened_defenses: bool = False,
+    validate_dataflow: bool = False,
+    validation_budget_threshold: float = 0.60,
 ) -> Optional[Dict[str, Any]]:
     """Orchestrate vulnerability analysis via external LLM or Claude Code.
 
@@ -504,11 +506,57 @@ def orchestrate(
                 primary[key] = source.get(key)
         results_by_id[fid] = primary
 
+    # --- IRIS-style dataflow validation (opt-in via --validate-dataflow) ---
+    # For Semgrep findings where the LLM claimed a dataflow path but no
+    # CodeQL evidence backs it, generate a CodeQL query via
+    # hypothesis_validation and run it against the project's database.
+    # Validation is NON-DESTRUCTIVE here — it records a recommendation
+    # but does not mutate is_exploitable. The reconciliation step at the
+    # end of orchestration applies the downgrade after consensus / judge
+    # have had their say. This keeps consensus blind to validation's
+    # signal and preserves the independence of multi-model voting.
+    #
+    # For correlated-error reasons, the helper prefers a different model
+    # family from the analysis model (cross-family) when one is available.
+    validation_metrics: Optional[Dict[str, Any]] = None
+    if validate_dataflow:
+        from packages.llm_analysis.dataflow_validation import run_validation_pass
+        validation_metrics = run_validation_pass(
+            findings=findings,
+            results_by_id=results_by_id,
+            out_dir=out_dir,
+            repo_path=repo_path,
+            dispatch_fn=dispatch_fn,
+            analysis_model=analysis_model,
+            role_resolution=role_resolution,
+            dispatch_mode=dispatch_mode,
+            cost_tracker=cost_tracker,
+            cross_family_resolver=_resolve_cross_family_checker,
+            budget_threshold=validation_budget_threshold,
+        )
+        if validation_metrics is None:
+            logger.info("dataflow validation skipped: mode/db unavailable")
+            print("\n  Dataflow validation skipped (no usable CodeQL DB)")
+        elif validation_metrics.get("n_validated", 0):
+            print(
+                f"\n  Dataflow validation: "
+                f"{validation_metrics['n_validated']} validated"
+                + (
+                    f", {validation_metrics['n_cache_hits']} cache hits"
+                    if validation_metrics.get("n_cache_hits") else ""
+                )
+                + (
+                    f", {validation_metrics['n_recommended_downgrades']} flagged for downgrade"
+                    if validation_metrics.get("n_recommended_downgrades") else ""
+                )
+            )
+
     # --- Pipeline flow (maps to exploitation-validator stages) ---
     # Stage E (binary feasibility) runs in Phase 0 if --binary provided.
     # Its results are in finding["feasibility"] and included in the prompt.
     #
     # AnalysisTask (above)  → Stages A-D: is this real? how exploitable?
+    # DataflowValidation    → IRIS: refute hallucinated dataflow claims
     # CrossFamilyCheckTask  → Re-check suspicious responses via different family
     # RetryTask             → Stage F: self-consistency check + retry
     # ConsensusTask         → Second model votes (if configured)
@@ -638,11 +686,39 @@ def orchestrate(
         if gid and "error" not in r:
             group_analyses[gid] = r
 
+    # --- Reconcile dataflow validation ---
+    # All analysis-stage tasks (consensus, judge, retry, group) have run.
+    # Apply downgrades from the validation pass that were deferred to
+    # avoid biasing those tasks. Re-scoring CVSS happens inside
+    # reconcile_dataflow_validation so the downgrade is consistent
+    # across is_exploitable / cvss_score / severity.
+    n_applied_downgrades = 0
+    n_soft_downgrades = 0
+    if validate_dataflow:
+        from packages.llm_analysis.dataflow_validation import (
+            reconcile_dataflow_validation,
+        )
+        recon = reconcile_dataflow_validation(results_by_id)
+        n_applied_downgrades = recon.get("n_hard_downgrades", 0)
+        n_soft_downgrades = recon.get("n_soft_downgrades", 0)
+        if n_applied_downgrades or n_soft_downgrades:
+            print(
+                f"  Dataflow validation reconciliation: "
+                f"{n_applied_downgrades} hard + {n_soft_downgrades} soft "
+                f"after consensus/judge"
+            )
+
     # --- Merge and write ---
     per_finding_results = list(results_by_id.values())
     merged = _merge_results(report, per_finding_results,
                             no_exploits=no_exploits, no_patches=no_patches)
     merged["cross_finding_groups"] = groups
+    if validate_dataflow:
+        merged["dataflow_validation"] = {
+            **(validation_metrics or {}),
+            "n_applied_downgrades": n_applied_downgrades,
+            "n_soft_downgrades": n_soft_downgrades,
+        }
     if group_analyses:
         merged["group_analyses"] = group_analyses
     if correlation:

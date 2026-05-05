@@ -264,6 +264,25 @@ Examples:
              "correlation results.",
     )
     parser.add_argument(
+        "--validate-dataflow",
+        action="store_true",
+        help="IRIS-style validation: for Semgrep findings where the LLM "
+             "claimed a dataflow path, generate a CodeQL query and run it "
+             "against the project database. Refuted claims downgrade "
+             "is_exploitable; original verdicts preserved as "
+             "is_exploitable_pre_validation. Requires --codeql to have run. "
+             "Opt-in until FP-reduction rate is measured against real data.",
+    )
+    parser.add_argument(
+        "--validation-budget",
+        type=float,
+        default=0.60,
+        metavar="FRACTION",
+        help="Fraction of LLM budget (0.0-1.0) above which dataflow "
+             "validation is skipped to leave room for downstream tasks "
+             "(consensus, exploit, patch). Default 0.60.",
+    )
+    parser.add_argument(
         "--trust-repo",
         action="store_true",
         help="Trust the target repo's config and skip safety checks. Currently "
@@ -880,6 +899,8 @@ Examples:
                 llm_config=llm_config,
                 block_cc_dispatch=block_cc_dispatch,
                 accept_weakened_defenses=args.accept_weakened_defenses,
+                validate_dataflow=getattr(args, "validate_dataflow", False),
+                validation_budget_threshold=getattr(args, "validation_budget", 0.60),
             )
         else:
             print("\n  No analysis report from Phase 3 — skipping orchestration")
