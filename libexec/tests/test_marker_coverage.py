@@ -24,7 +24,7 @@ REPO = Path(__file__).resolve().parents[2]
 LIBEXEC = REPO / "libexec"
 
 _SENTINEL = "# ─── trust-marker check"
-_TRUST_VARS = ("CLAUDECODE", "_RAPTOR_TRUSTED", "RAPTOR_DIR")
+_TRUST_VARS = ("CLAUDECODE", "_RAPTOR_TRUSTED")
 
 
 def _libexec_scripts() -> list[Path]:

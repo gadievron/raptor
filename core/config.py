@@ -202,6 +202,13 @@ class RaptorConfig:
         "DEBIAN_FRONTEND",
         # Python runtime flag we set ourselves.
         "PYTHONUNBUFFERED",
+        # Trust markers — libexec/ scripts inspect these to verify they
+        # were invoked from a trusted parent (bin/raptor, bin/cve-diff,
+        # or Claude Code). Pure boolean flags; not shell-interpreted.
+        # Must propagate through get_safe_env() because the sandbox
+        # spawns its own libexec scripts (raptor-pid1-shim,
+        # raptor-run-sandboxed) using this env.
+        "_RAPTOR_TRUSTED", "CLAUDECODE",
     })
 
     # Name prefixes — any variable whose name starts with one of these is

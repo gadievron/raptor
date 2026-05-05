@@ -26,6 +26,30 @@ from packages.sca.agent import _find_sca_agent, run_sca_subprocess
 # SCA_ALLOWED_HOSTS completeness
 # ---------------------------------------------------------------------------
 
+# Required hosts kept as a parameter list rather than asserted inline
+# so that CodeQL's `py/incomplete-url-substring-sanitization` query
+# doesn't flag every assertion. The query pattern-matches
+# ``<literal-with-dot> in <var>`` even when ``<var>`` is a tuple of
+# hostnames (membership-by-equality, not substring); binding the host
+# to a parameter sidesteps the false positive without changing what is
+# checked.
+_REQUIRED_HOSTS = (
+    "api.osv.dev",                    # OSV advisory database
+    "www.cisa.gov",                   # CISA KEV
+    "api.first.org",                  # FIRST.org EPSS
+    "pypi.org",                       # PyPI registry
+    "registry.npmjs.org",             # npm registry
+    "crates.io",                      # Cargo registry
+    "rubygems.org",                   # RubyGems registry
+    "proxy.golang.org",               # Go proxy
+    "api.nuget.org",                  # NuGet registry
+    "repo.maven.apache.org",          # Maven Central
+    "repo.packagist.org",             # Packagist (PHP)
+    "files.pythonhosted.org",         # source-archive downloads (version-diff)
+    "api.github.com",                 # GitHub API (rate-limited public refs)
+)
+
+
 class TestScaAllowedHosts:
 
     def test_is_tuple(self):
@@ -35,45 +59,10 @@ class TestScaAllowedHosts:
     def test_not_empty(self):
         assert len(SCA_ALLOWED_HOSTS) > 0
 
-    def test_contains_osv(self):
-        assert "api.osv.dev" in SCA_ALLOWED_HOSTS
-
-    def test_contains_kev(self):
-        assert "www.cisa.gov" in SCA_ALLOWED_HOSTS
-
-    def test_contains_epss(self):
-        assert "api.first.org" in SCA_ALLOWED_HOSTS
-
-    def test_contains_pypi_registry(self):
-        assert "pypi.org" in SCA_ALLOWED_HOSTS
-
-    def test_contains_npm_registry(self):
-        assert "registry.npmjs.org" in SCA_ALLOWED_HOSTS
-
-    def test_contains_crates_registry(self):
-        assert "crates.io" in SCA_ALLOWED_HOSTS
-
-    def test_contains_rubygems_registry(self):
-        assert "rubygems.org" in SCA_ALLOWED_HOSTS
-
-    def test_contains_golang_proxy(self):
-        assert "proxy.golang.org" in SCA_ALLOWED_HOSTS
-
-    def test_contains_nuget_registry(self):
-        assert "api.nuget.org" in SCA_ALLOWED_HOSTS
-
-    def test_contains_maven_registry(self):
-        assert "repo.maven.apache.org" in SCA_ALLOWED_HOSTS
-
-    def test_contains_packagist_registry(self):
-        assert "repo.packagist.org" in SCA_ALLOWED_HOSTS
-
-    def test_contains_pypi_archives(self):
-        """Source-archive downloads for version-diff review."""
-        assert "files.pythonhosted.org" in SCA_ALLOWED_HOSTS
-
-    def test_contains_github_api(self):
-        assert "api.github.com" in SCA_ALLOWED_HOSTS
+    @pytest.mark.parametrize("host", _REQUIRED_HOSTS)
+    def test_required_host_present(self, host):
+        """Every host the SCA pipeline relies on must be in the allowlist."""
+        assert host in SCA_ALLOWED_HOSTS
 
     def test_no_duplicates(self):
         assert len(SCA_ALLOWED_HOSTS) == len(set(SCA_ALLOWED_HOSTS))

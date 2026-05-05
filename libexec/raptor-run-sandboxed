@@ -35,8 +35,7 @@ import sys
 raptor_dir = str(__import__("pathlib").Path(__file__).resolve().parents[1])  # libexec -> raptor
 # ─── trust-marker check (do not import; inline by design) ───
 if not (os.environ.get("CLAUDECODE")
-        or os.environ.get("_RAPTOR_TRUSTED")
-        or os.environ.get("RAPTOR_DIR")):
+        or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
         f"{sys.argv[0]}: internal dispatch script.\n"
         "  Run via 'bin/raptor' instead.\n"
