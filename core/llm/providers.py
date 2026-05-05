@@ -2277,6 +2277,11 @@ class ClaudeCodeLLMProvider(LLMProvider):
     # empirically: CC honours the schema and produces valid tool
     # calls or final answers for typical agent flows.
 
+    # Class-level latch for the provider_specific-ignored warning so
+    # we don't log per-turn (one ToolUseLoop run can fire dozens of
+    # turns with the same kwargs).
+    _provider_specific_warned: bool = False
+
     def turn(
         self,
         messages: Sequence[Message],
@@ -2290,7 +2295,24 @@ class ClaudeCodeLLMProvider(LLMProvider):
         """Tool-use via ``generate_structured`` with a discriminated
         schema. Each turn, CC chooses either to call a tool (returning
         name + input) or to finalise (returning text)."""
-        del cache_control, provider_specific            # unused by CC
+        # `del cache_control` — no caching at the CC layer (the
+        # subprocess re-launches per turn).
+        del cache_control
+        # `provider_specific` — silently dropped pre-fix. A caller
+        # passing `temperature=`, `top_p=`, `frequency_penalty=`, etc.
+        # via the ToolUseLoop saw their values quietly ignored when
+        # the bound provider was CC (CC's subprocess interface doesn't
+        # expose those flags). Warn ONCE per process so the operator
+        # can decide whether to switch providers or accept the gap.
+        if provider_specific and not type(self)._provider_specific_warned:
+            type(self)._provider_specific_warned = True
+            logger.warning(
+                "ClaudeCodeLLMProvider.turn: ignoring provider_specific "
+                "kwargs %s — CC's subprocess interface doesn't expose these. "
+                "If you need per-turn control over temperature/top_p/etc., "
+                "switch to AnthropicProvider (set ANTHROPIC_API_KEY).",
+                sorted(provider_specific.keys()),
+            )
 
         # No tools → plain text generation. Skip the schema overhead.
         if not tools:
