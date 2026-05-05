@@ -236,6 +236,20 @@ class TestHashHypothesis:
         h4 = Hypothesis(claim="x", target=Path("/x"), flow_steps=[FlowStep()])
         assert hash_hypothesis(h1) != hash_hypothesis(h4)
 
+    def test_hash_is_byte_stable(self):
+        """Pin the hash for a fixed hypothesis. Changes to to_dict,
+        _normalise, the JSON encoding contract, or the hash algorithm
+        will fail this test. If you trip it, every persisted
+        Evidence.refers_to in the wild becomes invalid — bump a hash
+        version explicitly and write a migration, rather than silently
+        breaking the contract.
+        """
+        h = Hypothesis(claim="foo bar", target=Path("/x"), cwe="CWE-129")
+        assert hash_hypothesis(h) == (
+            "066b6bcb035ac80f53209d417bb66bcf"
+            "155d5a869305c50b3c92eb1f236a3e93"
+        )
+
     def test_hash_stable_across_field_addition_when_omitted(self):
         # Adding optional structured fields without populating them must
         # NOT change the hash of an existing hypothesis. This protects
