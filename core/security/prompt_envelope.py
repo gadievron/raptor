@@ -246,10 +246,36 @@ def nonce_leaked_in(nonce: str, text: str) -> bool:
         start = idx + 1
 
 
+# Characters that browsers / HTML parsers / markdown renderers
+# normalise away INSIDE tags but our regex sees as-is — so an attacker
+# can insert one of these between tag-name letters to bypass the tag
+# pattern. `<im​g src=...>` renders as `<img src=...>` in many
+# pipelines; without stripping, the autofetch regex misses it.
+#
+# Coverage:
+#   \x00       — null (browsers ignore inside attribute values + tag names)
+#   ​-D   — zero-width space / non-joiner / joiner
+#   ﻿     — zero-width no-break space (also BOM)
+#   ­     — soft hyphen
+#   ‪-E   — bidi embedding / override controls
+#   ⁦-9   — bidi isolate controls
+_BYPASS_CHAR_RE = re.compile(
+    '[\x00­​‌‍﻿'
+    '‪‫‬‭‮'
+    '⁦⁧⁨⁩]'
+)
+
+
 def _strip_autofetch_markup(content: str) -> str:
-    # Strip null bytes first — browsers ignore them, so <im\x00g> renders as
-    # <img>. Without this, null-byte insertion bypasses all tag patterns.
-    cleaned = content.replace('\x00', '')
+    # Strip parser-invisible characters first. Pre-fix this only
+    # stripped \x00; the zero-width and bidi-control characters above
+    # are equally effective bypasses against the autofetch regex
+    # because most renderers (browsers, GFM, the various markdown
+    # libraries downstream agents pipe through) treat them as either
+    # invisible or as zero-width formatting control — meaning
+    # `<im​g src=evil>` renders as a real `<img>` tag while our
+    # regex doesn't match it as `img`.
+    cleaned = _BYPASS_CHAR_RE.sub('', content)
     return _AUTOFETCH_MARKUP_RE.sub('[REDACTED-AUTOFETCH-MARKUP]', cleaned)
 
 
