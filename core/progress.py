@@ -48,16 +48,19 @@ class HackerProgress:
             return
         now = time.time()
 
-        # Only update display every 1 second
-        if now - self.last_update < 1.0:
-            return
-
-        self.last_update = now
-
+        # Update self.current ALWAYS — only the I/O is throttled. Otherwise
+        # rapid `update(current=idx)` calls in a tight loop silently drop
+        # values, leaving the displayed counter and ETA arithmetic stale.
         if current is not None:
             self.current = current
         else:
             self.current += 1
+
+        # Only update display every 1 second.
+        if now - self.last_update < 1.0:
+            return
+
+        self.last_update = now
 
         # Rotate spinner
         spinner = self.SPINNERS[self.spinner_idx % len(self.SPINNERS)]

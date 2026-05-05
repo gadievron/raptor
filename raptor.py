@@ -116,7 +116,9 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
             from core.sage.hooks import store_scan_results
             import json
             # Try to find and store SARIF results
-            sarif_files = list(out_dir.glob("*.sarif")) + list(out_dir.glob("**/*.sarif"))
+            # rglob matches both top-level and nested files; the older
+            # glob("*") + glob("**/*") form double-counted top-level files.
+            sarif_files = sorted({p for p in out_dir.rglob("*.sarif")})
             findings = []
             for sf in sarif_files:
                 try:

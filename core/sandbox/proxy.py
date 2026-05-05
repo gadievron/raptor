@@ -620,7 +620,17 @@ class EgressProxy:
                 f"egress proxy: max tunnels ({self._max_tunnels}) reached — "
                 f"refusing new connection"
             )
-            await self._write_error(writer, 429, "Too Many Tunnels")
+            try:
+                await self._write_error(writer, 429, "Too Many Tunnels")
+            finally:
+                # The reject path used to `return` before the try/finally
+                # below the cap-counter, so the writer was never closed
+                # on rejection — every 429 leaked the inbound socket.
+                try:
+                    writer.close()
+                    await writer.wait_closed()
+                except Exception:
+                    pass
             return
 
         try:

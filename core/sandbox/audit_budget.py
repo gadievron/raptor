@@ -459,8 +459,10 @@ class AuditBudget:
         self._category_counts[cat] = self._category_counts.get(cat, 0) + 1
         # Move PID to end of insertion order so LRU eviction (below)
         # discards the genuinely-oldest entries when the cap is hit.
+        # `d[k] += 1` does NOT update insertion order — pop+reinsert does.
         if pid in self._pid_counts:
-            self._pid_counts[pid] += 1
+            count = self._pid_counts.pop(pid) + 1
+            self._pid_counts[pid] = count
         else:
             self._pid_counts[pid] = 1
             if len(self._pid_counts) > self._pid_dict_cap:
