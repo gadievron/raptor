@@ -22,7 +22,7 @@ from pathlib import Path
 from cve_diff.core.exceptions import IdenticalCommitsError
 from cve_diff.core.models import CommitSha
 
-_SHA_RE = re.compile(r"^[a-f0-9]{7,40}$", re.IGNORECASE)
+_SHA_RE = re.compile(r"[a-f0-9]{7,40}", re.IGNORECASE | re.ASCII)
 _INVALID_LITERALS = frozenset({"0", "none", "null", ""})
 # git's canonical empty-tree SHA; `git diff <empty-tree>..<root-commit>`
 # produces the full-file-as-added diff. Used when a fix commit is the first
@@ -42,7 +42,7 @@ class CommitResolver:
         normalized = str(commit).strip().lower()
         if normalized in _INVALID_LITERALS:
             return False
-        return bool(_SHA_RE.match(normalized))
+        return bool(_SHA_RE.fullmatch(normalized))
 
     def validate_different(self, before: str | None, after: str | None) -> None:
         if before is None or after is None:

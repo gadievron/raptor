@@ -31,6 +31,8 @@ from cve_diff.core.models import CommitSha, DiffBundle, FileChange, RepoRef
 from cve_diff.core.path_classifier import is_test_path
 from cve_diff.diffing import shape_dynamic
 from cve_diff.diffing.extract_via_api import (
+    _INVALID_LITERALS,
+    _SHA_RE,
     extract_via_api as _extract_via_api_github,
 )
 
@@ -93,6 +95,11 @@ def extract_via_gitlab_api(cve_id: str, ref: RepoRef) -> DiffBundle:
         )
 
     sha = (ref.fix_commit or "").strip().lower()
+    if sha in _INVALID_LITERALS or not _SHA_RE.fullmatch(sha):
+        raise AnalysisError(
+            f"{cve_id}: extract_via_gitlab_api refused — fix_commit "
+            f"{ref.fix_commit!r} is not a SHA"
+        )
     encoded = _urlquote(slug, safe="")
     base = f"{host}/api/v4/projects/{encoded}/repository/commits/{sha}"
 

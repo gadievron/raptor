@@ -52,7 +52,9 @@ DEFAULT_TIMEOUT_S = 10
 
 import re
 
-_COMMIT_SHA_RE = re.compile(r"^[a-f0-9]{7,40}$", re.IGNORECASE)
+# `re.fullmatch` callers — `re.match` + `$` matches before final `\n`,
+# letting `"abc1234\n"` slip through and into `git fetch <sha>` argv.
+_COMMIT_SHA_RE = re.compile(r"[a-f0-9]{7,40}", re.IGNORECASE | re.ASCII)
 _LINUX_UPSTREAM = f"https://github.com/{LINUX_UPSTREAM_SLUG}"
 
 
@@ -172,7 +174,7 @@ class OSVDiscoverer:
                     e["introduced"]
                     for e in rng.events
                     if e.get("introduced") and e["introduced"] != "0"
-                    and _COMMIT_SHA_RE.match(e["introduced"])
+                    and _COMMIT_SHA_RE.fullmatch(e["introduced"])
                 ]
                 for event in rng.events:
                     fixed = event.get("fixed")
