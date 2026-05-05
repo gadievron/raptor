@@ -573,7 +573,29 @@ class ToolUseLoop:
                 f"tool {call.name!r} exceeded {self._tool_timeout_s}s timeout"
             )
         if "exc" in exc_holder:
-            raise exc_holder["exc"]
+            captured = exc_holder["exc"]
+            if isinstance(captured, Exception):
+                # Regular handler exception — re-raise as-is so the
+                # loop's per-tool error path (terminate-on-error vs
+                # feed-back-to-model) sees the original exception
+                # type for logging / debugging.
+                raise captured
+            # BaseException-but-not-Exception (KeyboardInterrupt,
+            # SystemExit, GeneratorExit) raised inside a daemon
+            # thread is already weird — Python's signal handler
+            # only fires on the main thread, so a Ctrl-C during a
+            # tool call lands here. Re-raising the original on the
+            # main thread would propagate out of the loop entirely
+            # (BaseException isn't caught by the loop's
+            # `except Exception`), which silently terminates the
+            # whole orchestration. Wrap as a regular Exception so
+            # the per-tool error path sees it like any other
+            # handler failure; the operator can re-Ctrl-C if they
+            # really want to abort.
+            raise RuntimeError(
+                f"tool {call.name!r} handler raised "
+                f"{type(captured).__name__} (non-Exception BaseException)"
+            ) from captured
         return ToolResult(tool_use_id=call.id, content=result_holder["text"])
 
     def _estimate_static_tokens(self) -> int:
