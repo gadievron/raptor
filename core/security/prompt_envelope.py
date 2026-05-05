@@ -172,7 +172,13 @@ _ENVELOPE_TAG_RE = re.compile(
     re.IGNORECASE,
 )
 
-_MARKER_RE = re.compile(r'^[A-Z_]+$')
+# `fullmatch` (not `match`) to defeat a trailing-newline bypass:
+# Python's `$` anchor matches just before a trailing newline, so
+# `re.match(r'^[A-Z_]+$', 'FOO\nattacker')` succeeds — and the marker
+# would then be embedded verbatim into the BEGIN_/END_ envelope, with
+# the attacker text rendered as if it came from the trusted side.
+# `fullmatch` requires the *entire* string to match.
+_MARKER_RE = re.compile(r'[A-Z_]+')
 
 _DATAMARK_SENTINEL = 'ˮ'
 
@@ -342,7 +348,7 @@ def _render_secalign(block: UntrustedBlock, nonce: str, profile: ModelDefensePro
 
 def _render_begin_end_marker(block: UntrustedBlock, nonce: str, profile: ModelDefenseProfile) -> str:
     marker = block.kind.upper()
-    if not _MARKER_RE.match(marker):
+    if not _MARKER_RE.fullmatch(marker):
         raise ValueError(
             f"begin-end-marker tag_style requires kind to match ^[A-Z_]+$ "
             f"after uppercasing; got {block.kind!r}"
