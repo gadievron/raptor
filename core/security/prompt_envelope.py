@@ -151,10 +151,24 @@ _AUTOFETCH_MARKUP_RE = re.compile(
 )
 
 _ENVELOPE_TAG_RE = re.compile(
+    # XML-style tags used by the structured-XML envelope.
     r'</?\s*untrusted[-_]'
     r'|</?\s*slots?\b'
     r'|</?\s*document(?:_content)?\b'
-    r'|</?\s*untrusted_text\b',
+    r'|</?\s*untrusted_text\b'
+    # Bracket-style markers used by the PASSTHROUGH / [MARK_INPT]
+    # envelope (prompt_envelope._render_passthrough). Without these,
+    # untrusted content containing the literal `[MARK_INPT]` or
+    # `[/MARK_INPT]` could visually close the envelope and inject
+    # text the model treats as outside-the-mark — same prompt-
+    # injection class the XML cases above neutralise.
+    r'|\[/?\s*MARK_INPT\s*\]'
+    # Line-marker style used by the BEGIN_/END_ envelope variant.
+    # The marker name is `[A-Z_]+`; an attacker including
+    # `BEGIN_INPT` or `END_X` in untrusted content could similarly
+    # forge a close-then-open boundary.
+    r'|\bBEGIN_[A-Z_]+\b'
+    r'|\bEND_[A-Z_]+\b',
     re.IGNORECASE,
 )
 
@@ -220,10 +234,31 @@ def _neutralize_tag_forgery(content: str) -> str:
     etc.) with ``&lt;``.  The replacement is narrow enough to leave normal
     source-code comparisons (``a < b``) untouched.
     """
-    return _ENVELOPE_TAG_RE.sub(
-        lambda m: '&lt;' + m.group(0)[1:],
-        content,
-    )
+    def _escape_match(m: re.Match) -> str:
+        s = m.group(0)
+        # XML-style: leading `<` → `&lt;`. Leaves the rest of the tag
+        # intact so the model still recognises "this looked like a
+        # tag" but it cannot match an envelope close.
+        if s.startswith('<'):
+            return '&lt;' + s[1:]
+        # Bracket-style: leading `[` → `&#91;`, and the trailing `]`
+        # if present → `&#93;`. Without escaping the trailing bracket
+        # the model still pattern-matches `MARK_INPT]` against an
+        # envelope close at the line-end boundary.
+        if s.startswith('['):
+            inner = s[1:-1] if s.endswith(']') else s[1:]
+            tail = '&#93;' if s.endswith(']') else ''
+            return '&#91;' + inner + tail
+        # Line-marker style (BEGIN_X / END_X): break the keyword by
+        # inserting a zero-width space after the `_` so the visual
+        # match against `BEGIN_<MARKER>` no longer fires. ZWSP is
+        # invisible to humans and to the model's structural parsing.
+        if s[:1].upper() in ('B', 'E') and '_' in s:
+            head, _, tail = s.partition('_')
+            return f'{head}_​{tail}'
+        return s
+
+    return _ENVELOPE_TAG_RE.sub(_escape_match, content)
 
 
 def _content_for_envelope(content: str, profile: ModelDefenseProfile) -> str:
