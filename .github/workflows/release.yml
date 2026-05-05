@@ -133,10 +133,21 @@ jobs:
               lambda m: m.group(1) + ver + m.group(2),
               text, count=1, flags=re.MULTILINE)
           open('core/config.py', 'w').write(text)
+
+          # README.md banner — 'Based on Claude Code (vX.Y.Z)' inside box
+          text = open('README.md').read()
+          def replace_readme(m):
+              prefix = m.group(1)
+              content = prefix + tag + ')'
+              pad = 76 - len(content)
+              return content + ' ' * pad + '║'
+          text = re.sub(r'(║\s+Based on Claude Code \()[^)]+\)[^║]*║', replace_readme, text)
+          open('README.md', 'w').write(text)
           " "$TAG"
           echo "Stamped:"
           grep "Based on Claude Code" raptor-offset
           grep 'VERSION = ' core/config.py | head -1
+          grep "Based on Claude Code" README.md
 
       - name: Commit version stamp and update tag
         env:
@@ -144,7 +155,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add raptor-offset core/config.py
+          git add raptor-offset core/config.py README.md
           if ! git diff --cached --quiet; then
             git commit -m "release: stamp ${TAG}"
             git tag -a -f "${TAG}" -m "Release ${TAG}"
