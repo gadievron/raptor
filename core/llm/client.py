@@ -408,7 +408,14 @@ class LLMClient:
         return data.get("content")
 
     def _save_to_cache(self, cache_key: str, response: LLMResponse) -> None:
-        """Save response to cache."""
+        """Save response to cache.
+
+        Mode 0o600 — LLM responses can contain proprietary code, scan
+        findings, vulnerability details, and other content the user
+        wouldn't want world-readable. The default umask on most systems
+        produces 0o644 (world-readable) which is wrong for this content.
+        Same posture as `LLMConfig.to_file` and the migration helper.
+        """
         if not self.config.enable_caching:
             return
 
@@ -421,7 +428,7 @@ class LLMClient:
                     "provider": response.provider,
                     "tokens_used": response.tokens_used,
                     "timestamp": time.time(),
-                })
+                }, mode=0o600)
         except Exception as e:
             logger.warning(f"Cache write error: {e}")
             return
