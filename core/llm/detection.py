@@ -73,9 +73,17 @@ def _get_available_ollama_models() -> List[str]:
     if _ollama_checked:
         return _cached_ollama_models or []
 
+    # Validate URL OUTSIDE the broad except below. A malformed
+    # OLLAMA_HOST (no scheme, etc.) used to be swallowed as "could not
+    # connect" and cached as `[]` — the operator saw "no Ollama
+    # running" with no hint that the URL itself was the problem, and
+    # the bad cache poisoned every later call in the same process.
+    # Surface the configuration error directly so the operator can fix
+    # the env var. Per-call cost is negligible (string check).
+    ollama_url = _validate_ollama_url(RaptorConfig.OLLAMA_HOST)
+
     _ollama_checked = True
     try:
-        ollama_url = _validate_ollama_url(RaptorConfig.OLLAMA_HOST)
         response = requests.get(f"{ollama_url}/api/tags", timeout=2)
         if response.status_code == 200:
             data = response.json()
