@@ -7,19 +7,29 @@ Two pieces:
 
 Stability is the contract: the same hypothesis content must produce the
 same hash across processes, machines, and Python versions. We get that
-by serialising to JSON with sorted keys and by normalising whitespace
-in every string field (collapse runs of whitespace to a single space,
-strip leading/trailing space) before hashing.
+by serialising to JSON with sorted keys, normalising whitespace in every
+string field, and pure-text path-normalising fields that hold filesystem
+paths (`target`, and the `file` attribute of nested locations / flow
+steps).
 
 Why normalise whitespace: the LLM frequently re-emits the same claim
 with different wrapping ("foo\\n  bar" vs "foo bar") between iteration
 rounds. Without normalisation, two semantically identical hypotheses
 hash differently and the runner cannot deduplicate or detect "this is
 the same hypothesis as last round".
+
+Why normalise paths: the LLM (and the runner) regularly emit `./foo.c`,
+`src/./foo.c`, and `src/../src/foo.c` interchangeably. `os.path.normpath`
+collapses these without filesystem access. Note that absolute and
+relative forms of the same path still hash distinctly — `normpath`
+cannot canonicalise that without a cwd, and a cwd-dependent hash would
+not be process-stable. Callers that need abs-vs-rel equivalence should
+resolve paths before constructing the Hypothesis.
 """
 
 import hashlib
 import json
+import os
 import re
 from typing import Any, Iterable
 
@@ -35,23 +45,41 @@ class ProvenanceMismatch(ValueError):
 
 _WS_RE = re.compile(r"\s+")
 
+# Keys whose string values are filesystem paths and so receive
+# `os.path.normpath` in addition to whitespace normalisation. Listed
+# explicitly rather than detected heuristically because path-shaped
+# strings appear elsewhere (e.g. in match `message` fields) where we
+# do *not* want to mangle them.
+_PATH_KEYS = frozenset({"target", "file"})
 
-def _normalise_string(s: str) -> str:
+
+def _normalise_string(s: str, *, is_path: bool = False) -> str:
     """Collapse runs of whitespace into one space; strip ends.
 
-    Applied to every string value before hashing. Idempotent.
+    When `is_path` is set, additionally apply `os.path.normpath` to
+    fold redundant separators and `.`/`..` segments. The empty string
+    is preserved as-is — `normpath("")` returns `"."`, which would
+    change the hash for an unset path field.
     """
-    return _WS_RE.sub(" ", s).strip()
+    out = _WS_RE.sub(" ", s).strip()
+    if is_path and out:
+        out = os.path.normpath(out)
+    return out
 
 
-def _normalise(value: Any) -> Any:
-    """Recursively normalise strings inside dicts/lists/tuples."""
+def _normalise(value: Any, key: Any = None) -> Any:
+    """Recursively normalise strings inside dicts/lists/tuples.
+
+    `key` carries the parent dict key when descending into dict values,
+    so path-shaped string fields can be normalised with `normpath`
+    while leaving sibling string fields alone.
+    """
     if isinstance(value, str):
-        return _normalise_string(value)
+        return _normalise_string(value, is_path=key in _PATH_KEYS)
     if isinstance(value, dict):
-        return {k: _normalise(v) for k, v in value.items()}
+        return {k: _normalise(v, key=k) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return [_normalise(v) for v in value]
+        return [_normalise(v, key=key) for v in value]
     return value
 
 
@@ -60,7 +88,9 @@ def hash_hypothesis(h: Hypothesis) -> HypothesisHash:
 
     Steps (each chosen so the hash is unaffected by superficial changes):
       1. Serialise via h.to_dict() so the field set is canonical.
-      2. Normalise whitespace in every string field.
+      2. Normalise whitespace in every string field; additionally apply
+         os.path.normpath to known path-bearing fields (`target`, nested
+         `file`).
       3. JSON-encode with sort_keys=True (stable key order across
          Python releases) and minimal separators (no whitespace at all
          in the encoded form).

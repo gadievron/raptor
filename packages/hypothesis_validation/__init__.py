@@ -34,11 +34,17 @@ Public API:
 Optional structured fields on Hypothesis (source/sink/flow_steps/
 sanitizers/smt_constraints), evidence provenance (Evidence.refers_to +
 hash_hypothesis), the verdict ladder (verdict_from/aggregate), and the
-must_progress iteration guard are all additive — see docs/design/
-typed-plan-layer.md.
+must_progress iteration guard are all additive — Phase A callers see
+no change.
 """
 
-from .hypothesis import Hypothesis, SourceLocation, SinkLocation, FlowStep
+from .hypothesis import (
+    Hypothesis,
+    Location,
+    SourceLocation,  # back-compat alias for Location
+    SinkLocation,    # back-compat alias for Location
+    FlowStep,
+)
 from .result import Evidence, ValidationResult
 from .adapters.base import ToolAdapter, ToolCapability, ToolInvocation, ToolEvidence
 from .verdict import verdict_from, aggregate
@@ -52,6 +58,7 @@ from .iteration import IterationStep, IterationStalled, uncertainty, must_progre
 
 __all__ = [
     "Hypothesis",
+    "Location",
     "SourceLocation",
     "SinkLocation",
     "FlowStep",

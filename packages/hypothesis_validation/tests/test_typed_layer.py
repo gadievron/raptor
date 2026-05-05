@@ -167,6 +167,54 @@ class TestHashHypothesis:
         )
         assert hash_hypothesis(bare) != hash_hypothesis(with_source)
 
+    def test_hash_normalises_target_path(self):
+        # `./foo.c`, `src/./foo.c`, and `src/../src/foo.c` are the same
+        # path under os.path.normpath; the hash must agree.
+        a = Hypothesis(claim="x", target=Path("/src/foo.c"))
+        b = Hypothesis(claim="x", target=Path("/src/./foo.c"))
+        c = Hypothesis(claim="x", target=Path("/src/../src/foo.c"))
+        assert hash_hypothesis(a) == hash_hypothesis(b)
+        assert hash_hypothesis(a) == hash_hypothesis(c)
+
+    def test_hash_normalises_nested_file_paths(self):
+        # Nested location/flow-step `file` fields go through the same
+        # normalisation as the top-level target.
+        a = Hypothesis(
+            claim="x",
+            target=Path("/src"),
+            source=SourceLocation(file="src/foo.c", line=1),
+        )
+        b = Hypothesis(
+            claim="x",
+            target=Path("/src"),
+            source=SourceLocation(file="src/./foo.c", line=1),
+        )
+        assert hash_hypothesis(a) == hash_hypothesis(b)
+
+    def test_hash_keeps_abs_and_rel_distinct(self):
+        # normpath cannot canonicalise abs vs rel without a cwd, and
+        # using cwd would make the hash process-dependent. Document by
+        # asserting they remain distinct.
+        a = Hypothesis(claim="x", target=Path("foo.c"))
+        b = Hypothesis(claim="x", target=Path("/src/foo.c"))
+        assert hash_hypothesis(a) != hash_hypothesis(b)
+
+    def test_hash_preserves_empty_path_strings(self):
+        # `os.path.normpath("")` returns ".", which would conflate
+        # "no path set" with "current directory" in the hash. A guard
+        # in `_normalise_string` skips normpath on empty input. This
+        # test exercises the guard via a SourceLocation whose `file`
+        # is unset (empty string).
+        a = Hypothesis(
+            claim="x", target=Path("/src"),
+            source=SourceLocation(kind="network"),  # file=""
+        )
+        b = Hypothesis(
+            claim="x", target=Path("/src"),
+            source=SourceLocation(kind="network", file="."),
+        )
+        assert hash_hypothesis(a) != hash_hypothesis(b)
+
 
 class TestEnsureSameProvenance:
     def test_empty_returns_empty_string(self):
