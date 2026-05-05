@@ -52,6 +52,13 @@ logger = logging.getLogger(__name__)
 # in summary.py picks it up unchanged.
 DENIALS_FILE = ".sandbox-denials.jsonl"
 
+# Wall-clock cap on `start()`'s wait for `log stream`'s first stdout
+# line. Empirically the banner arrives in 50-200ms; a generous cap keeps
+# the wait bounded if the OS log subsystem is wedged. Generous enough
+# that a healthy `log stream` startup never trips the cap, tight enough
+# that a slow path doesn't block the entire sandbox spawn.
+_FIRST_HEARTBEAT_TIMEOUT_S = 2.0
+
 
 # Skip-budget delegated to core.sandbox.audit_budget.AuditBudget,
 # which is shared with the Linux ptrace tracer so the two backends
@@ -151,8 +158,13 @@ class LogStreamer:
 
     def start(self) -> None:
         """Spawn `log stream` filtered to sandbox kext events and
-        start the reader thread. Non-blocking; returns immediately
-        once the subprocess is launched."""
+        start the reader thread. Blocks until `log stream` emits its
+        first line (usually the "Filtering the log data..." banner
+        on stdout) or up to ``_FIRST_HEARTBEAT_TIMEOUT_S`` seconds —
+        whichever comes first. Without this wait, the caller would
+        race the subprocess startup and lose events emitted by the
+        sandboxed workload during the ~50-200ms `log stream` needs
+        to attach to the kernel log feed."""
         predicate = (
             f'senderImagePath == "{SANDBOX_KEXT_SENDER}"'
         )
@@ -170,8 +182,45 @@ class LogStreamer:
             # arrive rather than accumulating in a 4K pipe buffer.
             bufsize=1,
         )
+        # Drain the first line synchronously so we know `log stream`
+        # is attached. The banner is the first thing it emits before
+        # any actual records, so this consumes a line that the reader
+        # thread doesn't need to see. Hand the banner-consumed
+        # subprocess to the reader thread; subsequent reads in the
+        # loop will be the genuine sandbox records.
+        try:
+            self._await_first_heartbeat()
+        except BaseException:
+            # If the heartbeat probe fails (subprocess died, timeout),
+            # tear down the subprocess so the caller doesn't have a
+            # zombie `log stream` running with nobody reading from it.
+            try:
+                self._proc.terminate()
+            except OSError:
+                pass
+            raise
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
+
+    def _await_first_heartbeat(self) -> None:
+        """Block until the `log stream` subprocess emits its first
+        line OR the heartbeat timeout elapses. Best-effort — we don't
+        fail the streamer if the banner doesn't arrive (some `log`
+        builds emit no banner on stdout, only on stderr which we
+        DEVNULL); we cap the wait so caller isn't blocked indefinitely."""
+        import selectors as _selectors
+        assert self._proc is not None
+        if self._proc.stdout is None:
+            return
+        sel = _selectors.DefaultSelector()
+        sel.register(self._proc.stdout, _selectors.EVENT_READ)
+        try:
+            events = sel.select(timeout=_FIRST_HEARTBEAT_TIMEOUT_S)
+            if events:
+                # Consume one line; if stdout closed, just return.
+                self._proc.stdout.readline()
+        finally:
+            sel.unregister(self._proc.stdout)
 
     def _read_loop(self) -> None:
         """Read ndjson lines from `log stream`, parse, and append
