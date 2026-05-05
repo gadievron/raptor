@@ -141,10 +141,21 @@ def _read_capped(path: Path) -> Optional[bytes]:
     """Read up to _MAX_CONFIG_BYTES+1. None on oversized/non-regular/error.
 
     O_NONBLOCK + fstat(S_ISREG) closes the FIFO-DoS and stat-vs-open TOCTOU
-    holes. Broad except for any I/O surprise — fail-closed is the safe stance.
+    holes. O_NOFOLLOW closes the symlink-redirect hole — the caller's
+    `_check_cached` symlink branch records symlinks as findings without
+    reading them, but a TOCTOU race could swap a regular file for a
+    symlink between the symlink check and the open here. With
+    O_NOFOLLOW the open fails with ELOOP and we fail-closed (return
+    None). Broad except for any I/O surprise — fail-closed is the safe
+    stance.
     """
     try:
-        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        fd = os.open(
+            str(path),
+            os.O_RDONLY
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
     except Exception:
         return None
     data: Optional[bytes] = None
