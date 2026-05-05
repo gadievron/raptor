@@ -236,6 +236,42 @@ class TestHashHypothesis:
         h4 = Hypothesis(claim="x", target=Path("/x"), flow_steps=[FlowStep()])
         assert hash_hypothesis(h1) != hash_hypothesis(h4)
 
+    def test_hash_path_normalisation_is_platform_independent(self):
+        """The hash of a forward-slash path must not depend on host OS.
+
+        os.path.normpath converts to backslashes on Windows; posixpath
+        .normpath does not. Hashes are stored cross-machine, so
+        platform-dependent normalisation breaks Evidence.refers_to
+        lookups. Pinning this property prevents a regression to
+        os.path.normpath.
+        """
+        # Two paths that normalise to the same canonical form. On any
+        # POSIX or Windows host, posixpath.normpath collapses both to
+        # "src/foo.c" with forward slashes intact.
+        h_dotted = Hypothesis(claim="x", target=Path("src/./foo.c"))
+        h_clean = Hypothesis(claim="x", target=Path("src/foo.c"))
+        assert hash_hypothesis(h_dotted) == hash_hypothesis(h_clean)
+
+        # Stronger guarantee: the canonical form encoded in the hash
+        # input contains forward slashes. We re-derive the expected
+        # digest with an explicit forward-slash payload; if the
+        # implementation ever swaps in a backslash separator the hash
+        # will no longer match.
+        expected_payload = {
+            "claim": "x",
+            "target": "src/foo.c",  # forward slashes, regardless of host
+            "target_function": "",
+            "cwe": "",
+            "suggested_tools": [],
+            "context": "",
+        }
+        expected = hashlib.sha256(
+            json.dumps(
+                expected_payload, sort_keys=True, separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        assert hash_hypothesis(h_clean) == expected
+
     def test_hash_is_byte_stable(self):
         """Pin the hash for a fixed hypothesis. Changes to to_dict,
         _normalise, the JSON encoding contract, or the hash algorithm

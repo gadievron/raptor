@@ -19,17 +19,22 @@ hash differently and the runner cannot deduplicate or detect "this is
 the same hypothesis as last round".
 
 Why normalise paths: the LLM (and the runner) regularly emit `./foo.c`,
-`src/./foo.c`, and `src/../src/foo.c` interchangeably. `os.path.normpath`
-collapses these without filesystem access. Note that absolute and
-relative forms of the same path still hash distinctly — `normpath`
-cannot canonicalise that without a cwd, and a cwd-dependent hash would
-not be process-stable. Callers that need abs-vs-rel equivalence should
-resolve paths before constructing the Hypothesis.
+`src/./foo.c`, and `src/../src/foo.c` interchangeably. `posixpath.normpath`
+collapses these without filesystem access. We use `posixpath` rather
+than `os.path` because the latter is platform-dependent — on Windows
+it rewrites `/` to `\\`, so a hypothesis hashed on a Linux dev machine
+and the same hypothesis hashed on a Windows CI runner would produce
+different hashes, defeating the cross-machine stability that's the
+whole point of this hash. Note that absolute and relative forms of the
+same path still hash distinctly — `normpath` cannot canonicalise that
+without a cwd, and a cwd-dependent hash would not be process-stable.
+Callers that need abs-vs-rel equivalence should resolve paths before
+constructing the Hypothesis.
 """
 
 import hashlib
 import json
-import os
+import posixpath
 import re
 from typing import Any, Iterable
 
@@ -56,14 +61,17 @@ _PATH_KEYS = frozenset({"target", "file"})
 def _normalise_string(s: str, *, is_path: bool = False) -> str:
     """Collapse runs of whitespace into one space; strip ends.
 
-    When `is_path` is set, additionally apply `os.path.normpath` to
-    fold redundant separators and `.`/`..` segments. The empty string
-    is preserved as-is — `normpath("")` returns `"."`, which would
-    change the hash for an unset path field.
+    When `is_path` is set, additionally apply `posixpath.normpath` to
+    fold redundant separators and `.`/`..` segments. We use `posixpath`
+    explicitly so the result is platform-independent: `os.path.normpath`
+    rewrites `/` to `\\` on Windows, which would make hashes diverge
+    across machines. The empty string is preserved as-is —
+    `normpath("")` returns `"."`, which would change the hash for an
+    unset path field.
     """
     out = _WS_RE.sub(" ", s).strip()
     if is_path and out:
-        out = os.path.normpath(out)
+        out = posixpath.normpath(out)
     return out
 
 
