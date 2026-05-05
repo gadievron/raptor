@@ -12,6 +12,8 @@ they pin down that pulling the downgrade rules out of `runner._evaluate`
 into `verdict_from` left the runner's behaviour unchanged.
 """
 
+import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -214,6 +216,47 @@ class TestHashHypothesis:
             source=SourceLocation(kind="network", file="."),
         )
         assert hash_hypothesis(a) != hash_hypothesis(b)
+
+    def test_hash_distinguishes_none_from_empty_source(self):
+        # `to_dict` skips structured fields when None but emits them
+        # with default values when set. So `source=None` and
+        # `source=SourceLocation()` are meaningfully different inputs
+        # and must hash differently. This test pins that sharp edge so
+        # any future "always emit defaults" change to to_dict surfaces
+        # as a test failure rather than a silent stored-hash invalidation.
+        h1 = Hypothesis(claim="x", target=Path("/x"))
+        h2 = Hypothesis(
+            claim="x", target=Path("/x"),
+            source=SourceLocation(),
+        )
+        assert hash_hypothesis(h1) != hash_hypothesis(h2)
+        # Same property for sink and flow_steps.
+        h3 = Hypothesis(claim="x", target=Path("/x"), sink=SinkLocation())
+        assert hash_hypothesis(h1) != hash_hypothesis(h3)
+        h4 = Hypothesis(claim="x", target=Path("/x"), flow_steps=[FlowStep()])
+        assert hash_hypothesis(h1) != hash_hypothesis(h4)
+
+    def test_hash_stable_across_field_addition_when_omitted(self):
+        # Adding optional structured fields without populating them must
+        # NOT change the hash of an existing hypothesis. This protects
+        # any persisted `Evidence.refers_to` against accidental changes
+        # to `to_dict` (e.g. "always emit source even when None") that
+        # would silently invalidate every stored hash.
+        h = Hypothesis(claim="x", target=Path("/x"))
+        expected_payload = {
+            "claim": "x",
+            "target": "/x",
+            "target_function": "",
+            "cwe": "",
+            "suggested_tools": [],
+            "context": "",
+        }
+        expected = hashlib.sha256(
+            json.dumps(
+                expected_payload, sort_keys=True, separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        assert hash_hypothesis(h) == expected
 
 
 class TestEnsureSameProvenance:
