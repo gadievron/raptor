@@ -567,6 +567,29 @@ class LLMClient:
             else:
                 model_config = self.config.primary_model
 
+        # Resolution may return None when:
+        #   * primary_model is unconfigured AND no task_type-specific
+        #     fallback registered (LLMClient was constructed bare —
+        #     normally `packages.llm_analysis.get_client` returns None
+        #     instead, but a direct `LLMClient(LLMConfig())` call hits
+        #     this path).
+        #   * task_type is supplied but `get_model_for_task` returns
+        #     None (no model registered for that role).
+        # Pre-fix the next line `model_config.max_context * 0.8` raised
+        # AttributeError on `None.max_context`. Surface a structured
+        # error instead — the caller has no way to recover from a
+        # missing model except by configuring one, and an
+        # AttributeError mid-stack is no help.
+        if model_config is None:
+            raise RuntimeError(
+                "LLMClient.generate: no model resolved "
+                f"(task_type={task_type!r}, primary_model="
+                f"{self.config.primary_model!r}). Construct via "
+                "packages.llm_analysis.get_client (which returns None "
+                "when no provider is available) or supply an explicit "
+                "model_config= kwarg."
+            )
+
         # Warn if prompt likely exceeds context window (~4 chars per token)
         estimated_tokens = (len(prompt) + len(system_prompt or "")) // 4
         if estimated_tokens > model_config.max_context * 0.8:
@@ -738,6 +761,19 @@ class LLMClient:
                 model_config = self.config.get_model_for_task(task_type)
             else:
                 model_config = self.config.primary_model
+
+        # Same None-guard as `generate` — see comment there for the
+        # full rationale. Without this, the next line crashes with
+        # AttributeError on `None.max_context`.
+        if model_config is None:
+            raise RuntimeError(
+                "LLMClient.generate_structured: no model resolved "
+                f"(task_type={task_type!r}, primary_model="
+                f"{self.config.primary_model!r}). Construct via "
+                "packages.llm_analysis.get_client (which returns None "
+                "when no provider is available) or supply an explicit "
+                "model_config= kwarg."
+            )
 
         # Provider impls of generate_structured don't currently accept
         # **kwargs (signature is (prompt, schema, system_prompt)) — so
