@@ -161,11 +161,37 @@ def _kill_and_reap(pid: int) -> None:
     child already exited (ProcessLookupError) or was reaped elsewhere
     (ChildProcessError), we just return. Used on every error path
     where the parent has to abandon the child mid-setup.
+
+    On Linux 5.3+ uses pidfd_open + pidfd_send_signal so the SIGKILL
+    cannot land on a reused PID if the original child is gone. Falls
+    back to os.kill() on older kernels or when pidfd_open() is missing
+    from this Python build (3.9+ has it stdlib).
     """
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    pidfd_open = getattr(os, "pidfd_open", None)
+    pidfd_send_signal = getattr(signal, "pidfd_send_signal", None)
+    if pidfd_open is not None and pidfd_send_signal is not None:
+        pidfd = -1
+        try:
+            try:
+                pidfd = pidfd_open(pid)
+            except (ProcessLookupError, OSError):
+                pidfd = -1
+            if pidfd >= 0:
+                try:
+                    pidfd_send_signal(pidfd, signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    pass
+        finally:
+            if pidfd >= 0:
+                try:
+                    os.close(pidfd)
+                except OSError:
+                    pass
+    else:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
     try:
         os.waitpid(pid, 0)
     except ChildProcessError:
