@@ -284,6 +284,14 @@ class AuditBudget:
         # in-band; this flag just lets callers query "did we just
         # cross the global ceiling?" via `pop_global_cap_notice()`.
         self._global_cap_notified = False
+        # One-shot latch: once `pop_global_cap_notice` has returned
+        # True, never return True again for the lifetime of this
+        # instance. Without this, a global-cap fire after the first
+        # poll re-arms `_global_cap_notified` and the second poll
+        # returns True too — so the tracer prints the "audit truncated"
+        # stderr line repeatedly under sustained burst load. Operator-
+        # visible cue is supposed to be one-shot.
+        self._global_cap_notice_consumed = False
         # Per-instance bookkeeping. dict-based; insertion-ordered
         # since Python 3.7 so we get LRU semantics on `_pid_counts`
         # for free (move_to_end on access).
@@ -459,8 +467,10 @@ class AuditBudget:
         self._category_counts[cat] = self._category_counts.get(cat, 0) + 1
         # Move PID to end of insertion order so LRU eviction (below)
         # discards the genuinely-oldest entries when the cap is hit.
+        # `d[k] += 1` does NOT update insertion order — pop+reinsert does.
         if pid in self._pid_counts:
-            self._pid_counts[pid] += 1
+            count = self._pid_counts.pop(pid) + 1
+            self._pid_counts[pid] = count
         else:
             self._pid_counts[pid] = 1
             if len(self._pid_counts) > self._pid_dict_cap:
@@ -507,12 +517,16 @@ class AuditBudget:
         }
 
     def pop_global_cap_notice(self) -> bool:
-        """Returns True ONCE if the global cap has fired since last
-        call, then False forever after. Lets callers (e.g., the
-        Linux tracer) emit a one-time stderr line when the cap is
-        crossed without re-emitting it on every subsequent drop."""
+        """Returns True at most ONCE per instance the first time the
+        global cap fires; False on every subsequent call. Lets
+        callers (e.g., the Linux tracer) emit a one-time stderr
+        line when the cap is crossed without re-emitting it on every
+        subsequent drop or every subsequent burst of drops."""
+        if self._global_cap_notice_consumed:
+            return False
         if self._global_cap_notified:
             self._global_cap_notified = False
+            self._global_cap_notice_consumed = True
             return True
         return False
 

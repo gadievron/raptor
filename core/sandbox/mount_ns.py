@@ -278,8 +278,24 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
                 else:
                     # File bind-mount: create an empty regular file to
                     # serve as the mount point.
+                    #
+                    # Use os.open with O_NOFOLLOW + 0o600 instead of
+                    # `open(inside, "a")`:
+                    #   * O_NOFOLLOW refuses to follow a symlink at
+                    #     `inside` — defence-in-depth even though our
+                    #     tmpfs root was freshly mkdir'd.
+                    #   * O_CREAT | O_EXCL refuses to reuse a pre-existing
+                    #     mount-point (which would also indicate something
+                    #     planted state we don't expect).
+                    #   * mode 0o600 — the mount-point itself shouldn't
+                    #     be world-readable (was 0o644 default via umask).
                     os.makedirs(os.path.dirname(inside), exist_ok=True)
-                    open(inside, "a").close()
+                    fd = os.open(
+                        inside,
+                        os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW | os.O_EXCL,
+                        0o600,
+                    )
+                    os.close(fd)
                 _mount(path, inside, None, MS_BIND)
                 try:
                     _mount(path, inside, None, MS_REMOUNT | MS_BIND | MS_RDONLY)

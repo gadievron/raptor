@@ -29,7 +29,7 @@ import typer
 from cve_diff.core.exceptions import CveDiffError
 from cve_diff.infra import api_status
 from cve_diff.infra.github_client import warn_if_token_missing
-from cve_diff.pipeline import Pipeline
+from cve_diff.pipeline import Pipeline, PipelineResult
 from cve_diff.report import osv_schema
 
 _PER_CVE_TIMEOUT_S = 300  # 5 min. Any upstream-slice clone finishes well under.
@@ -119,8 +119,21 @@ def _run_one(cve_id: str, output_dir: str, disk_limit_pct: float = 80.0,
     """
     t0 = time.monotonic()
     out = Path(output_dir)
-    prev_handler = signal.signal(signal.SIGALRM, _alarm_handler)
-    signal.alarm(_PER_CVE_TIMEOUT_S)
+    # SIGALRM only delivers to the main thread; if we install it in the
+    # parent process (workers <= 1 path), and the agent / DistroFetcher
+    # spins up its own ThreadPoolExecutor, SIGALRM can fire from inside
+    # an unrelated `as_completed` loop while a worker thread is the one
+    # actually stuck — the worker thread + its subprocess get orphaned.
+    # Install the alarm only when we're in a ProcessPoolExecutor child
+    # (its own process, separate signal disposition); the sequential
+    # path relies on per-subprocess timeouts (RaptorConfig.GIT_CLONE_TIMEOUT
+    # + httpx.timeout) for runaway protection.
+    import multiprocessing
+    install_alarm = multiprocessing.current_process().name != "MainProcess"
+    prev_handler = None
+    if install_alarm:
+        prev_handler = signal.signal(signal.SIGALRM, _alarm_handler)
+        signal.alarm(_PER_CVE_TIMEOUT_S)
     # Bench enables both consensus (pointer-level) and extraction
     # agreement (content-level) — the user's primary integrity signals.
     # Cost is near-zero because OSV / NVD / GitHub-commit fetches share
@@ -148,7 +161,7 @@ def _run_one(cve_id: str, output_dir: str, disk_limit_pct: float = 80.0,
                     extraction_agree=ext_agree.get("verdict") or "single_source",
                     **_agent_attrs(pipeline, model_id),
                 )
-                _write_flow(out, cve_id, r)
+                _write_flow(out, cve_id, r, pipeline=pipeline, pipeline_result=result)
                 # Save each extraction method's raw diff body as a
                 # `.patch` file so the partial/disagree cases are easy
                 # to audit. Best-effort; never blocks the bench.
@@ -182,7 +195,7 @@ def _run_one(cve_id: str, output_dir: str, disk_limit_pct: float = 80.0,
                     error_class=_classify_error(err),
                     **_agent_attrs(pipeline, model_id),
                 )
-                _write_flow(out, cve_id, r)
+                _write_flow(out, cve_id, r, pipeline=pipeline)
                 return r
             except CveDiffError as exc:
                 err = f"{type(exc).__name__}: {exc}"[:300]
@@ -194,7 +207,7 @@ def _run_one(cve_id: str, output_dir: str, disk_limit_pct: float = 80.0,
                     error_class=_classify_error(err),
                     **_agent_attrs(pipeline, model_id),
                 )
-                _write_flow(out, cve_id, r)
+                _write_flow(out, cve_id, r, pipeline=pipeline)
                 return r
             except Exception as exc:  # noqa: BLE001 — bench must not abort on one CVE
                 err = f"{type(exc).__name__}: {exc}"[:300]
@@ -206,11 +219,13 @@ def _run_one(cve_id: str, output_dir: str, disk_limit_pct: float = 80.0,
                     error_class=_classify_error(err),
                     **_agent_attrs(pipeline, model_id),
                 )
-                _write_flow(out, cve_id, r)
+                _write_flow(out, cve_id, r, pipeline=pipeline)
                 return r
     finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, prev_handler)
+        if install_alarm:
+            signal.alarm(0)
+            if prev_handler is not None:
+                signal.signal(signal.SIGALRM, prev_handler)
 
 
 def _agent_attrs(pipeline: "Pipeline", model_id: str) -> dict:
@@ -260,10 +275,27 @@ def _write_failure_md(output_dir: Path, cve_id: str, error_class: str,
         pass
 
 
-def _write_flow(output_dir: Path, cve_id: str, result: "_CveResult") -> None:
+def _write_flow(output_dir: Path, cve_id: str, result: "_CveResult",
+                pipeline: "Pipeline | None" = None,
+                pipeline_result: "PipelineResult | None" = None) -> None:
     """Emit `<cve>.flow.jsonl` + `<cve>.flow.md` for one bench result.
-    Thin adapter over the shared `cve_diff.report.flow.write_flow_files`.
+
+    When ``pipeline`` is supplied, this delegates to
+    ``cve_diff.cli.main._flow_from_pipeline`` so the bench's per-CVE
+    flow.md gets the same stage_signals + stage_status that single-run
+    flow.md already has — without that plumbing, every stages 2-5 row
+    rendered "(not reached)" even on a successful PASS.
     """
+    if pipeline is not None:
+        from cve_diff.cli.main import _flow_from_pipeline
+        _flow_from_pipeline(
+            output_dir, cve_id, pipeline,
+            ok=result.ok,
+            error_class=result.error_class,
+            pipeline_result=pipeline_result,
+        )
+        return
+    # Fallback path: pipeline not available (e.g. raised before assignment).
     from cve_diff.report.flow import write_flow_files
     write_flow_files(
         output_dir, cve_id,
@@ -640,7 +672,9 @@ def bench(
                     summary.passed += 1
                 _echo_result(i, n, r)
                 _flush()
-        summary.results.sort(key=lambda x: x.cve_id)
+    # Sort in BOTH modes so summary.json ordering is deterministic
+    # regardless of workers count (was sorted only in the parallel branch).
+    summary.results.sort(key=lambda x: x.cve_id)
 
     # Bench-layer retry pass: re-run CVEs whose error class is
     # transient (LLM outage / network blip / per-CVE timeout). Settled
@@ -711,7 +745,13 @@ def _persist_summary(summary_path: Path, sample: Path) -> None:
 
 # Error classes the bench-layer retry pass re-runs. Anything else is a
 # conclusive outcome.
-_TRANSIENT_CLASSES = frozenset({"llm_error", "PerCveTimeout"})
+# Transient = network/API blip during the agent or acquisition.
+# AcquisitionError covers "git clone died mid-fetch"; client_init_failed
+# covers a transient API auth flake (rate limit, DNS hiccup). Settled
+# outcomes (UnsupportedSource / no_evidence / budget_*) stay in.
+_TRANSIENT_CLASSES = frozenset({
+    "llm_error", "PerCveTimeout", "AcquisitionError", "client_init_failed",
+})
 
 
 def _run_bench_retry_pass(

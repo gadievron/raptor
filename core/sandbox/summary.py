@@ -269,17 +269,30 @@ def record_audit_degraded(run_dir: Path, *, reason: str,
         "instructions": instructions,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+    tmp = out.with_name(f".~{out.name}.tmp")
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
-        tmp = out.with_name(f".~{out.name}.tmp")
         tmp.write_text(
             json.dumps(payload, indent=2, ensure_ascii=True) + "\n",
             encoding="utf-8",
         )
         os.replace(tmp, out)
-    except OSError:
+    except (OSError, ValueError, TypeError):
         # Marker is best-effort. The log warning is the primary signal.
+        # Catch programming-error-shaped failures too (a future payload
+        # change with non-serialisable types would otherwise propagate
+        # and abort the caller's cleanup path while still leaking the
+        # `.~sandbox-audit-degraded.json.tmp` file).
         pass
+    finally:
+        # Ensure the tmp file doesn't leak when write_text succeeded but
+        # os.replace failed (e.g. EBUSY, EXDEV, target dir vanished).
+        # Unlink missing_ok handles both "tmp never existed" and "replace
+        # already moved it" cases as no-ops.
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:

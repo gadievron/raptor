@@ -70,8 +70,16 @@ class TestGetGitEnv:
         injected = {var: "bad" for var in RaptorConfig.DANGEROUS_ENV_VARS}
         with patch.dict(os.environ, injected):
             env = RaptorConfig.get_git_env()
+            # GIT_CONFIG_GLOBAL/SYSTEM are deliberately re-set by GIT_ENV_VARS
+            # to a safe sentinel (/dev/null) so git ignores ~/.gitconfig and
+            # /etc/gitconfig regardless of $HOME — verify the override took
+            # effect rather than asserting absence.
+            git_overrides = set(RaptorConfig.GIT_ENV_VARS)
             for var in RaptorConfig.DANGEROUS_ENV_VARS:
-                assert var not in env
+                if var in git_overrides:
+                    assert env[var] == RaptorConfig.GIT_ENV_VARS[var]
+                else:
+                    assert var not in env
 
     def test_also_strips_proxy_vars(self):
         injected = {var: "http://proxy.evil.com" for var in RaptorConfig.PROXY_ENV_VARS}

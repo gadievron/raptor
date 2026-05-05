@@ -74,7 +74,7 @@ def generate(data: dict[str, Any]) -> str:
     name = _sanitize(data.get("name", trace_id))
     steps = data.get("steps", [])
     branches = data.get("branches", [])
-    attacker_control = data.get("attacker_control", {})
+    attacker_control = data.get("attacker_control") or {}
 
 
     if not steps:

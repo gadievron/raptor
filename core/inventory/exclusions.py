@@ -88,7 +88,14 @@ def should_exclude(filepath: str, exclude_patterns: List[str]) -> bool:
         # Directory pattern (ends with /)
         if pattern.endswith('/'):
             dir_name = pattern_lower[:-1]
-            if dir_name in path_parts_lower:
+            # When the directory pattern contains glob metacharacters
+            # (e.g. ``*.egg-info/``, ``cmake-build-*/``), match each path
+            # component via fnmatch. Plain ``in`` would only catch a literal
+            # path segment named ``*.egg-info``, which never exists.
+            if any(c in dir_name for c in "*?["):
+                if any(fnmatch.fnmatch(part, dir_name) for part in path_parts_lower):
+                    return True
+            elif dir_name in path_parts_lower:
                 return True
         # Glob pattern
         elif '*' in pattern:
@@ -115,7 +122,10 @@ def match_exclusion_reason(filepath: str, exclude_patterns: List[str]) -> tuple:
         pattern_lower = pattern.lower()
         if pattern.endswith('/'):
             dir_name = pattern_lower[:-1]
-            if dir_name in path_parts_lower:
+            if any(c in dir_name for c in "*?["):
+                if any(fnmatch.fnmatch(part, dir_name) for part in path_parts_lower):
+                    return True, "pattern_match", pattern
+            elif dir_name in path_parts_lower:
                 return True, "pattern_match", pattern
         elif '*' in pattern:
             if fnmatch.fnmatch(os.path.basename(filepath_lower), pattern_lower):

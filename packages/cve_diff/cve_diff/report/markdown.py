@@ -502,10 +502,42 @@ def _commit_url(repository_url: str, sha: str) -> str:
     return f"{base}/commit/{sha}"
 
 
+def _md_safe(s: str) -> str:
+    """Escape characters that break markdown link/inline-code rendering.
+
+    `(`/`)` close link targets; backticks close inline-code; angle
+    brackets are interpreted as autolinks. Renderer-supplied URLs and
+    repo names should pass through this before landing in `[txt](url)`
+    or `` `txt` `` constructs.
+    """
+    return (
+        str(s)
+        .replace("\\", "\\\\")
+        .replace("`", "\\`")
+        .replace("(", "%28")
+        .replace(")", "%29")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def _neutralize_diff_fence(diff_text: str) -> str:
+    """Insert zero-width space inside fence-closing backtick runs.
+
+    A diff that contains ```` ``` ```` somewhere closes the surrounding
+    ```` ```diff ```` block early and turns the rest of the diff into
+    raw markdown — link/image injection from upstream commit content.
+    Inserting U+200B between any three consecutive backticks defangs the
+    fence without changing the visible characters in monospace render.
+    """
+    return diff_text.replace("```", "`​`​`")
+
+
 def render(bundle: DiffBundle, root_cause: RootCause | None = None) -> str:
     repo = bundle.repo_ref.repository_url
-    fix_url = _commit_url(repo, bundle.commit_after)
-    intro_url = _commit_url(repo, bundle.commit_before)
+    fix_url = _md_safe(_commit_url(repo, bundle.commit_after))
+    intro_url = _md_safe(_commit_url(repo, bundle.commit_before))
+    repo_safe = _md_safe(repo)
 
     diff_body = bundle.diff_text
     truncated_note = ""
@@ -532,7 +564,7 @@ def render(bundle: DiffBundle, root_cause: RootCause | None = None) -> str:
 
     return (
         f"# {bundle.cve_id}\n\n"
-        f"**Repository:** {repo}\n\n"
+        f"**Repository:** {repo_safe}\n\n"
         f"**Introduced:** [`{bundle.commit_before}`]({intro_url})\n\n"
         f"**Fixed:** [`{bundle.commit_after}`]({fix_url})\n\n"
         f"**Files changed:** {bundle.files_changed}  \n"
@@ -545,35 +577,56 @@ def render(bundle: DiffBundle, root_cause: RootCause | None = None) -> str:
         f"{files_block}"
         f"## Diff\n\n"
         f"```diff\n"
-        f"{diff_body}\n"
+        f"{_neutralize_diff_fence(diff_body)}\n"
         f"```"
         f"{truncated_note}\n"
     )
 
 
 def _render_extraction_agreement(bundle: DiffBundle) -> str:
-    """Render the clone-vs-API extraction-content cross-check block."""
+    """Render the N-source extraction-content cross-check block.
+
+    The schema changed in 2026 to ``{verdict, sources: [...], pairwise,
+    outliers}``. Iterate ``sources`` (one row per extractor) instead of
+    the old hard-coded clone-vs-API two-row layout (which read keys
+    that no longer exist and silently rendered "?" / 0 every time).
+    """
     a = bundle.extraction_agreement
     if not a:
         return ""
     verdict = a.get("verdict", "")
-    icon = {"agree": "✓", "partial": "≈", "disagree": "✗",
-            "single_source": "—"}.get(verdict, "?")
-    note = ""
-    if a.get("api_truncated"):
-        note = " _(API response truncated at ~300 files; comparison advisory)_"
-    return (
-        f"## Extraction sources\n\n"
-        f"| Method | Files | Bytes |\n"
-        f"|---|---:|---:|\n"
-        f"| Clone (`git diff fix^..fix`) | {a.get('files_clone', '?')} | "
-        f"{a.get('bytes_clone', 0):,} |\n"
-        f"| GitHub API (`/repos/{{slug}}/commits/{{sha}}`) | "
-        f"{a.get('files_api', '?')} | {a.get('bytes_api', 0):,} |\n\n"
-        f"**Agreement:** {icon} `{verdict}` — paths overlap "
-        f"{int(a.get('paths_overlap', 0) * 100)}%, byte delta "
-        f"{a.get('bytes_pct_diff', 0) * 100:.1f}%.{note}\n\n"
-    )
+    icon = {
+        "agree": "✓",
+        "majority_agree": "≈",
+        "partial": "≈",
+        "disagree": "✗",
+        "single_source": "—",
+    }.get(verdict, "?")
+    sources = a.get("sources") or []
+    if not sources:
+        return ""
+    rows = [
+        "## Extraction sources\n",
+        "| Method | Files | Bytes |",
+        "|---|---:|---:|",
+    ]
+    for s in sources:
+        name = s.get("name", "?")
+        files = s.get("files", "?")
+        bytes_ = s.get("bytes", 0)
+        rows.append(f"| {name} | {files} | {bytes_:,} |")
+    extras = []
+    pw = a.get("pairwise") or {}
+    if pw:
+        pw_text = ", ".join(f"`{k}`={v}" for k, v in pw.items())
+        extras.append(f"Pairwise: {pw_text}.")
+    outliers = a.get("outliers") or []
+    if outliers:
+        extras.append(f"Outlier sources: {', '.join(outliers)}.")
+    rows.append("")
+    rows.append(f"**Agreement:** {icon} `{verdict}`. " + " ".join(extras))
+    rows.append("")
+    return "\n".join(rows) + "\n"
 
 
 def _render_consensus(bundle: DiffBundle) -> str:

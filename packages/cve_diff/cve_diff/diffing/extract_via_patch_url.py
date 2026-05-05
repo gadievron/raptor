@@ -39,8 +39,20 @@ _MAX_BYTES = 5_000_000  # 5MB cap on patch body
 
 
 @functools.lru_cache(maxsize=1)
-def _client() -> UrllibClient:
-    return UrllibClient(user_agent=_USER_AGENT)
+def _client() -> "EgressClient":
+    """Allowlisted egress client (curated forge hosts only).
+
+    Pre-2026-05-04 this returned a bare UrllibClient with no host
+    allowlist. Combined with the substring-based forge selector that
+    accepted any URL containing ``/cgit/`` or ``git.savannah``, an
+    attacker-influenced CVE record could fetch from arbitrary HTTP
+    servers — SSRF amplifier. Now we share the agent tool layer's
+    allowlist (`_AGENT_FORGE_HOSTS`); any host not in it is refused
+    at CONNECT.
+    """
+    from core.http.egress_backend import EgressClient
+    from cve_diff.agent.tools import _AGENT_FORGE_HOSTS
+    return EgressClient(allowed_hosts=_AGENT_FORGE_HOSTS, user_agent=_USER_AGENT)
 
 
 def _patch_url_for(ref: RepoRef) -> str | None:
@@ -137,11 +149,15 @@ def extract_via_patch_url(cve_id: str, ref: RepoRef) -> DiffBundle | None:
         return None
     if resp.status != 200:
         return None
-    body = resp.body.decode("utf-8", errors="replace")
+    # Cap on raw bytes (not codepoints). The previous `len(body) >
+    # _MAX_BYTES` ran AFTER UTF-8 decode, so a 5M-codepoint string of
+    # mostly-multibyte chars could be 15-20 MB of underlying bytes;
+    # the in-memory body is also held in full before the cap. Cap
+    # bytes-side first.
+    raw = resp.body[:_MAX_BYTES]
+    body = raw.decode("utf-8", errors="replace")
     if not body or not body.strip():
         return None
-    if len(body) > _MAX_BYTES:
-        body = body[:_MAX_BYTES]
 
     parsed = _parse_unified_diff(body)
     if not parsed:

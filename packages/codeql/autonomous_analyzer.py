@@ -148,7 +148,16 @@ class AutonomousCodeQLAnalyzer:
 
         # Get rule metadata
         rules = run.get("tool", {}).get("driver", {}).get("rules", [])
-        rule = rules[rule_index] if rule_index < len(rules) else {}
+        # `rule_index < len(rules)` is true for any negative integer
+        # because len() is non-negative; Python's negative indexing then
+        # returns an unrelated rule from the end of the list. Bound check
+        # explicitly + isinstance to refuse string ruleIndex (some
+        # malformed SARIF emitters produce them).
+        rule = (
+            rules[rule_index]
+            if isinstance(rule_index, int) and 0 <= rule_index < len(rules)
+            else {}
+        )
 
         rule_name = rule.get("name", rule_id)
 

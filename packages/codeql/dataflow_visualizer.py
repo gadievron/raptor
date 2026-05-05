@@ -161,7 +161,9 @@ class DataflowVisualizer:
                 # Validate file path to prevent directory traversal
                 file_path = (repo_path / node['file']).resolve()
                 repo_resolved = repo_path.resolve()
-                if not str(file_path).startswith(str(repo_resolved)):
+                try:
+                    file_path.relative_to(repo_resolved)
+                except ValueError:
                     node['code_context'] = f"Access denied: {node['file']}"
                     continue
                 

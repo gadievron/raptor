@@ -478,5 +478,6 @@ class AgentLoop:
             tokens=tokens,
             cost_usd=cost_usd,
             elapsed_s=elapsed_s,
+            verified_candidates=verified_candidates,
         )
         return out_ok

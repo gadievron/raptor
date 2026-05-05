@@ -37,7 +37,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from core.git import clone_repository, fetch_commit
+from core.git import clone_repository, fetch_commit, get_safe_git_env
 
 from cve_diff.core.exceptions import AcquisitionError
 from cve_diff.core.models import RepoRef
@@ -63,6 +63,7 @@ def _commit_exists(repo_path: Path, sha: str) -> bool:
             capture_output=True,
             check=False,
             timeout=30,
+            env=get_safe_git_env(),
         )
     except subprocess.TimeoutExpired:
         return False
@@ -89,6 +90,10 @@ def _clean_dest(dest: Path) -> None:
         raise ValueError(f"_clean_dest refusing dangerous path: {dest!r}")
     if dest.is_symlink():
         raise ValueError(f"_clean_dest refusing symlink: {dest!r}")
+    # `iterdir()` raises NotADirectoryError on regular files. Refuse
+    # explicitly so the error is structured rather than opaque.
+    if dest.exists() and not dest.is_dir():
+        raise ValueError(f"_clean_dest refusing non-directory: {dest!r}")
     if dest.exists() and any(dest.iterdir()):
         subprocess.run(
             ["rm", "-rf", str(dest)],

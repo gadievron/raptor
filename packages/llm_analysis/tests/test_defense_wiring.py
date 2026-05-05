@@ -91,11 +91,18 @@ class TestTaskProfilePropagation:
         assert "<untrusted-" in user_msg
         assert "strcpy" in user_msg
 
-    def test_analysis_task_passthrough_system_has_no_priming(self):
+    def test_analysis_task_passthrough_system_has_passthrough_priming(self):
+        # PASSTHROUGH now ships a natural-language priming block that
+        # describes the `--- kind ---` / `name (untrusted): value`
+        # boundaries (smaller models still need to know which content
+        # is untrusted; pre-fix priming was empty for PASSTHROUGH and
+        # those models had no cue at all). The XML/nonce structural
+        # references must NOT appear — this profile doesn't emit them.
         task = AnalysisTask(profile=PASSTHROUGH)
         system = task.get_system_prompt()
-        assert "attacker may attempt" not in system
+        assert "attacker may attempt" in system
         assert "16-character hex" not in system
+        assert "<untrusted-" not in system
 
     def test_analysis_task_conservative_system_has_priming(self):
         task = AnalysisTask(profile=CONSERVATIVE)
@@ -373,7 +380,13 @@ class TestDispatchTelemetryRecording:
 
 class TestProfileConsistency:
 
-    def test_passthrough_system_prompts_have_no_priming(self):
+    def test_passthrough_system_prompts_omit_xml_nonce_priming(self):
+        # PASSTHROUGH now carries its own natural-language priming
+        # (boundary description + data-not-instructions rule), but it
+        # MUST NOT reference the XML/nonce structure that the
+        # disciplined profiles use — this profile doesn't emit those
+        # tags, and including the reference would mis-train the model
+        # to expect a structure it won't see.
         tasks = [
             AnalysisTask(profile=PASSTHROUGH),
             ExploitTask(profile=PASSTHROUGH),
@@ -384,7 +397,8 @@ class TestProfileConsistency:
         ]
         for task in tasks:
             system = task.get_system_prompt()
-            assert "16-character hex" not in system, f"{task.name} has priming in passthrough"
+            assert "16-character hex" not in system, f"{task.name} leaks nonce priming"
+            assert "<untrusted-" not in system, f"{task.name} leaks XML structure"
 
     def test_conservative_system_prompts_have_priming(self):
         tasks = [

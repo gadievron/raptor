@@ -523,7 +523,7 @@ class TestSlotXmlInjection:
         assert "< b" not in user
 
     def test_passthrough_slots_are_plain_text(self):
-        """PASSTHROUGH renders slots as 'name: value' — no XML wrapper."""
+        """PASSTHROUGH renders slots as 'name (trust): value' — no XML wrapper."""
         bundle = build_prompt(
             system="x", profile=PASSTHROUGH,
             untrusted_blocks=(UntrustedBlock(content="c", kind="k", origin="o"),),
@@ -531,7 +531,10 @@ class TestSlotXmlInjection:
         )
         user = next(m.content for m in bundle.messages if m.role == "user")
         assert "<slots>" not in user
-        assert "safe_key: safe_val" in user
+        # Trust-tagged plain-text rendering so the model can distinguish
+        # untrusted slot values from trusted ones in the PASSTHROUGH
+        # fallback (matches the structured envelope's `trust=` attr).
+        assert "safe_key (untrusted): safe_val" in user
 
 
 # --- Newline preservation in envelope content ---

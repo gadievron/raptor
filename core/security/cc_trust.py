@@ -141,10 +141,21 @@ def _read_capped(path: Path) -> Optional[bytes]:
     """Read up to _MAX_CONFIG_BYTES+1. None on oversized/non-regular/error.
 
     O_NONBLOCK + fstat(S_ISREG) closes the FIFO-DoS and stat-vs-open TOCTOU
-    holes. Broad except for any I/O surprise — fail-closed is the safe stance.
+    holes. O_NOFOLLOW closes the symlink-redirect hole — the caller's
+    `_check_cached` symlink branch records symlinks as findings without
+    reading them, but a TOCTOU race could swap a regular file for a
+    symlink between the symlink check and the open here. With
+    O_NOFOLLOW the open fails with ELOOP and we fail-closed (return
+    None). Broad except for any I/O surprise — fail-closed is the safe
+    stance.
     """
     try:
-        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        fd = os.open(
+            str(path),
+            os.O_RDONLY
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
     except Exception:
         return None
     data: Optional[bytes] = None
@@ -279,15 +290,29 @@ def check_repo_claude_trust(repo_path: str, trust_override: Optional[bool] = Non
         return False
     if trust_override is None:
         trust_override = _trust_override_set
-    return _check_cached(resolved, trust_override)
+    scans, any_blocking = _scan_cached(resolved)
+    # Print side-effects live OUTSIDE the cache. Pre-fix the print() calls
+    # were inside `_check_cached` which was @lru_cache'd — so the operator
+    # only saw the warning on the FIRST identical call per process; every
+    # subsequent invocation silently returned the cached verdict with no
+    # visible diagnostic. Re-emit the rendering on each invocation so the
+    # warning isn't suppressed by cache-friendly callers (e.g. an
+    # orchestrator that re-checks the same repo per finding).
+    if scans:
+        target = Path(resolved)
+        _render_scan_report(target, scans, any_blocking, trust_override)
+    return any_blocking and not trust_override
 
 
 @lru_cache(maxsize=64)
-def _check_cached(resolved_path: str, trust_override: bool) -> bool:
-    """Cached scan + render. Don't call directly — use check_repo_claude_trust()."""
+def _scan_cached(resolved_path: str) -> Tuple[Tuple["FileScan", ...], bool]:
+    """Pure scan: returns (scans, any_blocking). Cached because filesystem
+    state for a given resolved path doesn't change within a session.
+    Side-effect free so repeated cache hits don't suppress operator-
+    visible warnings (handled in the caller)."""
     target = Path(resolved_path)
     if target == _RAPTOR_DIR:
-        return False
+        return ((), False)
 
     candidates = [
         ("settings", target / ".claude" / "settings.json"),
@@ -296,7 +321,7 @@ def _check_cached(resolved_path: str, trust_override: bool) -> bool:
     ]
     present = [(kind, p) for kind, p in candidates if _path_present(p)]
     if not present:
-        return False
+        return ((), False)
 
     scans: List[FileScan] = []
     for kind, path in present:
@@ -316,13 +341,15 @@ def _check_cached(resolved_path: str, trust_override: bool) -> bool:
         elif scanned.findings:
             scans.append(scanned)
 
-    if not scans:
-        return False  # nothing actionable → silent
-
     any_blocking = any(s.has_blocking() for s in scans)
-    safe_target = _safe(str(target))
+    return (tuple(scans), any_blocking)
 
-    # Heading
+
+def _render_scan_report(target: Path, scans, any_blocking: bool,
+                        trust_override: bool) -> None:
+    """Pure rendering — separated from `_scan_cached` so the cache
+    doesn't suppress the operator-visible warning on re-invocation."""
+    safe_target = _safe(str(target))
     if any_blocking:
         if trust_override:
             print(f"raptor: {safe_target} has dangerous Claude Code config "
@@ -332,7 +359,6 @@ def _check_cached(resolved_path: str, trust_override: bool) -> bool:
     else:
         print(f"raptor: {safe_target} has Claude Code config:")
 
-    # Per-file blocks with aligned label columns
     for fs in scans:
         try:
             rel = fs.path.relative_to(target)
@@ -342,5 +368,3 @@ def _check_cached(resolved_path: str, trust_override: bool) -> bool:
         label_w = max(len(f.label) for f in fs.findings) + 2
         for f in fs.findings:
             print(f"    {f.label:<{label_w}}{f.value}")
-
-    return any_blocking and not trust_override

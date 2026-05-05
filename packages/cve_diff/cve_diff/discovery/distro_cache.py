@@ -146,20 +146,21 @@ def _fetch_ubuntu(cve_id: str) -> dict[str, Any]:
         data = resp.json()
     except Exception as exc:
         return {"error": f"non-json response: {type(exc).__name__}"}
+    if not isinstance(data, dict):
+        return {"error": f"non-dict response: {type(data).__name__}"}
     cves = data.get("cves") or []
     match = next((c for c in cves if (c.get("id") or "").upper() == cve_id.upper()), None)
     if match is None:
         return {"error": "http 404"}
-    refs = list(match.get("references") or [])
-    for note in match.get("notes") or []:
-        text = note.get("note") if isinstance(note, dict) else str(note)
-        if isinstance(text, str):
-            refs.append(text)
+    refs = [r for r in (match.get("references") or [])
+            if isinstance(r, str) and r.startswith(("http://", "https://"))]
     status = match.get("status") or None
     fix_version = None
     pkgs = match.get("packages") or []
     if pkgs and isinstance(pkgs[0], dict):
-        fix_version = pkgs[0].get("statuses", [{}])[0].get("description") if pkgs[0].get("statuses") else None
+        statuses = pkgs[0].get("statuses") or []
+        if statuses and isinstance(statuses[0], dict):
+            fix_version = statuses[0].get("description")
     return {"status": status, "fix_version": fix_version, "references": refs[:50]}
 
 
@@ -172,6 +173,8 @@ def _fetch_redhat(cve_id: str) -> dict[str, Any]:
         data = resp.json()
     except Exception as exc:
         return {"error": f"non-json response: {type(exc).__name__}"}
+    if not isinstance(data, dict):
+        return {"error": f"non-dict response: {type(data).__name__}"}
     refs = list(data.get("references") or [])
     affected = data.get("affected_release") or []
     fix_version = affected[0].get("package") if affected and isinstance(affected[0], dict) else None

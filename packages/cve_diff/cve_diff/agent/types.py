@@ -22,13 +22,22 @@ class AgentContext:
 
 @dataclass(frozen=True, slots=True)
 class AgentOutput:
-    """Success. ``value`` is a ``PatchTuple`` for the discover path."""
+    """Success. ``value`` is a ``PatchTuple`` for the discover path.
+
+    ``verified_candidates`` mirrors the same field on AgentSurrender —
+    every (slug, sha) pair the loop confirmed via ``gh_commit_detail``
+    during this run, regardless of whether the agent submitted one of
+    them or a different one. The pipeline's post-submit retry uses this
+    so it can hand the agent a "you verified these alternatives in your
+    last run, try a different one" prompt.
+    """
     value: Any
     rationale: str
     tool_calls: tuple[str, ...] = field(default_factory=tuple)
     tokens: int = 0
     cost_usd: float = 0.0
     elapsed_s: float = 0.0
+    verified_candidates: tuple[tuple[str, str], ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)

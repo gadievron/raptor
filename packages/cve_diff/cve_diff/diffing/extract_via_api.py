@@ -39,7 +39,7 @@ from cve_diff.diffing import shape_dynamic
 from cve_diff.infra import github_client
 
 # Same SHA acceptance as commit_resolver._SHA_RE — keep in sync.
-_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
+_SHA_RE = re.compile(r"[0-9a-f]{7,40}", re.IGNORECASE | re.ASCII)
 _INVALID_LITERALS = {"head", "main", "master", "trunk", "0", "none", "null", ""}
 
 
@@ -72,7 +72,7 @@ def extract_via_api(
       via the empty-tree-SHA fallback; here we propagate as a clear error).
     """
     sha = (ref.fix_commit or "").strip().lower()
-    if sha in _INVALID_LITERALS or not _SHA_RE.match(sha):
+    if sha in _INVALID_LITERALS or not _SHA_RE.fullmatch(sha):
         raise AnalysisError(
             f"{cve_id}: extract_via_api refused — fix_commit "
             f"{ref.fix_commit!r} is not a SHA (Bug #12 defense)"
@@ -93,12 +93,13 @@ def extract_via_api(
         )
 
     parents = payload.get("parents") or []
-    if not parents or not isinstance(parents[0], dict) or not parents[0].get("sha"):
+    parent_sha_raw = parents[0].get("sha") if parents and isinstance(parents[0], dict) else None
+    if not isinstance(parent_sha_raw, str):
         raise AnalysisError(
             f"{cve_id}: commit {slug}@{sha[:12]} has no parent — "
             f"can't compute fix^..fix via API (root commit)"
         )
-    parent_sha = parents[0]["sha"].lower()
+    parent_sha = parent_sha_raw.lower()
 
     files_raw = payload.get("files") or []
     if not isinstance(files_raw, list):

@@ -19,10 +19,12 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.git import get_safe_git_env
+
 from cve_diff.core.exceptions import IdenticalCommitsError
 from cve_diff.core.models import CommitSha
 
-_SHA_RE = re.compile(r"^[a-f0-9]{7,40}$", re.IGNORECASE)
+_SHA_RE = re.compile(r"[a-f0-9]{7,40}", re.IGNORECASE | re.ASCII)
 _INVALID_LITERALS = frozenset({"0", "none", "null", ""})
 # git's canonical empty-tree SHA; `git diff <empty-tree>..<root-commit>`
 # produces the full-file-as-added diff. Used when a fix commit is the first
@@ -42,7 +44,7 @@ class CommitResolver:
         normalized = str(commit).strip().lower()
         if normalized in _INVALID_LITERALS:
             return False
-        return bool(_SHA_RE.match(normalized))
+        return bool(_SHA_RE.fullmatch(normalized))
 
     def validate_different(self, before: str | None, after: str | None) -> None:
         if before is None or after is None:
@@ -64,6 +66,7 @@ class CommitResolver:
                 text=True,
                 check=False,
                 timeout=30,
+                env=get_safe_git_env(),
             )
         except subprocess.TimeoutExpired as exc:
             raise ValueError(f"git rev-parse {clean!r} timed out") from exc
@@ -89,6 +92,7 @@ class CommitResolver:
                 text=True,
                 check=False,
                 timeout=30,
+                env=get_safe_git_env(),
             )
         except subprocess.TimeoutExpired as exc:
             raise ValueError(
@@ -111,10 +115,16 @@ class CommitResolver:
                 text=True,
                 check=False,
                 timeout=30,
+                env=get_safe_git_env(),
             )
         except subprocess.TimeoutExpired:
             return False
         if result.returncode != 0:
             return False
         roots = {line.strip() for line in result.stdout.splitlines() if line.strip()}
-        return sha in roots
+        # `rev-list` always returns full 40-char SHAs; the caller may pass
+        # a 7-char short SHA. Match either way so the empty-tree fallback
+        # fires even when only a short SHA is available (e.g. CVE-2024-3094
+        # cited via 7-char short).
+        sha_lc = sha.lower()
+        return any(r.lower().startswith(sha_lc) or sha_lc.startswith(r.lower()) for r in roots)

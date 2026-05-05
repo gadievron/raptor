@@ -11,6 +11,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from core.git import get_safe_git_env
+
 from cve_diff.core.exceptions import AnalysisError
 from cve_diff.core.models import CommitSha, DiffBundle, FileChange, RepoRef
 from cve_diff.core.path_classifier import is_test_path
@@ -61,6 +63,7 @@ def extract_diff(
         capture_output=True,
         timeout=timeout_s,
         check=False,
+        env=get_safe_git_env(),
     )
     if completed.returncode != 0:
         raise RuntimeError(
@@ -136,6 +139,7 @@ def _show_blob(repo: Path, sha: CommitSha, path: str, timeout_s: int,
     completed = subprocess.run(
         ["git", "-C", str(repo), "show", f"{sha}:{path}"],
         capture_output=True, timeout=timeout_s, check=False,
+        env=get_safe_git_env(),
     )
     if completed.returncode != 0:
         return None
@@ -191,6 +195,7 @@ def _list_files(
         capture_output=True,
         timeout=timeout_s,
         check=False,
+        env=get_safe_git_env(),
     )
     if completed.returncode != 0:
         return []

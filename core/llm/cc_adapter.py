@@ -145,6 +145,12 @@ def parse_cc_freeform(stdout: str, stderr: str = "") -> dict[str, Any]:
         envelope = json.loads(content)
         if isinstance(envelope, dict):
             parsed: dict[str, Any] = {"content": envelope.get("result", "")}
+            # An envelope with is_error=true (or non-empty error) reports an
+            # in-band failure; without this check, "" content would surface
+            # as if it were a successful empty response. parse_cc_structured
+            # already checks this — keep behaviour symmetric here.
+            if envelope.get("is_error") is True or envelope.get("error"):
+                parsed["error"] = envelope.get("error") or "claude -p reported is_error=true"
             extract_envelope_metadata(envelope, parsed)
             return parsed
     except json.JSONDecodeError:

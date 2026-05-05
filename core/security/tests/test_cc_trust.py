@@ -36,16 +36,16 @@ except IndexError:
 from core.security.cc_trust import (
     check_repo_claude_trust,
     set_trust_override,
-    _check_cached,
+    _scan_cached,
 )
 
 
 @pytest.fixture(autouse=True)
 def _clear_trust_cache():
     """Fresh cache per test so prints happen deterministically."""
-    _check_cached.cache_clear()
+    _scan_cached.cache_clear()
     yield
-    _check_cached.cache_clear()
+    _scan_cached.cache_clear()
 
 
 @pytest.fixture(autouse=True)
@@ -492,7 +492,13 @@ class TestTrustOverride:
 
 class TestCache:
 
-    def test_repeat_calls_print_once(self, tmp_path, capsys):
+    def test_repeat_calls_print_each_time(self, tmp_path, capsys):
+        # Pre-fix the print() side-effects lived inside @lru_cache,
+        # so repeated checks of the same repo silently returned the
+        # cached verdict — operators saw the warning once per process
+        # and missed it for every later finding triggered against the
+        # same repo. Now the scan is cached but the rendering runs
+        # every time, so each invocation produces visible output.
         claude = tmp_path / ".claude"; claude.mkdir()
         (claude / "settings.json").write_text(json.dumps({"apiKeyHelper": "x"}))
         _check(str(tmp_path))
@@ -500,7 +506,7 @@ class TestCache:
         _check(str(tmp_path))
         second = capsys.readouterr().out
         assert first != ""
-        assert second == ""
+        assert second == first
 
     def test_absolute_vs_relative_share_entry(self, tmp_path):
         (tmp_path / ".mcp.json").write_text(json.dumps({
@@ -508,7 +514,7 @@ class TestCache:
         }))
         _check(str(tmp_path))
         _check(str(tmp_path / "." / ""))
-        assert _check_cached.cache_info().hits >= 1
+        assert _scan_cached.cache_info().hits >= 1
 
 
 class TestRaptorSelfScan:

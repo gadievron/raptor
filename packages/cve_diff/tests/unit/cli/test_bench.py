@@ -34,8 +34,10 @@ def test_error_classifier(err: str, expected: str) -> None:
 
 
 def test_transient_classes_set() -> None:
-    """Bench-retry trigger set: only LLM/timeout. Settled outcomes excluded."""
-    assert _TRANSIENT_CLASSES == frozenset({"llm_error", "PerCveTimeout"})
+    """Bench-retry trigger set: LLM/timeout/network blip. Settled outcomes excluded."""
+    assert _TRANSIENT_CLASSES == frozenset({
+        "llm_error", "PerCveTimeout", "AcquisitionError", "client_init_failed",
+    })
     # These must NOT be in the retry set:
     for settled in ("UnsupportedSource", "no_evidence", "budget_cost_usd",
                     "budget_iterations", "budget_tokens", "PASS"):

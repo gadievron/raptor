@@ -95,6 +95,7 @@ import ctypes.util
 import json
 import logging
 import os
+import time
 import platform
 import signal
 import struct
@@ -1110,6 +1111,16 @@ def trace(target_pid: int, run_dir: Path,
     # when the set is empty.
     traced = {target_pid}
 
+    # Parent-death watchdog. The tracer subprocess has a parent
+    # (cve-diff / sandbox spawn / etc.); if that parent dies abnormally,
+    # the tracer should exit rather than continue running orphaned. We
+    # poll `os.getppid()` between WNOHANG-waitpids; if it ever returns 1
+    # (re-parented to init / pid namespace init), bail. WNOHANG + sleep
+    # is mandatory for the watchdog to fire — a blocking `waitpid(-1, 0)`
+    # could sit forever waiting for a tracee event that may never come
+    # (uninterruptible-sleep tracee).
+    initial_ppid = os.getppid()
+
     while traced:
         try:
             # waitpid(-1) catches events from ANY tracee — required for
@@ -1127,7 +1138,7 @@ def trace(target_pid: int, run_dir: Path,
             # in the dispatch below would mistakenly add them to the
             # traced set). Adjust the wait pattern (e.g. switch to
             # waitid with P_PID per known tracee) if that day comes.
-            wpid, status = os.waitpid(-1, 0)
+            wpid, status = os.waitpid(-1, os.WNOHANG)
         except InterruptedError:
             continue
         except ChildProcessError:
@@ -1136,6 +1147,22 @@ def trace(target_pid: int, run_dir: Path,
         except OSError as e:
             logger.error(f"tracer: waitpid failed: {e}")
             return 4
+
+        if wpid == 0:
+            # No event ready. Check parent liveness, then sleep briefly
+            # so the loop doesn't busy-spin. Sleep is short enough that
+            # event latency stays tight (records still appear within
+            # ~50ms of the syscall) but long enough to keep CPU usage
+            # near zero when the workload is idle.
+            current_ppid = os.getppid()
+            if current_ppid != initial_ppid or current_ppid == 1:
+                logger.warning(
+                    f"tracer: parent died (ppid was {initial_ppid}, "
+                    f"now {current_ppid}); exiting"
+                )
+                return 0
+            time.sleep(0.05)
+            continue
 
         _handle_waitpid_event(
             wpid, status, traced, target_pid, arch_info,
@@ -1386,14 +1413,18 @@ def _handle_waitpid_event(
     # stay stopped). All other unrelated signals are passed
     # through to preserve original signal semantics.
     #
-    # M1: also `traced.add(wpid)` here — defensive against the
-    # FORK_EVENT-add path missing this PID (e.g. GETEVENTMSG
-    # failed). Set is idempotent so a duplicate add is harmless;
-    # the worst-case-without-this is the loop terminating with
-    # tracees still alive, leading to SIGSYS/SIGKILL of the
-    # orphaned tracee mid-workflow.
+    # The kernel always delivers the parent's PTRACE_EVENT_FORK /
+    # VFORK / CLONE BEFORE the child's auto-attached SIGSTOP, so by
+    # the time we see the child's SIGSTOP it should already be in
+    # `traced` from the FORK-event branch above. Pre-fix this branch
+    # also did `traced.add(wpid)` "defensively" against a missed
+    # GETEVENTMSG, but that masked real GETEVENTMSG bugs (we'd never
+    # know the FORK path was failing) AND would silently grow the
+    # traced set with any SIGSTOP'd pid that wpid != target_pid even
+    # if the FORK event was never seen. Trust the kernel ordering;
+    # if the FORK path fails, surface it via the missing-from-traced
+    # signal rather than papering over it.
     if sig == signal.SIGSTOP and wpid != target_pid:
-        traced.add(wpid)
         ptrace_cont(wpid, 0)
     else:
         ptrace_cont(wpid, sig if sig != signal.SIGTRAP else 0)

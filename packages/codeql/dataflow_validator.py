@@ -213,7 +213,8 @@ class DataflowValidator:
             self.logger.warning(f"Failed to extract dataflow path: {e}")
             return None
 
-    def read_source_context(self, file_path: str, line: int, context_lines: int = 10) -> str:
+    def read_source_context(self, file_path: str, line: int, context_lines: int = 10,
+                            repo_root: Optional[Path] = None) -> str:
         """
         Read source code context around a location.
 
@@ -221,12 +222,20 @@ class DataflowValidator:
             file_path: Path to source file
             line: Line number
             context_lines: Lines before/after to include
+            repo_root: When provided, refuse to read files outside this root.
+                Callers passing SARIF-derived paths should always set this.
 
         Returns:
             Source code snippet with context
         """
         try:
-            with open(file_path) as f:
+            resolved = Path(file_path).resolve()
+            if repo_root is not None:
+                try:
+                    resolved.relative_to(repo_root.resolve())
+                except ValueError:
+                    return ""
+            with open(resolved) as f:
                 lines = f.readlines()
 
             start = max(0, line - context_lines - 1)
@@ -278,7 +287,8 @@ class DataflowValidator:
         blocks = []
         all_steps = [dataflow.source] + dataflow.intermediate_steps + [dataflow.sink]
         for i, step in enumerate(all_steps):
-            ctx = self.read_source_context(str(repo_path / step.file_path), step.line, context_lines=5)
+            ctx = self.read_source_context(str(repo_path / step.file_path), step.line, context_lines=5,
+                                            repo_root=repo_path)
             blocks.append(UntrustedBlock(
                 content=f"({step.label})\n{ctx}",
                 kind=f"dataflow-step-{i}",
@@ -383,11 +393,13 @@ class DataflowValidator:
 
         source_context = self.read_source_context(
             str(repo_path / dataflow.source.file_path),
-            dataflow.source.line
+            dataflow.source.line,
+            repo_root=repo_path,
         )
         sink_context = self.read_source_context(
             str(repo_path / dataflow.sink.file_path),
-            dataflow.sink.line
+            dataflow.sink.line,
+            repo_root=repo_path,
         )
 
         system = (
@@ -418,7 +430,8 @@ class DataflowValidator:
             origin=f"{dataflow.source.file_path}:{dataflow.source.line}",
         ))
         for i, step in enumerate(dataflow.intermediate_steps, 1):
-            step_ctx = self.read_source_context(str(repo_path / step.file_path), step.line)
+            step_ctx = self.read_source_context(str(repo_path / step.file_path), step.line,
+                                                 repo_root=repo_path)
             blocks.append(UntrustedBlock(
                 content=step_ctx,
                 kind=f"dataflow-step-{i}-code",

@@ -26,10 +26,11 @@ from typing import Annotated
 import typer
 
 from cve_diff import __version__
-from cve_diff.analysis.analyzer import AnalysisError, RootCauseAnalyzer
+from cve_diff.analysis.analyzer import RootCauseAnalysisError, RootCauseAnalyzer
 from cve_diff.cli.bench import bench as _bench_cmd
 from cve_diff.core.exceptions import (
     AcquisitionError,
+    AnalysisError,
     DiscoveryError,
     IdenticalCommitsError,
     UnsupportedSource,
@@ -276,6 +277,18 @@ def run(
     output_dir.mkdir(parents=True, exist_ok=True)
     tmp_ctx: tempfile.TemporaryDirectory | None = None
     if work_dir is None:
+        if keep_workdir:
+            # `--keep-workdir` without `--work-dir` is meaningless: even if
+            # we suppress tmp_ctx.cleanup(), TemporaryDirectory's GC
+            # finalizer deletes the dir on collection. Refuse so the user
+            # gets a clear error rather than the silent "kept dir vanished
+            # anyway" surprise.
+            typer.echo(
+                "--keep-workdir requires --work-dir; the default temp "
+                "directory is auto-deleted regardless of this flag.",
+                err=True,
+            )
+            raise typer.Exit(code=2)
         tmp_ctx = tempfile.TemporaryDirectory(prefix="cve-diff-")
         work = Path(tmp_ctx.name)
     else:
@@ -411,7 +424,7 @@ def run(
                     f"root cause: {rc.cwe_id} ({rc.vulnerability_type}) "
                     f"conf={rc.confidence:.2f} tokens={rc.input_tokens}+{rc.output_tokens}"
                 )
-            except (AnalysisError, LLMCallFailed) as exc:
+            except (RootCauseAnalysisError, LLMCallFailed) as exc:
                 typer.echo(f"root-cause analysis failed: {exc}", err=True)
                 raise typer.Exit(code=9) from exc
 

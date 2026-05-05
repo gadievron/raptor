@@ -36,8 +36,22 @@ def _load_template(name: str) -> Template:
     return Template((_PROMPTS_DIR / name).read_text(encoding="utf-8"))
 
 
-class AnalysisError(RuntimeError):
-    pass
+class RootCauseAnalysisError(RuntimeError):
+    """Raised by the LLM-driven root-cause analyser only.
+
+    Renamed from ``AnalysisError`` to avoid collision with
+    ``cve_diff.core.exceptions.AnalysisError`` (which the pipeline raises
+    for shape rejection / extraction failures). The CLI used to import
+    *this* class and try to catch the pipeline's exceptions with it —
+    they were two different classes with the same name, so the CLI's
+    typed-exception handler never fired and every notes-only/packaging-
+    only rejection crashed uncaught.
+    """
+
+
+# Backwards-compat alias for any external caller that still imports
+# the old name. New code should use RootCauseAnalysisError directly.
+AnalysisError = RootCauseAnalysisError
 
 
 @dataclass(frozen=True)

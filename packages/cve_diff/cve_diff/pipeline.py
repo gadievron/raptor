@@ -189,7 +189,18 @@ class Pipeline:
                 return self._acquire_to_render(
                     cve_id, ref, agent_result, work_dir
                 )
-            except (AcquisitionError, AnalysisError, IdenticalCommitsError) as exc:
+            # Also catch ValueError from commit_resolver (rev-parse failure
+            # on stale SHA) and RuntimeError from transient mid-fetch git
+            # errors — both are recoverable by re-running the agent with
+            # a different candidate, so they belong in the post-submit
+            # retry path rather than being a hard pipeline crash.
+            except (
+                AcquisitionError,
+                AnalysisError,
+                IdenticalCommitsError,
+                ValueError,
+                RuntimeError,
+            ) as exc:
                 if attempt == _MAX_POST_SUBMIT_RETRIES:
                     raise
                 self._emit("post_submit_retry", "start", {
@@ -445,7 +456,10 @@ class Pipeline:
         # UnsupportedSource = closed-source, no_evidence = exhausted
         # search, model_stopped_without_submit = bug, client_init_failed
         # = config error.
-        if result.reason not in ("budget_cost_usd", "budget_iterations", "budget_tokens", "budget_s", "llm_error"):
+        # `budget_tokens` is documented but never emitted by the agent
+        # loop (see AgentLoop.surrender — only cost / iterations / s).
+        # Kept as an alias the loop *could* emit in a future change.
+        if result.reason not in ("budget_cost_usd", "budget_iterations", "budget_s", "llm_error"):
             return None
         if not result.verified_candidates:
             return None
@@ -475,11 +489,13 @@ class Pipeline:
         agent to pick a *different* candidate or surrender. Same
         retry-budget shape as `_maybe_retry` via `_focused_retry`.
         """
-        prior_verified: tuple[tuple[str, str], ...] = ()
-        if isinstance(prior_result, AgentSurrender):
-            prior_verified = prior_result.verified_candidates or ()
-        # AgentOutput doesn't carry verified_candidates today; if we
-        # ever extend it to do so, pull from there too.
+        # Both AgentOutput and AgentSurrender carry verified_candidates
+        # since 2026-05; the post-submit-retry path is reached when the
+        # agent submitted (AgentOutput) but stages 2-5 failed, so the
+        # prior_result is AgentOutput in this code path.
+        prior_verified: tuple[tuple[str, str], ...] = (
+            getattr(prior_result, "verified_candidates", ()) or ()
+        )
 
         candidates_str = (
             "\n".join(f"  - {slug} @ {sha[:12]}" for slug, sha in prior_verified[:5])

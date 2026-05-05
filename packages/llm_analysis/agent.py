@@ -142,7 +142,9 @@ class VulnerabilityContext:
             clean_path = file_uri.replace("file://", "")
             file_path = (self.repo_path / clean_path).resolve()
 
-            if not str(file_path).startswith(str(self.repo_path.resolve())):
+            try:
+                file_path.relative_to(self.repo_path.resolve())
+            except ValueError:
                 return f"[Path traversal blocked: {file_uri}]"
 
             if not file_path.exists():

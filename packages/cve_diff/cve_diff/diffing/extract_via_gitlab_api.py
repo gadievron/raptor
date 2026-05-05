@@ -31,6 +31,8 @@ from cve_diff.core.models import CommitSha, DiffBundle, FileChange, RepoRef
 from cve_diff.core.path_classifier import is_test_path
 from cve_diff.diffing import shape_dynamic
 from cve_diff.diffing.extract_via_api import (
+    _INVALID_LITERALS,
+    _SHA_RE,
     extract_via_api as _extract_via_api_github,
 )
 
@@ -40,13 +42,40 @@ _USER_AGENT = "cve-diff-gitlab/0.1"
 
 
 @functools.lru_cache(maxsize=1)
-def _client() -> UrllibClient:
-    return UrllibClient(user_agent=_USER_AGENT)
+def _client() -> "EgressClient":
+    """Allowlisted egress client (curated GitLab hosts only).
 
+    Pre-2026-05-04 this returned a bare UrllibClient with no host
+    allowlist. Combined with the very loose `_GITLAB_HOST_RE`
+    (``gitlab.<anything>``) that meant a CVE record citing
+    `gitlab.localhost` or `gitlab.evil.com` would fetch from those
+    hosts directly — SSRF amplifier. Now we share the same
+    `_AGENT_FORGE_HOSTS` allowlist the agent tool layer uses; every
+    GitLab host we care about is in it, anything else gets refused
+    at CONNECT.
+    """
+    from core.http.egress_backend import EgressClient
+    from cve_diff.agent.tools import _AGENT_FORGE_HOSTS
+    return EgressClient(allowed_hosts=_AGENT_FORGE_HOSTS, user_agent=_USER_AGENT)
+
+
+# Only accept hosts on the curated GitLab allowlist. The previous
+# `gitlab\.[^/]+` pattern matched any subdomain; combined with a
+# bare UrllibClient that allowed unconstrained outbound requests, a
+# CVE record citing `gitlab.localhost` / `gitlab.evil.com` would fetch.
+_GITLAB_ALLOWED_HOSTS = frozenset({
+    "gitlab.com",
+    "gitlab.freedesktop.org",
+    "gitlab.kde.org",
+    "gitlab.gnome.org",
+    "gitlab.kitware.com",
+    "gitlab.alpinelinux.org",
+    "gitlab.matrix.org",
+    "gitlab.suse.com",
+})
 
 _GITLAB_HOST_RE = re.compile(
-    r"^(https?://(?:gitlab\.com|gitlab\.[^/]+))/"
-    r"([^?#]+?)/?$",
+    r"^(https?://([\w.-]+))/([^?#]+?)/?$",
     re.IGNORECASE,
 )
 
@@ -63,8 +92,9 @@ def _gitlab_host_and_slug(repo_url: str) -> tuple[Optional[str], Optional[str]]:
     m = _GITLAB_HOST_RE.match(repo_url.strip())
     if not m:
         return None, None
-    host = m.group(1)
-    slug = m.group(2)
+    host, hostname, slug = m.group(1), m.group(2).lower(), m.group(3)
+    if hostname not in _GITLAB_ALLOWED_HOSTS:
+        return None, None
     if slug.endswith(".git"):
         slug = slug[:-4]
     return host, slug
@@ -93,6 +123,11 @@ def extract_via_gitlab_api(cve_id: str, ref: RepoRef) -> DiffBundle:
         )
 
     sha = (ref.fix_commit or "").strip().lower()
+    if sha in _INVALID_LITERALS or not _SHA_RE.fullmatch(sha):
+        raise AnalysisError(
+            f"{cve_id}: extract_via_gitlab_api refused — fix_commit "
+            f"{ref.fix_commit!r} is not a SHA"
+        )
     encoded = _urlquote(slug, safe="")
     base = f"{host}/api/v4/projects/{encoded}/repository/commits/{sha}"
 
@@ -250,11 +285,17 @@ def extract_for_agreement(
     # Patch-URL path: works on GitHub, GitLab, cgit. Independent of the
     # JSON path — we get triangulation when both succeed and at least
     # one second source when the JSON path is unavailable (cgit).
+    #
+    # Catch only the exception classes the extractor can plausibly raise
+    # in the wild (network, parse, custom analysis errors). The previous
+    # bare ``except Exception`` also swallowed programming bugs
+    # (AttributeError, TypeError, NameError) — silently turning real
+    # crashes into "third source unavailable" with no log signal.
     try:
         b = extract_via_patch_url(cve_id, ref)
         if b is not None:
             results.append(("patch_url", b))
-    except Exception:  # noqa: BLE001 — auxiliary, never block
+    except (HttpError, AnalysisError, OSError, UnicodeError):
         pass
 
     return results

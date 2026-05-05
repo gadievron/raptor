@@ -580,13 +580,28 @@ def convert_agentic_to_validate(agentic_findings: list, target_path: str) -> dic
     }
 
 
+def _safe_line(raw) -> int:
+    """Coerce LLM-emitted `line` (int / "12" / "12-15" / garbage) to int.
+
+    LLMs occasionally emit ranges or non-numeric strings; an unguarded
+    `int()` would crash the entire post-pass. Fall through to 0 on parse
+    failure — schemas downstream will surface a "missing line" warning.
+    """
+    if isinstance(raw, int):
+        return raw
+    try:
+        return int(str(raw).split("-", 1)[0])
+    except (TypeError, ValueError):
+        return 0
+
+
 def _convert_one_finding(f: dict) -> dict:
     """Convert a single /agentic finding dict to /validate Finding shape."""
     # Renames per the schema_constants alignment table.
     out: dict = {
         "id": str(f.get("finding_id") or f.get("id") or ""),
         "file": f.get("file_path") or f.get("file") or "",
-        "line": int(f.get("start_line") or f.get("line") or 0),
+        "line": _safe_line(f.get("start_line") or f.get("line") or 0),
         "description": f.get("reasoning") or f.get("description") or "",
         # ruling: /agentic emits a string verdict (e.g. "validated",
         # "false_positive"); /validate expects an object {"status": ...}.

@@ -394,9 +394,23 @@ class RaptorConfig:
     ]
 
     # Git Configuration
+    #
+    # GIT_CONFIG_GLOBAL=/dev/null and GIT_CONFIG_SYSTEM=/dev/null force git
+    # to ignore the operator's ~/.gitconfig and /etc/gitconfig respectively
+    # for every invocation that uses this env. Without these, a malicious
+    # gitconfig (alias = !sh, core.editor = arbitrary binary, credential.helper
+    # firing on every fetch) loaded out-of-band would still influence git's
+    # behaviour even though the env doesn't carry GIT_CONFIG_GLOBAL itself.
+    # The blocklist in get_safe_env() only clears caller-supplied overrides;
+    # the user's *default* config is read from $HOME, which we don't strip.
+    # GIT_CONFIG_NOSYSTEM=1 belt-and-braces in case /dev/null isn't honoured
+    # on the platform (e.g. some Windows builds).
     GIT_ENV_VARS = {
         "GIT_TERMINAL_PROMPT": "0",
         "GIT_ASKPASS": "true",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
     }
 
     # MCP Server Configuration
