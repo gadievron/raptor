@@ -14,6 +14,19 @@ Exit 0 on success (continue to claude), non-zero on abort.
 import sys
 from pathlib import Path
 
+# ─── trust-marker check (do not import; inline by design) ───
+import os
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")
+        or os.environ.get("RAPTOR_DIR")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 

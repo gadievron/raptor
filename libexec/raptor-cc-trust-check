@@ -31,6 +31,15 @@
 
 set -euo pipefail
 
+# ─── trust-marker check (do not source; inline by design) ───
+if [ -z "${CLAUDECODE:-}" ] && [ -z "${_RAPTOR_TRUSTED:-}" ] && [ -z "${RAPTOR_DIR:-}" ]; then
+    echo "$0: internal dispatch script." >&2
+    echo "  Run via 'bin/raptor' instead." >&2
+    echo "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass." >&2
+    exit 2
+fi
+# ─── end trust-marker check ─────────────────────────────────
+
 DRY_RUN=0
 TRUST=0
 TARGET=""

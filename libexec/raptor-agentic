@@ -14,6 +14,15 @@
 
 set -euo pipefail
 
+# ─── trust-marker check (do not source; inline by design) ───
+if [ -z "${CLAUDECODE:-}" ] && [ -z "${_RAPTOR_TRUSTED:-}" ] && [ -z "${RAPTOR_DIR:-}" ]; then
+    echo "$0: internal dispatch script." >&2
+    echo "  Run via 'bin/raptor' instead." >&2
+    echo "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass." >&2
+    exit 2
+fi
+# ─── end trust-marker check ─────────────────────────────────
+
 # Resolve symlinks so RAPTOR_DIR is correct even when this wrapper is
 # symlinked into ~/bin or similar (matches bin/raptor's behaviour).
 SCRIPT="$0"

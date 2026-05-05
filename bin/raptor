@@ -112,6 +112,10 @@ fi
 # Export static env vars
 export RAPTOR_CALLER_DIR="$(pwd)"
 export RAPTOR_DIR
+# Trust marker — libexec/ scripts refuse to run without one of
+# CLAUDECODE, _RAPTOR_TRUSTED, or RAPTOR_DIR. We've stripped env above
+# and resolved RAPTOR_DIR; mark this invocation as trusted.
+export _RAPTOR_TRUSTED=1
 
 # Parse RAPTOR-specific args, collect Claude args
 STARTUP_ARGS=("--caller-dir" "$RAPTOR_CALLER_DIR")

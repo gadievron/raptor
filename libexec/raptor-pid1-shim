@@ -69,6 +69,18 @@ from __future__ import annotations
 import os
 import signal
 import sys
+# ─── trust-marker check (do not import; inline by design) ───
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")
+        or os.environ.get("RAPTOR_DIR")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
 
 
 def main() -> int:
