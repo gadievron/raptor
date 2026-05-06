@@ -24,7 +24,7 @@ class TestTraceDispatch:
     def test_calls_dispatch_for_each_model(self):
         seen = []
 
-        def dispatch(model, traces):
+        def dispatch(model, traces, repo_path):
             seen.append(model.model_name)
             return [{"trace_id": t["trace_id"], "verdict": "reachable"}
                     for t in traces]
@@ -44,7 +44,7 @@ class TestTraceDispatch:
                 traces=[],
                 repo_path="/code",
                 models=[FakeModel("a")],
-                dispatch_fn=lambda m, t: [],
+                dispatch_fn=lambda m, t, r: [],
             )
 
     def test_non_callable_dispatch_raises(self):
@@ -69,7 +69,7 @@ class TestTraceMerge:
             "gemini": [{"trace_id": "EP-001", "verdict": "reachable"}],
         }
 
-        def dispatch(model, traces):
+        def dispatch(model, traces, repo_path):
             return verdicts[model.model_name]
 
         result = trace(
@@ -87,7 +87,7 @@ class TestTraceMerge:
             "gemini": [{"trace_id": "EP-001", "verdict": "not_reachable"}],
         }
 
-        def dispatch(model, traces):
+        def dispatch(model, traces, repo_path):
             return verdicts[model.model_name]
 
         result = trace(
@@ -100,7 +100,7 @@ class TestTraceMerge:
         assert result.correlation["confidence_signals"]["EP-001"] == "disputed"
 
     def test_unanimous_reachable_is_high(self):
-        def dispatch(model, traces):
+        def dispatch(model, traces, repo_path):
             return [{"trace_id": t["trace_id"], "verdict": "reachable"}
                     for t in traces]
 
@@ -115,7 +115,7 @@ class TestTraceMerge:
             assert result.correlation["confidence_signals"][trace_id] == "high"
 
     def test_all_uncertain_is_high_inconclusive(self):
-        def dispatch(model, traces):
+        def dispatch(model, traces, repo_path):
             return [{"trace_id": t["trace_id"], "verdict": "uncertain"}
                     for t in traces]
 
@@ -136,7 +136,7 @@ class TestTraceMerge:
 
 class TestTraceFailures:
     def test_failed_model_doesnt_kill_run(self):
-        def dispatch(model, traces):
+        def dispatch(model, traces, repo_path):
             if model.model_name == "broken":
                 raise RuntimeError("nope")
             return [{"trace_id": t["trace_id"], "verdict": "reachable"}
@@ -153,7 +153,7 @@ class TestTraceFailures:
         assert result.items[0]["verdict"] == "reachable"
 
     def test_dispatch_partially_returning_errors(self):
-        def dispatch(model, traces):
+        def dispatch(model, traces, repo_path):
             return [{"error": "model timed out"} for _ in traces]
 
         result = trace(
@@ -200,7 +200,7 @@ class TestTraceAggregator:
             ],
         }
 
-        def dispatch(model, traces):
+        def dispatch(model, traces, repo_path):
             return verdicts[model.model_name]
 
         result = trace(

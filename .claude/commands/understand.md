@@ -11,12 +11,50 @@ It is a work in progress, remember that.
 ## Usage
 
 ```
-/understand <target> [--map] [--trace <entry>] [--hunt <pattern>] [--teach <subject>] [--out <dir>]
+/understand <target> [--map] [--trace <entry>] [--hunt <pattern>] [--teach <subject>]
+                     [--out <dir>] [--model <name> ...]
 ```
 
 If no mode flag is given, default to `--map`.
 
+### Multi-model mode (opt-in)
+
+For `--hunt` and `--trace`, you can pass one or more `--model` flags to
+run independent analyses across multiple LLMs and correlate the results.
+Each model produces its own findings; the substrate identifies items
+where models agree (high confidence) vs. disagree (worth a closer look).
+
+```
+/understand <target> --hunt "<pattern>" --model claude-opus-4-7 --model gpt-5
+/understand <target> --trace traces.json --model claude-opus-4-7 --model gpt-5
+```
+
+**When to dispatch to libexec instead of running in-session:** if the
+user passes `--model` AND the mode is `--hunt` or `--trace`, you MUST
+run the work via `libexec/raptor-understand` (multi-model substrate)
+rather than doing the analysis here. Without `--model`, or for `--map`
+/ `--teach` regardless, follow the in-session workflow below.
+
 ## Execution
+
+**Multi-model path (when `--model` is present with `--hunt` or `--trace`):**
+
+```bash
+libexec/raptor-understand --hunt "<pattern>" --target <resolved_target> \
+    --out "$OUTPUT_DIR" --model <name> [--model <name> ...]
+```
+
+For `--trace`, point at a JSON file containing the trace list:
+```bash
+libexec/raptor-understand --trace <traces.json> --target <resolved_target> \
+    --out "$OUTPUT_DIR" --model <name> [--model <name> ...]
+```
+
+The shim writes `hunt-result.json` or `trace-result.json` to `$OUTPUT_DIR`
+and prints a one-screen summary. After it returns, surface the summary
+to the user and point them at the result file.
+
+**In-session path (no `--model`, or `--map` / `--teach`):**
 
 **Step 1: Start the run and build inventory:**
 ```bash

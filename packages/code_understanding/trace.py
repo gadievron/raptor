@@ -26,15 +26,14 @@ logger = logging.getLogger(__name__)
 
 
 TraceDispatchFn = Callable[
-    [ModelHandle, List[Dict[str, Any]]],  # (model, traces_to_classify)
-    List[Dict[str, Any]],                  # list of verdict dicts
+    [ModelHandle, List[Dict[str, Any]], str],  # (model, traces, repo_path)
+    List[Dict[str, Any]],                       # list of verdict dicts
 ]
-# Asymmetry note: HuntDispatchFn takes (model, pattern, repo_path) while
-# TraceDispatchFn takes (model, traces). That's intentional — hunt has a
-# single pattern applied across the codebase, while trace has a list of
-# pre-built traces (each carrying its own entry/sink/steps). The
-# dispatch_fn signatures reflect what each mode actually needs, not a
-# shared shape.
+# Symmetric with HuntDispatchFn (which is (model, pattern, repo_path)).
+# PR2a originally typed this as 2-arg (omitting repo_path), reasoning
+# that traces "carry their own metadata." That was wrong: a real LLM
+# trace dispatcher needs to read the codebase to verify reachability.
+# PR2b corrects to 3-arg.
 
 
 def trace(
@@ -79,12 +78,7 @@ def trace(
         )
 
     def task(model: ModelHandle) -> List[Dict[str, Any]]:
-        return dispatch_fn(model, traces)
-
-    # repo_path isn't needed by the substrate (the dispatch_fn closes
-    # over it via its own arguments), but we keep it on the signature
-    # for symmetry with hunt() and so a future PR2b dispatch can use it.
-    _ = repo_path
+        return dispatch_fn(model, traces, repo_path)
 
     return run_multi_model(
         task=task,
