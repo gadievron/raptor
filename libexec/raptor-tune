@@ -86,10 +86,10 @@ _PROFILES = {
 _COMMENTS = {
     "codeql_ram_mb": "MB of RAM for CodeQL analysis",
     "codeql_threads": "CPUs for CodeQL (0 = all available)",
-    "max_semgrep_workers": "parallel Semgrep scans",
-    "max_codeql_workers": "parallel CodeQL database builds",
+    "max_semgrep_workers": "parallel Semgrep scans (auto = half CPUs)",
+    "max_codeql_workers": "parallel CodeQL database builds (auto = half CPUs)",
     "max_agentic_parallel": "parallel Claude Code agents for analysis",
-    "max_fuzz_parallel": "ceiling for AFL++ parallel instances",
+    "max_fuzz_parallel": "ceiling for AFL++ parallel instances (auto = half CPUs)",
 }
 
 _KEY_ORDER = [

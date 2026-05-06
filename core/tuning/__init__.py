@@ -60,9 +60,37 @@ def _detect_threads() -> int:
     return 0
 
 
+def _detect_semgrep_workers() -> int:
+    """Resolve a conservative CPU-based Semgrep worker count.
+
+    Semgrep scans are CPU and memory heavy, so the auto value should
+    improve utilisation on larger machines without defaulting to every
+    detected core.
+    """
+    return _detect_half_cpu_parallelism()
+
+
+def _detect_codeql_workers() -> int:
+    """Resolve a conservative parallel CodeQL database-build count."""
+    return _detect_half_cpu_parallelism()
+
+
+def _detect_fuzz_parallel() -> int:
+    """Resolve a conservative AFL++ parallel-instance ceiling."""
+    return _detect_half_cpu_parallelism()
+
+
+def _detect_half_cpu_parallelism() -> int:
+    cpus = os.cpu_count() or 4
+    return max(1, cpus // 2)
+
+
 _AUTO_RESOLVERS = {
     "codeql_ram_mb": _detect_ram_mb,
     "codeql_threads": _detect_threads,
+    "max_semgrep_workers": _detect_semgrep_workers,
+    "max_codeql_workers": _detect_codeql_workers,
+    "max_fuzz_parallel": _detect_fuzz_parallel,
 }
 
 # Keys where 0 is a valid explicit value (e.g. CodeQL's "0 = all CPUs")
@@ -150,10 +178,10 @@ def _create_default_file(path: Path) -> None:
         comments = {
             "codeql_ram_mb": "MB of RAM for CodeQL analysis",
             "codeql_threads": "CPUs for CodeQL (0 = all available)",
-            "max_semgrep_workers": "parallel Semgrep scans",
-            "max_codeql_workers": "parallel CodeQL database builds",
+            "max_semgrep_workers": "parallel Semgrep scans (auto = half CPUs)",
+            "max_codeql_workers": "parallel CodeQL database builds (auto = half CPUs)",
             "max_agentic_parallel": "parallel Claude Code agents for analysis",
-            "max_fuzz_parallel": "ceiling for AFL++ parallel instances",
+            "max_fuzz_parallel": "ceiling for AFL++ parallel instances (auto = half CPUs)",
         }
         keys = list(_DEFAULTS.keys())
         entries = []

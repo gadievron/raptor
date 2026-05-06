@@ -6,7 +6,15 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from core.tuning import Tuning, load_tuning, _detect_ram_mb, _detect_threads
+from core.tuning import (
+    Tuning,
+    load_tuning,
+    _detect_codeql_workers,
+    _detect_fuzz_parallel,
+    _detect_ram_mb,
+    _detect_semgrep_workers,
+    _detect_threads,
+)
 
 
 class TestLoadTuning(unittest.TestCase):
@@ -61,12 +69,63 @@ class TestLoadTuning(unittest.TestCase):
             # 0 = CodeQL's native "use all CPUs" mode
             self.assertEqual(t.codeql_threads, 0)
 
-    def test_auto_not_supported_falls_back(self):
+    def test_auto_resolves_semgrep_workers(self):
         with TemporaryDirectory() as d:
             p = Path(d) / "tuning.json"
             p.write_text(json.dumps({"max_semgrep_workers": "auto"}))
-            t = load_tuning(p)
+            with patch("core.tuning.os.cpu_count", return_value=16):
+                t = load_tuning(p)
+            self.assertEqual(t.max_semgrep_workers, 8)
+
+    def test_auto_resolves_semgrep_workers_when_cpu_unknown(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "tuning.json"
+            p.write_text(json.dumps({"max_semgrep_workers": "auto"}))
+            with patch("core.tuning.os.cpu_count", return_value=None):
+                t = load_tuning(p)
+            self.assertEqual(t.max_semgrep_workers, 2)
+
+    def test_auto_resolves_codeql_workers(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "tuning.json"
+            p.write_text(json.dumps({"max_codeql_workers": "auto"}))
+            with patch("core.tuning.os.cpu_count", return_value=12):
+                t = load_tuning(p)
+            self.assertEqual(t.max_codeql_workers, 6)
+
+    def test_auto_resolves_fuzz_parallel(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "tuning.json"
+            p.write_text(json.dumps({"max_fuzz_parallel": "auto"}))
+            with patch("core.tuning.os.cpu_count", return_value=12):
+                t = load_tuning(p)
+            self.assertEqual(t.max_fuzz_parallel, 6)
+
+    def test_auto_resolves_all_cpu_backed_worker_limits_together(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "tuning.json"
+            p.write_text(json.dumps({
+                "max_semgrep_workers": "auto",
+                "max_codeql_workers": "auto",
+                "max_fuzz_parallel": "auto",
+            }))
+            with patch("core.tuning.os.cpu_count", return_value=8):
+                t = load_tuning(p)
             self.assertEqual(t.max_semgrep_workers, 4)
+            self.assertEqual(t.max_codeql_workers, 4)
+            self.assertEqual(t.max_fuzz_parallel, 4)
+
+    def test_auto_worker_limits_fallback_when_cpu_unknown(self):
+        with TemporaryDirectory() as d:
+            p = Path(d) / "tuning.json"
+            p.write_text(json.dumps({
+                "max_codeql_workers": "auto",
+                "max_fuzz_parallel": "auto",
+            }))
+            with patch("core.tuning.os.cpu_count", return_value=None):
+                t = load_tuning(p)
+            self.assertEqual(t.max_codeql_workers, 2)
+            self.assertEqual(t.max_fuzz_parallel, 2)
 
     def test_negative_value_falls_back(self):
         with TemporaryDirectory() as d:
@@ -176,6 +235,36 @@ class TestAutoDetection(unittest.TestCase):
     def test_threads_returns_zero(self):
         # 0 = CodeQL's native "use all CPUs" mode
         self.assertEqual(_detect_threads(), 0)
+
+    def test_semgrep_workers_uses_half_detected_cpus(self):
+        with patch("core.tuning.os.cpu_count", return_value=10):
+            self.assertEqual(_detect_semgrep_workers(), 5)
+
+    def test_semgrep_workers_has_minimum_and_unknown_cpu_fallback(self):
+        with patch("core.tuning.os.cpu_count", return_value=1):
+            self.assertEqual(_detect_semgrep_workers(), 1)
+        with patch("core.tuning.os.cpu_count", return_value=None):
+            self.assertEqual(_detect_semgrep_workers(), 2)
+
+    def test_codeql_workers_uses_half_detected_cpus(self):
+        with patch("core.tuning.os.cpu_count", return_value=16):
+            self.assertEqual(_detect_codeql_workers(), 8)
+
+    def test_codeql_workers_has_minimum_and_unknown_cpu_fallback(self):
+        with patch("core.tuning.os.cpu_count", return_value=1):
+            self.assertEqual(_detect_codeql_workers(), 1)
+        with patch("core.tuning.os.cpu_count", return_value=None):
+            self.assertEqual(_detect_codeql_workers(), 2)
+
+    def test_fuzz_parallel_uses_half_detected_cpus(self):
+        with patch("core.tuning.os.cpu_count", return_value=16):
+            self.assertEqual(_detect_fuzz_parallel(), 8)
+
+    def test_fuzz_parallel_has_minimum_and_unknown_cpu_fallback(self):
+        with patch("core.tuning.os.cpu_count", return_value=1):
+            self.assertEqual(_detect_fuzz_parallel(), 1)
+        with patch("core.tuning.os.cpu_count", return_value=None):
+            self.assertEqual(_detect_fuzz_parallel(), 2)
 
 
 class TestTuningFrozen(unittest.TestCase):
