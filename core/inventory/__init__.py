@@ -87,6 +87,26 @@ def save_checklist(output_dir, data):
     # masked the real OSError, so operators saw "name 'lock_file' is
     # not defined" instead of "permission denied" — much harder to
     # diagnose.
+    #
+    # Lock-then-unlink race: pre-fix the finally also called
+    # `lock_path.unlink(missing_ok=True)` AFTER LOCK_UN. Race
+    # sequence:
+    #   1. Process A holds lock, writes, LOCK_UN.
+    #   2. Process B (waiting on flock on the same inode) wakes up,
+    #      now holds the lock on the still-existing-but-about-to-be-
+    #      unlinked file.
+    #   3. A unlinks lock_path. The inode survives because B still
+    #      has it open, but the directory entry is gone.
+    #   4. Process C arrives, opens lock_path — creates a NEW file
+    #      at the same path, gets the lock immediately on the new
+    #      inode.
+    #   5. B and C both think they hold the (different) lock,
+    #      write to checklist.json concurrently → corruption.
+    #
+    # Standard Unix pattern: NEVER unlink the lock file. Stale lock
+    # files at rest are harmless (flock state is in-kernel, not
+    # disk), and the cost is one tiny .lock dotfile per checklist —
+    # acceptable trade for closing the corruption window.
     lock_path = checklist_path.with_suffix(".lock")
     lock_file = None
     try:
@@ -103,7 +123,3 @@ def save_checklist(output_dir, data):
                 lock_file.close()
             except Exception:
                 pass
-        try:
-            lock_path.unlink(missing_ok=True)
-        except Exception:
-            pass
