@@ -3,16 +3,56 @@ RAPTOR Progress Counter - Matrix/Hacker Style
 For operations that take >15 seconds.
 """
 
+import locale
 import sys
 import time
 from datetime import datetime
 from typing import Optional
 
 
+def _stderr_supports_unicode() -> bool:
+    """Probe whether stderr can encode the unicode block characters
+    used by the spinner / status decorations.
+
+    Returns False under POSIX/C locale, on legacy 7-bit terminals,
+    and on platforms where stderr lacks an `encoding` attribute.
+    Pre-fix every write to stderr risked
+    `UnicodeEncodeError: 'ascii' codec can't encode character '\\u2588'`
+    when the operator's locale was `C` (common in containers and
+    minimal CI runners), aborting the entire `with HackerProgress`
+    block partway through. Detect once at import.
+    """
+    enc = getattr(sys.stderr, "encoding", None)
+    if not enc:
+        return False
+    try:
+        "▌▀▐▄✓✗".encode(enc)
+    except (UnicodeEncodeError, LookupError):
+        return False
+    # Also check the locale's stated encoding — some terminals
+    # advertise utf-8 on the file object but the wrapping pipe
+    # is C/POSIX and downgrades.
+    try:
+        loc = locale.getpreferredencoding(False)
+        if loc and loc.lower() in {"ascii", "ansi_x3.4-1968", "us-ascii"}:
+            return False
+    except locale.Error:
+        return False
+    return True
+
+
+_UNICODE_OK = _stderr_supports_unicode()
+
+
 class HackerProgress:
     """Matrix-style progress counter for long operations."""
 
-    SPINNERS = ['▌', '▀', '▐', '▄']  # Block rotation
+    # Spinner glyphs picked at import time based on stderr encoding.
+    # ASCII fallback uses 4 rotating chars so the visual cadence
+    # still reads as an animation under POSIX locales.
+    SPINNERS = ['▌', '▀', '▐', '▄'] if _UNICODE_OK else ['|', '/', '-', '\\']
+    _CHECK = '✓' if _UNICODE_OK else '[OK]'
+    _CROSS = '✗' if _UNICODE_OK else '[FAIL]'
 
     def __init__(self, total: Optional[int] = None, operation: str = "Processing",
                  disabled: bool = False):
@@ -40,6 +80,16 @@ class HackerProgress:
         elapsed = time.time() - self.start_time
         rate = elapsed / self.current
         remaining = (self.total - self.current) * rate
+        # Clamp to >=0. When the caller-driven loop overruns the
+        # initially-declared total (work expanded mid-run, total
+        # was an underestimate), `current > total` makes
+        # `remaining` negative, and `_format_time(-30)` emits
+        # `-30s` which then renders as `ETA: -30s`. Operators
+        # interpret that as a bug (or a clock skew). Showing
+        # `0s` for an overrun is the honest reading: we already
+        # passed the projected total.
+        if remaining < 0:
+            remaining = 0
         return self._format_time(remaining)
 
     def update(self, current: Optional[int] = None, message: str = ""):
@@ -80,14 +130,24 @@ class HackerProgress:
         if message:
             status += f" | {message}"
 
-        # Overwrite previous line
-        sys.stderr.write(f"\r{status}")
+        # Overwrite previous line. `\033[K` clears from the cursor
+        # to end-of-line AFTER the carriage return — without it,
+        # if the previous status line was longer than the current
+        # one (e.g. earlier message was a long fid like
+        # `vuln_12345_long_finding_id`, current is just `vuln_1`),
+        # residual chars from the old line stay visible past the
+        # end of the new one. Operators see a corrupted-looking
+        # status: `vuln_1nding_id`. The clear-EOL escape removes
+        # the leftover tail. No-op on terminals that don't support
+        # ANSI (printed as a literal sequence at worst, which is
+        # already what HackerProgress assumes for the spinner).
+        sys.stderr.write(f"\r\033[K{status}")
         sys.stderr.flush()
 
     def finish(self, message: str = "Complete"):
         """Finish progress and move to new line."""
         elapsed = self._format_time(time.time() - self.start_time)
-        sys.stderr.write(f"\r✓ {message} ({elapsed})\n")
+        sys.stderr.write(f"\r\033[K{self._CHECK} {message} ({elapsed})\n")
         sys.stderr.flush()
 
     def __enter__(self):
@@ -104,7 +164,21 @@ class HackerProgress:
         if exc_type is None:
             self.finish()
         else:
-            sys.stderr.write(f"\r✗ {self.operation} failed\n")
+            # Include the exception's repr so the operator sees
+            # WHICH exception aborted the operation. Pre-fix the
+            # message was just "{operation} failed" — when a
+            # 30-minute scan died you saw "Analyzing vulnerabilities
+            # failed" with no clue whether it was a timeout, a 401,
+            # or a KeyboardInterrupt. The traceback lands further
+            # up in stderr but is easy to miss when the progress
+            # output is the last visible thing.
+            try:
+                exc_repr = repr(exc_val) if exc_val is not None else exc_type.__name__
+            except Exception:
+                exc_repr = "<unrepresentable exception>"
+            sys.stderr.write(
+                f"\r\033[K{self._CROSS} {self.operation} failed: {exc_repr}\n"
+            )
             sys.stderr.flush()
         return False
 
