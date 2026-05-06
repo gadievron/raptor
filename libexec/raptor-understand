@@ -1,0 +1,526 @@
+#!/usr/bin/env python3
+"""Multi-model dispatch entry point for /understand --hunt and --trace.
+
+Usage:
+    libexec/raptor-understand --hunt "pattern" --target /code \\
+        --model claude-opus-4-7 --model gpt-5
+
+    libexec/raptor-understand --trace traces.json --target /code \\
+        --model claude-opus-4-7
+
+This is the libexec shim. It does NOT replace the existing skill-based
+``/understand`` flow — it's only invoked when the user passes ``--model``
+(opting into the Python multi-model path). Without ``--model``, the
+skill markdown handles the request in-session via Claude Code's tools.
+
+Output is written to ``<out>/hunt-result.json`` or ``<out>/trace-result.json``
+plus a small ``summary`` printed to stdout for the operator/skill to
+relay. Returns non-zero exit status on dispatch errors so the skill
+can detect failure.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+# Per-model cost floor. Each model gets at LEAST this much budget so
+# it can do at least one tool-using turn and produce a result. The
+# floor can push total spend above the operator's --max-cost when
+# many models are configured; this is a documented trade-off (see
+# the help text on --max-cost).
+_PER_MODEL_COST_FLOOR_USD = 0.50
+
+
+# ---------------------------------------------------------------------------
+# Argparse
+# ---------------------------------------------------------------------------
+
+
+def _positive_int(value: str) -> int:
+    """argparse type for strictly-positive integers."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"expected integer, got {value!r}")
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {n}")
+    return n
+
+
+def _positive_float(value: str) -> float:
+    """argparse type for strictly-positive floats."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"expected number, got {value!r}")
+    if f <= 0:
+        raise argparse.ArgumentTypeError(f"must be > 0, got {f}")
+    return f
+
+
+def _nonempty_str(value: str) -> str:
+    """argparse type for non-empty strings (post-strip)."""
+    if not isinstance(value, str) or not value.strip():
+        raise argparse.ArgumentTypeError("must be a non-empty string")
+    return value.strip()
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="raptor-understand",
+        description=(
+            "Multi-model dispatch for /understand --hunt and --trace. "
+            "Skill-based modes (--map, --teach) are NOT handled here."
+        ),
+    )
+    mode = p.add_mutually_exclusive_group(required=True)
+    mode.add_argument(
+        "--hunt", metavar="PATTERN",
+        help="Pattern to hunt for. The pattern is sent verbatim to each model.",
+    )
+    mode.add_argument(
+        "--trace", metavar="TRACES_FILE",
+        help=(
+            "Path to a JSON file containing a list of traces, each with "
+            "at least a `trace_id` field. Each trace is classified by every "
+            "model (reachable / not_reachable / uncertain)."
+        ),
+    )
+
+    p.add_argument(
+        "--target", required=True, metavar="REPO_PATH",
+        help="Target repository to analyse (must be an existing directory).",
+    )
+    p.add_argument(
+        "--model", action="append", default=[], metavar="MODEL",
+        required=True, type=_nonempty_str,
+        help=(
+            "Model to dispatch to (repeatable). At least one required. "
+            "Multiple --model entries activate multi-model correlation."
+        ),
+    )
+    p.add_argument(
+        "--out", required=True, metavar="OUT_DIR",
+        help="Output directory. Created if missing. Result JSON is written here.",
+    )
+    p.add_argument(
+        "--max-cost", type=_positive_float, default=5.0, metavar="USD",
+        help=(
+            "Total cost cap across all models (default: $5.00). "
+            "Per-model cap is max($0.50, max_cost/N) — i.e. the $0.50 "
+            "floor can push total spend above this cap when many models "
+            "are configured."
+        ),
+    )
+    p.add_argument(
+        "--max-parallel", type=_positive_int, default=3, metavar="N",
+        help="Max concurrent model dispatches (default: 3, must be >= 1).",
+    )
+    p.add_argument(
+        "--verbose", action="store_true",
+        help=(
+            "Emit per-turn activity to stderr (tool calls and text "
+            "responses from each model). Useful for debugging a model "
+            "that's not following instructions or burning budget."
+        ),
+    )
+    return p
+
+
+# ---------------------------------------------------------------------------
+# Model handle resolution
+# ---------------------------------------------------------------------------
+
+
+def _resolve_models(model_names: list[str]):
+    """Turn --model strings into ModelConfig instances.
+
+    Each name is matched against models.json and env vars to produce
+    a ModelConfig with API key. Names that don't resolve produce a
+    clear error with hints for the operator.
+
+    We deliberately don't call ``build_llm_config_from_flags`` here —
+    that helper bundles role assignment (consensus/judge/aggregate)
+    which doesn't apply to /understand's flat model list.
+    """
+    from core.llm.config import _model_config_from_entry, _get_configured_models
+    from core.security.llm_family import family_of
+
+    configured = _get_configured_models()
+    by_name: dict[str, dict] = {}
+    for entry in configured:
+        if isinstance(entry, dict):
+            mn = entry.get("model")
+            if mn:
+                by_name[mn] = entry
+
+    resolved = []
+    missing = []
+    for name in model_names:
+        entry = by_name.get(name)
+        if entry is None:
+            # Synthesize an entry from the family heuristic
+            family = family_of(name)
+            if family is None:
+                missing.append(name)
+                continue
+            _FAMILY_TO_PROVIDER = {
+                "anthropic": "anthropic", "openai": "openai",
+                "google": "gemini", "mistral": "mistral",
+                "meta": "ollama",
+            }
+            entry = {
+                "model": name,
+                "provider": _FAMILY_TO_PROVIDER.get(family, ""),
+            }
+        try:
+            mc = _model_config_from_entry(entry)
+        except Exception as e:
+            missing.append(f"{name} ({e})")
+            continue
+        if not mc.api_key:
+            missing.append(f"{name} (no API key)")
+            continue
+        resolved.append(mc)
+
+    return resolved, missing
+
+
+# ---------------------------------------------------------------------------
+# Dispatch helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_traces(path_str: str) -> list[dict]:
+    """Load and validate a traces JSON file."""
+    p = Path(path_str)
+    if not p.is_file():
+        raise FileNotFoundError(f"traces file not found: {path_str}")
+    # Read and decode separately so we can attribute errors clearly.
+    try:
+        raw = p.read_bytes()
+    except OSError as e:
+        raise ValueError(f"could not read traces file: {e}") from None
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise ValueError(
+            f"traces file is not UTF-8: {e}. JSON must be UTF-8."
+        ) from None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"traces file is not valid JSON: {e}") from None
+    if not isinstance(data, list):
+        raise ValueError(
+            f"traces file must contain a JSON list; got {type(data).__name__}"
+        )
+    return data
+
+
+def _build_cost_gate():
+    """Construct a CostGate-shaped object — currently a no-op.
+
+    PR2b doesn't have a real cross-model CostTracker integration, so
+    substrate-level cost gating is disabled. Each model's per-call
+    cap (passed to the dispatcher's loop via ``max_cost_usd``) is the
+    only enforcement. Total spend is approximately bounded by
+    ``--max-cost`` divided by N models, with a $0.50 per-model floor.
+
+    Wiring a real aggregating tracker is a follow-up.
+    """
+    class _NoopGate:
+        def budget_ratio(self) -> float:
+            return 0.0
+    return _NoopGate()
+
+
+# ---------------------------------------------------------------------------
+# Mode handlers
+# ---------------------------------------------------------------------------
+
+
+def _do_hunt(args: argparse.Namespace) -> dict:
+    from packages.code_understanding import hunt
+    from packages.code_understanding.dispatch import default_hunt_dispatch
+
+    target = Path(args.target).resolve()
+    if not target.is_dir():
+        raise FileNotFoundError(f"target is not a directory: {target}")
+
+    models, missing = _resolve_models(args.model)
+    if missing:
+        raise SystemExit(
+            "Unable to resolve --model entries: " + ", ".join(missing) +
+            "\nCheck models.json or set the relevant *_API_KEY env var."
+        )
+
+    # Per-model budget = total / N, with a small per-model floor.
+    n = len(models)
+    per_model_cost = max(_PER_MODEL_COST_FLOOR_USD, args.max_cost / n)
+
+    cost_by_model, verbose_logger = _build_cost_and_verbose_helpers(args.verbose)
+
+    def _bound_dispatch(model, pattern, repo_path):
+        return default_hunt_dispatch(
+            model, pattern, repo_path,
+            max_cost_usd=per_model_cost,
+            cost_collector=lambda c: cost_by_model.update({model.model_name: c}),
+            verbose_logger=verbose_logger,
+        )
+
+    result = hunt(
+        pattern=args.hunt,
+        repo_path=str(target),
+        models=models,
+        dispatch_fn=_bound_dispatch,
+        cost_gate=_build_cost_gate(),
+        max_parallel=args.max_parallel,
+    )
+
+    return {
+        "mode": "hunt",
+        "pattern": args.hunt,
+        "target": str(target),
+        "models": [m.model_name for m in models],
+        "items": result.items,
+        "correlation": result.correlation,
+        "failed_models": result.failed_models,
+        "model_errors": _extract_model_errors(result),
+        "model_costs_usd": dict(cost_by_model),
+        "total_cost_usd": round(sum(cost_by_model.values()), 4),
+    }
+
+
+def _do_trace(args: argparse.Namespace) -> dict:
+    from packages.code_understanding import trace
+    from packages.code_understanding.dispatch import default_trace_dispatch
+
+    target = Path(args.target).resolve()
+    if not target.is_dir():
+        raise FileNotFoundError(f"target is not a directory: {target}")
+
+    traces = _load_traces(args.trace)
+
+    models, missing = _resolve_models(args.model)
+    if missing:
+        raise SystemExit(
+            "Unable to resolve --model entries: " + ", ".join(missing) +
+            "\nCheck models.json or set the relevant *_API_KEY env var."
+        )
+
+    n = len(models)
+    per_model_cost = max(_PER_MODEL_COST_FLOOR_USD, args.max_cost / n)
+
+    cost_by_model, verbose_logger = _build_cost_and_verbose_helpers(args.verbose)
+
+    def _bound_dispatch(model, traces_arg, repo_path):
+        return default_trace_dispatch(
+            model, traces_arg, repo_path,
+            max_cost_usd=per_model_cost,
+            cost_collector=lambda c: cost_by_model.update({model.model_name: c}),
+            verbose_logger=verbose_logger,
+        )
+
+    result = trace(
+        traces=traces,
+        repo_path=str(target),
+        models=models,
+        dispatch_fn=_bound_dispatch,
+        cost_gate=_build_cost_gate(),
+        max_parallel=args.max_parallel,
+    )
+
+    return {
+        "mode": "trace",
+        "trace_count": len(traces),
+        "target": str(target),
+        "models": [m.model_name for m in models],
+        "items": result.items,
+        "correlation": result.correlation,
+        "failed_models": result.failed_models,
+        "model_errors": _extract_model_errors(result),
+        "model_costs_usd": dict(cost_by_model),
+        "total_cost_usd": round(sum(cost_by_model.values()), 4),
+    }
+
+
+def _build_cost_and_verbose_helpers(verbose: bool):
+    """Per-run cost accumulator + optional verbose stderr logger.
+
+    Returns a (dict, callable | None) tuple. The dict is keyed by
+    model_name and populated by dispatchers via cost_collector. The
+    callable, when --verbose is set, prints LoopEvent activity to
+    stderr; otherwise None (events skipped entirely).
+    """
+    cost_by_model: dict[str, float] = {}
+
+    def _verbose_logger(line: str) -> None:
+        # Print to stderr so the JSON output on stdout stays clean.
+        print(line, file=sys.stderr, flush=True)
+
+    return cost_by_model, (_verbose_logger if verbose else None)
+
+
+def _extract_model_errors(result) -> dict:
+    """Pull per-model error strings out of result.per_model_raw.
+
+    The substrate filters error entries before passing per-model results
+    to the adapter, but stores raw output (including errors) on
+    per_model_raw. We surface the first error per failed model so the
+    operator/skill can debug without source access.
+    """
+    errors: dict = {}
+    raw = getattr(result, "per_model_raw", {}) or {}
+    for model_name in getattr(result, "failed_models", []) or []:
+        entries = raw.get(model_name, [])
+        for entry in entries:
+            if isinstance(entry, dict) and "error" in entry:
+                errors[model_name] = str(entry["error"])
+                break
+        else:
+            # No error entry but model is in failed_models — likely an
+            # exception in task() before any results were produced.
+            errors[model_name] = "model failed before producing results (check logs)"
+    return errors
+
+
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
+
+
+def _write_result(out_dir: Path, mode: str, payload: dict) -> Path:
+    """Write JSON to <out>/<mode>-result.json. Returns the path.
+
+    Raises:
+        OSError: mkdir or write_text failure (permission denied, disk
+            full, name too long, etc.).
+        TypeError: ``json.dumps`` rejects a non-serializable value in
+            payload (defensive — substrate output should be JSON-native
+            but bugs happen). Caller surfaces as a clean error.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fname = f"{mode}-result.json"
+    path = out_dir / fname
+    try:
+        serialized = json.dumps(payload, indent=2, sort_keys=True)
+    except TypeError as e:
+        raise TypeError(
+            f"could not serialize result payload: {e}. "
+            f"Adapter or substrate returned a non-JSON-native value."
+        ) from None
+    path.write_text(serialized)
+    return path
+
+
+def _print_summary(payload: dict, output_path: Path) -> None:
+    """One-screen summary for the operator/skill."""
+    mode = payload["mode"]
+    items = payload["items"]
+    failed = payload["failed_models"]
+    summary = (payload.get("correlation") or {}).get("summary", {})
+
+    print(f"Mode: {mode}")
+    print(f"Models: {', '.join(payload['models'])}")
+    print(f"Items: {len(items)}")
+    if failed:
+        print(f"Failed models: {', '.join(failed)}")
+        # Show first error per failed model so operators can debug
+        # without needing to dig into raw substrate output.
+        errors = payload.get("model_errors") or {}
+        for m in failed:
+            err = errors.get(m)
+            if err:
+                # Truncate so a giant traceback doesn't fill the screen
+                print(f"  {m}: {err[:200]}{'...' if len(err) > 200 else ''}")
+
+    total_cost = payload.get("total_cost_usd") or 0.0
+    if total_cost > 0:
+        per_model = payload.get("model_costs_usd") or {}
+        cost_parts = [
+            f"{m}=${c:.4f}" for m, c in sorted(per_model.items()) if c > 0
+        ]
+        if cost_parts:
+            print(f"Cost: ${total_cost:.4f} ({', '.join(cost_parts)})")
+        else:
+            print(f"Cost: ${total_cost:.4f}")
+    if summary:
+        # Generic summary print — keys vary by adapter
+        keys = sorted(k for k in summary if k not in ("models",))
+        parts = [f"{k}={summary[k]}" for k in keys]
+        if parts:
+            print(f"Summary: {' | '.join(parts)}")
+    print(f"Output: {output_path}")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+def main() -> int:
+    args = _build_parser().parse_args()
+
+    try:
+        # Path resolution can raise ValueError on NUL bytes in the
+        # operator-supplied path. Keep inside try so all errors get
+        # the clean-exit treatment.
+        out_dir = Path(args.out).resolve()
+        if args.hunt is not None:
+            payload = _do_hunt(args)
+        else:
+            payload = _do_trace(args)
+    except FileNotFoundError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("interrupted", file=sys.stderr)
+        return 130
+    except SystemExit:
+        # _resolve_models uses raise SystemExit(...) for clean error
+        # paths; let that pass through with its own message+code.
+        raise
+    except Exception as e:  # noqa: BLE001 - catch-all for clean exit
+        print(
+            f"error: unexpected {type(e).__name__}: {e}", file=sys.stderr,
+        )
+        return 1
+
+    try:
+        output_path = _write_result(out_dir, payload["mode"], payload)
+    except OSError as e:
+        # PermissionError, disk full, name too long, etc.
+        print(f"error: could not write result to {out_dir}: {e}", file=sys.stderr)
+        return 1
+    except TypeError as e:
+        # json.dumps rejected a non-serializable value in payload.
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    _print_summary(payload, output_path)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
