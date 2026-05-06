@@ -337,6 +337,7 @@ def validate_dataflow_claims(
     cost_tracker: Optional[Any] = None,
     budget_threshold: float = DEFAULT_BUDGET_THRESHOLD,
     progress_callback: Optional[Callable[[str], None]] = None,
+    deep_validate: bool = False,
 ) -> Dict[str, Any]:
     """Validate LLM dataflow claims via hypothesis_validation + CodeQL.
 
@@ -495,6 +496,7 @@ def validate_dataflow_claims(
         try:
             result, tier_used = _validate_one_hypothesis(
                 hypothesis, finding, adapter, llm_client,
+                deep_validate=deep_validate,
             )
         except Exception as e:  # never let a single validation crash the loop
             logger.warning(
@@ -629,14 +631,25 @@ def _validate_one_hypothesis(
     finding: Dict,
     adapter: Any,
     llm_client: Any,
+    *,
+    deep_validate: bool = False,
 ) -> "tuple[ValidationResult, str]":
     """Run a hypothesis through Tier 1 → Tier 2 → Tier 3 in order.
 
+    Args:
+        deep_validate: When False (default), Tier 2/3 LLM-backed predicate
+            generation is skipped — Tier 1's verdict is returned even if
+            inconclusive. Tier 1 is free (just CodeQL); Tier 2/3 burns
+            LLM tokens. Operators opt in via `--deep-validate` to spend
+            tokens trying to refute Tier 1-inconclusive findings.
+
     Returns (ValidationResult, tier_label). Tier label is one of:
-      "prebuilt"  — Tier 1 succeeded with a CodeQL stdlib Flow module
-      "template"  — Tier 2 succeeded with LLM-filled template (no retry needed)
-      "retry"     — Tier 3 succeeded after >=1 retry
-      "fallback"  — fell through to legacy generic validate() (last resort)
+      "prebuilt"               — Tier 1 produced a definitive verdict
+      "prebuilt-inconclusive"  — Tier 1 inconclusive, deep_validate=False
+                                 (no Tier 2 attempted)
+      "template"               — Tier 2 succeeded with LLM-filled template
+      "retry"                  — Tier 3 succeeded after >=1 retry
+      "fallback"               — fell through to legacy generic validate()
 
     The tier label is metric-only; the verdict is unchanged regardless.
     """
@@ -675,11 +688,31 @@ def _validate_one_hypothesis(
             if verdict in ("confirmed", "refuted"):
                 # Tier 1 produced a definitive answer. Done.
                 return _wrap_result(ev, verdict, tier="prebuilt"), "prebuilt"
-            # Otherwise (inconclusive), fall through to Tier 2 for a
-            # chance at refutation via LLM-customised predicates.
+            # Otherwise (inconclusive). When deep_validate=False, stop
+            # here and return the inconclusive Tier 1 result. The user
+            # didn't authorise spending LLM tokens on Tier 2 refinement;
+            # Tier 1's free signal is what they asked for.
+            if not deep_validate:
+                return (
+                    _wrap_result(ev, "inconclusive", tier="prebuilt"),
+                    "prebuilt-inconclusive",
+                )
+            # deep_validate=True: fall through to Tier 2 for a chance at
+            # refutation via LLM-customised predicates.
 
     # ----- Tier 2 + 3: language template + LLM-filled predicates +
     #                    compile-error retry -----
+    # Skip when deep_validate=False — Tier 2/3 are LLM-backed and the
+    # operator hasn't opted in to spending tokens.
+    if not deep_validate:
+        return (
+            ValidationResult(
+                verdict="inconclusive", evidence=[], iterations=0,
+                reasoning="deep_validate=False — Tier 2/3 skipped",
+            ),
+            "skipped-deep",
+        )
+
     if language and language in supported_languages_for_template():
         result, succeeded, retries = _try_template_with_retry(
             hypothesis, finding, adapter, llm_client, language,
@@ -1190,20 +1223,26 @@ def run_validation_pass(
     cross_family_resolver: Optional[Callable] = None,
     progress_callback: Optional[Callable[[str], None]] = None,
     budget_threshold: float = DEFAULT_BUDGET_THRESHOLD,
+    deep_validate: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Orchestrator-side hook: discover DB, pick model, run the pass.
 
-    Wraps the three steps the orchestrator needs to do for every
-    `--validate-dataflow` run:
+    Tier 1 (free, CodeQL-only) runs whenever a database is available.
+    Tier 2/3 (LLM-backed predicate generation) is gated on
+    `deep_validate=True` — operators opt in via `--deep-validate`.
 
-      1. Decide whether dispatch mode supports validation. We accept
-         external_llm, cc_dispatch, and cc_fallback. Anything else
+    Steps:
+
+      1. Decide whether dispatch mode supports validation. Accepts
+         external_llm, cc_dispatch, cc_fallback. Anything else
          (no-LLM mode, etc.) → return None.
       2. Discover a CodeQL database under `out_dir/codeql/`. None means
          no database was built this run; return None and log.
-      3. Pick the validation model. When the resolver is provided AND
-         we're in external_llm mode AND it returns a cross-family
-         option, prefer that. Otherwise fall back to `analysis_model`.
+      3. Pick the validation model (only consulted if deep_validate
+         opts the run into Tier 2/3). When `cross_family_resolver` is
+         provided AND we're in external_llm mode AND it returns a
+         cross-family option, prefer that. Otherwise fall back to
+         `analysis_model`.
       4. Build a DispatchClient and call `validate_dataflow_claims`.
 
     Returns the metrics dict from `validate_dataflow_claims`, or None
@@ -1256,6 +1295,7 @@ def run_validation_pass(
         cost_tracker=cost_tracker,
         budget_threshold=budget_threshold,
         progress_callback=progress_callback,
+        deep_validate=deep_validate,
     )
 
 

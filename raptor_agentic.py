@@ -270,23 +270,32 @@ Examples:
              "correlation results.",
     )
     parser.add_argument(
-        "--validate-dataflow",
+        "--no-validate-dataflow",
         action="store_true",
-        help="IRIS-style validation: for Semgrep findings where the LLM "
-             "claimed a dataflow path, generate a CodeQL query and run it "
-             "against the project database. Refuted claims downgrade "
-             "is_exploitable; original verdicts preserved as "
-             "is_exploitable_pre_validation. Requires --codeql to have run. "
-             "Opt-in until FP-reduction rate is measured against real data.",
+        help="Disable IRIS-style dataflow validation entirely. By default, "
+             "Tier 1 (free, CodeQL-only — runs the pre-built RemoteFlowSource "
+             "and RAPTOR-shipped LocalFlowSource queries against the project "
+             "database) is on whenever --codeql produced a database. Pass this "
+             "flag to skip validation completely.",
     )
     parser.add_argument(
-        "--validation-budget",
+        "--deep-validate",
+        action="store_true",
+        help="Opt into Tier 2 / Tier 3 of IRIS validation: when Tier 1 is "
+             "inconclusive, ask the LLM to write source+sink predicates and "
+             "retry on compile errors. Costs LLM tokens; without this flag "
+             "Tier 1's free signal is the only validation. Implies dataflow "
+             "validation is enabled (see --no-validate-dataflow to opt out).",
+    )
+    parser.add_argument(
+        "--deep-validate-budget",
         type=float,
         default=0.60,
         metavar="FRACTION",
-        help="Fraction of LLM budget (0.0-1.0) above which dataflow "
-             "validation is skipped to leave room for downstream tasks "
-             "(consensus, exploit, patch). Default 0.60.",
+        help="Fraction of LLM budget (0.0-1.0) above which --deep-validate's "
+             "Tier 2 / 3 LLM calls are skipped to leave room for downstream "
+             "tasks (consensus, exploit, patch). Tier 1 has no LLM cost so "
+             "this budget never gates it. Default 0.60.",
     )
     parser.add_argument(
         "--trust-repo",
@@ -908,6 +917,9 @@ Examples:
                 aggregate=getattr(args, "aggregate", None),
                 auto_detect=llm_env.external_llm,
             )
+            # Dataflow validation is on by default when CodeQL ran;
+            # `--no-validate-dataflow` opts out entirely. `--deep-validate`
+            # opts into LLM-backed Tier 2/3 on top of the always-free Tier 1.
             orchestration_result = orchestrate(
                 prep_report_path=analysis_report,
                 repo_path=original_repo_path,
@@ -919,8 +931,9 @@ Examples:
                 llm_config=llm_config,
                 block_cc_dispatch=block_cc_dispatch,
                 accept_weakened_defenses=args.accept_weakened_defenses,
-                validate_dataflow=getattr(args, "validate_dataflow", False),
-                validation_budget_threshold=getattr(args, "validation_budget", 0.60),
+                dataflow_validation_enabled=not getattr(args, "no_validate_dataflow", False),
+                deep_validate=getattr(args, "deep_validate", False),
+                deep_validate_budget=getattr(args, "deep_validate_budget", 0.60),
             )
         else:
             print("\n  No analysis report from Phase 3 — skipping orchestration")
