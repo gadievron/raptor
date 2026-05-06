@@ -229,8 +229,9 @@ def orchestrate(
     llm_config: Optional[Any] = None,
     block_cc_dispatch: bool = False,
     accept_weakened_defenses: bool = False,
-    validate_dataflow: bool = False,
-    validation_budget_threshold: float = 0.60,
+    dataflow_validation_enabled: bool = True,
+    deep_validate: bool = False,
+    deep_validate_budget: float = 0.60,
 ) -> Optional[Dict[str, Any]]:
     """Orchestrate vulnerability analysis via external LLM or Claude Code.
 
@@ -567,7 +568,7 @@ def orchestrate(
     # For correlated-error reasons, the helper prefers a different model
     # family from the analysis model (cross-family) when one is available.
     validation_metrics: Optional[Dict[str, Any]] = None
-    if validate_dataflow:
+    if dataflow_validation_enabled:
         from packages.llm_analysis.dataflow_validation import run_validation_pass
         validation_metrics = run_validation_pass(
             findings=findings,
@@ -580,7 +581,8 @@ def orchestrate(
             dispatch_mode=dispatch_mode,
             cost_tracker=cost_tracker,
             cross_family_resolver=_resolve_cross_family_checker,
-            budget_threshold=validation_budget_threshold,
+            budget_threshold=deep_validate_budget,
+            deep_validate=deep_validate,
         )
         if validation_metrics is None:
             logger.info("dataflow validation skipped: mode/db unavailable")
@@ -742,7 +744,7 @@ def orchestrate(
     # across is_exploitable / cvss_score / severity.
     n_applied_downgrades = 0
     n_soft_downgrades = 0
-    if validate_dataflow:
+    if dataflow_validation_enabled:
         from packages.llm_analysis.dataflow_validation import (
             reconcile_dataflow_validation,
         )
@@ -761,7 +763,7 @@ def orchestrate(
     merged = _merge_results(report, per_finding_results,
                             no_exploits=no_exploits, no_patches=no_patches)
     merged["cross_finding_groups"] = groups
-    if validate_dataflow:
+    if dataflow_validation_enabled:
         merged["dataflow_validation"] = {
             **(validation_metrics or {}),
             "n_applied_downgrades": n_applied_downgrades,

@@ -226,6 +226,7 @@ class TestE2EIris:
                 role_resolution={},
                 dispatch_mode="external_llm",
                 cost_tracker=None,
+                deep_validate=True,
             )
 
         # Validation ran exactly once, confirmed
@@ -285,6 +286,7 @@ class TestE2EIris:
                 role_resolution={},
                 dispatch_mode="external_llm",
                 cost_tracker=None,
+                deep_validate=True,
             )
 
         # IRIS recommended a downgrade
@@ -361,6 +363,7 @@ class TestE2EIris:
                 role_resolution={},
                 dispatch_mode="external_llm",
                 cost_tracker=None,
+                deep_validate=True,
             )
 
         assert metrics["n_validated"] == 2
@@ -419,6 +422,7 @@ class TestE2EIris:
                 role_resolution={},
                 dispatch_mode="external_llm",
                 cost_tracker=None,
+                deep_validate=True,
             )
 
         recon = reconcile_dataflow_validation(results_by_id)

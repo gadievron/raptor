@@ -352,7 +352,9 @@ class TestTierSelection:
             "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
             return_value=self._FAKE_PREBUILT,
         ):
-            result, tier = _validate_one_hypothesis(h, f, adapter, llm)
+            result, tier = _validate_one_hypothesis(
+                h, f, adapter, llm, deep_validate=True,
+            )
 
         assert tier == "template"
         assert result.verdict == "refuted"
@@ -386,7 +388,9 @@ class TestTierSelection:
             "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
             return_value=self._FAKE_PREBUILT,
         ):
-            result, tier = _validate_one_hypothesis(h, f, adapter, llm)
+            result, tier = _validate_one_hypothesis(
+                h, f, adapter, llm, deep_validate=True,
+            )
 
         # Tier 2 confirmed via custom predicates that match the specific claim
         assert tier == "template"
@@ -497,7 +501,9 @@ class TestTierSelection:
             "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
             return_value=None,
         ):
-            result, tier = _validate_one_hypothesis(h, f, adapter, llm)
+            result, tier = _validate_one_hypothesis(
+                h, f, adapter, llm, deep_validate=True,
+            )
 
         assert tier == "template"
         adapter.run_prebuilt_query.assert_not_called()
@@ -543,7 +549,9 @@ class TestTierSelection:
             "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
             return_value=None,
         ):
-            result, tier = _validate_one_hypothesis(h, f, adapter, llm)
+            result, tier = _validate_one_hypothesis(
+                h, f, adapter, llm, deep_validate=True,
+            )
 
         assert tier == "retry"
         assert result.verdict == "confirmed"
@@ -573,7 +581,9 @@ class TestTierSelection:
             "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
             return_value=None,
         ):
-            result, tier = _validate_one_hypothesis(h, f, adapter, llm)
+            result, tier = _validate_one_hypothesis(
+                h, f, adapter, llm, deep_validate=True,
+            )
         # 1 initial + 2 retries = 3 attempts max
         assert adapter.run.call_count == 3
         assert result.verdict == "inconclusive"
@@ -599,7 +609,7 @@ class TestTierSelection:
             "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
             return_value=None,
         ):
-            _validate_one_hypothesis(h, f, adapter, llm)
+            _validate_one_hypothesis(h, f, adapter, llm, deep_validate=True)
         # Only 1 attempt — no retry on non-compile errors
         assert adapter.run.call_count == 1
 
@@ -1302,6 +1312,7 @@ class TestValidateDataflowClaims:
                 codeql_db=db,
                 repo_path=tmp_path,
                 llm_client=llm_client,
+                deep_validate=True,
             )
             assert m["n_validated"] == 1
             assert m["n_eligible"] == 1
@@ -1356,6 +1367,7 @@ class TestValidateDataflowClaims:
                 codeql_db=db,
                 repo_path=tmp_path,
                 llm_client=llm_client,
+                deep_validate=True,
             )
         # F1: 1 Tier 2 call. F2: cache hit, 0 calls.
         assert mock_run.call_count == 1
@@ -1411,6 +1423,7 @@ class TestValidateDataflowClaims:
                 codeql_db=db,
                 repo_path=tmp_path,
                 llm_client=llm_client,
+                deep_validate=True,
             )
             # F1 errored (not counted in n_validated), F2 ran
             assert m["n_validated"] == 1
@@ -1724,31 +1737,58 @@ class TestCrossFamilyResolution:
 
 
 class TestCLIFlag:
-    """--validate-dataflow CLI flag wiring."""
+    """CLI flag wiring after the rename: --no-validate-dataflow opts
+    OUT (default is on), --deep-validate opts INTO Tier 2/3 LLM tiers,
+    --deep-validate-budget caps Tier 2/3 LLM cost."""
 
-    def test_flag_default_is_false(self):
+    def test_no_validate_dataflow_flag_default_is_false(self):
         import argparse
-        # Reproduce the argparse setup minimally
         parser = argparse.ArgumentParser()
-        parser.add_argument("--validate-dataflow", action="store_true")
+        parser.add_argument("--no-validate-dataflow", action="store_true")
         args = parser.parse_args([])
-        assert args.validate_dataflow is False
+        assert args.no_validate_dataflow is False
 
-    def test_flag_when_set_is_true(self):
+    def test_no_validate_dataflow_flag_when_set_is_true(self):
         import argparse
         parser = argparse.ArgumentParser()
-        parser.add_argument("--validate-dataflow", action="store_true")
-        args = parser.parse_args(["--validate-dataflow"])
-        assert args.validate_dataflow is True
+        parser.add_argument("--no-validate-dataflow", action="store_true")
+        args = parser.parse_args(["--no-validate-dataflow"])
+        assert args.no_validate_dataflow is True
 
-    def test_orchestrate_signature_accepts_flag(self):
-        """orchestrate() must accept validate_dataflow=True without TypeError."""
+    def test_deep_validate_flag_default_is_false(self):
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--deep-validate", action="store_true")
+        args = parser.parse_args([])
+        assert args.deep_validate is False
+
+    def test_deep_validate_flag_when_set_is_true(self):
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--deep-validate", action="store_true")
+        args = parser.parse_args(["--deep-validate"])
+        assert args.deep_validate is True
+
+    def test_orchestrate_signature_accepts_new_flags(self):
+        """orchestrate() must accept the new flag shape without TypeError."""
         import inspect
         from packages.llm_analysis.orchestrator import orchestrate
         sig = inspect.signature(orchestrate)
-        assert "validate_dataflow" in sig.parameters
-        # Default should be False so existing callers are unaffected
-        assert sig.parameters["validate_dataflow"].default is False
+        assert "dataflow_validation_enabled" in sig.parameters
+        assert sig.parameters["dataflow_validation_enabled"].default is True
+        assert "deep_validate" in sig.parameters
+        assert sig.parameters["deep_validate"].default is False
+        assert "deep_validate_budget" in sig.parameters
+
+    def test_orchestrate_no_longer_accepts_old_flag(self):
+        """The pre-rename validate_dataflow / validation_budget_threshold
+        kwargs must not exist any more — callers should fail loudly when
+        passing them rather than silently disabling the new behaviour."""
+        import inspect
+        from packages.llm_analysis.orchestrator import orchestrate
+        sig = inspect.signature(orchestrate)
+        assert "validate_dataflow" not in sig.parameters
+        assert "validation_budget_threshold" not in sig.parameters
 
 
 class TestOrchestratorIntegration:

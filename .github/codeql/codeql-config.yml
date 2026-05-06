@@ -1,0 +1,21 @@
+# CodeQL configuration for GitHub code scanning.
+#
+# Test fixtures under packages/**/tests/fixtures/ are intentionally
+# vulnerable — they exist to validate RAPTOR's own dataflow validation
+# pipeline and exploit-feasibility analyses. Scanning them produces
+# alerts that look real but are by-design honeypots, drowning out
+# signal from actual code.
+#
+# Loaded automatically by GitHub's default CodeQL setup when present
+# at this path.
+name: RAPTOR CodeQL config
+
+paths-ignore:
+  # IRIS Tier 1 dataflow-validation fixtures (intentionally vulnerable
+  # Flask + sys.argv command-injection patterns; CodeQL flags them
+  # because they ARE vulnerable, by design).
+  - packages/llm_analysis/tests/fixtures/iris_e2e/**
+  # Generic test-fixture exclusion for any other deliberately-bad
+  # samples a future test adds.
+  - "**/tests/fixtures/**"
+  - "**/test_fixtures/**"
