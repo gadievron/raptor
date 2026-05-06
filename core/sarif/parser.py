@@ -113,14 +113,49 @@ def deduplicate_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     return unique
 
 
-def _result_key(result: Dict[str, Any]) -> Tuple[str, str, int]:
-    """Dedup key for a SARIF result: (ruleId, uri, startLine)."""
+def _result_key(
+    result: Dict[str, Any],
+) -> Tuple[str, str, int, int, int, str]:
+    """Dedup key for a SARIF result.
+
+    Pre-fix the key was just (ruleId, uri, startLine). That collapsed
+    distinct findings on the same line:
+
+      * Two SQL-injection findings at the same line but different
+        column offsets — the second arrival overwrote the first
+        and the operator only saw one.
+      * Two findings at different `endLine`s sharing a startLine
+        (multi-line span vs single-line span on the same start) —
+        same collapse.
+      * Two scanner runs returning the same shape under different
+        SARIF `partialFingerprints` — these are the tool's own
+        identity for the finding and should disambiguate even when
+        line/column match.
+
+    Extended key: (ruleId, uri, startLine, endLine, startColumn,
+    fingerprint). Missing fields default to 0 / "" so keys remain
+    hashable and the (legacy) "no column / no fingerprint" case
+    keeps deduping like before.
+    """
     rule_id = result.get("ruleId", "")
     locs = result.get("locations") or [{}]
     phys = locs[0].get("physicalLocation", {}) if locs else {}
     uri = phys.get("artifactLocation", {}).get("uri", "")
-    line = phys.get("region", {}).get("startLine", 0)
-    return (rule_id, uri, line)
+    region = phys.get("region", {}) or {}
+    line = region.get("startLine", 0)
+    end_line = region.get("endLine", line)  # multi-line spans differ
+    start_col = region.get("startColumn", 0)
+    # `partialFingerprints` is a tool-supplied dict; serialise the
+    # primary `primaryLocationLineHash` if present, else collapse the
+    # whole dict to a stable string. SARIF spec recommends
+    # `primaryLocationLineHash` as the dedup-quality fingerprint.
+    fp = result.get("partialFingerprints") or {}
+    fingerprint = fp.get("primaryLocationLineHash") or ""
+    if not fingerprint and fp:
+        # Fall back to a stable serialisation of the whole dict —
+        # different fingerprint sets mean different findings.
+        fingerprint = repr(sorted(fp.items()))
+    return (rule_id, uri, line, end_line, start_col, fingerprint)
 
 
 def merge_sarif(sarif_paths: List[str]) -> Dict[str, Any]:
