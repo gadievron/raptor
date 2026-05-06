@@ -1,0 +1,49 @@
+name: CodeQL
+
+# Replaces GitHub's default CodeQL setup (which doesn't honour
+# in-repo configs) with an advanced workflow that points at
+# .github/codeql/codeql-config.yml. The config excludes intentionally-
+# vulnerable test fixtures (e.g. tests/fixtures/iris_e2e/) which
+# would otherwise generate persistent alerts for code that exists to
+# validate RAPTOR's own dataflow analyses.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly run picks up new query versions even when there's no
+    # PR/push activity.
+    - cron: "27 4 * * 1"
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
