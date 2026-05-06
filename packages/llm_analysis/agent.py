@@ -402,11 +402,40 @@ class AutonomousSecurityAgentV2:
             print()
 
     def _load_attack_path(self, ref: str) -> Optional[Dict[str, Any]]:
-        """Load attack path from a ref like 'attack-paths.json#PATH-001'."""
+        """Load attack path from a ref like 'attack-paths.json#PATH-001'.
+
+        `ref` is read from finding JSON which may originate from
+        an LLM response or a third-party SARIF — it is untrusted.
+        Reject `file_name` segments that contain path separators
+        or `..` so a malicious ref can't escape the intended search
+        roots and load arbitrary attacker-controlled JSON files
+        from the filesystem (e.g. `ref =
+        "../../../tmp/attacker.json#x"` would otherwise resolve
+        and the parsed list would feed straight into the
+        validation pipeline as if it were a real attack path).
+        """
         if not ref or '#' not in ref:
             return None
         try:
             file_name, path_id = ref.split('#', 1)
+            # Containment: file_name must be a single bare filename
+            # (no slashes, no parent traversal). Reject NUL bytes
+            # for filesystem-API safety. Empty rejected too —
+            # `Path / ""` is `Path` and would load the directory
+            # listing as JSON (then fail at parse, but still
+            # opens an unintended path).
+            if (
+                not file_name
+                or "/" in file_name
+                or "\\" in file_name
+                or "\x00" in file_name
+                or file_name in {".", ".."}
+                or file_name.startswith("..")
+            ):
+                logger.debug(
+                    "Refusing attack-path ref with non-bare filename: %r", ref,
+                )
+                return None
             # Search in validation directory — check multiple likely locations
             candidates = [
                 self.out_dir.parent / "validation" / file_name,    # Normal pipeline layout
