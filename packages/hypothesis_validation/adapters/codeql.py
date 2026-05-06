@@ -119,6 +119,117 @@ class CodeQLAdapter(ToolAdapter):
             languages=["c", "cpp", "java", "python", "javascript", "typescript", "go", "csharp", "ruby", "swift"],
         )
 
+    def run_prebuilt_query(
+        self,
+        query_path: Path,
+        target: Path,
+        *,
+        timeout: int = 300,
+        env: Optional[Dict[str, str]] = None,
+    ) -> ToolEvidence:
+        """Invoke an existing pack-resident .ql file directly.
+
+        Unlike `run`, no temp pack / qlpack.yml is materialised — the
+        prebuilt query already lives inside an installed pack so its
+        imports and dependencies are pre-resolved. We call
+        `codeql database analyze <db> <abs-ql-path>` and parse the SARIF.
+
+        `query_path` MUST be an absolute path to a `.ql` file produced
+        by `dataflow_query_builder.discover_prebuilt_query`. The path
+        is recorded as the `rule` field on the evidence so callers can
+        identify which prebuilt query handled the hypothesis (audit
+        trail, telemetry).
+
+        target / timeout / env behave the same as `run()`.
+        """
+        rule_label = str(query_path)
+        if not self._codeql_bin:
+            return ToolEvidence(
+                tool=self.name, rule=rule_label, success=False,
+                error="codeql CLI is not installed",
+            )
+        if not self._database_path:
+            return ToolEvidence(
+                tool=self.name, rule=rule_label, success=False,
+                error="no CodeQL database configured (set_database() first)",
+            )
+        if not self._database_path.exists():
+            return ToolEvidence(
+                tool=self.name, rule=rule_label, success=False,
+                error=f"CodeQL database not found: {self._database_path}",
+            )
+        if not query_path or not Path(query_path).is_file():
+            return ToolEvidence(
+                tool=self.name, rule=rule_label, success=False,
+                error=f"prebuilt query file not found: {query_path}",
+            )
+
+        if env is None:
+            from core.config import RaptorConfig
+            env = RaptorConfig.get_safe_env()
+
+        runner = (
+            make_sandbox_runner(target=self._database_path)
+            if self._sandbox else subprocess.run
+        )
+
+        try:
+            with TemporaryDirectory(prefix="codeql_prebuilt_") as tmp:
+                sarif_path = Path(tmp) / "result.sarif"
+                cmd = [
+                    self._codeql_bin,
+                    "database", "analyze",
+                    str(self._database_path),
+                    str(query_path),
+                    "--format=sarif-latest",
+                    f"--output={sarif_path}",
+                    "--no-rerun",
+                ]
+                try:
+                    proc = runner(
+                        cmd, capture_output=True, text=True,
+                        timeout=timeout, env=env,
+                    )
+                except subprocess.TimeoutExpired:
+                    return ToolEvidence(
+                        tool=self.name, rule=rule_label, success=False,
+                        error=f"codeql timeout after {timeout}s",
+                    )
+                except OSError as e:
+                    return ToolEvidence(
+                        tool=self.name, rule=rule_label, success=False,
+                        error=f"failed to invoke codeql: {e}",
+                    )
+
+                if proc.returncode != 0 or not sarif_path.exists():
+                    err = (proc.stderr or proc.stdout or "").strip()
+                    return ToolEvidence(
+                        tool=self.name, rule=rule_label, success=False,
+                        error=err[:500] or f"codeql returned {proc.returncode}",
+                    )
+
+                matches = _parse_sarif(sarif_path)
+        except OSError as e:
+            return ToolEvidence(
+                tool=self.name, rule=rule_label, success=False,
+                error=f"workspace setup failed: {e}",
+            )
+
+        n = len(matches)
+        files = sorted({m["file"] for m in matches if m.get("file")})
+        if n:
+            summary = f"{n} match{'es' if n != 1 else ''} in {len(files)} file{'s' if len(files) != 1 else ''}"
+        else:
+            summary = "no matches"
+
+        return ToolEvidence(
+            tool=self.name,
+            rule=rule_label,
+            success=True,
+            matches=matches,
+            summary=summary,
+        )
+
     def run(
         self,
         rule: str,
