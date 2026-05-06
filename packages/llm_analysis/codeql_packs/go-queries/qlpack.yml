@@ -1,0 +1,13 @@
+---
+# RAPTOR-shipped CodeQL pack for Go: companion queries that complement
+# the stdlib `codeql/go-queries` pack with sources beyond
+# `RemoteFlowSource`. Mirrors the Python pack — selects stdlib
+# threat-model sources tagged `commandargs` (os.Args), `environment`
+# (os.Getenv, godotenv, envconfig), `stdin` (os.Stdin), and `file`
+# (file reads of attacker-controlled paths).
+library: false
+name: raptor/go-queries
+version: 0.0.1
+dependencies:
+  codeql/go-all: "*"
+extractor: go

@@ -69,10 +69,12 @@ class TestDiscovery:
         discover_prebuilt_queries.cache_clear()
 
     def _isolate_default_root(self, monkeypatch, tmp_path):
-        """Point discovery at tmp_path only — no in-repo extras leak."""
+        """Point discovery at tmp_path only — no in-repo extras leak,
+        no real `codeql resolve qlpacks` output leaks either."""
         from core.config import RaptorConfig
         monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
         monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [])
+        monkeypatch.setattr(_dqb, "_resolved_pack_pointers", lambda: {})
 
     def test_finds_path_problem_query(self, tmp_path, monkeypatch):
         sec = _build_pack_tree(tmp_path, language="python")
@@ -175,6 +177,7 @@ class TestDiscovery:
         from core.config import RaptorConfig
         monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path / "does-not-exist")
         monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [])
+        monkeypatch.setattr(_dqb, "_resolved_pack_pointers", lambda: {})
         out = discover_prebuilt_queries()
         assert out == {}
 
@@ -252,6 +255,7 @@ class TestMultiRoot:
                      cwe_tag="external/cwe/cwe-78", qid="extras/cwe-78")
 
         monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", default_root)
+        monkeypatch.setattr(_dqb, "_resolved_pack_pointers", lambda: {})
         monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [extras_root])
 
         assert discover_prebuilt_query("python", "CWE-78") == extras_ql
@@ -273,6 +277,7 @@ class TestMultiRoot:
                      kind="path-problem", cwe_tag="external/cwe/cwe-94")
 
         monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", default_root)
+        monkeypatch.setattr(_dqb, "_resolved_pack_pointers", lambda: {})
         monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [extras_root])
 
         assert discover_prebuilt_query("python", "CWE-22") is not None
@@ -289,6 +294,7 @@ class TestMultiRoot:
                      kind="path-problem", cwe_tag="external/cwe/cwe-78")
 
         monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", default_root)
+        monkeypatch.setattr(_dqb, "_resolved_pack_pointers", lambda: {})
         monkeypatch.setattr(
             RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS",
             [tmp_path / "does-not-exist"],
@@ -311,6 +317,7 @@ class TestMultiRoot:
                      cwe_tag="external/cwe/cwe-502")
 
         monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path / "no-default")
+        monkeypatch.setattr(_dqb, "_resolved_pack_pointers", lambda: {})
         monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [extras_root])
 
         assert discover_prebuilt_query("python", "CWE-502") == ql
@@ -328,6 +335,125 @@ class TestMultiRoot:
         assert "raptor-python-queries" in str(path) or \
                "codeql_packs/python-queries" in str(path), \
                f"expected in-repo pack to win, got {path}"
+
+
+class TestResolvedPackPointers:
+    """`_resolved_pack_pointers()` shells out to `codeql resolve qlpacks`
+    so operators with non-default install layouts (e.g. the upstream
+    queries-checkout at `~/.local/codeql-queries/`) get IRIS Tier 1
+    coverage. Discovery merges these pointers with the default-root
+    walk."""
+
+    def setup_method(self):
+        discover_prebuilt_queries.cache_clear()
+
+    def teardown_method(self):
+        discover_prebuilt_queries.cache_clear()
+
+    def test_resolved_pointers_picked_up_by_discovery(self, tmp_path, monkeypatch):
+        """A pack at a non-default location is found via the resolved-
+        pointers fallback. Layout: `<pack_dir>/Security/CWE-NNN/*.ql`
+        (no `<lang>-queries/<version>/` wrapper)."""
+        from core.config import RaptorConfig
+
+        pack_dir = tmp_path / "alt-install" / "go" / "ql" / "src"
+        sec = pack_dir / "Security" / "CWE-078"
+        sec.mkdir(parents=True)
+        _write_query(sec / "CommandInjection.ql",
+                     kind="path-problem", cwe_tag="external/cwe/cwe-78")
+
+        # Default root and extras both empty; only the resolved pointer
+        # provides this pack.
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path / "no-default")
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [])
+        monkeypatch.setattr(_dqb, "_resolved_pack_pointers",
+                            lambda: {"go": pack_dir})
+
+        assert discover_prebuilt_query("go", "CWE-78") is not None
+
+    def test_resolved_pointers_handle_nested_cwe_layout(self, tmp_path, monkeypatch):
+        """Upstream codeql-queries checkout uses
+        `Security/CWE/CWE-NNN/*.ql` — an extra `CWE/` intermediate dir.
+        rglob inside the walk handles this transparently."""
+        from core.config import RaptorConfig
+
+        pack_dir = tmp_path / "queries" / "cpp" / "ql" / "src"
+        nested = pack_dir / "Security" / "CWE" / "CWE-078"
+        nested.mkdir(parents=True)
+        _write_query(nested / "ExecTainted.ql",
+                     kind="path-problem", cwe_tag="external/cwe/cwe-78")
+
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path / "no-default")
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [])
+        monkeypatch.setattr(_dqb, "_resolved_pack_pointers",
+                            lambda: {"cpp": pack_dir})
+
+        assert discover_prebuilt_query("cpp", "CWE-78") is not None
+
+    def test_extras_still_win_over_resolved(self, tmp_path, monkeypatch):
+        """Extras (RaptorConfig) take priority over both resolved
+        pointers and the default — RAPTOR-shipped LocalFlowSource packs
+        must override stdlib queries on collisions."""
+        from core.config import RaptorConfig
+
+        # Extras: in-repo override
+        extras_root = tmp_path / "extras"
+        extras_pack = extras_root / "python-queries" / "Security" / "CWE-078"
+        extras_pack.mkdir(parents=True)
+        extras_ql = extras_pack / "FromExtras.ql"
+        _write_query(extras_ql, kind="path-problem",
+                     cwe_tag="external/cwe/cwe-78")
+
+        # Resolved pointer: stdlib version
+        resolved_pack = tmp_path / "alt-install" / "python" / "ql" / "src"
+        resolved_sec = resolved_pack / "Security" / "CWE-078"
+        resolved_sec.mkdir(parents=True)
+        _write_query(resolved_sec / "FromResolved.ql",
+                     kind="path-problem", cwe_tag="external/cwe/cwe-78")
+
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path / "no-default")
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [extras_root])
+        monkeypatch.setattr(_dqb, "_resolved_pack_pointers",
+                            lambda: {"python": resolved_pack})
+
+        assert discover_prebuilt_query("python", "CWE-78") == extras_ql
+
+    def test_codeql_unavailable_falls_back_silently(self, tmp_path, monkeypatch):
+        """When `codeql` isn't on PATH, _resolved_pack_pointers returns
+        {} and discovery proceeds with whatever the default + extras
+        walks find. No crash."""
+        from core.config import RaptorConfig
+        # Empty default, no extras, no resolved pointers — empty dict.
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path / "no-default")
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [])
+        monkeypatch.setattr(_dqb, "_resolved_pack_pointers", lambda: {})
+        out = discover_prebuilt_queries()
+        assert out == {}
+
+    def test_dedup_when_resolved_overlaps_default(self, tmp_path, monkeypatch):
+        """If resolve-qlpacks returns a path that's also under
+        _DEFAULT_PACK_ROOT, the walk dedupes by resolved absolute
+        path so we don't scan the same files twice."""
+        from core.config import RaptorConfig
+
+        # Default root contains a python-queries pack
+        default_root = tmp_path / "default"
+        pack_dir = default_root / "python-queries"
+        sec = pack_dir / "Security" / "CWE-078"
+        sec.mkdir(parents=True)
+        ql = sec / "X.ql"
+        _write_query(ql, kind="path-problem", cwe_tag="external/cwe/cwe-78")
+
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", default_root)
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [])
+        # Resolved pointer points at the same pack
+        monkeypatch.setattr(_dqb, "_resolved_pack_pointers",
+                            lambda: {"python": pack_dir})
+
+        # Should still find exactly one entry, not crash on duplicate
+        # walk into the same Security tree.
+        out = discover_prebuilt_queries()
+        assert out.get(("python", "CWE-78")) == ql
 
 
 # Tier 2 ---------------------------------------------------------------------

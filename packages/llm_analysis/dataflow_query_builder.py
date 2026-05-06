@@ -42,8 +42,11 @@ packs) automatically.
 """
 
 import functools
+import json
 import logging
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -106,6 +109,71 @@ def _pack_roots() -> List[Path]:
     except ImportError:
         pass
     return extras + [_DEFAULT_PACK_ROOT]
+
+
+_RESOLVE_TIMEOUT_SECS = 30
+# Match `codeql/<lang>-queries` (canonical published-pack naming).
+# `<lang>` covers letters, digits, hyphens — no slashes.
+_QUERIES_PACK_NAME_RE = re.compile(r"^codeql/([A-Za-z0-9-]+)-queries$")
+
+
+def _resolved_pack_pointers() -> Dict[str, Path]:
+    """Ask the `codeql` CLI for the canonical install paths of all
+    published query packs. Returns {language: pack_path} for the
+    `codeql/<lang>-queries` namespace; non-queries packs (libs,
+    examples, tests) are filtered out.
+
+    Used as a secondary discovery source so operators who installed
+    CodeQL via the upstream queries-checkout (for example
+    `~/.local/codeql-queries/`) get IRIS Tier 1 coverage too — the
+    layout there does not match `<DEFAULT_PACK_ROOT>/<lang>-queries/`,
+    so the original walk would otherwise miss it.
+
+    Failure modes handled silently: codeql not on PATH, CLI errors,
+    parse errors, or timeout. The hardcoded `_DEFAULT_PACK_ROOT` walk
+    runs regardless of this helper's success.
+
+    Sandbox-safe: `codeql resolve qlpacks` is a metadata read against
+    the binary's own pack-cache. No target-repo or network access.
+    """
+    binary = shutil.which("codeql")
+    if not binary:
+        return {}
+    try:
+        proc = subprocess.run(
+            [binary, "resolve", "qlpacks", "--format=json"],
+            capture_output=True, text=True,
+            timeout=_RESOLVE_TIMEOUT_SECS,
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.debug("codeql resolve qlpacks failed: %s", e)
+        return {}
+    if proc.returncode != 0:
+        logger.debug(
+            "codeql resolve qlpacks returned %d: %s",
+            proc.returncode, (proc.stderr or "").strip()[:200],
+        )
+        return {}
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError as e:
+        logger.debug("codeql resolve qlpacks JSON parse failed: %s", e)
+        return {}
+
+    out: Dict[str, Path] = {}
+    for pack_name, paths in (data or {}).items():
+        m = _QUERIES_PACK_NAME_RE.match(pack_name)
+        if not m or not paths:
+            continue
+        lang = m.group(1).lower()
+        # `paths` is a list — published packs typically have one entry.
+        # Take the first that exists on disk.
+        for p in paths:
+            path = Path(p)
+            if path.is_dir():
+                out[lang] = path
+                break
+    return out
 
 
 def _read_metadata(ql_path: Path) -> Optional[str]:
@@ -182,45 +250,84 @@ def discover_prebuilt_queries() -> Dict[Tuple[str, str], Path]:
     single root, iteration is alphabetical for determinism.
     """
     out: Dict[Tuple[str, str], Path] = {}
-    for root in _pack_roots():
+
+    # Build the priority-ordered list of (language, pack_dir) pairs:
+    #   1. Extras roots (RaptorConfig.EXTRA_CODEQL_PACK_ROOTS) — RAPTOR-
+    #      shipped packs win on collisions.
+    #   2. `codeql resolve qlpacks` — direct pointers from the operator's
+    #      installed packs, including non-default install layouts like
+    #      the upstream codeql-queries checkout.
+    #   3. _DEFAULT_PACK_ROOT iter — the canonical
+    #      `~/.codeql/packages/codeql/` install. May overlap with (2);
+    #      `seen_dirs` dedupes by resolved absolute path.
+    seen_dirs: set = set()
+    pack_dirs: List[Tuple[str, Path]] = []
+
+    def _add_pack_dir(language: str, pack_dir: Path) -> None:
+        try:
+            resolved = pack_dir.resolve()
+        except (OSError, RuntimeError):
+            return
+        if resolved in seen_dirs:
+            return
+        seen_dirs.add(resolved)
+        pack_dirs.append((language, pack_dir))
+
+    # (1) Extras roots — iterate children
+    for root in _pack_roots()[:-1]:  # all but the default (handled in (3))
         if not root.is_dir():
             logger.debug("CodeQL pack root not found: %s", root)
             continue
-
-        # Walk every <lang>-queries pack. The pack may have a single
-        # version dir (`<root>/<lang>-queries/<version>/Security/...`)
-        # or be laid out flat (`<root>/<lang>-queries/Security/...`)
-        # for in-repo packs that don't ship versioned. Both shapes
-        # are recognised.
-        for pack_dir in sorted(root.iterdir()):
-            if not pack_dir.is_dir():
+        for child in sorted(root.iterdir()):
+            if not child.is_dir():
                 continue
-            language = _language_from_pack_dir(pack_dir)
-            if language is None:
+            lang = _language_from_pack_dir(child)
+            if lang:
+                _add_pack_dir(lang, child)
+
+    # (2) `codeql resolve qlpacks` — direct language→path pointers
+    for lang, path in _resolved_pack_pointers().items():
+        _add_pack_dir(lang, path)
+
+    # (3) _DEFAULT_PACK_ROOT — canonical install layout
+    default_root = _pack_roots()[-1]
+    if default_root.is_dir():
+        for child in sorted(default_root.iterdir()):
+            if not child.is_dir():
                 continue
+            lang = _language_from_pack_dir(child)
+            if lang:
+                _add_pack_dir(lang, child)
+    else:
+        logger.debug("CodeQL default pack root not found: %s", default_root)
 
-            search_dirs: List[Path] = []
-            flat_security = pack_dir / "Security"
-            if flat_security.is_dir():
-                # Flat: <root>/<lang>-queries/Security/...
-                search_dirs.append(flat_security)
-            else:
-                # Versioned: <root>/<lang>-queries/<version>/Security/...
-                for version_dir in sorted(pack_dir.iterdir()):
-                    if not version_dir.is_dir():
-                        continue
-                    security_dir = version_dir / "Security"
-                    if security_dir.is_dir():
-                        search_dirs.append(security_dir)
+    # Walk each pack dir. Layout variants supported:
+    #   Flat:        <pack>/Security/...                 (in-repo packs)
+    #   Versioned:   <pack>/<version>/Security/...       (canonical install)
+    #   Nested-CWE:  <pack>/Security/CWE/CWE-NNN/*.ql    (upstream queries
+    #                                                    checkout — handled
+    #                                                    by rglob below)
+    for language, pack_dir in pack_dirs:
+        search_dirs: List[Path] = []
+        flat_security = pack_dir / "Security"
+        if flat_security.is_dir():
+            search_dirs.append(flat_security)
+        else:
+            for version_dir in sorted(pack_dir.iterdir()):
+                if not version_dir.is_dir():
+                    continue
+                security_dir = version_dir / "Security"
+                if security_dir.is_dir():
+                    search_dirs.append(security_dir)
 
-            for security_dir in search_dirs:
-                for ql_path in sorted(security_dir.rglob("*.ql")):
-                    metadata = _read_metadata(ql_path)
-                    if metadata is None or not _is_path_problem(metadata):
-                        continue
-                    for cwe in _extract_cwes(metadata):
-                        key = (language, cwe)
-                        out.setdefault(key, ql_path)
+        for security_dir in search_dirs:
+            for ql_path in sorted(security_dir.rglob("*.ql")):
+                metadata = _read_metadata(ql_path)
+                if metadata is None or not _is_path_problem(metadata):
+                    continue
+                for cwe in _extract_cwes(metadata):
+                    key = (language, cwe)
+                    out.setdefault(key, ql_path)
 
     if out:
         logger.debug(

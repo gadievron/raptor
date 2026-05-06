@@ -1,0 +1,15 @@
+---
+# RAPTOR-shipped CodeQL pack for Java: companion queries that
+# complement the stdlib `codeql/java-queries` pack with sources
+# beyond `RemoteFlowSource`. Mirrors the Python pack — selects
+# stdlib threat-model sources tagged `commandargs` (main args[]),
+# `environment` (System.getenv, getProperty), `stdin`
+# (System.in / Scanner reads), `file` (file reads of attacker-
+# controlled paths), and `local` (Java's broader local-tag covering
+# things not specifically categorised).
+library: false
+name: raptor/java-queries
+version: 0.0.1
+dependencies:
+  codeql/java-all: "*"
+extractor: java
