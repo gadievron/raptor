@@ -21,6 +21,15 @@ STATUS_COMPLETED = "completed"
 STATUS_FAILED = "failed"
 STATUS_CANCELLED = "cancelled"
 
+# `_cleanup_abandoned` freshness threshold. A sibling run in
+# status=running that was created within this many seconds is treated
+# as a concurrent in-flight run, not as an Esc-then-retry abandon.
+# 30s is comfortably longer than any spawn-to-first-checkpoint
+# window (sandbox setup + tool init typically completes in a few
+# seconds) but tighter than a real abandon (Esc-cancelled runs sit
+# in 'running' state until the session terminates, often hours).
+_ABANDON_FRESHNESS_S = 30.0
+
 # Known command prefixes for inferring command type from directory names.
 # Includes both legacy prefixes (raptor_, autonomous, exploitability-validation)
 # and project-mode prefixes (agentic, validate, understand, fuzz, web).
@@ -172,6 +181,16 @@ def _cleanup_abandoned(project_dir: Path, command: str, session_pid: int) -> Non
     An abandoned run is one that has status=running, same session_pid (same
     Claude Code session), and same command type. This happens when the user
     presses Esc and retries the same command.
+
+    Recent siblings (created within ``_ABANDON_FRESHNESS_S`` seconds)
+    are LEFT ALONE even on the (session_pid, command) match. Pre-fix
+    a user issuing two commands of the same type in close succession
+    (or two parallel `/scan`s from the same Claude Code session in
+    different terminals) saw the new run mark the in-flight earlier
+    one as failed — exactly the wrong behaviour. The Esc-cancel case
+    the function is meant to handle leaves stale runs measured in
+    minutes, not seconds, so the freshness gate distinguishes
+    cleanly.
     """
     try:
         if not project_dir.is_dir():
@@ -184,6 +203,8 @@ def _cleanup_abandoned(project_dir: Path, command: str, session_pid: int) -> Non
         # of *our* past runs; if we can't enumerate, skip and let the
         # caller proceed.
         return
+
+    now = datetime.now(timezone.utc)
     for d in children:
         try:
             if not d.is_dir() or d.name.startswith((".", "_")):
@@ -200,6 +221,22 @@ def _cleanup_abandoned(project_dir: Path, command: str, session_pid: int) -> Non
         if (meta.get("status") == STATUS_RUNNING
                 and meta.get("command") == command
                 and meta.get("session_pid") == session_pid):
+            # Freshness gate — skip recent siblings (probable
+            # concurrent in-flight run of the same command type from
+            # the same session, NOT an Esc-then-retry).
+            ts_str = meta.get("timestamp")
+            if isinstance(ts_str, str):
+                try:
+                    started = datetime.fromisoformat(ts_str)
+                    if started.tzinfo is None:
+                        started = started.replace(tzinfo=timezone.utc)
+                    age_s = (now - started).total_seconds()
+                    if age_s < _ABANDON_FRESHNESS_S:
+                        continue
+                except ValueError:
+                    # Malformed timestamp — fall through to fail_run
+                    # (the run is questionable either way).
+                    pass
             fail_run(d, "abandoned — replaced by new run in same session",
                      record_timing=False)
 
