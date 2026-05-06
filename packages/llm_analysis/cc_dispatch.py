@@ -36,7 +36,22 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
 
     Used as a dispatch_fn callable by dispatch_task().
     """
-    effective_schema = build_schema() if schema else None
+    # Use the caller's schema. Pre-fix this was
+    # `build_schema() if schema else None`, which IGNORED the
+    # caller's argument and substituted FINDING_RESULT_SCHEMA
+    # for every CC invocation. AnalysisTask happens to use a
+    # subset of FINDING_RESULT_SCHEMA so analysis broadly worked,
+    # but ConsensusTask, ExploitTask, PatchTask, JudgeTask,
+    # GroupAnalysisTask, AggregationTask all pass DIFFERENT
+    # schemas with different required-field sets. CC would be
+    # asked (via `--json-schema`) to satisfy FINDING_RESULT_SCHEMA
+    # while the caller's schema demanded different shapes. Then
+    # `validate_structured_response(parsed, effective_schema)`
+    # below would validate the response against the wrong schema
+    # too — so the quality-score check passed for whatever shape
+    # FINDING_RESULT_SCHEMA happened to require, irrespective of
+    # what the caller actually wanted.
+    effective_schema = schema  # None means freeform — preserved.
     config = CCDispatchConfig(
         claude_bin=claude_bin,
         tools="Read,Grep,Glob",
