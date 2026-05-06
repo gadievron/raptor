@@ -482,7 +482,9 @@ def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
     return findings
 
 
-def validate_sarif(sarif_path: Path, schema_path: Optional[Path] = None) -> bool:
+def validate_sarif(
+    sarif_path: Path, schema_path: Optional[Path] = None,
+) -> Optional[bool]:
     """
     Validate SARIF file against schema.
 
@@ -491,7 +493,22 @@ def validate_sarif(sarif_path: Path, schema_path: Optional[Path] = None) -> bool
         schema_path: Optional path to SARIF schema (auto-detected if None)
 
     Returns:
-        True if valid, False otherwise
+        Tri-state — pre-fix returned plain bool, which conflated
+        "passed full validation" with "couldn't run full validation
+        but the basic shape was OK" (jsonschema not installed, schema
+        file missing, schema file unreadable). Callers couldn't
+        distinguish "trust this SARIF" from "couldn't fully verify
+        it" — the latter often warrants a warning to the operator.
+
+          * True   — passed full schema validation.
+          * False  — failed validation (load failed, version
+                     unsupported, missing 'runs' field, OR
+                     jsonschema reported a schema violation).
+          * None   — basic structural checks passed, but full
+                     schema validation could not run (jsonschema
+                     not installed, schema file missing /
+                     unreadable). Caller decides whether to treat
+                     as trust-with-warning or as failure.
     """
     sarif_data = load_sarif(sarif_path)
     if not sarif_data:
@@ -507,7 +524,10 @@ def validate_sarif(sarif_path: Path, schema_path: Optional[Path] = None) -> bool
         logger.warning("SARIF validation: missing required 'runs' field")
         return False
 
-    # Optional: Full schema validation if jsonschema is available
+    # Track whether full schema validation actually ran. If it didn't,
+    # we return None (the tri-state "couldn't verify") rather than
+    # True (the false-positive "fully verified").
+    full_validation_ran = False
     try:
         import jsonschema
 
@@ -518,17 +538,26 @@ def validate_sarif(sarif_path: Path, schema_path: Optional[Path] = None) -> bool
             schema = load_json(schema_path)
             if schema is not None:
                 jsonschema.validate(instance=sarif_data, schema=schema)
+                full_validation_ran = True
+            else:
+                logger.warning(
+                    f"SARIF validation: schema file unreadable: {schema_path}"
+                )
         else:
-            # Skip full validation if schema not available
-            pass
+            logger.debug(
+                f"SARIF validation: schema file not found at {schema_path}; "
+                "skipping full validation"
+            )
     except ImportError:
-        # jsonschema not installed - skip full validation
-        pass
+        logger.debug(
+            "SARIF validation: jsonschema not installed; "
+            "skipping full validation"
+        )
     except jsonschema.ValidationError as e:
         logger.warning(f"SARIF validation: schema validation failed: {e.message}")
         return False
 
-    return True
+    return True if full_validation_ran else None
 
 
 def generate_scan_metrics(sarif_paths: List[str]) -> Dict[str, Any]:

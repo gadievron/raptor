@@ -281,12 +281,24 @@ def run_single_semgrep(
         stderr_log.write_text(se or "")
         exit_file.write_text(str(rc))
 
-        # Validate SARIF
+        # Validate SARIF — tri-state result:
+        #   True  → full schema validation passed
+        #   False → load failed or schema rejected the structure
+        #   None  → basic shape OK but full schema check couldn't run
+        #           (jsonschema not installed, schema file missing)
+        # Treat None as trust-with-warning rather than rejection;
+        # the basic-shape check (load + version + runs field) is
+        # already strict enough to catch malformed semgrep output.
         is_valid = validate_sarif(sarif)
-        if not is_valid:
+        if is_valid is False:
             logger.warning(f"Semgrep scan '{name}' produced invalid SARIF")
+        elif is_valid is None:
+            logger.debug(
+                f"Semgrep scan '{name}': SARIF basic shape OK but full "
+                "schema validation skipped (jsonschema or schema file unavailable)"
+            )
 
-        success = rc in (0, 1) and is_valid
+        success = rc in (0, 1) and is_valid is not False
         logger.debug(f"Completed Semgrep scan: {name} (exit={rc}, valid={is_valid})")
 
         return str(sarif), success
