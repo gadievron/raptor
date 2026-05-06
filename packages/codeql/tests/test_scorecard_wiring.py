@@ -92,6 +92,11 @@ def _build_llm(tmp_path) -> "object":
     cfg.scorecard_path = tmp_path / "scorecard.json"
     cfg.scorecard_enabled = True
     cfg.scorecard_retain_samples = True
+    # Deterministic short-circuit assertions: the dataclass default
+    # for shadow_rate is 0.05, which would flake the
+    # ``short_circuit_skips_full`` test ~5% of the time when the random
+    # roll lands under threshold.
+    cfg.scorecard_shadow_rate = 0.0
 
     client = LLMClient.__new__(LLMClient)
     client.config = cfg
