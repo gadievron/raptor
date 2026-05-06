@@ -212,6 +212,19 @@ def merge_sarif(sarif_paths: List[str]) -> Dict[str, Any]:
                     # None for the dropped rules).
                     "rules_by_id": {},
                     "results": {},  # keyed by _result_key for dedup
+                    # Preserve `originalUriBaseIds` and `invocations`
+                    # across same-tool runs. Pre-fix these were
+                    # silently dropped — `parse_sarif_findings`
+                    # downstream cannot resolve relative URIs in the
+                    # results without `originalUriBaseIds`, and
+                    # consumers reasoning about run timing /
+                    # exitCode (CI gates, run-aborted detection) need
+                    # `invocations` intact. Per-id merge for the
+                    # bases (later wins on key collision); list
+                    # extend for invocations (each run is its own
+                    # logical invocation).
+                    "uri_bases": {},
+                    "invocations": [],
                 }
             # Union this run's rules into the per-tool index. Same-id
             # rules from later runs win on collision (matches the
@@ -221,6 +234,15 @@ def merge_sarif(sarif_paths: List[str]) -> Dict[str, Any]:
                     rule_id = rule.get("id")
                     if rule_id:
                         tool_runs[tool_name]["rules_by_id"][rule_id] = rule
+            # Merge originalUriBaseIds — keyed dict, later wins.
+            for base_id, base in (run.get("originalUriBaseIds") or {}).items():
+                if isinstance(base, dict):
+                    tool_runs[tool_name]["uri_bases"][base_id] = base
+            # Append invocations — each input run is its own
+            # invocation record; multiple legitimately coexist.
+            for inv in run.get("invocations") or []:
+                if isinstance(inv, dict):
+                    tool_runs[tool_name]["invocations"].append(inv)
             for result in run.get("results", []):
                 key = _result_key(result)
                 tool_runs[tool_name]["results"][key] = result
@@ -234,10 +256,15 @@ def merge_sarif(sarif_paths: List[str]) -> Dict[str, Any]:
         if run_data["rules_by_id"]:
             driver["rules"] = list(run_data["rules_by_id"].values())
         tool_block["driver"] = driver
-        merged_runs.append({
+        run_out: Dict[str, Any] = {
             "tool": tool_block,
-            "results": list(run_data["results"].values()),
-        })
+        }
+        if run_data["uri_bases"]:
+            run_out["originalUriBaseIds"] = run_data["uri_bases"]
+        if run_data["invocations"]:
+            run_out["invocations"] = run_data["invocations"]
+        run_out["results"] = list(run_data["results"].values())
+        merged_runs.append(run_out)
 
     return {
         "version": "2.1.0",
