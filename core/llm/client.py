@@ -250,6 +250,12 @@ class LLMClient:
         self.total_cost = 0.0
         self.request_count = 0
         self.task_type_costs: Dict[str, float] = {}  # task_type → cumulative cost
+        # Number of full ANALYSE calls avoided because the scorecard
+        # trusted the cheap-tier verdict and the consumer short-
+        # circuited. Bumped by consumers via ``record_short_circuit``;
+        # surfaced in /codeql's summary so the scorecard's effect on
+        # cost shows up as a concrete line.
+        self.short_circuits = 0
         self._stats_lock = threading.RLock()
         # Per-cache-key locks. Two threads issuing the same cache key
         # serialise on its lock so only one calls the provider; the
@@ -371,6 +377,14 @@ class LLMClient:
                 shadow_rate=self.config.scorecard_shadow_rate,
             )
         return self._scorecard
+
+    def record_short_circuit(self) -> None:
+        """Bump the avoided-full-call counter. Called by consumers
+        (codeql's autonomous_analyzer and dataflow_validator) right
+        after they take the scorecard-trusted short-circuit path so
+        the saving shows up in the run summary."""
+        with self._stats_lock:
+            self.short_circuits += 1
 
     def _key_lock(self, cache_key: str) -> "threading.Lock":
         """Return (creating if needed) a per-key lock used to dedupe

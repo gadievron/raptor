@@ -210,12 +210,14 @@ def run_autonomous_workflow(args):
                 logger.error(f"Analysis failed: {e}", exc_info=True)
 
     # Save autonomous analysis summary
+    short_circuits = getattr(llm_client, "short_circuits", 0)
     summary = {
         "total_findings": scan_result.total_findings,
         "analyzed": total_analyzed,
         "exploitable": total_exploitable,
         "exploits_generated": total_exploits_generated,
         "exploits_compiled": total_exploits_compiled,
+        "fast_tier_short_circuits": short_circuits,
         "scan_result": scan_result.to_dict(),
     }
 
@@ -233,6 +235,8 @@ def run_autonomous_workflow(args):
     print(f"Exploitable: {total_exploitable}")
     print(f"Exploits generated: {total_exploits_generated}")
     print(f"Exploits compiled: {total_exploits_compiled}")
+    if short_circuits > 0:
+        print(f"Fast-tier saved: {short_circuits} full ANALYSE call{'s' if short_circuits != 1 else ''}")
     print(f"\nOutput: {agent.out_dir}")
     print(f"  Scan results: {len(scan_result.sarif_files)} SARIF files")
     print(f"  Autonomous analysis: autonomous/")

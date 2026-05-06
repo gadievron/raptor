@@ -546,6 +546,7 @@ class DataflowValidator:
                 f"skipping full validation (cheap verdict trusted by "
                 f"scorecard)"
             )
+            self.llm.record_short_circuit()
             return self._short_circuit_fp_dataflow_result(cheap_reasoning)
 
         # Path is sat or indeterminate — run full LLM analysis.

@@ -428,6 +428,7 @@ class AutonomousCodeQLAnalyzer:
                 f"skipping full analysis (cheap verdict trusted by "
                 f"scorecard)"
             )
+            self.llm.record_short_circuit()
             return self._short_circuit_fp_result(cheap_reasoning)
 
         system = (

@@ -104,6 +104,7 @@ def _build_llm(tmp_path) -> "object":
     client.total_cost = 0.0
     client.request_count = 0
     client.task_type_costs = {}
+    client.short_circuits = 0
     client._stats_lock = threading.RLock()
     client._key_locks = {}
     client._key_locks_guard = threading.Lock()
@@ -270,6 +271,32 @@ def test_short_circuit_skips_full_when_scorecard_trusts_cell(llm):
     # And the result reflects the cheap reasoning.
     assert result.is_true_positive is False
     assert "constant 'admin'" in result.reasoning
+    # Substrate counter bumped so /codeql can surface the saving.
+    assert client.short_circuits == 1
+
+
+def test_short_circuits_counter_starts_at_zero_when_full_runs(llm):
+    """No short-circuit → counter stays at zero. Guards against
+    consumers accidentally bumping on the fall-through path."""
+    client, prov = llm
+    analyzer = _make_analyzer(client)
+
+    def responder(prompt, schema, system_prompt):
+        if _is_cheap_call(schema):
+            return ({"verdict": "needs_analysis",
+                     "reasoning": "uncertain"}, "raw")
+        return ({
+            "is_true_positive": True, "is_exploitable": True,
+            "exploitability_score": 0.5, "severity_assessment": "medium",
+            "reasoning": "tainted", "attack_scenario": "",
+            "prerequisites": [], "impact": "?", "cvss_estimate": 5.0,
+            "mitigation": "fix",
+        }, "raw")
+    prov.responder = responder
+
+    analyzer.analyze_vulnerability(_finding(), "code")
+
+    assert client.short_circuits == 0
 
 
 def test_cheap_says_needs_analysis_does_not_record_event(llm):
