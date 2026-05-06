@@ -77,6 +77,7 @@ class TestProject(unittest.TestCase):
         """sweep skips runs whose session PID is still alive."""
         from core.run.metadata import RUN_METADATA_FILE
         from core.json import load_json, save_json
+        from unittest.mock import patch
         import os
         with TemporaryDirectory() as d:
             run = Path(d) / "scan-20260401"
@@ -85,10 +86,19 @@ class TestProject(unittest.TestCase):
                 "version": 1, "command": "scan",
                 "timestamp": "2026-04-01T00:00:00+00:00",
                 "status": "running", "extra": {},
-                "session_pid": os.getpid(),  # our PID — definitely alive
+                "session_pid": os.getpid(),
             })
+            # Mock `_pid_alive` to True. Pre-batch 142 the function
+            # was a plain `os.kill(pid, 0)` and the test PID itself
+            # was sufficient. Post-142 it cross-checks
+            # /proc/<pid>/comm for a "claude" substring (PID-reuse
+            # protection), and the test process is `python`/`pytest`
+            # — fails the comm check. Mock so this test stays
+            # focused on sweep logic, not on _pid_alive's mechanics
+            # (which has its own coverage).
             p = Project(name="test", target="/tmp", output_dir=d)
-            count = p.sweep_stale_runs(keep_latest=False)
+            with patch("core.run.metadata._pid_alive", return_value=True):
+                count = p.sweep_stale_runs(keep_latest=False)
             self.assertEqual(count, 0)
             self.assertEqual(load_json(run / RUN_METADATA_FILE)["status"], "running")
 

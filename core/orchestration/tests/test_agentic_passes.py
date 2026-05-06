@@ -161,16 +161,25 @@ class SelectFindingsTests(unittest.TestCase):
             self.assertEqual(
                 {f["id"] for f in _select_findings_for_validate(report)}, {"a", "b"})
 
-    def test_strict_match_no_case_folding(self):
+    def test_case_folded_and_whitespace_tolerant(self):
+        # Pre-fix this asserted strict equality and only "c" matched.
+        # Post-fix the comparison strip+lowers so all three (and the
+        # leading/trailing-space variants common in spliced outputs)
+        # qualify. Schema-enforced canonical lowercase still produces
+        # the same outcome; the relaxation only adds robustness for
+        # non-orchestrated dispatch paths and external producers.
         with TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             report = self._write_report(tmp, [
                 {"id": "a", "confidence": "High"},
                 {"id": "b", "confidence": "HIGH"},
                 {"id": "c", "confidence": "high"},
+                {"id": "d", "confidence": "  high  "},
             ])
             self.assertEqual(
-                [f["id"] for f in _select_findings_for_validate(report)], ["c"])
+                {f["id"] for f in _select_findings_for_validate(report)},
+                {"a", "b", "c", "d"},
+            )
 
     def test_skips_null_or_missing_fields(self):
         with TemporaryDirectory() as tmp:

@@ -41,11 +41,13 @@ class TestGetOutputDir(unittest.TestCase):
         result = get_output_dir("scan", target_name="")
         self.assertTrue(result.name.startswith("scan_"))
         parts = result.name.split("_")
-        # scan_<date>_<time>_pid<N> — at least 4 parts; using >= so
-        # adding more suffix segments later (e.g., microseconds) doesn't
-        # break this test. Final part must be the pid marker.
-        self.assertGreaterEqual(len(parts), 4)
-        self.assertTrue(parts[-1].startswith("pid"))
+        # scan_<date>_<time>_pid<N>_<ns-tail> — at least 5 parts now
+        # (4-digit monotonic-ns tail added in batch 143 for in-process
+        # collision avoidance). The pid marker is no longer the LAST
+        # part; assert it appears in the suffix segment instead.
+        self.assertGreaterEqual(len(parts), 5)
+        pid_parts = [p for p in parts if p.startswith("pid")]
+        self.assertEqual(len(pid_parts), 1, f"expected one pid marker in {parts!r}")
 
     def test_concurrent_same_second_invocations_get_distinct_dirs(self):
         # The bug being fixed: two RAPTOR processes starting in the same
@@ -129,24 +131,34 @@ class TestUniqueRunSuffix(unittest.TestCase):
     """The collision-prevention primitive used by every standalone-mode
     output-dir computation across RAPTOR."""
 
+    # The 4-digit monotonic-ns tail (added in batch 143) makes
+    # exact-string assertions impractical without also patching
+    # time.monotonic_ns. Use prefix + shape assertions instead so
+    # the tests survive future tail-format adjustments.
     def test_underscore_separator(self):
         with patch("time.strftime", return_value="20260427_120000"):
             with patch("os.getpid", return_value=12345):
-                self.assertEqual(unique_run_suffix("_"),
-                                 "20260427_120000_pid12345")
+                suffix = unique_run_suffix("_")
+                self.assertTrue(suffix.startswith("20260427_120000_pid12345_"))
+                tail = suffix.rsplit("_", 1)[-1]
+                self.assertEqual(len(tail), 4)
+                self.assertTrue(tail.isdigit())
 
     def test_hyphen_separator(self):
         with patch("time.strftime", return_value="20260427-120000"):
             with patch("os.getpid", return_value=12345):
-                self.assertEqual(unique_run_suffix("-"),
-                                 "20260427-120000-pid12345")
+                suffix = unique_run_suffix("-")
+                self.assertTrue(suffix.startswith("20260427-120000-pid12345-"))
+                tail = suffix.rsplit("-", 1)[-1]
+                self.assertEqual(len(tail), 4)
+                self.assertTrue(tail.isdigit())
 
     def test_default_separator_is_underscore(self):
         # Standalone mode is the more common shape, so default to '_'.
         with patch("time.strftime", return_value="20260427_120000"):
             with patch("os.getpid", return_value=12345):
-                self.assertEqual(unique_run_suffix(),
-                                 "20260427_120000_pid12345")
+                suffix = unique_run_suffix()
+                self.assertTrue(suffix.startswith("20260427_120000_pid12345_"))
 
     def test_uses_correct_strftime_format_for_separator(self):
         # The separator threads through into strftime so the date and time

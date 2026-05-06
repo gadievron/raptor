@@ -33,7 +33,7 @@ The three-tier search in find_understand_output() covers:
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -1040,7 +1040,7 @@ def _merge_attack_surface(
             "sinks": merged_sinks,
             "trust_boundaries": merged_boundaries,
             "_imported_from": str(understand_dir / "context-map.json"),
-            "_imported_at": datetime.now().isoformat(),
+            "_imported_at": datetime.now(timezone.utc).isoformat(),
         }
         save_json(surface_path, attack_surface)
 
@@ -1143,7 +1143,7 @@ def _trace_to_attack_path(trace: Dict[str, Any], trace_file: Path) -> Dict[str, 
         "status": "uncertain",
         "source": TRACE_SOURCE_LABEL,
         "imported_from": str(trace_file),
-        "imported_at": datetime.now().isoformat(),
+        "imported_at": datetime.now(timezone.utc).isoformat(),
     }
 
     # Carry through attacker control summary as an annotation — useful context

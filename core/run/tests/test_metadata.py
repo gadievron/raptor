@@ -94,10 +94,15 @@ class TestRunLifecycle(unittest.TestCase):
                 self.assertIsInstance(meta["session_pid"], int)
 
     def test_start_cleanup_abandoned(self):
-        """start_run marks same-session same-type abandoned runs as failed."""
+        """start_run marks same-session same-type abandoned runs as
+        failed — provided they're past the freshness gate. Fresh
+        siblings (within `_ABANDON_FRESHNESS_S`) are LEFT ALONE
+        because they're indistinguishable from a legitimate
+        concurrent run of the same command."""
         import os
         if not os.environ.get("CLAUDECODE"):
             self.skipTest("Requires CLAUDECODE environment")
+        from core.json import save_json
         with TemporaryDirectory() as d:
             project = Path(d) / "project"
             project.mkdir()
@@ -106,11 +111,39 @@ class TestRunLifecycle(unittest.TestCase):
             start_run(run1, "validate")
             meta1 = load_json(run1 / RUN_METADATA_FILE)
             self.assertEqual(meta1["status"], "running")
+            # Age run1's timestamp past the freshness threshold so
+            # the cleanup recognises it as a real abandon, not a
+            # concurrent in-flight run.
+            from datetime import datetime, timedelta, timezone
+            meta1["timestamp"] = (
+                datetime.now(timezone.utc) - timedelta(minutes=5)
+            ).isoformat()
+            save_json(run1 / RUN_METADATA_FILE, meta1)
             # Second run of same type — should mark first as failed
             run2 = project / "validate-20260402"
             start_run(run2, "validate")
             meta1 = load_json(run1 / RUN_METADATA_FILE)
             self.assertEqual(meta1["status"], "failed")
+            meta2 = load_json(run2 / RUN_METADATA_FILE)
+            self.assertEqual(meta2["status"], "running")
+
+    def test_start_no_cleanup_recent_sibling(self):
+        """start_run leaves a fresh same-session same-type sibling
+        alone (concurrent in-flight, not Esc-then-retry)."""
+        import os
+        if not os.environ.get("CLAUDECODE"):
+            self.skipTest("Requires CLAUDECODE environment")
+        with TemporaryDirectory() as d:
+            project = Path(d) / "project"
+            project.mkdir()
+            run1 = project / "validate-20260401"
+            start_run(run1, "validate")
+            # Immediately start a second run; freshness gate keeps
+            # run1 in 'running' state.
+            run2 = project / "validate-20260402"
+            start_run(run2, "validate")
+            meta1 = load_json(run1 / RUN_METADATA_FILE)
+            self.assertEqual(meta1["status"], "running")
             meta2 = load_json(run2 / RUN_METADATA_FILE)
             self.assertEqual(meta2["status"], "running")
 
@@ -174,18 +207,26 @@ class TestIsRunDirectory(unittest.TestCase):
             start_run(out, "scan")
             self.assertTrue(is_run_directory(out))
 
-    def test_with_known_prefix(self):
+    def test_with_known_prefix_strict_rejects(self):
+        # Default strict mode: prefix alone is not enough — needs
+        # the canonical .raptor-run.json marker. Prevents over-match
+        # on user dirs that happen to start with `scan_`.
         with TemporaryDirectory() as d:
             out = Path(d) / "scan_vulns_20260406"
             out.mkdir()
-            self.assertTrue(is_run_directory(out))
+            self.assertFalse(is_run_directory(out))
+            self.assertTrue(is_run_directory(out, strict=False))
 
-    def test_with_typical_files(self):
+    def test_with_typical_files_strict_rejects(self):
+        # Default strict mode: stray findings.json in an unrelated
+        # dir doesn't make it a run dir. Lenient mode (the legacy
+        # heuristic, now opt-in) still accepts.
         with TemporaryDirectory() as d:
             out = Path(d) / "mystery_dir"
             out.mkdir()
             (out / "findings.json").write_text("{}")
-            self.assertTrue(is_run_directory(out))
+            self.assertFalse(is_run_directory(out))
+            self.assertTrue(is_run_directory(out, strict=False))
 
     def test_empty_dir(self):
         with TemporaryDirectory() as d:

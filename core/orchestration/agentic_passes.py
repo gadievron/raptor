@@ -47,6 +47,7 @@ from typing import Optional
 from core.json import load_json, save_json
 from core.sandbox import run as sandbox_run
 from core.schema_constants import CONFIDENCE_LEVELS
+from core.security.log_sanitisation import escape_nonprintable
 
 logger = logging.getLogger(__name__)
 
@@ -163,8 +164,13 @@ def _run_understand_prepass_unsafe(
         # second time. Falls back to a fresh build if the agentic checklist
         # isn't present (e.g. when build_inventory failed earlier).
         if not _provision_understand_checklist(target, agentic_out_dir, understand_dir):
-            _fail_lifecycle(understand_dir, "checklist build failed")
+            # Mark settled BEFORE the call so that if _fail_lifecycle
+            # itself raises, the `finally` block's "interrupted"
+            # fallback doesn't overwrite the real failure reason.
+            # Same pattern at every other _fail_lifecycle call site
+            # in this function.
             lifecycle_settled = True
+            _fail_lifecycle(understand_dir, "checklist build failed")
             return PrepassResult(ran=False, skipped_reason="checklist build failed",
                                  understand_dir=understand_dir,
                                  duration_s=time.time() - t0)
@@ -190,23 +196,23 @@ def _run_understand_prepass_unsafe(
                 caller_label="agentic-understand",
             )
         except subprocess.TimeoutExpired:
-            _fail_lifecycle(understand_dir, f"timeout after {_PREPASS_TIMEOUT_S}s")
             lifecycle_settled = True
+            _fail_lifecycle(understand_dir, f"timeout after {_PREPASS_TIMEOUT_S}s")
             logger.warning("understand pre-pass timed out after %ds", _PREPASS_TIMEOUT_S)
             return PrepassResult(ran=False, skipped_reason=f"timeout after {_PREPASS_TIMEOUT_S}s",
                                  understand_dir=understand_dir,
                                  duration_s=time.time() - t0)
         except OSError as e:
-            _fail_lifecycle(understand_dir, f"launch failed: {e}")
             lifecycle_settled = True
+            _fail_lifecycle(understand_dir, f"launch failed: {e}")
             logger.warning("understand pre-pass failed to launch: %s", e)
             return PrepassResult(ran=False, skipped_reason=f"launch failed: {e}",
                                  understand_dir=understand_dir,
                                  duration_s=time.time() - t0)
 
         if proc.returncode != 0:
-            _fail_lifecycle(understand_dir, f"subprocess returned {proc.returncode}")
             lifecycle_settled = True
+            _fail_lifecycle(understand_dir, f"subprocess returned {proc.returncode}")
             logger.warning("understand pre-pass returned %d", proc.returncode)
             return PrepassResult(ran=False, skipped_reason=f"subprocess returned {proc.returncode}",
                                  understand_dir=understand_dir,
@@ -214,8 +220,8 @@ def _run_understand_prepass_unsafe(
 
         context_map = understand_dir / "context-map.json"
         if not context_map.exists():
-            _fail_lifecycle(understand_dir, "context-map.json missing after run")
             lifecycle_settled = True
+            _fail_lifecycle(understand_dir, "context-map.json missing after run")
             logger.warning("understand pre-pass completed but context-map.json was not written")
             return PrepassResult(ran=False, skipped_reason="context-map.json missing after run",
                                  understand_dir=understand_dir,
@@ -230,8 +236,8 @@ def _run_understand_prepass_unsafe(
         parsed = load_json(context_map)
         shape_error = _validate_context_map_shape(parsed)
         if shape_error is not None:
-            _fail_lifecycle(understand_dir, f"context-map.json invalid: {shape_error}")
             lifecycle_settled = True
+            _fail_lifecycle(understand_dir, f"context-map.json invalid: {shape_error}")
             logger.warning("understand pre-pass: context-map.json failed shape check (%s)",
                            shape_error)
             return PrepassResult(ran=False, skipped_reason=f"context-map.json invalid: {shape_error}",
@@ -258,8 +264,8 @@ def _run_understand_prepass_unsafe(
 
     except Exception:
         # Make sure the lifecycle is marked failed before propagating.
-        _fail_lifecycle(understand_dir, "unexpected exception")
         lifecycle_settled = True
+        _fail_lifecycle(understand_dir, "unexpected exception")
         raise
     finally:
         # KeyboardInterrupt / SystemExit / any other BaseException bypasses
@@ -641,9 +647,21 @@ def _convert_ruling(agentic_ruling, fp_reason) -> dict:
     false_positive_reason. Keeps the agentic ruling string as a separate
     field so the original verdict is preserved verbatim alongside the
     /validate-native status field.
+
+    When the input is already a dict, returns a DEEP COPY rather than
+    aliasing the original. Pre-fix the dict-input branch returned the
+    caller's reference unchanged. Downstream consumers writing into
+    `result.ruling.<field>` (status update, reason augmentation,
+    nested evidence push) would mutate the original /agentic
+    finding's ruling — which OTHER readers (per-finding telemetry,
+    consensus scoring, the finding-id-keyed rolled-up report) might
+    still be holding. Symptom: later log/report renderings showed
+    "ruling.reason" with content that should only have appeared in
+    the /validate post-pass, contaminating /agentic's verdict trace.
     """
     if isinstance(agentic_ruling, dict):
-        return agentic_ruling  # already in object shape
+        from copy import deepcopy
+        return deepcopy(agentic_ruling)
     ruling = {"status": agentic_ruling or "", "agentic_ruling": agentic_ruling or ""}
     if fp_reason:
         ruling["reason"] = fp_reason
@@ -778,17 +796,44 @@ def _select_findings_for_validate(analysis_report: Path) -> list:
         # works across modes.
         is_exploitable = (r.get("is_exploitable") is True
                           or r.get("exploitable") is True)
-        if is_exploitable or r.get("confidence") == _HIGH_CONFIDENCE:
+        # Confidence comparison was strict equality against the
+        # canonical lowercase value. Schema enforces it for the
+        # orchestrated path, but several non-orchestrated dispatch
+        # routes (sequential mode, prep-only, retry-prompt-injected
+        # rewrites) and any future external producer can supply a
+        # confidence string with leading/trailing whitespace
+        # (`"high "` from a textual splice) or different case
+        # (`"High"`, `"HIGH"` from an LLM that wasn't envelope-
+        # constrained). Pre-fix any of those produced an exact-
+        # match miss and the finding silently failed to qualify.
+        # Strip + lower before compare.
+        confidence = r.get("confidence")
+        if isinstance(confidence, str):
+            confidence = confidence.strip().lower()
+        if is_exploitable or confidence == _HIGH_CONFIDENCE:
             selected.append(r)
     return selected
 
 
 def _build_understand_prompt(target: Path, understand_dir: Path) -> str:
+    # Escape control / format / ANSI bytes from path interpolation
+    # before splicing into the prompt. `target` and `understand_dir`
+    # come from caller-supplied input that may have flowed from a
+    # repository name, an argv flag, or a config file. A path
+    # containing `\x1b[2J` (clear-screen escape), CR/LF (prompt
+    # injection — adds "  Now follow these new instructions:"
+    # on the next visible line), or bidi-control bytes (visually
+    # mask malicious content) hijacks the prompt the LLM sees.
+    # `escape_nonprintable` replaces dangerous bytes with `\xHH`
+    # escapes that the model still reads as a path string.
+    safe_target = escape_nonprintable(str(target))
+    safe_dir = escape_nonprintable(str(understand_dir))
+    safe_raptor = escape_nonprintable(str(_RAPTOR_DIR))
     return f"""You are running the /understand --map workflow on a target repository
 as a pre-pass for the /agentic security workflow.
 
-Target repository: {target}
-Output directory:  {understand_dir}
+Target repository: {safe_target}
+Output directory:  {safe_dir}
 
 The launcher has already created the run directory and built checklist.json.
 Your job is to produce context-map.json so downstream analysis (the agentic
@@ -798,11 +843,11 @@ has architectural context.
 Steps:
 
 1. Load .claude/skills/code-understanding/SKILL.md and
-   .claude/skills/code-understanding/map.md from {_RAPTOR_DIR}.
+   .claude/skills/code-understanding/map.md from {safe_raptor}.
 
 2. Perform the --map analysis (MAP-0 through MAP-5) against the target.
 
-3. Write the resulting context-map.json directly into {understand_dir}.
+3. Write the resulting context-map.json directly into {safe_dir}.
 
 4. Do not call libexec/raptor-run-lifecycle — the launcher manages the
    lifecycle for you. Just produce context-map.json.

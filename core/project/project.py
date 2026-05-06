@@ -348,7 +348,15 @@ class ProjectManager:
         skipped = 0
         dest_base = project.output_path
 
-        if is_run_directory(src):
+        # `add_runs` is the user-facing import path — operators
+        # explicitly bring in directories that may not have
+        # `.raptor-run.json` yet (legacy runs, manually-copied
+        # subsets). `generate_run_metadata` below backfills it.
+        # Pass `strict=False` so the lenient match still admits
+        # those legacy shapes; the import is gated by an explicit
+        # operator action so the over-match risk is acceptable here
+        # (unlike sweep / cleanup paths which run automatically).
+        if is_run_directory(src, strict=False):
             # Single run directory
             dest = dest_base / src.name
             if dest.exists():
@@ -360,7 +368,7 @@ class ProjectManager:
         else:
             # Directory containing runs
             for child in sorted(src.iterdir()):
-                if child.is_dir() and is_run_directory(child):
+                if child.is_dir() and is_run_directory(child, strict=False):
                     dest = dest_base / child.name
                     if dest.exists():
                         skipped += 1

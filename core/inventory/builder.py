@@ -7,7 +7,7 @@ Used by both /validate (Stage 0) and /understand (MAP-0).
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -28,6 +28,15 @@ from .diff import compare_inventories
 logger = logging.getLogger(__name__)
 
 MAX_WORKERS = os.cpu_count() or 4
+
+# Per-file read cap. Bigger than any realistic source file (the
+# largest in CPython is ~30K LOC ≈ 1 MB) but small enough that a
+# pathological input — vendored binary blob, malformed
+# symlink-to-/dev/zero, hostile sample in a test fixture — can't
+# OOM the inventory builder. Pre-fix `read_bytes()` loaded the whole
+# file into memory before any size check, so a single 10 GB file
+# anywhere in the target tree killed the run.
+MAX_FILE_BYTES = 8 * 1024 * 1024  # 8 MiB
 
 
 def build_inventory(
@@ -146,7 +155,7 @@ def build_inventory(
         limitations.append("SLOC counts used regex fallback (less accurate)")
 
     inventory = {
-        'generated_at': datetime.now().isoformat(),
+        'generated_at': datetime.now(timezone.utc).isoformat(),
         'target_path': str(target_path),
         'total_files': len(files_info),
         'total_items': total_items,
@@ -298,7 +307,28 @@ def _process_single_file(
             if file_stat and old_stat and file_stat == old_stat:
                 return old_entry
 
-        raw_bytes = filepath.read_bytes()
+        # Bounded read. `read_bytes()` loads the whole file into
+        # memory before any size check — a 10 GB binary, malformed
+        # symlink-to-/dev/zero, or hostile sample in a vendored
+        # archive OOM-killed the inventory builder. stat-then-bound
+        # caps the in-flight memory at MAX_FILE_BYTES + 1 regardless
+        # of file size.
+        try:
+            file_size = filepath.stat().st_size
+        except OSError:
+            return {"path": rel_path, "_excluded": True,
+                    "_reason": "stat_failed", "_pattern": None}
+        if file_size > MAX_FILE_BYTES:
+            return {"path": rel_path, "_excluded": True,
+                    "_reason": "too_large",
+                    "_pattern": f"size>{MAX_FILE_BYTES}"}
+        with filepath.open("rb") as fh:
+            raw_bytes = fh.read(MAX_FILE_BYTES + 1)
+        if len(raw_bytes) > MAX_FILE_BYTES:
+            # File grew between stat and read — still reject.
+            return {"path": rel_path, "_excluded": True,
+                    "_reason": "too_large_during_read",
+                    "_pattern": f"size>{MAX_FILE_BYTES}"}
         content = raw_bytes.decode('utf-8', errors='ignore')
 
         if skip_generated and is_generated_file(content):

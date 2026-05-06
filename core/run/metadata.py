@@ -7,11 +7,14 @@ produced it, when, and whether it succeeded. Tools use start_run/complete_run/fa
 import contextlib
 import os
 import re
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from core.json import load_json, save_json
+
+logger = logging.getLogger(__name__)
 
 RUN_METADATA_FILE = ".raptor-run.json"
 
@@ -20,6 +23,15 @@ STATUS_RUNNING = "running"
 STATUS_COMPLETED = "completed"
 STATUS_FAILED = "failed"
 STATUS_CANCELLED = "cancelled"
+
+# `_cleanup_abandoned` freshness threshold. A sibling run in
+# status=running that was created within this many seconds is treated
+# as a concurrent in-flight run, not as an Esc-then-retry abandon.
+# 30s is comfortably longer than any spawn-to-first-checkpoint
+# window (sandbox setup + tool init typically completes in a few
+# seconds) but tighter than a real abandon (Esc-cancelled runs sit
+# in 'running' state until the session terminates, often hours).
+_ABANDON_FRESHNESS_S = 30.0
 
 # Known command prefixes for inferring command type from directory names.
 # Includes both legacy prefixes (raptor_, autonomous, exploitability-validation)
@@ -95,16 +107,49 @@ def _get_session_pid() -> Optional[int]:
 
 
 def _pid_alive(pid: int) -> bool:
-    """Check if a process is alive. Returns False for invalid PIDs."""
+    """Check if a process is alive AND looks like the original.
+
+    Returns False for invalid PIDs.
+
+    PID-reuse hazard: a session_pid recorded yesterday (Claude Code
+    session A, PID 12345). Session A exits; the kernel reuses PID
+    12345 for an unrelated process (a cron job, an editor, any
+    long-lived daemon). Plain `os.kill(pid, 0)` returns True for the
+    wrong process. `_cleanup_abandoned` then treats the long-dead
+    Claude Code session as still alive and skips legitimate cleanup
+    of its abandoned runs.
+
+    Cross-check with `/proc/<pid>/comm` on Linux: if the running
+    process at that PID isn't named `claude` (or a `claude*` variant
+    — `claude-code`, `claude.sh` wrapper, etc.), it's not the
+    session that recorded the run. Treat as dead so cleanup can
+    proceed.
+
+    Falls back to plain `os.kill(pid, 0)` on non-Linux (no /proc) —
+    accepts the residual PID-reuse risk on macOS/BSD where the
+    canonical /proc isn't available.
+    """
     if pid <= 0:
         return False
     try:
         os.kill(pid, 0)
-        return True
     except ProcessLookupError:
         return False
     except PermissionError:
         return True  # alive but owned by another user
+
+    # Process exists at that PID. On Linux, verify it's still a
+    # claude-shaped process — `comm` is the binary basename truncated
+    # to 16 chars (TASK_COMM_LEN), so we substring-match `claude`.
+    proc_comm = Path(f"/proc/{pid}/comm")
+    if not proc_comm.exists():
+        # Non-Linux or `/proc` not mounted — best-effort accept.
+        return True
+    try:
+        comm = proc_comm.read_text(errors="replace").strip().lower()
+    except OSError:
+        return True
+    return "claude" in comm
 
 
 def start_run(output_dir: Path, command: str, extra: Dict[str, Any] = None,
@@ -140,14 +185,28 @@ def start_run(output_dir: Path, command: str, extra: Dict[str, Any] = None,
         metadata["tool_pid"] = os.getppid()
     if target:
         metadata["target_path"] = str(target)
-    # Mark this run as the active sandbox-summary recording target before
-    # any further setup work — guarantees that any sandbox calls made by
-    # _setup_checklist_symlink (or anything else added later between save_json
-    # and return) get recorded into this run's summary.
+    # Order: persist metadata FIRST, then mark as active.
+    #
+    # Pre-fix `set_active_run_dir(output_dir)` ran BEFORE `save_json`.
+    # If `save_json` crashed (disk full, EIO, permission flip), the
+    # "active run dir" pointer was already set to a directory with
+    # no metadata file. Subsequent sandbox-summary writes (and any
+    # other consumer that resolves "the active run") would target
+    # a directory the rest of the system can't recognise as a real
+    # run — `is_run_directory()` returns False, recovery / sweep
+    # logic doesn't see it.
+    #
+    # Persist first; mark active only on success. The original
+    # justification (sandbox calls inside `_setup_checklist_symlink`
+    # need the active dir set) still holds for those — they run
+    # AFTER the active-dir set, which now happens AFTER the
+    # metadata write, so the timing window for that case is
+    # unchanged.
+    #
     # Lazy import to avoid circular core.sandbox load on metadata import.
     from core.sandbox.summary import set_active_run_dir
-    set_active_run_dir(output_dir)
     save_json(output_dir / RUN_METADATA_FILE, metadata)
+    set_active_run_dir(output_dir)
     _setup_checklist_symlink(output_dir)
     return output_dir
 
@@ -158,6 +217,16 @@ def _cleanup_abandoned(project_dir: Path, command: str, session_pid: int) -> Non
     An abandoned run is one that has status=running, same session_pid (same
     Claude Code session), and same command type. This happens when the user
     presses Esc and retries the same command.
+
+    Recent siblings (created within ``_ABANDON_FRESHNESS_S`` seconds)
+    are LEFT ALONE even on the (session_pid, command) match. Pre-fix
+    a user issuing two commands of the same type in close succession
+    (or two parallel `/scan`s from the same Claude Code session in
+    different terminals) saw the new run mark the in-flight earlier
+    one as failed — exactly the wrong behaviour. The Esc-cancel case
+    the function is meant to handle leaves stale runs measured in
+    minutes, not seconds, so the freshness gate distinguishes
+    cleanly.
     """
     try:
         if not project_dir.is_dir():
@@ -170,6 +239,8 @@ def _cleanup_abandoned(project_dir: Path, command: str, session_pid: int) -> Non
         # of *our* past runs; if we can't enumerate, skip and let the
         # caller proceed.
         return
+
+    now = datetime.now(timezone.utc)
     for d in children:
         try:
             if not d.is_dir() or d.name.startswith((".", "_")):
@@ -186,6 +257,22 @@ def _cleanup_abandoned(project_dir: Path, command: str, session_pid: int) -> Non
         if (meta.get("status") == STATUS_RUNNING
                 and meta.get("command") == command
                 and meta.get("session_pid") == session_pid):
+            # Freshness gate — skip recent siblings (probable
+            # concurrent in-flight run of the same command type from
+            # the same session, NOT an Esc-then-retry).
+            ts_str = meta.get("timestamp")
+            if isinstance(ts_str, str):
+                try:
+                    started = datetime.fromisoformat(ts_str)
+                    if started.tzinfo is None:
+                        started = started.replace(tzinfo=timezone.utc)
+                    age_s = (now - started).total_seconds()
+                    if age_s < _ABANDON_FRESHNESS_S:
+                        continue
+                except ValueError:
+                    # Malformed timestamp — fall through to fail_run
+                    # (the run is questionable either way).
+                    pass
             fail_run(d, "abandoned — replaced by new run in same session",
                      record_timing=False)
 
@@ -299,7 +386,8 @@ def _finalize_sandbox_summary(output_dir: Path) -> None:
     """
     # Lazy import to keep core.sandbox out of metadata import time.
     from core.sandbox.summary import (
-        summarize_and_write, set_active_run_dir, SUMMARY_FILE,
+        summarize_and_write, set_active_run_dir, get_active_run_dir,
+        SUMMARY_FILE,
     )
     import logging
     log = logging.getLogger(__name__)
@@ -323,9 +411,24 @@ def _finalize_sandbox_summary(output_dir: Path) -> None:
             exc_info=True,
         )
     finally:
-        # Always clear active-run state, even if summary write failed —
-        # otherwise subsequent runs would record into a stale path.
-        set_active_run_dir(None)
+        # Clear active-run state ONLY if the active dir is the one we
+        # just finalised. Pre-fix this unconditionally cleared, which
+        # corrupted concurrent-run accounting: if run A's _finalize
+        # fired while run B was already the active dir (A and B
+        # overlapped because A's lifecycle ended slightly later than
+        # its work, or sweep ran A's finaliser concurrently with B's
+        # work), every B-side denial after A's finalise was dropped
+        # silently. Compare paths via .resolve() so the same dir
+        # reached via two paths still matches.
+        try:
+            active = get_active_run_dir()
+            if active is not None and Path(active).resolve() == Path(output_dir).resolve():
+                set_active_run_dir(None)
+        except OSError:
+            # Path resolution failed (deleted dir, permission error)
+            # — clear conservatively so the active-pointer doesn't
+            # stay pinned to an unreachable target.
+            set_active_run_dir(None)
 
 
 # Sandbox summary is finalized BEFORE the status update in every terminal-
@@ -361,15 +464,23 @@ def cancel_run(output_dir: Path, extra: Dict[str, Any] = None) -> None:
 
 
 @contextlib.contextmanager
-def tracked_run(output_dir: Path, command: str, extra: Dict[str, Any] = None):
+def tracked_run(output_dir: Path, command: str, extra: Dict[str, Any] = None,
+                target: str = None):
     """Context manager for run lifecycle. Writes metadata automatically.
 
     Usage:
-        with tracked_run(out_dir, "agentic") as run_dir:
+        with tracked_run(out_dir, "agentic", target="/repo") as run_dir:
             # do work...
         # .raptor-run.json: completed on success, failed on exception, cancelled on Ctrl-C
+
+    `target` is forwarded to `start_run`. Pre-fix `tracked_run`
+    didn't accept it — callers using the context-manager style
+    couldn't record the scan target into the metadata file (the
+    `target_path` field that downstream consumers — project-listing,
+    coverage rollups, multi-target dedup — read from
+    `.raptor-run.json`). Now mirrored from start_run's signature.
     """
-    run_dir = start_run(output_dir, command, extra)
+    run_dir = start_run(output_dir, command, extra, target=target)
     try:
         yield run_dir
         complete_run(run_dir)
@@ -386,25 +497,41 @@ def load_run_metadata(run_dir: Path) -> Optional[Dict[str, Any]]:
     return load_json(run_dir / RUN_METADATA_FILE)
 
 
-def is_run_directory(path: Path) -> bool:
+def is_run_directory(path: Path, *, strict: bool = True) -> bool:
     """Check if a directory looks like a RAPTOR run output.
 
-    True if it has .raptor-run.json, or matches known naming patterns,
-    or contains typical output files.
+    Default (``strict=True``): requires the canonical
+    ``.raptor-run.json`` marker file. This is the only signal
+    `start_run` actually plants and that the rest of the lifecycle
+    relies on. Pre-fix the function ALSO accepted any directory whose
+    name matched a known command-prefix OR that contained a "typical
+    output file" (findings.json, checklist.json, ...) — the latter
+    in particular over-matched: a user dir of past validation
+    artifacts, a vendored sample, or a manually-copied subset all
+    looked like real runs to anything iterating on `is_run_directory`
+    (sweep / cleanup / project-listing logic).
+
+    ``strict=False``: legacy heuristic preserved for callers that
+    deliberately want the loose match (e.g., diagnostic tooling
+    inspecting pre-metadata historical runs from before
+    `.raptor-run.json` was a thing). Caller passes the flag
+    explicitly so the loose semantics are visible at the call site.
     """
     if not path.is_dir():
         return False
 
-    # Has metadata file
+    # Canonical marker — always sufficient.
     if (path / RUN_METADATA_FILE).exists():
         return True
 
-    # Matches known prefix patterns
+    if strict:
+        return False
+
+    # Lenient heuristics — opted into via strict=False.
     name = path.name
     if any(name.startswith(prefix) for prefix in _PREFIX_MAP):
         return True
 
-    # Contains typical output files
     typical_files = {"findings.json", "checklist.json", "scan_metrics.json",
                      "orchestrated_report.json", "validation-report.md"}
     if any((path / f).exists() for f in typical_files):
@@ -461,6 +588,9 @@ def generate_run_metadata(run_dir: Path) -> None:
     save_json(run_dir / RUN_METADATA_FILE, metadata)
 
 
+_TERMINAL_STATUSES = frozenset({STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELLED})
+
+
 def _update_status(output_dir: Path, status: str, extra: Dict[str, Any] = None,
                    record_timing: bool = True) -> None:
     """Update the status field in .raptor-run.json.
@@ -469,12 +599,33 @@ def _update_status(output_dir: Path, status: str, extra: Dict[str, Any] = None,
     duration_seconds. Set to False for sweep/cleanup where the run ended
     at an unknown earlier time.
 
+    Terminal-status guard: refuses to overwrite an already-terminal
+    state (completed / failed / cancelled). Pre-fix the function
+    silently flipped any status to any other status, so:
+      * `fail_run` called after `complete_run` (e.g. by exception
+        handlers in caller's `finally` after the lifecycle already
+        completed) downgraded a successful run to failed, masking
+        the actual outcome.
+      * `complete_run` called after `fail_run` (cleanup loop racing
+        a real failure handler) upgraded a failed run to completed
+        — operator sees green, the failure is invisible.
+    Logs at warning level so the racing-caller bug is investigable
+    rather than hidden.
+
     Raises FileNotFoundError if metadata file doesn't exist (call start_run first).
     """
     path = Path(output_dir) / RUN_METADATA_FILE
     metadata = load_json(path)
     if metadata is None:
         raise FileNotFoundError(f"No {RUN_METADATA_FILE} in {output_dir} — call start_run() first")
+    current = metadata.get("status")
+    if current in _TERMINAL_STATUSES and current != status:
+        logger.warning(
+            "Refusing to overwrite terminal status %r → %r in %s "
+            "(probable double-finalisation; investigate caller)",
+            current, status, output_dir,
+        )
+        return
     metadata["status"] = status
 
     if record_timing:

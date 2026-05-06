@@ -113,6 +113,32 @@ def findings_summary_line(counts: Dict[str, int], vuln_count: Optional[int] = No
     return f"**{', '.join(parts)}** out of {label}."
 
 
+def _md_table_cell(s: str) -> str:
+    """Escape characters that break out of a markdown table cell.
+
+    Pre-fix only `|` was escaped, and only at one site
+    (`build_finding_detail`'s code-line). Other cells interpolated
+    raw — a `vtype` containing `|` rendered as a column split,
+    a `function` name with backtick injection broke `code` cell
+    rendering, and any cell starting with a `-` or `+` could
+    de-stabilise downstream markdown processors that try to
+    re-parse the table as a list.
+
+    Escapes:
+      * `|` → `\\|` (table column separator)
+      * `` ` `` → `\\` ` (inline-code fence)
+      * Newlines → `<br>` (rows must be one line)
+    """
+    if s is None:
+        return ""
+    s = str(s)
+    s = s.replace("\\", "\\\\")
+    s = s.replace("|", "\\|")
+    s = s.replace("`", "\\`")
+    s = s.replace("\r\n", "<br>").replace("\n", "<br>").replace("\r", "<br>")
+    return s
+
+
 def build_finding_detail(finding: Dict[str, Any], index: int) -> ReportSection:
     """Build a per-finding detail section."""
     fid = finding.get("id") or finding.get("finding_id") or f"FIND-{index:04d}"
@@ -126,35 +152,35 @@ def build_finding_detail(finding: Dict[str, Any], index: int) -> ReportSection:
     lines = []
     lines.append("| Attribute | Value |")
     lines.append("|-----------|-------|")
-    lines.append(f"| Type | {vtype} |")
+    lines.append(f"| Type | {_md_table_cell(vtype)} |")
 
     func = finding.get("function")
     if func:
-        lines.append(f"| Function | `{func}` |")
+        lines.append(f"| Function | `{_md_table_cell(func)}` |")
 
     code = finding.get("proof", {}).get("vulnerable_code") if isinstance(finding.get("proof"), dict) else None
     code = code or finding.get("code") or ""
     if code:
-        code_line = code.strip().split("\n")[0][:100].replace("|", "\\|")
-        lines.append(f"| Code | `{code_line}` |")
+        code_line = code.strip().split("\n")[0][:100]
+        lines.append(f"| Code | `{_md_table_cell(code_line)}` |")
 
-    lines.append(f"| Final Status | {get_display_status(finding)} |")
+    lines.append(f"| Final Status | {_md_table_cell(get_display_status(finding))} |")
 
     cwe = finding.get("cwe_id")
     if cwe:
-        lines.append(f"| CWE | {cwe} |")
+        lines.append(f"| CWE | {_md_table_cell(cwe)} |")
 
     cvss = finding.get("cvss_score_estimate")
     cvss_vec = finding.get("cvss_vector")
     if cvss is not None:
-        cvss_str = str(cvss)
+        cvss_str = _md_table_cell(str(cvss))
         if cvss_vec:
-            cvss_str += f" (`{cvss_vec}`)"
+            cvss_str += f" (`{_md_table_cell(cvss_vec)}`)"
         lines.append(f"| CVSS | {cvss_str} |")
 
     confidence = finding.get("confidence")
     if confidence:
-        lines.append(f"| Confidence | {str(confidence).title()} |")
+        lines.append(f"| Confidence | {_md_table_cell(str(confidence).title())} |")
 
     lines.append("")
 

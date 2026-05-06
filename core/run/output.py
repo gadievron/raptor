@@ -21,29 +21,48 @@ class TargetMismatchError(ValueError):
 
 
 def unique_run_suffix(separator: str = "_") -> str:
-    """Sub-second-unique suffix for run-dir names: timestamp + PID,
-    joined by ``separator``. Use ``-`` for hyphen-style names (project
-    mode), ``_`` for underscore-style (standalone mode). Only ``-`` and
-    ``_`` are accepted to avoid strftime-directive injection (e.g., a
-    caller passing ``%H`` would get the format string interpreted).
+    """Sub-microsecond-unique suffix for run-dir names: timestamp +
+    PID + monotonic-ns tail, joined by ``separator``. Use ``-`` for
+    hyphen-style names (project mode), ``_`` for underscore-style
+    (standalone mode). Only ``-`` and ``_`` are accepted to avoid
+    strftime-directive injection (e.g., a caller passing ``%H`` would
+    get the format string interpreted).
 
-    Original failure mode: two RAPTOR processes starting in the same
-    wall-clock second computed identical run-dir names. Concrete
-    consequences depend on the caller — e.g., ``mkdir(exist_ok=True)``
-    silently shares the dir (interleaved writes), ``mkdir(exist_ok=False)``
-    raises, downstream code may overwrite per-run files. CI saw mtime
-    collisions and intermittent failures.
+    Collision-prevention layers:
 
-    Two concurrent processes have different PIDs; PID reuse within the
-    same wall-clock second is essentially impossible on Linux. A single
-    process calling this multiple times within the same second would
-    reuse its PID — not a concern for the lifecycle entry-point use
-    case (one call per run start), but worth knowing.
+      1. Wall-clock second — gives chronological ordering.
+      2. PID — disambiguates concurrent processes (cross-process).
+      3. ``monotonic_ns() % 10_000`` 4-digit tail — disambiguates
+         same-process calls within the same wall-clock second.
+
+    Pre-fix the suffix was just `<timestamp>_pid<PID>`. The docstring
+    noted "single process calling this multiple times within the same
+    second would reuse its PID — not a concern for the lifecycle
+    entry-point use case (one call per run start)" but that
+    assumption is fragile: test harnesses iterating `start_run`,
+    batch tooling, supervisor loops invoking subcommands serially,
+    and any future caller that re-enters the lifecycle within a
+    second all hit the in-process collision. Concrete consequences
+    depend on the caller — `mkdir(exist_ok=True)` silently shares
+    the dir (interleaved writes), `mkdir(exist_ok=False)` raises,
+    downstream code may overwrite per-run files. The 4-digit
+    monotonic tail closes that window without changing the
+    user-visible name shape meaningfully (one extra suffix).
     """
     if separator not in ("_", "-"):
         raise ValueError(f"separator must be '_' or '-', got {separator!r}")
     fmt = f"%Y%m%d{separator}%H%M%S"
-    return f"{time.strftime(fmt)}{separator}pid{os.getpid()}"
+    # Modulo by 10_000 gives a 4-digit tail — short enough to keep
+    # directory names readable, wide enough that collisions on
+    # consecutive same-process calls are vanishingly rare
+    # (`monotonic_ns()` resolution is ~1ns on Linux; the modulo
+    # window cycles every 10 microseconds, so two consecutive calls
+    # would have to land on the same modulo bucket within ~10us).
+    ns_tail = time.monotonic_ns() % 10_000
+    return (
+        f"{time.strftime(fmt)}{separator}pid{os.getpid()}"
+        f"{separator}{ns_tail:04d}"
+    )
 
 
 def _resolve_active_project() -> Optional[Tuple[str, str, str]]:
