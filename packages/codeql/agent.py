@@ -25,6 +25,7 @@ from core.json import save_json
 
 from core.config import RaptorConfig
 from core.logging import get_logger
+from core.run.safe_io import safe_run_mkdir
 from packages.codeql.language_detector import LanguageDetector, LanguageInfo
 from packages.codeql.build_detector import BuildDetector, BuildSystem
 from packages.codeql.database_manager import DatabaseManager, DatabaseResult
@@ -145,7 +146,8 @@ class CodeQLAgent:
             repo_name = self.repo_path.name
             self.out_dir = RaptorConfig.BASE_OUT_DIR / f"codeql_{repo_name}_{unique_run_suffix('_')}"
 
-        self.out_dir.mkdir(parents=True, exist_ok=True)
+        self.out_dir.parent.mkdir(parents=True, exist_ok=True)
+        safe_run_mkdir(self.out_dir)
 
         # Initialize components
         self.language_detector = LanguageDetector(self.repo_path)

@@ -44,6 +44,7 @@ from pathlib import Path
 
 from core.run.output import get_output_dir, TargetMismatchError
 from core.run.metadata import start_run, complete_run, fail_run
+from core.run.safe_io import safe_run_mkdir
 
 
 def _extract_target(args: list) -> str | None:
@@ -69,6 +70,14 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     except TargetMismatchError as e:
         print(f"✗ {e}", file=sys.stderr)
         return 1
+
+    # Trust-boundary mkdir: refuses if the predictable run-dir name has been
+    # pre-positioned as a symlink, owned by another user, or world-writable.
+    # Subprocesses re-verify on their side (defence in depth) but the parent
+    # is the first writer and has to gate too — start_run below would
+    # otherwise create .raptor-run.json along an attacker symlink.
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    safe_run_mkdir(out_dir)
 
     start_run(out_dir, command, target=target)
 

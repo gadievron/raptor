@@ -17,6 +17,7 @@ from core.json import save_json
 
 from core.logging import get_logger
 from core.llm.providers import LLMProvider
+from core.run.safe_io import safe_run_mkdir
 from packages.web.client import WebClient
 from packages.web.crawler import WebCrawler
 from packages.web.fuzzer import WebFuzzer
@@ -134,7 +135,8 @@ Examples:
         timestamp = int(time.time())
         out_dir = RaptorConfig.get_out_dir() / f"web_scan_{timestamp}"
 
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    safe_run_mkdir(out_dir)
 
     print("\n" + "=" * 70)
     print("RAPTOR WEB APPLICATION SECURITY SCANNER")

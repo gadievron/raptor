@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import List, Optional, Sequence
 
 from core.json import load_json, save_json
+from core.run.safe_io import safe_run_mkdir
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +222,8 @@ def main():
         out['files'].append(entry)
 
     out_dir = get_out_dir()
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    safe_run_mkdir(out_dir)
     save_json(out_dir / 'sca.json', out)
     print(json.dumps({'status': 'ok', 'files_found': len(out['files'])}))
 

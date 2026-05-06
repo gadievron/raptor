@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from core.json import load_json, save_json
 from core.config import RaptorConfig
 from core.logging import get_logger
+from core.run.safe_io import safe_run_mkdir
 from core.security.cc_trust import check_repo_claude_trust, set_trust_override
 
 logger = get_logger()
@@ -401,7 +402,11 @@ Examples:
     repo_name = repo_path.name  # Define repo_name for logging
     from core.run import get_output_dir
     out_dir = get_output_dir("agentic", target_name=repo_name, explicit_out=args.out if args.out else None)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # Parent (RAPTOR_DIR/out/, project dir, or --out target's parent) is
+    # raptor-controlled — plain mkdir is fine. The leaf is the predictable
+    # timestamp+PID name and gets the symlink/UID/world-write check.
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    safe_run_mkdir(out_dir)
 
     try:
         from core.run import start_run

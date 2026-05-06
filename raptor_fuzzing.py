@@ -26,6 +26,7 @@ from core.json import save_json
 
 from core.config import RaptorConfig
 from core.logging import get_logger
+from core.run.safe_io import safe_run_mkdir
 from packages.fuzzing import AFLRunner, CrashCollector, CorpusManager
 from packages.binary_analysis import CrashAnalyser
 from packages.llm_analysis.crash_agent import CrashAnalysisAgent
@@ -71,7 +72,8 @@ def main() -> None:
 
     corpus_dir = Path(args.corpus) if args.corpus else None
     out_dir = Path(args.out) if args.out else Path(f"out/fuzz_{binary_path.stem}_{int(time.time())}")
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    safe_run_mkdir(out_dir)
 
     logger.info("=" * 70)
     logger.info("RAPTOR FUZZING WORKFLOW STARTED")
