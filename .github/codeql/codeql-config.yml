@@ -1,13 +1,13 @@
 # CodeQL configuration for GitHub code scanning.
 #
-# Test fixtures under packages/**/tests/fixtures/ are intentionally
-# vulnerable — they exist to validate RAPTOR's own dataflow validation
-# pipeline and exploit-feasibility analyses. Scanning them produces
-# alerts that look real but are by-design honeypots, drowning out
-# signal from actual code.
+# Loaded by the workflow at .github/workflows/codeql.yml via its
+# `config-file:` argument. (GitHub's default *auto* setup does not
+# honour in-repo configs — that's why we ship an advanced workflow.)
 #
-# Loaded automatically by GitHub's default CodeQL setup when present
-# at this path.
+# Test fixtures and intentionally-vulnerable testbeds exist to validate
+# RAPTOR's own dataflow validation pipeline and exploit-feasibility
+# analyses. Scanning them produces alerts that look real but are
+# by-design honeypots, drowning out signal from actual code.
 name: RAPTOR CodeQL config
 
 paths-ignore:
@@ -19,3 +19,9 @@ paths-ignore:
   # samples a future test adds.
   - "**/tests/fixtures/**"
   - "**/test_fixtures/**"
+  # Intentionally vulnerable testbeds used by /scan and /codeql self-tests
+  # (python_sql_injection.py, javascript_xss.js, smt_codeql_testbench.c).
+  - test/data/**
+  # Git worktree mirrors — duplicates of in-tree source that would cause
+  # double-counted alerts if scanned.
+  - .claude/worktrees/**
