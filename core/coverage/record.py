@@ -38,11 +38,18 @@ def build_from_manifest(run_dir: Path, tool: str,
 
     files = set()
 
-    # Read manifest
+    # Read manifest. Use `rstrip("\r\n")` not `strip()` — the latter
+    # also trims leading/trailing spaces, but POSIX permits filenames
+    # that legitimately START or END with a space. `track_read`
+    # already rejects NUL/CR/LF in the path itself (batch 207), so
+    # a manifest line carrying a filename with a trailing space
+    # made it in legitimately and was then silently mangled by
+    # `strip()` here. Only newline-style line terminators need
+    # removing.
     if manifest.exists():
         try:
             for line in manifest.read_text().splitlines():
-                line = line.strip()
+                line = line.rstrip("\r\n")
                 if line:
                     files.add(line)
         except OSError:
@@ -197,8 +204,9 @@ def build_from_findings(findings_path: Path, reads_manifest_path: Path = None,
     read_files = set()
     if reads_manifest_path and reads_manifest_path.exists():
         try:
+            # Same rstrip-only rationale as the helper above.
             for line in reads_manifest_path.read_text().splitlines():
-                line = line.strip()
+                line = line.rstrip("\r\n")
                 if line:
                     read_files.add(line)
         except OSError:
