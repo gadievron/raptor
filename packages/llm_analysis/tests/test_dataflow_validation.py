@@ -394,6 +394,46 @@ class TestTierSelection:
         adapter.run_prebuilt_query.assert_called_once()
         adapter.run.assert_called_once()
 
+    def test_extras_pack_no_matches_refutes_at_tier1(self, tmp_path, monkeypatch):
+        """When discovery returns an in-repo (extras) query and CodeQL
+        finds zero matches, Tier 1 refutes immediately — no Tier 2
+        fallthrough, no LLM call. This is the key PR-B behaviour: the
+        broader LocalFlowSource model rules out CLI / env / stdin
+        variants the stdlib query would have missed."""
+        from core.config import RaptorConfig
+        from packages.hypothesis_validation.adapters.base import ToolEvidence
+        h, f = self._make_hyp_and_finding()
+
+        # Build a fake extras-rooted query path
+        extras = tmp_path / "extras"
+        ql = extras / "python-queries" / "Security" / "CWE-078" / "CmdInjLocal.ql"
+        ql.parent.mkdir(parents=True)
+        ql.write_text("// stub")
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [extras])
+
+        adapter = MagicMock()
+        adapter.run_prebuilt_query.return_value = ToolEvidence(
+            tool="codeql", rule=str(ql), success=True,
+            matches=[], summary="no matches",
+        )
+
+        # LLM must NOT be called — refutation short-circuits Tier 2
+        llm = MagicMock()
+        llm.generate_structured.side_effect = AssertionError(
+            "LLM was consulted despite Tier 1 refutation"
+        )
+
+        with patch(
+            "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
+            return_value=ql,
+        ):
+            result, tier = _validate_one_hypothesis(h, f, adapter, llm)
+
+        assert tier == "prebuilt"
+        assert result.verdict == "refuted"
+        adapter.run_prebuilt_query.assert_called_once()
+        adapter.run.assert_not_called()
+
     def test_inferred_cwe_picks_tier1_when_finding_lacks_cwe_id(self):
         """Findings without explicit cwe_id should still hit Tier 1 when
         the rule_id matches an inference pattern."""
@@ -571,14 +611,104 @@ class TestVerdictFromPrebuilt:
                           error="boom", matches=[])
         assert _verdict_from_prebuilt(ev, {"file_path": "x", "start_line": 1}) == "inconclusive"
 
-    def test_no_matches_inconclusive(self):
-        """Tier 1 cannot refute alone — its source model may not cover
-        the LLM's claim. No matches → inconclusive (caller falls through
-        to Tier 2 for refutation)."""
+    def test_no_matches_stdlib_path_inconclusive(self):
+        """Stdlib queries use RemoteFlowSource only; their source model
+        may not cover the LLM's claim. No matches → inconclusive (caller
+        falls through to Tier 2 for refutation)."""
         from packages.hypothesis_validation.adapters.base import ToolEvidence
         ev = ToolEvidence(tool="codeql", rule="r", success=True,
                           matches=[])
-        assert _verdict_from_prebuilt(ev, {"file_path": "x", "start_line": 1}) == "inconclusive"
+        # Stdlib path — falls outside any extras root
+        stdlib_path = Path("/home/me/.codeql/packages/codeql/python-queries/1.8.1/Security/CWE-078/CommandInjection.ql")
+        assert _verdict_from_prebuilt(
+            ev, {"file_path": "x", "start_line": 1}, stdlib_path,
+        ) == "inconclusive"
+
+    def test_no_matches_stdlib_path_inconclusive_no_path(self):
+        """Backwards-compat: callers that don't pass query_path get the
+        old asymmetric behaviour (no-match → inconclusive)."""
+        from packages.hypothesis_validation.adapters.base import ToolEvidence
+        ev = ToolEvidence(tool="codeql", rule="r", success=True, matches=[])
+        assert _verdict_from_prebuilt(
+            ev, {"file_path": "x", "start_line": 1},
+        ) == "inconclusive"
+
+    def test_no_matches_extras_path_refutes(self, tmp_path, monkeypatch):
+        """When the discovered query lives under an in-repo extras pack
+        (LocalFlowSource coverage), no-match IS a refutation signal —
+        the broader source model rules out CLI / env / stdin variants
+        that the stdlib query would miss."""
+        from core.config import RaptorConfig
+        from packages.hypothesis_validation.adapters.base import ToolEvidence
+        # Synthetic extras root with a query path under it
+        extras = tmp_path / "raptor-packs"
+        ql = extras / "python-queries" / "Security" / "CWE-078" / "CmdInj.ql"
+        ql.parent.mkdir(parents=True)
+        ql.write_text("// stub")
+
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [extras])
+
+        ev = ToolEvidence(tool="codeql", rule=str(ql), success=True, matches=[])
+        assert _verdict_from_prebuilt(
+            ev, {"file_path": "x.py", "start_line": 1}, ql,
+        ) == "refuted"
+
+    def test_no_matches_extras_path_no_extras_configured(self, monkeypatch):
+        """If extras is empty, even a path that LOOKS like it's under
+        an extras root falls back to inconclusive — without a configured
+        root we can't verify the query's source model is broad enough."""
+        from core.config import RaptorConfig
+        from packages.hypothesis_validation.adapters.base import ToolEvidence
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [])
+        ev = ToolEvidence(tool="codeql", rule="r", success=True, matches=[])
+        assert _verdict_from_prebuilt(
+            ev, {"file_path": "x", "start_line": 1},
+            Path("/some/path/that/is/not/an/extras/root.ql"),
+        ) == "inconclusive"
+
+    def test_extras_path_with_matches_at_location_still_confirms(
+        self, tmp_path, monkeypatch,
+    ):
+        """The extras-path branch only flips no-match → refuted. When
+        matches DO exist at the finding location, the verdict is still
+        confirmed regardless of which pack the query came from."""
+        from core.config import RaptorConfig
+        from packages.hypothesis_validation.adapters.base import ToolEvidence
+        extras = tmp_path / "raptor-packs"
+        ql = extras / "python-queries" / "Security" / "CWE-078" / "CmdInj.ql"
+        ql.parent.mkdir(parents=True)
+        ql.write_text("// stub")
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [extras])
+
+        ev = ToolEvidence(
+            tool="codeql", rule=str(ql), success=True,
+            matches=[{"file": "x.py", "line": 10}],
+        )
+        assert _verdict_from_prebuilt(
+            ev, {"file_path": "x.py", "start_line": 10}, ql,
+        ) == "confirmed"
+
+    def test_extras_path_with_matches_elsewhere_inconclusive(
+        self, tmp_path, monkeypatch,
+    ):
+        """Matches exist somewhere but not at the finding's location →
+        inconclusive. The matches-elsewhere case is NOT refutation; the
+        query may have caught a sibling flow."""
+        from core.config import RaptorConfig
+        from packages.hypothesis_validation.adapters.base import ToolEvidence
+        extras = tmp_path / "raptor-packs"
+        ql = extras / "python-queries" / "Security" / "CWE-078" / "CmdInj.ql"
+        ql.parent.mkdir(parents=True)
+        ql.write_text("// stub")
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [extras])
+
+        ev = ToolEvidence(
+            tool="codeql", rule=str(ql), success=True,
+            matches=[{"file": "other.py", "line": 99}],
+        )
+        assert _verdict_from_prebuilt(
+            ev, {"file_path": "x.py", "start_line": 10}, ql,
+        ) == "inconclusive"
 
     def test_match_at_location_confirms(self):
         from packages.hypothesis_validation.adapters.base import ToolEvidence

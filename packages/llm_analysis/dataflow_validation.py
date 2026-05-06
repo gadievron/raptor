@@ -651,20 +651,29 @@ def _validate_one_hypothesis(
         cwe = (infer_cwe_from_rule_id(finding.get("rule_id", "")) or "").upper().strip()
 
     # ----- Tier 1: prebuilt pack-resident query -----
-    # Fast confirmation lane. Returns confirmed when matches exist at the
-    # finding's location. Returns inconclusive (NOT refuted) on no matches —
-    # the prebuilt's source model may not cover the LLM's claimed source
-    # (e.g. RemoteFlowSource for HTTP misses sys.argv-driven CLIs).
-    # Inconclusive at Tier 1 falls through to Tier 2 where the LLM can
-    # customise predicates to test the specific claim.
+    # Confirmation lane. Behaviour depends on which pack the discovered
+    # query came from:
+    #
+    #   - Stdlib pack (~/.codeql/packages/codeql/python-queries/...):
+    #     RemoteFlowSource-only source model. No-match is inconclusive
+    #     because CLI / env / stdin sources fall outside the model.
+    #
+    #   - In-repo extras pack (RaptorConfig.EXTRA_CODEQL_PACK_ROOTS):
+    #     LocalFlowSource selects remote + commandargs + environment +
+    #     stdin + file. Source model is broad enough that no-match
+    #     becomes meaningful refutation.
+    #
+    # Either way a confirmed verdict (matches at finding location)
+    # short-circuits Tier 2. A refuted verdict (now possible from
+    # extras packs) does the same. Inconclusive falls through to Tier 2
+    # for a chance at refutation via LLM-customised predicates.
     if language and cwe:
         prebuilt_path = discover_prebuilt_query(language, cwe)
         if prebuilt_path is not None:
             ev = adapter.run_prebuilt_query(prebuilt_path, hypothesis.target)
-            verdict = _verdict_from_prebuilt(ev, finding)
-            if verdict == "confirmed":
-                # Tier 1 confirmed the path exists at the finding's
-                # location. Done — no need to run Tier 2.
+            verdict = _verdict_from_prebuilt(ev, finding, prebuilt_path)
+            if verdict in ("confirmed", "refuted"):
+                # Tier 1 produced a definitive answer. Done.
                 return _wrap_result(ev, verdict, tier="prebuilt"), "prebuilt"
             # Otherwise (inconclusive), fall through to Tier 2 for a
             # chance at refutation via LLM-customised predicates.
@@ -802,35 +811,72 @@ def _wrap_result(
 def _verdict_from_prebuilt(
     evidence: ToolEvidence,
     finding: Dict,
+    query_path: Optional[Path] = None,
 ) -> str:
     """Derive verdict from a prebuilt-query result.
 
-    Tier 1 is asymmetric: it confirms reliably, but cannot refute alone.
-
-    Why: prebuilt CodeQL queries (e.g. CommandInjectionFlow) have specific
-    source/sink models that may not cover every variant the LLM's
-    dataflow_summary describes. Python's `RemoteFlowSource`, for instance,
-    models *network* sources but NOT `sys.argv` — so a real CLI-driven
-    command injection produces "no matches" in the prebuilt query.
-    Treating that as refutation would downgrade true positives. Empirical:
-    real-LLM E2E with `sys.argv → subprocess.call(shell=True)` hit
-    exactly this case.
+    Asymmetry depends on which pack the query came from. Stdlib queries
+    use `RemoteFlowSource` only (network inputs); they cannot refute a
+    finding alone because the LLM's claim might involve a CLI / env /
+    stdin source that the model doesn't cover. In-repo extras packs
+    (`RaptorConfig.EXTRA_CODEQL_PACK_ROOTS`) ship `LocalFlowSource`
+    queries selecting remote + commandargs + environment + stdin + file
+    threat models — broad enough that a no-match result IS meaningful
+    refutation.
 
     Verdict logic:
       - tool failed → inconclusive
-      - matches present at finding location → confirmed (high-confidence)
-      - matches present elsewhere → inconclusive (query-narrow vs true-elsewhere)
-      - no matches at all → inconclusive (prebuilt's source model may
-        not cover the LLM's claimed source; refutation requires Tier 2's
-        LLM-customised predicates aligned with the specific claim)
+      - matches at finding location → confirmed
+      - matches elsewhere → inconclusive
+      - no matches, query from in-repo extras pack → refuted
+      - no matches, query from stdlib pack → inconclusive
+        (caller falls through to Tier 2 for LLM-customised refutation)
+
+    Empirical: pre-LocalFlowSource, a real CLI-driven command injection
+    using `sys.argv → subprocess.call(shell=True)` produced no matches
+    against the stdlib query, and treating that as refutation would
+    have downgraded a true positive. The relaxed branch only fires
+    when an in-repo query (which DOES cover sys.argv) returned no
+    matches — at which point refutation is justified.
     """
     if not evidence.success:
         return "inconclusive"
-    if not evidence.matches:
-        return "inconclusive"  # NOT refuted — see docstring
-    if _any_match_at_finding_location(evidence.matches, finding):
-        return "confirmed"
+    if evidence.matches:
+        if _any_match_at_finding_location(evidence.matches, finding):
+            return "confirmed"
+        return "inconclusive"
+    # No matches. Refutation is justified only when the query has broad
+    # source coverage — which only the in-repo extras packs do.
+    if query_path is not None and _query_is_in_extras_pack(query_path):
+        return "refuted"
     return "inconclusive"
+
+
+def _query_is_in_extras_pack(query_path: Path) -> bool:
+    """True when `query_path` lives under one of the configured extras
+    roots (i.e. an in-repo RAPTOR pack with LocalFlowSource coverage).
+
+    Handles both `Path.is_relative_to` (3.9+) and resolves to absolute
+    so a relative path argument doesn't accidentally fail the check.
+    """
+    try:
+        from core.config import RaptorConfig
+        extras = list(RaptorConfig.EXTRA_CODEQL_PACK_ROOTS or [])
+    except ImportError:
+        return False
+    if not extras:
+        return False
+    try:
+        target = Path(query_path).resolve()
+    except (OSError, RuntimeError):
+        return False
+    for root in extras:
+        try:
+            if target.is_relative_to(Path(root).resolve()):
+                return True
+        except (OSError, RuntimeError):
+            continue
+    return False
 
 
 def _verdict_from_template(
