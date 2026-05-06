@@ -218,6 +218,11 @@ Examples:
                         help="Run /validate on exploitable/high-confidence findings after analysis")
     parser.add_argument("--sequential", action="store_true",
                        help="Sequential analysis in Phase 3 instead of parallel Phase 4 orchestration")
+    parser.add_argument("--verbose", action="store_true",
+                       help="Drop console log level from INFO to DEBUG. "
+                            "Surfaces per-LLM-call detail (cache hits, retries, "
+                            "per-call cost/duration). Useful for debugging "
+                            "multi-model dispatches or schema validation failures.")
 
     parser.add_argument(
         "--accept-weakened-defenses",
@@ -296,6 +301,16 @@ Examples:
     add_cli_args(parser)
     args = parser.parse_args()
     apply_cli_args(args, parser=parser)
+
+    # --verbose: drop the existing console StreamHandler from INFO to
+    # DEBUG so per-LLM-call detail (cache hits, retries, per-call
+    # cost/duration) becomes visible. Doesn't change the file handler
+    # (already DEBUG) — only what the operator sees on stderr.
+    if getattr(args, "verbose", False):
+        import logging
+        for h in logger.logger.handlers:
+            if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+                h.setLevel(logging.DEBUG)
 
     # Propagate --trust-repo via a module-level flag in cc_trust so every
     # in-process trust check (this module, build_detector, ...) agrees.
@@ -1113,6 +1128,18 @@ Examples:
         if failed_count > 0:
             parts.append(f"{failed_count} failed")
         print(f"   ⚠️  {', '.join(parts)}")
+        # Per-model failure breakdown — operator can see which model
+        # failed and why (first error truncated to 200 chars).
+        if orchestration_result:
+            failed_by_model = (
+                orchestration_result.get("orchestration", {})
+                .get("failed_by_model", {})
+            )
+            for model, info in sorted(failed_by_model.items()):
+                first_err = info.get("first_error") or ""
+                err_snippet = (first_err[:120] + "...") if len(first_err) > 120 else first_err
+                print(f"     {model}: {info.get('count', 0)} error{'s' if info.get('count') != 1 else ''}"
+                      + (f" — {err_snippet}" if err_snippet else ""))
     if true_positives > 0 or false_positives > 0:
         print(f"   True positives: {true_positives}")
         if false_positives > 0:

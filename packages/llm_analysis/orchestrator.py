@@ -812,6 +812,7 @@ def orchestrate(
         "findings_dispatched": len(findings),
         "findings_analysed": sum(1 for r in per_finding_results if "error" not in r),
         "findings_failed": sum(1 for r in per_finding_results if "error" in r),
+        "failed_by_model": _per_model_failure_summary(analysis_results),
         "structural_groups": len(groups),
         "cross_family_checked": cross_family_checked,
         "cross_family_disputes": cross_family_disputes,
@@ -1028,6 +1029,33 @@ def _build_aggregation_payload(
         "unique_insights": (correlation or {}).get("unique_insights", [])[:20],
         "findings": findings,
     }
+
+
+def _per_model_failure_summary(
+    analysis_results: List[Dict],
+) -> Dict[str, Dict[str, Any]]:
+    """Aggregate per-model failures from a flat analysis_results list.
+
+    /agentic dispatches analysis as (model × finding) work items. When
+    a model fails on a finding, the result has an ``"error"`` key plus
+    ``analysed_by`` identifying the model. Operators currently see only
+    a flat ``findings_failed`` count — they can't tell whether one
+    model failed on every finding or every model failed on one finding.
+
+    Returns ``{model_name: {count: N, first_error: "..."}}``. Empty
+    when no errors. ``first_error`` truncated to 200 chars to avoid
+    bloating the JSON report.
+    """
+    by_model: Dict[str, Dict[str, Any]] = {}
+    for r in analysis_results:
+        if not isinstance(r, dict) or "error" not in r:
+            continue
+        model = r.get("analysed_by") or "?"
+        entry = by_model.setdefault(model, {"count": 0, "first_error": None})
+        entry["count"] += 1
+        if entry["first_error"] is None:
+            entry["first_error"] = str(r["error"])[:200]
+    return by_model
 
 
 def _detect_multi_model_collapse(
