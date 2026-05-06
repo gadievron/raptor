@@ -206,7 +206,13 @@ def dispatch_task(
     completed = 0
     running_cost = 0.0
     abort = False
-    consecutive_errors = 0
+    # Per-model state — see error path for the rationale (auth
+    # and consecutive-error tracking moved from global counters
+    # to per-model so a single bad credential or model-specific
+    # failure burst doesn't kill peer models' work).
+    _per_model_auth_fail: set = set()
+    _per_model_dead: set = set()
+    _per_model_state: Dict[str, Dict[str, int]] = {}
     start = time.monotonic()
     system_prompt = task.get_system_prompt()
 
@@ -268,7 +274,12 @@ def dispatch_task(
                 item_cost = processed.get("cost_usd", 0)
                 running_cost += item_cost
                 results.append(processed)
-                consecutive_errors = 0
+                # Reset this model's consecutive-failure counter
+                # — successful response means we're not in a
+                # death spiral for this model.
+                pm = _per_model_state.setdefault(model_key, {"consec": 0, "completed": 0})
+                pm["completed"] += 1
+                pm["consec"] = 0
 
                 # Record defense telemetry (nonce leakage, schema rejection)
                 with _nonces_lock:
@@ -353,19 +364,52 @@ def dispatch_task(
                             schema_retried=False,
                         )
 
+                # Per-model auth-failure tracking. Pre-fix any
+                # single auth error from ANY model aborted the
+                # WHOLE dispatch — so with multi-model dispatch
+                # (M models × N findings) a single bad credential
+                # on one model killed work in progress on every
+                # other valid model. Track per (model_key, "auth")
+                # and only abort when ALL models active for this
+                # task have hit auth errors.
                 if _is_auth_error(err_str):
-                    print("\n  Authentication/billing error — aborting remaining")
-                    abort = True
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    break
+                    _per_model_auth_fail.add(model_key)
+                    distinct_models = {_model_key(m) for m, _ in work}
+                    if _per_model_auth_fail >= distinct_models:
+                        print("\n  All models hit auth/billing errors — aborting remaining")
+                        abort = True
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        break
+                    else:
+                        # Single-model auth failure — keep dispatching
+                        # to other models. Surface the per-model
+                        # failure but don't kill peers.
+                        print(f"  (model {model_key} auth-failed; continuing with other models)")
 
-                consecutive_errors += 1
-                if consecutive_errors >= 3 and completed == consecutive_errors:
-                    # Every result so far has failed — abort early
-                    print(f"\n  {consecutive_errors} consecutive failures — aborting remaining")
-                    abort = True
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    break
+                # Per-model consecutive_errors. Pre-fix the global
+                # counter triggered "3 consecutive failures" abort
+                # when one bad model's failures interleaved with
+                # other models' successes — with M models the
+                # round-robin scheduler frequently hit
+                # fail/fail/fail-from-same-model bursts that the
+                # GLOBAL counter saw as universal failure even
+                # when other models had succeeded between them.
+                # Per-model counter only triggers when this
+                # specific model has 3 consecutive failures
+                # AND every result for this model has been a
+                # failure.
+                pm = _per_model_state.setdefault(model_key, {"consec": 0, "completed": 0})
+                pm["completed"] += 1
+                pm["consec"] += 1
+                if pm["consec"] >= 3 and pm["completed"] == pm["consec"]:
+                    print(f"\n  Model {model_key}: {pm['consec']} consecutive failures — "
+                          "stopping dispatch to this model (others continue)")
+                    _per_model_dead.add(model_key)
+                    distinct_models = {_model_key(m) for m, _ in work}
+                    if _per_model_dead >= distinct_models:
+                        abort = True
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        break
 
     if abort:
         completed_ids = {r.get("finding_id") for r in results}
