@@ -50,7 +50,7 @@ Analyse this crash and provide:
 2. **exploitability_score** (float 0-1): Confidence that this is exploitable
 3. **crash_type** (string): Classify the crash (heap_overflow, stack_overflow, use_after_free, null_deref, format_string, integer_overflow, etc.)
 4. **severity_assessment** (string): low/medium/high/critical
-5. **cvss_estimate** (float): CVSS 3.1 base score estimate
+5. **cvss_score_estimate** (float): CVSS 3.1 base score estimate
 6. **attack_scenario** (string): Describe how an attacker would exploit this
 7. **exploitation_primitives** (list): What primitives are needed (arbitrary_write, controlled_pc, info_leak, etc.)
 8. **recommended_next_steps** (string): What to try for exploitation
@@ -355,7 +355,18 @@ class CrashAnalysisAgent:
             "exploitability_score": "float",
             "crash_type": "string",
             "severity_assessment": "string",
-            "cvss_estimate": "float",
+            # Renamed from `cvss_estimate` to align with the
+            # canonical schema name used by ANALYSIS_SCHEMA,
+            # exploitability_validation, and orchestrator
+            # consumers (see core/schema_constants.py — every
+            # other CVSS field across both /agentic and
+            # /validate is `cvss_score_estimate`). The bare
+            # `cvss_estimate` legacy spelling here meant the
+            # crash-agent's LLM was asked for one field while
+            # all other paths asked for another, and downstream
+            # mergers (json reports, judge prompts) failed to
+            # find the score on crash-agent results.
+            "cvss_score_estimate": "float",
             "attack_scenario": "string",
             "exploitation_primitives": "list",
             "recommended_next_steps": "string",
@@ -395,7 +406,16 @@ class CrashAnalysisAgent:
             # Update crash context
             crash_context.exploitability = "exploitable" if analysis.get("is_exploitable") else "not_exploitable"
             crash_context.crash_type = analysis.get("crash_type", "unknown")
-            crash_context.cvss_estimate = analysis.get("cvss_estimate", 0.0)
+            # Read the canonical name first, fall back to legacy
+            # for back-compat with cached analyses still using
+            # the old field name. crash_context attribute keeps
+            # its `cvss_estimate` name (purely internal — renaming
+            # would cascade across reports/binary_analysis).
+            crash_context.cvss_estimate = (
+                analysis.get("cvss_score_estimate")
+                or analysis.get("cvss_estimate")
+                or 0.0
+            )
             crash_context.analysis = analysis
 
             logger.info("✓ LLM analysis complete:")
@@ -403,7 +423,9 @@ class CrashAnalysisAgent:
             logger.info(f"  Exploitable: {analysis.get('is_exploitable', False)}")
             logger.info(f"  Crash Type: {analysis.get('crash_type', 'unknown')}")
             logger.info(f"  Severity: {analysis.get('severity_assessment', 'unknown')}")
-            logger.info(f"  CVSS: {analysis.get('cvss_estimate', 0.0)}")
+            logger.info(
+                f"  CVSS: {analysis.get('cvss_score_estimate', analysis.get('cvss_estimate', 0.0))}"
+            )
             attack_scenario = analysis.get('attack_scenario')
             if attack_scenario:
                 # Coerce to str — pre-fix `attack_scenario[:150]`
