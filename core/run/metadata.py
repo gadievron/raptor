@@ -386,7 +386,8 @@ def _finalize_sandbox_summary(output_dir: Path) -> None:
     """
     # Lazy import to keep core.sandbox out of metadata import time.
     from core.sandbox.summary import (
-        summarize_and_write, set_active_run_dir, SUMMARY_FILE,
+        summarize_and_write, set_active_run_dir, get_active_run_dir,
+        SUMMARY_FILE,
     )
     import logging
     log = logging.getLogger(__name__)
@@ -410,9 +411,24 @@ def _finalize_sandbox_summary(output_dir: Path) -> None:
             exc_info=True,
         )
     finally:
-        # Always clear active-run state, even if summary write failed —
-        # otherwise subsequent runs would record into a stale path.
-        set_active_run_dir(None)
+        # Clear active-run state ONLY if the active dir is the one we
+        # just finalised. Pre-fix this unconditionally cleared, which
+        # corrupted concurrent-run accounting: if run A's _finalize
+        # fired while run B was already the active dir (A and B
+        # overlapped because A's lifecycle ended slightly later than
+        # its work, or sweep ran A's finaliser concurrently with B's
+        # work), every B-side denial after A's finalise was dropped
+        # silently. Compare paths via .resolve() so the same dir
+        # reached via two paths still matches.
+        try:
+            active = get_active_run_dir()
+            if active is not None and Path(active).resolve() == Path(output_dir).resolve():
+                set_active_run_dir(None)
+        except OSError:
+            # Path resolution failed (deleted dir, permission error)
+            # — clear conservatively so the active-pointer doesn't
+            # stay pinned to an unreachable target.
+            set_active_run_dir(None)
 
 
 # Sandbox summary is finalized BEFORE the status update in every terminal-
