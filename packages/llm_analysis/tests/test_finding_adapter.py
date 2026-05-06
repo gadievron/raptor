@@ -119,6 +119,65 @@ class TestSelectPrimaryBehaviour:
             adapter.select_primary([])
 
 
+class TestExtractAnalysisRecord:
+    """Override mirrors /agentic's existing inline shape from
+    orchestrator.py's manual multi_model_analyses construction:
+    model + is_exploitable + exploitability_score + ruling + reasoning
+    (untruncated)."""
+
+    def test_returns_agentic_shape(self):
+        adapter = FindingAdapter()
+        result = {
+            "is_exploitable": True,
+            "exploitability_score": 0.9,
+            "ruling": "exploitable",
+            "reasoning": "user input reaches sink",
+            # extra fields shouldn't leak into the record
+            "extra": "should not appear",
+        }
+        record = adapter.extract_analysis_record(result, "claude-opus-4-7")
+        assert record == {
+            "model": "claude-opus-4-7",
+            "is_exploitable": True,
+            "exploitability_score": 0.9,
+            "ruling": "exploitable",
+            "reasoning": "user input reaches sink",
+        }
+
+    def test_missing_fields_default_to_none_or_empty(self):
+        adapter = FindingAdapter()
+        record = adapter.extract_analysis_record({}, "m1")
+        assert record == {
+            "model": "m1",
+            "is_exploitable": None,
+            "exploitability_score": None,
+            "ruling": None,
+            "reasoning": "",
+        }
+
+    def test_reasoning_not_truncated(self):
+        # /agentic's legacy inline construction did NOT truncate reasoning.
+        # Substrate's BaseVerdictAdapter default truncates to 600 chars
+        # (REASONING_TRUNCATE). Our override preserves legacy untruncated.
+        adapter = FindingAdapter()
+        long_reasoning = "x" * 5000
+        record = adapter.extract_analysis_record(
+            {"reasoning": long_reasoning}, "m1",
+        )
+        assert record["reasoning"] == long_reasoning
+        assert len(record["reasoning"]) == 5000
+
+    def test_no_verdict_field(self):
+        # Substrate default includes "verdict" (normalize_verdict output).
+        # /agentic uses "ruling" instead; "verdict" should NOT appear.
+        adapter = FindingAdapter()
+        record = adapter.extract_analysis_record(
+            {"is_exploitable": True, "ruling": "exploitable"}, "m1",
+        )
+        assert "verdict" not in record
+        assert record["ruling"] == "exploitable"
+
+
 class TestSelectPrimaryWithErrorFallback:
     """Wrapper that mirrors legacy _select_primary_result's error
     handling. Errors filtered out; if every result is an error,

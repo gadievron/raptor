@@ -525,11 +525,9 @@ def orchestrate(
         else:
             primary = _finding_adapter.select_primary_with_error_fallback(model_results)
             primary["multi_model_analyses"] = [
-                {"model": r.get("analysed_by", "?"),
-                 "is_exploitable": r.get("is_exploitable"),
-                 "exploitability_score": r.get("exploitability_score"),
-                 "ruling": r.get("ruling"),
-                 "reasoning": r.get("reasoning", "")}
+                _finding_adapter.extract_analysis_record(
+                    r, r.get("analysed_by", "?"),
+                )
                 for r in model_results
             ]
         source = findings_by_id.get(fid, {})

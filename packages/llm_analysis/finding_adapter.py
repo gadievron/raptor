@@ -43,6 +43,28 @@ class FindingAdapter(BaseVerdictAdapter):
         # negative. Preserve that rule here.
         return "positive" if item.get("is_exploitable") else "negative"
 
+    def extract_analysis_record(
+        self, result: Dict[str, Any], model_name: str,
+    ) -> Dict[str, Any]:
+        """Per-model record stored under ``multi_model_analyses``.
+
+        Matches /agentic's existing inline shape (preserved verbatim
+        from the manual loop in orchestrator.py): model + is_exploitable
+        + exploitability_score + ruling + full reasoning. Differs from
+        the substrate's default in two ways:
+        - includes ``ruling`` (free-form LLM verdict string) instead
+          of substrate's normalized ``verdict``;
+        - reasoning is NOT truncated (substrate truncates to 600 chars
+          by default).
+        """
+        return {
+            "model": model_name,
+            "is_exploitable": result.get("is_exploitable"),
+            "exploitability_score": result.get("exploitability_score"),
+            "ruling": result.get("ruling"),
+            "reasoning": result.get("reasoning", ""),
+        }
+
     def select_primary_with_error_fallback(
         self, model_results: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
