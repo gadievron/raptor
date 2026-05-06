@@ -43,7 +43,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,31 @@ logger = logging.getLogger(__name__)
 # is encoded in the key itself (e.g., wheel-metadata keyed on
 # (name, exact-version) — content can't change for a given key).
 TTL_FOREVER = -1
+
+
+# Sentinel for `try_get` — distinguishes "no entry" from "entry
+# exists but value is None". `get()` collapses both to None which
+# forced consumers (notably packages.nvd.client) to invent ad-hoc
+# wrapper sentinels (`_NVD_CACHE_MISSING`) to cache "not found"
+# verdicts without re-issuing the upstream request on every read.
+# Use a class-level singleton (not just `object()`) so `is`
+# comparisons across module reloads still work for tests.
+class _MissingType:
+    _instance: Optional["_MissingType"] = None
+
+    def __new__(cls) -> "_MissingType":
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __repr__(self) -> str:
+        return "<JsonCache._MISSING>"
+
+    def __bool__(self) -> bool:
+        return False
+
+
+MISSING = _MissingType()
 
 
 @dataclass(frozen=True)
@@ -137,20 +162,41 @@ class JsonCache:
     # ------------------------------------------------------------------
 
     def get(self, key: str, *, ttl_seconds: int) -> Optional[Any]:
-        """Return cached value if fresh; else ``None``."""
+        """Return cached value if fresh; else ``None``.
+
+        Note: returns ``None`` for both "no entry" and "entry holds
+        None". Callers that need to distinguish those cases should
+        use :meth:`try_get` instead.
+        """
+        value = self.try_get(key, ttl_seconds=ttl_seconds)
+        if value is MISSING:
+            return None
+        return value
+
+    def try_get(self, key: str, *, ttl_seconds: int) -> Any:
+        """Return cached value if fresh; else the ``MISSING`` sentinel.
+
+        Distinguishes "no entry" / "expired" / "corrupt" from
+        "entry holds None". The latter is a legitimate cached
+        value — operators caching `null` JSON responses
+        (NVD's "no record for this CVE" verdict, GitHub's
+        empty-array responses, distro tracker no-data signals)
+        previously had to wrap with their own sentinel because
+        `get` returned `None` indistinguishably for both cases.
+        """
         if not self._writable or self._root is None:
             self.misses += 1
-            return None
+            return MISSING
         path = self._path_for(key)
         if not path.exists():
             self.misses += 1
-            return None
+            return MISSING
         try:
             envelope = self._read_envelope(path)
         except (OSError, ValueError, KeyError) as e:
             logger.debug("core.json.cache: corrupt entry %s: %s", path, e)
             self.misses += 1
-            return None
+            return MISSING
         # Caller may downgrade TTL relative to what was stored. Honour
         # the *minimum* TTL.
         effective_ttl = ttl_seconds if ttl_seconds < envelope.ttl_seconds \
@@ -162,7 +208,7 @@ class JsonCache:
         )
         if not envelope.is_fresh(time.time()):
             self.misses += 1
-            return None
+            return MISSING
         self.hits += 1
         return envelope.value
 
