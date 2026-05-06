@@ -243,27 +243,81 @@ def merge_sarif(sarif_paths: List[str]) -> Dict[str, Any]:
     }
 
 
+_CWE_TAG_RE = re.compile(r"cwe[-_]?(\d+)", re.IGNORECASE)
+
+
 def _extract_cwe_from_rule(rule: Dict[str, Any]) -> Optional[str]:
-    """Extract CWE ID from a SARIF rule's properties/tags.
+    """Extract CWE ID from a SARIF rule.
 
-    SARIF rules carry CWE metadata in various places:
-    - properties.tags: ["external/cwe/cwe-89", "security"]
-    - properties.cwe: "CWE-89"
-    - shortDescription or fullDescription text
+    SARIF tools emit CWE metadata in several places — pre-fix this
+    only checked two:
+
+      * `properties.cwe` as a string ("CWE-89")
+      * `properties.tags` as a list of strings ("external/cwe/cwe-89")
+
+    Now also covers:
+      * `properties.cwe` as a LIST (some tools emit
+        `["CWE-89", "CWE-564"]`) — pre-fix the `isinstance(str)`
+        branch silently fell through to None for these.
+      * `relationships[].target.id` — SARIF spec's canonical way to
+        link a rule to a CWE-taxonomy entry. CodeQL's SARIF output
+        uses this exclusively (no properties.cwe), so pre-fix every
+        CodeQL CWE was missed.
+      * `properties.cwe_id` (alternate name several tools use).
+
+    Returns the FIRST CWE-ID found in inspection order. Multi-CWE
+    findings still surface only one CWE — promoting to a list would
+    break downstream consumers expecting a single string.
     """
-    # Check properties.cwe directly
-    props = rule.get("properties", {})
-    if props.get("cwe"):
-        cwe = props["cwe"]
-        if isinstance(cwe, str) and re.match(r"CWE-\d+", cwe):
-            return cwe
+    props = rule.get("properties") or {}
 
-    # Check tags for CWE patterns
-    for tag in props.get("tags", []):
-        if isinstance(tag, str) and "cwe" in tag.lower():
-            m = re.search(r"cwe-(\d+)", tag, re.IGNORECASE)
+    # `properties.cwe` — string OR list.
+    raw_cwe = props.get("cwe") or props.get("cwe_id")
+    if isinstance(raw_cwe, str):
+        m = _CWE_TAG_RE.search(raw_cwe)
+        if m:
+            return f"CWE-{m.group(1)}"
+    elif isinstance(raw_cwe, list):
+        for entry in raw_cwe:
+            if isinstance(entry, str):
+                m = _CWE_TAG_RE.search(entry)
+                if m:
+                    return f"CWE-{m.group(1)}"
+
+    # `properties.tags` — list of strings, may contain external/cwe/cwe-N.
+    for tag in props.get("tags", []) or []:
+        if isinstance(tag, str):
+            m = _CWE_TAG_RE.search(tag)
             if m:
                 return f"CWE-{m.group(1)}"
+
+    # `relationships[]` — SARIF spec's canonical mechanism. Each
+    # relationship has a `target` reference (`{"id": "CWE-89", ...}`
+    # or `{"toolComponent": {"name": "CWE"}, "id": "89"}`).
+    for rel in rule.get("relationships") or []:
+        if not isinstance(rel, dict):
+            continue
+        target = rel.get("target") or {}
+        if not isinstance(target, dict):
+            continue
+        target_id = target.get("id")
+        if isinstance(target_id, str):
+            m = _CWE_TAG_RE.search(target_id)
+            if m:
+                return f"CWE-{m.group(1)}"
+        # CodeQL emits the bare numeric id with the toolComponent
+        # naming the CWE catalog separately.
+        tc = target.get("toolComponent") or {}
+        if (
+            isinstance(tc, dict)
+            and isinstance(tc.get("name"), str)
+            and tc["name"].upper() == "CWE"
+            and isinstance(target_id, (str, int))
+        ):
+            try:
+                return f"CWE-{int(str(target_id))}"
+            except ValueError:
+                pass
 
     return None
 
