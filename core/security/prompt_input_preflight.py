@@ -99,7 +99,21 @@ def preflight(
     *corpora* restricts which pattern files to check. ``None`` (default)
     checks all loaded corpora. Pass a tuple of file stems to limit — e.g.
     ``corpora=("english", "english_multiline")`` for short structured inputs.
+
+    Raises ``ValueError`` if any name in *corpora* doesn't match a loaded
+    pattern file. Pre-fix a typo (``corpora=("englsih",)``) silently
+    iterated over zero patterns and returned the no-hit haircut — a
+    fail-open misconfiguration the operator wouldn't see in normal logs.
+    Failing fast surfaces the typo at the call site instead.
     """
+    if corpora is not None:
+        loaded = set(_PATTERNS)
+        unknown = [c for c in corpora if c not in loaded]
+        if unknown:
+            raise ValueError(
+                f"preflight: unknown corpora {unknown!r}. "
+                f"Loaded corpora: {sorted(loaded)!r}"
+            )
     indicators: list[str] = []
     for name, patterns in _PATTERNS.items():
         if corpora is not None and name not in corpora:

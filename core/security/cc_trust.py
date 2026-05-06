@@ -92,6 +92,43 @@ _COMPREHENSIVE_DANGEROUS_ENV_VARS = frozenset({
     "NODE_OPTIONS", "NODE_PATH",
     "PERL5OPT", "PERLLIB", "PERL5LIB",
     "RUBYOPT", "RUBYLIB",
+    # Proxy redirection — a target repo's CC settings.json env can
+    # silently route every outbound HTTP/HTTPS request through an
+    # attacker-controlled proxy. Pre-fix, the standalone fallback
+    # (used when core.config is unimportable — e.g. a stripped-down
+    # CC install or partial repo) didn't catch these. The full
+    # RaptorConfig.DANGEROUS_ENV_VARS list does, but the fallback was
+    # the line of defence for everything else.
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+    "http_proxy", "https_proxy", "all_proxy",
+    "NO_PROXY", "no_proxy",
+    # JVM / language-runtime injection. Any tool that spawns Java
+    # picks JAVA_TOOL_OPTIONS up unconditionally; -javaagent loads
+    # arbitrary code at JVM startup. _JAVA_OPTIONS is the older
+    # variant. CLASSPATH adds attacker .jar to load path.
+    "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "CLASSPATH",
+    "MAVEN_OPTS", "GRADLE_OPTS",
+    # Cargo / Ruby / Node module-resolution overrides.
+    "CARGO_HOME", "GEM_HOME", "GEM_PATH", "BUNDLE_GEMFILE",
+    "PYTHONUSERBASE", "PYTHONBREAKPOINT",
+    # Git config redirection — an env-set GIT_CONFIG_GLOBAL points
+    # git at an attacker config file with `alias = !sh`,
+    # `core.editor = arbitrary binary`, `credential.helper = ...`
+    # firing on every fetch. GIT_SSH_COMMAND directly execs an
+    # attacker binary on every ssh-based git op.
+    "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG",
+    "GIT_SSH_COMMAND", "GIT_SSH", "SSH_ASKPASS",
+    # OpenSSL config — .conf files can load ENGINE .so files
+    # (arbitrary code in any process that initialises OpenSSL).
+    "OPENSSL_CONF",
+    # TLS trust override — CA bundle / cert dir redirection makes
+    # MITM trivial.
+    "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+    "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "NODE_EXTRA_CA_CERTS", "SSLKEYLOGFILE",
+    # Kubernetes — `users[].user.exec` directive runs arbitrary
+    # command for credential acquisition.
+    "KUBECONFIG",
 })
 try:
     from core.config import RaptorConfig
@@ -219,24 +256,60 @@ def _scan_settings(path: Path) -> Optional[FileScan]:
                     for entry in inner:
                         if not isinstance(entry, dict):
                             continue
-                        if entry.get("type") == "command":
+                        # Pre-fix: only `type == "command"` hooks were
+                        # flagged. CC's hook spec is small today (just
+                        # `command`), but a future addition (or a
+                        # caller-supplied custom hook type) would slip
+                        # past entirely — we'd silently treat
+                        # `type=plugin` / `type=script` / etc. as
+                        # benign. Fail-closed: any hook entry whose
+                        # type we don't recognise is treated as
+                        # dangerous (the value field is rendered for
+                        # operator review).
+                        hook_type = entry.get("type")
+                        if hook_type == "command":
                             cmd = entry.get("command")
                             value = _truncate(cmd) if isinstance(cmd, str) and cmd else "(empty)"
                             fs.findings.append(Finding(f"{ev} hook", value, True))
+                        else:
+                            # Unknown hook type — surface the type +
+                            # the entry's keys so the operator can
+                            # judge. Treated as blocking like every
+                            # other hook finding.
+                            type_label = _truncate(
+                                str(hook_type) if hook_type is not None else "(missing)",
+                                limit=40,
+                            )
+                            keys_summary = ",".join(sorted(entry.keys()))
+                            fs.findings.append(Finding(
+                                f"{ev} hook ({type_label}, unknown type)",
+                                _truncate(keys_summary),
+                                True,
+                            ))
 
         env_cfg = data.get("env")
         if isinstance(env_cfg, dict):
+            # Pre-fix the membership check was exact-match, so a target
+            # setting `http_proxy` or `Https_Proxy` (both honoured by
+            # curl, wget, requests, and most language stdlibs) bypassed
+            # the dangerous-env detection because only uppercase
+            # `HTTP_PROXY`/`HTTPS_PROXY` were in the set. POSIX doesn't
+            # mandate uppercase env vars; the case-insensitive proxy
+            # convention is real and widely exploited. Compare against
+            # an upper-case-folded view of the dangerous set.
+            dangerous_upper = {v.upper() for v in _DANGEROUS_ENV_VARS}
             for env_key, env_val in env_cfg.items():
                 key_str = str(env_key)
+                key_upper = key_str.upper()
                 # RAPTOR_* and SAGE_* in a target repo's env dict are suspicious
                 # regardless of the specific var — targets have no business
                 # setting RAPTOR's own control env vars (RAPTOR_OUT_DIR, etc.)
                 # nor SAGE's (SAGE_URL could redirect to a poisoned memory
                 # server, SAGE_ENABLED could silently turn on persistent
                 # memory the user didn't intend, etc.).
-                if (key_str in _DANGEROUS_ENV_VARS
-                        or key_str.startswith("RAPTOR_")
-                        or key_str.startswith("SAGE_")):
+                if (key_upper in dangerous_upper
+                        or key_upper.startswith("RAPTOR_")
+                        or key_upper.startswith("SAGE_")):
                     k = _truncate(key_str, limit=40)
                     fs.findings.append(Finding(f"env {k}", _truncate(str(env_val)), True))
     except Exception:

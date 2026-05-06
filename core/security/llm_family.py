@@ -25,7 +25,10 @@ from __future__ import annotations
 from typing import Iterable, Literal, Optional
 
 
-Family = Literal["anthropic", "openai", "google", "meta", "mistral", "ollama", "unknown"]
+Family = Literal[
+    "anthropic", "openai", "google", "meta", "mistral",
+    "ollama", "cohere", "unknown",
+]
 
 
 _PROVIDER_STEMS: tuple[tuple[str, Family], ...] = (
@@ -35,7 +38,17 @@ _PROVIDER_STEMS: tuple[tuple[str, Family], ...] = (
     ("google", "google"),
     ("meta-llama", "meta"),
     ("mistral", "mistral"),
+    ("mistralai", "mistral"),
     ("ollama", "ollama"),
+    ("cohere", "cohere"),
+    # Aggregator hosts (Together, Groq, OpenRouter, Fireworks) re-host
+    # models from underlying families. The provider stem alone doesn't
+    # tell us the family — `together/meta-llama/Llama-3-8B` is meta,
+    # `together/anthropic/claude-haiku-4-5` is anthropic. Strip the
+    # aggregator prefix and recurse on the remainder. Without this,
+    # cross-family validation against an aggregator-hosted model
+    # produced "unknown" and the safety check silently no-op'd.
+    # Handled below in family_of() rather than as a stem here.
 )
 
 _MODEL_STEMS: tuple[tuple[str, Family], ...] = (
@@ -43,9 +56,23 @@ _MODEL_STEMS: tuple[tuple[str, Family], ...] = (
     ("gpt", "openai"),
     ("o1", "openai"),
     ("o3", "openai"),
+    ("o4", "openai"),
     ("gemini", "google"),
     ("llama", "meta"),
     ("mistral", "mistral"),
+    ("mixtral", "mistral"),
+    ("command", "cohere"),  # cohere's `command-r-plus`, `command-light`
+)
+
+
+_AGGREGATOR_PREFIXES: tuple[str, ...] = (
+    "together/",
+    "groq/",
+    "openrouter/",
+    "fireworks/",
+    "deepinfra/",
+    "perplexity/",
+    "replicate/",
 )
 
 
@@ -56,6 +83,7 @@ _FAMILY_TO_PROVIDER: dict[Family, str] = {
     "meta": "ollama",
     "mistral": "mistral",
     "ollama": "ollama",
+    "cohere": "cohere",
 }
 
 
@@ -76,9 +104,29 @@ def family_of(model_id: str) -> Family:
     and ``anthropic/claude-haiku-4-5`` both resolve to ``"anthropic"``).
     Provider routing prefixes (``provider/model``) are checked first so
     that e.g. ``ollama/llama-3`` resolves to ``ollama`` not ``meta``.
+
+    Aggregator-host prefixes (``together/``, ``groq/``, ``openrouter/``,
+    etc.) are STRIPPED first before family resolution — they re-host
+    models from underlying families and must not be mistaken for a
+    family of their own. Without this peel,
+    `together/anthropic/claude-haiku-4-5` resolved to "unknown" and
+    the cross-family safety check silently no-op'd.
+
     Unknown identifiers return ``"unknown"``.
     """
     needle = model_id.lower()
+    # Peel aggregator prefix(es). Some users chain (e.g.
+    # `openrouter/together/...`); peel iteratively up to a small bound
+    # to avoid pathological loops on adversarial inputs.
+    for _ in range(4):
+        peeled = False
+        for prefix in _AGGREGATOR_PREFIXES:
+            if needle.startswith(prefix):
+                needle = needle[len(prefix):]
+                peeled = True
+                break
+        if not peeled:
+            break
     for stem, family in _PROVIDER_STEMS:
         if needle.startswith(stem + "/"):
             return family

@@ -73,9 +73,17 @@ def _get_available_ollama_models() -> List[str]:
     if _ollama_checked:
         return _cached_ollama_models or []
 
+    # Validate URL OUTSIDE the broad except below. A malformed
+    # OLLAMA_HOST (no scheme, etc.) used to be swallowed as "could not
+    # connect" and cached as `[]` — the operator saw "no Ollama
+    # running" with no hint that the URL itself was the problem, and
+    # the bad cache poisoned every later call in the same process.
+    # Surface the configuration error directly so the operator can fix
+    # the env var. Per-call cost is negligible (string check).
+    ollama_url = _validate_ollama_url(RaptorConfig.OLLAMA_HOST)
+
     _ollama_checked = True
     try:
-        ollama_url = _validate_ollama_url(RaptorConfig.OLLAMA_HOST)
         response = requests.get(f"{ollama_url}/api/tags", timeout=2)
         if response.status_code == 200:
             data = response.json()
@@ -100,12 +108,22 @@ def _check_litellm_installed() -> bool:
 
             # litellm is installed — PyYAML is guaranteed (transitive dep).
             # Pre-emptively migrate config before any other checks.
+            #
+            # Catch the specific failure modes rather than bare
+            # `except Exception`:
+            #   * RuntimeError — Path.home() raises this when no HOME
+            #     is set (some daemon/systemd-unit environments).
+            #   * OSError — exists() / migration file ops.
+            #   * yaml.YAMLError — malformed source config from migrate.
+            # Bare `except Exception` would also swallow programming
+            # bugs (AttributeError, NameError) introduced by future
+            # edits — losing valuable signal during development.
             try:
                 old_config = Path.home() / ".config/litellm/config.yaml"
                 new_config = Path.home() / ".config/raptor/models.json"
                 if old_config.exists() and not new_config.exists():
                     _try_auto_migrate(old_config, new_config)
-            except Exception:
+            except (RuntimeError, OSError):
                 pass  # Migration is best-effort
 
             if installed in ("1.82.7", "1.82.8"):
@@ -116,13 +134,30 @@ def _check_litellm_installed() -> bool:
                     f"\n"
                 )
                 if installed == "1.82.8":
+                    # Removal must scope to Python's actual site-packages
+                    # locations rather than `find / -path '*/litellm*'`
+                    # which would:
+                    #   * traverse the whole filesystem on multi-mount /
+                    #     NFS hosts (hours; hits /proc/*, /sys/*),
+                    #   * delete unrelated files whose path happens to
+                    #     contain "litellm" (logs, research papers,
+                    #     symlinks, /tmp scratch dirs).
+                    # Narrow to the known Python site dirs from `python
+                    # -c "import site; print(site.getsitepackages(),
+                    # site.getusersitepackages())"`. The for-loop
+                    # iterates each one and only touches files literally
+                    # under `<sitedir>/litellm*` and the matching .pth.
                     msg += (
                         f"  Version 1.82.8 runs on ANY Python startup via a .pth file.\n"
                         f"  Do NOT use pip to remove it — pip invokes Python, triggering the payload.\n"
                         f"\n"
-                        f"  Safe removal (no Python invoked):\n"
-                        f"    find / -path '*/litellm*' -name '*.pth' -delete 2>/dev/null\n"
-                        f"    find / -path '*/site-packages/litellm*' -exec rm -rf {{}} + 2>/dev/null\n"
+                        f"  1. Identify your Python site-packages locations:\n"
+                        f"     python -c 'import site; print(*site.getsitepackages(), site.getusersitepackages())'\n"
+                        f"\n"
+                        f"  2. For EACH location printed above, remove the litellm package + .pth shim:\n"
+                        f"     SITE=/exact/path/from/step/1\n"
+                        f"     rm -rf \"$SITE\"/litellm \"$SITE\"/litellm-*.dist-info\n"
+                        f"     find \"$SITE\" -maxdepth 1 -name 'litellm*.pth' -delete\n"
                         f"\n"
                         f"  Then rotate all API keys, SSH keys, and cloud credentials.\n"
                     )
@@ -164,6 +199,16 @@ def _try_auto_migrate(old_config: Path, new_config: Path) -> bool:
     import json
     from .model_data import PROVIDER_ENV_KEYS
 
+    # Allowlist of providers RAPTOR's downstream code can handle.
+    # LiteLLM supports a much wider set (vertex_ai, bedrock, sagemaker,
+    # cohere, replicate, etc.) — migrating those produces JSON
+    # entries that our config loader silently ignores at best, or
+    # crashes on at worst. Skip with a debug log so the operator can
+    # see what was dropped and add a manual entry if needed.
+    _SUPPORTED_PROVIDERS = frozenset({
+        "anthropic", "openai", "gemini", "mistral", "ollama", "claudecode",
+    })
+
     try:
         with open(old_config) as f:
             data = yaml.safe_load(f)
@@ -172,6 +217,7 @@ def _try_auto_migrate(old_config: Path, new_config: Path) -> bool:
             return False
 
         models = []
+        skipped_unknown: list[str] = []
         for entry in data['model_list']:
             if not isinstance(entry, dict):
                 continue
@@ -183,6 +229,14 @@ def _try_auto_migrate(old_config: Path, new_config: Path) -> bool:
 
             provider = underlying.split('/')[0]
             model_name = underlying.split('/', 1)[1]
+
+            if provider not in _SUPPORTED_PROVIDERS:
+                # Drop the entry rather than write an unsupported
+                # provider into the migrated config. The loader would
+                # later silently skip it (best case) or crash on a
+                # missing builder (worst case).
+                skipped_unknown.append(f"{provider}/{model_name}")
+                continue
 
             model_entry = {"provider": provider, "model": model_name}
 
@@ -205,6 +259,16 @@ def _try_auto_migrate(old_config: Path, new_config: Path) -> bool:
 
         if not models:
             return False
+
+        if skipped_unknown:
+            logger.info(
+                "Auto-migration skipped %d unsupported provider(s): %s. "
+                "RAPTOR supports: %s. Add a manual entry to %s if needed.",
+                len(skipped_unknown),
+                ", ".join(skipped_unknown),
+                ", ".join(sorted(_SUPPORTED_PROVIDERS)),
+                new_config,
+            )
 
         # Write new config with restrictive permissions atomically
         from core.json import save_json

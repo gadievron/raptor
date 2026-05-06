@@ -181,12 +181,24 @@ class TestHooks:
         "not-a-dict", 42, None, [], {"Event": "not-a-list"}, {"Event": [None]},
         {"Event": [{"hooks": "not-a-list"}]},
         {"Event": [{"hooks": [None]}]},
-        {"Event": [{"hooks": [{"type": "notification"}]}]},  # non-command type
     ])
     def test_malformed_hooks_do_not_false_positive(self, tmp_path, hooks_value):
         claude = tmp_path / ".claude"; claude.mkdir()
         (claude / "settings.json").write_text(json.dumps({"hooks": hooks_value}))
         assert _check(str(tmp_path)) is False
+
+    def test_unknown_hook_type_blocks(self, tmp_path, capsys):
+        # Fail-closed: any hook entry whose type we don't recognise is
+        # treated as dangerous. CC's hook spec is small today (just
+        # `command`), but a future addition or caller-supplied custom
+        # type must NOT slip past silently. Pre-fix `type=notification`
+        # / `type=plugin` / `type=script` were treated as benign.
+        claude = tmp_path / ".claude"; claude.mkdir()
+        (claude / "settings.json").write_text(json.dumps({
+            "hooks": {"Event": [{"hooks": [{"type": "notification"}]}]}
+        }))
+        assert _check(str(tmp_path)) is True
+        assert "unknown type" in capsys.readouterr().out
 
 
 class TestEnvInjection:

@@ -37,6 +37,40 @@ from .tool_use.types import (
 
 logger = get_logger()
 
+
+def _safe_float(value: Any, *, default: float) -> float:
+    """`float(value)` with all error paths collapsed to `default`.
+
+    The CC subprocess envelope nominally returns numeric `cost_usd` /
+    `_tokens`, but a future CC change or an upstream parser bug could
+    surface a string like `"1.23abc"`, `"NaN"`, `True`, `None`, or
+    even a dict. Pre-fix `float(parsed.get("cost_usd") or 0.0)`
+    raised ValueError on the non-numeric-string case mid-stack and
+    aborted the entire turn. Track the failure in debug logs so a
+    real upstream regression is visible without crashing the run.
+    """
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        logger.debug("CC envelope: non-numeric cost/tokens value %r — using %r",
+                     value, default)
+        return default
+
+
+def _safe_int(value: Any, *, default: int) -> int:
+    """Same as `_safe_float` for int conversion."""
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        logger.debug("CC envelope: non-int tokens value %r — using %r",
+                     value, default)
+        return default
+
+
 # SDK availability flags (canonical source is detection.py)
 from .detection import OPENAI_SDK_AVAILABLE, ANTHROPIC_SDK_AVAILABLE, GENAI_SDK_AVAILABLE
 
@@ -656,9 +690,15 @@ def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']]):
             python_type = Opt[python_type]
             default_value = None
 
-        # Nullable fields should default to None even if required in the schema —
-        # LLMs frequently omit nullable fields rather than explicitly returning null
-        if nullable and default_value is ...:
+        # Nullable + REQUIRED: keep `...` (no default) so Pydantic
+        # enforces presence — the LLM must emit the field, even if the
+        # value is `null`. The previous behaviour of forcing
+        # `default_value = None` for every nullable field silently
+        # accepted omission, defeating the schema's `required` set.
+        # Nullable + NOT required: default to None (the omission case
+        # is what "not required" means; LLMs habitually omit
+        # null-valued non-required fields and we should accept that).
+        if nullable and default_value is ... and not is_required:
             default_value = None
 
         # Create field definition
@@ -987,12 +1027,14 @@ class OpenAICompatibleProvider(LLMProvider):
                     f"{attempt + 1}, retrying in {delay:.1f}s: {exc}"
                 )
                 time.sleep(delay)
-        else:
-            return TurnResponse(
-                content=[], stop_reason=StopReason.ERROR,
-                input_tokens=0, output_tokens=0,
-                error_message="exhausted retries",
-            )
+        # No `else:` branch — the for/else here was dead. Every
+        # exception path either returns early (permanent error,
+        # tool-use unsupported, retries exhausted) or continues to
+        # retry. Success path breaks. The for/else body would only
+        # fire if the loop exhausted naturally without break, which
+        # is unreachable: `attempt >= max_retries` in the except
+        # triggers the early return before the loop would naturally
+        # terminate.
         duration = time.monotonic() - t_start
 
         # ---- normalise response --------------------------------------
@@ -1105,14 +1147,34 @@ def _is_tool_use_unsupported_error(exc: BaseException) -> bool:
         elif isinstance(err, str):
             text += " " + err.lower()
 
-    has_keyword = "tool" in text or "function call" in text or "function-call" in text
-    has_negation = (
-        "not support" in text
-        or "unsupported" in text
-        or "does not" in text
-        or "no support" in text
+    # Tighter heuristic — pre-fix `"does not" in text` matched
+    # unrelated 4xx negations (`does not have permission`, `does not
+    # include billing`, `does not match expected schema`) producing
+    # false-positive synthesis fallback when native tool-use was
+    # actually broken for an UNRELATED reason. Require a phrase that
+    # actually links the negation to tool/function support.
+    has_unsupported_phrase = any(
+        phrase in text for phrase in (
+            "does not support tools",
+            "does not support tool",
+            "does not support function",
+            "doesn't support tools",
+            "doesn't support tool",
+            "doesn't support function",
+            "no tool support",
+            "no function support",
+            "tools are not supported",
+            "tool calls not supported",
+            "tool calling not supported",
+            "function calling not supported",
+            "function calls not supported",
+            "function calling is not supported",
+            "function calls are not supported",
+            "tools unsupported",
+            "tool_use not supported",
+        )
     )
-    return has_keyword and has_negation
+    return has_unsupported_phrase
 
 
 def _message_to_openai_wire(m: Message) -> list[Dict[str, Any]]:
@@ -1127,8 +1189,12 @@ def _message_to_openai_wire(m: Message) -> list[Dict[str, Any]]:
     on ``StopReason.ERROR``) emit ``{"role": "assistant",
     "content": ""}`` — most OpenAI-compatible backends reject an
     assistant message with neither ``content`` nor ``tool_calls``,
-    so the empty-string is the safe wire form. Empty user turns are
-    skipped (the message has nothing to convey).
+    so the empty-string is the safe wire form.
+
+    Genuinely-empty user turns (no text, no tool results) symmetrically
+    emit ``{"role": "user", "content": ""}``. Pre-fix this returned
+    `[]` — most backends rejected the request as malformed (the
+    next assistant turn followed an absent user turn).
 
     User turns carrying both text and tool_results emit the tool
     messages first, then a trailing ``role:"user"`` text message —
@@ -1172,6 +1238,15 @@ def _message_to_openai_wire(m: Message) -> list[Dict[str, Any]]:
             })
     if text_parts:
         out_msgs.append({"role": "user", "content": "".join(text_parts)})
+    elif not out_msgs:
+        # Genuinely empty user message — no text, no tool results.
+        # Pre-fix returned `[]`, which produced a wire-shape with no
+        # message for this turn at all. Most OpenAI-compat backends
+        # then reject the request as malformed (assistant turn
+        # without prior user). Symmetric with the assistant-role
+        # branch above which also emits `{"content": ""}` for the
+        # genuinely-empty case.
+        out_msgs.append({"role": "user", "content": ""})
     return out_msgs
 
 
@@ -1239,7 +1314,15 @@ class AnthropicProvider(LLMProvider):
                 raise RuntimeError("Anthropic returned empty content")
             first_block = response.content[0]
             if not hasattr(first_block, 'text'):
-                raise RuntimeError(f"Anthropic returned non-text content block: {first_block.type}")
+                # `getattr` with default — pre-fix `first_block.type`
+                # raised AttributeError mid-error-formatting if the
+                # block lacked BOTH `text` AND `type` (a future SDK
+                # shape change or unexpected response variant). The
+                # AttributeError replaced the informative
+                # "non-text content" message with a confusing
+                # internal-state crash.
+                block_type = getattr(first_block, 'type', '<unknown>')
+                raise RuntimeError(f"Anthropic returned non-text content block: {block_type}")
             content = first_block.text
             finish_reason = response.stop_reason or "complete"
 
@@ -1505,12 +1588,14 @@ class AnthropicProvider(LLMProvider):
                     f"{attempt + 1}, retrying in {delay:.1f}s: {exc}"
                 )
                 time.sleep(delay)
-        else:
-            return TurnResponse(
-                content=[], stop_reason=StopReason.ERROR,
-                input_tokens=0, output_tokens=0,
-                error_message="exhausted retries",
-            )
+        # No `else:` branch — the for/else here was dead. Every
+        # exception path either returns early (permanent error,
+        # tool-use unsupported, retries exhausted) or continues to
+        # retry. Success path breaks. The for/else body would only
+        # fire if the loop exhausted naturally without break, which
+        # is unreachable: `attempt >= max_retries` in the except
+        # triggers the early return before the loop would naturally
+        # terminate.
         duration = time.monotonic() - t_start
 
         # ---- normalise response --------------------------------------
@@ -2018,7 +2103,20 @@ class ClaudeCodeLLMProvider(LLMProvider):
         # Per-call timeout: prefer explicit kwarg, then ModelConfig.timeout,
         # then a generous default (Claude Code subprocess + tool-use can
         # take several minutes on real workloads).
-        self._timeout_s = timeout_s or (config.timeout if config.timeout else 600)
+        #
+        # `0` is the documented "no timeout" sentinel — operator
+        # explicitly opting out of the cap (a long-running tool-use
+        # session, an unattended overnight scan). Pre-fix the
+        # `timeout_s or ...` chain treated 0 as falsy and overrode it
+        # with the 600s default — silently re-enforcing the cap the
+        # operator just disabled. Use explicit `is None` for kwarg
+        # absence and `<= 0` to honour the no-timeout sentinel.
+        if timeout_s is not None:
+            self._timeout_s = None if timeout_s <= 0 else timeout_s
+        elif config.timeout is not None:
+            self._timeout_s = None if config.timeout <= 0 else config.timeout
+        else:
+            self._timeout_s = 600
 
     def generate(
         self,
@@ -2072,8 +2170,8 @@ class ClaudeCodeLLMProvider(LLMProvider):
 
         parsed = parse_cc_freeform(proc.stdout, proc.stderr)
         content = parsed.get("content", "") or ""
-        cost = float(parsed.get("cost_usd", 0.0) or 0.0)
-        tokens = int(parsed.get("_tokens", 0) or 0)
+        cost = _safe_float(parsed.get("cost_usd"), default=0.0)
+        tokens = _safe_int(parsed.get("_tokens"), default=0)
 
         # Best-effort token split: cc_adapter only surfaces total tokens;
         # if the envelope had separate input/output we'd carry them, but
@@ -2151,8 +2249,8 @@ class ClaudeCodeLLMProvider(LLMProvider):
         # Track usage so structured calls show up alongside generate() in
         # provider stats. cost/_tokens are set by extract_envelope_metadata
         # inside parse_cc_structured when the envelope carries them.
-        cost = float(result.pop("cost_usd", 0.0) or 0.0)
-        tokens = int(result.pop("_tokens", 0) or 0)
+        cost = _safe_float(result.pop("cost_usd", None), default=0.0)
+        tokens = _safe_int(result.pop("_tokens", None), default=0)
         result.pop("duration_seconds", None)
         result.pop("analysed_by", None)
         # parse_cc_structured injects ``finding_id`` (default "unknown")
@@ -2204,6 +2302,11 @@ class ClaudeCodeLLMProvider(LLMProvider):
     # empirically: CC honours the schema and produces valid tool
     # calls or final answers for typical agent flows.
 
+    # Class-level latch for the provider_specific-ignored warning so
+    # we don't log per-turn (one ToolUseLoop run can fire dozens of
+    # turns with the same kwargs).
+    _provider_specific_warned: bool = False
+
     def turn(
         self,
         messages: Sequence[Message],
@@ -2217,7 +2320,24 @@ class ClaudeCodeLLMProvider(LLMProvider):
         """Tool-use via ``generate_structured`` with a discriminated
         schema. Each turn, CC chooses either to call a tool (returning
         name + input) or to finalise (returning text)."""
-        del cache_control, provider_specific            # unused by CC
+        # `del cache_control` — no caching at the CC layer (the
+        # subprocess re-launches per turn).
+        del cache_control
+        # `provider_specific` — silently dropped pre-fix. A caller
+        # passing `temperature=`, `top_p=`, `frequency_penalty=`, etc.
+        # via the ToolUseLoop saw their values quietly ignored when
+        # the bound provider was CC (CC's subprocess interface doesn't
+        # expose those flags). Warn ONCE per process so the operator
+        # can decide whether to switch providers or accept the gap.
+        if provider_specific and not type(self)._provider_specific_warned:
+            type(self)._provider_specific_warned = True
+            logger.warning(
+                "ClaudeCodeLLMProvider.turn: ignoring provider_specific "
+                "kwargs %s — CC's subprocess interface doesn't expose these. "
+                "If you need per-turn control over temperature/top_p/etc., "
+                "switch to AnthropicProvider (set ANTHROPIC_API_KEY).",
+                sorted(provider_specific.keys()),
+            )
 
         # No tools → plain text generation. Skip the schema overhead.
         if not tools:

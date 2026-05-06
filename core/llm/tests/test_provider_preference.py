@@ -266,13 +266,18 @@ def test_prefer_env_var_beats_operator_thinking_model(
     assert config.provider == "anthropic"
 
 
-def test_prefer_unavailable_falls_to_thinking_model(
+def test_prefer_filters_thinking_model_too(
     clean_env, no_claudecode, no_ollama, monkeypatch,
 ) -> None:
-    """Consumer prefers Anthropic, env var not set, operator has
-    Gemini configured → falls through to operator's Gemini rather
-    than dropping all the way to claudecode. Operator's explicit
-    config still beats unconfigured fallbacks."""
+    """Consumer prefers Anthropic; operator has Gemini configured as
+    their thinking-model file. With strict-prefer (matching the
+    docstring's promise), the cached Gemini thinking model is
+    skipped because its provider doesn't match the preference. Falls
+    through to step 3 (default-order autodetect) rather than handing
+    back a Gemini config that defeats the consumer's prefer arg.
+    Pre-fix the cached thinking model was returned unconditionally
+    even when a `prefer` filter was set, silently overriding the
+    consumer's explicit choice."""
     fake_thinking = ModelConfig(
         provider="gemini",
         model_name="gemini-2.5-pro",
@@ -283,8 +288,10 @@ def test_prefer_unavailable_falls_to_thinking_model(
         "core.llm.config._get_best_thinking_model",
         lambda: fake_thinking,
     )
+    # No env vars set, no claudecode, no ollama → step 3 finds nothing
+    # either. None means "couldn't honour prefer AND no fallback found".
     config = _get_default_primary_model(prefer="anthropic")
-    assert config.provider == "gemini"
+    assert config is None
 
 
 # ---------------------------------------------------------------------------

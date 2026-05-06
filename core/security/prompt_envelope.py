@@ -63,6 +63,9 @@ Trust = Literal["trusted", "untrusted"]
 MessageRole = Literal["system", "user", "assistant"]
 
 
+_VALID_TRUST_VALUES: frozenset[str] = frozenset({"trusted", "untrusted"})
+
+
 @dataclass(frozen=True)
 class TaintedString:
     """A string with an explicit trust label.
@@ -71,10 +74,26 @@ class TaintedString:
     untrusted value as trusted prose. Untrusted slot values are still
     rendered into the prompt, but inside the envelope's named-slot
     structure, never as free text.
+
+    The `Trust` Literal annotation is type-check time only and Python
+    doesn't enforce it at runtime — `__post_init__` validates that
+    `trust` is exactly one of `{"trusted", "untrusted"}`. Without this
+    runtime check, `TaintedString(value="x", trust="UNTRUSTED")` (case
+    drift), `trust="maybe"`, or `trust=None` all construct fine and
+    then silently bypass the `== "trusted"` routing in `_render_slots`
+    — defaulting to the untrusted-rendering path is the safer
+    failure mode but the operator wouldn't see the typo.
     """
 
     value: str
     trust: Trust
+
+    def __post_init__(self) -> None:
+        if self.trust not in _VALID_TRUST_VALUES:
+            raise ValueError(
+                f"TaintedString.trust must be one of "
+                f"{sorted(_VALID_TRUST_VALUES)!r}; got {self.trust!r}"
+            )
 
 
 @dataclass(frozen=True)
@@ -227,10 +246,36 @@ def nonce_leaked_in(nonce: str, text: str) -> bool:
         start = idx + 1
 
 
+# Characters that browsers / HTML parsers / markdown renderers
+# normalise away INSIDE tags but our regex sees as-is — so an attacker
+# can insert one of these between tag-name letters to bypass the tag
+# pattern. `<im​g src=...>` renders as `<img src=...>` in many
+# pipelines; without stripping, the autofetch regex misses it.
+#
+# Coverage:
+#   \x00       — null (browsers ignore inside attribute values + tag names)
+#   ​-D   — zero-width space / non-joiner / joiner
+#   ﻿     — zero-width no-break space (also BOM)
+#   ­     — soft hyphen
+#   ‪-E   — bidi embedding / override controls
+#   ⁦-9   — bidi isolate controls
+_BYPASS_CHAR_RE = re.compile(
+    '[\x00­​‌‍﻿'
+    '‪‫‬‭‮'
+    '⁦⁧⁨⁩]'
+)
+
+
 def _strip_autofetch_markup(content: str) -> str:
-    # Strip null bytes first — browsers ignore them, so <im\x00g> renders as
-    # <img>. Without this, null-byte insertion bypasses all tag patterns.
-    cleaned = content.replace('\x00', '')
+    # Strip parser-invisible characters first. Pre-fix this only
+    # stripped \x00; the zero-width and bidi-control characters above
+    # are equally effective bypasses against the autofetch regex
+    # because most renderers (browsers, GFM, the various markdown
+    # libraries downstream agents pipe through) treat them as either
+    # invisible or as zero-width formatting control — meaning
+    # `<im​g src=evil>` renders as a real `<img>` tag while our
+    # regex doesn't match it as `img`.
+    cleaned = _BYPASS_CHAR_RE.sub('', content)
     return _AUTOFETCH_MARKUP_RE.sub('[REDACTED-AUTOFETCH-MARKUP]', cleaned)
 
 
@@ -316,7 +361,22 @@ def _content_for_envelope(content: str, profile: ModelDefenseProfile) -> str:
 
 
 def _xml_attr_escape(s: str) -> str:
-    return escape_nonprintable(s).replace('&', '&amp;').replace('"', '&quot;').replace('<', '&lt;')
+    # Escape the full XML attribute-special set: `&` `<` `>` `"` `'`.
+    # Pre-fix `>` and `'` were unescaped — fine for strict XML parsers
+    # which only require `<` / `&` / quote-of-the-attr-delim, but our
+    # consumers are LLMs that pattern-match visually rather than
+    # parsing XML. An attribute value containing `>` (closing the
+    # attribute's tag visually) or `'` (closing a single-quoted
+    # surrounding attr in a future change) was a smuggling primitive.
+    # Escape both for defence-in-depth.
+    return (
+        escape_nonprintable(s)
+        .replace('&', '&amp;')
+        .replace('<', '&lt;')
+        .replace('>', '&gt;')
+        .replace('"', '&quot;')
+        .replace("'", '&apos;')
+    )
 
 
 def _xml_content_escape(s: str) -> str:

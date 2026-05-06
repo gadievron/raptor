@@ -3,16 +3,34 @@
 # Conservative — designed to fire on a deliberate injection attempt without
 # matching natural language about prior conversation. Patterns require
 # explicit override / disregard / new-task framing.
+#
+# Whitespace runs use ``[^\S\n]+`` (one or more whitespace chars EXCLUDING
+# newline) rather than a literal space. Pre-fix a literal space failed to
+# match against:
+#   * double-spaced inputs (``ignore  the previous``)
+#   * tab-separated tokens (``ignore\tthe\tprevious``)
+#   * non-breaking spaces (U+00A0) and other Unicode horizontal ws between tokens
+# All three are realistic injection delivery vectors. Newlines are
+# DELIBERATELY excluded from this character class — the cross-line evasion
+# case is the responsibility of english_multiline.txt, kept as a separate
+# corpus so callers can opt out of multiline scanning when single-line
+# semantics matter (e.g. log-line scanning).
 
-ignore (?:all |the )?(?:previous|prior|above|preceding) (?:instructions|messages|rules|prompts)
-disregard (?:all |the )?(?:previous|prior|above|preceding) (?:instructions|messages|rules|prompts)
-forget (?:all |the |everything )?(?:previous|prior|above|preceding|you were told)
-override (?:all |the |above|prior|previous|safety)
-your (?:real|actual|new|true) (?:task|goal|objective|purpose|mission) is
-new instructions:
-new task:
-^\s*\[?system\]?\s*[:>]
-respond (?:only |just )?with (?:the |a )?(?:following|word|phrase|number|message)
-print (?:only |just )?(?:the |a )?(?:following|word|phrase|message|verbatim)
-the user (?:is lying|is mistaken|is an attacker)
-end of (?:instructions|prompt|system message)
+ignore[^\S\n]+(?:all[^\S\n]+|the[^\S\n]+)?(?:previous|prior|above|preceding)[^\S\n]+(?:instructions|messages|rules|prompts)
+disregard[^\S\n]+(?:all[^\S\n]+|the[^\S\n]+)?(?:previous|prior|above|preceding)[^\S\n]+(?:instructions|messages|rules|prompts)
+forget[^\S\n]+(?:all[^\S\n]+|the[^\S\n]+|everything[^\S\n]+)?(?:previous|prior|above|preceding|you[^\S\n]+were[^\S\n]+told)
+override[^\S\n]+(?:all[^\S\n]+|the[^\S\n]+|above[^\S\n]+|prior[^\S\n]+|previous[^\S\n]+|safety)
+your[^\S\n]+(?:real|actual|new|true)[^\S\n]+(?:task|goal|objective|purpose|mission)[^\S\n]+is
+new[^\S\n]+instructions:
+new[^\S\n]+task:
+# Note: the ``^[system]:`` line-marker pattern lives in
+# english_multiline.txt because this corpus is compiled WITHOUT
+# re.MULTILINE — ``^`` here only matches at the start of the WHOLE
+# input, so an attacker prefixing the input with any character
+# (``hello\n[system]: do X``) would bypass the pattern entirely.
+# english_multiline.txt is compiled with re.MULTILINE so ``^`` there
+# matches at the start of every line.
+respond[^\S\n]+(?:only[^\S\n]+|just[^\S\n]+)?with[^\S\n]+(?:the[^\S\n]+|a[^\S\n]+)?(?:following|word|phrase|number|message)
+print[^\S\n]+(?:only[^\S\n]+|just[^\S\n]+)?(?:the[^\S\n]+|a[^\S\n]+)?(?:following|word|phrase|message|verbatim)
+the[^\S\n]+user[^\S\n]+(?:is[^\S\n]+lying|is[^\S\n]+mistaken|is[^\S\n]+an[^\S\n]+attacker)
+end[^\S\n]+of[^\S\n]+(?:instructions|prompt|system[^\S\n]+message)

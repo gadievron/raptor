@@ -523,7 +523,14 @@ class TestCompromisedLitellmDetection:
                 _check_litellm_installed()
         captured = capsys.readouterr()
         assert "Do NOT use pip" in captured.out
-        assert "find /" in captured.out
+        # Operator gets a guided two-step removal scoped to actual
+        # site-packages locations rather than the previous
+        # `find / ...` recommendation (whole-FS scan + path
+        # substring match would delete unrelated files).
+        assert "site.getsitepackages" in captured.out
+        assert "rm -rf" in captured.out
+        # Removal scope is the user's site-packages path, not `/`.
+        assert "find /" not in captured.out
 
     @patch("core.llm.detection.Path.home")
     def test_182_7_shows_pip_removal(self, mock_home, tmp_path, capsys):

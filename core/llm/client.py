@@ -37,6 +37,13 @@ except ImportError:
 
 logger = get_logger()
 
+# After this many consecutive cache write failures, auto-disable
+# caching for the rest of the run. Tuned for "transient blip vs
+# durable problem" — three retries lets a momentary EBUSY recover,
+# but a real disk-full / read-only-FS / permission flip stops
+# spamming the log after a few thousand subsequent writes.
+_CACHE_WRITE_FAILURE_THRESHOLD = 3
+
 
 def _sanitize_log_message(msg: str) -> str:
     """
@@ -272,6 +279,12 @@ class LLMClient:
                 self.config.enable_caching = False
                 logger.warning(f"Cannot create cache dir {self.config.cache_dir} — caching disabled")
 
+        # Consecutive cache-write failure counter. Auto-disable
+        # caching after `_CACHE_WRITE_FAILURE_THRESHOLD` in a row to
+        # stop log-spamming when the cache dir runs out of space /
+        # permission flips / filesystem goes read-only mid-run.
+        self._cache_write_failures = 0
+
         logger.info("LLM Client initialized")
         if self.config.primary_model:
             logger.info(f"Primary model: {self.config.primary_model.provider}/{self.config.primary_model.model_name}")
@@ -291,14 +304,23 @@ class LLMClient:
             )
 
     def _get_provider(self, model_config: ModelConfig) -> LLMProvider:
-        """Get or create provider for model config."""
+        """Get or create provider for model config.
+
+        Thread-safe: the check-then-create pattern is wrapped under
+        `_stats_lock` (already RLock) so concurrent calls with the
+        same model can't both pass the membership check and end up
+        constructing two provider instances — the earlier one would
+        be silently leaked when the later write replaces it.
+        Provider construction is cheap (no network) so holding the
+        lock across `create_provider` is fine.
+        """
         key = f"{model_config.provider}:{model_config.model_name}"
 
-        if key not in self.providers:
-            logger.debug(f"Creating provider: {key}")
-            self.providers[key] = create_provider(model_config)
-
-        return self.providers[key]
+        with self._stats_lock:
+            if key not in self.providers:
+                logger.debug(f"Creating provider: {key}")
+                self.providers[key] = create_provider(model_config)
+            return self.providers[key]
 
     @property
     def primary_provider(self) -> LLMProvider:
@@ -399,7 +421,14 @@ class LLMClient:
         return data.get("content")
 
     def _save_to_cache(self, cache_key: str, response: LLMResponse) -> None:
-        """Save response to cache."""
+        """Save response to cache.
+
+        Mode 0o600 — LLM responses can contain proprietary code, scan
+        findings, vulnerability details, and other content the user
+        wouldn't want world-readable. The default umask on most systems
+        produces 0o644 (world-readable) which is wrong for this content.
+        Same posture as `LLMConfig.to_file` and the migration helper.
+        """
         if not self.config.enable_caching:
             return
 
@@ -412,9 +441,26 @@ class LLMClient:
                     "provider": response.provider,
                     "tokens_used": response.tokens_used,
                     "timestamp": time.time(),
-                })
+                }, mode=0o600)
+            # Reset failure counter on a successful write — recovery
+            # from a transient EBUSY shouldn't carry the strike count
+            # forward.
+            self._cache_write_failures = 0
         except Exception as e:
-            logger.warning(f"Cache write error: {e}")
+            self._cache_write_failures += 1
+            if self._cache_write_failures >= _CACHE_WRITE_FAILURE_THRESHOLD:
+                # Persistent problem (disk full, read-only FS,
+                # permission flip mid-run). Stop spamming the log
+                # and stop attempting subsequent writes.
+                self.config.enable_caching = False
+                logger.warning(
+                    f"Cache write error #{self._cache_write_failures}: {e}. "
+                    f"Caching disabled for the remainder of this run."
+                )
+            else:
+                logger.warning(
+                    f"Cache write error #{self._cache_write_failures}: {e}"
+                )
             return
         self._maybe_evict_cache()
 
@@ -519,7 +565,17 @@ class LLMClient:
                 "timestamp": time.time(),
             })
         except Exception as e:
-            logger.warning(f"Structured cache write error: {e}")
+            self._cache_write_failures += 1
+            if self._cache_write_failures >= _CACHE_WRITE_FAILURE_THRESHOLD:
+                self.config.enable_caching = False
+                logger.warning(
+                    f"Structured cache write error #{self._cache_write_failures}: {e}. "
+                    f"Caching disabled for the remainder of this run."
+                )
+            else:
+                logger.warning(
+                    f"Structured cache write error #{self._cache_write_failures}: {e}"
+                )
             return
         self._maybe_evict_cache()
 
@@ -567,6 +623,29 @@ class LLMClient:
             else:
                 model_config = self.config.primary_model
 
+        # Resolution may return None when:
+        #   * primary_model is unconfigured AND no task_type-specific
+        #     fallback registered (LLMClient was constructed bare —
+        #     normally `packages.llm_analysis.get_client` returns None
+        #     instead, but a direct `LLMClient(LLMConfig())` call hits
+        #     this path).
+        #   * task_type is supplied but `get_model_for_task` returns
+        #     None (no model registered for that role).
+        # Pre-fix the next line `model_config.max_context * 0.8` raised
+        # AttributeError on `None.max_context`. Surface a structured
+        # error instead — the caller has no way to recover from a
+        # missing model except by configuring one, and an
+        # AttributeError mid-stack is no help.
+        if model_config is None:
+            raise RuntimeError(
+                "LLMClient.generate: no model resolved "
+                f"(task_type={task_type!r}, primary_model="
+                f"{self.config.primary_model!r}). Construct via "
+                "packages.llm_analysis.get_client (which returns None "
+                "when no provider is available) or supply an explicit "
+                "model_config= kwarg."
+            )
+
         # Warn if prompt likely exceeds context window (~4 chars per token)
         estimated_tokens = (len(prompt) + len(system_prompt or "")) // 4
         if estimated_tokens > model_config.max_context * 0.8:
@@ -595,7 +674,17 @@ class LLMClient:
                 return LLMResponse(
                     content=cached_content,
                     model=model_config.model_name,
-                    provider=model_config.provider,
+                    # Lowercase to match the provider field that fresh
+                    # `provider.generate()` returns. Pre-fix the cached
+                    # path passed `model_config.provider` verbatim, so
+                    # an LLMConfig with `provider="Anthropic"` (capital
+                    # A — accepted by the constructor since the
+                    # downstream lookup is case-insensitive) returned
+                    # `"Anthropic"` from cached calls and `"anthropic"`
+                    # from fresh ones. Downstream consumers grouping by
+                    # provider (telemetry summaries, cost rollups) split
+                    # the two into separate buckets silently.
+                    provider=model_config.provider.lower(),
                     tokens_used=0,
                     cost=0.0,
                     finish_reason="cached",
@@ -738,6 +827,19 @@ class LLMClient:
                 model_config = self.config.get_model_for_task(task_type)
             else:
                 model_config = self.config.primary_model
+
+        # Same None-guard as `generate` — see comment there for the
+        # full rationale. Without this, the next line crashes with
+        # AttributeError on `None.max_context`.
+        if model_config is None:
+            raise RuntimeError(
+                "LLMClient.generate_structured: no model resolved "
+                f"(task_type={task_type!r}, primary_model="
+                f"{self.config.primary_model!r}). Construct via "
+                "packages.llm_analysis.get_client (which returns None "
+                "when no provider is available) or supply an explicit "
+                "model_config= kwarg."
+            )
 
         # Provider impls of generate_structured don't currently accept
         # **kwargs (signature is (prompt, schema, system_prompt)) — so
@@ -933,15 +1035,25 @@ class LLMClient:
             }
 
     def reset_stats(self) -> None:
-        """Reset usage statistics."""
+        """Reset usage statistics.
+
+        Per-provider counters are reset under EACH provider's own
+        `_usage_lock` (the same lock `track_usage` holds while
+        mutating those fields). Pre-fix the per-provider mutations
+        ran without that lock, racy against concurrent `track_usage`
+        calls — a track_usage in flight at reset time could either
+        write into the post-reset zero state (silently re-injecting
+        stale counts) or land on a half-updated tuple of fields.
+        """
         with self._stats_lock:
             self.total_cost = 0.0
             self.request_count = 0
             self.task_type_costs.clear()
         for provider in self.providers.values():
-            provider.total_tokens = 0
-            provider.total_input_tokens = 0
-            provider.total_output_tokens = 0
-            provider.total_cost = 0.0
-            provider.call_count = 0
-            provider.total_duration = 0.0
+            with provider._usage_lock:
+                provider.total_tokens = 0
+                provider.total_input_tokens = 0
+                provider.total_output_tokens = 0
+                provider.total_cost = 0.0
+                provider.call_count = 0
+                provider.total_duration = 0.0

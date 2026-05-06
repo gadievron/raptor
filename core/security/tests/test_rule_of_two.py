@@ -17,6 +17,19 @@ from core.security.rule_of_two import (
 
 class TestIsInteractive:
 
+    @pytest.fixture(autouse=True)
+    def _no_ci_env(self, monkeypatch):
+        # `is_interactive()` requires BOTH a TTY AND no CI env var.
+        # These TTY-only tests need to clear any CI flag the test
+        # runner itself sets — GitHub Actions sets CI=true /
+        # GITHUB_ACTIONS=true, which would override the mocked TTY
+        # and make `is_interactive()` return False on CI even though
+        # the test mocks stdin as a TTY. Clear the curated CI list
+        # so each test isolates the TTY codepath cleanly.
+        from core.security.rule_of_two import _CI_ENV_VARS
+        for name in _CI_ENV_VARS:
+            monkeypatch.delenv(name, raising=False)
+
     def test_true_when_tty(self):
         with patch("sys.stdin") as mock_stdin:
             mock_stdin.isatty.return_value = True
@@ -29,6 +42,16 @@ class TestIsInteractive:
 
     def test_false_when_no_isatty(self):
         with patch("sys.stdin", new=io.StringIO()):
+            assert is_interactive() is False
+
+    def test_false_when_tty_but_ci_env_set(self, monkeypatch):
+        # CI runners that allocate a pseudo-TTY (docker -t, GHA
+        # tty: true, Jenkins ssh agent) used to slip past the
+        # rule-of-two gate. The CI-env probe added in batch 076
+        # closes that gap.
+        monkeypatch.setenv("CI", "true")
+        with patch("sys.stdin") as mock_stdin:
+            mock_stdin.isatty.return_value = True
             assert is_interactive() is False
 
 

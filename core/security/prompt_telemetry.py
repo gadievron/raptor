@@ -61,9 +61,26 @@ _PREFLIGHT_HIT_WARN_THRESHOLD = 0.20
 
 @dataclass
 class _ModelStats:
+    """Per-model schema-validation outcome counters.
+
+    The three schema_* fields partition every response into exactly
+    one bucket:
+      * `schema_accepted`  — first-attempt validation succeeded.
+      * `schema_retry_failed` — caller's `validate_response` retried
+        once and the second attempt also failed validation.
+        (Renamed 2026-05-05 from the misleading `schema_retried`,
+        which read as "retry was attempted" rather than "retry was
+        attempted AND ALSO failed".)
+      * `schema_failed` — first-attempt validation failed and no
+        retry was attempted (either no `llm_call` thunk supplied or
+        the caller declined to retry).
+    Both `schema_retry_failed` and `schema_failed` are validation
+    failures the caller couldn't recover from, hence both feed into
+    the rejection-rate numerator.
+    """
     responses: int = 0
     schema_accepted: int = 0
-    schema_retried: int = 0
+    schema_retry_failed: int = 0
     schema_failed: int = 0
     nonce_leaks: int = 0
 
@@ -88,7 +105,27 @@ class DefenseTelemetry:
         self._weakened_overrides: dict[str, str] = {}
 
     def reset(self) -> None:
-        """Clear all counters. Call at the start of each run."""
+        """Clear all counters AND the once-per-run warning latches.
+
+        **Contract: call this at the START of every analysis run.**
+
+        Required because:
+          * The module-level `defense_telemetry` singleton persists
+            for the entire process lifetime — without reset, a second
+            run inside the same process inherits counters and warning
+            latches from the first.
+          * Several internal latches (`_nonce_leak_warned`,
+            `_schema_warned`, `_preflight_warned`) suppress repeated
+            log warnings to one-per-process; if the prior run already
+            tripped them, the new run's actual issues stay silent.
+          * The `summary()` output is meant to describe ONE run;
+            without reset, you get the cumulative-since-process-start
+            view which is harder to reason about.
+
+        Wired into `packages/llm_analysis/orchestrator.orchestrate()`
+        on every entry. New orchestration entry points must call this
+        too.
+        """
         with self._lock:
             self._models.clear()
             self._preflight = _PreflightStats()
@@ -125,7 +162,12 @@ class DefenseTelemetry:
             if schema_accepted:
                 stats.schema_accepted += 1
             elif schema_retried:
-                stats.schema_retried += 1
+                # schema_retried=True from the caller means retry WAS
+                # attempted and the second attempt ALSO failed. Hence
+                # the renamed `schema_retry_failed` counter — old name
+                # `schema_retried` read as "retry attempted (regardless
+                # of outcome)" which it isn't.
+                stats.schema_retry_failed += 1
             else:
                 stats.schema_failed += 1
 
@@ -160,7 +202,7 @@ class DefenseTelemetry:
                     "e.g. disabling base64 or datamarking.",
                     model_id,
                     rejection_rate * 100,
-                    stats.schema_retried + stats.schema_failed,
+                    stats.schema_retry_failed + stats.schema_failed,
                     stats.responses,
                     profile_name,
                 )
@@ -195,7 +237,7 @@ class DefenseTelemetry:
     def _rejection_rate(stats: _ModelStats) -> Optional[float]:
         if stats.responses == 0:
             return None
-        return (stats.schema_retried + stats.schema_failed) / stats.responses
+        return (stats.schema_retry_failed + stats.schema_failed) / stats.responses
 
     def _preflight_hit_rate(self) -> Optional[float]:
         if self._preflight.checked == 0:
@@ -216,7 +258,15 @@ class DefenseTelemetry:
                 entry: dict = {
                     "responses": stats.responses,
                     "schema_accepted": stats.schema_accepted,
-                    "schema_retried": stats.schema_retried,
+                    # Canonical key going forward.
+                    "schema_retry_failed": stats.schema_retry_failed,
+                    # Backwards-compatible alias for the old key. The
+                    # name was misleading (read as "retry attempted"
+                    # when the actual semantic is "retry attempted AND
+                    # failed"). External summary consumers can switch
+                    # to `schema_retry_failed`; the old key will be
+                    # removed in a future release.
+                    "schema_retried": stats.schema_retry_failed,
                     "schema_failed": stats.schema_failed,
                     "nonce_leaks": stats.nonce_leaks,
                 }

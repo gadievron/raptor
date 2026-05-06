@@ -442,13 +442,20 @@ def validate_structured_response(
     quality = weighted_score / total_weight if total_weight > 0 else 0.0
     quality = max(0.0, min(1.0, quality))
 
+    # Deep-copy `raw` so a downstream caller mutating
+    # `validated.raw["nested"]["field"]` doesn't reach back through
+    # the shallow `dict(raw)` and mutate the original LLM response —
+    # which OTHER readers (telemetry, retry-prompt construction,
+    # judge dispatch) may still be reading. Cheap relative to the
+    # LLM call cost; necessary for isolation.
+    from copy import deepcopy
     return ValidatedResponse(
         data=data,
         quality=quality,
         incomplete=incomplete,
         coerced=coerced_fields,
         fields=fields,
-        raw=dict(raw),
+        raw=deepcopy(raw),
     )
 
 

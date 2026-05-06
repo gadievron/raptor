@@ -76,15 +76,23 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
 
     Returns ModelConfig for best available thinking model, or None if none found.
     """
+    # Cache successful resolutions only. Pre-fix `_thinking_model_checked`
+    # was set to True even when the result was None, so a process that
+    # probed once before the operator created `~/.config/raptor/models.json`
+    # would never see the new config in the same session — every
+    # subsequent call short-circuited to the cached None. Recomputing
+    # the lookup when the cached value is None is cheap (single JSON
+    # file read; the consumer's surrounding code is already doing
+    # network LLM calls), so the trade-off is clear: tiny re-probe cost
+    # vs. silent-stale-config bug.
     global _cached_thinking_model, _thinking_model_checked
-    if _thinking_model_checked:
+    if _thinking_model_checked and _cached_thinking_model is not None:
         return _cached_thinking_model
-
-    _thinking_model_checked = True
 
     models = _get_configured_models()
     if not models:
         _cached_thinking_model = None
+        _thinking_model_checked = False  # don't latch on negative result
         return None
 
     # Define priority order for thinking models (best first)
@@ -186,6 +194,8 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
         logger.info(f"Auto-selected thinking model: {best_model.provider}/{best_model.model_name} (score: {best_score})")
 
     _cached_thinking_model = best_model
+    # Latch the cache only on positive results (see header comment).
+    _thinking_model_checked = best_model is not None
     return best_model
 
 
@@ -225,6 +235,20 @@ def _build_openai_compat_config(provider_name: str) -> Optional['ModelConfig']:
     api_key = os.getenv(env_var_map[provider_name])
     if not api_key:
         return None
+    # All three providers route through OpenAICompatibleProvider
+    # downstream — without the openai SDK installed, that path
+    # crashes at provider construction. Skip the builder up-front so
+    # the resolver falls through to the next candidate (Ollama,
+    # ClaudeCode) instead of detecting a usable API key, advertising
+    # the model to the operator, then crashing the next LLM call.
+    from .detection import OPENAI_SDK_AVAILABLE
+    if not OPENAI_SDK_AVAILABLE:
+        logger.debug(
+            "Skipping %s config: %s key present but openai SDK not "
+            "installed (pip install openai)",
+            provider_name, env_var_map[provider_name],
+        )
+        return None
     default_model = PROVIDER_DEFAULT_MODELS[provider_name]
     limits = MODEL_LIMITS.get(default_model, {})
     costs = MODEL_COSTS.get(default_model, {})
@@ -256,16 +280,30 @@ def _build_ollama_config() -> Optional['ModelConfig']:
         if selected_model != ollama_models[0]:
             break
     ollama_base = _validate_ollama_url(RaptorConfig.OLLAMA_HOST)
-    if selected_model not in MODEL_LIMITS:
+    # Look up the actual limits when known. Pre-fix the log claimed
+    # "using defaults (max_context=32000, max_output=4096)" but the
+    # construction only passed `max_tokens=4096` and let max_context
+    # fall through to ModelConfig's class default — known models
+    # never benefited from MODEL_LIMITS and got the same defaults
+    # as unknown ones. Now: known → use the registered limits;
+    # unknown → keep the historical 32000/4096 defaults but log it.
+    limits = MODEL_LIMITS.get(selected_model)
+    if limits is None:
         logger.info(
             f"Model '{selected_model}' not in MODEL_LIMITS — using defaults "
             f"(max_context=32000, max_output=4096). Override in models.json if needed."
         )
+        max_output = 4096
+        max_context = 32000
+    else:
+        max_output = limits.get("max_output", 4096)
+        max_context = limits.get("max_context", 32000)
     return ModelConfig(
         provider="ollama",
         model_name=selected_model,
         api_base=f"{ollama_base}/v1",
-        max_tokens=4096,
+        max_tokens=max_output,
+        max_context=max_context,
         temperature=0.7,
         cost_per_1k_tokens=0.0,
     )
@@ -367,8 +405,18 @@ def _get_default_primary_model(
     # explicit choice beats env-var defaults — if they configured
     # Gemini in ``~/.config/raptor/models.json``, respect that even
     # when OPENAI_API_KEY happens to be set as an env var.
+    #
+    # When `prefer` is set, the cached thinking model is only honoured
+    # if its provider matches the preference list — otherwise we'd
+    # return e.g. an OpenAI thinking model to a consumer that
+    # explicitly preferred Anthropic, defeating the prefer arg's
+    # entire purpose. The docstring above promises this; pre-fix the
+    # check was missing and the cached-thinking-model path silently
+    # ignored `prefer`.
     thinking_model = _get_best_thinking_model()
-    if thinking_model and thinking_model.api_key:
+    if (thinking_model
+            and thinking_model.api_key
+            and (prefer_set is None or thinking_model.provider in prefer_set)):
         logger.info(
             f"Using automatic thinking model: "
             f"{thinking_model.provider}/{thinking_model.model_name}"
@@ -575,15 +623,22 @@ def resolve_model_roles(
     Raises:
         ConfigError on invalid role configurations.
     """
+    # All three branches below return the same 6-key shape so callers
+    # can iterate the dict without per-branch missing-key handling.
+    # Pre-fix the empty-config branch missed `analysis_models` and
+    # `judge_models`, and the no-roles default branch missed
+    # `analysis_models` — consumers calling
+    # `roles["analysis_models"]` crashed with KeyError if the empty
+    # or no-roles branch produced the dict.
     if primary_model is None and not fallback_models:
         return {
             "analysis_model": None,
             "analysis_models": [],
             "code_model": None,
             "consensus_models": [],
-            "fallback_models": [],
             "judge_models": [],
             "aggregate_models": [],
+            "fallback_models": [],
         }
 
     all_models = []
@@ -597,10 +652,11 @@ def resolve_model_roles(
 
     if not has_roles:
         # Default: first model = analysis + code, rest = fallback
+        first = all_models[0] if all_models else None
         return {
-            "analysis_model": all_models[0] if all_models else None,
-            "analysis_models": [all_models[0]] if all_models else [],
-            "code_model": all_models[0] if all_models else None,
+            "analysis_model": first,
+            "analysis_models": [first] if first is not None else [],
+            "code_model": first,
             "consensus_models": [],
             "judge_models": [],
             "aggregate_models": [],
@@ -761,7 +817,35 @@ class LLMConfig:
     max_cost_per_scan: float = 10.0  # USD
 
     def to_file(self, config_path: Path) -> None:
-        """Save configuration to JSON file with restrictive permissions."""
+        """Save a MINIMAL snapshot of this configuration to JSON.
+
+        **What this writes:** the primary model's provider+model_name
+        and the `enable_fallback` flag. NOTHING ELSE.
+
+        **What this does NOT write:**
+          * api_key / api_base — credentials should not be persisted to
+            on-disk config; round-trip via env vars / CLI flags.
+          * max_tokens / max_context / temperature / etc. — these are
+            looked up from the model registry by name at load time
+            so the persisted file stays small and stable across model
+            registry updates.
+          * fallback_models / specialized_models — multi-model setups
+            should be authored in `~/.config/raptor/models.json`
+            (the canonical operator config), not in a CLI-emitted
+            snapshot.
+          * Budget / retry / cache settings — defaults from
+            `LLMConfig` are intentionally re-applied each run so
+            operator changes take effect.
+
+        This file is intended for the CLI's "save current run config"
+        feature only. Callers that need full round-trip serialisation
+        should construct config explicitly from the operator's
+        `~/.config/raptor/models.json` rather than via this method.
+
+        Mode 0o600 so the file isn't world-readable even though it
+        deliberately omits credentials — defence in depth against
+        future field additions.
+        """
         from core.json import save_json
         primary = None
         if self.primary_model:
@@ -774,8 +858,19 @@ class LLMConfig:
             "fallback_enabled": self.enable_fallback,
         }, mode=0o600)
 
-    def get_model_for_task(self, task_type: str) -> ModelConfig:
-        """Get the appropriate model for a specific task type."""
+    def get_model_for_task(self, task_type: str) -> Optional[ModelConfig]:
+        """Get the model registered for `task_type`, falling back to
+        ``primary_model``. Returns None if neither is configured.
+
+        The signature was previously typed `-> ModelConfig` despite
+        the `return self.primary_model` falling through to a field
+        that is `Optional[ModelConfig]` — a typing lie that caused
+        downstream callers to skip None-guards and crash with
+        AttributeError on `None.max_context` / `None.provider` /
+        etc. Caller `LLMClient.generate` now also guards (batch 080),
+        but the signature should match reality so type-checkers
+        catch new callers that miss the guard.
+        """
         if task_type in self.specialized_models:
             model = self.specialized_models[task_type]
             if model.enabled:

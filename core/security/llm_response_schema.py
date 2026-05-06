@@ -20,12 +20,45 @@ separate module; this one only reports up via return value.)
 
 from __future__ import annotations
 
+import functools
 from typing import Callable, Optional, TypeVar
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 
 T = TypeVar("T", bound=BaseModel)
+
+
+@functools.lru_cache(maxsize=128)
+def _strict_clone(schema: type[BaseModel]) -> type[BaseModel]:
+    """Return a subclass of `schema` with `extra="forbid"` enforced.
+
+    The module docstring claims "anything outside the schema is
+    rejected" but Pydantic v2's default `extra="ignore"` silently drops
+    unknown keys — a hijacked LLM emitting
+    `{"verdict": "safe", "exfil": "<…>"}` would validate cleanly and
+    the rogue field would simply disappear (data loss; potential
+    side-channel into downstream renderers that re-inflate the raw
+    response). The promise the docstring makes (and that anti-injection
+    consumers depend on) requires `extra="forbid"`.
+
+    Cloning each provided schema as a strict subclass:
+      * preserves the caller's existing schema as-is — they don't have
+        to remember to add `model_config = ConfigDict(extra="forbid")`
+        to every model;
+      * is cached per-class (Pydantic schema construction isn't free),
+        so the per-call cost amortises to zero.
+    Schemas already configured with `extra="forbid"` clone trivially.
+    """
+    base_extra = schema.model_config.get("extra") if hasattr(schema, "model_config") else None
+    if base_extra == "forbid":
+        return schema
+    name = f"{schema.__name__}__StrictClone"
+    return type(
+        name,
+        (schema,),
+        {"model_config": ConfigDict(**{**schema.model_config, "extra": "forbid"})},
+    )
 
 
 def validate_response(
@@ -42,13 +75,28 @@ def validate_response(
     instruction. The thunk is invoked at most once. If the second
     response also fails, returns None.
 
+    The caller-supplied `schema` is auto-cloned with `extra="forbid"`
+    so the docstring's "anything outside the schema is rejected"
+    promise actually holds (default Pydantic v2 silently drops unknown
+    fields). Schemas already declared with `extra="forbid"` are passed
+    through unchanged.
+
     Never raises. Pydantic's `ValidationError` is converted to None;
     any other exception from `llm_call` is also swallowed (treated as a
     validation failure) so the caller's fallback path is uniform.
     """
+    strict = _strict_clone(schema)
+    # Catch TypeError alongside ValidationError. `model_validate_json`
+    # raises TypeError on older Pydantic v2 (< 2.12) when the input
+    # isn't str/bytes/bytearray; 2.12+ converted that to a
+    # ValidationError, but the contract here is "never raises" and
+    # the older behaviour is still in the field. A caller-supplied
+    # thunk returning, say, an `Optional[str]` instead of a str could
+    # also feed None / int into this path. Same fail-uniform handling
+    # for both branches.
     try:
-        return schema.model_validate_json(raw)
-    except ValidationError:
+        return strict.model_validate_json(raw)
+    except (ValidationError, TypeError):
         pass
 
     if llm_call is None:
@@ -60,6 +108,6 @@ def validate_response(
         return None
 
     try:
-        return schema.model_validate_json(retry)
-    except ValidationError:
+        return strict.model_validate_json(retry)
+    except (ValidationError, TypeError):
         return None

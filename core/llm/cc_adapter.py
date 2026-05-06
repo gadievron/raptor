@@ -11,6 +11,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from core.security.redaction import redact_secrets
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,17 +67,40 @@ def strip_json_fences(text: str) -> str:
 
 
 def extract_envelope_metadata(envelope: dict, into: dict) -> None:
-    """Extract cost, duration, model, and token counts from a ``claude -p`` JSON envelope."""
-    if envelope.get("total_cost_usd"):
-        into["cost_usd"] = envelope["total_cost_usd"]
-    if envelope.get("duration_ms"):
-        into["duration_seconds"] = round(envelope["duration_ms"] / 1000, 1)
+    """Extract cost, duration, model, and token counts from a ``claude -p`` JSON envelope.
+
+    Use explicit `is not None` / `in envelope` checks rather than
+    truthiness — a legitimate zero (a cached call costing 0 USD, a
+    sub-millisecond cache hit reporting 0 ms duration, a no-token
+    response) should still be recorded faithfully. Pre-fix, the
+    `if envelope.get(X):` pattern silently dropped zero values, so
+    cost/token telemetry under-reported any "free" calls and the
+    operator's spend-tracking was systematically biased.
+    """
+    cost = envelope.get("total_cost_usd")
+    if isinstance(cost, (int, float)):
+        into["cost_usd"] = cost
+    duration_ms = envelope.get("duration_ms")
+    if isinstance(duration_ms, (int, float)):
+        into["duration_seconds"] = round(duration_ms / 1000, 1)
     model_usage = envelope.get("modelUsage", {})
-    into["analysed_by"] = next(iter(model_usage)) if model_usage else "claude-code"
+    if isinstance(model_usage, dict) and model_usage:
+        # Pre-fix `next(iter(model_usage))` picked one arbitrary key.
+        # CC envelopes list ALL models that contributed to the turn —
+        # a main reasoning model plus a smaller helper for tool-call
+        # routing, for example. Recording only the first hides the
+        # helper's contribution and silently misattributes cost
+        # tracking when multiple models are summed under one name.
+        # Sort for deterministic output (envelope dict ordering is
+        # CC's choice, may vary across CC versions).
+        into["analysed_by"] = ",".join(sorted(model_usage.keys()))
+    else:
+        into["analysed_by"] = "claude-code"
     usage = envelope.get("usage", {})
-    tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
-    if tokens:
-        into["_tokens"] = tokens
+    in_tokens = usage.get("input_tokens", 0) or 0
+    out_tokens = usage.get("output_tokens", 0) or 0
+    if "input_tokens" in usage or "output_tokens" in usage:
+        into["_tokens"] = in_tokens + out_tokens
 
 
 def parse_cc_structured(
@@ -90,7 +115,12 @@ def parse_cc_structured(
     """
     content = stdout.strip()
     if not content:
-        stderr_excerpt = (stderr or "")[:500]
+        # Redact stderr before embedding into the error message —
+        # CC subprocess stderr can carry API keys (Anthropic SDK's
+        # verbose output shows the bearer header), URL-embedded
+        # credentials, AWS keys, etc. The error string is propagated
+        # up to logs and reports that may be shared.
+        stderr_excerpt = redact_secrets((stderr or "")[:500])
         return {"finding_id": finding_id, "error": f"empty output: {stderr_excerpt}"}
 
     try:
@@ -129,7 +159,13 @@ def parse_cc_structured(
     except (ValueError, json.JSONDecodeError):
         pass
 
-    return {"finding_id": finding_id, "error": f"unparseable output: {content[:200]}"}
+    # Same redaction rationale as the empty-output path above —
+    # `content` here may include partial CC envelope text from a
+    # broken response that streamed Authorization headers / API keys.
+    return {
+        "finding_id": finding_id,
+        "error": f"unparseable output: {redact_secrets(content[:200])}",
+    }
 
 
 def parse_cc_freeform(stdout: str, stderr: str = "") -> dict[str, Any]:
@@ -139,7 +175,10 @@ def parse_cc_freeform(stdout: str, stderr: str = "") -> dict[str, Any]:
     """
     content = stdout.strip()
     if not content:
-        return {"content": "", "error": f"empty output: {(stderr or '')[:500]}"}
+        return {
+            "content": "",
+            "error": f"empty output: {redact_secrets((stderr or '')[:500])}",
+        }
 
     try:
         envelope = json.loads(content)
@@ -149,8 +188,27 @@ def parse_cc_freeform(stdout: str, stderr: str = "") -> dict[str, Any]:
             # in-band failure; without this check, "" content would surface
             # as if it were a successful empty response. parse_cc_structured
             # already checks this — keep behaviour symmetric here.
-            if envelope.get("is_error") is True or envelope.get("error"):
-                parsed["error"] = envelope.get("error") or "claude -p reported is_error=true"
+            #
+            # `is True` covers the canonical bool. We also accept string
+            # `"true"` / `"True"` because some upstream JSON serialisers
+            # / fixture builders coerce bool to string. The error-string
+            # check rejects the literal `"false"` / `"none"` / `"null"`
+            # which are truthy by Python's bool() but semantically empty
+            # — `if envelope.get("error")` alone fired for `error: "false"`
+            # on responses that were actually fine.
+            err_field = envelope.get("error")
+            if isinstance(err_field, str) and err_field.strip().lower() in (
+                "false", "none", "null", "0", "",
+            ):
+                err_field = None
+            is_error_flag = envelope.get("is_error")
+            is_error = (
+                is_error_flag is True
+                or (isinstance(is_error_flag, str)
+                    and is_error_flag.strip().lower() == "true")
+            )
+            if is_error or err_field:
+                parsed["error"] = err_field or "claude -p reported is_error=true"
             extract_envelope_metadata(envelope, parsed)
             return parsed
     except json.JSONDecodeError:

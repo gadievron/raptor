@@ -106,13 +106,16 @@ def test_openai_wire_assistant_with_tool_calls_only_omits_content() -> None:
     assert out[0]["tool_calls"][0]["function"]["name"] == "search"
 
 
-def test_openai_wire_empty_user_returns_empty_list() -> None:
-    """Empty user turns convey nothing — skip rather than emit a
-    bogus ``{"role": "user", "content": ""}`` that would just be
-    noise in the request."""
+def test_openai_wire_empty_user_emits_empty_content() -> None:
+    """Empty user turns emit ``{"role": "user", "content": ""}`` —
+    symmetric with the assistant-empty branch which has always done
+    this. Pre-fix returned `[]`, which produced a malformed
+    conversation (the next assistant turn followed an absent user
+    turn) and most OpenAI-compat backends rejected the request
+    outright."""
     msg = Message(role="user", content=[])
     out = _message_to_openai_wire(msg)
-    assert out == []
+    assert out == [{"role": "user", "content": ""}]
 
 
 def test_openai_wire_user_with_tool_results_only() -> None:
