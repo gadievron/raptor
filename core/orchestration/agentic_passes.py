@@ -783,7 +783,21 @@ def _select_findings_for_validate(analysis_report: Path) -> list:
         # works across modes.
         is_exploitable = (r.get("is_exploitable") is True
                           or r.get("exploitable") is True)
-        if is_exploitable or r.get("confidence") == _HIGH_CONFIDENCE:
+        # Confidence comparison was strict equality against the
+        # canonical lowercase value. Schema enforces it for the
+        # orchestrated path, but several non-orchestrated dispatch
+        # routes (sequential mode, prep-only, retry-prompt-injected
+        # rewrites) and any future external producer can supply a
+        # confidence string with leading/trailing whitespace
+        # (`"high "` from a textual splice) or different case
+        # (`"High"`, `"HIGH"` from an LLM that wasn't envelope-
+        # constrained). Pre-fix any of those produced an exact-
+        # match miss and the finding silently failed to qualify.
+        # Strip + lower before compare.
+        confidence = r.get("confidence")
+        if isinstance(confidence, str):
+            confidence = confidence.strip().lower()
+        if is_exploitable or confidence == _HIGH_CONFIDENCE:
             selected.append(r)
     return selected
 
