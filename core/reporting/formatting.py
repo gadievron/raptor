@@ -17,12 +17,39 @@ def get_display_status(finding: Dict[str, Any]) -> str:
     # Boolean fields (agentic pipeline) are the actual verdict — check first.
     # These take priority over the string 'ruling' field, which may describe
     # code provenance (test_code, dead_code) rather than exploitability.
-    if "is_true_positive" in finding or "is_exploitable" in finding:
-        if finding.get("is_true_positive") is False:
+    #
+    # Pre-fix the truthy checks below were `if finding.get(field):` which
+    # fires on the STRING `"false"` (truthy because non-empty) — so a
+    # finding with `{"is_exploitable": "false"}` produced from a tool
+    # that stringified the bool got marked "Exploitable", the opposite
+    # of its intent. Also `is_true_positive is False` only matched the
+    # literal Python False, not the string `"false"` — so the same
+    # input ALSO failed the False-positive branch and silently passed
+    # through to the next check.
+    #
+    # Coerce string-encoded booleans up-front so all three branches
+    # see Python booleans. Unknown strings stay None (treated as
+    # absent — falls through to status-string handling).
+    def _coerce_bool(v):
+        if v is None or isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            sl = v.strip().lower()
+            if sl in ("true", "1", "yes"):
+                return True
+            if sl in ("false", "0", "no"):
+                return False
+        return None
+    has_tp = "is_true_positive" in finding
+    has_ex = "is_exploitable" in finding
+    if has_tp or has_ex:
+        tp = _coerce_bool(finding.get("is_true_positive"))
+        ex = _coerce_bool(finding.get("is_exploitable"))
+        if tp is False:
             return "False Positive"
-        if finding.get("is_exploitable"):
+        if ex is True:
             return "Exploitable"
-        if finding.get("is_true_positive"):
+        if tp is True:
             return "Confirmed"
 
     # final_status is authoritative (set after Stage E feasibility adjustment)
