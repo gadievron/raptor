@@ -269,7 +269,15 @@ class TestDbFreshness:
 
 
 class TestTierSelection:
-    """Tier 1 → Tier 2 → fallback path through _validate_one_hypothesis."""
+    """Tier 1 → Tier 2 → fallback path through _validate_one_hypothesis.
+
+    Discovery is patched in every test so the suite is deterministic
+    regardless of which CodeQL packs (if any) are installed on the host.
+    Tier 1 invokes `adapter.run_prebuilt_query(path, target)`; Tier 2
+    invokes `adapter.run(rule_text, target)`.
+    """
+
+    _FAKE_PREBUILT = Path("/fake/pack/codeql/python-queries/1.0/Security/CWE-078/CommandInjection.ql")
 
     def _make_hyp_and_finding(self, *, cwe="CWE-78", file="x.py", line=10):
         from packages.hypothesis_validation import Hypothesis
@@ -284,10 +292,9 @@ class TestTierSelection:
         from packages.hypothesis_validation.adapters.base import ToolEvidence
         h, f = self._make_hyp_and_finding(cwe="CWE-78", file="x.py", line=10)
 
-        # Adapter returns a match at the finding's location → confirmed.
         adapter = MagicMock()
-        adapter.run.return_value = ToolEvidence(
-            tool="codeql", rule="...", success=True,
+        adapter.run_prebuilt_query.return_value = ToolEvidence(
+            tool="codeql", rule=str(self._FAKE_PREBUILT), success=True,
             matches=[{"file": "x.py", "line": 10,
                       "rule": "py/command-injection",
                       "message": "tainted to subprocess.call"}],
@@ -300,15 +307,20 @@ class TestTierSelection:
             "LLM was consulted for a prebuilt-CWE case"
         )
 
-        result, tier = _validate_one_hypothesis(h, f, adapter, llm)
+        with patch(
+            "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
+            return_value=self._FAKE_PREBUILT,
+        ):
+            result, tier = _validate_one_hypothesis(h, f, adapter, llm)
+
         assert tier == "prebuilt"
         assert result.verdict == "confirmed"
-        # The wrapper query is mechanical — verify the .ql passed to
-        # adapter.run imports the CommandInjectionFlow module rather
-        # than asking the LLM.
-        rule_arg = adapter.run.call_args.args[0]
-        assert "CommandInjectionFlow" in rule_arg
-        assert "import semmle.python.security.dataflow.CommandInjectionQuery" in rule_arg
+        # Tier 1 invokes run_prebuilt_query with the discovered Path —
+        # not run() with a generated rule string.
+        adapter.run_prebuilt_query.assert_called_once()
+        path_arg = adapter.run_prebuilt_query.call_args.args[0]
+        assert path_arg == self._FAKE_PREBUILT
+        adapter.run.assert_not_called()
 
     def test_prebuilt_no_match_at_location_falls_through_to_tier2(self):
         """Tier 1 inconclusive (matches elsewhere) → fall through to Tier 2
@@ -316,21 +328,19 @@ class TestTierSelection:
         from packages.hypothesis_validation.adapters.base import ToolEvidence
         h, f = self._make_hyp_and_finding(file="x.py", line=10)
 
-        # Tier 1 returns matches elsewhere → inconclusive
-        # Tier 2 returns no matches → refuted
-        adapter_evidences = [
-            ToolEvidence(
-                tool="codeql", rule="<prebuilt>", success=True,
-                matches=[{"file": "other_file.py", "line": 200}],
-                summary="1 match in 1 file",
-            ),
-            ToolEvidence(
-                tool="codeql", rule="<template>", success=True,
-                matches=[], summary="no matches",
-            ),
-        ]
         adapter = MagicMock()
-        adapter.run.side_effect = adapter_evidences
+        # Tier 1 → matches elsewhere → inconclusive
+        adapter.run_prebuilt_query.return_value = ToolEvidence(
+            tool="codeql", rule=str(self._FAKE_PREBUILT), success=True,
+            matches=[{"file": "other_file.py", "line": 200}],
+            summary="1 match in 1 file",
+        )
+        # Tier 2 → no matches → refuted
+        adapter.run.return_value = ToolEvidence(
+            tool="codeql", rule="<template>", success=True,
+            matches=[], summary="no matches",
+        )
+
         llm = MagicMock()
         llm.generate_structured.return_value = {
             "source_predicate_body": "n instanceof RemoteFlowSource",
@@ -338,11 +348,16 @@ class TestTierSelection:
             "expected_evidence": "...", "reasoning": "...",
         }
 
-        result, tier = _validate_one_hypothesis(h, f, adapter, llm)
-        # Fell through to Tier 2 which refuted
+        with patch(
+            "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
+            return_value=self._FAKE_PREBUILT,
+        ):
+            result, tier = _validate_one_hypothesis(h, f, adapter, llm)
+
         assert tier == "template"
         assert result.verdict == "refuted"
-        assert adapter.run.call_count == 2  # Tier 1 + Tier 2
+        adapter.run_prebuilt_query.assert_called_once()
+        adapter.run.assert_called_once()
 
     def test_prebuilt_no_matches_falls_through_to_tier2(self):
         """Tier 1's source model may not cover the LLM's claim (e.g.
@@ -350,29 +365,34 @@ class TestTierSelection:
         is inconclusive, NOT refuted, and we try Tier 2."""
         from packages.hypothesis_validation.adapters.base import ToolEvidence
         h, f = self._make_hyp_and_finding()
-        adapter_evidences = [
-            ToolEvidence(
-                tool="codeql", rule="<prebuilt>", success=True,
-                matches=[], summary="no matches",
-            ),
-            ToolEvidence(
-                tool="codeql", rule="<template>", success=True,
-                matches=[{"file": "x.py", "line": 10}], summary="1 match",
-            ),
-        ]
+
         adapter = MagicMock()
-        adapter.run.side_effect = adapter_evidences
+        adapter.run_prebuilt_query.return_value = ToolEvidence(
+            tool="codeql", rule=str(self._FAKE_PREBUILT), success=True,
+            matches=[], summary="no matches",
+        )
+        adapter.run.return_value = ToolEvidence(
+            tool="codeql", rule="<template>", success=True,
+            matches=[{"file": "x.py", "line": 10}], summary="1 match",
+        )
         llm = MagicMock()
         llm.generate_structured.return_value = {
             "source_predicate_body": "n instanceof X",
             "sink_predicate_body": "exists(Call c)",
             "expected_evidence": "...", "reasoning": "...",
         }
-        result, tier = _validate_one_hypothesis(h, f, adapter, llm)
+
+        with patch(
+            "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
+            return_value=self._FAKE_PREBUILT,
+        ):
+            result, tier = _validate_one_hypothesis(h, f, adapter, llm)
+
         # Tier 2 confirmed via custom predicates that match the specific claim
         assert tier == "template"
         assert result.verdict == "confirmed"
-        assert adapter.run.call_count == 2
+        adapter.run_prebuilt_query.assert_called_once()
+        adapter.run.assert_called_once()
 
     def test_inferred_cwe_picks_tier1_when_finding_lacks_cwe_id(self):
         """Findings without explicit cwe_id should still hit Tier 1 when
@@ -385,20 +405,34 @@ class TestTierSelection:
              "rule_id": "raptor.injection.command-shell"}
 
         adapter = MagicMock()
-        adapter.run.return_value = ToolEvidence(
-            tool="codeql", rule="...", success=True,
+        adapter.run_prebuilt_query.return_value = ToolEvidence(
+            tool="codeql", rule=str(self._FAKE_PREBUILT), success=True,
             matches=[{"file": "x.py", "line": 10}],
             summary="1 match",
         )
         llm = MagicMock()
         llm.generate_structured.side_effect = AssertionError("LLM not needed")
 
-        result, tier = _validate_one_hypothesis(h, f, adapter, llm)
+        # Patch discover_prebuilt_query to ASSERT it's called with the
+        # inferred CWE — this is the contract under test.
+        captured = {}
+
+        def fake_discover(language, cwe):
+            captured["lang"] = language
+            captured["cwe"] = cwe
+            return self._FAKE_PREBUILT
+
+        with patch(
+            "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
+            side_effect=fake_discover,
+        ):
+            result, tier = _validate_one_hypothesis(h, f, adapter, llm)
+
         assert tier == "prebuilt"
         assert result.verdict == "confirmed"
-        # Verify the wrapper query is for CWE-78 (command injection)
-        rule_arg = adapter.run.call_args.args[0]
-        assert "CommandInjectionFlow" in rule_arg
+        # Verify the inference fed Tier 1 the correct CWE.
+        assert captured["cwe"] == "CWE-78"
+        assert captured["lang"] == "python"
 
     def test_unknown_cwe_falls_to_tier2_template(self):
         """No prebuilt → LLM generates predicates only → tier='template'."""
@@ -418,8 +452,15 @@ class TestTierSelection:
             "sink_predicate_body": "exists(Call c)",
             "expected_evidence": "...", "reasoning": "...",
         }
-        result, tier = _validate_one_hypothesis(h, f, adapter, llm)
+
+        with patch(
+            "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
+            return_value=None,
+        ):
+            result, tier = _validate_one_hypothesis(h, f, adapter, llm)
+
         assert tier == "template"
+        adapter.run_prebuilt_query.assert_not_called()
         # The query that ran must be the template-assembled one — check
         # what was passed to adapter.run, not what the mock returned.
         rule_arg = adapter.run.call_args.args[0]
@@ -458,7 +499,12 @@ class TestTierSelection:
         llm = MagicMock()
         llm.generate_structured.side_effect = llm_responses
 
-        result, tier = _validate_one_hypothesis(h, f, adapter, llm)
+        with patch(
+            "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
+            return_value=None,
+        ):
+            result, tier = _validate_one_hypothesis(h, f, adapter, llm)
+
         assert tier == "retry"
         assert result.verdict == "confirmed"
         assert adapter.run.call_count == 2  # initial + 1 retry
@@ -483,7 +529,11 @@ class TestTierSelection:
             "expected_evidence": "...", "reasoning": "...",
         }
 
-        result, tier = _validate_one_hypothesis(h, f, adapter, llm)
+        with patch(
+            "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
+            return_value=None,
+        ):
+            result, tier = _validate_one_hypothesis(h, f, adapter, llm)
         # 1 initial + 2 retries = 3 attempts max
         assert adapter.run.call_count == 3
         assert result.verdict == "inconclusive"
@@ -505,7 +555,11 @@ class TestTierSelection:
             "expected_evidence": "...", "reasoning": "...",
         }
 
-        _validate_one_hypothesis(h, f, adapter, llm)
+        with patch(
+            "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
+            return_value=None,
+        ):
+            _validate_one_hypothesis(h, f, adapter, llm)
         # Only 1 attempt — no retry on non-compile errors
         assert adapter.run.call_count == 1
 
@@ -1130,7 +1184,7 @@ class TestValidateDataflowClaims:
         assert results_by_id["F1"]["dataflow_validation"]["recommends_downgrade"] is True
 
     def test_cache_hits_avoid_duplicate_llm_calls(self, tmp_path):
-        """Two findings with identical hypothesis share one tier1 + tier2 run."""
+        """Two findings with identical hypothesis share one validation run."""
         from packages.hypothesis_validation.adapters.base import ToolEvidence
         db = self._setup_db(tmp_path)
         results_by_id = {
@@ -1147,7 +1201,14 @@ class TestValidateDataflowClaims:
             "sink_predicate_body": "exists(Call c)",
             "expected_evidence": "...", "reasoning": "...",
         }
+        # Patch discover_prebuilt_query to skip Tier 1 — this test focuses
+        # on cache behaviour at the Tier 2 path. Tier 1 availability
+        # depends on host pack install state which would make the test
+        # non-deterministic in CI.
         with patch(
+            "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
+            return_value=None,
+        ), patch(
             "packages.hypothesis_validation.adapters.CodeQLAdapter.is_available",
             return_value=True,
         ), patch(
@@ -1166,8 +1227,8 @@ class TestValidateDataflowClaims:
                 repo_path=tmp_path,
                 llm_client=llm_client,
             )
-        # F1: 2 adapter calls (Tier 1 + Tier 2). F2: cache hit, 0 calls.
-        assert mock_run.call_count == 2
+        # F1: 1 Tier 2 call. F2: cache hit, 0 calls.
+        assert mock_run.call_count == 1
         assert m["n_validated"] == 1
         assert m["n_cache_hits"] == 1
         assert m["n_eligible"] == 2
@@ -1191,7 +1252,18 @@ class TestValidateDataflowClaims:
                          matches=[{"file": "b.c", "line": 2}],
                          summary="1 match"),
         ]
+        llm_client = MagicMock()
+        llm_client.generate_structured.return_value = {
+            "source_predicate_body": "n instanceof X",
+            "sink_predicate_body": "exists(Call c)",
+            "expected_evidence": "...", "reasoning": "...",
+        }
+        # Skip Tier 1 so the loop's adapter.run call sequence is
+        # deterministic regardless of host pack state.
         with patch(
+            "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
+            return_value=None,
+        ), patch(
             "packages.hypothesis_validation.adapters.CodeQLAdapter.is_available",
             return_value=True,
         ), patch(
@@ -1208,7 +1280,7 @@ class TestValidateDataflowClaims:
                 results_by_id=results_by_id,
                 codeql_db=db,
                 repo_path=tmp_path,
-                llm_client=MagicMock(),
+                llm_client=llm_client,
             )
             # F1 errored (not counted in n_validated), F2 ran
             assert m["n_validated"] == 1
@@ -1365,11 +1437,17 @@ class TestRunValidationPass:
         args = self._baseline_args(tmp_path)
         args["dispatch_mode"] = "cc_dispatch"
         args["findings"], args["results_by_id"] = self._make_finding()
+        # Force Tier 1 to fire with a synthetic discovery result so the
+        # test is deterministic regardless of host pack state.
+        fake_path = Path("/fake/pack/codeql/cpp-queries/1.0/Security/CWE-078/CmdInj.ql")
         with patch(
+            "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
+            return_value=fake_path,
+        ), patch(
             "packages.hypothesis_validation.adapters.CodeQLAdapter.is_available",
             return_value=True,
         ), patch(
-            "packages.hypothesis_validation.adapters.CodeQLAdapter.run",
+            "packages.hypothesis_validation.adapters.CodeQLAdapter.run_prebuilt_query",
             return_value=self._confirmed_evidence(),
         ) as mock_run:
             m = run_validation_pass(**args)

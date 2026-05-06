@@ -33,10 +33,9 @@ from packages.hypothesis_validation.runner import validate
 from .dataflow_dispatch_client import DispatchClient
 from .dataflow_query_builder import (
     TEMPLATE_PREDICATE_SCHEMA,
-    build_prebuilt_query,
     build_template_query,
+    discover_prebuilt_query,
     infer_cwe_from_rule_id,
-    lookup_prebuilt_flow,
     supported_languages_for_template,
 )
 
@@ -651,7 +650,7 @@ def _validate_one_hypothesis(
     if not cwe:
         cwe = (infer_cwe_from_rule_id(finding.get("rule_id", "")) or "").upper().strip()
 
-    # ----- Tier 1: prebuilt Flow module -----
+    # ----- Tier 1: prebuilt pack-resident query -----
     # Fast confirmation lane. Returns confirmed when matches exist at the
     # finding's location. Returns inconclusive (NOT refuted) on no matches —
     # the prebuilt's source model may not cover the LLM's claimed source
@@ -659,16 +658,9 @@ def _validate_one_hypothesis(
     # Inconclusive at Tier 1 falls through to Tier 2 where the LLM can
     # customise predicates to test the specific claim.
     if language and cwe:
-        prebuilt = lookup_prebuilt_flow(language, cwe)
-        if prebuilt is not None:
-            flow_import, flow_module = prebuilt
-            rule = build_prebuilt_query(
-                language=language,
-                flow_import=flow_import,
-                flow_module=flow_module,
-                query_id=f"raptor/iris/{cwe.lower()}",
-            )
-            ev = adapter.run(rule, hypothesis.target)
+        prebuilt_path = discover_prebuilt_query(language, cwe)
+        if prebuilt_path is not None:
+            ev = adapter.run_prebuilt_query(prebuilt_path, hypothesis.target)
             verdict = _verdict_from_prebuilt(ev, finding)
             if verdict == "confirmed":
                 # Tier 1 confirmed the path exists at the finding's

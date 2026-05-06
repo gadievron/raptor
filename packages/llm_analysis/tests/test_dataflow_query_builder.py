@@ -1,99 +1,213 @@
 """Tests for the mechanical CodeQL query builder (Tier 1 + Tier 2)."""
 
 import sys
+import textwrap
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from packages.llm_analysis import dataflow_query_builder as _dqb
 from packages.llm_analysis.dataflow_query_builder import (
     TEMPLATE_PREDICATE_SCHEMA,
-    build_prebuilt_query,
     build_template_query,
+    discover_prebuilt_queries,
+    discover_prebuilt_query,
     infer_cwe_from_rule_id,
-    lookup_prebuilt_flow,
     supported_languages_for_template,
 )
 
 
-# Tier 1 ---------------------------------------------------------------------
-
-class TestPrebuiltLookup:
-    def test_python_command_injection(self):
-        result = lookup_prebuilt_flow("python", "CWE-78")
-        assert result is not None
-        imp, mod = result
-        assert "CommandInjection" in imp
-        assert mod == "CommandInjectionFlow"
-
-    def test_python_sql_injection(self):
-        result = lookup_prebuilt_flow("python", "CWE-89")
-        assert result is not None
-        assert result[1] == "SqlInjectionFlow"
-
-    def test_java_command_injection(self):
-        result = lookup_prebuilt_flow("java", "CWE-78")
-        assert result is not None
-
-    def test_unknown_combination_returns_none(self):
-        assert lookup_prebuilt_flow("python", "CWE-9999") is None
-        assert lookup_prebuilt_flow("cobol", "CWE-78") is None
-
-    def test_case_insensitive_language(self):
-        assert lookup_prebuilt_flow("Python", "CWE-78") is not None
-        assert lookup_prebuilt_flow("PYTHON", "CWE-78") is not None
-
-    def test_case_insensitive_cwe(self):
-        assert lookup_prebuilt_flow("python", "cwe-78") is not None
-        assert lookup_prebuilt_flow("python", " CWE-78 ") is not None  # whitespace
-
-    def test_empty_inputs(self):
-        assert lookup_prebuilt_flow("", "CWE-78") is None
-        assert lookup_prebuilt_flow("python", "") is None
-        assert lookup_prebuilt_flow("", "") is None
-        assert lookup_prebuilt_flow(None, None) is None
+# Tier 1 — discovery ---------------------------------------------------------
 
 
-class TestBuildPrebuiltQuery:
-    def test_basic_python_query(self):
-        q = build_prebuilt_query(
-            language="python",
-            flow_import="semmle.python.security.dataflow.CommandInjectionQuery",
-            flow_module="CommandInjectionFlow",
+def _write_query(path: Path, *, kind: str, cwe_tag: str, qid: str = "raptor/test") -> None:
+    """Materialise a minimally-valid QLDoc-tagged .ql stub for discovery to find.
+
+    Discovery only reads the header; it never compiles the file. We just need
+    the @kind / @id / @tags external/cwe/cwe-NNN bits in the leading 4KB.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = textwrap.dedent(
+        f"""\
+        /**
+         * @name Test query
+         * @kind {kind}
+         * @id {qid}
+         * @tags security
+         *       {cwe_tag}
+         */
+        import python
+        """
+    )
+    path.write_text(body)
+
+
+def _build_pack_tree(root: Path, *, language: str, version: str = "1.0.0") -> Path:
+    """Mimic the on-disk layout of an installed CodeQL queries pack:
+    <root>/<lang>-queries/<version>/Security/CWE-NNN/*.ql
+    where <root> is the configured pack root.
+    """
+    sec = root / f"{language}-queries" / version / "Security"
+    sec.mkdir(parents=True, exist_ok=True)
+    return sec
+
+
+class TestDiscovery:
+    """`discover_prebuilt_queries` walks installed packs to map (lang, CWE) → path.
+
+    Tests build a fake pack tree under tmp_path, monkeypatch the module's
+    `_DEFAULT_PACK_ROOT` to point at it, and bust the lru_cache between
+    cases. Avoiding env vars per project convention.
+    """
+
+    def setup_method(self):
+        discover_prebuilt_queries.cache_clear()
+
+    def teardown_method(self):
+        discover_prebuilt_queries.cache_clear()
+
+    def test_finds_path_problem_query(self, tmp_path, monkeypatch):
+        sec = _build_pack_tree(tmp_path, language="python")
+        ql = sec / "CWE-078" / "CommandInjection.ql"
+        _write_query(ql, kind="path-problem",
+                     cwe_tag="external/cwe/cwe-78", qid="py/cmd-injection")
+
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        out = discover_prebuilt_queries()
+        assert ("python", "CWE-78") in out
+        assert out[("python", "CWE-78")] == ql
+
+    def test_skips_non_path_problem_queries(self, tmp_path, monkeypatch):
+        sec = _build_pack_tree(tmp_path, language="python")
+        ql = sec / "CWE-079" / "CookieFlag.ql"
+        # @kind problem (not path-problem) — useful as a static check, but
+        # dataflow validation isn't what it does.
+        _write_query(ql, kind="problem", cwe_tag="external/cwe/cwe-79")
+
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        out = discover_prebuilt_queries()
+        assert ("python", "CWE-79") not in out
+
+    def test_lookup_normalises_inputs(self, tmp_path, monkeypatch):
+        sec = _build_pack_tree(tmp_path, language="python")
+        _write_query(
+            sec / "CWE-089" / "SqlInjection.ql",
+            kind="path-problem",
+            cwe_tag="external/cwe/cwe-89",
         )
-        assert "import python" in q
-        assert "import semmle.python.security.dataflow.CommandInjectionQuery" in q
-        assert "import CommandInjectionFlow::PathGraph" in q
-        assert "from CommandInjectionFlow::PathNode source" in q
-        assert "where CommandInjectionFlow::flowPath" in q
-        assert "@kind path-problem" in q
-        assert "@problem.severity" in q  # required for path-problem queries
 
-    def test_query_id_embedded(self):
-        q = build_prebuilt_query(
-            language="python",
-            flow_import="...",
-            flow_module="X",
-            query_id="raptor/iris/CWE-78",
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        # Case-insensitive language and CWE; trims whitespace.
+        assert discover_prebuilt_query("Python", "cwe-89") is not None
+        assert discover_prebuilt_query("PYTHON", " CWE-89 ") is not None
+        assert discover_prebuilt_query("python", "CWE-89") is not None
+
+    def test_lookup_returns_none_for_unknown(self, tmp_path, monkeypatch):
+        # Empty pack tree.
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        assert discover_prebuilt_query("python", "CWE-9999") is None
+        assert discover_prebuilt_query("cobol", "CWE-78") is None
+
+    def test_lookup_empty_inputs(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        assert discover_prebuilt_query("", "CWE-78") is None
+        assert discover_prebuilt_query("python", "") is None
+        assert discover_prebuilt_query(None, None) is None
+
+    def test_finds_queries_across_languages(self, tmp_path, monkeypatch):
+        py_sec = _build_pack_tree(tmp_path, language="python")
+        java_sec = _build_pack_tree(tmp_path, language="java")
+        cpp_sec = _build_pack_tree(tmp_path, language="cpp")
+
+        _write_query(
+            py_sec / "CWE-078" / "CommandInjection.ql",
+            kind="path-problem", cwe_tag="external/cwe/cwe-78",
         )
-        assert "raptor/iris/CWE-78" in q
-
-    def test_unknown_language_raises(self):
-        import pytest
-        with pytest.raises(ValueError):
-            build_prebuilt_query(
-                language="cobol",
-                flow_import="...",
-                flow_module="X",
-            )
-
-    def test_includes_correct_lang_header(self):
-        q = build_prebuilt_query(
-            language="cpp",
-            flow_import="semmle.code.cpp.security.X",
-            flow_module="XFlow",
+        _write_query(
+            java_sec / "CWE-078" / "ExecTainted.ql",
+            kind="path-problem", cwe_tag="external/cwe/cwe-78",
         )
-        assert "import cpp" in q
-        assert "import python" not in q
+        _write_query(
+            cpp_sec / "CWE-078" / "ExecTainted.ql",
+            kind="path-problem", cwe_tag="external/cwe/cwe-78",
+        )
+
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        assert discover_prebuilt_query("python", "CWE-78") is not None
+        assert discover_prebuilt_query("java", "CWE-78") is not None
+        assert discover_prebuilt_query("cpp", "CWE-78") is not None
+
+    def test_first_seen_wins_on_collision(self, tmp_path, monkeypatch):
+        sec = _build_pack_tree(tmp_path, language="python")
+        # Two queries both tagged CWE-78. discover walks alphabetically so
+        # the lexicographically-first file wins, deterministically.
+        a = sec / "CWE-078" / "Aaa.ql"
+        b = sec / "CWE-078" / "Bbb.ql"
+        _write_query(a, kind="path-problem", cwe_tag="external/cwe/cwe-78")
+        _write_query(b, kind="path-problem", cwe_tag="external/cwe/cwe-78")
+
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        assert discover_prebuilt_query("python", "CWE-78") == a
+
+    def test_skips_non_queries_packs(self, tmp_path, monkeypatch):
+        # `python-all` is a library pack, not a queries pack. Discovery
+        # only looks at <lang>-queries dirs.
+        not_a_queries = tmp_path / "python-all" / "1.0.0" / "Security"
+        not_a_queries.mkdir(parents=True)
+        _write_query(
+            not_a_queries / "CWE-078" / "CommandInjection.ql",
+            kind="path-problem", cwe_tag="external/cwe/cwe-78",
+        )
+
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        assert discover_prebuilt_query("python", "CWE-78") is None
+
+    def test_missing_pack_root_is_handled(self, tmp_path, monkeypatch):
+        # Pack root points at a non-existent dir → empty result, no crash.
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path / "does-not-exist")
+        out = discover_prebuilt_queries()
+        assert out == {}
+
+    def test_zero_padded_cwe_tags_are_normalised(self, tmp_path, monkeypatch):
+        """Real CodeQL packs use zero-padded tags (`cwe-022`); RAPTOR
+        findings carry canonical CWE strings (`CWE-22`). Discovery must
+        strip leading zeros so the dict keys match what callers pass."""
+        sec = _build_pack_tree(tmp_path, language="python")
+        # Tag uses zero-padded form, as real packs do
+        ql = sec / "CWE-022" / "PathInjection.ql"
+        _write_query(ql, kind="path-problem",
+                     cwe_tag="external/cwe/cwe-022")
+
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        # Lookup with canonical (unpadded) form must hit the entry.
+        assert discover_prebuilt_query("python", "CWE-22") == ql
+        # The dict key itself is also canonical.
+        assert ("python", "CWE-22") in discover_prebuilt_queries()
+        assert ("python", "CWE-022") not in discover_prebuilt_queries()
+
+    def test_multiple_cwes_per_query(self, tmp_path, monkeypatch):
+        # Some queries tag multiple CWEs. Discovery indexes the query
+        # under each one — both lookups should find it.
+        sec = _build_pack_tree(tmp_path, language="python")
+        ql = sec / "CWE-078" / "MultiTagged.ql"
+        ql.parent.mkdir(parents=True, exist_ok=True)
+        ql.write_text(textwrap.dedent(
+            """\
+            /**
+             * @name Multi-tagged
+             * @kind path-problem
+             * @id raptor/multi
+             * @tags security
+             *       external/cwe/cwe-78
+             *       external/cwe/cwe-77
+             */
+            import python
+            """
+        ))
+
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        assert discover_prebuilt_query("python", "CWE-78") == ql
+        assert discover_prebuilt_query("python", "CWE-77") == ql
 
 
 # Tier 2 ---------------------------------------------------------------------
@@ -195,38 +309,6 @@ class TestSchemas:
         # Schema descriptions should help the LLM produce well-shaped predicates
         s = TEMPLATE_PREDICATE_SCHEMA["source_predicate_body"]
         assert "Example" in s or "example" in s
-
-
-class TestExpandedPrebuiltMap:
-    """Smoke tests for the expanded Python prebuilt map. Each entry should
-    resolve to a (import_path, flow_module) tuple and produce a syntactically
-    plausible wrapper query."""
-
-    PYTHON_CWES = [
-        "CWE-78", "CWE-77", "CWE-89", "CWE-90", "CWE-94", "CWE-22",
-        "CWE-79", "CWE-93", "CWE-117", "CWE-209", "CWE-312", "CWE-313",
-        "CWE-327", "CWE-501", "CWE-502", "CWE-601", "CWE-611", "CWE-643",
-        "CWE-776", "CWE-918", "CWE-943", "CWE-1004", "CWE-1333", "CWE-1336",
-    ]
-
-    def test_all_python_cwes_resolve(self):
-        for cwe in self.PYTHON_CWES:
-            result = lookup_prebuilt_flow("python", cwe)
-            assert result is not None, f"missing entry: python/{cwe}"
-            imp, mod = result
-            assert imp.startswith("semmle.python.security.dataflow.")
-            assert mod.endswith("Flow")
-
-    def test_each_python_cwe_builds_a_query(self):
-        for cwe in self.PYTHON_CWES:
-            imp, mod = lookup_prebuilt_flow("python", cwe)
-            q = build_prebuilt_query(
-                language="python", flow_import=imp, flow_module=mod,
-            )
-            assert "import python" in q
-            assert f"import {imp}" in q
-            assert f"import {mod}::PathGraph" in q
-            assert f"{mod}::flowPath(source, sink)" in q
 
 
 class TestCweInference:
