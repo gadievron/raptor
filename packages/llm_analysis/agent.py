@@ -13,6 +13,7 @@ This agent provides TRUE agentic behaviour with NO templates:
 
 import argparse
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -869,33 +870,49 @@ class AutonomousSecurityAgentV2:
                 print("⚠️  LLM authentication failed — check your API key.")
             return False
 
-    def _extract_code(self, content: str) -> Optional[str]:
-        """Extract code from LLM response (handles markdown code blocks)."""
-        # Try to find C++ code block first
-        if "```cpp" in content:
-            parts = content.split("```cpp")
-            if len(parts) > 1:
-                code = parts[1].split("```")[0].strip()
-                return code
-        # Try to find C code block
-        elif "```c" in content:
-            parts = content.split("```c")
-            if len(parts) > 1:
-                code = parts[1].split("```")[0].strip()
-                return code
-        # Try to find Python code block
-        elif "```python" in content:
-            parts = content.split("```python")
-            if len(parts) > 1:
-                code = parts[1].split("```")[0].strip()
-                return code
-        elif "```" in content:
-            parts = content.split("```")
-            if len(parts) > 1:
-                code = parts[1].strip()
-                return code
+    # Match a markdown fenced code block. Captures the optional
+    # language tag and the body between fences. The language tag
+    # must end at a newline or the closing fence — pre-fix the
+    # plain `"```c" in content` substring check matched ```cpp,
+    # ```csharp, ```cmake, ```css, and even ```c++ as if they were
+    # the C-language branch (because "```c" is a prefix of all of
+    # them). Anchored on a per-line basis (re.MULTILINE) so prose
+    # text containing "```cpp" inline (`"like ```cpp would match"`)
+    # doesn't false-positive as a code block.
+    _CODE_FENCE_RE = re.compile(
+        r"^```(?P<lang>[a-zA-Z0-9_+-]*)\s*\n"
+        r"(?P<body>.*?)"
+        r"^```\s*$",
+        re.MULTILINE | re.DOTALL,
+    )
 
-        # If no code block, return content as-is
+    def _extract_code(self, content: str) -> Optional[str]:
+        """Extract code from LLM response (handles markdown code blocks).
+
+        Preference order: ```cpp > ```c > ```python > untagged
+        ``` > raw content. Pre-fix the substring matches conflated
+        ```cpp / ```csharp / ```cmake / ```css with ```c, and
+        matched ``` substrings inside prose as code blocks. The
+        regex requires the fence to be at line start and the
+        language tag to be a clean identifier ending at whitespace
+        / newline.
+        """
+        # Find every fenced block and choose by language tag.
+        blocks = list(self._CODE_FENCE_RE.finditer(content))
+        if blocks:
+            by_lang: Dict[str, str] = {}
+            for m in blocks:
+                lang = (m.group("lang") or "").lower()
+                # First occurrence per language wins (preserve order).
+                by_lang.setdefault(lang, m.group("body").rstrip())
+            for preferred in ("cpp", "c++", "c", "python", "py", ""):
+                if preferred in by_lang:
+                    return by_lang[preferred].strip()
+            # Fall back to the first block of any other language so
+            # captions like ```rust still extract.
+            return next(iter(by_lang.values())).strip()
+
+        # No code block — return content as-is.
         return content.strip()
 
     def _load_validated_findings(self, findings_path: str) -> List[Dict[str, Any]]:
