@@ -23,6 +23,7 @@ from .exclusions import (
     match_exclusion_reason,
 )
 from .extractors import extract_functions, extract_items, count_sloc
+from .call_graph import extract_call_graph_python
 from .diff import compare_inventories
 
 logger = logging.getLogger(__name__)
@@ -348,7 +349,7 @@ def _process_single_file(
         items = extract_items(str(filepath), language, content, _tree_cache=tree_cache)
         sloc = count_sloc(content, language, _tree=tree_cache.get("tree"))
 
-        return {
+        record: Dict[str, Any] = {
             'path': rel_path,
             'language': language,
             'lines': line_count,
@@ -357,6 +358,13 @@ def _process_single_file(
             '_stat': file_stat,
             'items': [item.to_dict() for item in items],
         }
+        # Call-graph extraction is Python-only at first cut; the
+        # resolver in core.inventory.reachability is language-
+        # agnostic but the per-file walker is currently AST-based.
+        # Other languages get added when a consumer needs them.
+        if language == 'python':
+            record['call_graph'] = extract_call_graph_python(content).to_dict()
+        return record
 
     except Exception as e:
         logger.warning(f"Failed to process {filepath}: {e}")
