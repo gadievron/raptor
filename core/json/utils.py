@@ -111,6 +111,17 @@ def save_json(path: Union[str, Path], data: Any, mode: int = None) -> None:
         mode: Optional POSIX file permission bits (e.g. 0o600). When set,
               the temp file is created with these permissions atomically —
               no window where the file exists with default permissions.
+
+    Durability: fsyncs the data file BEFORE the rename, then fsyncs the
+    parent directory AFTER. Pre-fix the atomic-write pattern used
+    `tmp.write_text` + `tmp.replace(p)` without either fsync — the
+    rename is atomic at the filesystem-metadata layer, but the data
+    pages may not be on disk yet. A power loss / hard reboot between
+    the rename and the next pdflush cycle produced a renamed file
+    containing zero bytes (or a torn fragment) — operator next boot
+    saw the path exist but the JSON failed to parse. The two fsyncs
+    cost a few hundred microseconds per save vs. the cost of losing
+    a checklist or report on power loss.
     """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -131,9 +142,27 @@ def save_json(path: Union[str, Path], data: Any, mode: int = None) -> None:
             fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
         else:
-            tmp.write_text(content, encoding="utf-8")
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
         tmp.replace(p)
+        # fsync the parent directory so the rename's metadata is also
+        # durable. Some filesystems (ext4 default, xfs) don't propagate
+        # rename ordering to the next dir-entry flush without this.
+        try:
+            dir_fd = os.open(str(p.parent), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            # Some filesystems (notably some FUSE / network mounts)
+            # don't support fsync on directory fds. Best-effort.
+            pass
     except BaseException:
         # Clean up temp file on any failure
         tmp.unlink(missing_ok=True)
