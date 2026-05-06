@@ -215,8 +215,25 @@ def dispatch_task(
     profile_name = task.get_profile_name()
 
     import threading as _th
-    _nonces: dict[str, str] = {}
+    # Key by (item_id, model_key) tuple — NOT just item_id. With N
+    # models analysing the same item (multi-model orchestration),
+    # all N writes land on the same `iid` key and last-writer-
+    # wins, then the first completed future pops the entry and
+    # the remaining N-1 model responses see an empty nonce →
+    # `defense_telemetry.record_response` silently never fires
+    # for them, defeating the entire prompt-injection / nonce-
+    # leak detection layer (it can't detect leakage if it never
+    # gets to compare the response against the nonce). Each
+    # (item, model) pair must hold its own nonce to its own
+    # completion.
+    _nonces: dict[tuple, str] = {}
     _nonces_lock = _th.Lock()
+
+    def _model_key(m) -> str:
+        """Stable hashable identity for a model object — same
+        formula used for telemetry's `model_id` so the nonce
+        lookup matches the recorded response."""
+        return getattr(m, "model_name", None) or str(m)
 
     with ThreadPoolExecutor(max_workers=max_parallel) as executor:
         futures = {}
@@ -227,7 +244,7 @@ def dispatch_task(
                 if nonce:
                     iid = task.get_item_id(it)
                     with _nonces_lock:
-                        _nonces[iid] = nonce
+                        _nonces[(iid, _model_key(m))] = nonce
                 pf = preflight(prompt, corpora=_DISPATCH_CORPORA)
                 defense_telemetry.record_preflight(hit=pf.has_injection_indicators)
                 schema = task.get_schema(it)
@@ -239,6 +256,7 @@ def dispatch_task(
         for future in as_completed(futures):
             model, item = futures[future]
             item_id = task.get_item_id(item)
+            model_key = _model_key(model)
             completed += 1
             elapsed = time.monotonic() - start
 
@@ -254,7 +272,7 @@ def dispatch_task(
 
                 # Record defense telemetry (nonce leakage, schema rejection)
                 with _nonces_lock:
-                    nonce = _nonces.pop(item_id, "")
+                    nonce = _nonces.pop((item_id, model_key), "")
                 if nonce and profile_name:
                     raw = ""
                     if hasattr(dispatch_result, "result") and isinstance(dispatch_result.result, dict):
@@ -310,7 +328,7 @@ def dispatch_task(
                 # Record schema failure telemetry (skip auth/network errors)
                 if error_type not in ("auth", "timeout") and profile_name:
                     with _nonces_lock:
-                        nonce = _nonces.pop(item_id, "")
+                        nonce = _nonces.pop((item_id, model_key), "")
                     if nonce:
                         model_id = getattr(model, "model_name", str(model))
                         defense_telemetry.record_response(
