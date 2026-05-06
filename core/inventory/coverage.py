@@ -23,11 +23,33 @@ def update_coverage(
     Returns:
         Updated inventory.
     """
-    checked_set = {(f['file'], f['function']) for f in checked_functions}
+    # `.get()` rather than `[...]` for caller-supplied dicts —
+    # `checked_functions` flows from external callers (validate
+    # stage outputs, understand-map post-processing, agentic
+    # post-pass enrichment) and any of them passing a partial
+    # entry (`{"file": "x"}` without `function`) would crash the
+    # whole coverage update with KeyError. Skip incomplete entries
+    # silently — the upstream finder is the right place to enforce
+    # completeness, not the consumer.
+    checked_set = {
+        (f.get('file'), f.get('function'))
+        for f in checked_functions
+        if isinstance(f, dict) and f.get('file') and f.get('function')
+    }
 
     for file_info in inventory.get('files', []):
+        if not isinstance(file_info, dict):
+            continue
+        path = file_info.get('path')
+        if not path:
+            continue
         for func in _get_items(file_info):
-            key = (file_info['path'], func['name'])
+            if not isinstance(func, dict):
+                continue
+            name = func.get('name')
+            if not name:
+                continue
+            key = (path, name)
             if key in checked_set:
                 checked_by = func.get('checked_by', [])
                 if source_label not in checked_by:
