@@ -11,8 +11,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Dict, Any
 
-from core.logging import get_logger
 from core.llm.providers import LLMProvider
+from core.llm.task_types import TaskType
+from core.logging import get_logger
 from core.security.prompt_defense_profiles import CONSERVATIVE
 from core.security.prompt_envelope import (
     PromptBundle,
@@ -132,7 +133,10 @@ class MultiTurnAnalyser:
         initial_prompt, initial_sys = _extract_roles(initial_bundle)
         messages.append(Message(role="user", content=initial_prompt))
 
-        llm_response = self.llm.generate(initial_prompt, system_prompt=initial_sys)
+        llm_response = self.llm.generate(
+            initial_prompt, system_prompt=initial_sys,
+            task_type=TaskType.AGENT_LOOP,
+        )
         response = llm_response.content
         messages.append(Message(role="assistant", content=response))
         analysis_result["reasoning_steps"].append({
@@ -152,7 +156,10 @@ class MultiTurnAnalyser:
             clarify_prompt, clarify_sys = _extract_roles(clarify_bundle)
             messages.append(Message(role="user", content=clarify_prompt))
 
-            llm_response = self.llm.generate(clarify_prompt, system_prompt=clarify_sys)
+            llm_response = self.llm.generate(
+                clarify_prompt, system_prompt=clarify_sys,
+                task_type=TaskType.AGENT_LOOP,
+            )
             response = llm_response.content
             messages.append(Message(role="assistant", content=response))
             analysis_result["reasoning_steps"].append({
@@ -228,7 +235,10 @@ class MultiTurnAnalyser:
             messages.append(Message(role="user", content=refine_prompt))
 
             # Get refined code
-            llm_response = self.llm.generate(refine_prompt, system_prompt=refine_sys)
+            llm_response = self.llm.generate(
+                refine_prompt, system_prompt=refine_sys,
+                task_type=TaskType.AGENT_LOOP,
+            )
             response = llm_response.content
             messages.append(Message(role="assistant", content=response))
 
@@ -306,7 +316,10 @@ class MultiTurnAnalyser:
         )
         prompt, system_prompt = _extract_roles(bundle)
 
-        llm_response = self.llm.generate(prompt, system_prompt=system_prompt)
+        llm_response = self.llm.generate(
+            prompt, system_prompt=system_prompt,
+            task_type=TaskType.AGENT_LOOP,
+        )
         response = llm_response.content
         logger.info(f"LLM recommendation: {response[:200]}...")
 

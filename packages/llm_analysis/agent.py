@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parents[2]))  # repo root
 
 from core.json import load_json, save_json
 from core.config import RaptorConfig
+from core.llm.task_types import TaskType
 from core.logging import get_logger
 from core.progress import HackerProgress
 from core.run.output import unique_run_suffix
@@ -464,7 +465,8 @@ class AutonomousSecurityAgentV2:
             raw_validation, _response = self.llm.generate_structured(
                 prompt=validation_prompt,
                 schema=validation_schema,
-                system_prompt=system_prompt
+                system_prompt=system_prompt,
+                task_type=TaskType.ANALYSE,
             )
 
             if raw_validation is None:
@@ -573,7 +575,8 @@ class AutonomousSecurityAgentV2:
             raw_analysis, _full_response = self.llm.generate_structured(
                 prompt=prompt,
                 schema=analysis_schema,
-                system_prompt=system_prompt
+                system_prompt=system_prompt,
+                task_type=TaskType.ANALYSE,
             )
 
             if raw_analysis is None:
@@ -701,7 +704,8 @@ class AutonomousSecurityAgentV2:
             response = self.llm.generate(
                 prompt=prompt,
                 system_prompt=system_prompt,
-                temperature=0.8  # Higher creativity for exploit generation. YMMV
+                temperature=0.8,  # Higher creativity for exploit generation. YMMV
+                task_type=TaskType.GENERATE_CODE,
             )
 
             if response is None:
@@ -776,7 +780,8 @@ class AutonomousSecurityAgentV2:
             response = self.llm.generate(
                 prompt=prompt,
                 system_prompt=system_prompt,
-                temperature=0.3  # Lower temperature for safer patches
+                temperature=0.3,  # Lower temperature for safer patches
+                task_type=TaskType.GENERATE_CODE,
             )
 
             if response is None:

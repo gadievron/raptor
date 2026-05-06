@@ -23,6 +23,7 @@ from packages.codeql.smt_path_validator import (
 # packages/codeql/dataflow_validator.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
+from core.llm.task_types import TaskType
 from core.logging import get_logger
 from core.security.prompt_defense_profiles import CONSERVATIVE
 from core.security.prompt_envelope import (
@@ -320,6 +321,7 @@ class DataflowValidator:
                 prompt=prompt,
                 schema=PATH_CONDITIONS_SCHEMA,
                 system_prompt=system_prompt,
+                task_type=TaskType.ANALYSE,
             )
             conditions = [
                 PathCondition(
@@ -482,6 +484,7 @@ class DataflowValidator:
                 prompt=prompt,
                 schema=DATAFLOW_VALIDATION_SCHEMA,
                 system_prompt=system_prompt,
+                task_type=TaskType.ANALYSE,
             )
 
             # Parse response

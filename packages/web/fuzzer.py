@@ -21,6 +21,7 @@ from pathlib import Path
 # packages/web/fuzzer.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
+from core.llm.task_types import TaskType
 from core.logging import get_logger
 from core.security.prompt_defense_profiles import CONSERVATIVE
 from core.security.prompt_envelope import (
@@ -126,6 +127,7 @@ class WebFuzzer:
                 prompt=prompt,
                 schema=schema,
                 system_prompt=system_prompt,
+                task_type=TaskType.GENERATE_CODE,
             )
 
             payloads = result.get('payloads', [])

@@ -12,6 +12,7 @@ from pathlib import Path
 from core.json import save_json
 from typing import Any, Dict, List
 
+from core.llm.task_types import TaskType
 from core.logging import get_logger
 from core.security.prompt_defense_profiles import CONSERVATIVE
 from core.security.prompt_envelope import (
@@ -369,6 +370,7 @@ class CrashAnalysisAgent:
                 prompt=prompt,
                 schema=analysis_schema,
                 system_prompt=system_prompt,
+                task_type=TaskType.ANALYSE,
             )
 
             if analysis is None:
@@ -481,6 +483,7 @@ class CrashAnalysisAgent:
                 prompt=prompt,
                 schema=exploit_schema,
                 system_prompt=system_prompt,
+                task_type=TaskType.GENERATE_CODE,
             )
 
             if exploit_data is None:

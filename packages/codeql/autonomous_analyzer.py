@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.json import save_json
 
+from core.llm.task_types import TaskType
 from core.logging import get_logger
 from core.security.prompt_defense_profiles import CONSERVATIVE
 from core.security.prompt_envelope import (
@@ -325,6 +326,7 @@ class AutonomousCodeQLAnalyzer:
                 prompt=prompt,
                 schema=VULNERABILITY_ANALYSIS_SCHEMA,
                 system_prompt=system_prompt,
+                task_type=TaskType.ANALYSE,
             )
 
             # Defensive: LLM might return extra fields not in schema
@@ -449,6 +451,7 @@ class AutonomousCodeQLAnalyzer:
                 prompt=prompt,
                 system_prompt=system_prompt,
                 temperature=0.8,
+                task_type=TaskType.GENERATE_CODE,
             )
 
             # Extract code from response
