@@ -513,7 +513,12 @@ class AutonomousSecurityAgentV2:
             logger.info(f"  Sanitizers effective: {validation.get('sanitizers_effective')}")
             logger.info(f"  Path reachable: {validation.get('path_reachable')}")
             logger.info(f"  Is exploitable: {validation.get('is_exploitable')}")
-            logger.info(f"  Confidence: {validation.get('exploitability_confidence', 0):.2f}")
+            # `.get(key, default)` only fires the default for MISSING keys;
+            # an explicit `null` from the LLM passes through as None, then
+            # `f"{None:.2f}"` raises TypeError mid-log-write and aborts
+            # the whole validate_dataflow call. Coalesce explicitly.
+            _conf = validation.get('exploitability_confidence')
+            logger.info(f"  Confidence: {(_conf if _conf is not None else 0):.2f}")
             logger.info(f"  Attack complexity: {validation.get('attack_complexity')}")
             logger.info(f"  False positive: {validation.get('false_positive')}")
 
@@ -667,14 +672,24 @@ class AutonomousSecurityAgentV2:
                         logger.info(f"⚠️  Validation determined NOT EXPLOITABLE:")
                         logger.info(f"    Reason: {(validation.get('exploitability_reasoning') or '')[:150]}")
                         vuln.exploitable = False
-                        vuln.exploitability_score = validation.get('exploitability_confidence', 0.0) * 0.5
+                        # Same null-vs-missing distinction as the
+                        # log site above — explicit None from the
+                        # LLM crashes `None * 0.5`.
+                        _conf = validation.get('exploitability_confidence')
+                        if _conf is None:
+                            _conf = 0.0
+                        vuln.exploitability_score = _conf * 0.5
                     else:
                         # Validation confirms exploitability
                         logger.info(f"✓ Validation confirms EXPLOITABLE")
-                        # Use validation confidence to refine score
+                        # Use validation confidence to refine score —
+                        # fall back to existing score if missing OR
+                        # explicit null (max(float, None) → TypeError).
+                        _conf = validation.get('exploitability_confidence')
+                        if _conf is None:
+                            _conf = vuln.exploitability_score
                         vuln.exploitability_score = max(
-                            vuln.exploitability_score,
-                            validation.get('exploitability_confidence', vuln.exploitability_score)
+                            vuln.exploitability_score, _conf,
                         )
 
                     # Store validation in analysis
