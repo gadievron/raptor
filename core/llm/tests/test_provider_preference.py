@@ -336,6 +336,7 @@ def test_llmclient_primary_provider_raises_without_primary_model() -> None:
     cfg.cache_dir = Path("/tmp")
     cfg.enable_cost_tracking = False
     cfg.max_cost_per_scan = 10.0
+    cfg.scorecard_enabled = False  # avoid latent class-default pollution if a future code path consults scorecard
     client = LLMClient.__new__(LLMClient)
     client.config = cfg
     client.providers = {}

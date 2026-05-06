@@ -83,6 +83,7 @@ def _client(
     cfg.cache_max_entries = cache_max_entries
     cfg.enable_cost_tracking = False
     cfg.max_cost_per_scan = 100.0
+    cfg.scorecard_enabled = False  # avoid latent class-default pollution if a future code path consults scorecard
 
     if enable_caching:
         cfg.cache_dir.mkdir(parents=True, exist_ok=True)

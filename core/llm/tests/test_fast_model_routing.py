@@ -135,6 +135,7 @@ def test_no_primary_model_no_population() -> None:
     cfg.cache_max_entries = None
     cfg.enable_cost_tracking = False
     cfg.max_cost_per_scan = 10.0
+    cfg.scorecard_enabled = False  # avoid latent class-default pollution if a future code path consults scorecard
     cfg.__post_init__()                       # should be a no-op
 
     assert cfg.specialized_models == {}
