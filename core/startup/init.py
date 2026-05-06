@@ -325,10 +325,19 @@ def check_env(unavailable_features: set) -> tuple[list, list]:
     except OSError:
         pass
 
-    if os.getenv("RAPTOR_OUT_DIR"):
-        parts.append(f"RAPTOR_OUT_DIR={os.getenv('RAPTOR_OUT_DIR')}")
-    if os.getenv("RAPTOR_CONFIG"):
-        parts.append(f"RAPTOR_CONFIG={os.getenv('RAPTOR_CONFIG')}")
+    # Operator-supplied env values flow into the startup banner that
+    # gets printed to the terminal. A value containing ANSI escapes
+    # (`\x1b[2J`) blanks the terminal; a value with bidi controls
+    # visually re-orders the line; CR/LF splits across lines.
+    # Apply `escape_nonprintable` so dangerous bytes render as
+    # `\xHH` literals.
+    from core.security.log_sanitisation import escape_nonprintable
+    out_dir_env = os.getenv("RAPTOR_OUT_DIR")
+    if out_dir_env:
+        parts.append(f"RAPTOR_OUT_DIR={escape_nonprintable(out_dir_env)}")
+    config_env = os.getenv("RAPTOR_CONFIG")
+    if config_env:
+        parts.append(f"RAPTOR_CONFIG={escape_nonprintable(config_env)}")
 
     if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
         warnings.append("/oss-forensics unavailable — BigQuery not configured")
