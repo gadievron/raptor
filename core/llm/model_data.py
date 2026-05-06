@@ -48,6 +48,35 @@ PROVIDER_DEFAULT_MODELS = {
     "mistral":   "mistral-large-latest",
 }
 
+# Fast/cheap-tier model per provider — used as the default for
+# routing-light task types (binary verdicts, classification, severity
+# triage) where a flagship model is overkill. Aim is "good enough"
+# quality at ~10× cost reduction and ~3× latency reduction vs the
+# flagship default.
+#
+# Cost-class ratio (input/output, per-1K, vs flagship default):
+#   Anthropic:  Opus  $0.005/$0.025  →  Haiku   $0.001/$0.005   (~5×)
+#   OpenAI:     5.4   $0.0025/$0.015 →  4o-mini $0.00015/$0.0006 (~25×)
+#   Gemini:     Pro   $0.00125/$0.01 →  Flash-L $0.0001/$0.0004  (~25×)
+#   Mistral:    Large $0.0005/$0.0015→  Small   $0.00015/$0.0006 (~3×)
+#
+# OpenAI mapping prefers ``gpt-4o-mini`` over the cheaper
+# ``gpt-5-nano`` because the 4o-mini has a longer track record for
+# structured-output reliability across third-party libraries (Instructor,
+# pydantic-ai). Switch to a 5.x mini when its structured-output story
+# stabilises in those libraries.
+#
+# Providers without a fast-model mapping (Ollama, Claude Code via
+# subprocess) are intentionally absent — for Ollama the operator picks
+# a small tagged model themselves; for Claude Code there's only one
+# "model".
+PROVIDER_FAST_MODELS = {
+    "anthropic": "claude-haiku-4-5",
+    "openai":    "gpt-4o-mini",
+    "gemini":    "gemini-2.5-flash-lite",
+    "mistral":   "mistral-small-latest",
+}
+
 # Per-1K-token costs (USD), split input/output.
 # Thinking/reasoning tokens are billed at the output rate on all providers.
 MODEL_COSTS = {

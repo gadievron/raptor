@@ -21,7 +21,7 @@ from core.logging import get_logger
 
 # Re-export from submodules for backward compatibility
 from .model_data import (
-    PROVIDER_ENDPOINTS, PROVIDER_DEFAULT_MODELS,
+    PROVIDER_ENDPOINTS, PROVIDER_DEFAULT_MODELS, PROVIDER_FAST_MODELS,
     MODEL_COSTS, MODEL_LIMITS, PROVIDER_ENV_KEYS,
 )
 from .detection import (
@@ -471,6 +471,48 @@ def _model_config_from_entry(entry: Dict) -> 'ModelConfig':
     )
 
 
+def _build_fast_model_for(primary: 'ModelConfig') -> Optional['ModelConfig']:
+    """Construct a same-provider fast/cheap-tier ModelConfig given the
+    operator's primary. Returns ``None`` when the primary's provider
+    has no fast-model mapping (Ollama, Claude Code) — in that case we
+    leave ``specialized_models`` alone and the operator can configure
+    explicitly.
+
+    Reuses the primary's API key and api_base because the fast model
+    sits on the same provider endpoint and authenticates with the
+    same credential. Pulls cost / context limits from the model_data
+    catalog so the same lookup tables drive both flagship and fast
+    tiers — a future model addition only needs catalog entries, not
+    plumbing changes here.
+    """
+    fast_name = PROVIDER_FAST_MODELS.get(primary.provider)
+    if not fast_name:
+        return None
+
+    limits = MODEL_LIMITS.get(fast_name, {})
+    costs = MODEL_COSTS.get(fast_name, {})
+    cost_per_1k = (costs.get("input", 0.0) + costs.get("output", 0.0)) / 2
+
+    return ModelConfig(
+        provider=primary.provider,
+        model_name=fast_name,
+        api_key=primary.api_key,
+        api_base=PROVIDER_ENDPOINTS.get(primary.provider) or primary.api_base,
+        # Fast-tier work (verdicts, classification) is short-output by
+        # design — no need to inherit the primary's max_tokens, which
+        # may be sized for code-generation. Use the catalog default,
+        # which is already provider-appropriate for the small model.
+        max_tokens=limits.get("max_output", 4096),
+        max_context=limits.get("max_context", 32000),
+        timeout=primary.timeout,
+        # Lower temperature than the primary's default — the workloads
+        # routed here (yes/no, classify) don't benefit from sampling
+        # variance and are more deterministic at lower temperature.
+        temperature=0.0,
+        cost_per_1k_tokens=cost_per_1k,
+    )
+
+
 def _get_default_fallback_models() -> List['ModelConfig']:
     """
     Get default fallback models based on primary model tier.
@@ -815,6 +857,29 @@ class LLMConfig:
     cache_max_entries: Optional[int] = None
     enable_cost_tracking: bool = True
     max_cost_per_scan: float = 10.0  # USD
+
+    def __post_init__(self) -> None:
+        """Seed ``specialized_models`` with same-provider fast-tier
+        defaults for routing-light task types (binary verdicts,
+        classification). Operator-set entries are preserved — we only
+        fill slots the operator hasn't claimed.
+
+        Skips silently when:
+          * no primary model is available (no provider to map from);
+          * the primary's provider has no entry in
+            ``PROVIDER_FAST_MODELS`` (Ollama, Claude Code) — those
+            providers don't have a meaningful "smaller, cheaper"
+            sibling within the family that we can pick automatically.
+        """
+        from .task_types import FAST_TIER_TASKS
+
+        if self.primary_model is None:
+            return
+        fast_config = _build_fast_model_for(self.primary_model)
+        if fast_config is None:
+            return
+        for task in FAST_TIER_TASKS:
+            self.specialized_models.setdefault(task, fast_config)
 
     def to_file(self, config_path: Path) -> None:
         """Save a MINIMAL snapshot of this configuration to JSON.
