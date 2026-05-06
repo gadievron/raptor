@@ -11,8 +11,7 @@ LLM-powered web crawler that:
 
 import re
 from typing import Dict, List, Set, Optional
-from urllib.parse import urlparse, urljoin, parse_qs, urlunparse
-from bs4 import BeautifulSoup
+from urllib.parse import urlparse, urljoin, parse_qs
 
 import sys
 from pathlib import Path
@@ -22,6 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.logging import get_logger
+from core.security.redaction import redact_url_secrets_only
 from packages.web.client import WebClient
 
 logger = get_logger()
@@ -44,6 +44,33 @@ class WebCrawler:
 
         logger.info(f"Web crawler initialized (max_depth={max_depth}, max_pages={max_pages})")
 
+    def _redact_url_for_artifact(self, url: object) -> str:
+        """Redact URL-embedded secrets unless the operator opted into reveal mode."""
+        return redact_url_secrets_only(url, reveal_secrets=self.client.reveal_secrets)
+
+    def _redact_message_for_log(self, message: object) -> str:
+        """Redact URL-embedded secrets from crawler log messages."""
+        return redact_url_secrets_only(message, reveal_secrets=self.client.reveal_secrets)
+
+    def _redacted_url_list(self, urls: Set[str]) -> List[str]:
+        """Return a deterministic, redacted URL list for persisted crawl artifacts."""
+        return [self._redact_url_for_artifact(url) for url in sorted(urls)]
+
+    def _redacted_form(self, form: Dict) -> Dict:
+        """Redact URL-bearing fields from a discovered form artifact."""
+        redacted = dict(form)
+        for field in ("action", "page_url"):
+            if field in redacted:
+                redacted[field] = self._redact_url_for_artifact(redacted[field])
+        return redacted
+
+    def _redacted_api(self, api: Dict) -> Dict:
+        """Redact URL-bearing fields from a discovered API artifact."""
+        redacted = dict(api)
+        if "url" in redacted:
+            redacted["url"] = self._redact_url_for_artifact(redacted["url"])
+        return redacted
+
     def crawl(self, start_url: str) -> Dict:
         """
         Crawl website starting from URL.
@@ -51,7 +78,7 @@ class WebCrawler:
         Returns:
             Dict with discovered resources
         """
-        logger.info(f"Starting crawl from {start_url}")
+        logger.info(f"Starting crawl from {self._redact_url_for_artifact(start_url)}")
 
         self.discovered_urls.add(start_url)
         self._crawl_recursive(start_url, depth=0)
@@ -61,7 +88,7 @@ class WebCrawler:
     def _crawl_recursive(self, url: str, depth: int) -> None:
         """Recursively crawl pages."""
         if depth > self.max_depth:
-            logger.debug(f"Max depth reached for {url}")
+            logger.debug(f"Max depth reached for {self._redact_url_for_artifact(url)}")
             return
 
         if len(self.visited_urls) >= self.max_pages:
@@ -72,7 +99,10 @@ class WebCrawler:
             return
 
         self.visited_urls.add(url)
-        logger.info(f"Crawling: {url} (depth={depth}, pages={len(self.visited_urls)})")
+        logger.info(
+            f"Crawling: {self._redact_url_for_artifact(url)} "
+            f"(depth={depth}, pages={len(self.visited_urls)})"
+        )
 
         try:
             # Fetch page
@@ -81,7 +111,10 @@ class WebCrawler:
             response = self.client.get(path)
 
             if response.status_code != 200:
-                logger.debug(f"Non-200 response for {url}: {response.status_code}")
+                logger.debug(
+                    f"Non-200 response for {self._redact_url_for_artifact(url)}: "
+                    f"{response.status_code}"
+                )
                 return
 
             # Parse content
@@ -95,11 +128,16 @@ class WebCrawler:
                 logger.debug(f"Skipping non-HTML/JSON content: {content_type}")
 
         except Exception as e:
-            logger.warning(f"Error crawling {url}: {e}")
+            logger.warning(
+                f"Error crawling {self._redact_url_for_artifact(url)}: "
+                f"{self._redact_message_for_log(e)}"
+            )
 
     def _process_html_response(self, url: str, response, depth: int) -> None:
         """Process HTML response to discover links, forms, etc."""
         try:
+            from bs4 import BeautifulSoup
+
             soup = BeautifulSoup(response.content, 'html.parser')
 
             # Discover links
@@ -133,7 +171,10 @@ class WebCrawler:
                     self._extract_api_endpoints_from_js(script.string)
 
         except Exception as e:
-            logger.warning(f"Error parsing HTML from {url}: {e}")
+            logger.warning(
+                f"Error parsing HTML from {self._redact_url_for_artifact(url)}: "
+                f"{self._redact_message_for_log(e)}"
+            )
 
     def _process_json_response(self, url: str, response) -> None:
         """Process JSON response (likely API endpoint)."""
@@ -144,9 +185,12 @@ class WebCrawler:
                 'method': 'GET',
                 'response_keys': list(data.keys()) if isinstance(data, dict) else [],
             })
-            logger.info(f"Discovered API endpoint: {url}")
+            logger.info(f"Discovered API endpoint: {self._redact_url_for_artifact(url)}")
         except Exception as e:
-            logger.debug(f"Error parsing JSON from {url}: {e}")
+            logger.debug(
+                f"Error parsing JSON from {self._redact_url_for_artifact(url)}: "
+                f"{self._redact_message_for_log(e)}"
+            )
 
     def _parse_form(self, form_element, page_url: str) -> Optional[Dict]:
         """Parse HTML form to extract inputs and action."""
@@ -192,16 +236,18 @@ class WebCrawler:
                     absolute_url = urljoin(self.client.base_url, match)
                     if urlparse(absolute_url).netloc == urlparse(self.client.base_url).netloc:
                         self.discovered_urls.add(absolute_url)
-                        logger.debug(f"Found API endpoint in JS: {absolute_url}")
+                        logger.debug(
+                            f"Found API endpoint in JS: {self._redact_url_for_artifact(absolute_url)}"
+                        )
 
     def get_results(self) -> Dict:
         """Get crawl results."""
         return {
-            'visited_urls': list(self.visited_urls),
-            'discovered_urls': list(self.discovered_urls),
-            'discovered_forms': self.discovered_forms,
-            'discovered_apis': self.discovered_apis,
-            'discovered_parameters': list(self.discovered_parameters),
+            'visited_urls': self._redacted_url_list(self.visited_urls),
+            'discovered_urls': self._redacted_url_list(self.discovered_urls),
+            'discovered_forms': [self._redacted_form(form) for form in self.discovered_forms],
+            'discovered_apis': [self._redacted_api(api) for api in self.discovered_apis],
+            'discovered_parameters': sorted(self.discovered_parameters),
             'stats': {
                 'total_pages': len(self.visited_urls),
                 'total_urls': len(self.discovered_urls),

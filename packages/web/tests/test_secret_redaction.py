@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from packages.web.client import WebClient
+from packages.web.crawler import WebCrawler
 from packages.web.fuzzer import WebFuzzer
 
 
@@ -10,6 +11,110 @@ class DummyLLM:
 
 def _response():
     return SimpleNamespace(status_code=200, content=b"ok", text="sql syntax error")
+
+
+def test_web_crawler_redacts_secret_url_artifacts_by_default():
+    api_key = "api-" + "j" * 24
+    access_probe = "access-" + "k" * 24
+    client_probe = "client-" + "l" * 24
+    refresh_probe = "refresh-" + "m" * 24
+    crawler = WebCrawler(WebClient("https://example.test"))
+    crawler.visited_urls.add(f"https://example.test/start?api_key={api_key}&debug=true")
+    crawler.discovered_urls.add(
+        f"https://example.test/callback#access_token={access_probe}&state=ok"
+    )
+    crawler.discovered_forms.append(
+        {
+            "action": f"https://example.test/login?client_secret={client_probe}",
+            "method": "POST",
+            "inputs": {"username": {"type": "text", "value": ""}},
+            "page_url": f"https://example.test/form?refresh_token={refresh_probe}",
+        }
+    )
+    crawler.discovered_apis.append(
+        {
+            "url": f"https://example.test/api?access_token={access_probe}",
+            "method": "GET",
+            "response_keys": ["ok"],
+        }
+    )
+
+    results = crawler.get_results()
+    rendered = str(results)
+
+    assert api_key not in rendered
+    assert access_probe not in rendered
+    assert client_probe not in rendered
+    assert refresh_probe not in rendered
+    assert "api_key=[REDACTED]" in rendered
+    assert "access_token=[REDACTED]" in rendered
+    assert "client_secret=[REDACTED]" in rendered
+    assert "refresh_token=[REDACTED]" in rendered
+    assert "debug=true" in rendered
+    assert "state=ok" in rendered
+
+
+def test_web_crawler_can_preserve_secret_url_artifacts_for_debugging():
+    api_key = "api-" + "n" * 24
+    access_probe = "access-" + "o" * 24
+    client_probe = "client-" + "p" * 24
+    client = WebClient("https://example.test", reveal_secrets=True)
+    crawler = WebCrawler(client)
+    crawler.visited_urls.add(f"https://example.test/start?api_key={api_key}")
+    crawler.discovered_urls.add(f"https://example.test/callback?access_token={access_probe}")
+    crawler.discovered_forms.append(
+        {
+            "action": f"https://example.test/login?client_secret={client_probe}",
+            "method": "POST",
+            "inputs": {},
+            "page_url": "https://example.test/form",
+        }
+    )
+
+    rendered = str(crawler.get_results())
+
+    assert api_key in rendered
+    assert access_probe in rendered
+    assert client_probe in rendered
+
+
+def test_web_crawler_redacts_secret_urls_in_logs(monkeypatch):
+    import packages.web.crawler as crawler_module
+
+    api_key = "api-" + "q" * 24
+    recorder = RecordingLogger()
+    crawler = WebCrawler(WebClient("https://example.test"), max_depth=0)
+    monkeypatch.setattr(crawler_module, "logger", recorder)
+    monkeypatch.setattr(crawler.client, "get", lambda path: SimpleNamespace(status_code=404))
+
+    url = "https://example.test/start?" + "api_key=" + api_key
+    crawler.crawl(url)
+
+    joined = "\n".join(recorder.messages)
+    assert api_key not in joined
+    assert "api_key=[REDACTED]" in joined
+
+
+def test_web_crawler_redacts_secret_urls_inside_exception_messages(monkeypatch):
+    import packages.web.crawler as crawler_module
+
+    request_probe = "api-" + "r" * 24
+    recorder = RecordingLogger()
+    crawler = WebCrawler(WebClient("https://example.test"), max_depth=0)
+    monkeypatch.setattr(crawler_module, "logger", recorder)
+
+    def raise_error(path):
+        raise RuntimeError(f"failed for https://example.test{path}&trace=1")
+
+    monkeypatch.setattr(crawler.client, "get", raise_error)
+
+    url = "https://example.test/start?" + "api_key=" + request_probe
+    crawler.crawl(url)
+
+    joined = "\n".join(recorder.messages)
+    assert request_probe not in joined
+    assert "api_key=[REDACTED]" in joined
+    assert "trace=1" in joined
 
 
 def test_web_client_redacts_secret_urls_in_history_by_default():
