@@ -10,9 +10,13 @@ ruff>=0.1.0
 mypy>=1.0.0
 
 # Testing
-pytest>=7.0.0
-pytest-cov>=4.0.0
-gcovr>=5.1
+# pytest pinned exactly: the root pytest.ini uses ``--import-mode=importlib``
+# and ``pythonpath`` (pytest 7+ features) to fix a ``tests`` namespace
+# collision between packages that all carry ``tests/__init__.py``. Pinning
+# avoids surprise regressions from collection-mode changes between minors.
+pytest==9.0.2
+pytest-cov==7.0.0
+gcovr==8.4
 
 # test for Z3 solver
 z3-solver==4.16.0.0
