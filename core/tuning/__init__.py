@@ -190,6 +190,13 @@ def _validate_value(key: str, raw: Any) -> Optional[int]:
     min_val = 0 if key in _ZERO_ALLOWED else 1
     if isinstance(raw, int) and not isinstance(raw, bool) and raw >= min_val:
         return raw
+    # Accept integer-valued floats (`4.0`, `8.0`) — JSON has no
+    # int/float distinction at the wire level, and many editors /
+    # config tools emit `4.0` when the user types `4`. Pre-fix
+    # the strict `isinstance(raw, int)` rejected these and used
+    # the default, masking the operator's intent.
+    if isinstance(raw, float) and raw.is_integer() and raw >= min_val:
+        return int(raw)
     logger.warning(
         'tuning.json: "%s" must be "auto" or a positive integer, '
         "using default (%s)",
