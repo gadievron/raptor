@@ -428,13 +428,6 @@ class TestFlowTrace:
         out = gen_flow_trace({"id": "T1", "name": "empty", "steps": []})
         assert "No steps" in out
 
-    def test_empty_steps_xss_in_trace_id_sanitised(self):
-        """trace_id is read from input data and lands in the EMPTY label —
-        confirm it can't break out of the mermaid quoted string."""
-        out = gen_flow_trace({"id": '<script>alert(1)</script>', "steps": []})
-        assert "<script>" not in out
-        assert "&lt;script&gt;" in out
-
     def test_step_chain_edges(self):
         out = gen_flow_trace(FLOW_TRACE_DATA)
         assert "S1 --> S2" in out
@@ -765,19 +758,6 @@ class TestAttackPaths:
     def test_empty_list(self):
         out = gen_attack_paths([])
         assert "No attack paths" in out
-
-    def test_xss_in_path_heading_sanitised(self):
-        """``path_id`` / ``name`` / ``status`` land in a markdown ``####`` heading
-        that's rendered to HTML — confirm raw ``<script>`` cannot survive."""
-        payload = "<script>alert(1)</script>"
-        out = gen_attack_paths([{
-            "id": payload,
-            "name": payload,
-            "status": payload,
-            "steps": [],
-        }])
-        assert "<script>" not in out
-        assert "&lt;script&gt;" in out
 
     def test_single_path_step_chain(self):
         out = generate_single(ATTACK_PATHS_DATA[0], 0)

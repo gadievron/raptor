@@ -2,14 +2,6 @@
 
 Translates vulnerability findings into ReportSpec for rendering.
 Used by both /validate and /agentic pipelines.
-
-Untrusted fields — anything sourced from a finding dict, including
-SARIF text from external scanners (Semgrep, CodeQL, etc.) — pass
-through ``sanitise_string`` / ``sanitise_code`` before landing in
-the rendered output. Markdown allows raw HTML by default, so any
-unescaped ``<script>`` / ``<img onerror>`` in a finding field would
-execute when the report is opened in a browser-rendered viewer
-(GitHub preview, MkDocs, gitlab, etc). Single choke point: render-time.
 """
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -17,20 +9,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from core.security.prompt_output_sanitise import sanitise_code, sanitise_string
 from .formatting import get_display_status, title_case_type, truncate_path
 from .spec import ReportSpec, ReportSection
-
-
-def _sani(value: Any, *, max_chars: int = 200) -> str:
-    """Cast + sanitise an untrusted finding field for rendered output.
-
-    Returns ``"—"`` for None / empty so table cells stay tidy. All
-    SARIF-sourced strings go through here on their way into the
-    report — vuln_type, cwe_id, file path, function name, status,
-    severity, CVSS string, etc. Numeric callers can rely on the
-    str() cast.
-    """
-    if value is None or value == "":
-        return "—"
-    return sanitise_string(str(value), max_chars=max_chars)
 
 
 def build_findings_rows(findings: List[Dict[str, Any]], filename_only: bool = False) -> List[Tuple]:
@@ -44,17 +22,17 @@ def build_findings_rows(findings: List[Dict[str, Any]], filename_only: bool = Fa
     """
     rows = []
     for i, f in enumerate(findings, 1):
-        vtype = sanitise_string(title_case_type(f.get("vuln_type", "")), max_chars=80)
-        cwe = _sani(f.get("cwe_id"), max_chars=20)
+        vtype = title_case_type(f.get("vuln_type", ""))
+        cwe = f.get("cwe_id") or "—"
 
         fpath = f.get("file") or f.get("file_path") or ""
         if filename_only:
             fpath = fpath.rsplit("/", 1)[-1] if "/" in fpath else fpath
         fline = f.get("line") if f.get("line") is not None else f.get("start_line")
         loc = f"{fpath}:{fline}" if fline is not None else fpath
-        loc = sanitise_string(truncate_path(loc), max_chars=80) if loc else "—"
+        loc = truncate_path(loc) if loc else "—"
 
-        status = sanitise_string(get_display_status(f), max_chars=40)
+        status = get_display_status(f)
 
         severity = str(f.get("severity") or f.get("severity_assessment") or "").lower()
         if severity == "none":
@@ -63,10 +41,9 @@ def build_findings_rows(findings: List[Dict[str, Any]], filename_only: bool = Fa
             severity = severity.title()
         else:
             severity = "—"
-        severity = sanitise_string(severity, max_chars=20)
 
         cvss = f.get("cvss_score_estimate")
-        cvss_str = sanitise_string(str(cvss), max_chars=10) if cvss is not None else "—"
+        cvss_str = str(cvss) if cvss is not None else "—"
 
         rows.append((str(i), vtype, cwe, loc, status, severity, cvss_str))
 
@@ -138,15 +115,11 @@ def findings_summary_line(counts: Dict[str, int], vuln_count: Optional[int] = No
 
 def build_finding_detail(finding: Dict[str, Any], index: int) -> ReportSection:
     """Build a per-finding detail section."""
-    fid = sanitise_string(
-        str(finding.get("id") or finding.get("finding_id") or f"FIND-{index:04d}"),
-        max_chars=80,
-    )
-    vtype = sanitise_string(title_case_type(finding.get("vuln_type", "unknown")), max_chars=80)
+    fid = finding.get("id") or finding.get("finding_id") or f"FIND-{index:04d}"
+    vtype = title_case_type(finding.get("vuln_type", "unknown"))
     fpath = finding.get("file") or finding.get("file_path") or "unknown"
     fline = finding.get("line") if finding.get("line") is not None else finding.get("start_line")
     loc = f"{fpath}:{fline}" if fline is not None else fpath
-    loc = sanitise_string(loc, max_chars=200)
 
     title = f"{fid} — {vtype} in `{loc}`"
 
@@ -157,32 +130,31 @@ def build_finding_detail(finding: Dict[str, Any], index: int) -> ReportSection:
 
     func = finding.get("function")
     if func:
-        lines.append(f"| Function | `{sanitise_string(str(func), max_chars=120)}` |")
+        lines.append(f"| Function | `{func}` |")
 
     code = finding.get("proof", {}).get("vulnerable_code") if isinstance(finding.get("proof"), dict) else None
     code = code or finding.get("code") or ""
     if code:
-        code_line = code.strip().split("\n")[0][:100]
-        code_line = sanitise_string(code_line, max_chars=120).replace("|", "\\|")
+        code_line = code.strip().split("\n")[0][:100].replace("|", "\\|")
         lines.append(f"| Code | `{code_line}` |")
 
-    lines.append(f"| Final Status | {sanitise_string(get_display_status(finding), max_chars=40)} |")
+    lines.append(f"| Final Status | {get_display_status(finding)} |")
 
     cwe = finding.get("cwe_id")
     if cwe:
-        lines.append(f"| CWE | {sanitise_string(str(cwe), max_chars=20)} |")
+        lines.append(f"| CWE | {cwe} |")
 
     cvss = finding.get("cvss_score_estimate")
     cvss_vec = finding.get("cvss_vector")
     if cvss is not None:
-        cvss_str = sanitise_string(str(cvss), max_chars=10)
+        cvss_str = str(cvss)
         if cvss_vec:
-            cvss_str += f" (`{sanitise_string(str(cvss_vec), max_chars=80)}`)"
+            cvss_str += f" (`{cvss_vec}`)"
         lines.append(f"| CVSS | {cvss_str} |")
 
     confidence = finding.get("confidence")
     if confidence:
-        lines.append(f"| Confidence | {sanitise_string(str(confidence).title(), max_chars=40)} |")
+        lines.append(f"| Confidence | {str(confidence).title()} |")
 
     lines.append("")
 

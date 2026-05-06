@@ -83,11 +83,7 @@ class StructuredResponse:
     model: str = ""
     provider: str = ""
     duration: float = 0.0
-    cached: bool = False  # Not yet wired: generate_structured() has no cache path.
-    # generate() caches via _get_cached_response but returns LLMResponse, not this.
-    # To enable: add cache check in generate_structured() before provider call,
-    # return StructuredResponse(cached=True) on hit. Cache key must include schema.
-    # Inventory checksums (core/inventory) could feed cache invalidation.
+    cached: bool = False
 
     def __iter__(self):
         """Allow unpacking as 2-tuple for backwards compatibility."""

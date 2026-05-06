@@ -2,16 +2,13 @@
 
 Three tiers, ordered by reliability:
 
-  Tier 1 — `discover_prebuilt_query` + adapter.run_prebuilt_query:
-    discovers existing CodeQL queries indexed by `external/cwe/cwe-NNN`
-    tags under each installed `*-queries` pack. Invokes them by absolute
-    path. The LLM is not involved in QL generation; we just run the
-    professionally-written, pack-maintained `.ql` files. Handles 70-80%
-    of real Semgrep findings (CWE-78 / 79 / 89 / 22 etc.) for whatever
-    languages have packs installed.
+  Tier 1 — `build_prebuilt_query`: for known (language, CWE) pairs,
+    wraps a CodeQL pre-built Flow module (e.g. CommandInjectionFlow).
+    The LLM is not involved in QL generation; the wrapper imports the
+    professionally-written, pack-maintained config and reports paths.
+    Handles 70-80% of real Semgrep findings (CWE-78 / 79 / 89 / 22 etc.).
 
-  Tier 2 — `build_template_query`: for CWEs with no prebuilt query, or
-    languages that lack a `*-queries` pack on the host, assembles a full
+  Tier 2 — `build_template_query`: for unknown CWEs, assembles a full
     query from a per-language template with placeholders. The LLM fills
     only the `isSource` and `isSink` predicate bodies — small surface,
     much smaller compile-error risk than full-query generation.
@@ -31,190 +28,128 @@ used the legacy `Configuration` class API, and got AST class names wrong
 (`IndexExpr` instead of `Subscript`). Constraining the LLM to predicate
 bodies — for which CodeQL's standard library exposes high-level helpers
 like `RemoteFlowSource` — sidesteps most of these failure modes.
-
-Discovery vs hardcoded map: an earlier draft maintained a hand-edited
-(language, CWE) → (import_path, flow_module) dict. Discovery replaces
-that — the CodeQL packs already organise queries by CWE under
-`Security/CWE-NNN/` and tag them with `@tags external/cwe/cwe-NNN`.
-The packs are the source of truth; hardcoding goes stale on every pack
-update. Discovery picks up new queries (and user-installed custom
-packs) automatically.
 """
 
-import functools
-import logging
 import re
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-
-logger = logging.getLogger(__name__)
+from typing import Dict, Optional, Tuple
 
 
-# Tier 1 — discovery ---------------------------------------------------------
+# Tier 1 ----------------------------------------------------------------------
 
-# Default pack search root. Mirrors the pack location CodeQL itself uses
-# for its bundled stdlib packs. The directory contains `<lang>-queries`
-# packs directly. Tests monkeypatch this constant to point at a fixture
-# tree.
-_DEFAULT_PACK_ROOT = Path.home() / ".codeql" / "packages" / "codeql"
+# Pre-built Flow modules from CodeQL's standard library packs.
+# Each entry maps (language, CWE) → (Customizations.qll path,
+# Flow module name). The path is what we `import`, the module name is
+# what we use for PathGraph / PathNode.
+#
+# These cover the most common CWEs flagged by Semgrep. Adding entries is
+# a one-line change — just confirm the pack actually ships the module
+# (look under `~/.codeql/packages/codeql/<lang>-all/*/semmle/<lang>/security/dataflow/`).
+_PREBUILT_FLOWS: Dict[Tuple[str, str], Tuple[str, str]] = {
+    # ---- Python (verified against installed codeql/python-all pack) ----
+    ("python", "CWE-78"):  ("semmle.python.security.dataflow.CommandInjectionQuery",       "CommandInjectionFlow"),
+    ("python", "CWE-77"):  ("semmle.python.security.dataflow.UnsafeShellCommandConstructionQuery", "UnsafeShellCommandConstructionFlow"),
+    ("python", "CWE-89"):  ("semmle.python.security.dataflow.SqlInjectionQuery",           "SqlInjectionFlow"),
+    ("python", "CWE-90"):  ("semmle.python.security.dataflow.LdapInjectionQuery",          "LdapInjectionFlow"),
+    ("python", "CWE-94"):  ("semmle.python.security.dataflow.CodeInjectionQuery",          "CodeInjectionFlow"),
+    ("python", "CWE-22"):  ("semmle.python.security.dataflow.PathInjectionQuery",          "PathInjectionFlow"),
+    ("python", "CWE-79"):  ("semmle.python.security.dataflow.ReflectedXssQuery",           "ReflectedXssFlow"),
+    ("python", "CWE-93"):  ("semmle.python.security.dataflow.HttpHeaderInjectionQuery",    "HttpHeaderInjectionFlow"),
+    ("python", "CWE-117"): ("semmle.python.security.dataflow.LogInjectionQuery",           "LogInjectionFlow"),
+    ("python", "CWE-209"): ("semmle.python.security.dataflow.StackTraceExposureQuery",     "StackTraceExposureFlow"),
+    ("python", "CWE-312"): ("semmle.python.security.dataflow.CleartextLoggingQuery",       "CleartextLoggingFlow"),
+    ("python", "CWE-313"): ("semmle.python.security.dataflow.CleartextStorageQuery",       "CleartextStorageFlow"),
+    ("python", "CWE-327"): ("semmle.python.security.dataflow.WeakSensitiveDataHashingQuery", "WeakSensitiveDataHashingFlow"),
+    ("python", "CWE-501"): ("semmle.python.security.dataflow.UrlRedirectQuery",            "UrlRedirectFlow"),
+    ("python", "CWE-502"): ("semmle.python.security.dataflow.UnsafeDeserializationQuery",  "UnsafeDeserializationFlow"),
+    ("python", "CWE-601"): ("semmle.python.security.dataflow.UrlRedirectQuery",            "UrlRedirectFlow"),
+    ("python", "CWE-611"): ("semmle.python.security.dataflow.XxeQuery",                    "XxeFlow"),
+    ("python", "CWE-643"): ("semmle.python.security.dataflow.XpathInjectionQuery",         "XpathInjectionFlow"),
+    ("python", "CWE-776"): ("semmle.python.security.dataflow.XmlBombQuery",                "XmlBombFlow"),
+    ("python", "CWE-918"): ("semmle.python.security.dataflow.ServerSideRequestForgeryQuery", "ServerSideRequestForgeryFlow"),
+    ("python", "CWE-943"): ("semmle.python.security.dataflow.NoSqlInjectionQuery",         "NoSqlInjectionFlow"),
+    ("python", "CWE-1004"): ("semmle.python.security.dataflow.CookieInjectionQuery",       "CookieInjectionFlow"),
+    ("python", "CWE-1333"): ("semmle.python.security.dataflow.PolynomialReDoSQuery",       "PolynomialReDoSFlow"),
+    ("python", "CWE-1336"): ("semmle.python.security.dataflow.TemplateInjectionQuery",     "TemplateInjectionFlow"),
 
-# Match `@tags external/cwe/cwe-NNN` (case-insensitive). The tag may sit on
-# its own line (continuation of a multi-line @tags block) or follow @tags
-# directly. Captures the numeric portion.
-_CWE_TAG_RE = re.compile(
-    r"\bexternal/cwe/cwe-(\d+)\b",
-    re.IGNORECASE,
-)
+    # ---- Java ----
+    ("java", "CWE-78"):  ("semmle.code.java.security.CommandLineQuery",     "RemoteUserInputToArgumentToExecFlow"),
+    ("java", "CWE-89"):  ("semmle.code.java.security.SqlInjectionQuery",    "QueryInjectionFlow"),
+    ("java", "CWE-22"):  ("semmle.code.java.security.PathCreation",         "TaintedPathFlow"),
+    ("java", "CWE-79"):  ("semmle.code.java.security.XSS",                  "XssFlow"),
+    ("java", "CWE-502"): ("semmle.code.java.security.UnsafeDeserializationQuery", "UnsafeDeserializationFlow"),
 
-# Match `@kind path-problem` to filter out non-dataflow queries.
-# Standalone `@kind problem` queries are useful for static checks
-# (e.g. "missing httpOnly flag") but don't track paths from source to
-# sink — they're not what IRIS is validating.
-_KIND_PATH_PROBLEM_RE = re.compile(
-    r"@kind\s+path-problem\b",
-    re.IGNORECASE,
-)
+    # ---- C / C++ ----
+    ("cpp", "CWE-78"):  ("semmle.code.cpp.security.CommandExecution",   "CommandExecutionFlow"),
+    ("cpp", "CWE-22"):  ("semmle.code.cpp.security.TaintedPath",        "TaintedPathFlow"),
+    ("cpp", "CWE-120"): ("semmle.code.cpp.security.BufferAccess",       "BufferAccessFlow"),
 
-# Match `@id <ns>/<rest>` — used for stable identification of which
-# discovered query handled a particular finding (audit trail).
-_ID_RE = re.compile(r"@id\s+([\w.\-/]+)")
+    # ---- JavaScript / TypeScript ----
+    ("javascript", "CWE-79"):  ("semmle.javascript.security.dataflow.DomBasedXssQuery",     "DomBasedXss"),
+    ("javascript", "CWE-78"):  ("semmle.javascript.security.dataflow.CommandInjectionQuery", "CommandInjection"),
+    ("javascript", "CWE-89"):  ("semmle.javascript.security.dataflow.SqlInjectionQuery",     "SqlInjection"),
+    ("javascript", "CWE-22"):  ("semmle.javascript.security.dataflow.TaintedPathQuery",      "TaintedPath"),
 
-# Bound how much of each .ql file we read when checking metadata. Real
-# headers fit in ~1 KB; reading more wastes IO on large dataflow query
-# bodies. 4 KB gives slack for queries with long descriptions.
-_METADATA_READ_BYTES = 4096
-
-
-def _pack_root() -> Path:
-    """Resolve the CodeQL package root."""
-    return _DEFAULT_PACK_ROOT
-
-
-def _read_metadata(ql_path: Path) -> Optional[str]:
-    """Return the first ~4KB of a .ql file as text, or None on read failure.
-
-    Comment-block parsing is naive on purpose: we just look for tag
-    matches anywhere in the head of the file. CodeQL's QLDoc format puts
-    metadata in the leading `/** ... */` block, so substring matches are
-    safe — there's no executable QL syntax in the comment block that would
-    spoof our patterns.
-    """
-    try:
-        with ql_path.open("rb") as f:
-            data = f.read(_METADATA_READ_BYTES)
-        return data.decode("utf-8", errors="replace")
-    except OSError:
-        return None
-
-
-def _extract_cwes(metadata: str) -> List[str]:
-    """All CWE-NNN tags found in the metadata block (canonical form).
-
-    CodeQL packs zero-pad to three digits (`cwe-022`); the canonical
-    MITRE form has no leading zeros (`CWE-22`). Strip leading zeros so
-    the discovery dict uses the same key shape that callers pass in.
-    """
-    return [
-        f"CWE-{int(m.group(1))}"
-        for m in _CWE_TAG_RE.finditer(metadata)
-    ]
+    # ---- Go ----
+    ("go", "CWE-78"):  ("semmle.go.security.CommandInjectionQuery",   "CommandInjection"),
+    ("go", "CWE-89"):  ("semmle.go.security.SqlInjectionQuery",       "SqlInjection"),
+}
 
 
-def _is_path_problem(metadata: str) -> bool:
-    return bool(_KIND_PATH_PROBLEM_RE.search(metadata))
+def lookup_prebuilt_flow(language: str, cwe: str) -> Optional[Tuple[str, str]]:
+    """Return (import_path, flow_module_name) for known (language, CWE) pairs.
 
-
-def _query_id(metadata: str) -> Optional[str]:
-    m = _ID_RE.search(metadata)
-    return m.group(1) if m else None
-
-
-def _language_from_pack_dir(pack_dir: Path) -> Optional[str]:
-    """Extract language tag from a `<lang>-queries` directory name.
-
-    Examples: `python-queries` → "python", `cpp-queries` → "cpp".
-    Returns None for directories that don't fit the convention (library
-    packs like `python-all`, `dataflow`, etc.).
-    """
-    name = pack_dir.name
-    if not name.endswith("-queries"):
-        return None
-    return name[: -len("-queries")].lower()
-
-
-@functools.lru_cache(maxsize=1)
-def discover_prebuilt_queries() -> Dict[Tuple[str, str], Path]:
-    """Walk installed CodeQL query packs to build the (lang, CWE) → path map.
-
-    Scans `<pack_root>/<lang>-queries/<version>/Security/CWE-*/*.ql` and
-    reads each file's QLDoc header for `@kind path-problem` and
-    `external/cwe/cwe-NNN` tags. Returns a dict keyed by (language tag,
-    CWE-NNN string) with the absolute path of the .ql file.
-
-    Result is cached for the process lifetime via lru_cache. The scan
-    is cheap (~100ms for ~500 files) but still wasteful to repeat per
-    finding. Tests that need to bust the cache call
-    `discover_prebuilt_queries.cache_clear()`.
-
-    Multiple .ql files can share a (lang, CWE) key — e.g. both
-    `Security/CWE-078/CommandInjection.ql` and an extension query.
-    First-seen wins (sorted alphabetically), so behaviour is
-    deterministic. Operators with strong opinions about which query
-    handles a given CWE can set `CODEQL_HOME` to a curated install.
-    """
-    out: Dict[Tuple[str, str], Path] = {}
-    root = _pack_root()
-    if not root.is_dir():
-        logger.info("CodeQL pack root not found: %s", root)
-        return out
-
-    # Walk every <lang>-queries pack. Multiple versions may coexist —
-    # we take queries from all of them; a (lang, CWE) collision picks
-    # the alphabetically-first version which is a stable choice.
-    for pack_dir in sorted(root.iterdir()):
-        if not pack_dir.is_dir():
-            continue
-        language = _language_from_pack_dir(pack_dir)
-        if language is None:
-            continue
-
-        # Each pack contains one or more `<version>/` dirs — go one
-        # level deeper to find Security/CWE-* directories.
-        for version_dir in sorted(pack_dir.iterdir()):
-            if not version_dir.is_dir():
-                continue
-            security_dir = version_dir / "Security"
-            if not security_dir.is_dir():
-                continue
-            for ql_path in sorted(security_dir.rglob("*.ql")):
-                metadata = _read_metadata(ql_path)
-                if metadata is None or not _is_path_problem(metadata):
-                    continue
-                for cwe in _extract_cwes(metadata):
-                    key = (language, cwe)
-                    out.setdefault(key, ql_path)
-
-    if out:
-        logger.debug(
-            "discovered %d prebuilt CodeQL queries across %d languages",
-            len(out), len({k[0] for k in out}),
-        )
-    return out
-
-
-def discover_prebuilt_query(language: str, cwe: str) -> Optional[Path]:
-    """Look up a prebuilt path-problem query for (language, CWE).
-
-    Both args are normalised before lookup. Returns the absolute .ql
-    path, or None when no such query exists in the installed packs.
+    Both args are normalised to lowercase / uppercase respectively. Returns
+    None when the combination has no prebuilt mapping — caller falls back
+    to Tier 2 (template) or Tier 3 (LLM-generated free-form).
     """
     if not language or not cwe:
         return None
     key = (language.lower().strip(), cwe.upper().strip())
-    return discover_prebuilt_queries().get(key)
+    return _PREBUILT_FLOWS.get(key)
 
 
-# Tier 2 — language templates ------------------------------------------------
+def build_prebuilt_query(
+    *,
+    language: str,
+    flow_import: str,
+    flow_module: str,
+    query_id: str = "raptor/iris-validation",
+) -> str:
+    """Assemble a tiny wrapper query that uses a prebuilt Flow module.
+
+    The wrapper is purely mechanical — no LLM-generated content. All
+    the dataflow logic (sources, sinks, sanitizers, taint propagation
+    rules) lives inside the imported Flow module. We just import it
+    and ask for path results.
+
+    Returns the .ql text. Caller writes to a file inside a qlpack and
+    runs `codeql database analyze`.
+    """
+    lang_import = _LANGUAGE_HEADER.get(language.lower())
+    if lang_import is None:
+        raise ValueError(f"unsupported language for prebuilt query: {language}")
+
+    # Path-problem queries require @severity. Use 'error' since we're
+    # validating an existing finding's reachability — match found ⇒
+    # finding stands.
+    return f"""\
+/**
+ * @name IRIS validation: {query_id}
+ * @kind path-problem
+ * @id {query_id}
+ * @problem.severity error
+ */
+{lang_import}
+import {flow_import}
+import {flow_module}::PathGraph
+
+from {flow_module}::PathNode source, {flow_module}::PathNode sink
+where {flow_module}::flowPath(source, sink)
+select sink.getNode(), source, sink, "IRIS-validated dataflow path"
+"""
+
+
+# Tier 2 ----------------------------------------------------------------------
 
 # Per-language taint-tracking templates. The LLM fills in two strings:
 # `source_predicate_body` and `sink_predicate_body`. Everything else
@@ -363,6 +298,17 @@ select sink.getNode(), source, sink, "IRIS dataflow path"
 }
 
 
+# Imports for the per-language top-level. Used by both Tier 1 wrapper and
+# anywhere we need just the `import <lang>` line.
+_LANGUAGE_HEADER: Dict[str, str] = {
+    "python":     "import python",
+    "java":       "import java",
+    "cpp":        "import cpp",
+    "javascript": "import javascript",
+    "go":         "import go",
+}
+
+
 def supported_languages_for_template() -> set:
     """Languages with a Tier 2 template available."""
     return set(_TAINT_TEMPLATES.keys())
@@ -403,6 +349,9 @@ def build_template_query(
     )
 
 
+# Tier 1+2 schema for LLM ----------------------------------------------------
+
+
 # Schema for the structured response when we ask the LLM for predicates only.
 # Used by the dataflow_validation runner when Tier 1 doesn't apply and we
 # fall through to Tier 2.
@@ -429,10 +378,10 @@ TEMPLATE_PREDICATE_SCHEMA = {
 
 # CWE inference --------------------------------------------------------------
 
-# Maps regex patterns over Semgrep rule IDs to CWE numbers. Used when the
-# finding's `cwe_id` field is empty — many Semgrep rules don't tag CWE
-# explicitly but their rule names are descriptive. Without inference we
-# lose the CWE → prebuilt query mapping for these findings.
+# Maps regex patterns over Semgrep rule IDs / rule_ids to CWE numbers.
+# Used when the finding's `cwe_id` field is empty — many Semgrep rules
+# don't tag CWE explicitly but their rule names are descriptive. Without
+# inference we lose the CWE → prebuilt query mapping for these findings.
 #
 # Order matters: more specific patterns first. The first match wins.
 _RULE_ID_TO_CWE: list = [
@@ -502,8 +451,8 @@ def infer_cwe_from_rule_id(rule_id: str) -> Optional[str]:
     Many Semgrep rules don't set the `cwe_id` field explicitly but have
     descriptive rule names like "raptor.injection.command-shell" or
     "python.lang.security.deserialization.pickle". Inferring from the
-    rule_id lets Tier 1's CWE → prebuilt-query map kick in for findings
-    that would otherwise fall through to Tier 2.
+    rule_id lets Tier 1's CWE → Flow map kick in for findings that
+    would otherwise fall through to Tier 2.
 
     Returns the first matching CWE-NNN string, or None when no pattern
     matches. Patterns are ordered from most specific to most general
@@ -519,8 +468,8 @@ def infer_cwe_from_rule_id(rule_id: str) -> Optional[str]:
 
 
 __all__ = [
-    "discover_prebuilt_queries",
-    "discover_prebuilt_query",
+    "lookup_prebuilt_flow",
+    "build_prebuilt_query",
     "build_template_query",
     "supported_languages_for_template",
     "TEMPLATE_PREDICATE_SCHEMA",

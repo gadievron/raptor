@@ -78,7 +78,7 @@ def generate(data: dict[str, Any]) -> str:
 
 
     if not steps:
-        return f"flowchart TD\n    EMPTY[\"No steps in {_sanitize(trace_id)}\"]"
+        return f"flowchart TD\n    EMPTY[\"No steps in {trace_id}\"]"
 
     lines = ["flowchart TD"]
     lines.append(f'    TITLE["{name}"]')

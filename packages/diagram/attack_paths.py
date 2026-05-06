@@ -110,10 +110,10 @@ def generate(data: list[dict[str, Any]]) -> str:
 
     sections = []
     for i, path_data in enumerate(data):
-        path_id = _sanitize(path_data.get("id", f"PATH-{i+1}"))
-        name = _sanitize(path_data.get("name", path_id))
+        path_id = path_data.get("id", f"PATH-{i+1}")
+        name = path_data.get("name", path_id)
         proximity = path_data.get("proximity") or 0
-        status = _sanitize(path_data.get("status", "uncertain"))
+        status = path_data.get("status", "uncertain")
         sections.append(f"#### {path_id}: {name} (Proximity {proximity}/10, {status})\n")
         sections.append("```mermaid")
         sections.append(generate_single(path_data, i))

@@ -747,6 +747,16 @@ class LLMConfig:
     retry_delay_remote: float = 5.0
     enable_caching: bool = True
     cache_dir: Path = Path("out/llm_cache")
+    # Optional: drop cache entries older than this on read. None = no
+    # TTL. Useful when an upgraded model would now produce different
+    # output for a previously-cached prompt.
+    cache_ttl_seconds: Optional[float] = None
+    # Optional: cap cache size by number of entries. After each
+    # successful save the oldest files (by mtime) are evicted until at
+    # or under this cap. None = no eviction (cache grows unboundedly).
+    # The directory-walk per save is O(N); fine to ~10k entries, beyond
+    # which a real cache backend would be more appropriate.
+    cache_max_entries: Optional[int] = None
     enable_cost_tracking: bool = True
     max_cost_per_scan: float = 10.0  # USD
 

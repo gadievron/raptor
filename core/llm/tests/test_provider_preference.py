@@ -332,6 +332,9 @@ def test_llmclient_primary_provider_raises_without_primary_model() -> None:
     client = LLMClient.__new__(LLMClient)
     client.config = cfg
     client.providers = {}
+    import threading
+    client._key_locks = {}
+    client._key_locks_guard = threading.Lock()
 
     with pytest.raises(RuntimeError, match="primary_model"):
         _ = client.primary_provider

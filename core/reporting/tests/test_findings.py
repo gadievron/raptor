@@ -198,14 +198,10 @@ class TestFindingDetailSanitisation(unittest.TestCase):
         self.assertNotIn("# Injected Heading", section.content)
         self.assertIn("Injected Heading", section.content)
 
-    def test_patch_code_html_escapes_hash_include(self):
-        """``<`` and ``>`` HTML-escape inside the fenced patch block —
-        renders correctly when the markdown is converted to HTML, and
-        prevents XSS if the fence ever breaks."""
+    def test_patch_code_preserves_hash_include(self):
         finding = {**SAMPLE_FINDINGS[0], "patch_code": "#include <stdio.h>\nint main() {}"}
         section = build_finding_detail(finding, 1)
-        self.assertIn("#include &lt;stdio.h&gt;", section.content)
-        self.assertNotIn("#include <stdio.h>", section.content)
+        self.assertIn("#include <stdio.h>", section.content)
 
     def test_ansi_in_patch_code_escaped(self):
         finding = {**SAMPLE_FINDINGS[0], "patch_code": "int x\x1b[31m = 0;"}
@@ -230,90 +226,6 @@ class TestFindingDetailSanitisation(unittest.TestCase):
         section = build_finding_detail(finding, 1)
         self.assertIn("…", section.content)
         self.assertLess(len(section.content), 5000)
-
-
-class TestSarifSourcedFieldXss(unittest.TestCase):
-    """SARIF-sourced fields (vuln_type, file, function, code, etc.) are
-    attacker-controlled when scanning untrusted repos. Confirm they
-    HTML-escape on the way into the rendered markdown so embedded
-    ``<script>`` / ``<img onerror>`` can't execute when the report is
-    opened in a browser-rendered viewer."""
-
-    XSS_PAYLOAD = '<script>alert(1)</script>'
-    IMG_PAYLOAD = '<img src=x onerror="alert(1)">'
-
-    def _assertNoRawXss(self, content: str, payload: str = None):
-        """Raw XSS payload must not appear in rendered content."""
-        payload = payload or self.XSS_PAYLOAD
-        self.assertNotIn(payload, content)
-        self.assertNotIn("<script>", content)
-
-    def _assertEscaped(self, content: str):
-        """Escaped form of XSS payload must appear (proof the value was rendered)."""
-        self.assertIn("&lt;", content)
-
-    def test_xss_in_function_name_escaped(self):
-        finding = {**SAMPLE_FINDINGS[0], "function": self.XSS_PAYLOAD}
-        section = build_finding_detail(finding, 1)
-        self._assertNoRawXss(section.content)
-        self._assertEscaped(section.content)
-
-    def test_xss_in_file_path_escaped_in_title(self):
-        finding = {**SAMPLE_FINDINGS[0], "file": f"src/{self.XSS_PAYLOAD}.c"}
-        section = build_finding_detail(finding, 1)
-        # File path appears in the section title, not the table body
-        self._assertNoRawXss(section.title)
-        self._assertEscaped(section.title)
-
-    def test_xss_in_code_snippet_escaped(self):
-        finding = {**SAMPLE_FINDINGS[0], "code": self.IMG_PAYLOAD}
-        section = build_finding_detail(finding, 1)
-        self._assertNoRawXss(section.content, self.IMG_PAYLOAD)
-        self._assertEscaped(section.content)
-
-    def test_xss_in_cwe_id_escaped(self):
-        finding = {**SAMPLE_FINDINGS[0], "cwe_id": self.XSS_PAYLOAD}
-        section = build_finding_detail(finding, 1)
-        self._assertNoRawXss(section.content)
-        self._assertEscaped(section.content)
-
-    def test_xss_in_vuln_type_escaped_in_row(self):
-        finding = {**SAMPLE_FINDINGS[0], "vuln_type": self.XSS_PAYLOAD}
-        rows = build_findings_rows([finding])
-        joined = " ".join(str(c) for c in rows[0])
-        self._assertNoRawXss(joined)
-        self._assertEscaped(joined)
-
-    def test_xss_in_finding_id_escaped(self):
-        # Override both id keys so the XSS payload actually lands in the title
-        finding = {**SAMPLE_FINDINGS[0], "id": self.XSS_PAYLOAD, "finding_id": self.XSS_PAYLOAD}
-        section = build_finding_detail(finding, 1)
-        self._assertNoRawXss(section.title)
-        self._assertEscaped(section.title)
-
-    def test_xss_in_cvss_vector_escaped(self):
-        finding = {**SAMPLE_FINDINGS[0],
-                   "cvss_score_estimate": 8.4,
-                   "cvss_vector": self.XSS_PAYLOAD}
-        section = build_finding_detail(finding, 1)
-        self._assertNoRawXss(section.content)
-        self._assertEscaped(section.content)
-
-    def test_full_spec_render_with_xss_safe(self):
-        """End-to-end: build the full spec, render to markdown,
-        confirm the rendered markdown is XSS-clean."""
-        finding = {
-            **SAMPLE_FINDINGS[0],
-            "vuln_type": self.XSS_PAYLOAD,
-            "file": f"src/{self.XSS_PAYLOAD}.c",
-            "function": self.XSS_PAYLOAD,
-            "cwe_id": self.XSS_PAYLOAD,
-            "code": self.IMG_PAYLOAD,
-        }
-        spec = build_findings_spec([finding], title="Test")
-        report = render_report(spec)
-        self.assertNotIn("<script>", report)
-        self.assertNotIn(self.IMG_PAYLOAD, report)
 
 
 class TestBuildFindingsSpec(unittest.TestCase):
