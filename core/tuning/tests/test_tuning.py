@@ -9,6 +9,8 @@ from unittest.mock import patch
 from core.tuning import (
     Tuning,
     load_tuning,
+    _detect_available_cpus,
+    _detect_cgroup_cpu_quota,
     _detect_codeql_workers,
     _detect_fuzz_parallel,
     _detect_ram_mb,
@@ -235,6 +237,42 @@ class TestAutoDetection(unittest.TestCase):
     def test_threads_returns_zero(self):
         # 0 = CodeQL's native "use all CPUs" mode
         self.assertEqual(_detect_threads(), 0)
+
+
+    def test_available_cpus_respects_cgroup_v2_quota(self):
+        def fake_read_text(path, encoding="utf-8"):
+            if str(path) == "/sys/fs/cgroup/cpu.max":
+                return "250000 100000"
+            raise OSError
+
+        with patch("core.tuning.Path.read_text", fake_read_text), patch(
+            "core.tuning.os.sched_getaffinity", return_value=set(range(64)), create=True
+        ), patch("core.tuning.os.cpu_count", return_value=64):
+            self.assertEqual(_detect_cgroup_cpu_quota(), 3)
+            self.assertEqual(_detect_available_cpus(), 3)
+
+    def test_available_cpus_respects_cgroup_v1_quota(self):
+        def fake_read_text(path, encoding="utf-8"):
+            path = str(path)
+            if path == "/sys/fs/cgroup/cpu.max":
+                raise OSError
+            if path == "/sys/fs/cgroup/cpu/cpu.cfs_quota_us":
+                return "200000"
+            if path == "/sys/fs/cgroup/cpu/cpu.cfs_period_us":
+                return "100000"
+            raise OSError
+
+        with patch("core.tuning.Path.read_text", fake_read_text), patch(
+            "core.tuning.os.sched_getaffinity", return_value=set(range(64)), create=True
+        ), patch("core.tuning.os.cpu_count", return_value=64):
+            self.assertEqual(_detect_cgroup_cpu_quota(), 2)
+            self.assertEqual(_detect_available_cpus(), 2)
+
+    def test_available_cpus_falls_back_when_cpu_unknown(self):
+        with patch("core.tuning.Path.read_text", side_effect=OSError), patch(
+            "core.tuning.os.sched_getaffinity", None, create=True
+        ), patch("core.tuning.os.cpu_count", return_value=None):
+            self.assertEqual(_detect_available_cpus(), 4)
 
     def test_semgrep_workers_uses_half_detected_cpus(self):
         with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=10):

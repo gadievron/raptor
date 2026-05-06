@@ -11,6 +11,7 @@ never blocks a session.
 from __future__ import annotations
 
 import logging
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -87,8 +88,37 @@ def _detect_fuzz_parallel() -> int:
     return _detect_half_cpu_parallelism()
 
 
+def _detect_cgroup_cpu_quota() -> int | None:
+    """Return an integer CPU quota from Linux cgroups, if configured."""
+    cpu_max = Path("/sys/fs/cgroup/cpu.max")
+    try:
+        quota_text = cpu_max.read_text(encoding="utf-8").strip().split()
+    except OSError:
+        quota_text = []
+    if len(quota_text) >= 2 and quota_text[0] != "max":
+        try:
+            quota = int(quota_text[0])
+            period = int(quota_text[1])
+        except ValueError:
+            quota = period = 0
+        if quota > 0 and period > 0:
+            return max(1, math.ceil(quota / period))
+
+    quota_path = Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us")
+    period_path = Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
+    try:
+        quota = int(quota_path.read_text(encoding="utf-8").strip())
+        period = int(period_path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    if quota > 0 and period > 0:
+        return max(1, math.ceil(quota / period))
+    return None
+
+
 def _detect_available_cpus() -> int:
-    """Return CPUs available to this process, respecting Linux affinity."""
+    """Return CPUs available to this process, respecting affinity/cgroups."""
+    candidates: list[int] = []
     sched_getaffinity = getattr(os, "sched_getaffinity", None)
     if sched_getaffinity is not None:
         try:
@@ -96,11 +126,19 @@ def _detect_available_cpus() -> int:
         except OSError:
             affinity_cpus = 0
         if affinity_cpus > 0:
-            return affinity_cpus
-    cpus = os.cpu_count()
-    if cpus is None:
+            candidates.append(affinity_cpus)
+
+    cpu_count = os.cpu_count()
+    if cpu_count is not None and cpu_count > 0:
+        candidates.append(cpu_count)
+
+    cgroup_cpus = _detect_cgroup_cpu_quota()
+    if cgroup_cpus is not None:
+        candidates.append(cgroup_cpus)
+
+    if not candidates:
         return 4
-    return cpus
+    return min(candidates)
 
 
 def _detect_half_cpu_parallelism(max_workers: int | None = None) -> int:
