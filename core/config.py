@@ -59,6 +59,21 @@ class RaptorConfig:
     CODEQL_QUERIES_DIR = ENGINE_DIR / "codeql" / "queries"
     CODEQL_SUITES_DIR = ENGINE_DIR / "codeql" / "suites"
 
+    # Additional CodeQL pack roots searched by IRIS Tier 1 discovery
+    # alongside the default `~/.codeql/packages/codeql/` location. Each
+    # entry is a directory containing one or more `<lang>-queries/`
+    # subdirectories matching the standard CodeQL pack layout. Listed
+    # roots take precedence over the default on (lang, CWE) collisions
+    # so RAPTOR-shipped packs can override stdlib queries.
+    #
+    # Default includes the in-repo raptor-python-queries pack so
+    # LocalFlowSource-based queries (covering CLI sources like sys.argv
+    # that the stdlib RemoteFlowSource model excludes) are picked up
+    # without operator configuration.
+    EXTRA_CODEQL_PACK_ROOTS: List[Path] = [
+        REPO_ROOT / "packages" / "llm_analysis" / "codeql_packs",
+    ]
+
     # Timeout Configuration (seconds)
     DEFAULT_TIMEOUT = 1800          # 30 minutes
     SEMGREP_TIMEOUT = 900            # 15 minutes (scan over local rule dirs)

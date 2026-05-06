@@ -56,8 +56,10 @@ class TestDiscovery:
     """`discover_prebuilt_queries` walks installed packs to map (lang, CWE) → path.
 
     Tests build a fake pack tree under tmp_path, monkeypatch the module's
-    `_DEFAULT_PACK_ROOT` to point at it, and bust the lru_cache between
-    cases. Avoiding env vars per project convention.
+    `_DEFAULT_PACK_ROOT` to point at it, AND clear
+    RaptorConfig.EXTRA_CODEQL_PACK_ROOTS so the in-repo
+    raptor-python-queries pack (a real production extras root) doesn't
+    leak into the test's view. Avoiding env vars per project convention.
     """
 
     def setup_method(self):
@@ -66,13 +68,19 @@ class TestDiscovery:
     def teardown_method(self):
         discover_prebuilt_queries.cache_clear()
 
+    def _isolate_default_root(self, monkeypatch, tmp_path):
+        """Point discovery at tmp_path only — no in-repo extras leak."""
+        from core.config import RaptorConfig
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [])
+
     def test_finds_path_problem_query(self, tmp_path, monkeypatch):
         sec = _build_pack_tree(tmp_path, language="python")
         ql = sec / "CWE-078" / "CommandInjection.ql"
         _write_query(ql, kind="path-problem",
                      cwe_tag="external/cwe/cwe-78", qid="py/cmd-injection")
 
-        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        self._isolate_default_root(monkeypatch, tmp_path)
         out = discover_prebuilt_queries()
         assert ("python", "CWE-78") in out
         assert out[("python", "CWE-78")] == ql
@@ -84,7 +92,7 @@ class TestDiscovery:
         # dataflow validation isn't what it does.
         _write_query(ql, kind="problem", cwe_tag="external/cwe/cwe-79")
 
-        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        self._isolate_default_root(monkeypatch, tmp_path)
         out = discover_prebuilt_queries()
         assert ("python", "CWE-79") not in out
 
@@ -96,7 +104,7 @@ class TestDiscovery:
             cwe_tag="external/cwe/cwe-89",
         )
 
-        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        self._isolate_default_root(monkeypatch, tmp_path)
         # Case-insensitive language and CWE; trims whitespace.
         assert discover_prebuilt_query("Python", "cwe-89") is not None
         assert discover_prebuilt_query("PYTHON", " CWE-89 ") is not None
@@ -104,12 +112,12 @@ class TestDiscovery:
 
     def test_lookup_returns_none_for_unknown(self, tmp_path, monkeypatch):
         # Empty pack tree.
-        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        self._isolate_default_root(monkeypatch, tmp_path)
         assert discover_prebuilt_query("python", "CWE-9999") is None
         assert discover_prebuilt_query("cobol", "CWE-78") is None
 
     def test_lookup_empty_inputs(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        self._isolate_default_root(monkeypatch, tmp_path)
         assert discover_prebuilt_query("", "CWE-78") is None
         assert discover_prebuilt_query("python", "") is None
         assert discover_prebuilt_query(None, None) is None
@@ -132,7 +140,7 @@ class TestDiscovery:
             kind="path-problem", cwe_tag="external/cwe/cwe-78",
         )
 
-        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        self._isolate_default_root(monkeypatch, tmp_path)
         assert discover_prebuilt_query("python", "CWE-78") is not None
         assert discover_prebuilt_query("java", "CWE-78") is not None
         assert discover_prebuilt_query("cpp", "CWE-78") is not None
@@ -146,7 +154,7 @@ class TestDiscovery:
         _write_query(a, kind="path-problem", cwe_tag="external/cwe/cwe-78")
         _write_query(b, kind="path-problem", cwe_tag="external/cwe/cwe-78")
 
-        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        self._isolate_default_root(monkeypatch, tmp_path)
         assert discover_prebuilt_query("python", "CWE-78") == a
 
     def test_skips_non_queries_packs(self, tmp_path, monkeypatch):
@@ -159,12 +167,14 @@ class TestDiscovery:
             kind="path-problem", cwe_tag="external/cwe/cwe-78",
         )
 
-        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        self._isolate_default_root(monkeypatch, tmp_path)
         assert discover_prebuilt_query("python", "CWE-78") is None
 
     def test_missing_pack_root_is_handled(self, tmp_path, monkeypatch):
         # Pack root points at a non-existent dir → empty result, no crash.
+        from core.config import RaptorConfig
         monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path / "does-not-exist")
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [])
         out = discover_prebuilt_queries()
         assert out == {}
 
@@ -178,7 +188,7 @@ class TestDiscovery:
         _write_query(ql, kind="path-problem",
                      cwe_tag="external/cwe/cwe-022")
 
-        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        self._isolate_default_root(monkeypatch, tmp_path)
         # Lookup with canonical (unpadded) form must hit the entry.
         assert discover_prebuilt_query("python", "CWE-22") == ql
         # The dict key itself is also canonical.
@@ -205,9 +215,119 @@ class TestDiscovery:
             """
         ))
 
-        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path)
+        self._isolate_default_root(monkeypatch, tmp_path)
         assert discover_prebuilt_query("python", "CWE-78") == ql
         assert discover_prebuilt_query("python", "CWE-77") == ql
+
+
+class TestMultiRoot:
+    """Discovery walks RaptorConfig.EXTRA_CODEQL_PACK_ROOTS before the
+    default. Extras win on (lang, CWE) collisions so RAPTOR-shipped
+    packs (LocalFlowSource etc.) override the bundled stdlib queries."""
+
+    def setup_method(self):
+        discover_prebuilt_queries.cache_clear()
+
+    def teardown_method(self):
+        discover_prebuilt_queries.cache_clear()
+
+    def test_extras_override_default_on_collision(self, tmp_path, monkeypatch):
+        """Same (lang, CWE) in both extras and default → extras wins."""
+        from core.config import RaptorConfig
+
+        # Default root: stdlib-shaped query for CWE-78
+        default_root = tmp_path / "default"
+        default_sec = default_root / "python-queries" / "1.0.0" / "Security"
+        default_sec.mkdir(parents=True)
+        default_ql = default_sec / "CWE-078" / "FromDefault.ql"
+        _write_query(default_ql, kind="path-problem",
+                     cwe_tag="external/cwe/cwe-78", qid="default/cwe-78")
+
+        # Extras root: same CWE, flat layout (in-repo packs ship flat).
+        extras_root = tmp_path / "extras"
+        extras_sec = extras_root / "python-queries" / "Security"
+        extras_sec.mkdir(parents=True)
+        extras_ql = extras_sec / "CWE-078" / "FromExtras.ql"
+        _write_query(extras_ql, kind="path-problem",
+                     cwe_tag="external/cwe/cwe-78", qid="extras/cwe-78")
+
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", default_root)
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [extras_root])
+
+        assert discover_prebuilt_query("python", "CWE-78") == extras_ql
+
+    def test_extras_and_default_merge_distinct_cwes(self, tmp_path, monkeypatch):
+        """Extras and default contribute different CWEs — both surface."""
+        from core.config import RaptorConfig
+
+        default_root = tmp_path / "default"
+        default_sec = default_root / "python-queries" / "1.0.0" / "Security"
+        default_sec.mkdir(parents=True)
+        _write_query(default_sec / "CWE-022" / "PathInjection.ql",
+                     kind="path-problem", cwe_tag="external/cwe/cwe-22")
+
+        extras_root = tmp_path / "extras"
+        extras_sec = extras_root / "python-queries" / "Security"
+        extras_sec.mkdir(parents=True)
+        _write_query(extras_sec / "CWE-094" / "CodeInjection.ql",
+                     kind="path-problem", cwe_tag="external/cwe/cwe-94")
+
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", default_root)
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [extras_root])
+
+        assert discover_prebuilt_query("python", "CWE-22") is not None
+        assert discover_prebuilt_query("python", "CWE-94") is not None
+
+    def test_missing_extras_root_tolerated(self, tmp_path, monkeypatch):
+        """A non-existent extras root must not crash discovery."""
+        from core.config import RaptorConfig
+
+        default_root = tmp_path / "default"
+        default_sec = default_root / "python-queries" / "1.0.0" / "Security"
+        default_sec.mkdir(parents=True)
+        _write_query(default_sec / "CWE-078" / "X.ql",
+                     kind="path-problem", cwe_tag="external/cwe/cwe-78")
+
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", default_root)
+        monkeypatch.setattr(
+            RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS",
+            [tmp_path / "does-not-exist"],
+        )
+
+        # Default root still resolves; missing extras silently skipped.
+        assert discover_prebuilt_query("python", "CWE-78") is not None
+
+    def test_flat_pack_layout_recognised(self, tmp_path, monkeypatch):
+        """In-repo packs use flat layout (<pack>/Security/...) without a
+        version dir. Discovery must recognise both layouts."""
+        from core.config import RaptorConfig
+
+        # Flat layout — used by raptor-python-queries
+        extras_root = tmp_path / "extras"
+        flat_sec = extras_root / "python-queries" / "Security"
+        flat_sec.mkdir(parents=True)
+        ql = flat_sec / "CWE-502" / "Deser.ql"
+        _write_query(ql, kind="path-problem",
+                     cwe_tag="external/cwe/cwe-502")
+
+        monkeypatch.setattr(_dqb, "_DEFAULT_PACK_ROOT", tmp_path / "no-default")
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [extras_root])
+
+        assert discover_prebuilt_query("python", "CWE-502") == ql
+
+    def test_in_repo_pack_discoverable_in_default_config(self):
+        """Smoke-test the production default: discovery actually picks up
+        the RAPTOR-shipped raptor-python-queries pack via the default
+        EXTRA_CODEQL_PACK_ROOTS without any monkeypatching."""
+        # No monkeypatch — use real RaptorConfig defaults
+        out = discover_prebuilt_queries()
+        # CWE-78 must resolve to the in-repo LocalFlowSource query
+        # (extras win over the stdlib CommandInjection.ql on collision).
+        path = discover_prebuilt_query("python", "CWE-78")
+        assert path is not None
+        assert "raptor-python-queries" in str(path) or \
+               "codeql_packs/python-queries" in str(path), \
+               f"expected in-repo pack to win, got {path}"
 
 
 # Tier 2 ---------------------------------------------------------------------

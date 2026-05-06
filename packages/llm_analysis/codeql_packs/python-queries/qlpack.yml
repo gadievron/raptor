@@ -1,0 +1,19 @@
+---
+# RAPTOR-shipped CodeQL pack: companion queries that complement the
+# stdlib `codeql/python-queries` pack with sources beyond the
+# `RemoteFlowSource` model — specifically `commandargs`, `environment`,
+# `stdin`, and `file` threat models. Used by IRIS Tier 1 dataflow
+# validation when a Semgrep finding's claim involves a CLI / env /
+# stdin source that the stdlib `RemoteFlowSource`-based queries miss.
+#
+# Discovery picks this pack up via RaptorConfig.EXTRA_CODEQL_PACK_ROOTS;
+# pack name is distinct from the stdlib's so no resolution collision.
+# Layout is flat (no version dir) since the pack ships in the RAPTOR
+# repo and isn't separately versioned — pack discovery's flat-layout
+# branch handles this case.
+library: false
+name: raptor/python-queries
+version: 0.0.1
+dependencies:
+  codeql/python-all: "*"
+extractor: python

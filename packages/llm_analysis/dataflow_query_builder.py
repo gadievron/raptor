@@ -85,9 +85,27 @@ _ID_RE = re.compile(r"@id\s+([\w.\-/]+)")
 _METADATA_READ_BYTES = 4096
 
 
-def _pack_root() -> Path:
-    """Resolve the CodeQL package root."""
-    return _DEFAULT_PACK_ROOT
+def _pack_roots() -> List[Path]:
+    """Resolve all CodeQL pack roots in priority order.
+
+    Returns extras (from RaptorConfig.EXTRA_CODEQL_PACK_ROOTS) first,
+    then the default. First-seen-wins semantics in the walk mean
+    extras override the default on (lang, CWE) collisions — RAPTOR-
+    shipped packs (e.g. raptor-python-queries with LocalFlowSource
+    coverage) take precedence over the bundled stdlib queries.
+
+    Config import is deferred so this module stays import-safe in
+    contexts (tests, scripts) where core.config may not be fully
+    initialised. Tests can also monkeypatch _DEFAULT_PACK_ROOT
+    directly to point at fixtures.
+    """
+    extras: List[Path] = []
+    try:
+        from core.config import RaptorConfig
+        extras = list(RaptorConfig.EXTRA_CODEQL_PACK_ROOTS or [])
+    except ImportError:
+        pass
+    return extras + [_DEFAULT_PACK_ROOT]
 
 
 def _read_metadata(ql_path: Path) -> Optional[str]:
@@ -157,42 +175,52 @@ def discover_prebuilt_queries() -> Dict[Tuple[str, str], Path]:
     `discover_prebuilt_queries.cache_clear()`.
 
     Multiple .ql files can share a (lang, CWE) key — e.g. both
-    `Security/CWE-078/CommandInjection.ql` and an extension query.
-    First-seen wins (sorted alphabetically), so behaviour is
-    deterministic. Operators with strong opinions about which query
-    handles a given CWE can set `CODEQL_HOME` to a curated install.
+    `Security/CWE-078/CommandInjection.ql` and an extension query, or
+    a RAPTOR override and the stdlib version. First-seen wins, with
+    extras (RaptorConfig.EXTRA_CODEQL_PACK_ROOTS) walked before the
+    default root so RAPTOR-shipped packs win on collisions. Within a
+    single root, iteration is alphabetical for determinism.
     """
     out: Dict[Tuple[str, str], Path] = {}
-    root = _pack_root()
-    if not root.is_dir():
-        logger.info("CodeQL pack root not found: %s", root)
-        return out
-
-    # Walk every <lang>-queries pack. Multiple versions may coexist —
-    # we take queries from all of them; a (lang, CWE) collision picks
-    # the alphabetically-first version which is a stable choice.
-    for pack_dir in sorted(root.iterdir()):
-        if not pack_dir.is_dir():
-            continue
-        language = _language_from_pack_dir(pack_dir)
-        if language is None:
+    for root in _pack_roots():
+        if not root.is_dir():
+            logger.debug("CodeQL pack root not found: %s", root)
             continue
 
-        # Each pack contains one or more `<version>/` dirs — go one
-        # level deeper to find Security/CWE-* directories.
-        for version_dir in sorted(pack_dir.iterdir()):
-            if not version_dir.is_dir():
+        # Walk every <lang>-queries pack. The pack may have a single
+        # version dir (`<root>/<lang>-queries/<version>/Security/...`)
+        # or be laid out flat (`<root>/<lang>-queries/Security/...`)
+        # for in-repo packs that don't ship versioned. Both shapes
+        # are recognised.
+        for pack_dir in sorted(root.iterdir()):
+            if not pack_dir.is_dir():
                 continue
-            security_dir = version_dir / "Security"
-            if not security_dir.is_dir():
+            language = _language_from_pack_dir(pack_dir)
+            if language is None:
                 continue
-            for ql_path in sorted(security_dir.rglob("*.ql")):
-                metadata = _read_metadata(ql_path)
-                if metadata is None or not _is_path_problem(metadata):
-                    continue
-                for cwe in _extract_cwes(metadata):
-                    key = (language, cwe)
-                    out.setdefault(key, ql_path)
+
+            search_dirs: List[Path] = []
+            flat_security = pack_dir / "Security"
+            if flat_security.is_dir():
+                # Flat: <root>/<lang>-queries/Security/...
+                search_dirs.append(flat_security)
+            else:
+                # Versioned: <root>/<lang>-queries/<version>/Security/...
+                for version_dir in sorted(pack_dir.iterdir()):
+                    if not version_dir.is_dir():
+                        continue
+                    security_dir = version_dir / "Security"
+                    if security_dir.is_dir():
+                        search_dirs.append(security_dir)
+
+            for security_dir in search_dirs:
+                for ql_path in sorted(security_dir.rglob("*.ql")):
+                    metadata = _read_metadata(ql_path)
+                    if metadata is None or not _is_path_problem(metadata):
+                        continue
+                    for cwe in _extract_cwes(metadata):
+                        key = (language, cwe)
+                        out.setdefault(key, ql_path)
 
     if out:
         logger.debug(

@@ -18,14 +18,77 @@ this pattern.
 """
 
 import json
+import logging
 import shutil
 import subprocess
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from .base import ToolAdapter, ToolCapability, ToolEvidence, make_sandbox_runner
+
+logger = logging.getLogger(__name__)
+
+
+# Process-scoped cache of pack dirs we've already attempted to install.
+# Pack-install is idempotent and fast on subsequent calls (just reads the
+# lockfile), but skipping the subprocess entirely is cheaper.
+_INSTALLED_PACK_DIRS: Set[Path] = set()
+
+
+def _find_pack_dir(query_path: Path) -> Optional[Path]:
+    """Walk up from a .ql file looking for the containing pack's qlpack.yml.
+
+    Bounds the walk to a few levels — pack layouts are
+    `<pack>/Security/CWE-NNN/file.ql` (3 up) or
+    `<pack>/<version>/Security/CWE-NNN/file.ql` (4 up).
+    """
+    for parent in query_path.resolve().parents[:5]:
+        if (parent / "qlpack.yml").is_file():
+            return parent
+    return None
+
+
+def _ensure_pack_installed(
+    query_path: Path,
+    codeql_bin: str,
+    runner,
+    env: Dict[str, str],
+) -> None:
+    """Run `codeql pack install` on the query's containing pack if needed.
+
+    Skipped when:
+      - The query lives outside any qlpack.yml-owning directory
+      - The pack already has a `codeql-pack.lock.yml` (already installed)
+      - We've already attempted install for this pack in this process
+
+    Failures are logged but do not raise — the subsequent
+    `codeql database analyze` call surfaces a clearer error if the
+    install was actually required.
+    """
+    pack_dir = _find_pack_dir(Path(query_path))
+    if pack_dir is None:
+        return
+    if pack_dir in _INSTALLED_PACK_DIRS:
+        return
+    _INSTALLED_PACK_DIRS.add(pack_dir)
+
+    if (pack_dir / "codeql-pack.lock.yml").is_file():
+        # Already installed — pack-install would be a no-op.
+        return
+
+    try:
+        runner(
+            [codeql_bin, "pack", "install", str(pack_dir)],
+            capture_output=True, text=True,
+            timeout=180, env=env,
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.warning(
+            "codeql pack install on %s failed: %s — analyze may fail with a clearer error",
+            pack_dir, e,
+        )
 
 
 _SYNTAX_EXAMPLE = """\
@@ -172,6 +235,15 @@ class CodeQLAdapter(ToolAdapter):
             make_sandbox_runner(target=self._database_path)
             if self._sandbox else subprocess.run
         )
+
+        # Lazy pack-install: in-repo packs (under EXTRA_CODEQL_PACK_ROOTS)
+        # ship a qlpack.yml but no codeql-pack.lock.yml in fresh checkouts.
+        # Without the lockfile codeql can't resolve the pack's
+        # dependencies (codeql/python-all etc.) when invoking via
+        # absolute query path. Standard installed packs (under
+        # ~/.codeql/packages/codeql/) always have lockfiles already,
+        # so this is a no-op for them.
+        _ensure_pack_installed(query_path, self._codeql_bin, runner, env)
 
         try:
             with TemporaryDirectory(prefix="codeql_prebuilt_") as tmp:
