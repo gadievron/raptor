@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from packages.llm_analysis.cc_dispatch import invoke_cc_simple
+from packages.llm_analysis.finding_adapter import FindingAdapter
 from core.reporting.formatting import format_elapsed as _format_elapsed
 
 logger = logging.getLogger(__name__)
@@ -500,11 +501,12 @@ def orchestrate(
 
     n_analysis_models = len(role_resolution.get("analysis_models", []))
     findings_by_id = {f.get("finding_id"): f for f in findings if f.get("finding_id")}
+    _finding_adapter = FindingAdapter()
     for fid, model_results in _multi_results.items():
         if len(model_results) == 1:
             primary = model_results[0]
         else:
-            primary = _select_primary_result(model_results)
+            primary = _finding_adapter.select_primary_with_error_fallback(model_results)
             primary["multi_model_analyses"] = [
                 {"model": r.get("analysed_by", "?"),
                  "is_exploitable": r.get("is_exploitable"),
@@ -993,36 +995,6 @@ def _build_aggregation_payload(
         "unique_insights": (correlation or {}).get("unique_insights", [])[:20],
         "findings": findings,
     }
-
-
-def _select_primary_result(model_results: List[Dict]) -> Dict:
-    """Pick the best result from multiple models' analyses of the same finding.
-
-    Prefers: exploitable verdicts (conservative), then highest quality score,
-    then highest exploitability_score.
-    """
-    best = model_results[0]
-    for r in model_results[1:]:
-        if "error" in r:
-            continue
-        if "error" in best:
-            best = r
-            continue
-        r_expl = r.get("is_exploitable", False)
-        b_expl = best.get("is_exploitable", False)
-        if r_expl and not b_expl:
-            best = r
-        elif r_expl == b_expl:
-            r_q = r.get("_quality", 1.0)
-            b_q = best.get("_quality", 1.0)
-            if r_q > b_q:
-                best = r
-            elif r_q == b_q:
-                r_s = r.get("exploitability_score", 0) or 0
-                b_s = best.get("exploitability_score", 0) or 0
-                if r_s > b_s:
-                    best = r
-    return dict(best)
 
 
 def _check_self_consistency(results_by_id: Dict[str, Dict]) -> None:

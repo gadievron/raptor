@@ -117,34 +117,40 @@ class TestAnalysisTask:
 
 
 class TestSelectPrimaryResult:
+    """Coverage of FindingAdapter.select_primary, the substrate-backed
+    replacement for the legacy _select_primary_result function.
+
+    PR3 Option A migrated /agentic's selection logic to the multi-model
+    substrate. Behaviour is preserved: prefer is_exploitable=True, then
+    higher _quality, then higher exploitability_score.
+
+    Substrate's select_primary expects valid (non-error) inputs — error
+    filtering is the caller's responsibility (in the orchestrator the
+    filter happens upstream of this call).
+    """
+
+    def _select(self, results):
+        from packages.llm_analysis.finding_adapter import FindingAdapter
+        return FindingAdapter().select_primary(results)
+
     def test_prefers_exploitable(self):
-        from packages.llm_analysis.orchestrator import _select_primary_result
         r1 = {"is_exploitable": False, "exploitability_score": 0.9, "analysed_by": "m1"}
         r2 = {"is_exploitable": True, "exploitability_score": 0.5, "analysed_by": "m2"}
-        assert _select_primary_result([r1, r2])["analysed_by"] == "m2"
+        assert self._select([r1, r2])["analysed_by"] == "m2"
 
     def test_prefers_higher_quality(self):
-        from packages.llm_analysis.orchestrator import _select_primary_result
         r1 = {"is_exploitable": True, "_quality": 0.5, "analysed_by": "m1"}
         r2 = {"is_exploitable": True, "_quality": 0.9, "analysed_by": "m2"}
-        assert _select_primary_result([r1, r2])["analysed_by"] == "m2"
+        assert self._select([r1, r2])["analysed_by"] == "m2"
 
     def test_prefers_higher_score_on_tie(self):
-        from packages.llm_analysis.orchestrator import _select_primary_result
         r1 = {"is_exploitable": True, "_quality": 1.0, "exploitability_score": 0.7, "analysed_by": "m1"}
         r2 = {"is_exploitable": True, "_quality": 1.0, "exploitability_score": 0.9, "analysed_by": "m2"}
-        assert _select_primary_result([r1, r2])["analysed_by"] == "m2"
-
-    def test_skips_errors(self):
-        from packages.llm_analysis.orchestrator import _select_primary_result
-        r1 = {"error": "failed", "analysed_by": "m1"}
-        r2 = {"is_exploitable": False, "analysed_by": "m2"}
-        assert _select_primary_result([r1, r2])["analysed_by"] == "m2"
+        assert self._select([r1, r2])["analysed_by"] == "m2"
 
     def test_single_result(self):
-        from packages.llm_analysis.orchestrator import _select_primary_result
         r1 = {"is_exploitable": True, "analysed_by": "m1"}
-        result = _select_primary_result([r1])
+        result = self._select([r1])
         assert result["analysed_by"] == "m1"
 
 
