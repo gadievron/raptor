@@ -275,19 +275,20 @@ class TestNulByteDefensiveHandling:
     catches the resulting ValueError and surfaces a clean error."""
 
     def _load_module(self):
-        # Use spec-based loading (load_module is deprecated in 3.13+).
+        # The root conftest.py sets _RAPTOR_TRUSTED=1 for the whole
+        # pytest session, so the script's trust-marker check passes
+        # during module load. Do NOT pop it here — that would leak
+        # into other test files that subprocess-invoke libexec scripts
+        # (e.g. packages/exploit_feasibility/tests/test_smt_path.py)
+        # and break their tests via env cross-contamination.
         import importlib.util
         from importlib.machinery import SourceFileLoader
 
-        os.environ["_RAPTOR_TRUSTED"] = "1"
-        try:
-            loader = SourceFileLoader("raptor_understand", str(LIBEXEC))
-            spec = importlib.util.spec_from_loader(loader.name, loader)
-            mod = importlib.util.module_from_spec(spec)
-            loader.exec_module(mod)
-            return mod
-        finally:
-            os.environ.pop("_RAPTOR_TRUSTED", None)
+        loader = SourceFileLoader("raptor_understand", str(LIBEXEC))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+        return mod
 
     def test_path_resolve_nul_caught_in_main(self, tmp_path, monkeypatch):
         # Drive main() with a NUL in --out and verify it returns 1
