@@ -43,14 +43,19 @@ _DEFAULTS = {
 }
 
 
-def _detect_ram_mb() -> int:
-    """25% of system RAM, clamped to [2048, 16384] MB."""
+def _detect_total_ram_mb() -> int:
+    """Return total system RAM in MB, or a conservative fallback."""
     try:
         pages = os.sysconf("SC_PHYS_PAGES")
         page_size = os.sysconf("SC_PAGE_SIZE")
-        total_mb = pages * page_size // (1024 * 1024)
     except (ValueError, OSError):
-        return 8192
+        return 32768
+    return pages * page_size // (1024 * 1024)
+
+
+def _detect_ram_mb() -> int:
+    """25% of system RAM, clamped to [2048, 16384] MB."""
+    total_mb = _detect_total_ram_mb()
     return max(2048, min(total_mb // 4, 16384))
 
 
@@ -72,7 +77,9 @@ def _detect_semgrep_workers() -> int:
 
 def _detect_codeql_workers() -> int:
     """Resolve a conservative parallel CodeQL database-build count."""
-    return _detect_half_cpu_parallelism()
+    per_worker_ram_mb = _detect_ram_mb()
+    ram_limited_workers = max(1, _detect_total_ram_mb() // per_worker_ram_mb)
+    return _detect_half_cpu_parallelism(max_workers=min(8, ram_limited_workers))
 
 
 def _detect_fuzz_parallel() -> int:
@@ -80,9 +87,28 @@ def _detect_fuzz_parallel() -> int:
     return _detect_half_cpu_parallelism()
 
 
-def _detect_half_cpu_parallelism() -> int:
-    cpus = os.cpu_count() or 4
-    return max(1, cpus // 2)
+def _detect_available_cpus() -> int:
+    """Return CPUs available to this process, respecting Linux affinity."""
+    sched_getaffinity = getattr(os, "sched_getaffinity", None)
+    if sched_getaffinity is not None:
+        try:
+            affinity_cpus = len(sched_getaffinity(0))
+        except OSError:
+            affinity_cpus = 0
+        if affinity_cpus > 0:
+            return affinity_cpus
+    cpus = os.cpu_count()
+    if cpus is None:
+        return 4
+    return cpus
+
+
+def _detect_half_cpu_parallelism(max_workers: int | None = None) -> int:
+    cpus = _detect_available_cpus()
+    workers = max(1, cpus // 2)
+    if max_workers is not None:
+        workers = min(workers, max_workers)
+    return workers
 
 
 _AUTO_RESOLVERS = {
@@ -178,10 +204,10 @@ def _create_default_file(path: Path) -> None:
         comments = {
             "codeql_ram_mb": "MB of RAM for CodeQL analysis",
             "codeql_threads": "CPUs for CodeQL (0 = all available)",
-            "max_semgrep_workers": "parallel Semgrep scans (auto = half CPUs)",
-            "max_codeql_workers": "parallel CodeQL database builds (auto = half CPUs)",
+            "max_semgrep_workers": "parallel Semgrep scans (auto = half available CPUs)",
+            "max_codeql_workers": "parallel CodeQL DB builds (auto = half available CPUs, capped)",
             "max_agentic_parallel": "parallel Claude Code agents for analysis",
-            "max_fuzz_parallel": "ceiling for AFL++ parallel instances (auto = half CPUs)",
+            "max_fuzz_parallel": "ceiling for AFL++ parallel instances (auto = half available CPUs)",
         }
         keys = list(_DEFAULTS.keys())
         entries = []

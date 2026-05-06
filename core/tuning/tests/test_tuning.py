@@ -73,7 +73,7 @@ class TestLoadTuning(unittest.TestCase):
         with TemporaryDirectory() as d:
             p = Path(d) / "tuning.json"
             p.write_text(json.dumps({"max_semgrep_workers": "auto"}))
-            with patch("core.tuning.os.cpu_count", return_value=16):
+            with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=16):
                 t = load_tuning(p)
             self.assertEqual(t.max_semgrep_workers, 8)
 
@@ -81,7 +81,7 @@ class TestLoadTuning(unittest.TestCase):
         with TemporaryDirectory() as d:
             p = Path(d) / "tuning.json"
             p.write_text(json.dumps({"max_semgrep_workers": "auto"}))
-            with patch("core.tuning.os.cpu_count", return_value=None):
+            with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=None):
                 t = load_tuning(p)
             self.assertEqual(t.max_semgrep_workers, 2)
 
@@ -89,7 +89,7 @@ class TestLoadTuning(unittest.TestCase):
         with TemporaryDirectory() as d:
             p = Path(d) / "tuning.json"
             p.write_text(json.dumps({"max_codeql_workers": "auto"}))
-            with patch("core.tuning.os.cpu_count", return_value=12):
+            with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=12), patch("core.tuning._detect_total_ram_mb", return_value=98304), patch("core.tuning._detect_ram_mb", return_value=16384):
                 t = load_tuning(p)
             self.assertEqual(t.max_codeql_workers, 6)
 
@@ -97,7 +97,7 @@ class TestLoadTuning(unittest.TestCase):
         with TemporaryDirectory() as d:
             p = Path(d) / "tuning.json"
             p.write_text(json.dumps({"max_fuzz_parallel": "auto"}))
-            with patch("core.tuning.os.cpu_count", return_value=12):
+            with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=12):
                 t = load_tuning(p)
             self.assertEqual(t.max_fuzz_parallel, 6)
 
@@ -109,7 +109,7 @@ class TestLoadTuning(unittest.TestCase):
                 "max_codeql_workers": "auto",
                 "max_fuzz_parallel": "auto",
             }))
-            with patch("core.tuning.os.cpu_count", return_value=8):
+            with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=8):
                 t = load_tuning(p)
             self.assertEqual(t.max_semgrep_workers, 4)
             self.assertEqual(t.max_codeql_workers, 4)
@@ -122,7 +122,7 @@ class TestLoadTuning(unittest.TestCase):
                 "max_codeql_workers": "auto",
                 "max_fuzz_parallel": "auto",
             }))
-            with patch("core.tuning.os.cpu_count", return_value=None):
+            with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=None):
                 t = load_tuning(p)
             self.assertEqual(t.max_codeql_workers, 2)
             self.assertEqual(t.max_fuzz_parallel, 2)
@@ -237,33 +237,43 @@ class TestAutoDetection(unittest.TestCase):
         self.assertEqual(_detect_threads(), 0)
 
     def test_semgrep_workers_uses_half_detected_cpus(self):
-        with patch("core.tuning.os.cpu_count", return_value=10):
+        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=10):
             self.assertEqual(_detect_semgrep_workers(), 5)
 
+    def test_semgrep_workers_respects_affinity_before_host_cpu_count(self):
+        with patch("core.tuning.os.sched_getaffinity", return_value=set(range(8)), create=True), patch("core.tuning.os.cpu_count", return_value=64):
+            self.assertEqual(_detect_semgrep_workers(), 4)
+
     def test_semgrep_workers_has_minimum_and_unknown_cpu_fallback(self):
-        with patch("core.tuning.os.cpu_count", return_value=1):
+        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=1):
             self.assertEqual(_detect_semgrep_workers(), 1)
-        with patch("core.tuning.os.cpu_count", return_value=None):
+        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=None):
             self.assertEqual(_detect_semgrep_workers(), 2)
 
     def test_codeql_workers_uses_half_detected_cpus(self):
-        with patch("core.tuning.os.cpu_count", return_value=16):
+        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=16), patch("core.tuning._detect_total_ram_mb", return_value=262144), patch("core.tuning._detect_ram_mb", return_value=16384):
             self.assertEqual(_detect_codeql_workers(), 8)
 
+    def test_codeql_workers_has_memory_and_hard_ceiling(self):
+        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=256), patch("core.tuning._detect_total_ram_mb", return_value=262144), patch("core.tuning._detect_ram_mb", return_value=16384):
+            self.assertEqual(_detect_codeql_workers(), 8)
+        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=64), patch("core.tuning._detect_total_ram_mb", return_value=32768), patch("core.tuning._detect_ram_mb", return_value=16384):
+            self.assertEqual(_detect_codeql_workers(), 2)
+
     def test_codeql_workers_has_minimum_and_unknown_cpu_fallback(self):
-        with patch("core.tuning.os.cpu_count", return_value=1):
+        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=1):
             self.assertEqual(_detect_codeql_workers(), 1)
-        with patch("core.tuning.os.cpu_count", return_value=None):
+        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=None):
             self.assertEqual(_detect_codeql_workers(), 2)
 
     def test_fuzz_parallel_uses_half_detected_cpus(self):
-        with patch("core.tuning.os.cpu_count", return_value=16):
+        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=16):
             self.assertEqual(_detect_fuzz_parallel(), 8)
 
     def test_fuzz_parallel_has_minimum_and_unknown_cpu_fallback(self):
-        with patch("core.tuning.os.cpu_count", return_value=1):
+        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=1):
             self.assertEqual(_detect_fuzz_parallel(), 1)
-        with patch("core.tuning.os.cpu_count", return_value=None):
+        with patch("core.tuning.os.sched_getaffinity", None, create=True), patch("core.tuning.os.cpu_count", return_value=None):
             self.assertEqual(_detect_fuzz_parallel(), 2)
 
 

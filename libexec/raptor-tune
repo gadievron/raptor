@@ -26,7 +26,7 @@ if not (os.environ.get("CLAUDECODE")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.json import load_json_with_comments
-from core.tuning import load_tuning, _DEFAULTS
+from core.tuning import load_tuning, _DEFAULTS, _detect_available_cpus
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _TUNING_PATH = _REPO_ROOT / "tuning.json"
@@ -39,7 +39,7 @@ def _system_info() -> dict:
         total_ram_mb = pages * page_size // (1024 * 1024)
     except (ValueError, OSError):
         total_ram_mb = None
-    cpus = os.cpu_count()
+    cpus = _detect_available_cpus()
     return {"total_ram_mb": total_ram_mb, "cpus": cpus}
 
 
@@ -48,11 +48,13 @@ def _max_values() -> dict:
     info = _system_info()
     cpus = info["cpus"] or 4
     ram = info["total_ram_mb"]
+    codeql_ram_mb = max(2048, min(ram // 2, 32768)) if ram else 16384
+    codeql_worker_ram_cap = max(1, ram // codeql_ram_mb) if ram else 1
     return {
-        "codeql_ram_mb": max(2048, min(ram // 2, 32768)) if ram else 16384,
+        "codeql_ram_mb": codeql_ram_mb,
         "codeql_threads": cpus,
         "max_semgrep_workers": max(2, cpus),
-        "max_codeql_workers": max(1, cpus // 2),
+        "max_codeql_workers": max(1, min(cpus // 2, 8, codeql_worker_ram_cap)),
         "max_agentic_parallel": max(2, cpus),
         "max_fuzz_parallel": max(1, cpus // 2),
     }
@@ -86,10 +88,10 @@ _PROFILES = {
 _COMMENTS = {
     "codeql_ram_mb": "MB of RAM for CodeQL analysis",
     "codeql_threads": "CPUs for CodeQL (0 = all available)",
-    "max_semgrep_workers": "parallel Semgrep scans (auto = half CPUs)",
-    "max_codeql_workers": "parallel CodeQL database builds (auto = half CPUs)",
+    "max_semgrep_workers": "parallel Semgrep scans (auto = half available CPUs)",
+    "max_codeql_workers": "parallel CodeQL DB builds (auto = half available CPUs, capped)",
     "max_agentic_parallel": "parallel Claude Code agents for analysis",
-    "max_fuzz_parallel": "ceiling for AFL++ parallel instances (auto = half CPUs)",
+    "max_fuzz_parallel": "ceiling for AFL++ parallel instances (auto = half available CPUs)",
 }
 
 _KEY_ORDER = [
