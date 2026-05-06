@@ -519,9 +519,27 @@ def _match_to_inventory(path: str, inventory_paths: set) -> Optional[str]:
     if len(matches) == 1:
         return matches[0]
 
-    # Try suffix matching (tool may report relative to different root)
+    # Try suffix matching (tool may report relative to different root).
+    # Pre-fix this used plain `str.endswith` — produced false matches
+    # whenever the shorter path's first component happened to be a
+    # SUFFIX of a longer path's component (not a separate component):
+    #   * `foo.py` matched `src/notfoo.py` (the latter ENDS WITH the
+    #     literal string "foo.py").
+    #   * `lib/x.py` matched `sublib/x.py` (the latter ends with
+    #     "lib/x.py" because "sublib" ends with "lib").
+    # Path-component-aware match: the suffix must align on a `/`
+    # separator boundary OR equal the whole longer path.
+    def _path_suffix_match(longer: str, shorter: str) -> bool:
+        if longer == shorter:
+            return True
+        if not longer.endswith(shorter):
+            return False
+        # Char immediately preceding the suffix must be a separator
+        # so the boundary aligns on a path component.
+        return longer[len(longer) - len(shorter) - 1] == "/"
+
     for inv_path in inventory_paths:
-        if inv_path.endswith(path) or path.endswith(inv_path):
+        if _path_suffix_match(inv_path, path) or _path_suffix_match(path, inv_path):
             return inv_path
 
     return None
