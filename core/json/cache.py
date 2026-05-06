@@ -53,6 +53,15 @@ logger = logging.getLogger(__name__)
 TTL_FOREVER = -1
 
 
+# Reaper freshness threshold. Tempfiles whose mtime is within this
+# many seconds are assumed to be in-flight writes from another
+# concurrent writer, not crash-orphans. 60s is comfortably longer
+# than any realistic write window (single-key json.dump → fsync →
+# rename completes in milliseconds even on slow storage) and tight
+# enough that real crash-orphans get cleaned on the next session.
+_REAP_FRESHNESS_S = 60.0
+
+
 # Sentinel for `try_get` — distinguishes "no entry" from "entry
 # exists but value is None". `get()` collapses both to None which
 # forced consumers (notably packages.nvd.client) to invent ad-hoc
@@ -131,6 +140,17 @@ class JsonCache:
         across many runs (each run has a different pid, so old orphans
         are never overwritten).
 
+        Skips tempfiles modified within ``_REAP_FRESHNESS_S`` seconds.
+        Pre-fix the reaper unlinked every tempfile shape it found,
+        including those another concurrent JsonCache instance (in
+        another process or another thread) was actively writing to —
+        race: writer A opens `tmp.<pidA>.<tidA>`, writer B's
+        constructor scans, finds A's tempfile, treats it as a
+        crash-orphan, unlinks it mid-write. A's subsequent
+        `tmp.replace(path)` then fails with FileNotFoundError, the
+        cache write is lost, and the operator sees a confused
+        warning instead of the cached entry.
+
         Best-effort: any remove failure is ignored. Runs once at
         construction time; not in the hot path.
         """
@@ -140,6 +160,7 @@ class JsonCache:
             entries = list(self._root.rglob("*.tmp.*"))
         except OSError:
             return
+        now = time.time()
         for entry in entries:
             # Defensive: only target files whose suffix matches the
             # tempfile shape we write — either legacy ``.tmp.<pid>``
@@ -151,11 +172,20 @@ class JsonCache:
             if len(parts) != 2:
                 continue
             tail = parts[1].split(".")
-            if 1 <= len(tail) <= 2 and all(s.isdigit() for s in tail):
-                try:
-                    entry.unlink()
-                except OSError:
-                    pass
+            if not (1 <= len(tail) <= 2 and all(s.isdigit() for s in tail)):
+                continue
+            # Skip if mtime is recent — concurrent writer is in
+            # the middle of producing this file.
+            try:
+                mtime = entry.stat().st_mtime
+            except OSError:
+                continue
+            if now - mtime < _REAP_FRESHNESS_S:
+                continue
+            try:
+                entry.unlink()
+            except OSError:
+                pass
 
     # ------------------------------------------------------------------
     # Public API

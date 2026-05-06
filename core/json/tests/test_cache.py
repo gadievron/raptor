@@ -148,23 +148,49 @@ def test_orphan_tempfiles_are_reaped_at_construction(tmp_path: Path) -> None:
     so the dir doesn't accumulate orphans across runs. Both the
     legacy single-pid format and the current pid.tid format are
     recognised.
+
+    Test files are aged past `_REAP_FRESHNESS_S` so the
+    concurrent-writer-protection (batch 193) doesn't skip them.
     """
+    import os
     # Legacy ``.tmp.<pid>`` shape (orphans from earlier code on disk).
-    (tmp_path / "k.tmp.99999").write_text('{"partial": true}')
+    legacy = tmp_path / "k.tmp.99999"
+    legacy.write_text('{"partial": true}')
     (tmp_path / "vulns").mkdir()
-    (tmp_path / "vulns" / "GHSA-xxx.tmp.12345").write_text('{"x": 1}')
+    inner = tmp_path / "vulns" / "GHSA-xxx.tmp.12345"
+    inner.write_text('{"x": 1}')
     # Current ``.tmp.<pid>.<tid>`` shape (what put() writes now).
-    (tmp_path / "current.tmp.12345.67890").write_text('{"partial": true}')
+    current = tmp_path / "current.tmp.12345.67890"
+    current.write_text('{"partial": true}')
     # Also a file with a similar but non-matching suffix — must NOT be reaped.
     decoy = tmp_path / "config.tmp.json"
     decoy.write_text("user data")
 
+    # Age the orphans past the freshness threshold so the
+    # concurrent-writer-protection added in batch 193 doesn't
+    # skip them.
+    old = time.time() - 3600
+    for f in (legacy, inner, current):
+        os.utime(f, (old, old))
+
     JsonCache(root=tmp_path)   # construction triggers the sweep
 
-    assert not (tmp_path / "k.tmp.99999").exists()
-    assert not (tmp_path / "vulns" / "GHSA-xxx.tmp.12345").exists()
-    assert not (tmp_path / "current.tmp.12345.67890").exists()
+    assert not legacy.exists()
+    assert not inner.exists()
+    assert not current.exists()
     assert decoy.exists(), "must not reap files whose suffix isn't .tmp.<digits>[.<digits>]"
+
+
+def test_orphan_tempfile_recent_is_skipped(tmp_path: Path) -> None:
+    """A tempfile modified seconds ago is presumed to belong to a
+    concurrent in-flight writer in another process / thread — DON'T
+    reap it. Pre-fix the constructor unlinked any tempfile shape it
+    found, racing the writer's tmp.replace() into FileNotFoundError."""
+    fresh = tmp_path / "live.tmp.99999.11111"
+    fresh.write_text('{"in_progress": true}')
+    # Default mtime is now — within the freshness window.
+    JsonCache(root=tmp_path)
+    assert fresh.exists(), "fresh tempfile (concurrent writer) must survive"
 
 
 def test_concurrent_threads_same_key_no_torn_writes(tmp_path: Path) -> None:
