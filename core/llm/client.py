@@ -602,6 +602,13 @@ class LLMClient:
             task_type: Task type for model selection
             **kwargs: Additional generation parameters
                 model_config: Optional ModelConfig to override default model selection
+                exclude_fallback_to: Optional set[str] of model names that
+                    should NOT be selected as fallback targets, even if
+                    configured globally as fallbacks. Used by multi-model
+                    dispatch to prevent silent fallback into another active
+                    model in the dispatch set (which would create duplicate
+                    analysed_by entries in the model panel). Cross-family
+                    fallbacks not in the set still work normally.
 
         Returns:
             LLMResponse with generated content
@@ -617,6 +624,14 @@ class LLMClient:
 
         # Get appropriate model for task (priority: explicit model_config > task_type > primary)
         model_config = kwargs.pop('model_config', None)
+        # exclude_fallback_to: optional set[str] of model names that should
+        # NOT be fallback targets even if configured globally. Used by
+        # multi-model dispatch to prevent a primary's failure from silently
+        # falling back into another model that's already in the active
+        # dispatch set — which would create a duplicate (the same model
+        # showing up under two slots in the model panel). Pop here so the
+        # value doesn't propagate to providers via **kwargs.
+        exclude_fallback_to: Optional[set] = kwargs.pop('exclude_fallback_to', None)
         if not model_config:
             if task_type:
                 model_config = self.config.get_model_for_task(task_type)
@@ -703,6 +718,10 @@ class LLMClient:
                     if is_local_primary == is_local_fallback:
                         # Skip if same as primary (already trying it)
                         if fallback.model_name != model_config.model_name:
+                            # Skip if caller marked this name as already-active
+                            # in a parallel dispatch (multi-model duplicate guard).
+                            if exclude_fallback_to and fallback.model_name in exclude_fallback_to:
+                                continue
                             models_to_try.append(fallback)
 
             last_error = None
@@ -806,6 +825,9 @@ class LLMClient:
             task_type: Task type for model selection
             **kwargs: Additional generation parameters
                 model_config: Optional ModelConfig to override default model selection
+                exclude_fallback_to: Optional set[str] of model names that
+                    should NOT be selected as fallback targets. Same
+                    semantics as ``generate``.
 
         Returns:
             StructuredResponse with result dict, raw content, cost, and metadata.
@@ -822,6 +844,8 @@ class LLMClient:
 
         # Get appropriate model (priority: explicit model_config > task_type > primary)
         model_config = kwargs.pop('model_config', None)
+        # See ``generate`` for the rationale on exclude_fallback_to.
+        exclude_fallback_to: Optional[set] = kwargs.pop('exclude_fallback_to', None)
         if not model_config:
             if task_type:
                 model_config = self.config.get_model_for_task(task_type)
@@ -903,6 +927,9 @@ class LLMClient:
                     is_local_fallback = fallback.provider.lower() == "ollama"
                     if is_local_primary == is_local_fallback:
                         if fallback.model_name != model_config.model_name:
+                            # Multi-model duplicate guard — see ``generate``.
+                            if exclude_fallback_to and fallback.model_name in exclude_fallback_to:
+                                continue
                             models_to_try.append(fallback)
 
             last_error = None

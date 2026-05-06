@@ -20,7 +20,7 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from packages.llm_analysis.cc_dispatch import invoke_cc_simple
 from packages.llm_analysis.finding_adapter import FindingAdapter
@@ -368,11 +368,27 @@ def orchestrate(
         from core.llm.client import LLMClient
         client = LLMClient(llm_config)
 
+        # Multi-model duplicate guard: when a primary model fails and
+        # the client silently falls back, the fallback target may
+        # already be one of the OTHER active analysis models — and the
+        # multi-model panel collapses to duplicate analysed_by entries
+        # (e.g. ``[pro, flash]`` becomes ``[flash, flash]`` if pro
+        # falls back to flash). Pass the names of all active analysis
+        # models to the client so it skips them as fallback targets
+        # for any one dispatch. Other fallback targets (cross-family
+        # resilience) still work normally.
+        _active_analysis_names = {
+            m.model_name for m in role_resolution.get("analysis_models", [])
+            if m and getattr(m, "model_name", None)
+        }
+
         def dispatch_fn(prompt, schema, system_prompt, temperature, model):
+            other_active = _active_analysis_names - {model.model_name}
             if schema:
                 response = client.generate_structured(
                     prompt=prompt, schema=schema, system_prompt=system_prompt,
                     model_config=model, temperature=temperature,
+                    exclude_fallback_to=other_active,
                 )
                 result = response.result
                 quality = 1.0
@@ -390,6 +406,7 @@ def orchestrate(
                 response = client.generate(
                     prompt=prompt, system_prompt=system_prompt,
                     model_config=model, temperature=temperature,
+                    exclude_fallback_to=other_active,
                 )
                 return DispatchResult(
                     result={"content": response.content}, cost=response.cost,
@@ -520,6 +537,24 @@ def orchestrate(
             if key not in primary and source.get(key) is not None:
                 primary[key] = source.get(key)
         results_by_id[fid] = primary
+
+    # Multi-model collapse detection. The exclude_fallback_to guard above
+    # prevents most cases where a primary's failure routes silently into
+    # another active analysis model. The corner case it doesn't catch:
+    # multiple primaries failing concurrently and converging on the same
+    # external fallback (e.g., both pro and flash falling back to haiku).
+    # Surface that here so operators don't silently get a single-model
+    # result labelled as multi-model.
+    if n_analysis_models > 1:
+        collapsed = _detect_multi_model_collapse(results_by_id, n_analysis_models)
+        if collapsed:
+            logger.warning(
+                f"Multi-model collapse: {len(collapsed)}/"
+                f"{len(results_by_id)} finding(s) had fewer than "
+                f"{n_analysis_models} distinct contributors. Likely caused "
+                f"by silent fallback during model failure. First few: "
+                f"{collapsed[:3]}"
+            )
 
     # --- IRIS-style dataflow validation (opt-in via --validate-dataflow) ---
     # For Semgrep findings where the LLM claimed a dataflow path but no
@@ -995,6 +1030,35 @@ def _build_aggregation_payload(
         "unique_insights": (correlation or {}).get("unique_insights", [])[:20],
         "findings": findings,
     }
+
+
+def _detect_multi_model_collapse(
+    results_by_id: Dict[str, Dict],
+    n_analysis_models: int,
+) -> List[Tuple[str, List[str]]]:
+    """Identify findings whose multi_model_analyses has fewer DISTINCT
+    contributors than the requested model count.
+
+    Returns a list of ``(finding_id, sorted_distinct_models)`` for each
+    such finding. Empty if every multi-model finding has the expected
+    number of contributors.
+
+    Helps operators spot silent-fallback failures where multiple primary
+    models converged on the same external fallback model.
+    """
+    collapsed: List[Tuple[str, List[str]]] = []
+    for fid, item in results_by_id.items():
+        analyses = item.get("multi_model_analyses")
+        if not isinstance(analyses, list) or not analyses:
+            continue
+        distinct = {
+            a.get("model") for a in analyses if isinstance(a, dict)
+        }
+        distinct.discard("?")
+        distinct.discard(None)
+        if len(distinct) < n_analysis_models:
+            collapsed.append((fid, sorted(distinct)))
+    return collapsed
 
 
 def _check_self_consistency(results_by_id: Dict[str, Dict]) -> None:
