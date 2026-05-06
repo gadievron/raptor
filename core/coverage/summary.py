@@ -435,6 +435,14 @@ def compute_project_summary(project) -> Optional[Dict[str, Any]]:
                 "tool": tool,
                 "files_examined": set(),
                 "functions_analysed": [],
+                # Maintain a parallel seen-set for the
+                # functions_analysed list. Pre-fix the dedup check
+                # rebuilt a fresh set comprehension over the entire
+                # list on EVERY incoming entry — O(N²) for N total
+                # functions across all records. Projects with a few
+                # thousand functions across multiple runs spent
+                # multiple seconds in this single line.
+                "_func_keys": set(),
                 "rules_applied": set(),
                 "packs": set(),
                 "files_failed": [],
@@ -444,8 +452,9 @@ def compute_project_summary(project) -> Optional[Dict[str, Any]]:
             m["files_examined"].add(f)
         for fa in record.get("functions_analysed", []):
             key = (fa.get("file", ""), fa.get("function", ""))
-            if key not in {(x.get("file"), x.get("function")) for x in m["functions_analysed"]}:
+            if key not in m["_func_keys"]:
                 m["functions_analysed"].append(fa)
+                m["_func_keys"].add(key)
         for r in record.get("rules_applied", []):
             m["rules_applied"].add(r)
         for p in record.get("packs", []):
