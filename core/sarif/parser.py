@@ -6,6 +6,7 @@ Utilities for working with SARIF (Static Analysis Results Interchange Format) fi
 including validation, deduplication, and merging.
 """
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -359,10 +360,35 @@ def parse_sarif_findings(sarif_path: Path) -> List[Dict[str, Any]]:
                 rules_by_id[rid] = {"cwe_id": cwe_id}
 
         for result in results:
+            # finding_id resolution:
+            #   1. SARIF tool-supplied fingerprint (best — survives
+            #      reformatting / line-shifts that the tool tracked).
+            #   2. ruleId (cheap, but collides across multiple findings
+            #      of the same rule type — only useful when the run has
+            #      one finding per rule).
+            #   3. Deterministic hash of the canonicalised result.
+            #
+            # Pre-fix the fallback was `str(hash(json.dumps(result)))`.
+            # Two problems:
+            #   * Python's `hash()` is randomised per-process by default
+            #     (PYTHONHASHSEED) for security against hash-flooding,
+            #     so the SAME finding produced a DIFFERENT finding_id
+            #     on every invocation. Downstream consumers tracking
+            #     findings across runs (deduplication, regression
+            #     detection, fix verification) couldn't correlate.
+            #   * `json.dumps` without `sort_keys=True` is also non-
+            #     deterministic across dict insertion orders.
+            # `hashlib.sha256(json.dumps(..., sort_keys=True))` fixes
+            # both: identical input always yields the same hex digest.
+            try:
+                canonical = json.dumps(result, sort_keys=True, default=str)
+            except (TypeError, ValueError):
+                canonical = repr(sorted(result.items()))
+            sha = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             finding_id = (
                 (result.get("fingerprints") or {}).get("matchBasedId/v1")
                 or result.get("ruleId")
-                or str(hash(json.dumps(result)))
+                or sha
             )
 
             loc = (result.get("locations") or [{}])[0].get("physicalLocation", {})
