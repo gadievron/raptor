@@ -196,21 +196,70 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     return rc
 
 
+_active_dispatcher = None
+
+
+def _get_or_start_dispatcher():
+    """Lazy single dispatcher per ``raptor.py`` invocation.
+
+    Phase B credential-isolation: when this is called, the spawned
+    analysis script gets ``RAPTOR_LLM_SOCKET`` + a per-spawn token
+    via ``spawn_worker``, and ``core/llm/providers.py`` routes its
+    SDK calls through the dispatcher. API keys are still in env (for
+    fallback) until Phase C drops the passthrough.
+    """
+    global _active_dispatcher
+    if _active_dispatcher is not None:
+        return _active_dispatcher
+    try:
+        from core.llm.dispatcher.server import LLMDispatcher
+        import uuid, atexit
+        _active_dispatcher = LLMDispatcher(run_id=f"raptor-{uuid.uuid4().hex[:8]}")
+        atexit.register(_active_dispatcher.shutdown)
+        return _active_dispatcher
+    except Exception as exc:
+        # Failure to start the dispatcher must not break the run —
+        # fall through to the env-direct path. The credential leak
+        # channel stays open in this case but is no worse than today.
+        import logging
+        logging.getLogger(__name__).warning(
+            "credential-isolation dispatcher failed to start, falling back "
+            "to env-direct: %s", exc,
+        )
+        return None
+
+
 def _run_script(script_path: Path, args: list) -> int:
     """
     Run a RAPTOR script with given arguments.
-    
+
     Args:
         script_path: Path to the Python script to run
         args: Command-line arguments to pass to the script
-        
+
     Returns:
         Exit code from the script
     """
     cmd = [sys.executable, str(script_path)] + args
-    
+
     try:
         from core.config import RaptorConfig
+        # Phase B: opt the spawn into the credential-isolation
+        # dispatcher. Worker env still has API keys (fallback path
+        # exists until Phase C); ``RAPTOR_LLM_SOCKET`` and
+        # ``RAPTOR_LLM_TOKEN_FD`` direct the worker's SDK calls
+        # through the dispatcher when present.
+        dispatcher = _get_or_start_dispatcher()
+        if dispatcher is not None:
+            from core.llm.dispatcher.spawn import spawn_worker
+            proc = spawn_worker(
+                dispatcher,
+                cmd=cmd,
+                label=script_path.name,
+                env=RaptorConfig.get_llm_env(),
+            )
+            return proc.wait()
+        # Fallback: pre-Phase-B behaviour, env-direct.
         result = subprocess.run(cmd, env=RaptorConfig.get_llm_env())
         return result.returncode
     except KeyboardInterrupt:

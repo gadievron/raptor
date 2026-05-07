@@ -75,6 +75,31 @@ def run_command_streaming(cmd: list, description: str) -> tuple[int, str, str]:
         finally:
             pipe.close()
 
+    # Phase B credential-isolation: when raptor_agentic.py was
+    # itself spawned with a dispatcher session (RAPTOR_LLM_SOCKET +
+    # RAPTOR_LLM_TOKEN_FD), relay the session to the grandchild so
+    # ``--sequential`` mode of ``packages/llm_analysis/agent.py`` can
+    # reach the LLM after Phase C drops API keys from the env. Same
+    # token value, fresh inheritable FD — see
+    # ``core.llm.dispatcher.client.relay_for_grandchild``.
+    child_env = RaptorConfig.get_safe_env()
+    child_pass_fds: list[int] = []
+    if os.environ.get("RAPTOR_LLM_SOCKET"):
+        try:
+            from core.llm.dispatcher.client import relay_for_grandchild
+            socket_path, token_fd = relay_for_grandchild()
+            child_env["RAPTOR_LLM_SOCKET"] = socket_path
+            child_env["RAPTOR_LLM_TOKEN_FD"] = str(token_fd)
+            child_pass_fds.append(token_fd)
+        except Exception as exc:
+            logger.warning(
+                f"credential-isolation relay to grandchild failed, "
+                f"falling back to env-direct: {exc}"
+            )
+            token_fd = None
+    else:
+        token_fd = None
+
     try:
         process = subprocess.Popen(
             cmd,
@@ -83,7 +108,8 @@ def run_command_streaming(cmd: list, description: str) -> tuple[int, str, str]:
             text=True,
             bufsize=1,  # Line buffered
             universal_newlines=True,
-            env=RaptorConfig.get_safe_env(),
+            env=child_env,
+            pass_fds=tuple(child_pass_fds),
             # Detach from parent's process group so operator
             # Ctrl-C in the parent doesn't propagate SIGINT
             # to the child via the controlling terminal. The
@@ -96,6 +122,13 @@ def run_command_streaming(cmd: list, description: str) -> tuple[int, str, str]:
             # message.
             start_new_session=True,
         )
+        # The child has inherited the FD; close our copy so the
+        # pipe's EOF tracks the child's lifetime, not ours.
+        if token_fd is not None:
+            try:
+                os.close(token_fd)
+            except OSError:
+                pass
 
         stdout_lines = []
         stderr_lines = []
