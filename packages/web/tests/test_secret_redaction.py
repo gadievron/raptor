@@ -81,8 +81,6 @@ def test_web_crawler_can_preserve_secret_url_artifacts_for_debugging():
 
 
 def test_web_crawler_redacts_secret_urls_in_logs(monkeypatch):
-    import hashlib
-
     import packages.web.crawler as crawler_module
 
     api_key = "api-" + "q" * 24
@@ -94,22 +92,19 @@ def test_web_crawler_redacts_secret_urls_in_logs(monkeypatch):
     )
 
     url = "https://example.test/start?" + "api_key=" + api_key
-    page_id = hashlib.sha256(url.encode("utf-8", "replace")).hexdigest()[:12]
     crawler.crawl(url)
 
     joined = "\n".join(recorder.messages)
     assert api_key not in joined
     assert "api_key" not in joined
     assert "/start" not in joined
-    assert f"page_id={page_id}" in joined
+    assert "page_id=page-0001" in joined
     assert "Starting crawl from https://example.test page_id=" in joined
     assert "Crawling: https://example.test page_id=" in joined
     assert "Non-200 response for https://example.test page_id=" in joined
 
 
 def test_web_crawler_redacts_secret_urls_inside_exception_messages(monkeypatch):
-    import hashlib
-
     import packages.web.crawler as crawler_module
 
     request_probe = "api-" + "r" * 24
@@ -123,7 +118,6 @@ def test_web_crawler_redacts_secret_urls_inside_exception_messages(monkeypatch):
     monkeypatch.setattr(crawler.client, "get", raise_error)
 
     url = "https://example.test/start?" + "api_key=" + request_probe
-    page_id = hashlib.sha256(url.encode("utf-8", "replace")).hexdigest()[:12]
     crawler.crawl(url)
 
     joined = "\n".join(recorder.messages)
@@ -131,7 +125,7 @@ def test_web_crawler_redacts_secret_urls_inside_exception_messages(monkeypatch):
     assert "api_key" not in joined
     assert "trace=1" not in joined
     assert "failed for" not in joined
-    assert f"page_id={page_id}" in joined
+    assert "page_id=page-0001" in joined
     assert "Error crawling https://example.test page_id=" in joined
     assert "RuntimeError" in joined
 
@@ -327,8 +321,6 @@ def test_web_crawler_redacts_concatenated_secret_form_input_names():
 def test_web_crawler_preserves_page_context_in_parser_logs_without_url_text(
     monkeypatch,
 ):
-    import hashlib
-
     import packages.web.crawler as crawler_module
 
     access_probe = "access-" + "c" * 24
@@ -343,7 +335,6 @@ def test_web_crawler_preserves_page_context_in_parser_logs_without_url_text(
             )
 
     url = f"https://example.test/api?access_token={access_probe}&debug=1"
-    page_id = hashlib.sha256(url.encode("utf-8", "replace")).hexdigest()[:12]
     crawler._process_json_response(
         url,
         BadJsonResponse(),
@@ -354,7 +345,7 @@ def test_web_crawler_preserves_page_context_in_parser_logs_without_url_text(
     assert "access_token" not in joined
     assert "debug=1" not in joined
     assert "trace=1" not in joined
-    assert f"page_id={page_id}" in joined
+    assert "page_id=page-0001" in joined
     assert "Error parsing JSON from https://example.test page_id=" in joined
     assert "RuntimeError" in joined
 

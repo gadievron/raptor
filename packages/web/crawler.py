@@ -9,7 +9,6 @@ LLM-powered web crawler that:
 - Finds hidden functionality
 """
 
-import hashlib
 import re
 from typing import Dict, List, Set, Optional
 from urllib.parse import urlparse, urljoin, parse_qs
@@ -44,6 +43,7 @@ class WebCrawler:
         self.discovered_forms: List[Dict] = []
         self.discovered_apis: List[Dict] = []
         self.discovered_parameters: Set[str] = set()
+        self._log_page_ids: Dict[str, str] = {}
 
         logger.info(
             f"Web crawler initialized (max_depth={max_depth}, max_pages={max_pages})"
@@ -67,11 +67,15 @@ class WebCrawler:
         """Return a stable non-URL page label for crawler logs.
 
         CodeQL treats user-controlled URL strings as sensitive logging sinks even
-        after query-string redaction. Logs therefore use a deterministic page ID
-        derived from the raw URL plus the non-secret base origin. Persisted crawl
-        artifacts still retain redacted path/query context for operator review.
+        after query-string redaction. Logs therefore use a per-crawl page ID plus
+        the non-secret base origin. Persisted crawl artifacts still retain
+        redacted path/query context for operator review.
         """
-        page_id = hashlib.sha256(str(url).encode("utf-8", "replace")).hexdigest()[:12]
+        raw_url = str(url)
+        page_id = self._log_page_ids.get(raw_url)
+        if page_id is None:
+            page_id = f"page-{len(self._log_page_ids) + 1:04d}"
+            self._log_page_ids[raw_url] = page_id
         return f"{self._target_log_label()} page_id={page_id}"
 
     def _redacted_url_list(self, urls: Set[str]) -> List[str]:
