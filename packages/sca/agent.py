@@ -29,6 +29,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 import time
 # Use defusedxml for parsing target-repo XML files. Stdlib's
@@ -287,18 +288,63 @@ def parse_pom(p):
             iter_xpath = './/m:dependency'
             child = lambda d, k: d.find(f'm:{k}', ns)
             findall_kwargs = (iter_xpath, ns)
+            properties_xpath = './/m:properties'
         else:
             iter_xpath = './/dependency'
             child = lambda d, k: d.find(k)
             findall_kwargs = (iter_xpath,)
+            properties_xpath = './/properties'
+
+        # Property-substitution map. Maven POMs frequently use
+        # `${prop.name}` references in version (and sometimes
+        # groupId/artifactId) fields, with the actual value
+        # defined in a `<properties>` section. Pre-fix the parser
+        # returned the literal `${spring.version}` string as the
+        # version, which OSV lookups can't resolve to a CVE
+        # search — false-negative on every property-substituted
+        # version.
+        props = {}
+        properties_node = root.find(*((properties_xpath, ns) if is_namespaced
+                                      else (properties_xpath,)))
+        if properties_node is not None:
+            for prop in properties_node:
+                # Strip namespace from tag if present.
+                tag = prop.tag
+                if tag.startswith('{'):
+                    tag = tag.split('}', 1)[1]
+                if prop.text:
+                    props[tag] = prop.text.strip()
+
+        def resolve(value):
+            """Substitute `${prop}` references; bounded recursion
+            so circular `${a}=${b}, ${b}=${a}` definitions can't
+            spin forever."""
+            if value is None:
+                return None
+            for _ in range(8):  # 8 levels of indirection is plenty.
+                m = re.search(r'\$\{([^}]+)\}', value)
+                if not m:
+                    break
+                key = m.group(1)
+                if key not in props or props[key] == value:
+                    break
+                value = value.replace(m.group(0), props[key])
+            return value
+
         for d in root.findall(*findall_kwargs):
             g = child(d, 'groupId')
             a = child(d, 'artifactId')
             v = child(d, 'version')
+            s = child(d, 'scope')
             deps.append({
-                'group': g.text if g is not None else None,
-                'artifact': a.text if a is not None else None,
-                'version': v.text if v is not None else None,
+                'group': resolve(g.text) if g is not None else None,
+                'artifact': resolve(a.text) if a is not None else None,
+                'version': resolve(v.text) if v is not None else None,
+                # `scope` (compile/test/provided/runtime/system/import)
+                # lets downstream consumers filter test-only deps
+                # the way devDependencies are filtered for npm.
+                # Default is `compile` per Maven spec.
+                'scope': (s.text.strip() if s is not None and s.text else 'compile'),
             })
         return deps
     except Exception as e:
