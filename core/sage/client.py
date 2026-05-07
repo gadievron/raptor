@@ -63,6 +63,56 @@ class SageClient:
     def __init__(self, config: Optional[SageConfig] = None):
         self._config = config or SageConfig.from_env()
         self._client = None
+        self._register_with_egress_proxy()
+
+    def _register_with_egress_proxy(self) -> None:
+        """Register the configured SAGE host with the in-process egress
+        proxy's allowlist when LLM egress is active.
+
+        ``core.llm.egress.enable_llm_egress`` (called from
+        ``LLMClient.__init__``) brings up the in-process proxy and
+        registers LLM provider hostnames on its allowlist. SAGE's
+        host is NOT in that allowlist — without this registration the
+        SAGE health check + SDK calls go through the same proxy and
+        get refused with a 403.
+
+        We only act when:
+          * LLM egress is active (the egress module's own
+            ``_enabled`` flag is set, NOT a heuristic on
+            ``HTTPS_PROXY`` URL pattern — the latter would
+            false-positive on an operator running their own local
+            proxy on 127.0.0.1); and
+          * SAGE's URL is non-loopback (loopback is bypassed via
+            ``NO_PROXY``, no registration needed).
+
+        Failure to register is logged at debug level and falls
+        through to SAGE's graceful-degradation contract — never
+        raises."""
+        from urllib.parse import urlparse
+
+        try:
+            from core.llm.egress import _enabled as _llm_egress_enabled
+        except ImportError:
+            # Defensive — egress module always present in tree, but
+            # circular-import safety in pathological setups.
+            return
+        if not _llm_egress_enabled:
+            # LLM egress not active for this process — SAGE's httpx
+            # calls go direct, no chokepoint to coordinate with.
+            return
+        try:
+            host = urlparse(self._config.url).hostname or ""
+        except (TypeError, ValueError):
+            return
+        if not host or host in ("localhost", "127.0.0.1"):
+            return
+        try:
+            from core.sandbox.proxy import get_proxy
+            get_proxy([host])
+        except Exception as e:                          # noqa: BLE001
+            logger.debug(
+                f"Could not register SAGE host {host!r} with egress proxy: {e}"
+            )
 
     def is_available(self) -> bool:
         """

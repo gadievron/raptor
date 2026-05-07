@@ -198,5 +198,107 @@ class TestSageClientWithMock(unittest.TestCase):
             _restore_sdk(client_mod, snapshot)
 
 
+class TestSageClientEgressProxyRegistration(unittest.TestCase):
+    """SAGE registers its host with the in-process egress proxy when
+    LLM egress is active so its httpx calls aren't refused by the
+    chokepoint.
+
+    See ``core/sage/client.py:_register_with_egress_proxy`` and
+    ``core/llm/egress.py`` for the rationale."""
+
+    def setUp(self):
+        # Each test starts with the egress module's _enabled flag
+        # in a known state; restore on tearDown.
+        from core.llm import egress
+        self._egress_module = egress
+        self._egress_was_enabled = egress._enabled
+        egress._enabled = False
+
+    def tearDown(self):
+        self._egress_module._enabled = self._egress_was_enabled
+
+    def _set_egress_enabled(self, value: bool) -> None:
+        self._egress_module._enabled = value
+
+    def test_no_op_when_egress_not_active(self):
+        """LLM egress not enabled → don't touch the proxy singleton.
+        Avoids spinning up a chokepoint that nothing will route through
+        and prevents false-positive on operators running their own
+        local proxy on 127.0.0.1."""
+        from core.sage.config import SageConfig
+        from core.sage.client import SageClient
+
+        self._set_egress_enabled(False)
+        with patch("core.sandbox.proxy.get_proxy") as mock_get:
+            SageClient(SageConfig(enabled=True, url="http://sage.example.com:9090"))
+            mock_get.assert_not_called()
+
+    def test_no_op_for_localhost_url(self):
+        """Localhost SAGE bypasses the proxy via NO_PROXY — no
+        registration needed."""
+        from core.sage.config import SageConfig
+        from core.sage.client import SageClient
+
+        self._set_egress_enabled(True)
+        with patch("core.sandbox.proxy.get_proxy") as mock_get:
+            SageClient(SageConfig(enabled=True, url="http://localhost:8090"))
+            mock_get.assert_not_called()
+
+    def test_no_op_for_127_0_0_1_url(self):
+        from core.sage.config import SageConfig
+        from core.sage.client import SageClient
+
+        self._set_egress_enabled(True)
+        with patch("core.sandbox.proxy.get_proxy") as mock_get:
+            SageClient(SageConfig(enabled=True, url="http://127.0.0.1:8090"))
+            mock_get.assert_not_called()
+
+    def test_registers_remote_host_when_egress_active(self):
+        """Remote SAGE_URL + LLM egress active → register sage's
+        host on the proxy allowlist via UNION semantics."""
+        from core.sage.config import SageConfig
+        from core.sage.client import SageClient
+
+        self._set_egress_enabled(True)
+        with patch("core.sandbox.proxy.get_proxy") as mock_get:
+            SageClient(SageConfig(enabled=True, url="http://sage.example.com:9090"))
+            mock_get.assert_called_once()
+            # Hostname only, no scheme/port/path
+            args, _ = mock_get.call_args
+            assert args[0] == ["sage.example.com"]
+
+    def test_proxy_failure_swallowed(self):
+        """A failure in get_proxy must not propagate — SAGE has its
+        own graceful-degradation contract that should remain
+        unchanged by this wiring."""
+        from core.sage.config import SageConfig
+        from core.sage.client import SageClient
+
+        self._set_egress_enabled(True)
+        with patch("core.sandbox.proxy.get_proxy",
+                   side_effect=RuntimeError("port bind failed")):
+            # Must not raise.
+            SageClient(SageConfig(enabled=True, url="http://sage.example.com:9090"))
+
+    def test_no_op_when_operator_runs_their_own_local_proxy(self):
+        """Adversarial: operator runs e.g. mitmproxy at
+        ``127.0.0.1:8888`` and sets HTTPS_PROXY pointing at it. The
+        URL pattern alone matches our in-process proxy's pattern, so
+        a heuristic-on-HTTPS_PROXY check would false-positive and
+        register sage on a chokepoint that isn't ours. Using the
+        egress module's ``_enabled`` flag avoids that — the flag is
+        only set when ``enable_llm_egress`` actually ran."""
+        from core.sage.config import SageConfig
+        from core.sage.client import SageClient
+
+        # Operator's own proxy pattern in env, but our flag NOT set
+        # (LLM egress wasn't actually enabled this process).
+        self._set_egress_enabled(False)
+        with patch.dict("os.environ", {"HTTPS_PROXY": "http://127.0.0.1:8888"}):
+            with patch("core.sandbox.proxy.get_proxy") as mock_get:
+                SageClient(SageConfig(enabled=True, url="http://sage.example.com:9090"))
+                mock_get.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
