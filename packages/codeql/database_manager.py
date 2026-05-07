@@ -926,19 +926,40 @@ class DatabaseManager:
                 logger.debug(f"Missing essential file: {file_name}")
                 return False
 
-        # Run codeql database check (optional, can be slow)
-        # Disabled by default for performance
-        # try:
-        #     result = subprocess.run(
-        #         [self.codeql_cli, "database", "check", str(db_path)],
-        #         capture_output=True,
-        #         timeout=30,
-        #     )
-        #     return result.returncode == 0
-        # except Exception:
-        #     return False
-
-        return True
+        # Pre-fix `codeql-database.yml` existence was the only
+        # check — easy for a half-built / corrupted database to
+        # pass (the yml is the FIRST thing CodeQL writes during
+        # build, so an aborted build leaves the yml in place
+        # but no actual DB content). Add a minimal-substance
+        # check: the database must have a `db-*` subdirectory
+        # (CodeQL writes per-language dbs as db-cpp, db-java,
+        # etc.) AND that subdir must be non-empty / non-trivial
+        # in size. Half-built databases typically have a few KB
+        # of yml/header but the multi-MB db-*/default/* trie
+        # files only land on successful build completion.
+        try:
+            db_subdirs = [d for d in db_path.iterdir()
+                          if d.is_dir() and d.name.startswith("db-")]
+            if not db_subdirs:
+                logger.debug(f"No db-* subdir in {db_path}")
+                return False
+            # At least one db-* subdir must hold > 100KB of data
+            # (the smallest realistic codeql DB observed in
+            # practice). Empty / kilobyte-sized = aborted build.
+            for sub in db_subdirs:
+                total_size = sum(
+                    f.stat().st_size for f in sub.rglob("*") if f.is_file()
+                )
+                if total_size > 100 * 1024:
+                    return True
+            logger.debug(
+                f"db-* subdirs present but trivially small in {db_path} "
+                f"(likely aborted build)",
+            )
+            return False
+        except OSError as e:
+            logger.debug(f"validate_database couldn't stat {db_path}: {e}")
+            return False
 
     def _count_database_files(self, db_path: Path) -> int:
         """Count files in database (for statistics)."""
