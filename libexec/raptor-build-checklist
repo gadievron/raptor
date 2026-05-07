@@ -27,14 +27,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith('--')]
-
-    if len(args) < 2:
-        print("Usage: raptor-build-checklist <target> <output_dir>", file=sys.stderr)
-        sys.exit(1)
-
-    target = args[0]
-    output_dir = args[1]
+    # Use argparse so unknown --flags raise instead of silently
+    # being filtered out. Pre-fix `[a for a in sys.argv[1:]
+    # if not a.startswith('--')]` discarded EVERY --flag without
+    # logging which ones got dropped. If an operator passed
+    # `--out /custom` thinking it'd override the positional
+    # output_dir, the flag was silently ignored and the
+    # positional defaulted (or raised "Usage" if positional
+    # was missing). Confusing failure mode — the operator's
+    # explicit intent didn't take effect with no breadcrumb.
+    import argparse
+    ap = argparse.ArgumentParser(
+        prog="raptor-build-checklist",
+        description="Build a per-file checklist for exploitability validation.",
+    )
+    ap.add_argument("target", help="Target source root.")
+    ap.add_argument("output_dir", help="Where to write the checklist.")
+    # Tolerate well-known launcher flags that may be passed
+    # through but aren't relevant here. parse_known_args puts
+    # them in `_extras`; we don't act on them but document
+    # their presence so future readers see why we accept them.
+    parsed, _extras = ap.parse_known_args(sys.argv[1:])
+    target = parsed.target
+    output_dir = parsed.output_dir
 
     if not Path(target).exists():
         print(f"ERROR: target not found: {target}", file=sys.stderr)
