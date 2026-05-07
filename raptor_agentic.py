@@ -300,10 +300,10 @@ Examples:
     parser.add_argument(
         "--trust-repo",
         action="store_true",
-        help="Trust the target repo's config and skip safety checks. Currently "
-             "covers the Claude Code config check in core/security/cc_trust.py "
-             "(credential helpers, hooks, dangerous env vars, stdio MCP servers). "
-             "Future trust checks read the same signal.",
+        help="Trust the target repo's config and skip safety checks. Covers the "
+             "Claude Code config check (core/security/cc_trust.py) AND the "
+             "CodeQL pack/config check (core/security/codeql_trust.py). New "
+             "trust checks read the same signal.",
     )
 
     from core.sandbox import add_cli_args, apply_cli_args
@@ -321,10 +321,14 @@ Examples:
             if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
                 h.setLevel(logging.DEBUG)
 
-    # Propagate --trust-repo via a module-level flag in cc_trust so every
-    # in-process trust check (this module, build_detector, ...) agrees.
+    # Propagate --trust-repo to every target-repo trust check so each
+    # in-process consumer (cc_trust, codeql_trust, build_detector, ...)
+    # agrees on the operator's intent. New checks added here must keep
+    # this list in sync.
     if getattr(args, "trust_repo", False):
         set_trust_override(True)
+        from core.security.codeql_trust import set_trust_override as _ql_set
+        _ql_set(True)
 
     if not args.repo:
         parser.error("--repo is required (or launch via `raptor` from the target directory)")
