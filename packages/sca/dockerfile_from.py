@@ -222,6 +222,40 @@ class ImageSbom:
     packages: Tuple[InstalledPackage, ...]
     layer_count_scanned: int = 0
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialise for the cross-run JsonCache. Versions and names
+        are plain strings; ecosystem is the OSV string. The
+        ``image_ref`` is informational — the cache is keyed on
+        ``digest``, but we keep the ref for diagnostic logging."""
+        return {
+            "image_ref": self.image_ref,
+            "digest": self.digest,
+            "layer_count_scanned": self.layer_count_scanned,
+            "packages": [
+                {"ecosystem": p.ecosystem,
+                 "name": p.name,
+                 "version": p.version}
+                for p in self.packages
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "ImageSbom":
+        return cls(
+            image_ref=d.get("image_ref", "") or "",
+            digest=d.get("digest"),
+            layer_count_scanned=int(d.get("layer_count_scanned", 0) or 0),
+            packages=tuple(
+                InstalledPackage(
+                    ecosystem=p.get("ecosystem", "") or "",
+                    name=p.get("name", "") or "",
+                    version=p.get("version", "") or "",
+                )
+                for p in (d.get("packages") or [])
+                if isinstance(p, dict)
+            ),
+        )
+
 
 def fetch_image_sbom(
     image: str,
@@ -231,6 +265,7 @@ def fetch_image_sbom(
     platform_arch: str = "amd64",
     max_layer_bytes: int = 256 * 1024 * 1024,
     digest_cache: Optional[Dict[str, "ImageSbom"]] = None,
+    disk_cache: Optional[Any] = None,
 ) -> Optional[ImageSbom]:
     """Pull the OS-package SBOM for ``image``.
 
@@ -296,20 +331,40 @@ def fetch_image_sbom(
         )
         return None
 
-    # Cache short-circuit on the resolved digest. The caller owns
-    # the cache lifecycle — typically one dict per ``scan_dockerfiles``
-    # invocation. Digests are content-addressed so a hit is always
-    # safe.
-    if digest_cache is not None and target_digest and (
-        target_digest in digest_cache
-    ):
-        cached = digest_cache[target_digest]
-        return ImageSbom(
-            image_ref=image,
-            digest=target_digest,
-            packages=cached.packages,
-            layer_count_scanned=cached.layer_count_scanned,
-        )
+    # Cache short-circuit on the resolved digest. Two cache levels:
+    #   * ``digest_cache`` — in-memory dict, per ``scan_dockerfiles``
+    #     invocation. Cheap; covers "same base image referenced from
+    #     multiple Dockerfiles in one run".
+    #   * ``disk_cache`` — JsonCache, persists across runs. Covers
+    #     "operator re-runs SCA tomorrow against an unchanged base
+    #     image". Digests are content-addressed, so cached entries
+    #     are stored ``TTL_FOREVER``.
+    if target_digest:
+        if digest_cache is not None and target_digest in digest_cache:
+            cached = digest_cache[target_digest]
+            return ImageSbom(
+                image_ref=image,
+                digest=target_digest,
+                packages=cached.packages,
+                layer_count_scanned=cached.layer_count_scanned,
+            )
+        if disk_cache is not None:
+            from core.json.cache import TTL_FOREVER
+            disk_value = disk_cache.get(
+                target_digest, ttl_seconds=TTL_FOREVER,
+            )
+            if isinstance(disk_value, dict):
+                restored = ImageSbom.from_dict(disk_value)
+                # Promote into the in-memory tier so subsequent calls
+                # in this run skip the disk hit too.
+                if digest_cache is not None:
+                    digest_cache[target_digest] = restored
+                return ImageSbom(
+                    image_ref=image,
+                    digest=target_digest,
+                    packages=restored.packages,
+                    layer_count_scanned=restored.layer_count_scanned,
+                )
 
     image_manifest = parse_image_manifest(parsed)
 
@@ -348,8 +403,14 @@ def fetch_image_sbom(
         packages=packages,
         layer_count_scanned=layers_scanned,
     )
-    if digest_cache is not None and target_digest:
-        digest_cache[target_digest] = sbom
+    if target_digest:
+        if digest_cache is not None:
+            digest_cache[target_digest] = sbom
+        if disk_cache is not None:
+            from core.json.cache import TTL_FOREVER
+            disk_cache.put(
+                target_digest, sbom.to_dict(), ttl_seconds=TTL_FOREVER,
+            )
     return sbom
 
 
@@ -376,6 +437,9 @@ def packages_to_dependencies(
     packages: Iterable[InstalledPackage],
     *,
     declared_in: Path,
+    image_ref: Optional[str] = None,
+    digest: Optional[str] = None,
+    stage_name: Optional[str] = None,
 ) -> List[Dependency]:
     """Convert installed-package records into Dependency rows.
 
@@ -383,7 +447,24 @@ def packages_to_dependencies(
     ``source_kind="dockerfile_from"``, and a high
     ``parser_confidence`` (the data came from a real package db,
     not a regex over a RUN line).
+
+    ``image_ref`` / ``digest`` / ``stage_name`` (when supplied)
+    populate ``source_extra`` so reports can group findings by base
+    image and surface which build stage produced them — e.g. a
+    multi-stage build's intermediate ``builder`` stage's findings
+    can be filtered out from a final-image-focused review.
     """
+    extra: Optional[Dict[str, Any]] = None
+    # ``image_ref`` is the gate: when the caller has any image
+    # context, we record the full triple — including ``stage_name=
+    # None`` for the final / un-named stage. ``None`` is a
+    # meaningful value (the final stage), distinct from "stage info
+    # wasn't supplied".
+    if image_ref:
+        extra = {"image": image_ref, "stage_name": stage_name}
+        if digest:
+            extra["digest"] = digest
+
     out: List[Dependency] = []
     for pkg in packages:
         if not pkg.name or not pkg.version:
@@ -404,6 +485,7 @@ def packages_to_dependencies(
             purl=purl,
             parser_confidence=_PIN_CONFIDENCE,
             source_kind="dockerfile_from",
+            source_extra=dict(extra) if extra else None,
         ))
     return out
 
@@ -419,6 +501,7 @@ def scan_dockerfiles(
     client: Optional[OciRegistryClient] = None,
     platform_os: str = "linux",
     platform_arch: str = "amd64",
+    cache: Optional[Any] = None,
 ) -> List[Dependency]:
     """Discover Dockerfiles in ``target``, fetch each FROM's
     SBOM, and return the Dependency rows.
@@ -426,6 +509,13 @@ def scan_dockerfiles(
     Supplying ``client`` lets tests inject a mock; production
     callers can pass ``None`` and accept the default (anonymous
     pulls via ``core.http.default_client()``).
+
+    ``cache`` is a :class:`core.json.cache.JsonCache` namespaced for
+    Dockerfile-FROM SBOMs. Per-digest entries are stored
+    ``TTL_FOREVER`` since digests are content-addressed. When ``None``
+    is passed, the per-run in-memory dict is the only cache tier
+    (correct behaviour for tests; production callers should pass a
+    cache so re-runs against unchanged base images don't re-fetch).
 
     Returns an empty list when the target has no Dockerfiles, when
     every FROM was unresolvable, or when ``client`` rejected every
@@ -458,12 +548,16 @@ def scan_dockerfiles(
                 platform_os=platform_os,
                 platform_arch=platform_arch,
                 digest_cache=digest_cache,
+                disk_cache=cache,
             )
             if sbom is None or not sbom.packages:
                 continue
             deps.extend(packages_to_dependencies(
                 sbom.packages,
                 declared_in=dockerfile,
+                image_ref=entry.image,
+                digest=sbom.digest,
+                stage_name=entry.stage_name,
             ))
     return deps
 

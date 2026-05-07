@@ -152,6 +152,19 @@ def _build_components(
             comp["properties"].append({
                 "name": "raptor:commented_out", "value": "true"
             })
+        # source_extra fields surfaced as raptor:<key> properties.
+        # Used today by ``dockerfile_from`` rows to expose
+        # ``image`` / ``digest`` / ``stage_name`` so SBOM consumers
+        # can group findings by base image and filter intermediate
+        # build stages from the final-image view.
+        if d.source_extra:
+            for k, v in d.source_extra.items():
+                if v is None:
+                    continue
+                comp["properties"].append({
+                    "name": f"raptor:{k}",
+                    "value": str(v),
+                })
         seen[bom_ref] = comp
         by_key[d.key()] = bom_ref
     return list(seen.values()), by_key

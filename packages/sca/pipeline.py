@@ -266,8 +266,20 @@ def run_sca(
         from .dockerfile_from import scan_dockerfiles
         from core.oci.client import OciRegistryClient
         oci_client = OciRegistryClient(http=http)
+        # Cross-run cache for base-image SBOMs. Per-digest entries
+        # are stored ``TTL_FOREVER`` since digests are content-
+        # addressed; ``--no-cache`` zeroes TTLs upstream so a fresh
+        # run still re-fetches.
+        if options.no_cache:
+            dockerfile_cache = None
+        else:
+            dockerfile_cache = JsonCache(
+                root=(options.cache_root or SCA_CACHE_ROOT) / "dockerfile_from",
+            )
         try:
-            base_image_deps = scan_dockerfiles(target, client=oci_client)
+            base_image_deps = scan_dockerfiles(
+                target, client=oci_client, cache=dockerfile_cache,
+            )
         except Exception:                           # noqa: BLE001
             logger.warning(
                 "sca.pipeline: Dockerfile FROM scanning failed",

@@ -311,6 +311,17 @@ def _render_one_vuln(f: VulnFinding, *, omit_source: bool = False) -> str:
             bullets.append(f"- Source: lockfile (`{dep.declared_in}`)")
         else:
             bullets.append(f"- Source: manifest (`{dep.declared_in}`)")
+        # Source-specific context — Dockerfile FROM rows surface
+        # the base image + stage so operators can group findings
+        # by build stage in their review.
+        if dep.source_kind == "dockerfile_from" and dep.source_extra:
+            image = dep.source_extra.get("image")
+            stage = dep.source_extra.get("stage_name")
+            if image:
+                stage_part = f" stage `{stage}`" if stage else ""
+                bullets.append(
+                    f"- Base image: `{image}`{stage_part}"
+                )
     bullets.append(f"- Direct: {'yes' if dep.direct else 'no'}; "
                    f"scope: {dep.scope}; pin: {dep.pin_style.value}")
 
