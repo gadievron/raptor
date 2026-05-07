@@ -225,12 +225,36 @@ def parse_pom(p):
     try:
         tree = ET.parse(p)
         root = tree.getroot()
+        # Try both XPath shapes: namespaced (Maven 4.0.0 schema —
+        # `xmlns="http://maven.apache.org/POM/4.0.0"` declared) and
+        # bare (no xmlns). Pre-fix only the namespaced path was
+        # tried, so namespace-less POMs (older Maven projects,
+        # hand-written POMs, some Spring Boot generated POMs that
+        # omit xmlns, custom build tooling output) returned an
+        # empty `[]` deps list — SCA silently reported zero
+        # dependencies. The bare-XPath fallback covers the
+        # missing-xmlns case without breaking the schema-conforming
+        # path.
         ns = {'m': 'http://maven.apache.org/POM/4.0.0'}
         deps = []
-        for d in root.findall('.//m:dependency', ns):
-            g = d.find('m:groupId', ns)
-            a = d.find('m:artifactId', ns)
-            v = d.find('m:version', ns)
+        # Determine which shape this POM uses by checking root tag.
+        # ElementTree namespaces appear in tags as
+        # `{http://maven.apache.org/POM/4.0.0}project`; bare POMs
+        # are just `project`. Iterating both yields zero noise
+        # because each POM matches exactly one shape.
+        is_namespaced = root.tag.startswith('{')
+        if is_namespaced:
+            iter_xpath = './/m:dependency'
+            child = lambda d, k: d.find(f'm:{k}', ns)
+            findall_kwargs = (iter_xpath, ns)
+        else:
+            iter_xpath = './/dependency'
+            child = lambda d, k: d.find(k)
+            findall_kwargs = (iter_xpath,)
+        for d in root.findall(*findall_kwargs):
+            g = child(d, 'groupId')
+            a = child(d, 'artifactId')
+            v = child(d, 'version')
             deps.append({
                 'group': g.text if g is not None else None,
                 'artifact': a.text if a is not None else None,
