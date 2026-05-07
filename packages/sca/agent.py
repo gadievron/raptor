@@ -428,8 +428,36 @@ def parse_package_json(p):
         obj = load_json(p)
         if obj is None:
             return {'error': 'failed to parse JSON'}
-        deps = obj.get('dependencies', {})
-        return [{'name': k, 'version': v} for k, v in deps.items()]
+        # Pre-fix only `dependencies` (the production deps) was
+        # read. npm / yarn / pnpm projects also use:
+        #   * `devDependencies` — test/build tooling, often
+        #     consumed in CI flows that DO ship to production
+        #     when build artifacts are baked in.
+        #   * `peerDependencies` — declared API requirements
+        #     that get installed by consumers; advisories on
+        #     these still affect the project surface.
+        #   * `optionalDependencies` — installed when present;
+        #     CVEs apply when they ARE installed.
+        # SCA reports ought to surface advisories on all four.
+        # `dep_type` annotation lets downstream consumers
+        # filter (e.g. "skip dev-only deps for production
+        # severity scoring") without re-parsing.
+        deps_out = []
+        for dep_type, key in (
+            ("runtime", "dependencies"),
+            ("dev", "devDependencies"),
+            ("peer", "peerDependencies"),
+            ("optional", "optionalDependencies"),
+        ):
+            section = obj.get(key)
+            if isinstance(section, dict):
+                for name, version in section.items():
+                    deps_out.append({
+                        "name": name,
+                        "version": version,
+                        "dep_type": dep_type,
+                    })
+        return deps_out
     except Exception as e:
         return {'error': str(e)}
 
