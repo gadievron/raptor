@@ -99,15 +99,25 @@ def parse_dockerfile(text: str) -> List[Instruction]:
             continue
 
         # Collapse line continuations: gather lines while the
-        # current one ends with `` \``.
+        # current one ends with `` \``. Comment-only continuation
+        # lines (a frequent shape inside multi-line ``RUN`` blocks)
+        # don't terminate the continuation — Docker treats them as
+        # transparent. They're preserved in ``raw`` for round-trip
+        # but the continuation-test still uses the prior non-comment
+        # line.
         first_line_no = i + 1
         chunks = [line]
         while line.rstrip().endswith("\\"):
             i += 1
             if i >= len(raw_lines):
                 break
-            line = raw_lines[i]
-            chunks.append(line)
+            next_line = raw_lines[i]
+            chunks.append(next_line)
+            if next_line.strip().startswith("#"):
+                # Skip — keep ``line`` as-is so the while-test
+                # continues using the prior continuation status.
+                continue
+            line = next_line
         i += 1
 
         raw = "\n".join(chunks)
