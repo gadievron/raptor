@@ -231,7 +231,26 @@ class AutonomousCodeQLAnalyzer:
         Returns:
             Source code with context
         """
-        file_path = repo_path / finding.file_path
+        # Containment check on the joined path. `finding.file_path`
+        # comes from the CodeQL SARIF result — typically benign but
+        # a malicious target's `qlpack.yml` could produce a query
+        # whose result emits an absolute path or `../../etc/passwd`
+        # style traversal. `repo_path / "../../etc/passwd"` resolves
+        # OUT of `repo_path`, and the subsequent `open()` reads
+        # arbitrary host files which then get fed into the LLM
+        # prompt as "vulnerable code" — operator-visible
+        # disclosure.
+        try:
+            joined = (repo_path / finding.file_path).resolve(strict=False)
+            repo_resolved = repo_path.resolve(strict=False)
+            joined.relative_to(repo_resolved)  # raises ValueError if outside
+        except (ValueError, OSError) as e:
+            self.logger.warning(
+                "Refusing read_vulnerable_code on out-of-tree path %r: %s",
+                finding.file_path, e,
+            )
+            return finding.snippet
+        file_path = joined
 
         try:
             with open(file_path) as f:
