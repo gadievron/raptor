@@ -9,6 +9,7 @@ LLM-powered web crawler that:
 - Finds hidden functionality
 """
 
+import hashlib
 import re
 from typing import Dict, List, Set, Optional
 from urllib.parse import urlparse, urljoin, parse_qs
@@ -52,16 +53,26 @@ class WebCrawler:
         """Redact URL-embedded secrets unless the operator opted into reveal mode."""
         return redact_url_secrets_only(url, reveal_secrets=self.client.reveal_secrets)
 
-    def _redacted_log_url(self, url: object) -> str:
-        """Return a per-page URL label for logs with URL-embedded secrets removed.
+    def _target_log_label(self) -> str:
+        """Return the non-secret crawl target origin for log messages."""
+        parsed = urlparse(str(self.client.base_url))
+        scheme = f"{parsed.scheme}://" if parsed.scheme else ""
+        host = parsed.hostname or parsed.netloc.rsplit("@", 1)[-1]
+        if not host:
+            return "target"
+        port = f":{parsed.port}" if parsed.port else ""
+        return f"{scheme}{host}{port}"
 
-        This keeps useful crawl context such as path, status target, and
-        non-sensitive query parameters while avoiding raw query/fragment
-        credentials in operator-visible logs. Only the string rendering of
-        exceptions is redacted by callers; non-string exception attributes are
-        not inspected.
+    def _crawl_log_label(self, url: object) -> str:
+        """Return a stable non-URL page label for crawler logs.
+
+        CodeQL treats user-controlled URL strings as sensitive logging sinks even
+        after query-string redaction. Logs therefore use a deterministic page ID
+        derived from the raw URL plus the non-secret base origin. Persisted crawl
+        artifacts still retain redacted path/query context for operator review.
         """
-        return redact_url_secrets_only(url)
+        page_id = hashlib.sha256(str(url).encode("utf-8", "replace")).hexdigest()[:12]
+        return f"{self._target_log_label()} page_id={page_id}"
 
     def _redacted_url_list(self, urls: Set[str]) -> List[str]:
         """Return a deterministic, redacted URL list for persisted crawl artifacts."""
@@ -127,7 +138,7 @@ class WebCrawler:
         Returns:
             Dict with discovered resources
         """
-        logger.info(f"Starting crawl from {self._redacted_log_url(start_url)}")
+        logger.info(f"Starting crawl from {self._crawl_log_label(start_url)}")
 
         self.discovered_urls.add(start_url)
         self._crawl_recursive(start_url, depth=0)
@@ -137,7 +148,7 @@ class WebCrawler:
     def _crawl_recursive(self, url: str, depth: int) -> None:
         """Recursively crawl pages."""
         if depth > self.max_depth:
-            logger.debug(f"Max depth reached for {self._redacted_log_url(url)}")
+            logger.debug(f"Max depth reached for {self._crawl_log_label(url)}")
             return
 
         if len(self.visited_urls) >= self.max_pages:
@@ -149,7 +160,7 @@ class WebCrawler:
 
         self.visited_urls.add(url)
         logger.info(
-            f"Crawling: {self._redacted_log_url(url)} "
+            f"Crawling: {self._crawl_log_label(url)} "
             f"(depth={depth}, pages={len(self.visited_urls)})"
         )
 
@@ -163,7 +174,7 @@ class WebCrawler:
 
             if response.status_code != 200:
                 logger.debug(
-                    f"Non-200 response for {self._redacted_log_url(url)}: "
+                    f"Non-200 response for {self._crawl_log_label(url)}: "
                     f"{response.status_code}"
                 )
                 return
@@ -180,8 +191,7 @@ class WebCrawler:
 
         except Exception as e:
             logger.warning(
-                f"Error crawling {self._redacted_log_url(url)}: "
-                f"{redact_url_secrets_only(str(e))}"
+                f"Error crawling {self._crawl_log_label(url)}: {type(e).__name__}"
             )
 
     def _process_html_response(self, url: str, response, depth: int) -> None:
@@ -223,8 +233,8 @@ class WebCrawler:
 
         except Exception as e:
             logger.warning(
-                f"Error parsing HTML from {self._redacted_log_url(url)}: "
-                f"{redact_url_secrets_only(str(e))}"
+                f"Error parsing HTML from {self._crawl_log_label(url)}: "
+                f"{type(e).__name__}"
             )
 
     def _process_json_response(self, url: str, response) -> None:
@@ -240,11 +250,11 @@ class WebCrawler:
                     else [],
                 }
             )
-            logger.info(f"Discovered API endpoint: {self._redacted_log_url(url)}")
+            logger.info(f"Discovered API endpoint: {self._crawl_log_label(url)}")
         except Exception as e:
             logger.debug(
-                f"Error parsing JSON from {self._redacted_log_url(url)}: "
-                f"{redact_url_secrets_only(str(e))}"
+                f"Error parsing JSON from {self._crawl_log_label(url)}: "
+                f"{type(e).__name__}"
             )
 
     def _parse_form(self, form_element, page_url: str) -> Optional[Dict]:
@@ -295,7 +305,7 @@ class WebCrawler:
                     ):
                         self.discovered_urls.add(absolute_url)
                         logger.debug(
-                            f"Found API endpoint in JS: {self._redacted_log_url(absolute_url)}"
+                            f"Found API endpoint in JS: {self._crawl_log_label(absolute_url)}"
                         )
 
     def get_results(self) -> Dict:
