@@ -73,6 +73,18 @@ def _load_user_limits() -> dict:
             state._user_limits_cache = {}
             return state._user_limits_cache
         try:
+            # `is_file()` check before read_text. Pre-fix
+            # `_CONFIG_PATH.exists()` returned True for FIFO,
+            # device file, named pipe, or symlink-to-FIFO at the
+            # config path. `read_text()` on a FIFO BLOCKS waiting
+            # for a writer, hanging the import indefinitely.
+            # An attacker (or operator misconfiguration) creating
+            # `~/.config/raptor/sandbox.json` as a FIFO via
+            # `mkfifo` would cause every RAPTOR process to hang
+            # at startup. Treat non-regular files as missing.
+            if not _CONFIG_PATH.is_file():
+                state._user_limits_cache = {}
+                return state._user_limits_cache
             # UnicodeDecodeError is possible if config isn't valid UTF-8 —
             # catching it alongside JSON/OS errors keeps module import safe
             # against a malformed config file.
