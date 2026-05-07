@@ -331,8 +331,23 @@ def run_sandboxed(cmd: List[str], *,
             try:
                 audit_streamer.stop()
             except Exception:
-                logger.debug("seatbelt audit streamer stop failed",
-                             exc_info=True)
+                # Pre-fix this swallowed failures at DEBUG level
+                # — operators rarely run with debug logging on,
+                # so audit-streamer stop failures went invisible.
+                # The streamer holds OS resources (kqueue fd,
+                # spawn-helper subprocess, log-rotation handles);
+                # silent failure here means those resources leak
+                # over the lifetime of a long-running session.
+                # Bump to WARNING so the next sandbox invocation
+                # surfaces the leak hint to the operator. Still
+                # catches Exception (don't propagate to mask the
+                # original sandbox-launch outcome) — the goal is
+                # visibility, not failure-propagation.
+                logger.warning(
+                    "seatbelt audit streamer stop failed — "
+                    "resources may have leaked from this sandbox call",
+                    exc_info=True,
+                )
 
     # 7. Attach sandbox_info — caller (context.py) populates the rest;
     #    we just guarantee the attribute exists so callers don't have
