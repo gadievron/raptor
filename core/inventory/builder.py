@@ -24,6 +24,7 @@ from .exclusions import (
 )
 from .extractors import extract_functions, extract_items, count_sloc
 from .call_graph import (
+    extract_call_graph_go,
     extract_call_graph_javascript,
     extract_call_graph_python,
 )
@@ -371,6 +372,10 @@ def _process_single_file(
             # Tree-sitter-driven; gracefully empty when the grammar
             # isn't installed.
             record['call_graph'] = extract_call_graph_javascript(
+                content,
+            ).to_dict()
+        elif language == 'go':
+            record['call_graph'] = extract_call_graph_go(
                 content,
             ).to_dict()
         return record

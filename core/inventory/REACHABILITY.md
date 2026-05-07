@@ -84,10 +84,11 @@ The resolver is language-agnostic — it operates on the `call_graph` field of e
 
 - **Python** (`extract_call_graph_python`) — uses stdlib `ast`. Always available.
 - **JavaScript / TypeScript** (`extract_call_graph_javascript`) — uses tree-sitter when `tree_sitter_javascript` is installed; gracefully empty otherwise. Handles ES-module imports (default + named + namespace + alias), CommonJS `require` (simple + destructured + alias), call sites with attribute chains, and the JS analogs of Python's indirection flags (`import(<var>)`, `require(<var>)`, `obj[<var>](...)`, `eval`, `new Function(...)()`).
+- **Go** (`extract_call_graph_go`) — tree-sitter; gracefully empty when `tree_sitter_go` isn't installed. Handles single + block import forms, aliased imports, dot imports (`. "errors"`, flagged as wildcard), blank imports (`_ "x"`, side-effect-only — no binding). Reflective dispatch via the `reflect` package is flagged as `INDIRECTION_REFLECT`. The bound name follows Go convention (last path segment) but the value retains the full path so the resolver matches against OSV symbols like `net/http.Get`.
 
-For npm consumers in particular, OSV advisories often ship `imports[].symbols` data — the SCA function-level reachability tier can match these against project source via the JS extractor, getting precise per-CVE function reachability for the npm ecosystem.
+For npm + Go consumers, OSV advisories often ship `imports[].symbols` data — the SCA function-level reachability tier matches these against project source via the corresponding extractor, getting precise per-CVE function reachability.
 
-Adding Go / Java is a matter of writing one more `extract_call_graph_<lang>` function emitting the same `FileCallGraph` dataclass and wiring it from `_process_single_file`.
+Adding Java is a matter of writing one more `extract_call_graph_<lang>` function emitting the same `FileCallGraph` dataclass and wiring it from `_process_single_file`.
 
 ## Performance
 

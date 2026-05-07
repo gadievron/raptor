@@ -25,6 +25,8 @@ project?":
       * JavaScript / TypeScript: dynamic ``import(<var>)``,
         ``require(<var>)``, bracket dispatch ``obj[<var>](...)``,
         ``eval`` / ``new Function(...)``.
+      * Go: dot import ``. "pkg"`` (analog of wildcard),
+        ``reflect`` package usage (any reflective dispatch).
 
 Indirection flags are file-scoped (not per-call) because once any
 of them is present, every NOT_CALLED claim about that file becomes
@@ -36,10 +38,10 @@ finer granularity buys nothing.
 Pure-AST. We never import / require / eval the target, never look
 at any filesystem outside the source tree. String-shape only.
 
-Languages today: Python (stdlib ``ast``) + JavaScript / TypeScript
-(tree-sitter when the grammar is installed; empty result
-otherwise). Adding Go / Java means writing one more
-``extract_call_graph_<lang>`` function emitting the same
+Languages today: Python (stdlib ``ast``) + JavaScript /
+TypeScript + Go (all tree-sitter-driven for non-Python; gracefully
+empty when the grammar isn't installed). Adding Java means writing
+one more ``extract_call_graph_<lang>`` function emitting the same
 dataclasses; the resolver in :mod:`core.inventory.reachability` is
 language-agnostic.
 """
@@ -700,6 +702,305 @@ class _JsCallGraph:
         return last
 
 
+# ---------------------------------------------------------------------------
+# Go
+# ---------------------------------------------------------------------------
+
+
+# Go-specific flag — ``reflect.ValueOf(x).MethodByName(...)`` and
+# friends. Any use of the ``reflect`` package's call-by-name surface
+# is the analog of Python's ``getattr`` / ``importlib`` dispatch.
+INDIRECTION_REFLECT = "reflect"
+
+
+def extract_call_graph_go(content: str) -> FileCallGraph:
+    """Walk a Go source string via tree-sitter and return its
+    :class:`FileCallGraph`.
+
+    Returns an empty graph when:
+
+      * tree-sitter or ``tree_sitter_go`` isn't installed
+        (the inventory builder degrades; resolver treats absence
+        as no-evidence)
+      * The file is unparseable
+
+    Go-specific import handling:
+
+      * ``import "fmt"``        → ``{"fmt": "fmt"}`` (last segment
+                                   binds; full path is the value).
+      * ``import "net/http"``   → ``{"http": "net/http"}``.
+      * ``import str "strings"``→ ``{"str": "strings"}`` (alias).
+      * ``import . "errors"``   → no map entry; flag wildcard.
+      * ``import _ "x"``        → no binding (side-effect only);
+                                   not callable, no record.
+
+    The resolver matches OSV symbols like ``net/http.HandlerFunc``
+    where the module path includes slashes. Unlike Python's dotted
+    paths, Go imports' ``map[name] = full_path`` retains the slash
+    so ``http.HandlerFunc(...)`` resolves to ``"net/http" +
+    ".HandlerFunc"`` for the resolver's chain comparison.
+    """
+    try:
+        import tree_sitter_go as ts_go
+        from tree_sitter import Language, Parser
+    except ImportError:
+        logger.debug(
+            "call_graph: tree-sitter Go grammar not installed; "
+            "returning empty graph",
+        )
+        return FileCallGraph()
+
+    try:
+        parser = Parser(Language(ts_go.language()))
+        tree = parser.parse(content.encode("utf-8", errors="replace"))
+    except Exception as e:                          # noqa: BLE001
+        logger.debug("call_graph: Go parse failed (%s)", e)
+        return FileCallGraph()
+
+    walker = _GoCallGraph()
+    walker.walk(tree.root_node)
+    return walker.graph
+
+
+class _GoCallGraph:
+    """Single-pass tree-sitter walk emitting imports + call sites
+    + indirection flags for one Go file."""
+
+    _CALL_NODE = "call_expression"
+    _SELECTOR_NODE = "selector_expression"
+    _IDENT_NODE = "identifier"
+    _PKG_IDENT_NODE = "package_identifier"
+    _FIELD_IDENT_NODE = "field_identifier"
+    _BLANK_IDENT_NODE = "blank_identifier"
+    _IMPORT_DECL_NODE = "import_declaration"
+    _IMPORT_SPEC_LIST = "import_spec_list"
+    _IMPORT_SPEC = "import_spec"
+    _STRING_LIT_NODE = "interpreted_string_literal"
+    _STRING_CONTENT_NODE = "interpreted_string_literal_content"
+    _DOT_NODE = "dot"
+    _ARG_LIST_NODE = "argument_list"
+    _FUNC_DECL_NODE = "function_declaration"
+    _METHOD_DECL_NODE = "method_declaration"
+
+    def __init__(self) -> None:
+        self.graph = FileCallGraph()
+        self._enclosing: List[str] = []
+
+    def walk(self, node) -> None:
+        """Recursive descent. Push/pop enclosing-function stack so
+        ``CallSite.caller`` carries the innermost named function."""
+        if node.type == self._FUNC_DECL_NODE:
+            name = self._first_child_of_type(
+                node, (self._IDENT_NODE,),
+            )
+            self._enclosing.append(
+                name.text.decode() if name else "<anon>"
+            )
+            try:
+                for child in node.children:
+                    self.walk(child)
+            finally:
+                self._enclosing.pop()
+            return
+
+        if node.type == self._METHOD_DECL_NODE:
+            # ``func (r Recv) Name() {}`` — the function name is a
+            # ``field_identifier`` child, not the receiver's identifier.
+            name = self._first_child_of_type(
+                node, (self._FIELD_IDENT_NODE,),
+            )
+            self._enclosing.append(
+                name.text.decode() if name else "<anon>"
+            )
+            try:
+                for child in node.children:
+                    self.walk(child)
+            finally:
+                self._enclosing.pop()
+            return
+
+        if node.type == self._IMPORT_DECL_NODE:
+            self._visit_import(node)
+            # Don't recurse inside (no calls / functions live there).
+            return
+
+        if node.type == self._CALL_NODE:
+            self._visit_call(node)
+            # Continue recursion to capture nested calls in args.
+
+        for child in node.children:
+            self.walk(child)
+
+    # ------------------------------------------------------------------
+    # Imports
+    # ------------------------------------------------------------------
+
+    def _visit_import(self, node) -> None:
+        """Both single (``import "x"``) and block (``import (...)``)
+        forms have ``import_spec`` children; for the block form
+        wrapped in an ``import_spec_list``."""
+        for child in node.children:
+            if child.type == self._IMPORT_SPEC:
+                self._handle_import_spec(child)
+            elif child.type == self._IMPORT_SPEC_LIST:
+                for spec in child.children:
+                    if spec.type == self._IMPORT_SPEC:
+                        self._handle_import_spec(spec)
+
+    def _handle_import_spec(self, spec) -> None:
+        """Extract one ``import_spec`` into the imports map.
+
+        Shapes:
+          * ``"fmt"``           → bare; bind last-segment of path.
+          * ``alias "fmt"``     → alias binding.
+          * ``. "errors"``      → dot import; flag wildcard.
+          * ``_ "x"``           → blank; no binding.
+        """
+        path = self._import_path(spec)
+        if path is None:
+            return
+        # First non-string named child (if any) is the binding hint.
+        binding = None
+        for c in spec.children:
+            if c.type == self._STRING_LIT_NODE:
+                continue
+            if c.is_named:
+                binding = c
+                break
+
+        if binding is not None:
+            if binding.type == self._DOT_NODE:
+                # ``. "errors"`` — dot import. The Go analog of
+                # ``from x import *``: every exported name from the
+                # package becomes available in this file's scope
+                # without qualification.
+                self.graph.indirection.add(INDIRECTION_WILDCARD_IMPORT)
+                return
+            if binding.type == self._BLANK_IDENT_NODE:
+                # ``_ "..."`` — side-effect-only; no name binding,
+                # no calls of this package will appear in this file.
+                return
+            if binding.type == self._PKG_IDENT_NODE:
+                self.graph.imports[binding.text.decode()] = path
+                return
+
+        # Bare import: bind the LAST segment of the path.
+        last_segment = path.rsplit("/", 1)[-1]
+        if last_segment:
+            self.graph.imports[last_segment] = path
+
+    def _import_path(self, spec) -> Optional[str]:
+        """Pull the string literal out of an import_spec."""
+        s = self._first_child_of_type(spec, (self._STRING_LIT_NODE,))
+        if s is None:
+            return None
+        content = self._first_child_of_type(
+            s, (self._STRING_CONTENT_NODE,),
+        )
+        if content is None:
+            return None
+        return content.text.decode()
+
+    # ------------------------------------------------------------------
+    # Calls + indirection
+    # ------------------------------------------------------------------
+
+    def _visit_call(self, node) -> None:
+        """Every ``call_expression``. Detect:
+
+          * Plain ``foo()`` and ``a.b.c()`` → recorded as CallSite.
+          * Anything reaching through ``reflect.*`` → flag.
+          * Type assertions / function values / method-on-value
+            calls — not recorded as CallSites (no statically
+            resolvable qualified name).
+        """
+        callee = self._call_callee(node)
+        if callee is None:
+            return
+
+        chain = self._callee_chain(callee)
+        if chain is None:
+            return
+
+        # Reflect-based dispatch is Go's analog of Python's getattr.
+        # ``reflect.ValueOf(...).MethodByName("name").Call(...)`` —
+        # any chain with reflect.MethodByName / reflect.Value.Call
+        # / reflect.ValueOf.* indicates name-by-string dispatch.
+        if chain and chain[0] == "reflect":
+            self.graph.indirection.add(INDIRECTION_REFLECT)
+            # Still record the call — the chain itself isn't
+            # interesting for CVE-symbol matching, but recording it
+            # keeps the data shape consistent.
+
+        caller = self._enclosing[-1] if self._enclosing else None
+        self.graph.calls.append(CallSite(
+            line=node.start_point[0] + 1,
+            chain=chain,
+            caller=caller,
+        ))
+
+    def _call_callee(self, call_node):
+        """First non-trivia named child is the callee."""
+        for c in call_node.children:
+            if c.type == self._ARG_LIST_NODE:
+                return None
+            if c.is_named:
+                return c
+        return None
+
+    def _callee_chain(self, callee) -> Optional[List[str]]:
+        """``foo`` → ``["foo"]``;
+        ``foo.Bar`` → ``["foo", "Bar"]``;
+        ``foo.Bar.Baz`` → ``["foo", "Bar", "Baz"]``."""
+        if callee.type == self._IDENT_NODE:
+            return [callee.text.decode()]
+        if callee.type == self._SELECTOR_NODE:
+            parts: List[str] = []
+            cur = callee
+            while cur is not None and cur.type == self._SELECTOR_NODE:
+                # ``selector_expression`` → operand + field_identifier.
+                # Children order: operand first, then ``.``, then
+                # the field. Pull the field; descend into the operand.
+                field = self._last_child_of_type(
+                    cur, (self._FIELD_IDENT_NODE,),
+                )
+                if field is None:
+                    return None
+                parts.append(field.text.decode())
+                # Operand is the first named child.
+                operand = None
+                for c in cur.children:
+                    if c.is_named:
+                        operand = c
+                        break
+                cur = operand
+            if cur is not None and cur.type == self._IDENT_NODE:
+                parts.append(cur.text.decode())
+                return list(reversed(parts))
+            return None
+        return None
+
+    # ------------------------------------------------------------------
+    # Helpers (shared shape with the JS extractor — duplicated to
+    # keep the two walkers loosely coupled)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _first_child_of_type(node, types):
+        for c in node.children:
+            if c.type in types:
+                return c
+        return None
+
+    @staticmethod
+    def _last_child_of_type(node, types):
+        last = None
+        for c in node.children:
+            if c.type in types:
+                last = c
+        return last
+
+
 __all__ = [
     "CallSite",
     "FileCallGraph",
@@ -709,7 +1010,9 @@ __all__ = [
     "INDIRECTION_EVAL",
     "INDIRECTION_GETATTR",
     "INDIRECTION_IMPORTLIB",
+    "INDIRECTION_REFLECT",
     "INDIRECTION_WILDCARD_IMPORT",
+    "extract_call_graph_go",
     "extract_call_graph_javascript",
     "extract_call_graph_python",
 ]
