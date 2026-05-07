@@ -52,8 +52,39 @@ def verify(
     pslug = normalize_slug(picked_slug)
     psha = picked_sha.lower()
 
+    # Minimum SHA length for an "exact" verdict. Pre-fix the
+    # mutual-prefix check `sha.startswith(psha[:12]) and
+    # psha.startswith(sha[:12])` worked correctly when both
+    # sides were ≥12 chars (12-hex collision space is 16^12 ≈
+    # 2.8×10^14 — effectively unique within any one repo).
+    # But when EITHER side was shorter (e.g. a 7-char short
+    # SHA from a parsed reference), `psha[:12]` truncated
+    # silently to its full length, and the comparison
+    # accepted matches with as few as 7 chars in common.
+    # Git's documented short-sha ambiguity threshold is
+    # 7-8 chars — below 12 the false-positive risk is
+    # operationally meaningful (cve_diff oracle then
+    # reports MATCH_EXACT for unrelated commits that
+    # happen to share a 7-char prefix). Require ≥12 on
+    # BOTH sides; below that, downgrade to DISPUTE with
+    # a note explaining why.
+    _MIN_EXACT_SHA_LEN = 12
+    if len(psha) < _MIN_EXACT_SHA_LEN:
+        return OracleVerdict(
+            cve_id=cve_id, picked_slug=picked_slug, picked_sha=picked_sha,
+            verdict=Verdict.DISPUTE, source="nvd",
+            expected_slugs=expected_slugs, expected_shas=expected_shas,
+            notes=(
+                f"picked_sha is only {len(psha)} chars — below the 12-char "
+                "minimum for safe exact-match verdict"
+            ),
+        )
+
     for s, sha in pairs:
-        if sha.startswith(psha[:12]) and psha.startswith(sha[:12]):
+        if (
+            len(sha) >= _MIN_EXACT_SHA_LEN
+            and sha.startswith(psha[:12]) and psha.startswith(sha[:12])
+        ):
             if s == pslug:
                 return OracleVerdict(
                     cve_id=cve_id, picked_slug=picked_slug, picked_sha=picked_sha,
