@@ -141,7 +141,25 @@ class RaptorLogger:
             RaptorConfig.LOG_DIR
             / f"raptor_{int(time.time())}_pid{_os.getpid()}_{ns_tail:04d}.jsonl"
         )
-        file_handler = logging.FileHandler(log_file)
+        # `delay=True` defers opening the file until the first emit.
+        # Pre-fix every `RaptorLogger()` instantiation eagerly created
+        # a file in `LOG_DIR`, even for processes that:
+        #
+        # * Imported `core.logging` but never logged (CLI `--help`,
+        #   `raptor --version`, dry-run / probe modes)
+        # * Crashed before the first emit (config error, env-var
+        #   validation failure)
+        # * Spawned worker subprocesses that exited fast (process
+        #   pool warmup, sandbox probe processes)
+        #
+        # Each created an empty `raptor_*.jsonl` file that
+        # accumulated under `LOG_DIR` indefinitely. Operators saw
+        # the dir grow with hundreds of empty files per long-lived
+        # session, with no signal that any of them were empty until
+        # opening one. `delay=True` only opens the file when there's
+        # actually a record to write — empty processes leave no
+        # trace in `LOG_DIR`.
+        file_handler = logging.FileHandler(log_file, delay=True)
         file_handler.setLevel(logging.DEBUG)
         json_formatter = JSONFormatter()
         file_handler.setFormatter(json_formatter)
