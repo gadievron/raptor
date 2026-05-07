@@ -13,7 +13,7 @@ For direct command-line usage, scripting, or CI/CD integration.
 python3 raptor.py agentic --repo /path/to/code
 
 # Static analysis only
-python3 raptor.py scan --repo /path/to/code --policy_groups secrets,owasp
+python3 raptor.py scan --repo /path/to/code --policy-groups secrets,owasp
 
 # Binary fuzzing
 python3 raptor.py fuzz --binary /path/to/binary --duration 3600
@@ -53,7 +53,7 @@ python3 raptor.py help scan
 ### 1. scan - Static Analysis
 
 ```bash
-python3 raptor.py scan --repo /path/to/code --policy_groups secrets,owasp
+python3 raptor.py scan --repo /path/to/code --policy-groups secrets,owasp
 ```
 
 Runs Semgrep only (fast, focused scanning).

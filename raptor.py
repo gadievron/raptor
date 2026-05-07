@@ -425,7 +425,7 @@ Examples:
   python3 raptor.py agentic --repo /path/to/code
 
   # Static analysis only
-  python3 raptor.py scan --repo /path/to/code --policy_groups secrets,owasp
+  python3 raptor.py scan --repo /path/to/code --policy-groups secrets,owasp
 
   # Binary fuzzing
   python3 raptor.py fuzz --binary /path/to/binary --duration 3600
