@@ -112,6 +112,17 @@ class AutonomousAnalysisResult:
     validation_result: Optional[Dict]
     refinement_iterations: int
     total_duration_seconds: float
+    # Reachability prefilter outcome — set when the inventory-based
+    # resolver was consulted before the expensive LLM stages.
+    # ``"called"`` / ``"not_called"`` / ``"uncertain"`` / None
+    # (when the prefilter couldn't determine, e.g. non-Python file
+    # or sink line not in any function).
+    reachability_verdict: Optional[str] = None
+    # Set to a non-None reason when the analyzer short-circuited
+    # without running deep analysis. Today the only value is
+    # ``"reachability_not_called"`` (sink function provably dead
+    # code); future iterations may add more.
+    skipped_reason: Optional[str] = None
 
 
 class AutonomousCodeQLAnalyzer:
@@ -131,7 +142,9 @@ class AutonomousCodeQLAnalyzer:
         llm_client,
         exploit_validator,
         multi_turn_analyzer=None,
-        enable_visualization=True
+        enable_visualization=True,
+        reachability_inventory=None,
+        reachability_checklist_path=None,
     ):
         """
         Initialize autonomous analyzer.
@@ -141,6 +154,18 @@ class AutonomousCodeQLAnalyzer:
             exploit_validator: ExploitValidator from packages/autonomous/exploit_validator.py
             multi_turn_analyzer: MultiTurnAnalyser from packages/autonomous/dialogue.py (optional)
             enable_visualization: Enable dataflow visualizations (default: True)
+            reachability_inventory: Pre-built inventory dict (from
+                ``core.inventory.builder.build_inventory``). When
+                provided, ``_check_reachability`` uses it directly
+                and skips the lazy build. Lets the caller share
+                an inventory across analyzer instances or with
+                sibling consumers in the same process.
+            reachability_checklist_path: Path to a serialised
+                ``checklist.json``. When provided AND
+                ``reachability_inventory`` is None, the prefilter
+                loads it instead of rebuilding. Lets a subprocess
+                analyzer reuse an inventory built by the parent
+                /agentic run, avoiding the per-process tree walk.
         """
         self.llm = llm_client
         self.validator = exploit_validator
@@ -148,6 +173,152 @@ class AutonomousCodeQLAnalyzer:
         self.dataflow_validator = DataflowValidator(llm_client)
         self.enable_visualization = enable_visualization
         self.logger = get_logger()
+        # Reachability prefilter inventory. Three states:
+        #   * dict — usable inventory (caller-provided OR lazy
+        #     build OR loaded-from-disk).
+        #   * None — uninitialised; first ``_check_reachability``
+        #     call attempts load/build.
+        #   * False — load AND build both failed earlier; don't
+        #     retry.
+        self._reachability_inventory: Any = reachability_inventory
+        self._reachability_checklist_path = reachability_checklist_path
+
+    def _check_reachability(
+        self, finding: CodeQLFinding, repo_path: Path,
+    ) -> Optional[str]:
+        """Best-effort prefilter: is the function containing this
+        finding's sink line reached from anywhere in the project?
+
+        Returns one of ``"called"`` / ``"not_called"`` /
+        ``"uncertain"`` / None (None = couldn't determine — non-
+        Python file, sink not in any function, inventory build
+        failed, etc.). The caller's policy is to short-circuit on
+        ``"not_called"`` and otherwise continue.
+
+        Cost: inventory build is paid once per analyzer instance
+        (cached); per-finding lookup is O(N_files + N_calls in
+        sink file) — sub-millisecond after the inventory is
+        loaded.
+        """
+        if self._reachability_inventory is False:
+            return None     # earlier load/build failed; don't retry
+        if self._reachability_inventory is None:
+            # First try loading from disk if a checklist path was
+            # supplied — caller's been told "an /agentic prepass
+            # already built this; don't redo the walk".
+            if self._reachability_checklist_path is not None:
+                try:
+                    from core.json import load_json
+                    loaded = load_json(self._reachability_checklist_path)
+                    if isinstance(loaded, dict) and loaded.get("files"):
+                        self._reachability_inventory = loaded
+                except Exception as e:               # noqa: BLE001
+                    self.logger.debug(
+                        "reachability prefilter: checklist load "
+                        "failed (%s); falling back to fresh build",
+                        e,
+                    )
+            if self._reachability_inventory is None:
+                try:
+                    from core.inventory.builder import build_inventory
+                    import tempfile
+                    with tempfile.TemporaryDirectory() as td:
+                        self._reachability_inventory = build_inventory(
+                            str(repo_path), td,
+                        )
+                except Exception as e:              # noqa: BLE001
+                    self.logger.debug(
+                        "reachability prefilter: inventory build "
+                        "failed: %s", e,
+                    )
+                    self._reachability_inventory = False
+                    return None
+
+        try:
+            from core.inventory.lookup import lookup_function
+            from core.inventory.reachability import (
+                Verdict, function_called,
+            )
+        except ImportError:
+            return None
+
+        # Find the function containing the sink line.
+        func_info = lookup_function(
+            self._reachability_inventory,
+            finding.file_path,
+            finding.start_line,
+            repo_root=str(repo_path),
+        )
+        if func_info is None:
+            return None
+        func_name = func_info.get("name")
+        if not isinstance(func_name, str) or not func_name:
+            return None
+
+        # Build the qualified name. For Python files we derive the
+        # module from the relative path; for other languages the
+        # resolver handles the dotted-chain matching directly off
+        # the inventory's call_graph data, but we still need a
+        # qualified name to query. ``<module>.<func>`` works for
+        # both — when the file isn't Python, the lookup just won't
+        # match and we get NOT_CALLED, which the caller treats
+        # conservatively (skip if the verdict is the answer; the
+        # None return from non-callable lookups falls through).
+        rel_path = self._relative_path(finding.file_path, repo_path)
+        if rel_path is None:
+            return None
+        module = self._path_to_module(rel_path)
+        if not module:
+            return None
+        qualified = f"{module}.{func_name}"
+
+        try:
+            result = function_called(
+                self._reachability_inventory, qualified,
+            )
+        except ValueError:
+            return None
+        return result.verdict.value
+
+    def _relative_path(
+        self, file_path: str, repo_path: Path,
+    ) -> Optional[str]:
+        """Normalise a finding's file path to a project-relative
+        path. SARIF emitters produce a mix of absolute, repo-
+        relative, and ``file://``-URI shapes — handle all three.
+        """
+        from pathlib import Path as _P
+        if file_path.startswith("file://"):
+            file_path = file_path[len("file://"):]
+        p = _P(file_path)
+        if p.is_absolute():
+            try:
+                return str(p.relative_to(repo_path.resolve()))
+            except ValueError:
+                return None
+        return file_path
+
+    def _path_to_module(self, rel_path: str) -> Optional[str]:
+        """``packages/foo/bar.py`` → ``packages.foo.bar``.
+
+        For non-Python files we strip the extension and replace
+        path separators with dots. The resolver's chain matching
+        is dotted-only, so this works for any language whose
+        call_graph data was produced by an extractor on the
+        inventory side."""
+        if not rel_path:
+            return None
+        from pathlib import PurePosixPath
+        p = PurePosixPath(rel_path.replace("\\", "/"))
+        if not p.suffix:
+            return None
+        # Drop the extension. Multiple-extension cases (.tar.gz)
+        # don't apply for source files; ``.py`` / ``.go`` /
+        # ``.js`` / ``.ts`` etc. are all single-suffix.
+        parts = list(p.with_suffix("").parts)
+        if not parts:
+            return None
+        return ".".join(parts)
 
     def parse_sarif_finding(self, result: Dict, run: Dict) -> CodeQLFinding:
         """
@@ -736,6 +907,39 @@ class AutonomousCodeQLAnalyzer:
         finding = self.parse_sarif_finding(sarif_result, sarif_run)
         self.logger.info(f"🤖 AUTONOMOUS ANALYSIS: {finding.rule_id}")
 
+        # Stage 1a: Reachability prefilter. The
+        # ``core.inventory.reachability`` resolver answers "is the
+        # function CONTAINING this sink reached from anywhere in
+        # the project?" When the answer is ``"not_called"`` the
+        # sink is in dead code — the multi-second LLM analyses
+        # that follow would be wasted, so short-circuit early.
+        # ``"uncertain"`` (e.g. dynamic dispatch in the file)
+        # falls through to the full analysis: we don't trust
+        # NOT_CALLED claims when the static analysis can't see
+        # everything. None means we couldn't determine (non-
+        # supported language, lookup miss) — also fall through.
+        reachability_verdict = self._check_reachability(
+            finding, repo_path,
+        )
+        if reachability_verdict == "not_called":
+            self.logger.info(
+                "⏭️  Sink function not called from project — "
+                "skipping expensive analysis",
+            )
+            return AutonomousAnalysisResult(
+                finding=finding,
+                analysis=None,
+                dataflow_validation=None,
+                exploitable=False,
+                exploit_code=None,
+                exploit_compiled=False,
+                validation_result=None,
+                refinement_iterations=0,
+                total_duration_seconds=time.time() - start_time,
+                reachability_verdict=reachability_verdict,
+                skipped_reason="reachability_not_called",
+            )
+
         # Stage 2: Read vulnerable code
         vulnerable_code = self.read_vulnerable_code(finding, repo_path)
 
@@ -778,7 +982,8 @@ class AutonomousCodeQLAnalyzer:
                     exploit_compiled=False,
                     validation_result=None,
                     refinement_iterations=0,
-                    total_duration_seconds=time.time() - start_time
+                    total_duration_seconds=time.time() - start_time,
+                    reachability_verdict=reachability_verdict,
                 )
 
         # Stage 4: Deep LLM analysis
@@ -800,7 +1005,8 @@ class AutonomousCodeQLAnalyzer:
                 exploit_compiled=False,
                 validation_result=None,
                 refinement_iterations=0,
-                total_duration_seconds=time.time() - start_time
+                total_duration_seconds=time.time() - start_time,
+                reachability_verdict=reachability_verdict,
             )
 
         # Stage 5: Check mitigations before exploit generation
@@ -826,7 +1032,8 @@ class AutonomousCodeQLAnalyzer:
                 exploit_compiled=False,
                 validation_result=None,
                 refinement_iterations=0,
-                total_duration_seconds=time.time() - start_time
+                total_duration_seconds=time.time() - start_time,
+                reachability_verdict=reachability_verdict,
             )
 
         # Stage 7: Validate and refine exploit
@@ -907,7 +1114,8 @@ class AutonomousCodeQLAnalyzer:
             exploit_compiled=exploit_compiled,
             validation_result=asdict(validation_result) if validation_result else None,
             refinement_iterations=refinement_count,
-            total_duration_seconds=time.time() - start_time
+            total_duration_seconds=time.time() - start_time,
+            reachability_verdict=reachability_verdict,
         )
 
 

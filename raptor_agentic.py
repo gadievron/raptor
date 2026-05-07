@@ -564,6 +564,40 @@ Examples:
         else:
             logger.warning(f"Pre-pass skipped: {prepass_result.skipped_reason}")
 
+    # ========================================================================
+    # PRE-PASS: reachability — always-on companion to /understand.
+    # Marks dead-code functions priority=low in the agentic checklist using
+    # core.inventory.reachability. Runs regardless of --understand because
+    # the agentic LLM analysis prompt reads priority/priority_reason and
+    # benefits from the dead-code signal even without context-map upgrades.
+    # The returned inventory is threaded through to downstream consumers
+    # (codeql analyzer, /validate post-pass) so they don't re-walk the tree.
+    # ========================================================================
+    reachability_prepass_result = None
+    try:
+        from core.orchestration import run_reachability_prepass
+        reachability_prepass_result = run_reachability_prepass(
+            target=original_repo_path,
+            agentic_out_dir=out_dir,
+        )
+        if reachability_prepass_result.ran:
+            logger.info(
+                f"Reachability pre-pass marked "
+                f"{reachability_prepass_result.marked_count} dead-code "
+                f"function(s) priority=low "
+                f"(took {reachability_prepass_result.duration_s:.1f}s)"
+            )
+        else:
+            logger.debug(
+                "Reachability pre-pass skipped: "
+                f"{reachability_prepass_result.skipped_reason}"
+            )
+    except Exception:                               # noqa: BLE001
+        logger.warning(
+            "Reachability pre-pass failed; continuing without it",
+            exc_info=True,
+        )
+
     all_sarif_files = []
     semgrep_metrics = {}
     codeql_metrics = {}

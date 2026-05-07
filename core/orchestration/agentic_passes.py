@@ -99,6 +99,22 @@ class PostpassResult:
     duration_s: float = 0.0
 
 
+@dataclass
+class ReachabilityPrepassResult:
+    """Outcome of run_reachability_prepass().
+
+    ``inventory`` is the (possibly cached) inventory dict the
+    prepass built. The agentic launcher threads it through to
+    downstream consumers (codeql analyzer, /validate Stage B)
+    so they don't re-walk the source tree.
+    """
+    ran: bool
+    skipped_reason: Optional[str] = None
+    marked_count: int = 0          # functions marked priority=low
+    inventory: Optional[Any] = None
+    duration_s: float = 0.0
+
+
 def run_understand_prepass(
     target: Path,
     agentic_out_dir: Path,
@@ -253,6 +269,14 @@ def _run_understand_prepass_unsafe(
         # analysis prompt — so --understand pays off in this run too, not just
         # any later /validate.
         enriched = _enrich_agentic_checklist(agentic_out_dir, context_map)
+
+        # NOTE: the reachability low-priority marking previously
+        # lived here (under the --understand-only branch) but is
+        # now hoisted to ``run_reachability_prepass`` so it fires
+        # regardless of whether --understand was passed.
+        # Operators not using --understand still get the dead-
+        # code priority signal in their checklist, which
+        # benefits the agentic LLM budget allocation.
 
         return PrepassResult(
             ran=True,
@@ -761,6 +785,127 @@ def _enrich_agentic_checklist(agentic_out_dir: Path, context_map_path: Path) -> 
     except Exception as e:
         logger.warning("checklist enrichment failed: %s", e)
         return False
+
+
+def _mark_unreachable_low_priority(
+    agentic_out_dir: Path, target: Path,
+) -> int:
+    """Mark dead-code functions as ``priority=low`` in the
+    agentic checklist.
+
+    Sibling of :func:`_enrich_agentic_checklist` — that pass
+    UPGRADES priority based on /understand context-map data;
+    this pass DOWNGRADES priority for functions not called
+    anywhere in non-test project source. The two are
+    complementary and run consecutively. Functions already
+    marked ``priority=high`` by context-map enrichment are
+    skipped (entry-point analysis trumps reachability).
+
+    Returns the count of functions marked low-priority. Best-
+    effort; failures logged at debug.
+    """
+    checklist_path = agentic_out_dir / "checklist.json"
+    if not checklist_path.exists():
+        return 0
+    try:
+        from core.json import load_json, save_json
+        from core.orchestration.reachability_enrichment import (
+            mark_unreachable_low_priority,
+        )
+        checklist = load_json(checklist_path)
+        if not isinstance(checklist, dict):
+            return 0
+        marked = mark_unreachable_low_priority(checklist, target)
+        if marked:
+            save_json(checklist_path, checklist)
+        return marked
+    except Exception:                               # noqa: BLE001
+        logger.debug(
+            "reachability low-priority enrichment failed",
+            exc_info=True,
+        )
+        return 0
+
+
+def run_reachability_prepass(
+    target: Path,
+    agentic_out_dir: Path,
+) -> "ReachabilityPrepassResult":
+    """Always-on companion to ``run_understand_prepass``.
+
+    Runs unconditionally (no --understand gating): builds the
+    inventory once, marks dead-code functions priority=low in
+    the agentic checklist, returns the inventory so downstream
+    consumers (codeql analyzer, /validate Stage B) can reuse it
+    without rebuilding.
+
+    The /agentic LLM analysis prompt already reads
+    ``priority`` / ``priority_reason`` per function and surfaces
+    them to the model — so the priority=low marking shifts the
+    analysis budget to live code regardless of whether the
+    operator passed --understand.
+
+    Best-effort: any failure (missing checklist, inventory build
+    error, malformed call_graph) is logged at debug; the
+    returned ``ReachabilityPrepassResult.ran`` is False with a
+    non-None ``skipped_reason``.
+    """
+    t0 = time.time()
+    checklist_path = agentic_out_dir / "checklist.json"
+    if not checklist_path.exists():
+        return ReachabilityPrepassResult(
+            ran=False,
+            skipped_reason="agentic checklist not yet built",
+            duration_s=time.time() - t0,
+        )
+
+    # Build the inventory once. Cached on the result so the
+    # agentic launcher can hand it to /validate + codeql.
+    try:
+        from core.inventory.builder import build_inventory
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            inventory = build_inventory(str(target), td)
+    except Exception as e:                          # noqa: BLE001
+        logger.debug(
+            "reachability prepass: inventory build failed (%s)", e,
+        )
+        return ReachabilityPrepassResult(
+            ran=False,
+            skipped_reason="inventory build failed",
+            duration_s=time.time() - t0,
+        )
+
+    try:
+        from core.orchestration.reachability_enrichment import (
+            mark_unreachable_low_priority,
+        )
+        checklist = load_json(checklist_path)
+        if not isinstance(checklist, dict):
+            return ReachabilityPrepassResult(
+                ran=False,
+                skipped_reason="checklist not a JSON object",
+                inventory=inventory,
+                duration_s=time.time() - t0,
+            )
+        marked = mark_unreachable_low_priority(
+            checklist, target, inventory=inventory,
+        )
+        if marked:
+            save_json(checklist_path, checklist)
+    except Exception:                               # noqa: BLE001
+        logger.debug(
+            "reachability prepass: enrichment failed",
+            exc_info=True,
+        )
+        marked = 0
+
+    return ReachabilityPrepassResult(
+        ran=True,
+        marked_count=marked,
+        inventory=inventory,
+        duration_s=time.time() - t0,
+    )
 
 
 # ---------------------------------------------------------------------------
