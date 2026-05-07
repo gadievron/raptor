@@ -127,6 +127,26 @@ def run_rule(
     runner = subprocess_runner or subprocess.run
 
     start = time.monotonic()
+    # `cwd=target.parent if file else target if dir`. spatch
+    # resolves #include paths relative to its CWD when paths
+    # are not absolute. Pre-fix the runner inherited the
+    # parent process's CWD (typically the RAPTOR repo root,
+    # not the target's directory), so:
+    #   * Headers in the target's own tree found via relative
+    #     #include were missed (spatch couldn't resolve
+    #     `#include "foo.h"` because it looked in
+    #     RAPTOR-root not target-root).
+    #   * SmPL `<+...+>` patterns spanning multiple translation
+    #     units silently failed to match across includes.
+    # Setting cwd= to the target's directory fixes both — the
+    # path semantics now match what spatch expects when invoked
+    # by hand from the target repo.
+    if target.is_file():
+        spatch_cwd = target.parent
+    elif target.is_dir():
+        spatch_cwd = target
+    else:
+        spatch_cwd = None
     try:
         proc = runner(
             cmd,
@@ -135,6 +155,7 @@ def run_rule(
             timeout=timeout,
             env=run_env,
             input=effective_rule,
+            cwd=str(spatch_cwd) if spatch_cwd is not None else None,
         )
     except subprocess.TimeoutExpired as exc:
         # Capture partial output before giving up. spatch on
