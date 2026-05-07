@@ -947,7 +947,14 @@ def _select_findings_for_validate(analysis_report: Path) -> list:
     equals the canonical high value. Schema-enforced enum values mean no
     case-folding or fuzzy matching is needed (see FINDING_RESULT_SCHEMA).
     """
-    report = load_json(analysis_report)
+    # `allow_non_finite=True`: scanner outputs (Semgrep + CodeQL +
+    # LLM-stage scoring) can legitimately carry NaN / Infinity in
+    # `exploitability_score`. The downstream truncation logic
+    # (`_truncate_findings_for_validate`) treats NaN as 0 to keep
+    # ordering deterministic. Without the opt-in the whole report
+    # rejects on the first NaN cell — every finding silently
+    # dropped, validate pass becomes a no-op.
+    report = load_json(analysis_report, allow_non_finite=True)
     if not isinstance(report, dict):
         logger.warning("could not parse %s as a JSON object", analysis_report)
         return []

@@ -36,7 +36,12 @@ def _reject_non_finite(token: str) -> Any:
     raise ValueError(f"non-finite JSON constant rejected: {token}")
 
 
-def load_json(path: Union[str, Path], strict: bool = False) -> Optional[Any]:
+def load_json(
+    path: Union[str, Path],
+    strict: bool = False,
+    *,
+    allow_non_finite: bool = False,
+) -> Optional[Any]:
     """Load a JSON file.
 
     Returns None if the file does not exist. If the file exists but is
@@ -53,19 +58,29 @@ def load_json(path: Union[str, Path], strict: bool = False) -> Optional[Any]:
     and many JSON exports from Office tools all carry a BOM.
     `utf-8-sig` is a strict superset of `utf-8`: identical for
     BOM-less files, transparent for BOM-prefixed ones.
+
+    ``allow_non_finite`` (keyword-only): opt in to accepting
+    ``NaN``, ``Infinity``, ``-Infinity`` literals at parse time. Off by
+    default — see ``_reject_non_finite`` for the threat model.
+    Callers reading reports from upstream analysers that legitimately
+    emit non-finite numeric scores (LLM confidence layers, certain
+    fuzzers) opt in here so the parse doesn't reject the whole file
+    on one NaN cell. Caller is then responsible for handling
+    non-finite values downstream (treat-as-zero, skip, etc).
     """
     p = Path(path)
     if not p.exists():
         return None
+    parse_constant = None if allow_non_finite else _reject_non_finite
     if strict:
         return json.loads(
             p.read_text(encoding="utf-8-sig"),
-            parse_constant=_reject_non_finite,
+            parse_constant=parse_constant,
         )
     try:
         return json.loads(
             p.read_text(encoding="utf-8-sig"),
-            parse_constant=_reject_non_finite,
+            parse_constant=parse_constant,
         )
     except (json.JSONDecodeError, ValueError, OSError) as e:
         # Pre-fix this returned None silently. Operators investigating
