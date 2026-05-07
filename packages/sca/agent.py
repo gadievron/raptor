@@ -265,13 +265,104 @@ def parse_pom(p):
         return {'error': str(e)}
 
 
-def parse_requirements(p):
-    deps = []
-    for ln in p.read_text().splitlines():
-        ln = ln.strip()
-        if not ln or ln.startswith('#'):
+def parse_requirements(p, _seen=None):
+    """Parse a pip requirements.txt-style file.
+
+    Pre-fix issues addressed here:
+      * **Line continuations.** A single requirement can span
+        multiple lines via trailing `\\` (`pkg \\` newline
+        `--hash=sha256:...`). Pre-fix `splitlines()` returned
+        each fragment as a separate "dep" entry — `pkg \\` and
+        `--hash=sha256:...` showed up as two unrelated
+        requirements, the latter being garbage.
+      * **`-r other.txt` includes.** Real requirements files
+        commonly chain via `-r requirements-dev.txt` or
+        `--requirement other.txt`. Pre-fix those lines were
+        recorded verbatim as "deps" — SCA reported `-r
+        other.txt` as a literal package name, then OSV lookups
+        for it failed silently. Recursively parse the included
+        file (with cycle detection via `_seen`) so the chained
+        deps surface in the report.
+      * **Inline comments.** `pkg==1.0  # pin for CVE-XYZ`
+        kept the trailing comment as part of the version
+        spec; OSV lookups treated `1.0  # pin for CVE-XYZ` as
+        the version. Strip everything after the first
+        whitespace-prefixed `#`.
+    """
+    deps: List[str] = []
+    if _seen is None:
+        _seen = set()
+    real = p.resolve(strict=False)
+    if real in _seen:
+        return deps
+    _seen.add(real)
+    try:
+        text = p.read_text()
+    except OSError:
+        return deps
+
+    # Join continuations: trailing `\` on a stripped-of-trailing-
+    # whitespace line means "next physical line is part of this
+    # logical line". Process character-by-character to avoid
+    # corner cases with embedded backslashes in URLs.
+    logical_lines: List[str] = []
+    buf = ""
+    for raw in text.splitlines():
+        # If buf is mid-continuation, prepend to current line.
+        if buf:
+            raw = buf + raw
+            buf = ""
+        # Detect continuation: line ends with `\` (not preceded
+        # by another `\` to escape it). Drop the trailing `\`
+        # and stash for the next iteration.
+        stripped_right = raw.rstrip()
+        if stripped_right.endswith("\\") and not stripped_right.endswith("\\\\"):
+            buf = stripped_right[:-1]
             continue
-        deps.append(ln)
+        logical_lines.append(raw)
+    if buf:
+        logical_lines.append(buf)
+
+    for ln in logical_lines:
+        # Strip inline comments (` #` or leading `#`).
+        # Don't strip `#` inside the requirement (e.g. URL fragments)
+        # — only when preceded by whitespace.
+        hash_idx = -1
+        in_quoted = False
+        for i, ch in enumerate(ln):
+            if ch in ("'", '"'):
+                in_quoted = not in_quoted
+            elif ch == '#' and not in_quoted and (i == 0 or ln[i - 1] in (' ', '\t')):
+                hash_idx = i
+                break
+        if hash_idx >= 0:
+            ln = ln[:hash_idx]
+        ln = ln.strip()
+        if not ln:
+            continue
+
+        # `-r path` / `--requirement path` recursive include.
+        for prefix in ('-r ', '--requirement ', '--requirement='):
+            if ln.startswith(prefix):
+                included = ln[len(prefix):].strip().strip('"').strip("'")
+                # Resolve relative to the parent file's directory.
+                included_path = (p.parent / included).resolve(strict=False)
+                if included_path.exists():
+                    deps.extend(parse_requirements(included_path, _seen))
+                break
+        else:
+            # `-c constraints.txt` is a constraints file (NOT a
+            # dep itself, just version pinning hints) — recurse
+            # to surface its pins as deps for SCA purposes.
+            for prefix in ('-c ', '--constraint ', '--constraint='):
+                if ln.startswith(prefix):
+                    included = ln[len(prefix):].strip().strip('"').strip("'")
+                    included_path = (p.parent / included).resolve(strict=False)
+                    if included_path.exists():
+                        deps.extend(parse_requirements(included_path, _seen))
+                    break
+            else:
+                deps.append(ln)
     return deps
 
 
