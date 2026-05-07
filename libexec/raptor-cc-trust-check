@@ -95,7 +95,23 @@ fi
 # -I = isolated mode: strips PYTHONPATH and PYTHONHOME, doesn't add user site,
 #      and does not prepend cwd to sys.path. Prevents the target repo from
 #      smuggling a shadowing `core/` via PYTHONPATH, ~/.local, or cwd.
-cd "$RAPTOR_DIR"
+# Pre-fix `cd "$RAPTOR_DIR"` failed silently if RAPTOR_DIR
+# became invalid (operator running from a deleted dir, race
+# with directory removal, broken symlink). Subsequent
+# `python3 -I - "$RAPTOR_DIR" ...` then ran from the OLD
+# cwd with RAPTOR_DIR pointing somewhere that the
+# `sys.path.insert(0, raptor_dir)` line couldn't actually
+# read from — the import inside the heredoc raised
+# ModuleNotFoundError, the script exited rc=1, and per
+# batch 586 we'd treat that as "failing closed" — correct
+# behaviour but with an unhelpful "undocumented exit code
+# 1" message. Catch the cd failure here with a clear
+# diagnostic instead.
+if ! cd "$RAPTOR_DIR" 2>/dev/null; then
+    echo "raptor-cc-trust-check: cannot cd into RAPTOR_DIR=$RAPTOR_DIR" >&2
+    echo "  (RAPTOR_DIR resolved at startup but is no longer accessible — refusing to run trust check)" >&2
+    exit 3
+fi
 set +e
 python3 -I - "$RAPTOR_DIR" "$TARGET" "$TRUST" <<'PY'
 import sys
