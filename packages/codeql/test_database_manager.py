@@ -223,15 +223,24 @@ class TestStagingPromote:
     def test_lost_promotion_race_uses_winner_canonical(self, db_manager, tmp_path):
         # Simulate: another writer populated canonical between our cache-miss
         # check and our promote attempt. We should cleanup our staging and
-        # return the winner's canonical path. Canonical here is VALID
-        # (has codeql-database.yml) so validate_database in the lost-race
-        # branch accepts it.
+        # return the winner's canonical path.
+        # Canonical must pass validate_database for the lost-race branch
+        # to accept it: batch 399 requires not just `codeql-database.yml`
+        # but also a `db-<lang>/` subdir holding > 100KB of trie content
+        # (real CodeQL DB shape). The fixture mimics that shape so the
+        # test exercises the "winner is valid → use their canonical"
+        # path rather than the "winner looks broken → evict + retry"
+        # path which has its own dedicated tests.
         canonical = tmp_path / "cache" / "abc" / "python-db"
         canonical.parent.mkdir(parents=True)
         # Pre-populate canonical (simulating sibling who finished first)
         canonical.mkdir()
         (canonical / "codeql-database.yml").write_text("language: python\n")
         (canonical / "winner-marker").write_text("winner")
+        winner_db = canonical / "db-python"
+        winner_db.mkdir()
+        # > 100KB to clear validate_database's minimum-substance check.
+        (winner_db / "trie.bin").write_bytes(b"w" * 150_000)
 
         bs = BuildSystem(type="pip", command="", working_dir=tmp_path,
                          env_vars={}, confidence=1.0, detected_files=[])
