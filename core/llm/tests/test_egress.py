@@ -31,17 +31,9 @@ from core.llm.config import LLMConfig, ModelConfig
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(autouse=True)
-def _reset_egress_state(monkeypatch):
-    """Reset module-level ``_enabled`` flag and any env vars we mutate
-    between tests so each test sees a deterministic starting state."""
-    egress._reset_for_tests()
-    monkeypatch.delenv("HTTPS_PROXY", raising=False)
-    monkeypatch.delenv("https_proxy", raising=False)
-    monkeypatch.delenv("NO_PROXY", raising=False)
-    monkeypatch.delenv("no_proxy", raising=False)
-    yield
-    egress._reset_for_tests()
+# Note: env-var cleanup + ``egress._enabled`` reset for every test in
+# this directory is handled by ``core/llm/tests/conftest.py``'s autouse
+# fixture. See that file for the test-pollution rationale.
 
 
 @pytest.fixture
@@ -100,7 +92,13 @@ class TestDeriveAllowlist:
 
     def test_openai_default_uses_provider_endpoints(self):
         cfg = _config(primary=_model(provider="openai"))
-        assert "api.openai.com" in egress.derive_allowlist(cfg)
+        # Use set equality / superset checks rather than ``in``
+        # against the returned set — CodeQL's
+        # py/incomplete-url-substring-sanitization rule false-positives
+        # on string-shaped LHS in ``in`` checks even when RHS is
+        # explicitly a set. ``issuperset`` makes the set semantics
+        # unambiguous.
+        assert egress.derive_allowlist(cfg).issuperset({"api.openai.com"})
 
     def test_operator_api_base_overrides_default(self):
         """Operator routes Anthropic via internal gateway: the
@@ -112,8 +110,8 @@ class TestDeriveAllowlist:
             api_base="https://gateway.internal.corp/anthropic/v1",
         ))
         hosts = egress.derive_allowlist(cfg)
-        assert "gateway.internal.corp" in hosts
-        assert "api.anthropic.com" not in hosts
+        assert hosts.issuperset({"gateway.internal.corp"})
+        assert hosts.isdisjoint({"api.anthropic.com"})
 
     def test_multi_provider_panel(self):
         """A multi-model dispatch with primary + fallback + specialized
@@ -128,9 +126,9 @@ class TestDeriveAllowlist:
             },
         )
         hosts = egress.derive_allowlist(cfg)
-        assert "api.anthropic.com" in hosts
-        assert "api.openai.com" in hosts
-        assert "api.mistral.ai" in hosts
+        assert hosts.issuperset(
+            {"api.anthropic.com", "api.openai.com", "api.mistral.ai"}
+        )
 
     def test_ollama_only_localhost(self):
         cfg = _config(primary=_model(
@@ -141,7 +139,7 @@ class TestDeriveAllowlist:
         # localhost SHOULD show up here — derive_allowlist is pure
         # discovery; the loopback bypass happens in enable_llm_egress.
         hosts = egress.derive_allowlist(cfg)
-        assert "localhost" in hosts
+        assert hosts.issuperset({"localhost"})
 
     def test_unknown_provider_no_endpoint(self):
         """A provider with no ``api_base`` and no entry in
@@ -162,7 +160,7 @@ class TestDeriveAllowlist:
         hosts = egress.derive_allowlist(cfg)
         # urlparse on "not a url" yields no hostname; we silently skip
         # this entry rather than substituting the default.
-        assert "api.anthropic.com" not in hosts
+        assert hosts.isdisjoint({"api.anthropic.com"})
 
     def test_api_base_with_port_extracts_host_only(self):
         cfg = _config(primary=_model(
@@ -188,29 +186,31 @@ class TestEnableLLMEgress:
     def test_appends_loopback_to_no_proxy(self, stub_proxy):
         cfg = _config(primary=_model(provider="anthropic"))
         egress.enable_llm_egress(cfg)
-        np = os.environ["NO_PROXY"]
-        assert "localhost" in np
-        assert "127.0.0.1" in np
+        # Parse NO_PROXY as a set so the assertion is set-membership
+        # rather than substring containment (CodeQL's URL-substring
+        # rule false-positives on the latter).
+        entries = {p.strip() for p in os.environ["NO_PROXY"].split(",")}
+        assert entries.issuperset({"localhost", "127.0.0.1"})
 
     def test_preserves_operator_no_proxy_entries(self, stub_proxy, monkeypatch):
         monkeypatch.setenv("NO_PROXY", "internal.corp,*.test")
         cfg = _config(primary=_model(provider="anthropic"))
         egress.enable_llm_egress(cfg)
         np = os.environ["NO_PROXY"]
-        assert "internal.corp" in np
-        assert "*.test" in np
-        assert "localhost" in np
+        entries = [p.strip() for p in np.split(",")]
+        assert set(entries).issuperset(
+            {"internal.corp", "*.test", "localhost"}
+        )
         # Order: operator entries first
-        parts = np.split(",")
-        assert parts.index("internal.corp") < parts.index("localhost")
+        assert entries.index("internal.corp") < entries.index("localhost")
 
     def test_no_double_localhost_when_already_present(self, stub_proxy, monkeypatch):
         monkeypatch.setenv("NO_PROXY", "localhost,internal.corp")
         cfg = _config(primary=_model(provider="anthropic"))
         egress.enable_llm_egress(cfg)
-        np = os.environ["NO_PROXY"]
+        entries = [p.strip() for p in os.environ["NO_PROXY"].split(",")]
         # Each entry exactly once
-        assert np.count("localhost") == 1
+        assert entries.count("localhost") == 1
 
     def test_empty_allowlist_no_op(self, stub_proxy, monkeypatch):
         """No models configured (autodetect-empty) → no env mutation,
@@ -257,8 +257,8 @@ class TestEnableLLMEgress:
         egress.enable_llm_egress(cfg1)
         egress.enable_llm_egress(cfg2)
         assert len(stub_proxy) == 2
-        assert "api.anthropic.com" in stub_proxy[0]
-        assert "api.openai.com" in stub_proxy[1]
+        assert set(stub_proxy[0]).issuperset({"api.anthropic.com"})
+        assert set(stub_proxy[1]).issuperset({"api.openai.com"})
 
     def test_proxy_brought_up_before_env_overwrite(self, monkeypatch):
         """Critical ordering: ``get_proxy`` must be called BEFORE we
@@ -310,9 +310,8 @@ class TestEnableLLMEgress:
         egress.enable_llm_egress(cfg)
         assert stub_proxy, "get_proxy should have been called"
         registered = set(stub_proxy[0])
-        assert "api.anthropic.com" in registered
-        assert "localhost" not in registered
-        assert "127.0.0.1" not in registered
+        assert registered.issuperset({"api.anthropic.com"})
+        assert registered.isdisjoint({"localhost", "127.0.0.1"})
 
 
 # ---------------------------------------------------------------------------
