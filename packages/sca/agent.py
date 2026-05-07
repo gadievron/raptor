@@ -197,6 +197,38 @@ def find_dependency_files(root: Path) -> List[Path]:
                 rel_parts = p.parts
             if any(part in _VENDOR_DIR_NAMES for part in rel_parts[:-1]):
                 continue
+            # Reject symlinks (file or any parent dir). `rglob`
+            # follows symlinks by default on Python < 3.13 — a
+            # symlink under the target repo pointing OUT to e.g.
+            # `/etc` or to a shared workspace directory could
+            # introduce dependency files we'd then parse and
+            # report as if they belonged to this repo. Two failure
+            # modes:
+            #   1. Operator-visible noise: shared workspace
+            #      `requirements.txt` flagged against the wrong
+            #      project, fix recommendations applied to the
+            #      wrong tree.
+            #   2. Confused-deputy disclosure: parser output
+            #      goes into LLM prompts for triage; symlinks
+            #      to /etc/* would leak host filesystem layout.
+            try:
+                if p.is_symlink():
+                    continue
+                # Walk up the parents to root, refusing if any
+                # intermediate directory is a symlink (the file
+                # itself may not be a symlink even when reached
+                # through a symlinked parent).
+                parent = p.parent
+                walked_through_symlink = False
+                while parent != root and parent.parent != parent:
+                    if parent.is_symlink():
+                        walked_through_symlink = True
+                        break
+                    parent = parent.parent
+                if walked_through_symlink:
+                    continue
+            except OSError:
+                continue
             candidates.append(p)
     return candidates
 
