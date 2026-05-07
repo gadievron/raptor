@@ -281,15 +281,21 @@ Examples:
     parser.add_argument("--no-visualizations", action="store_true", help="Disable dataflow visualizations")
     parser.add_argument("--trust-repo", action="store_true",
                         help="Trust the target repo's config and skip safety checks "
-                             "(core/security/cc_trust.py).")
+                             "(.claude/settings*.json, .mcp.json, codeql-pack.yml, "
+                             "qlpack.yml, .github/codeql/codeql-config.yml).")
 
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(parser)
     args = parser.parse_args()
     apply_cli_args(args, parser=parser)
     if getattr(args, "trust_repo", False):
-        from core.security.cc_trust import set_trust_override
-        set_trust_override(True)
+        # Umbrella flag: every target-repo trust check honours the same
+        # operator-set override. New checks added here must keep this
+        # list in sync.
+        from core.security.cc_trust import set_trust_override as _cc_set
+        from core.security.codeql_trust import set_trust_override as _ql_set
+        _cc_set(True)
+        _ql_set(True)
 
     try:
         run_autonomous_workflow(args)

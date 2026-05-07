@@ -494,6 +494,29 @@ class DatabaseManager:
         logger.info(f"Creating CodeQL database for {language}")
         logger.info(f"{'=' * 70}")
 
+        # Trust check: target-repo codeql-pack.yml / qlpack.yml /
+        # codeql-config.yml can declare custom extractors, build hooks
+        # and external pack dependencies that codeql exec's during
+        # `database create`. Refuse on findings unless --trust-repo
+        # has been parsed at the entry point. Distinct surface from
+        # the cc_trust check (which guards .claude/settings.json).
+        from core.security.codeql_trust import check_repo_codeql_trust
+        if check_repo_codeql_trust(str(repo_path)):
+            return DatabaseResult(
+                success=False,
+                language=language,
+                database_path=None,
+                metadata=None,
+                errors=[
+                    "target repo has unsafe CodeQL pack config — refusing "
+                    "to invoke `codeql database create`. Re-run with "
+                    "--trust-repo to override after auditing the printed "
+                    "findings."
+                ],
+                duration_seconds=time.time() - start_time,
+                cached=False,
+            )
+
         # Check for cached database
         if not force:
             cached_db = self.get_cached_database(repo_path, language)
