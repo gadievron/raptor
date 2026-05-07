@@ -31,7 +31,23 @@ import logging
 import os
 import sys
 import time
-import xml.etree.ElementTree as ET
+# Use defusedxml for parsing target-repo XML files. Stdlib's
+# `xml.etree.ElementTree` is vulnerable to XXE / billion-laughs /
+# decompression-bomb attacks when fed adversarial XML — the SCA
+# pipeline reads XML files from untrusted target repositories
+# (operator's pom.xml may have been crafted by an attacker via
+# a malicious dependency, supply-chain compromise, or a deliberately
+# poisoned target). defusedxml.ElementTree wraps the same API but
+# disables external entity resolution, blocks billion-laughs, and
+# caps recursion. ImportError fallback keeps SCA working in
+# environments where defusedxml isn't installed (with a runtime
+# warning that XML parsing is using the unsafe stdlib).
+try:
+    import defusedxml.ElementTree as ET  # type: ignore[import-not-found]
+    _DEFUSED_XML = True
+except ImportError:
+    import xml.etree.ElementTree as ET
+    _DEFUSED_XML = False
 from pathlib import Path
 from typing import List, Optional, Sequence
 
@@ -156,7 +172,27 @@ def find_dependency_files(root: Path) -> List[Path]:
     return candidates
 
 
+_PARSE_POM_WARNED_UNSAFE = False
+
+
 def parse_pom(p):
+    global _PARSE_POM_WARNED_UNSAFE
+    if not _DEFUSED_XML and not _PARSE_POM_WARNED_UNSAFE:
+        # Warn once per process — operator should know they're
+        # parsing untrusted XML with the stdlib parser. Logging
+        # here rather than at import to avoid the warning when
+        # SCA isn't actually invoked.
+        try:
+            from core.logging import get_logger
+            get_logger("sca.agent").warning(
+                "defusedxml not installed — pom.xml parsing falls back to "
+                "xml.etree.ElementTree which is vulnerable to XXE / "
+                "billion-laughs in adversarial XML. `pip install defusedxml` "
+                "to enable safe parsing."
+            )
+        except Exception:
+            pass
+        _PARSE_POM_WARNED_UNSAFE = True
     try:
         tree = ET.parse(p)
         root = tree.getroot()
