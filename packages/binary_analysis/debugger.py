@@ -67,8 +67,33 @@ class GDBDebugger:
         # write (ENOSPC, I/O error, etc.) would leak /tmp/.raptor_gdb_*.txt
         # unless we unlink on failure. Guard with try/except that re-raises
         # after cleanup so the caller still sees the underlying error.
+        #
+        # `dir=` to the binary's parent dir (RAPTOR-controlled
+        # via the analyser's working area) instead of the
+        # default `/tmp`. Pre-fix the script landed in
+        # `tempfile.gettempdir()` which on Linux is shared
+        # `/tmp`. Multi-user systems (CI runners, jump hosts,
+        # shared dev VMs) had operators' GDB scripts visible
+        # to OTHER users via `ls /tmp/.raptor_gdb_*` and (since
+        # they're 0600 by mkstemp default) at least
+        # enumerable. Worse: the GDB script contains the binary
+        # path + commands; on systems with /tmp world-readable
+        # for compatibility with old tools, the script content
+        # leaks. Place the script next to the binary so it
+        # inherits the binary's directory permissions, which
+        # we control.
         import tempfile
-        fd, script_name = tempfile.mkstemp(prefix=".raptor_gdb_", suffix=".txt")
+        # binary_dir resolves to the analyser's binary working
+        # area — same dir we already pass to landlock as a
+        # writable path (line 81 below).
+        binary_dir = self.binary.parent
+        try:
+            binary_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        fd, script_name = tempfile.mkstemp(
+            prefix=".raptor_gdb_", suffix=".txt", dir=str(binary_dir),
+        )
         script_file = Path(script_name)
         os.close(fd)
         try:
