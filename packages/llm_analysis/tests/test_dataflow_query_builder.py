@@ -336,6 +336,116 @@ class TestMultiRoot:
                "codeql_packs/python-queries" in str(path), \
                f"expected in-repo pack to win, got {path}"
 
+    def test_shipped_query_files_present_on_disk(self):
+        """Lock the on-disk file inventory of the in-repo packs.
+
+        Asserts on file paths rather than `discover_prebuilt_query`
+        resolution because:
+
+          - Tag-driven discovery hides accidental drift — a query
+            that loses its `@kind path-problem` line or canonical CWE
+            tag would silently disappear from `discover_*` lookups
+            but still be on disk.
+          - File-path assertions surface that drift instead of giving
+            a confusing "no query for X" indirection.
+
+        Pairs with `test_shipped_cwe_breadth_resolves_via_discovery`
+        below, which checks the discovery layer reads the same files
+        with the right metadata.
+        """
+        from packages.llm_analysis.dataflow_query_builder import _DEFAULT_PACK_ROOT  # noqa: F401
+        from core.config import RaptorConfig
+
+        repo_packs = (RaptorConfig.EXTRA_CODEQL_PACK_ROOTS or [None])[0]
+        assert repo_packs is not None and repo_packs.is_dir(), \
+            f"EXTRA_CODEQL_PACK_ROOTS missing or non-existent: {repo_packs}"
+
+        # Each entry: (language pack dir name, list of expected query
+        # files relative to Security/). The .ql files MUST exist for
+        # the workstream's documented coverage to hold; if you add or
+        # rename one, update this list and the discovery test below.
+        expected = {
+            "python-queries": [
+                "CWE-022/PathTraversalLocal.ql",
+                "CWE-078/CommandInjectionLocal.ql",
+                "CWE-079/ReflectedXssLocal.ql",
+                "CWE-089/SqlInjectionLocal.ql",
+                "CWE-094/CodeInjectionLocal.ql",
+                "CWE-502/UnsafeDeserializationLocal.ql",
+                "CWE-611/XxeLocal.ql",
+                "CWE-918/SsrfLocal.ql",
+            ],
+            "java-queries": [
+                "CWE-022/PathTraversalLocal.ql",
+                "CWE-078/CommandInjectionLocal.ql",
+                "CWE-079/XssLocal.ql",
+                "CWE-089/SqlInjectionLocal.ql",
+                "CWE-502/UnsafeDeserializationLocal.ql",
+                "CWE-611/XxeLocal.ql",
+                "CWE-918/SsrfLocal.ql",
+            ],
+            "javascript-queries": [
+                "CWE-022/PathTraversalLocal.ql",
+                "CWE-078/CommandInjectionLocal.ql",
+                "CWE-079/ReflectedXssLocal.ql",
+                "CWE-089/SqlInjectionLocal.ql",
+                "CWE-094/CodeInjectionLocal.ql",
+                "CWE-502/UnsafeDeserializationLocal.ql",
+                "CWE-918/SsrfLocal.ql",
+            ],
+            "go-queries": [
+                "CWE-022/PathTraversalLocal.ql",
+                "CWE-078/CommandInjectionLocal.ql",
+                "CWE-079/ReflectedXssLocal.ql",
+                "CWE-089/SqlInjectionLocal.ql",
+                "CWE-918/SsrfLocal.ql",
+            ],
+        }
+        for pack_dirname, query_paths in expected.items():
+            pack_dir = repo_packs / pack_dirname
+            assert pack_dir.is_dir(), f"missing pack: {pack_dir}"
+            for rel in query_paths:
+                ql = pack_dir / "Security" / rel
+                assert ql.is_file(), f"missing query: {ql}"
+
+    def test_shipped_cwe_breadth_resolves_via_discovery(self):
+        """Discovery resolves the canonical CWE for each shipped query
+        to the in-repo pack (not the stdlib).
+
+        Skipped when the test environment has no real CodeQL packs —
+        a fresh CI runner without `~/.codeql/packages/` populated
+        would otherwise generate a misleading failure. The on-disk
+        inventory test above runs unconditionally.
+        """
+        import pytest as _pytest
+        from packages.llm_analysis.dataflow_query_builder import _DEFAULT_PACK_ROOT
+        if not _DEFAULT_PACK_ROOT.is_dir():
+            _pytest.skip(
+                f"no real CodeQL packs at {_DEFAULT_PACK_ROOT}; "
+                "the on-disk inventory test covers file presence "
+                "without needing them."
+            )
+        # Canonical-CWE coverage shipped per language. Multi-tagged
+        # queries (e.g. CommandInjectionLocal.ql tags both cwe-78 and
+        # cwe-88) only need the canonical CWE asserted here.
+        expected = {
+            "python": ["CWE-78", "CWE-89", "CWE-22", "CWE-94", "CWE-502",
+                       "CWE-79", "CWE-918", "CWE-611"],
+            "java":   ["CWE-78", "CWE-89", "CWE-22", "CWE-502",
+                       "CWE-79", "CWE-611", "CWE-918"],
+            "javascript": ["CWE-78", "CWE-22", "CWE-94",
+                           "CWE-79", "CWE-89", "CWE-918", "CWE-502"],
+            "go":     ["CWE-78", "CWE-22", "CWE-89",
+                       "CWE-79", "CWE-918"],
+        }
+        for lang, cwes in expected.items():
+            for cwe in cwes:
+                path = discover_prebuilt_query(lang, cwe)
+                assert path is not None, \
+                    f"{lang}/{cwe}: no query discovered"
+                assert "codeql_packs" in str(path), \
+                    f"{lang}/{cwe}: stdlib won the collision (expected in-repo): {path}"
+
 
 class TestResolvedPackPointers:
     """`_resolved_pack_pointers()` shells out to `codeql resolve qlpacks`

@@ -3,21 +3,23 @@
  * @kind path-problem
  * @problem.severity error
  * @precision high
- * @id raptor/iris/java/unsafe-deserialization-local
+ * @id raptor/iris/javascript/unsafe-deserialization-local
  * @tags security
  *       external/cwe/cwe-502
  */
 
-import java
-import semmle.code.java.dataflow.DataFlow
-import semmle.code.java.dataflow.TaintTracking
-import semmle.code.java.security.UnsafeDeserializationQuery
+import javascript
+import semmle.javascript.dataflow.DataFlow
+import semmle.javascript.dataflow.TaintTracking
+import semmle.javascript.security.dataflow.UnsafeDeserializationCustomizations
 import Raptor.LocalFlowSource
 
 private module Config implements DataFlow::ConfigSig {
   predicate isSource(DataFlow::Node n) { n instanceof LocalFlowSource }
 
-  predicate isSink(DataFlow::Node n) { n instanceof UnsafeDeserializationSink }
+  predicate isSink(DataFlow::Node n) { n instanceof UnsafeDeserialization::Sink }
+
+  predicate isBarrier(DataFlow::Node n) { n instanceof UnsafeDeserialization::Sanitizer }
   predicate observeDiffInformedIncrementalMode() { any() }
 }
 

@@ -18,9 +18,16 @@
 
 import javascript
 
+// Selection kept in sync across the four RAPTOR LocalFlowSource
+// libraries (Python / JS / Java / Go); see python-queries/Raptor/
+// LocalFlowSource.qll for the authoritative category list and the
+// rationale for inclusions / exclusions.
 class LocalFlowSource extends ThreatModelSource {
   LocalFlowSource() {
     this.getThreatModel() =
-      ["remote", "commandargs", "environment", "stdin", "file"]
+      [
+        "remote", "commandargs", "environment", "stdin", "file",
+        "database", "view-component-input"
+      ]
   }
 }

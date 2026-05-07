@@ -35,12 +35,24 @@ import semmle.code.java.dataflow.ExternalFlow
  * even when stdlib YAML models tag sources outside the SourceNode
  * class system.
  */
+// Selection kept in sync across the four RAPTOR LocalFlowSource
+// libraries (Python / JS / Java / Go); see python-queries/Raptor/
+// LocalFlowSource.qll for the authoritative category list and the
+// rationale for inclusions / exclusions. Java additionally includes
+// the broad `local` category, which the Java stdlib uses as an
+// umbrella for sources that don't fit a more specific bucket.
 class LocalFlowSource extends DataFlow::Node {
   LocalFlowSource() {
     this.(SourceNode).getThreatModel() =
-      ["remote", "local", "commandargs", "environment", "stdin", "file"]
+      [
+        "remote", "local", "commandargs", "environment", "stdin",
+        "file", "database", "view-component-input"
+      ]
     or
     sourceNode(this,
-      ["remote", "local", "commandargs", "environment", "stdin", "file"])
+      [
+        "remote", "local", "commandargs", "environment", "stdin",
+        "file", "database", "view-component-input"
+      ])
   }
 }

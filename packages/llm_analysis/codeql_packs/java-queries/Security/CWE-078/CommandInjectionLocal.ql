@@ -26,6 +26,7 @@ private module Config implements DataFlow::ConfigSig {
   predicate isSink(DataFlow::Node n) { n instanceof CommandInjectionSink }
 
   predicate isBarrier(DataFlow::Node n) { n instanceof CommandInjectionSanitizer }
+  predicate observeDiffInformedIncrementalMode() { any() }
 }
 
 module Flow = TaintTracking::Global<Config>;

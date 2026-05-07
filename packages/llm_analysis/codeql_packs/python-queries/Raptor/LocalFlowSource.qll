@@ -35,10 +35,40 @@ import semmle.python.Concepts
  * Subtype selectors mirror the threat-model categories in the CodeQL
  * threat-models pack. Adding a category here is the only change needed
  * to widen IRIS Tier 1's source coverage.
+ *
+ * Threat-model categories selected here (kept in sync across the four
+ * RAPTOR LocalFlowSource libraries — Python / JS / Java / Go):
+ *
+ *   - `remote`   — network sources (HTTP, RPC, message queues, etc.).
+ *                  Included so a single `LocalFlowSource` query covers
+ *                  both local and remote inputs.
+ *   - `commandargs` — argv-style command-line parameters.
+ *   - `environment` — env-variable reads.
+ *   - `stdin`    — stdin reads / interactive input.
+ *   - `file`     — reads of attacker-controlled file paths.
+ *   - `database` — values fetched from a (possibly attacker-influenced)
+ *                  data store, used as second-order taint sources.
+ *   - `view-component-input` — JS-specific client-side inputs (URL
+ *                  fragments, query strings, postMessage payloads);
+ *                  no-op on Python/Java/Go but cheap to include for
+ *                  cross-language consistency.
+ *
+ * Threat-model categories deliberately excluded:
+ *   - `reverse-dns` — DNS-based attacker control is rare and noisy;
+ *                  add when a real claim names it.
+ *
+ * If an LLM-generated claim involves a category outside the list
+ * above, Tier 1 will return zero matches and PR-B's verdict relaxation
+ * will refute (potentially incorrectly). The list above is the
+ * authoritative answer to "what does our LocalFlowSource cover" — keep
+ * this docblock and the predicate body in sync.
  */
 class LocalFlowSource extends ThreatModelSource {
   LocalFlowSource() {
     this.getThreatModel() =
-      ["remote", "commandargs", "environment", "stdin", "file"]
+      [
+        "remote", "commandargs", "environment", "stdin", "file",
+        "database", "view-component-input"
+      ]
   }
 }

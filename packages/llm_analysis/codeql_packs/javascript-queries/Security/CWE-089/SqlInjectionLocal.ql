@@ -3,21 +3,23 @@
  * @kind path-problem
  * @problem.severity error
  * @precision high
- * @id raptor/iris/go/sql-injection-local
+ * @id raptor/iris/javascript/sql-injection-local
  * @tags security
  *       external/cwe/cwe-89
  */
 
-import go
-import semmle.go.dataflow.DataFlow
-import semmle.go.dataflow.TaintTracking
-import semmle.go.security.SqlInjectionCustomizations
+import javascript
+import semmle.javascript.dataflow.DataFlow
+import semmle.javascript.dataflow.TaintTracking
+import semmle.javascript.security.dataflow.SqlInjectionCustomizations
 import Raptor.LocalFlowSource
 
 private module Config implements DataFlow::ConfigSig {
   predicate isSource(DataFlow::Node n) { n instanceof LocalFlowSource }
 
   predicate isSink(DataFlow::Node n) { n instanceof SqlInjection::Sink }
+
+  predicate isBarrier(DataFlow::Node n) { n instanceof SqlInjection::Sanitizer }
   predicate observeDiffInformedIncrementalMode() { any() }
 }
 

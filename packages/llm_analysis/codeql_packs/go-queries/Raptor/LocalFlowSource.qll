@@ -22,12 +22,22 @@ import go
 import semmle.go.security.FlowSources
 import semmle.go.dataflow.ExternalFlow
 
+// Selection kept in sync across the four RAPTOR LocalFlowSource
+// libraries (Python / JS / Java / Go); see python-queries/Raptor/
+// LocalFlowSource.qll for the authoritative category list and the
+// rationale for inclusions / exclusions.
 class LocalFlowSource extends DataFlow::Node {
   LocalFlowSource() {
     this.(SourceNode).getThreatModel() =
-      ["remote", "commandargs", "environment", "stdin", "file"]
+      [
+        "remote", "commandargs", "environment", "stdin", "file",
+        "database", "view-component-input"
+      ]
     or
     sourceNode(this,
-      ["remote", "commandargs", "environment", "stdin", "file"])
+      [
+        "remote", "commandargs", "environment", "stdin", "file",
+        "database", "view-component-input"
+      ])
   }
 }
