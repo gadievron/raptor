@@ -411,6 +411,33 @@ def _run_validate_postpass_unsafe(
         save_json(selection_file,
                   convert_agentic_to_validate(selected, str(target)))
 
+        # Drop a pointer to the parent /agentic checklist so /validate's
+        # Stage 0 can reuse it instead of rebuilding the inventory from
+        # scratch. The reachability prepass already built one; pointing
+        # at it saves a full source-tree walk + AST parse (~30-60s on
+        # typical large repos). /validate's Stage 0 reads
+        # ``parent-checklist-pointer.json`` and falls through to a fresh
+        # build when the pointer is missing / stale / mistargeted /
+        # outside the expected root.
+        #
+        # ``expected_root_dir`` is the agentic_out_dir; /validate
+        # rejects pointers whose ``checklist_path`` resolves outside
+        # this root (defense against a buggy or malicious pointer
+        # pointing at arbitrary file paths). Same defensive principle
+        # as the /understand bridge's path validation. The mtime-based
+        # TTL on the validate side rejects checklists older than 1h
+        # (stale source drift).
+        agentic_checklist = agentic_out_dir / "checklist.json"
+        if agentic_checklist.is_file():
+            save_json(
+                validate_dir / "parent-checklist-pointer.json",
+                {
+                    "checklist_path": str(agentic_checklist.resolve()),
+                    "expected_target_path": str(target),
+                    "expected_root_dir": str(agentic_out_dir.resolve()),
+                },
+            )
+
         prompt = _build_validate_prompt(target, agentic_out_dir, validate_dir,
                                         analysis_report, selection_file, len(selected))
 
