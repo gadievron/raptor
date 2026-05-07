@@ -196,10 +196,29 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Build initial prompt: /raptor [target]
-if [[ -n "$TARGET" && -n "$INITIAL_PROMPT" ]]; then
-    INITIAL_PROMPT="/raptor $TARGET"
+# Build initial prompt: /raptor [target]. Escape TARGET
+# before interpolating into the prompt string. Pre-fix `"/raptor
+# $TARGET"` interpolated `$TARGET` raw — for legitimate paths
+# this was harmless, but TARGET is operator-supplied:
+#   * Path with embedded newlines (`/foo$'\n'/extra`) split
+#     the prompt into multiple lines downstream — the second
+#     line was treated by Claude Code as a new instruction.
+#   * Path with embedded backticks / `$()` was preserved
+#     verbatim into the prompt (Claude Code receives a
+#     literal string, doesn't shell-eval), but if the
+#     operator copied the rendered prompt elsewhere
+#     (Slack message, ticket) and pasted into a shell, the
+#     command substitution would fire there.
+# Strip control bytes from TARGET before interpolation;
+# legitimate path components don't contain them.
+_target_clean=$(printf '%s' "$TARGET" | tr -d '\000-\010\013-\037')
+if [ "$_target_clean" != "$TARGET" ]; then
+    echo "raptor: TARGET contained control bytes — stripped before use" >&2
 fi
+if [[ -n "$_target_clean" && -n "$INITIAL_PROMPT" ]]; then
+    INITIAL_PROMPT="/raptor $_target_clean"
+fi
+unset _target_clean
 
 # Resolve which directory the trust check should scan
 CHECK_TARGET=""
