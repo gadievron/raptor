@@ -134,7 +134,16 @@ def extract_personas() -> list[dict]:
             continue
 
         persona_name = persona_file.stem.replace("_", " ").replace("-", " ")
-        content = persona_file.read_text(encoding="utf-8").strip()
+        # Cap before reading. Pre-fix `read_text()` was unbounded; a
+        # legitimate persona is <50 KB, but a corrupted .md file or
+        # an inadvertent log paste into the personas dir could be
+        # tens of MB and we'd then chunk-load the whole thing into
+        # SAGE — wallclock + memory penalty for what's almost
+        # certainly bad data. 5 MB cap leaves headroom for unusually
+        # rich personas while refusing pathological input.
+        if not _read_capped(persona_file, max_bytes=5 * 1024 * 1024):
+            continue
+        content = _read_capped(persona_file, max_bytes=5 * 1024 * 1024).strip()
 
         # Chunk long personas into ~1500 char segments
         if len(content) > 1500:
@@ -176,7 +185,10 @@ def extract_methodology() -> list[dict]:
         if not fpath.exists():
             continue
 
-        content = fpath.read_text(encoding="utf-8").strip()
+        capped = _read_capped(fpath, max_bytes=5 * 1024 * 1024)
+        if not capped:
+            continue
+        content = capped.strip()
         doc_name = fname.replace(".md", "").replace("-", " ")
 
         chunks = _chunk_text(content, max_chars=1500)
@@ -242,6 +254,34 @@ def extract_semgrep_config() -> list[dict]:
     })
 
     return memories
+
+
+def _read_capped(path: Path, *, max_bytes: int) -> str:
+    """Read a text file with a byte cap. Returns "" on read failure or
+    if the file exceeds ``max_bytes`` (logging a warning on the
+    oversize path so an operator sees what was skipped).
+
+    Pre-fix every `read_text` call here was unbounded. A corrupted
+    .md file in the personas/methodology dir, or an inadvertent log
+    paste, could be tens of MB and we'd chunk-load the whole thing
+    into SAGE — wallclock + memory + bandwidth penalty for what's
+    almost certainly bad data.
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return ""
+    if st.st_size > max_bytes:
+        import logging
+        logging.getLogger(__name__).warning(
+            "seed_sage: skipping %s (size %s exceeds cap %s)",
+            path.name, st.st_size, max_bytes,
+        )
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
 
 
 def _chunk_text(text: str, max_chars: int = 1500) -> list[str]:
