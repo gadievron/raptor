@@ -337,6 +337,17 @@ async def _register_one(
                     tags=[xref_tag],
                 )
 
+            # Status differentiates force-mode from cold-stores. With
+            # `--force`, role_exists / xref_exists were stomped to False
+            # above so the cold-store path always runs; pre-fix this
+            # came back as "stored" indistinguishable from a real first
+            # registration. Operators rerunning `--force` after an
+            # incident review need to see "this was already there, I
+            # just rewrote it" vs "this was net-new" — masking the
+            # difference made the success log useless for confirming
+            # whether the registry was actually missing entries.
+            if force:
+                return (name, "force-restored")
             if role_exists or xref_exists:
                 return (name, "partial")  # one half was already present
             return (name, "stored")
@@ -417,6 +428,7 @@ async def register_agents(sage_url: str, dry_run: bool = False, force: bool = Fa
             results.append(r)
 
     stored = sum(1 for _, status in results if status == "stored")
+    force_restored = sum(1 for _, status in results if status == "force-restored")
     partial = sum(1 for _, status in results if status == "partial")
     skipped = sum(1 for _, status in results if status == "skipped")
     failed = [(name, status) for name, status in results if status.startswith("failed")]
@@ -435,11 +447,13 @@ async def register_agents(sage_url: str, dry_run: bool = False, force: bool = Fa
         n = safe_name(name)
         s = safe_name(status)
         if status == "stored":
-            print(f"  stored:  {n}")
+            print(f"  stored:         {n}")
+        elif status == "force-restored":
+            print(f"  force-restored: {n} (re-proposed under --force)")
         elif status == "partial":
-            print(f"  partial: {n} (filled in missing half from a prior partial run)")
+            print(f"  partial:        {n} (filled in missing half from a prior partial run)")
         elif status == "skipped":
-            print(f"  skipped: {n} (already registered)")
+            print(f"  skipped:        {n} (already registered)")
         else:
             print(f"  {s.upper()}: {n}")
 
@@ -447,6 +461,7 @@ async def register_agents(sage_url: str, dry_run: bool = False, force: bool = Fa
     print("=" * 60)
     print(
         f"Stored: {stored}/{len(RAPTOR_AGENTS)}  "
+        f"Force-restored: {force_restored}  "
         f"Partial: {partial}  Skipped: {skipped}  Failed: {len(failed)}"
     )
     print("=" * 60)
