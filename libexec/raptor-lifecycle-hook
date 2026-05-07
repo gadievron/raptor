@@ -74,8 +74,26 @@ def main():
                 scan_dirs.append(project_dir)
         except OSError:
             pass
+    # Honour RaptorConfig.get_out_dir() / DEFAULT_OUTPUT_BASE
+    # rather than hardcoding `REPO_ROOT / "out"`. Pre-fix the
+    # hardcoded path missed runs that landed under the
+    # operator-configured base (e.g. the project run dir from a
+    # `/project use` invocation, or RAPTOR_OUTPUT_BASE override
+    # for shared CI workspaces). The hook's "find the active
+    # run" logic then said "no run found" for runs that
+    # genuinely existed elsewhere; lifecycle events fired
+    # against the wrong (stale) state.
+    try:
+        from core.config import RaptorConfig
+        configured_out = Path(RaptorConfig.DEFAULT_OUTPUT_BASE)
+        if configured_out.is_dir() and configured_out not in scan_dirs:
+            scan_dirs.append(configured_out)
+    except Exception:
+        # core.config import failure shouldn't break the hook;
+        # fall back to the hardcoded default.
+        pass
     out_dir = REPO_ROOT / "out"
-    if out_dir.is_dir():
+    if out_dir.is_dir() and out_dir not in scan_dirs:
         scan_dirs.append(out_dir)
 
     for parent in scan_dirs:
