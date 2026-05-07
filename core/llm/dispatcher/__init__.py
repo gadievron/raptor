@@ -23,7 +23,11 @@ each LLM-calling subprocess and switches it to ``spawn_worker`` +
 ``client.make_anthropic_client``.
 """
 
-from .client import make_anthropic_client
+from .client import (
+    make_anthropic_client,
+    make_gemini_base_url,
+    make_openai_client,
+)
 from .lifecycle import dispatcher_for_run, llm_dispatcher_in_run
 from .server import LLMDispatcher, AuditEvent
 from .spawn import spawn_worker
@@ -34,5 +38,7 @@ __all__ = [
     "dispatcher_for_run",
     "llm_dispatcher_in_run",
     "make_anthropic_client",
+    "make_gemini_base_url",
+    "make_openai_client",
     "spawn_worker",
 ]

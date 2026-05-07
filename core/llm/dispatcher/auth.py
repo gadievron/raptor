@@ -83,10 +83,15 @@ class CredentialStore:
 
 
 def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
-    """Return the rules table for v1 — Anthropic only.
+    """Return the rules table.
 
-    OpenAI and Gemini will join the table once the v1 design is
-    proven. Each addition is one ``ProviderRule`` entry.
+    Each provider is a single :class:`ProviderRule` entry. Adding a
+    new provider is a closure that returns the right header shape
+    plus a ``ProviderRule`` row — no other code changes required.
+    Providers whose key is unset at build time are still in the
+    table; the dispatcher rejects requests to them with
+    ``503 provider not configured`` so worker SDK calls surface a
+    clear error.
     """
 
     def _anthropic_headers() -> dict[str, str]:
@@ -98,10 +103,35 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
             "anthropic-version": "2023-06-01",
         }
 
+    def _openai_headers() -> dict[str, str]:
+        key = creds.get("openai")
+        if not key:
+            return {}
+        return {"Authorization": f"Bearer {key}"}
+
+    def _gemini_headers() -> dict[str, str]:
+        key = creds.get("gemini")
+        if not key:
+            return {}
+        # Gemini's REST API accepts the key either as ``?key=...`` query
+        # param or as the ``x-goog-api-key`` header; SDKs default to
+        # the header so the dispatcher injects it that way.
+        return {"x-goog-api-key": key}
+
     return {
         "anthropic": ProviderRule(
             name="anthropic",
             upstream_base_url="https://api.anthropic.com",
             inject_headers=_anthropic_headers,
+        ),
+        "openai": ProviderRule(
+            name="openai",
+            upstream_base_url="https://api.openai.com",
+            inject_headers=_openai_headers,
+        ),
+        "gemini": ProviderRule(
+            name="gemini",
+            upstream_base_url="https://generativelanguage.googleapis.com",
+            inject_headers=_gemini_headers,
         ),
     }

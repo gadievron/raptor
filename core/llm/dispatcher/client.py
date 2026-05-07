@@ -70,6 +70,28 @@ def _make_httpx_client(socket_path: str, token: str) -> httpx.Client:
     )
 
 
+def _resolve_socket_and_token(
+    socket_path: Optional[str], token: Optional[str],
+) -> tuple[str, str]:
+    """Shared default-resolution for the per-provider client factories.
+
+    Lifted out of ``make_anthropic_client`` so OpenAI and Gemini
+    factories don't repeat the same env-var fallback logic and stay
+    in sync if the env var names ever change.
+    """
+    if socket_path is None:
+        env = os.environ.get("RAPTOR_LLM_SOCKET")
+        if env is None:
+            raise RuntimeError(
+                "RAPTOR_LLM_SOCKET not set — worker must be spawned via "
+                "core.llm.dispatcher.spawn_worker"
+            )
+        socket_path = env
+    if token is None:
+        token = read_token()
+    return socket_path, token
+
+
 def make_anthropic_client(
     *,
     socket_path: Optional[str] = None,
@@ -89,17 +111,7 @@ def make_anthropic_client(
     """
     import anthropic   # imported lazily so the module loads without the SDK
 
-    if socket_path is None:
-        env = os.environ.get("RAPTOR_LLM_SOCKET")
-        if env is None:
-            raise RuntimeError(
-                "RAPTOR_LLM_SOCKET not set — worker must be spawned via "
-                "core.llm.dispatcher.spawn_worker"
-            )
-        socket_path = env
-    if token is None:
-        token = read_token()
-
+    socket_path, token = _resolve_socket_and_token(socket_path, token)
     http = _make_httpx_client(socket_path, token)
     # ``api_key='dummy'`` because the SDK validates that *something*
     # was passed; the dispatcher strips it and injects the real key.
@@ -110,3 +122,36 @@ def make_anthropic_client(
         base_url="http://_/anthropic/v1",
         http_client=http,
     )
+
+
+def make_openai_client(
+    *,
+    socket_path: Optional[str] = None,
+    token: Optional[str] = None,
+):
+    """Return a stock ``openai.OpenAI`` client routed through the
+    dispatcher. Same shape as :func:`make_anthropic_client`."""
+    import openai
+
+    socket_path, token = _resolve_socket_and_token(socket_path, token)
+    http = _make_httpx_client(socket_path, token)
+    return openai.OpenAI(
+        api_key="dummy-not-used",
+        base_url="http://_/openai/v1",
+        http_client=http,
+    )
+
+
+def make_gemini_base_url(*, socket_path: Optional[str] = None,
+                          token: Optional[str] = None) -> tuple[str, httpx.Client]:
+    """Gemini's Python SDK (``google-genai``) doesn't take a custom
+    httpx client through its top-level ``Client`` constructor in all
+    versions, so callers wire the base URL + httpx client themselves.
+
+    Returns a tuple ``(base_url, http_client)`` the caller passes to
+    whichever Gemini client wrapper they use. Same socket/token
+    resolution as the other factories.
+    """
+    socket_path, token = _resolve_socket_and_token(socket_path, token)
+    http = _make_httpx_client(socket_path, token)
+    return "http://_/gemini", http
