@@ -129,6 +129,55 @@ class TestStoreAnalysisResults(unittest.TestCase):
         store_analysis_results("/repo", {"exploitable": 3})
 
 
+class TestAdditionalSageHooks(unittest.TestCase):
+    @patch("core.sage.hooks._get_client")
+    def test_store_web_payload_effectiveness_redacts_secret_like_text(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.propose.return_value = True
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import store_web_payload_effectiveness
+        store_web_payload_effectiveness(
+            repo_path="https://example.test",
+            target_fingerprint="https://example.test/search",
+            payload_class="xss",
+            evidence_class="reflection",
+            effectiveness=0.91,
+            attempts=12,
+            signals=3,
+            notes="auth header Bearer sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDE",
+        )
+
+        self.assertTrue(mock_client.propose.called)
+        content = mock_client.propose.call_args.kwargs["content"]
+        self.assertNotIn("sk-proj-", content)
+        self.assertIn("[REDACTED]", content)
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_context_for_codeql_build_returns_results(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.query.return_value = [
+            {"content": "build succeeded with autobuild", "confidence": 0.85, "domain": "raptor-methodology"}
+        ]
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import recall_context_for_codeql_build
+        results = recall_context_for_codeql_build("/repo", ["python"])
+        self.assertEqual(len(results), 1)
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_context_for_fuzzing_strategy_handles_failure(self, mock_get_client):
+        mock_client = MagicMock()
+        mock_client.query.side_effect = RuntimeError("boom")
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import recall_context_for_fuzzing_strategy
+        self.assertEqual(
+            recall_context_for_fuzzing_strategy("/repo", "abc123", "default"),
+            [],
+        )
+
+
 class TestThrottle(unittest.TestCase):
     """SAGE_PROPOSE_DELAY_MS behaviour (default 0, no sleep)."""
 

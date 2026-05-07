@@ -182,6 +182,9 @@ class SageClient:
         if client is None:
             return False
         try:
+            # SAGE model usage: we intentionally delegate embedding generation
+            # to the SAGE sidecar/client. The configured embedding model is
+            # selected there, so RAPTOR stays model-agnostic at the hook layer.
             if embedding is None:
                 embedding = client.embed(content)
 
@@ -239,6 +242,7 @@ class SageClient:
         if client is None:
             return []
         try:
+            # Query path uses the same SAGE-managed embedding model as propose().
             embedding = client.embed(text)
             response = client.query(
                 embedding=embedding,

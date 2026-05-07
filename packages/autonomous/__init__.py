@@ -11,8 +11,6 @@ Transforms RAPTOR from automation to true autonomy through:
 
 from .planner import FuzzingPlanner, FuzzingState, Action
 from .memory import FuzzingMemory, FuzzingKnowledge
-from .unified_memory import UnifiedMemory, SecretScanPolicy
-from .memory_exports import export_memory_views
 from .dialogue import MultiTurnAnalyser
 from .exploit_validator import ExploitValidator, ValidationResult
 from .goal_planner import GoalPlanner, Goal, GoalType
@@ -24,9 +22,6 @@ __all__ = [
     "Action",
     "FuzzingMemory",
     "FuzzingKnowledge",
-    "UnifiedMemory",
-    "SecretScanPolicy",
-    "export_memory_views",
     "MultiTurnAnalyser",
     "ExploitValidator",
     "ValidationResult",

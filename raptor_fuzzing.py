@@ -24,16 +24,20 @@ sys.path.insert(0, str(Path(__file__).parent))
 from core.hash import sha256_file
 from core.json import save_json
 
-from core.config import RaptorConfig
 from core.logging import get_logger
 from core.run.safe_io import safe_run_mkdir
-from packages.fuzzing import AFLRunner, CrashCollector, CorpusManager
+from core.sage.hooks import (
+    recall_context_for_crash_analysis,
+    recall_context_for_fuzzing_strategy,
+    store_crash_analysis_pattern,
+    store_fuzzing_strategy_outcome,
+)
+from packages.fuzzing import AFLRunner, CrashCollector
 from packages.binary_analysis import CrashAnalyser
 from packages.llm_analysis.crash_agent import CrashAnalysisAgent
 from packages.autonomous import (
     FuzzingPlanner, FuzzingState, FuzzingMemory,
-    MultiTurnAnalyser, ExploitValidator, GoalPlanner, CorpusGenerator,
-    UnifiedMemory, export_memory_views
+    MultiTurnAnalyser, ExploitValidator, GoalPlanner, CorpusGenerator
 )
 
 logger = get_logger()
@@ -162,13 +166,15 @@ def main() -> None:
         # Check for past strategies for this binary
         binary_hash = sha256_file(binary_path)[:16]
         best_strategy = memory.get_best_strategy(binary_hash)
+        # Future-agent note: recall first, then local heuristic selection.
+        # Keep this ordering so SAGE memory can influence planning early.
+        recall_context_for_fuzzing_strategy(
+            repo_path=str(binary_path.parent),
+            binary_fingerprint=binary_hash,
+            strategy_id="default",
+        )
         if best_strategy:
             logger.info(f"✨ Found best strategy from memory: {best_strategy}")
-            UnifiedMemory().record_event(
-                "fuzzing",
-                "best_strategy_recalled",
-                {"binary_hash": binary_hash, "strategy": best_strategy},
-            )
 
         # Generate autonomous corpus if no corpus provided
         if not corpus_dir:
@@ -215,17 +221,12 @@ def main() -> None:
             max_crashes=args.max_crashes,
         )
 
-        print(f"\n✓ Fuzzing complete:")
+        print("\n✓ Fuzzing complete:")
         print(f"  - Duration: {args.duration}s")
         print(f"  - Unique crashes: {num_crashes}")
         print(f"  - Crashes dir: {crashes_dir}")
 
         if num_crashes == 0:
-            UnifiedMemory().record_event(
-                "fuzzing",
-                "fuzzing_completed",
-                {"binary": str(binary_path), "duration": args.duration, "crashes": 0},
-            )
             print("\nNo crashes found. Try:")
             print("    - Increasing duration (--duration)")
             print("    - Better seed corpus (--corpus)")
@@ -325,11 +326,19 @@ def main() -> None:
                 input_file=crash.input_file,
                 signal=crash.signal or "unknown",
             )
+            # Future-agent note: crash recall is contextual guidance only.
+            # Never block triage if SAGE is unavailable.
+            recall_context_for_crash_analysis(
+                repo_path=str(binary_path.parent),
+                binary_fingerprint=sha256_file(binary_path)[:16],
+                signal=crash_context.signal,
+                function_name=crash_context.function_name,
+            )
 
             # Deduplicate by stack hash
             if crash_context.stack_hash and crash_context.stack_hash in seen_stack_hashes:
                 logger.info(f"⊘ Skipping duplicate crash (stack hash: {crash_context.stack_hash})")
-                print(f"⊘ Duplicate crash - same stack trace as previous crash")
+                print("⊘ Duplicate crash - same stack trace as previous crash")
                 skipped_duplicates += 1
                 continue
 
@@ -339,6 +348,17 @@ def main() -> None:
             # Classify crash type
             crash_context.crash_type = crash_analyser.classify_crash_type(crash_context)
             logger.info(f"Crash type (heuristic): {crash_context.crash_type}")
+            # Persist coarse crash pattern outcome into SAGE for cross-run recall.
+            store_crash_analysis_pattern(
+                repo_path=str(binary_path.parent),
+                binary_path=str(binary_path),
+                signal=crash_context.signal,
+                function_name=crash_context.function_name or "unknown",
+                crash_type=crash_context.crash_type,
+                source_location=crash_context.source_location,
+                stack_hash=crash_context.stack_hash,
+                exploitability_hint=crash_context.exploitability,
+            )
 
             # LLM analysis - use multi-turn if autonomous mode
             if args.autonomous and multi_turn:
@@ -464,13 +484,13 @@ def main() -> None:
     print("\n" + "=" * 70)
     print("RAPTOR FUZZING COMPLETE")
     print("=" * 70)
-    print(f"\n Summary:")
+    print("\n Summary:")
     print(f"   Total crashes: {num_crashes}")
     print(f"   analysed: {analysed}")
     print(f"   Exploitable: {exploitable}")
     print(f"   Exploits generated: {exploits_generated}")
 
-    print(f"\n Outputs:")
+    print("\n Outputs:")
     print(f"   AFL output: {out_dir / 'afl_output'}")
     print(f"   Crashes: {crashes_dir}")
     print(f"   Analysis: {out_dir / 'analysis'}")
@@ -520,34 +540,22 @@ def main() -> None:
 
     report_file = out_dir / "fuzzing_report.json"
     save_json(report_file, report)
-    unified = UnifiedMemory()
-    unified.record_event(
-        "fuzzing",
-        "run_summary",
-        {
-            "binary": str(binary_path),
-            "crashes": num_crashes,
-            "analysed": analysed,
-            "exploitable": exploitable,
-            "exploits_generated": exploits_generated,
-        },
+    # Store end-of-run strategy outcome through the canonical SAGE path.
+    store_fuzzing_strategy_outcome(
+        repo_path=str(binary_path.parent),
+        binary_fingerprint=sha256_file(binary_path)[:16],
+        strategy_id="default",
+        duration_s=args.duration,
+        execs=0,
+        unique_crashes=num_crashes,
+        hangs=0,
+        exploitable_crashes=exploitable,
     )
-    unified.upsert_knowledge(
-        domain="fuzzing",
-        knowledge_type="strategy_outcome",
-        key=f"default:{binary_path.name}",
-        value={"crashes": num_crashes, "exploitable": exploitable},
-        confidence=0.6 if num_crashes > 0 else 0.3,
-        success_count=num_crashes,
-        failure_count=0 if num_crashes > 0 else 1,
-        context={"binary_path": str(binary_path)},
-    )
-    export_memory_views(unified)
 
     print(f"   Report: {report_file}")
 
     if args.autonomous and memory:
-        print(f"\n Autonomous Learning:")
+        print("\n Autonomous Learning:")
         stats = memory.get_statistics()
         print(f"   Knowledge entries: {stats['total_knowledge']}")
         print(f"   Average confidence: {stats['average_confidence']:.2f}")

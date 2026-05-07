@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from core.hash import sha256_string
 from core.logging import get_logger
+from core.security.redaction import redact_secrets
 
 from .client import SageClient
 from .config import SageConfig
@@ -37,6 +38,13 @@ _client_initialised: bool = False
 # TTL — once we have a working client, keep it for the lifetime.
 _client_none_decided_at: float = 0.0
 _CLIENT_NONE_TTL_S: float = 300.0  # 5 min; balances probe cost vs. recovery latency
+_sage_metrics: Dict[str, int] = {
+    "propose_attempted": 0,
+    "propose_succeeded": 0,
+    "propose_failed": 0,
+    "recall_attempted": 0,
+    "recall_hits": 0,
+}
 
 
 def _throttle() -> None:
@@ -119,10 +127,6 @@ def _get_client() -> Optional[SageClient]:
 
 
 def _repo_key(repo_path: str) -> str:
-    # Resolve before hashing so that different paths that reach the same repo
-    # (symlinks, relative paths) collapse to the same key, and same-basename
-    # repos at different locations stay distinct.
-    #
     # Empty path → empty key. Pre-fix the empty-path branch fed `""`
     # through `sha256_string` and returned the SHA-256 prefix of the
     # empty string ("e3b0c44298fc"). Every caller that fired without
@@ -134,6 +138,12 @@ def _repo_key(repo_path: str) -> str:
     # without inventing a synthetic-but-shared bucket.
     if not repo_path:
         return ""
+    # URL-ish identifiers (web targets): hash normalized URL; avoid cwd resolution.
+    if "://" in repo_path:
+        return sha256_string(repo_path.strip().lower())[:12]
+    # Resolve before hashing so that different paths that reach the same repo
+    # (symlinks, relative paths) collapse to the same key, and same-basename
+    # repos at different locations stay distinct.
     resolved = str(Path(repo_path).resolve())
     return sha256_string(resolved)[:12]
 
@@ -144,6 +154,41 @@ def _findings_domain(repo_path: str) -> str:
 
 def _exploits_domain(repo_path: str) -> str:
     return f"raptor-exploits-{_repo_key(repo_path)}"
+
+
+def _crashes_domain(repo_path: str) -> str:
+    return f"raptor-crashes-{_repo_key(repo_path)}"
+
+
+def _web_domain(repo_path: str) -> str:
+    return f"raptor-web-{_repo_key(repo_path)}"
+
+
+def _binary_key(binary_path: str) -> str:
+    return sha256_string(str(Path(binary_path).resolve()))[:12]
+
+
+def _propose_redacted(
+    *,
+    client: SageClient,
+    content: str,
+    memory_type: str,
+    domain_tag: str,
+    confidence: float,
+) -> bool:
+    _sage_metrics["propose_attempted"] += 1
+    redacted_content = redact_secrets(content)
+    ok = client.propose(
+        content=redacted_content,
+        memory_type=memory_type,
+        domain_tag=domain_tag,
+        confidence=confidence,
+    )
+    if ok:
+        _sage_metrics["propose_succeeded"] += 1
+    else:
+        _sage_metrics["propose_failed"] += 1
+    return ok
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -189,6 +234,114 @@ def recall_context_for_scan(
 
     except Exception as e:
         logger.debug(f"SAGE pre-scan recall failed: {e}")
+        return []
+
+
+def recall_context_for_crash_analysis(
+    repo_path: str,
+    binary_fingerprint: Optional[str] = None,
+    signal: Optional[str] = None,
+    function_name: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    client = _get_client()
+    if client is None:
+        return []
+    try:
+        _sage_metrics["recall_attempted"] += 1
+        query = "Summarize prior crash patterns"
+        if signal:
+            query += f" for signal {signal}"
+        if function_name:
+            query += f" near function {function_name}"
+        if binary_fingerprint:
+            query += f" for binary fingerprint {binary_fingerprint}"
+        query += ", including confidence and exploitability hints."
+        results = client.query(
+            text=query,
+            domain_tag=_crashes_domain(repo_path),
+            top_k=5,
+        )
+        _sage_metrics["recall_hits"] += len(results)
+        return results
+    except Exception as e:
+        logger.debug(f"SAGE crash recall failed: {e}")
+        return []
+
+
+def recall_context_for_web_scan(
+    repo_path: str,
+    target_fingerprint: str,
+) -> List[Dict[str, Any]]:
+    client = _get_client()
+    if client is None:
+        return []
+    try:
+        _sage_metrics["recall_attempted"] += 1
+        results = client.query(
+            text=(
+                "Which payload classes produced differentiated signals "
+                f"on targets matching {target_fingerprint}?"
+            ),
+            domain_tag=_web_domain(repo_path),
+            top_k=5,
+        )
+        _sage_metrics["recall_hits"] += len(results)
+        return results
+    except Exception as e:
+        logger.debug(f"SAGE web recall failed: {e}")
+        return []
+
+
+def recall_context_for_codeql_build(
+    repo_path: str,
+    languages: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    client = _get_client()
+    if client is None:
+        return []
+    try:
+        _sage_metrics["recall_attempted"] += 1
+        lang_str = ", ".join(languages or []) or "unknown"
+        results = client.query(
+            text=(
+                "What CodeQL build approach succeeded last time "
+                f"for {lang_str} and what failures should we skip retrying?"
+            ),
+            domain_tag="raptor-methodology",
+            top_k=5,
+        )
+        _sage_metrics["recall_hits"] += len(results)
+        return results
+    except Exception as e:
+        logger.debug(f"SAGE codeql recall failed: {e}")
+        return []
+
+
+def recall_context_for_fuzzing_strategy(
+    repo_path: str,
+    binary_fingerprint: str,
+    strategy_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    client = _get_client()
+    if client is None:
+        return []
+    try:
+        _sage_metrics["recall_attempted"] += 1
+        query = (
+            "What fuzzing strategies produced crashes for this binary "
+            f"or similar binaries ({binary_fingerprint})?"
+        )
+        if strategy_id:
+            query += f" Focus on strategy {strategy_id}."
+        results = client.query(
+            text=query,
+            domain_tag="raptor-fuzzing",
+            top_k=5,
+        )
+        _sage_metrics["recall_hits"] += len(results)
+        return results
+    except Exception as e:
+        logger.debug(f"SAGE fuzzing recall failed: {e}")
         return []
 
 
@@ -245,7 +398,8 @@ def store_scan_results(
 
             confidence = {"error": 0.95, "warning": 0.85, "note": 0.75}.get(level, 0.70)
 
-            if client.propose(
+            if _propose_redacted(
+                client=client,
                 content=content,
                 memory_type="observation",
                 domain_tag=_findings_domain(repo_path),
@@ -269,7 +423,8 @@ def store_scan_results(
             f"note={by_sev.get('note', 0)}). "
             f"Tools: {', '.join(scan_metrics.get('tools_used', ['Semgrep']))}."
         )
-        client.propose(
+        _propose_redacted(
+            client=client,
             content=summary,
             memory_type="observation",
             domain_tag=_findings_domain(repo_path),
@@ -309,7 +464,8 @@ def store_analysis_results(
             f"{patches} patches generated."
         )
 
-        client.propose(
+        _propose_redacted(
+            client=client,
             content=summary,
             memory_type="observation",
             domain_tag=_findings_domain(repo_path),
@@ -326,7 +482,8 @@ def store_analysis_results(
                         f"Confirmed exploitable: {rule_id} in {repo_name}. "
                         f"Reasoning: {reasoning}"
                     )
-                    client.propose(
+                    _propose_redacted(
+                        client=client,
                         content=content,
                         memory_type="fact",
                         domain_tag=_exploits_domain(repo_path),
@@ -383,3 +540,131 @@ def enrich_analysis_prompt(
     except Exception as e:
         logger.debug(f"SAGE prompt enrichment failed: {e}")
         return ""
+
+
+def store_crash_analysis_pattern(
+    repo_path: str,
+    binary_path: str,
+    signal: str,
+    function_name: str,
+    crash_type: str,
+    source_location: str = "",
+    stack_hash: str = "",
+    exploitability_hint: str = "unknown",
+) -> None:
+    client = _get_client()
+    if client is None:
+        return
+    try:
+        confidence = 0.90 if exploitability_hint == "exploitable" else 0.85
+        content = (
+            f"Crash pattern in repo {Path(repo_path).name}: signal {signal}, "
+            f"function {function_name}, crash type {crash_type}, "
+            f"source {source_location or 'unknown'}, stack signature {stack_hash or 'none'}, "
+            f"binary key {_binary_key(binary_path)}, exploitability hint {exploitability_hint}."
+        )
+        _propose_redacted(
+            client=client,
+            content=content,
+            memory_type="observation",
+            domain_tag=_crashes_domain(repo_path),
+            confidence=confidence,
+        )
+    except Exception as e:
+        logger.debug(f"SAGE crash pattern store failed: {e}")
+
+
+def store_web_payload_effectiveness(
+    repo_path: str,
+    target_fingerprint: str,
+    payload_class: str,
+    evidence_class: str,
+    effectiveness: float,
+    attempts: int,
+    signals: int,
+    notes: str = "",
+) -> None:
+    client = _get_client()
+    if client is None:
+        return
+    try:
+        confidence = 0.85 if signals > 0 else 0.75
+        content = (
+            f"Web payload effectiveness for {target_fingerprint}: "
+            f"payload class {payload_class}, evidence {evidence_class}, "
+            f"effectiveness {effectiveness:.2f}, attempts {attempts}, signals {signals}. "
+            f"Notes: {notes[:200]}"
+        )
+        _propose_redacted(
+            client=client,
+            content=content,
+            memory_type="observation",
+            domain_tag=_web_domain(repo_path),
+            confidence=confidence,
+        )
+    except Exception as e:
+        logger.debug(f"SAGE web payload store failed: {e}")
+
+
+def store_codeql_build_reliability(
+    repo_path: str,
+    languages: List[str],
+    build_command: str,
+    auto_detect_outcome: str,
+    analyses_completed: int,
+    failure_modes: Optional[List[str]] = None,
+) -> None:
+    client = _get_client()
+    if client is None:
+        return
+    try:
+        failures = ", ".join(failure_modes or []) or "none"
+        lang_str = ", ".join(languages) or "unknown"
+        confidence = 0.85 if auto_detect_outcome == "success" else 0.75
+        content = (
+            f"CodeQL build reliability for repo {Path(repo_path).name}: "
+            f"languages {lang_str}, outcome {auto_detect_outcome}, "
+            f"build command {build_command}, analyses completed {analyses_completed}, "
+            f"failure modes {failures}."
+        )
+        _propose_redacted(
+            client=client,
+            content=content,
+            memory_type="observation",
+            domain_tag="raptor-methodology",
+            confidence=confidence,
+        )
+    except Exception as e:
+        logger.debug(f"SAGE codeql reliability store failed: {e}")
+
+
+def store_fuzzing_strategy_outcome(
+    repo_path: str,
+    binary_fingerprint: str,
+    strategy_id: str,
+    duration_s: int,
+    execs: int,
+    unique_crashes: int,
+    hangs: int,
+    exploitable_crashes: int,
+) -> None:
+    client = _get_client()
+    if client is None:
+        return
+    try:
+        confidence = 0.85 if unique_crashes > 0 else 0.75
+        content = (
+            f"Fuzzing strategy outcome for repo {Path(repo_path).name}: "
+            f"strategy {strategy_id}, binary fingerprint {binary_fingerprint}, "
+            f"duration {duration_s}s, executions {execs}, unique crashes {unique_crashes}, "
+            f"hangs {hangs}, exploitable crashes {exploitable_crashes}."
+        )
+        _propose_redacted(
+            client=client,
+            content=content,
+            memory_type="observation",
+            domain_tag="raptor-fuzzing",
+            confidence=confidence,
+        )
+    except Exception as e:
+        logger.debug(f"SAGE fuzzing strategy store failed: {e}")
