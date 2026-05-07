@@ -1568,7 +1568,35 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             #     without O_NONBLOCK blocks the parent forever —
             #     DoS against any RAPTOR caller that reuses `output`.
             #     O_NONBLOCK + O_APPEND + fstat(S_ISREG) closes this.
-            if output:
+            #
+            # Invariant: never persist the JSONL into a path that lives
+            # under `target`. Some callers (e.g. packages/codeql/
+            # build_detector.py) intentionally pass output=target so
+            # Landlock engages on a writable repo for compile/build
+            # steps; writing proxy-events.jsonl there would pollute the
+            # user's scanned source tree. In-memory events on
+            # result.sandbox_info["proxy_events"] are unaffected.
+            _skip_target_pollution = False
+            try:
+                _norm_out = os.path.realpath(output) if output else None
+                _norm_tgt = os.path.realpath(target) if target else None
+                if _norm_out and _norm_tgt and (
+                    _norm_out == _norm_tgt
+                    or _norm_out.startswith(_norm_tgt + os.sep)
+                ):
+                    _skip_target_pollution = True
+                    logger.debug(
+                        f"Sandbox: output ({_norm_out}) lies within "
+                        f"target ({_norm_tgt}); skipping proxy-events."
+                        f"jsonl persistence to avoid polluting the "
+                        f"scanned tree (in-memory events unaffected)"
+                    )
+            except OSError:
+                # realpath() failed (e.g. dangling component, perm
+                # error). Fall back to the existing behaviour rather
+                # than break the scan over an observability check.
+                pass
+            if output and not _skip_target_pollution:
                 try:
                     import json as _json
                     _log_path = os.path.join(
