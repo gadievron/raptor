@@ -26,6 +26,7 @@ from __future__ import annotations
 import re
 
 from core.security.log_sanitisation import escape_nonprintable
+from core.security.prompt_envelope import _strip_autofetch_markup
 
 
 _LINE_LEAD_MD_RE = re.compile(r'(?m)^([ \t]*)([`*_#]+)')
@@ -38,8 +39,23 @@ def sanitise_string(s: str, *, max_chars: int = 500) -> str:
 
     `max_chars` is the post-escape length cap; the suffix ellipsis counts
     toward the cap (returned string is at most `max_chars` characters).
+
+    Also strips autofetch markup. Pre-fix `sanitise_string` defanged
+    line-leading markdown control chars but DIDN'T strip the
+    autofetch markup family (`![](url)` images, `[text](javascript:)`
+    links, `<img>`/`<iframe>`/`<script>` HTML tags, scheme-relative
+    `//host` links). The input-side envelope already strips these
+    from untrusted slot values BEFORE the model sees them, but
+    the OUTPUT side leaked them through — the LLM could be
+    coaxed into reproducing autofetch markup in its response,
+    and that response landed in markdown reports / web UI without
+    further sanitization. A finding renderer that opens the report
+    in a browser then fired the autofetch (image src, iframe load,
+    redirect link), exfiltrating context to the attacker-controlled
+    URL.
     """
     s = _LINE_LEAD_MD_RE.sub(lambda m: m.group(1), s)
+    s = _strip_autofetch_markup(s)
     s = escape_nonprintable(s, preserve_newlines=True)
     if len(s) > max_chars:
         s = s[: max_chars - 1] + _ELLIPSIS
