@@ -233,12 +233,24 @@ def _collect_files_examined(target: Path, match_files: set) -> List[str]:
 
     spatch has no machine-readable log of which files it processed, so we
     approximate: for a single file target we know exactly; for a directory
-    we enumerate *.c (spatch's default glob).
+    we enumerate *.c AND *.h (spatch examines headers too — pre-fix
+    only `.c` was counted, so the files_examined report under-
+    counted by ~50% on typical C projects, and any rule that
+    matched in a header silently failed to surface in
+    files_examined even though it WAS examined).
     """
     if target.is_file():
         examined = {str(target)} | match_files
     elif target.is_dir():
-        examined = {str(f) for f in target.rglob("*.c")} | match_files
+        # Both .c and .h — spatch examines preprocessed
+        # translation units which include headers via #include
+        # expansion. Operators tracking "did the rule examine
+        # this header?" need .h in the list.
+        examined = (
+            {str(f) for f in target.rglob("*.c")}
+            | {str(f) for f in target.rglob("*.h")}
+            | match_files
+        )
     else:
         examined = set(match_files)
     return sorted(examined)
