@@ -179,6 +179,25 @@ def _run_script(script_path: Path, args: list) -> int:
         return result.returncode
     except KeyboardInterrupt:
         print("\n\nInterrupted by user")
+        # Mark any active run as cancelled. Pre-fix Ctrl-C
+        # left runs in `status="in_progress"` forever — the
+        # next /scan or /agentic invocation saw a stale
+        # "active" run from yesterday's interrupted session
+        # and either appended to it (corrupting findings
+        # comparison) or refused to start ("a run is already
+        # active"). cancel_run flips status to "cancelled"
+        # and clears the active-run pointer; subsequent
+        # invocations get a clean slate.
+        try:
+            from core.sandbox.summary import get_active_run_dir
+            from core.run.metadata import cancel_run
+            active = get_active_run_dir()
+            if active:
+                cancel_run(active)
+        except Exception:
+            # Best-effort. Don't mask the original Ctrl-C
+            # by raising secondary errors during cleanup.
+            pass
         return 130
     except Exception as e:
         print(f"\n✗ Error running {script_path.name}: {e}")
