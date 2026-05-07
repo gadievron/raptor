@@ -52,15 +52,17 @@ class WebCrawler:
         """Redact URL-embedded secrets unless the operator opted into reveal mode."""
         return redact_url_secrets_only(url, reveal_secrets=self.client.reveal_secrets)
 
-    def _redact_message_for_log(self, message: object) -> str:
-        """Redact URL-shaped substrings in crawler log messages.
-
-        The exception's string rendering is sanitized; custom exception attributes
-        are only covered if the exception includes them in ``str(exception)``.
-        """
-        return redact_url_secrets_only(
-            message, reveal_secrets=self.client.reveal_secrets
-        )
+    def _target_log_label(self) -> str:
+        """Return a non-secret target label for crawler progress logs."""
+        try:
+            parsed = urlparse(str(self.client.base_url))
+        except ValueError:
+            return "crawl target"
+        host = parsed.hostname
+        if not host:
+            return "crawl target"
+        scheme = f"{parsed.scheme}://" if parsed.scheme else ""
+        return f"{scheme}{host}"
 
     def _redacted_url_list(self, urls: Set[str]) -> List[str]:
         """Return a deterministic, redacted URL list for persisted crawl artifacts."""
@@ -126,7 +128,7 @@ class WebCrawler:
         Returns:
             Dict with discovered resources
         """
-        logger.info(f"Starting crawl from {self._redact_url_for_artifact(start_url)}")
+        logger.info(f"Starting crawl from {self._target_log_label()}")
 
         self.discovered_urls.add(start_url)
         self._crawl_recursive(start_url, depth=0)
@@ -136,7 +138,7 @@ class WebCrawler:
     def _crawl_recursive(self, url: str, depth: int) -> None:
         """Recursively crawl pages."""
         if depth > self.max_depth:
-            logger.debug(f"Max depth reached for {self._redact_url_for_artifact(url)}")
+            logger.debug(f"Max depth reached for {self._target_log_label()}")
             return
 
         if len(self.visited_urls) >= self.max_pages:
@@ -148,7 +150,7 @@ class WebCrawler:
 
         self.visited_urls.add(url)
         logger.info(
-            f"Crawling: {self._redact_url_for_artifact(url)} "
+            f"Crawling: {self._target_log_label()} "
             f"(depth={depth}, pages={len(self.visited_urls)})"
         )
 
@@ -162,7 +164,7 @@ class WebCrawler:
 
             if response.status_code != 200:
                 logger.debug(
-                    f"Non-200 response for {self._redact_url_for_artifact(url)}: "
+                    f"Non-200 response for {self._target_log_label()}: "
                     f"{response.status_code}"
                 )
                 return
@@ -179,8 +181,7 @@ class WebCrawler:
 
         except Exception as e:
             logger.warning(
-                f"Error crawling {self._redact_url_for_artifact(url)}: "
-                f"{self._redact_message_for_log(e)}"
+                f"Error crawling {self._target_log_label()}: {type(e).__name__}"
             )
 
     def _process_html_response(self, url: str, response, depth: int) -> None:
@@ -222,8 +223,7 @@ class WebCrawler:
 
         except Exception as e:
             logger.warning(
-                f"Error parsing HTML from {self._redact_url_for_artifact(url)}: "
-                f"{self._redact_message_for_log(e)}"
+                f"Error parsing HTML from {self._target_log_label()}: {type(e).__name__}"
             )
 
     def _process_json_response(self, url: str, response) -> None:
@@ -239,13 +239,10 @@ class WebCrawler:
                     else [],
                 }
             )
-            logger.info(
-                f"Discovered API endpoint: {self._redact_url_for_artifact(url)}"
-            )
+            logger.info(f"Discovered API endpoint: {self._target_log_label()}")
         except Exception as e:
             logger.debug(
-                f"Error parsing JSON from {self._redact_url_for_artifact(url)}: "
-                f"{self._redact_message_for_log(e)}"
+                f"Error parsing JSON from {self._target_log_label()}: {type(e).__name__}"
             )
 
     def _parse_form(self, form_element, page_url: str) -> Optional[Dict]:
@@ -272,7 +269,7 @@ class WebCrawler:
             }
 
         except Exception as e:
-            logger.debug(f"Error parsing form: {e}")
+            logger.debug(f"Error parsing form: {type(e).__name__}")
             return None
 
     def _extract_api_endpoints_from_js(self, js_code: str) -> None:
@@ -296,7 +293,7 @@ class WebCrawler:
                     ):
                         self.discovered_urls.add(absolute_url)
                         logger.debug(
-                            f"Found API endpoint in JS: {self._redact_url_for_artifact(absolute_url)}"
+                            f"Found API endpoint in JS: {self._target_log_label()}"
                         )
 
     def get_results(self) -> Dict:

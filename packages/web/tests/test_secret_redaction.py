@@ -96,7 +96,8 @@ def test_web_crawler_redacts_secret_urls_in_logs(monkeypatch):
 
     joined = "\n".join(recorder.messages)
     assert api_key not in joined
-    assert "api_key=[REDACTED]" in joined
+    assert "api_key" not in joined
+    assert recorder.messages[0] == "Starting crawl from https://example.test"
 
 
 def test_web_crawler_redacts_secret_urls_inside_exception_messages(monkeypatch):
@@ -117,8 +118,9 @@ def test_web_crawler_redacts_secret_urls_inside_exception_messages(monkeypatch):
 
     joined = "\n".join(recorder.messages)
     assert request_probe not in joined
-    assert "api_key=[REDACTED]" in joined
-    assert "trace=1" in joined
+    assert "api_key" not in joined
+    assert "trace=1" not in joined
+    assert "RuntimeError" in joined
 
 
 def test_web_client_redacts_secret_urls_in_history_by_default():
