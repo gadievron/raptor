@@ -260,16 +260,20 @@ class TestConsensusTask:
         assert len(selected) == 1
         assert selected[0]["finding_id"] == "f-001"
 
-    def test_finalize_single_consensus_preserves_primary(self):
+    def test_finalize_single_consensus_dispute_takes_conservative_max(self):
+        # batch 337 — 1-vote dispute takes the conservative max
+        # (exploitable if EITHER voter says so), matching
+        # CrossFamilyCheckTask. Pre-fix this test asserted the
+        # primary verdict was preserved silently — that behaviour
+        # buried real findings the consensus model surfaced.
         task = ConsensusTask()
-        # Consensus says exploitable, primary says not — primary preserved, disputed
         consensus_results = [
             {"finding_id": "f-001", "is_exploitable": True, "analysed_by": "gemini",
              "reasoning": "yes"}
         ]
         prior = {"f-001": {"is_exploitable": False, "finding_id": "f-001"}}
         task.finalize(consensus_results, prior)
-        assert prior["f-001"]["is_exploitable"] is False
+        assert prior["f-001"]["is_exploitable"] is True  # conservative-max
         assert prior["f-001"]["consensus"] == "disputed"
 
     def test_finalize_single_consensus_primary_exploitable_preserved(self):
