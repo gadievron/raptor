@@ -4,6 +4,7 @@ Enumerates source files, extracts functions, computes checksums.
 Used by both /validate (Stage 0) and /understand (MAP-0).
 """
 
+import fnmatch
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -93,7 +94,7 @@ def build_inventory(
         raise ValueError(f"Target file has no recognized source extension: {target_path}")
 
     # Collect files in single pass
-    file_list = _collect_source_files(target, extensions)
+    file_list, pruned_dirs = _collect_source_files(target, extensions)
     logger.info(f"Found {len(file_list)} source files to process")
 
     output_path = Path(output_dir)
@@ -108,7 +109,10 @@ def build_inventory(
                 old_files_by_path[f['path']] = f
 
     files_info = []
-    excluded_files = []
+    # Seed `excluded_files` with the directories pruned at walk time so
+    # operators still see what was skipped even though we never
+    # enumerated each file inside.
+    excluded_files = list(pruned_dirs)
     total_items = 0
     total_sloc = 0
     skipped = 0
@@ -249,16 +253,77 @@ def _carry_forward_coverage(
                 item['checked_by'] = list(old_coverage[key])
 
 
-def _collect_source_files(target: Path, extensions: Set[str]) -> List[Path]:
-    """Collect all source files in a single pass."""
-    if target.is_file():
-        return [target]
+def _collect_source_files(
+    target: Path, extensions: Set[str],
+) -> tuple[List[Path], List[Dict[str, Any]]]:
+    """Collect all source files in a single pass.
 
-    file_list = []
+    Returns ``(file_list, pruned_dirs)`` where ``pruned_dirs`` lists
+    directory-shaped exclusions skipped at walk time so the caller
+    can record them in ``excluded_files`` for operator visibility.
+
+    Prunes the descent at walk time on directory-shaped patterns from
+    `DEFAULT_EXCLUDES` (`node_modules/`, `vendor/`, `__pycache__/`,
+    `.git/` etc.). Pre-fix `os.walk` descended into them all, then
+    `_process_single_file` later marked each enumerated file as
+    excluded — but `node_modules` on a real project is hundreds of
+    thousands of files. The walk-time stat() of every one of those
+    files dominated inventory wallclock for any JS/TS project.
+    Pruning the dir name from `dirs[:]` skips the entire subtree, so
+    walk time scales with source-tree size rather than source-tree
+    + dependency-tree size.
+    """
+    if target.is_file():
+        return [target], []
+
+    # Pre-extract directory-shaped exclusion names from DEFAULT_EXCLUDES.
+    # Patterns with `/` suffix and no glob meta-chars are pure directory
+    # names that prune cleanly. Patterns with `*` (e.g.
+    # `cmake-build-*/`) need fnmatch — handle separately.
+    exact_dir_names = set()
+    glob_dir_patterns = []
+    for pat in DEFAULT_EXCLUDES:
+        if not pat.endswith('/'):
+            continue
+        bare = pat.rstrip('/')
+        if '*' in bare or '?' in bare or '[' in bare:
+            glob_dir_patterns.append(bare)
+        else:
+            exact_dir_names.add(bare)
+
+    file_list: List[Path] = []
+    pruned_dirs: List[Dict[str, Any]] = []
     for root, dirs, files in os.walk(target):
-        # Skip hidden directories and symlinked directories
-        dirs[:] = [d for d in dirs
-                   if not d.startswith('.') and not (Path(root) / d).is_symlink()]
+        # Skip hidden directories, symlinked directories, AND any directory
+        # that matches a DEFAULT_EXCLUDES dir-shaped pattern.
+        kept_dirs = []
+        for d in dirs:
+            if d.startswith('.'):
+                continue
+            if (Path(root) / d).is_symlink():
+                continue
+            if d in exact_dir_names:
+                rel = str((Path(root) / d).relative_to(target))
+                pruned_dirs.append({
+                    "path": rel + "/",
+                    "reason": "excluded_directory_pruned",
+                    "pattern_matched": d + "/",
+                })
+                continue
+            matched_glob = next(
+                (p for p in glob_dir_patterns if fnmatch.fnmatch(d, p)),
+                None,
+            )
+            if matched_glob is not None:
+                rel = str((Path(root) / d).relative_to(target))
+                pruned_dirs.append({
+                    "path": rel + "/",
+                    "reason": "excluded_directory_pruned",
+                    "pattern_matched": matched_glob + "/",
+                })
+                continue
+            kept_dirs.append(d)
+        dirs[:] = kept_dirs
         for filename in files:
             filepath = Path(root) / filename
             if filepath.is_symlink():
@@ -267,7 +332,7 @@ def _collect_source_files(target: Path, extensions: Set[str]) -> List[Path]:
             if ext in extensions:
                 file_list.append(filepath)
 
-    return file_list
+    return file_list, pruned_dirs
 
 
 def _process_single_file(

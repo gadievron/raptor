@@ -287,8 +287,17 @@ class TestBuildInventory:
 
         assert inv["total_files"] == 1  # Only app.py
         assert len(inv["excluded_files"]) >= 1
+        # `tests/` matches a `DEFAULT_EXCLUDES` directory-shaped
+        # pattern, so it's pruned at walk time. The exclusion record
+        # carries the DIRECTORY entry (not the per-file enumeration
+        # the pre-perf-fix path recorded). Operator visibility is
+        # preserved either way — the directory record names the
+        # parent that was skipped, so a reviewer scanning
+        # `excluded_files` still sees that `tests/` was suppressed.
         excluded_paths = [e["path"] for e in inv["excluded_files"]]
-        assert any("test_app.py" in p for p in excluded_paths)
+        assert any("tests/" in p for p in excluded_paths), (
+            f"expected pruned 'tests/' dir record, got {excluded_paths!r}"
+        )
 
     def test_generated_file_excluded(self, tmp_path):
         src = tmp_path / "src"
