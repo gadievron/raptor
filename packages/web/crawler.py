@@ -21,10 +21,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from core.logging import get_logger
-from core.security.redaction import redact_url_secrets_only
+from core.security.redaction import is_secret_field_name, redact_url_secrets_only
 from packages.web.client import WebClient
 
 logger = get_logger()
+
+_SENSITIVE_HIDDEN_INPUT_NAMES = {"csrf", "nonce", "state"}
 
 
 class WebCrawler:
@@ -42,26 +44,72 @@ class WebCrawler:
         self.discovered_apis: List[Dict] = []
         self.discovered_parameters: Set[str] = set()
 
-        logger.info(f"Web crawler initialized (max_depth={max_depth}, max_pages={max_pages})")
+        logger.info(
+            f"Web crawler initialized (max_depth={max_depth}, max_pages={max_pages})"
+        )
 
     def _redact_url_for_artifact(self, url: object) -> str:
         """Redact URL-embedded secrets unless the operator opted into reveal mode."""
         return redact_url_secrets_only(url, reveal_secrets=self.client.reveal_secrets)
 
     def _redact_message_for_log(self, message: object) -> str:
-        """Redact URL-embedded secrets from crawler log messages."""
-        return redact_url_secrets_only(message, reveal_secrets=self.client.reveal_secrets)
+        """Redact URL-shaped substrings in crawler log messages.
+
+        The exception's string rendering is sanitized; custom exception attributes
+        are only covered if the exception includes them in ``str(exception)``.
+        """
+        return redact_url_secrets_only(
+            message, reveal_secrets=self.client.reveal_secrets
+        )
 
     def _redacted_url_list(self, urls: Set[str]) -> List[str]:
         """Return a deterministic, redacted URL list for persisted crawl artifacts."""
         return [self._redact_url_for_artifact(url) for url in sorted(urls)]
 
+    def _is_sensitive_form_input(self, name: object, metadata: object) -> bool:
+        """Return whether a parsed form input value should be hidden in artifacts."""
+        if is_secret_field_name(name):
+            return True
+        if not isinstance(metadata, dict):
+            return False
+        input_type = str(metadata.get("type", "")).strip().lower()
+        normalized_name = str(name).strip().lower()
+        return (
+            input_type == "hidden" and normalized_name in _SENSITIVE_HIDDEN_INPUT_NAMES
+        )
+
+    def _redacted_form_inputs(self, inputs: object) -> object:
+        """Redact sensitive pre-filled form input values while preserving shape."""
+        if not isinstance(inputs, dict):
+            return inputs
+
+        redacted_inputs = {}
+        for name, metadata in inputs.items():
+            if isinstance(metadata, dict):
+                redacted_metadata = dict(metadata)
+                if "value" in redacted_metadata:
+                    if (
+                        self._is_sensitive_form_input(name, metadata)
+                        and not self.client.reveal_secrets
+                    ):
+                        redacted_metadata["value"] = "[REDACTED]"
+                    else:
+                        redacted_metadata["value"] = self._redact_url_for_artifact(
+                            redacted_metadata["value"]
+                        )
+                redacted_inputs[name] = redacted_metadata
+            else:
+                redacted_inputs[name] = metadata
+        return redacted_inputs
+
     def _redacted_form(self, form: Dict) -> Dict:
-        """Redact URL-bearing fields from a discovered form artifact."""
+        """Redact sensitive fields from a discovered form artifact."""
         redacted = dict(form)
         for field in ("action", "page_url"):
             if field in redacted:
                 redacted[field] = self._redact_url_for_artifact(redacted[field])
+        if "inputs" in redacted:
+            redacted["inputs"] = self._redacted_form_inputs(redacted["inputs"])
         return redacted
 
     def _redacted_api(self, api: Dict) -> Dict:
@@ -107,7 +155,9 @@ class WebCrawler:
         try:
             # Fetch page
             parsed_url = urlparse(url)
-            path = parsed_url.path + (f"?{parsed_url.query}" if parsed_url.query else "")
+            path = parsed_url.path + (
+                f"?{parsed_url.query}" if parsed_url.query else ""
+            )
             response = self.client.get(path)
 
             if response.status_code != 200:
@@ -118,11 +168,11 @@ class WebCrawler:
                 return
 
             # Parse content
-            content_type = response.headers.get('Content-Type', '')
+            content_type = response.headers.get("Content-Type", "")
 
-            if 'application/json' in content_type:
+            if "application/json" in content_type:
                 self._process_json_response(url, response)
-            elif 'text/html' in content_type:
+            elif "text/html" in content_type:
                 self._process_html_response(url, response, depth)
             else:
                 logger.debug(f"Skipping non-HTML/JSON content: {content_type}")
@@ -138,11 +188,11 @@ class WebCrawler:
         try:
             from bs4 import BeautifulSoup
 
-            soup = BeautifulSoup(response.content, 'html.parser')
+            soup = BeautifulSoup(response.content, "html.parser")
 
             # Discover links
-            for link in soup.find_all('a', href=True):
-                href = link['href']
+            for link in soup.find_all("a", href=True):
+                href = link["href"]
                 absolute_url = urljoin(url, href)
 
                 # Only follow links on same domain
@@ -159,14 +209,14 @@ class WebCrawler:
                     self._crawl_recursive(absolute_url, depth + 1)
 
             # Discover forms
-            for form in soup.find_all('form'):
+            for form in soup.find_all("form"):
                 form_data = self._parse_form(form, url)
                 if form_data:
                     self.discovered_forms.append(form_data)
-                    self.discovered_parameters.update(form_data['inputs'].keys())
+                    self.discovered_parameters.update(form_data["inputs"].keys())
 
             # Discover API endpoints from JavaScript
-            for script in soup.find_all('script'):
+            for script in soup.find_all("script"):
                 if script.string:
                     self._extract_api_endpoints_from_js(script.string)
 
@@ -180,12 +230,18 @@ class WebCrawler:
         """Process JSON response (likely API endpoint)."""
         try:
             data = response.json()
-            self.discovered_apis.append({
-                'url': url,
-                'method': 'GET',
-                'response_keys': list(data.keys()) if isinstance(data, dict) else [],
-            })
-            logger.info(f"Discovered API endpoint: {self._redact_url_for_artifact(url)}")
+            self.discovered_apis.append(
+                {
+                    "url": url,
+                    "method": "GET",
+                    "response_keys": list(data.keys())
+                    if isinstance(data, dict)
+                    else [],
+                }
+            )
+            logger.info(
+                f"Discovered API endpoint: {self._redact_url_for_artifact(url)}"
+            )
         except Exception as e:
             logger.debug(
                 f"Error parsing JSON from {self._redact_url_for_artifact(url)}: "
@@ -195,24 +251,24 @@ class WebCrawler:
     def _parse_form(self, form_element, page_url: str) -> Optional[Dict]:
         """Parse HTML form to extract inputs and action."""
         try:
-            action = form_element.get('action', '')
-            method = form_element.get('method', 'GET').upper()
+            action = form_element.get("action", "")
+            method = form_element.get("method", "GET").upper()
             absolute_action = urljoin(page_url, action)
 
             inputs = {}
-            for input_elem in form_element.find_all(['input', 'textarea', 'select']):
-                name = input_elem.get('name')
+            for input_elem in form_element.find_all(["input", "textarea", "select"]):
+                name = input_elem.get("name")
                 if name:
                     inputs[name] = {
-                        'type': input_elem.get('type', 'text'),
-                        'value': input_elem.get('value', ''),
+                        "type": input_elem.get("type", "text"),
+                        "value": input_elem.get("value", ""),
                     }
 
             return {
-                'action': absolute_action,
-                'method': method,
-                'inputs': inputs,
-                'page_url': page_url,
+                "action": absolute_action,
+                "method": method,
+                "inputs": inputs,
+                "page_url": page_url,
             }
 
         except Exception as e:
@@ -232,9 +288,12 @@ class WebCrawler:
         for pattern in patterns:
             matches = re.findall(pattern, js_code, re.IGNORECASE)
             for match in matches:
-                if match.startswith('/') or match.startswith('http'):
+                if match.startswith("/") or match.startswith("http"):
                     absolute_url = urljoin(self.client.base_url, match)
-                    if urlparse(absolute_url).netloc == urlparse(self.client.base_url).netloc:
+                    if (
+                        urlparse(absolute_url).netloc
+                        == urlparse(self.client.base_url).netloc
+                    ):
                         self.discovered_urls.add(absolute_url)
                         logger.debug(
                             f"Found API endpoint in JS: {self._redact_url_for_artifact(absolute_url)}"
@@ -243,16 +302,20 @@ class WebCrawler:
     def get_results(self) -> Dict:
         """Get crawl results."""
         return {
-            'visited_urls': self._redacted_url_list(self.visited_urls),
-            'discovered_urls': self._redacted_url_list(self.discovered_urls),
-            'discovered_forms': [self._redacted_form(form) for form in self.discovered_forms],
-            'discovered_apis': [self._redacted_api(api) for api in self.discovered_apis],
-            'discovered_parameters': sorted(self.discovered_parameters),
-            'stats': {
-                'total_pages': len(self.visited_urls),
-                'total_urls': len(self.discovered_urls),
-                'total_forms': len(self.discovered_forms),
-                'total_apis': len(self.discovered_apis),
-                'total_parameters': len(self.discovered_parameters),
+            "visited_urls": self._redacted_url_list(self.visited_urls),
+            "discovered_urls": self._redacted_url_list(self.discovered_urls),
+            "discovered_forms": [
+                self._redacted_form(form) for form in self.discovered_forms
+            ],
+            "discovered_apis": [
+                self._redacted_api(api) for api in self.discovered_apis
+            ],
+            "discovered_parameters": sorted(self.discovered_parameters),
+            "stats": {
+                "total_pages": len(self.visited_urls),
+                "total_urls": len(self.discovered_urls),
+                "total_forms": len(self.discovered_forms),
+                "total_apis": len(self.discovered_apis),
+                "total_parameters": len(self.discovered_parameters),
             },
         }

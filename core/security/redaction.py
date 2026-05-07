@@ -52,7 +52,7 @@ _SECRET_QUERY_KEYS = {
     "service_token",
     "token",
     # Common-but-missed names. `password` shows up in legacy URL forms
-    # like `https://example.com/api?username=u&password=p`. `sig` is the
+    # like `https://example.com/api?username=u&password=...`; `sig` is the
     # HMAC signature in many provider URL schemes (signed S3 URLs use
     # `Signature`, plain `sig` covers Slack / Twilio / etc.). The
     # `x-amz-*` family covers AWS SigV4 presigned URLs which carry the
@@ -71,6 +71,16 @@ _SECRET_QUERY_KEYS = {
     "private_key",
 }
 
+_SECRET_FIELD_SUFFIXES = ("_token", "-token", "_secret", "-secret", "_key", "-key")
+
+
+def is_secret_field_name(name: object) -> bool:
+    """Return whether a field/parameter name conventionally carries a secret value."""
+    normalized = str(name).strip().lower()
+    return normalized in _SECRET_QUERY_KEYS or normalized.endswith(
+        _SECRET_FIELD_SUFFIXES
+    )
+
 
 def _redact_url(match: re.Match[str]) -> str:
     raw_url = match.group(0)
@@ -86,7 +96,12 @@ def _redact_url(match: re.Match[str]) -> str:
     # us that didn't match the http(s)://host shape exactly. The
     # public regex guards http/https today, but that's defence-in-depth
     # against future callers passing matches from a wider regex.
-    if not parsed.scheme and not parsed.netloc and not parsed.query and not parsed.fragment:
+    if (
+        not parsed.scheme
+        and not parsed.netloc
+        and not parsed.query
+        and not parsed.fragment
+    ):
         return raw_url
 
     netloc = parsed.netloc
@@ -105,7 +120,8 @@ def _redact_url(match: re.Match[str]) -> str:
         for key, value in query_pairs
     ]
     query = "&".join(
-        f"{quote(key, safe='[]')}={quote(value, safe='[]/')}" for key, value in redacted_pairs
+        f"{quote(key, safe='[]')}={quote(value, safe='[]/')}"
+        for key, value in redacted_pairs
     )
 
     # OAuth 2.0 implicit-flow puts `access_token` / `id_token` in the
@@ -175,8 +191,7 @@ def redact_secrets(value: object, *, reveal_secrets: bool = False) -> str:
     return text
 
 
-def redact_url_secrets_only(value: object, *,
-                             reveal_secrets: bool = False) -> str:
+def redact_url_secrets_only(value: object, *, reveal_secrets: bool = False) -> str:
     """Redact URL-embedded credentials only — no Bearer/Basic patterns.
 
     For filesystem paths and other structured text where the Bearer/Basic

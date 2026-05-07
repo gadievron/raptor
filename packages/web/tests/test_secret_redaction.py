@@ -61,7 +61,9 @@ def test_web_crawler_can_preserve_secret_url_artifacts_for_debugging():
     client = WebClient("https://example.test", reveal_secrets=True)
     crawler = WebCrawler(client)
     crawler.visited_urls.add(f"https://example.test/start?api_key={api_key}")
-    crawler.discovered_urls.add(f"https://example.test/callback?access_token={access_probe}")
+    crawler.discovered_urls.add(
+        f"https://example.test/callback?access_token={access_probe}"
+    )
     crawler.discovered_forms.append(
         {
             "action": f"https://example.test/login?client_secret={client_probe}",
@@ -85,7 +87,9 @@ def test_web_crawler_redacts_secret_urls_in_logs(monkeypatch):
     recorder = RecordingLogger()
     crawler = WebCrawler(WebClient("https://example.test"), max_depth=0)
     monkeypatch.setattr(crawler_module, "logger", recorder)
-    monkeypatch.setattr(crawler.client, "get", lambda path: SimpleNamespace(status_code=404))
+    monkeypatch.setattr(
+        crawler.client, "get", lambda path: SimpleNamespace(status_code=404)
+    )
 
     url = "https://example.test/start?" + "api_key=" + api_key
     crawler.crawl(url)
@@ -163,8 +167,9 @@ def test_web_client_can_preserve_secret_urls_for_debugging():
         0.01,
     )
 
-    assert client.request_history[0]["url"].endswith(f"api_key={redaction_probe}&debug=true")
-
+    assert client.request_history[0]["url"].endswith(
+        f"api_key={redaction_probe}&debug=true"
+    )
 
 
 def test_web_fuzzer_redacts_finding_urls_by_default():
@@ -200,6 +205,82 @@ def test_web_fuzzer_can_preserve_finding_urls_for_debugging():
 
     assert finding is not None
     assert finding["url"].endswith(f"access_token={redaction_probe}")
+
+
+def test_web_crawler_redacts_sensitive_prefilled_form_input_values_by_default():
+    csrf_probe = "csrf-" + "s" * 24
+    api_probe = "api-" + "t" * 24
+    oauth_state_probe = "state-" + "u" * 24
+    normal_probe = "visible-" + "v" * 8
+    crawler = WebCrawler(WebClient("https://example.test"))
+    crawler.discovered_forms.append(
+        {
+            "action": "https://example.test/login",
+            "method": "POST",
+            "inputs": {
+                "csrf_token": {"type": "hidden", "value": csrf_probe},
+                "api_key": {"type": "hidden", "value": api_probe},
+                "state": {"type": "hidden", "value": oauth_state_probe},
+                "username": {"type": "text", "value": normal_probe},
+            },
+            "page_url": "https://example.test/form",
+        }
+    )
+
+    results = crawler.get_results()
+    rendered = str(results)
+
+    assert csrf_probe not in rendered
+    assert api_probe not in rendered
+    assert oauth_state_probe not in rendered
+    assert rendered.count("[REDACTED]") >= 3
+    assert normal_probe in rendered
+
+
+def test_web_crawler_can_preserve_prefilled_form_input_values_for_debugging():
+    csrf_probe = "csrf-" + "w" * 24
+    api_probe = "api-" + "x" * 24
+    crawler = WebCrawler(WebClient("https://example.test", reveal_secrets=True))
+    crawler.discovered_forms.append(
+        {
+            "action": "https://example.test/login",
+            "method": "POST",
+            "inputs": {
+                "csrf_token": {"type": "hidden", "value": csrf_probe},
+                "api_key": {"type": "hidden", "value": api_probe},
+            },
+            "page_url": "https://example.test/form",
+        }
+    )
+
+    rendered = str(crawler.get_results())
+
+    assert csrf_probe in rendered
+    assert api_probe in rendered
+
+
+def test_web_crawler_redacts_secret_urls_inside_non_sensitive_form_values():
+    refresh_probe = "refresh-" + "y" * 24
+    crawler = WebCrawler(WebClient("https://example.test"))
+    crawler.discovered_forms.append(
+        {
+            "action": "https://example.test/continue",
+            "method": "POST",
+            "inputs": {
+                "next_url": {
+                    "type": "text",
+                    "value": f"https://example.test/callback?refresh_token={refresh_probe}&ok=1",
+                }
+            },
+            "page_url": "https://example.test/form",
+        }
+    )
+
+    rendered = str(crawler.get_results())
+
+    assert refresh_probe not in rendered
+    assert "refresh_token=[REDACTED]" in rendered
+    assert "ok=1" in rendered
 
 
 class RecordingLogger:
