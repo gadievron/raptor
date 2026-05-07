@@ -737,19 +737,29 @@ def _scan_shell_lines(
     lines: List[Tuple[int, str, bool]],
     declared_in: Path,
     source_kind: str,
+    skip_ecosystems: Optional[set] = None,
 ) -> List[Dependency]:
     """Apply the manager patterns to each logical line; emit deps.
 
     Each subline is one install command — at most one manager should apply.
     We pick the *latest-starting* match so more-specific wrappers like
     ``uv pip install`` win over the inner ``pip install``.
+
+    ``skip_ecosystems`` lets a caller suppress specific managers in
+    favour of a more authoritative source. The Dockerfile entry
+    point uses this to delegate apt/Debian extraction to
+    ``core.dockerfile.apt`` (POSIX-correct, sudo / pipe / bash -c
+    aware) without duplicating those packages.
     """
+    skip_ecosystems = skip_ecosystems or set()
     deps: List[Dependency] = []
     for line_no, body, commented in lines:
         cleaned = _strip_inline_comment(body)
         for sub in _split_compound(cleaned):
             best: Optional[Tuple[_PkgManager, "re.Match[str]"]] = None
             for mgr in _MANAGERS:
+                if mgr.ecosystem in skip_ecosystems:
+                    continue
                 m = mgr.pattern.search(sub)
                 if not m:
                     continue
@@ -857,16 +867,88 @@ def _canonicalise_name(name: str, ecosystem: str) -> str:
 def parse_dockerfile(path: Path) -> List[Dependency]:
     """Extract installs from a Dockerfile / Containerfile.
 
-    Logic: collapse backslash-continuations, look at every line whose
-    leading token is ``RUN`` (Docker's instruction keyword), and feed the
-    rest through the shell scanner.
+    Two-pass design:
+
+    1. **apt / Debian** via ``core.dockerfile.extract_apt_packages``.
+       The shared substrate is POSIX-correct (shlex tokenisation,
+       sudo / pipe / subshell-paren / ``bash -c`` recursion / comment-
+       in-continuation handling) and carries multi-stage attribution.
+    2. **All other managers** (pip / yum / dnf / apk / npm / cargo /
+       gem / brew / go) via the legacy regex-based shell scanner,
+       with apt skipped to avoid duplicates.
+
+    The two passes return ``Dependency`` rows with the same
+    ``source_kind="dockerfile"``; downstream pipeline treats them
+    uniformly.
     """
     text = _safe_read(path)
     if text is None:
         return []
+    deps: List[Dependency] = []
+    deps.extend(_extract_apt_via_core_dockerfile(text, path))
     runs = _extract_dockerfile_run_blocks(text)
-    return _scan_shell_lines(runs, declared_in=path,
-                             source_kind="dockerfile")
+    deps.extend(_scan_shell_lines(
+        runs, declared_in=path, source_kind="dockerfile",
+        skip_ecosystems={"Debian"},
+    ))
+    return deps
+
+
+def _extract_apt_via_core_dockerfile(
+    text: str, path: Path,
+) -> List[Dependency]:
+    """Use ``core.dockerfile.apt`` to extract Debian deps from a
+    Dockerfile.
+
+    Returns one ``Dependency`` per ``AptPackage``. ``stage`` is
+    threaded into ``scope`` so multi-stage SBOMs distinguish builder
+    deps from runtime deps; absence of an ``AS <stage>`` clause
+    falls back to ``scope="main"`` (the legacy default).
+    """
+    from core.dockerfile import (
+        AptPackage,
+        extract_apt_packages,
+        parse_dockerfile as core_parse_dockerfile,
+    )
+    try:
+        instructions = core_parse_dockerfile(text)
+    except Exception:                               # noqa: BLE001
+        logger.warning(
+            "sca.parsers.inline_installs: core.dockerfile parse "
+            "failed for %s — falling back to regex scanner",
+            path, exc_info=True,
+        )
+        return []
+    out: List[Dependency] = []
+    for ap in extract_apt_packages(instructions):
+        out.append(_apt_package_to_dep(ap, path))
+    return out
+
+
+def _apt_package_to_dep(ap, declared_in: Path) -> Dependency:
+    canon = _canonicalise_name(ap.name, "Debian")
+    purl_base = f"pkg:deb/debian/{canon}"
+    purl = f"{purl_base}@{ap.version}" if ap.version else purl_base
+    return Dependency(
+        ecosystem="Debian",
+        name=canon,
+        version=ap.version,
+        declared_in=declared_in,
+        scope=ap.stage or "main",
+        is_lockfile=False,
+        pin_style=PinStyle.EXACT if ap.version else PinStyle.WILDCARD,
+        direct=True,
+        purl=purl,
+        parser_confidence=Confidence(
+            "high",
+            reason=(
+                f"core.dockerfile apt extractor at "
+                f"{declared_in.name}:{ap.line}"
+            ),
+        ),
+        commented_out=False,
+        source_kind="dockerfile",
+    )
 
 
 def parse_devcontainer_json(path: Path) -> List[Dependency]:

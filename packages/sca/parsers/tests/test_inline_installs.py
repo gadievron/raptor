@@ -175,6 +175,99 @@ def test_dockerfile_apt_multiple(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Dockerfile — improvements inherited from core.dockerfile.apt
+# (sudo, pipe, subshell parens, bash -c, multi-stage attribution,
+# comment-in-continuation). These shapes were previously missed or
+# mis-parsed by the legacy regex scanner.
+# ---------------------------------------------------------------------------
+
+def test_dockerfile_sudo_prefix_via_core(tmp_path: Path) -> None:
+    """``sudo apt-get install -y curl`` — the sudo prefix is now
+    stripped (was missed by the regex scanner)."""
+    p = _write(tmp_path, "FROM ubuntu\nRUN sudo apt-get install -y curl\n",
+               "Dockerfile")
+    deps = parse_dockerfile(p)
+    debian = [d for d in deps if d.ecosystem == "Debian"]
+    assert [d.name for d in debian] == ["curl"]
+
+
+def test_dockerfile_bash_c_recursion_via_core(tmp_path: Path) -> None:
+    """``bash -c "apt-get install -y curl"`` — shlex unquotes the
+    body and the apt extractor recurses into it."""
+    p = _write(tmp_path,
+               'FROM debian\nRUN bash -c "apt-get install -y curl"\n',
+               "Dockerfile")
+    deps = parse_dockerfile(p)
+    debian = [d for d in deps if d.ecosystem == "Debian"]
+    assert [d.name for d in debian] == ["curl"]
+
+
+def test_dockerfile_pipe_separator_via_core(tmp_path: Path) -> None:
+    """``yes | apt-get install -y curl`` — pipes split commands."""
+    p = _write(tmp_path,
+               "FROM debian\nRUN yes | apt-get install -y curl\n",
+               "Dockerfile")
+    deps = parse_dockerfile(p)
+    debian = [d for d in deps if d.ecosystem == "Debian"]
+    assert [d.name for d in debian] == ["curl"]
+
+
+def test_dockerfile_multi_stage_scope_attribution(tmp_path: Path) -> None:
+    """Multi-stage builds: each apt dep carries the AS-stage in
+    its ``scope`` field so SCA can build per-stage SBOMs."""
+    p = _write(tmp_path,
+               "FROM debian AS builder\nRUN apt-get install -y gcc\n"
+               "FROM debian AS runtime\nRUN apt-get install -y libc6\n",
+               "Dockerfile")
+    deps = parse_dockerfile(p)
+    by_name = {d.name: d for d in deps if d.ecosystem == "Debian"}
+    assert by_name["gcc"].scope == "builder"
+    assert by_name["libc6"].scope == "runtime"
+
+
+def test_dockerfile_comment_in_continuation_via_core(tmp_path: Path) -> None:
+    """``# comment`` lines inside a multi-line RUN no longer
+    terminate the continuation — packages on lines after a comment
+    are picked up. (Fixed in core.dockerfile.parser.)"""
+    p = _write(
+        tmp_path,
+        "FROM debian\n"
+        "RUN apt-get install -y \\\n"
+        "    curl \\\n"
+        "    # explainer\n"
+        "    wget\n",
+        "Dockerfile",
+    )
+    deps = parse_dockerfile(p)
+    debian = sorted(d.name for d in deps if d.ecosystem == "Debian")
+    assert debian == ["curl", "wget"]
+
+
+def test_dockerfile_apt_skipped_in_legacy_scanner(tmp_path: Path) -> None:
+    """The legacy regex shell scanner now skips apt entirely so
+    Debian deps aren't double-counted between the two passes."""
+    p = _write(tmp_path,
+               "FROM debian\nRUN apt-get install -y curl\n",
+               "Dockerfile")
+    deps = parse_dockerfile(p)
+    # Exactly one Debian dep — would be 2 if both passes emitted.
+    assert sum(1 for d in deps if d.ecosystem == "Debian") == 1
+
+
+def test_dockerfile_pip_still_via_legacy_scanner(tmp_path: Path) -> None:
+    """Non-apt managers still go through the legacy scanner — the
+    refactor only short-circuits Debian."""
+    p = _write(tmp_path,
+               "FROM python:3.12\n"
+               "RUN apt-get install -y curl\n"
+               "RUN pip install django==4.2.7\n",
+               "Dockerfile")
+    deps = parse_dockerfile(p)
+    by_eco = {d.ecosystem: d.name for d in deps}
+    assert by_eco == {"Debian": "curl", "PyPI": "django"}
+
+
+# ---------------------------------------------------------------------------
 # devcontainer.json
 # ---------------------------------------------------------------------------
 
