@@ -1196,6 +1196,16 @@ Examples:
             if len(by_model) > 1:
                 for model, mcost in by_model.items():
                     print(f"     {model}: ${mcost:.2f}")
+        # Fast-tier scorecard savings — surface concrete behaviour
+        # of the prefilter (full ANALYSE calls skipped on findings
+        # the cheap tier confidently classified as FPs and the
+        # scorecard trusted).
+        short_circuits = orchestration_result.get("orchestration", {}).get(
+            "fast_tier_short_circuits", 0
+        )
+        if short_circuits > 0:
+            plural = "s" if short_circuits != 1 else ""
+            print(f"   Fast-tier saved: {short_circuits} full ANALYSE call{plural}")
 
     print("\n📁 Outputs:")
     print(f"   Main report: {report_file}")

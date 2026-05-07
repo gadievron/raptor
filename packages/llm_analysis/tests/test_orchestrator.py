@@ -714,7 +714,8 @@ class TestWeakenedDefenses:
         analysis_result = _make_cc_result("finding-001")
 
         def mock_dispatch_task(task, findings, dispatch_fn, role_resolution,
-                               results_by_id, cost_tracker, max_parallel):
+                               results_by_id, cost_tracker, max_parallel,
+                               prefilter_fn=None):
             for f in findings:
                 fid = f.get("finding_id")
                 r = dict(analysis_result, finding_id=fid)

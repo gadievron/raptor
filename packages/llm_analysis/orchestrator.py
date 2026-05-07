@@ -364,6 +364,11 @@ def orchestrate(
     dispatch_fn = None
     start_time = time.monotonic()
 
+    # Bound across both dispatch modes so the merged-dict construction
+    # below can read ``client.short_circuits`` without NameError on
+    # the CC paths (where it stays None and the count is 0).
+    client = None
+
     if llm_config and llm_config.primary_model:
         # External LLM: dispatch via generate_structured/generate
         from core.llm.client import LLMClient
@@ -501,9 +506,23 @@ def orchestrate(
 
     # --- Per-finding analysis ---
     results_by_id = {}
+    # Fast-tier scorecard prefilter — only wires up on the external-LLM
+    # path because the cheap call uses ``client.generate_structured``
+    # which the CC-prep / CC-fallback paths don't drive. Returns a
+    # short-circuit FP result on trusted cells so the full ANALYSE
+    # call is skipped; bumps ``client.short_circuits`` so /agentic
+    # surfaces the savings count.
+    prefilter_fn = None
+    if dispatch_mode == "external_llm":
+        from packages.llm_analysis.prefilter import prefilter_for_finding
+
+        def prefilter_fn(item):
+            return prefilter_for_finding(client, item)
+
     analysis_results = dispatch_task(
         AnalysisTask(profile=profile), findings, dispatch_fn, role_resolution,
         results_by_id, cost_tracker, max_parallel,
+        prefilter_fn=prefilter_fn,
     )
 
     # Fallback: if external LLM failed entirely, try CC
@@ -841,6 +860,12 @@ def orchestrate(
         "elapsed_seconds": round(elapsed, 1),
         "max_parallel": max_parallel,
         "cost": cost_tracker.get_summary(),
+        # Number of full ANALYSE calls avoided because the fast-tier
+        # scorecard trusted the cheap-tier "clear FP" verdict. Zero
+        # on CC-prep / CC-fallback paths (no prefilter wiring).
+        "fast_tier_short_circuits": (
+            getattr(client, "short_circuits", 0) if client is not None else 0
+        ),
     }
 
     if defense_telemetry.has_warnings:

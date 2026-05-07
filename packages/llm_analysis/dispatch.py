@@ -153,6 +153,7 @@ def dispatch_task(
     prior_results: dict,
     cost_tracker: Any,
     max_parallel: int = 3,
+    prefilter_fn: Optional[Callable] = None,
 ) -> List[Dict[str, Any]]:
     """Generic parallel dispatcher.
 
@@ -168,6 +169,13 @@ def dispatch_task(
         prior_results: Results from earlier tasks, keyed by item ID.
         cost_tracker: CostTracker for budget enforcement.
         max_parallel: Maximum concurrent dispatches.
+        prefilter_fn: Optional ``(item) -> Optional[result-dict]`` hook
+            invoked before building the prompt and calling dispatch_fn.
+            When it returns a dict the work item is short-circuited
+            (no full ANALYSE call, no token/cost accounting beyond
+            whatever the hook itself spent). Used by /agentic to wire
+            in the scorecard prefilter; ``None`` for tasks that don't
+            participate.
 
     Returns:
         List of result dicts, one per item dispatched. Failed items have "error" key.
@@ -239,6 +247,23 @@ def dispatch_task(
         futures = {}
         for model, item in work:
             def _do_one(m=model, it=item):
+                # Prefilter hook (fast-tier scorecard) — fires before
+                # prompt build and full dispatch so we don't pay for
+                # token-heavy work when the cheap-tier verdict is
+                # trusted. Returning a dict here ends this work item
+                # with that result; ``None`` proceeds to full dispatch.
+                if prefilter_fn is not None:
+                    sc_result = prefilter_fn(it)
+                    if sc_result is not None:
+                        model_name = m.model_name if m is not None else "prefilter"
+                        return DispatchResult(
+                            result=sc_result,
+                            cost=0.0,
+                            tokens=0,
+                            model=model_name,
+                            duration=0.0,
+                            quality=1.0,
+                        )
                 prompt = task.build_prompt(it)
                 nonce = task.get_last_nonce()
                 if nonce:
