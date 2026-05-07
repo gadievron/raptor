@@ -178,6 +178,7 @@ class UrllibClient:
         total_timeout: int = DEFAULT_TOTAL_TIMEOUT,
         retries: int = DEFAULT_RETRIES,
         follow_redirects: bool = True,
+        stream: bool = False,
     ) -> Response:
         """Low-level HTTP request — returns a full :class:`Response` object.
 
@@ -189,7 +190,15 @@ class UrllibClient:
         callers can pass them via this method — the convenience methods
         (``get_json``, ``post_json``, ``get_bytes``) only cover the
         most common shapes.
+
+        ``stream`` is accepted for ``requests``-API compatibility
+        (consumers like :mod:`core.oci.client` were written against
+        ``requests.Session.request(stream=True)``). The urllib
+        backend buffers the response body either way, so the
+        ``stream`` value is ignored. For true streaming downloads,
+        use :meth:`stream_bytes`.
         """
+        del stream                      # accepted for compat; no-op
         self._validate_url(url)
         merged = {"User-Agent": self._ua}
         if headers:

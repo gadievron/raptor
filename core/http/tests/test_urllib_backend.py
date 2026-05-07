@@ -755,3 +755,83 @@ class TestDefaultClient:
     def test_no_hosts_returns_urllib(self):
         c = default_client()
         assert isinstance(c, UrllibClient)
+
+
+# ---------------------------------------------------------------------------
+# requests-API compatibility shim
+# ---------------------------------------------------------------------------
+
+class TestRequestsCompatShim:
+    """Consumers like ``core.oci.client`` were originally written
+    against the ``requests.Response`` API. The Response dataclass
+    exposes ``status_code`` / ``content`` / ``text`` / ``iter_content``
+    / ``close`` aliases so they work without a rewrite."""
+
+    def _resp(self, body=b"hello", status=200):
+        from core.http import Response
+        return Response(
+            status=status, headers={}, body=body, url="https://x/",
+        )
+
+    def test_status_code_aliases_status(self):
+        assert self._resp(status=404).status_code == 404
+
+    def test_content_aliases_body(self):
+        assert self._resp(body=b"abc").content == b"abc"
+
+    def test_text_decodes_utf8_with_replace(self):
+        # Invalid UTF-8 byte -> replacement char, not exception.
+        r = self._resp(body=b"hello \xff world")
+        assert "hello" in r.text and "world" in r.text
+
+    def test_iter_content_chunks(self):
+        r = self._resp(body=b"abcdefghij")
+        assert list(r.iter_content(chunk_size=3)) == [
+            b"abc", b"def", b"ghi", b"j",
+        ]
+
+    def test_iter_content_empty_body(self):
+        r = self._resp(body=b"")
+        assert list(r.iter_content()) == []
+
+    def test_close_is_noop(self):
+        # No-op for the buffered backend; doesn't raise.
+        self._resp().close()
+
+
+class TestStreamKwargAccepted:
+    """``UrllibClient.request`` accepts ``stream=`` as a no-op so
+    consumers written against ``requests.Session.request(stream=True)``
+    keep working. Buffering behaviour is unchanged."""
+
+    def test_request_accepts_stream_kwarg_via_inspect(self):
+        # Inspect the signature directly — no network needed. We
+        # only care that ``stream`` is an accepted parameter so the
+        # OCI client's ``request(method, url, stream=True)`` calls
+        # don't raise TypeError.
+        import inspect
+        sig = inspect.signature(UrllibClient.request)
+        assert "stream" in sig.parameters
+        assert sig.parameters["stream"].default is False
+
+    def test_request_stream_kwarg_doesnt_change_buffering(self, monkeypatch):
+        # The kwarg is accepted but ignored; buffering is unchanged.
+        # We verify by mocking ``_fetch`` and confirming both calls
+        # invoke it with identical arguments.
+        client = UrllibClient()
+        captured = []
+
+        def fake_fetch(*args, **kwargs):
+            captured.append(("call", args, kwargs))
+            from core.http import Response
+            return Response(
+                status=200, headers={}, body=b"ok", url=args[0],
+            )
+
+        monkeypatch.setattr(client, "_fetch", fake_fetch)
+        client.request("GET", "https://example.com/", stream=True)
+        client.request("GET", "https://example.com/", stream=False)
+        # Both calls reached _fetch with the same kwargs — stream=
+        # was stripped by request() before dispatch.
+        assert len(captured) == 2
+        assert captured[0] == captured[1]
