@@ -108,6 +108,30 @@ RUN apt-get update \\
     assert "git" in insts[0].args
 
 
+def test_comment_lines_inside_continuation_dont_terminate():
+    """Real Dockerfiles often interleave ``# explainer`` lines
+    between continued args. Docker treats those as transparent —
+    the prior line's trailing ``\\`` continuation still applies.
+    """
+    src = """\
+RUN apt-get install -y \\
+    curl \\
+    # explainer line
+    wget \\
+    # another explainer
+    git
+"""
+    insts = parse_dockerfile(src)
+    assert len(insts) == 1
+    assert insts[0].directive == "RUN"
+    args = insts[0].args
+    # All three packages survived the continuation across
+    # comment-only intermediate lines.
+    assert "curl" in args
+    assert "wget" in args
+    assert "git" in args
+
+
 def test_continuation_line_numbers_use_first_line():
     """``Instruction.line`` points at the FIRST line of the
     instruction, not the continuation lines. Consumers emitting

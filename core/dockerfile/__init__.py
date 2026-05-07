@@ -21,6 +21,10 @@ Module layout:
 
   * :mod:`core.dockerfile.parser` — tokenise the file into an
     ordered list of :class:`Instruction` objects.
+  * :mod:`core.dockerfile.apt` — walk the instruction stream and
+    extract ``apt-get install`` package declarations (name,
+    optional version pin, optional architecture qualifier, source
+    line). Substrate for SCA's Debian deps tier.
 
 Limitations (also captured in :doc:`README`):
   * No ``ARG`` / ``ENV`` substitution — instructions carry the
@@ -33,6 +37,10 @@ Limitations (also captured in :doc:`README`):
     interpret the contained shell.
 """
 
+from .apt import (
+    AptPackage,
+    extract_apt_packages,
+)
 from .parser import (
     DockerfileSyntaxError,
     Instruction,
@@ -40,7 +48,9 @@ from .parser import (
 )
 
 __all__ = [
+    "AptPackage",
     "DockerfileSyntaxError",
     "Instruction",
+    "extract_apt_packages",
     "parse_dockerfile",
 ]
