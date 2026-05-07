@@ -380,6 +380,10 @@ class TestMultiRoot:
                 "CWE-078/CommandInjectionLocal.ql",
                 "CWE-079/XssLocal.ql",
                 "CWE-089/SqlInjectionLocal.ql",
+                # CWE-94 Java has no unified CodeInjection sink — split
+                # across Groovy + JEXL engines, hence two narrow queries.
+                "CWE-094/GroovyInjectionLocal.ql",
+                "CWE-094/JexlInjectionLocal.ql",
                 "CWE-502/UnsafeDeserializationLocal.ql",
                 "CWE-611/XxeLocal.ql",
                 "CWE-918/SsrfLocal.ql",
@@ -431,7 +435,7 @@ class TestMultiRoot:
         expected = {
             "python": ["CWE-78", "CWE-89", "CWE-22", "CWE-94", "CWE-502",
                        "CWE-79", "CWE-918", "CWE-611"],
-            "java":   ["CWE-78", "CWE-89", "CWE-22", "CWE-502",
+            "java":   ["CWE-78", "CWE-89", "CWE-22", "CWE-94", "CWE-502",
                        "CWE-79", "CWE-611", "CWE-918"],
             "javascript": ["CWE-78", "CWE-22", "CWE-94",
                            "CWE-79", "CWE-89", "CWE-918", "CWE-502"],
