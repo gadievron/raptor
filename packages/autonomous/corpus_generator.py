@@ -412,13 +412,31 @@ class CorpusGenerator:
         initial_count = len(seeds)
 
         if not coverage_data:
-            # Simple deduplication by content
-            seen_hashes = set()
+            # Simple deduplication by content. Use hashlib.sha256
+            # NOT Python's builtin hash():
+            #
+            # 1. PYTHONHASHSEED randomises bytes-hash per process
+            #    invocation by default. Two runs of corpus
+            #    deduplication on the same input directory could
+            #    produce different `seen_hashes` sets, leading to
+            #    DIFFERENT seeds surviving across runs — non-
+            #    determinism that defeats the goal (reproducible
+            #    minimal corpus).
+            # 2. hash(bytes) collisions are not cryptographically
+            #    designed; for adversarial corpus inputs (the whole
+            #    point of fuzzing), an attacker could craft
+            #    distinct seeds that collide and trick the
+            #    dedup into deleting a real exploit input.
+            # 3. SHA-256 is fast on the small bytes objects we're
+            #    hashing here (typical seed file is <16KB);
+            #    no measurable perf impact vs builtin hash.
+            import hashlib
+            seen_hashes: set[bytes] = set()
             removed = 0
 
             for seed_file in seeds:
                 content = seed_file.read_bytes()
-                content_hash = hash(content)
+                content_hash = hashlib.sha256(content).digest()
 
                 if content_hash in seen_hashes:
                     seed_file.unlink()
