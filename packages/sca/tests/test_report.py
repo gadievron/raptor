@@ -24,13 +24,13 @@ from packages.sca.report import (
 
 
 def _dep(name: str = "lodash", version: str = "4.17.20",
-         direct: bool = True) -> Dependency:
+         direct: bool = True, scope: str = "main") -> Dependency:
     return Dependency(
         ecosystem="npm",
         name=name,
         version=version,
         declared_in=Path("/repo/package.json"),
-        scope="main",
+        scope=scope,
         is_lockfile=False,
         pin_style=PinStyle.EXACT,
         direct=direct,
@@ -175,6 +175,122 @@ def test_cache_stats_when_provided() -> None:
     )
     assert "8 hits / 2 misses" in md
     assert "80%" in md
+
+
+def test_build_stage_breakdown_omitted_for_single_scope() -> None:
+    """Single-scope projects (the common case) shouldn't see a
+    breakdown table — it would just duplicate the main severity
+    summary with no extra info."""
+    d = _dep()
+    findings = build_vuln_findings(
+        [d], [OsvResult(d.key(), [_adv()])],
+    )
+    md = render_markdown_report(
+        target=Path("/x"),
+        deps_analysed=1,
+        vuln_findings=findings,
+        hygiene_findings=[],
+    )
+    assert "Build-stage breakdown" not in md
+
+
+def test_build_stage_breakdown_rendered_when_multi_stage() -> None:
+    """Multi-stage Dockerfiles produce findings with distinct
+    ``scope`` values (e.g. builder vs runtime). Render a per-stage
+    table so operators triage runtime CVEs separately from
+    build-only ones."""
+    d_build = _dep(name="gcc", version="10.2.1", scope="builder")
+    d_run = _dep(name="libc6", version="2.31", scope="runtime")
+    findings = []
+    findings.extend(build_vuln_findings(
+        [d_build], [OsvResult(d_build.key(),
+                              [_adv("GHSA-b", "high", 7.0)])],
+    ))
+    findings.extend(build_vuln_findings(
+        [d_run], [OsvResult(d_run.key(),
+                            [_adv("GHSA-r", "critical", 9.5)])],
+    ))
+    md = render_markdown_report(
+        target=Path("/x"),
+        deps_analysed=2,
+        vuln_findings=findings,
+        hygiene_findings=[],
+    )
+    assert "### Build-stage breakdown" in md
+    # Both stages appear with their finding counts.
+    assert "`builder`" in md
+    assert "`runtime`" in md
+
+
+def test_finding_emphasises_non_main_scope_inline() -> None:
+    """An individual finding from a non-main scope shows the scope
+    in bold so operators can spot it during triage."""
+    d = _dep(name="gcc", scope="builder")
+    findings = build_vuln_findings(
+        [d], [OsvResult(d.key(), [_adv()])],
+    )
+    md = render_markdown_report(
+        target=Path("/x"),
+        deps_analysed=1,
+        vuln_findings=findings,
+        hygiene_findings=[],
+    )
+    assert "scope: **`builder`** stage" in md
+
+
+def test_finding_inline_main_scope_unchanged() -> None:
+    """Default ``main`` scope keeps the legacy inline format —
+    no visual emphasis."""
+    d = _dep()  # scope="main" by default
+    findings = build_vuln_findings(
+        [d], [OsvResult(d.key(), [_adv()])],
+    )
+    md = render_markdown_report(
+        target=Path("/x"),
+        deps_analysed=1,
+        vuln_findings=findings,
+        hygiene_findings=[],
+    )
+    assert "scope: main" in md
+    assert "**`main`**" not in md
+
+
+def test_build_stage_breakdown_kev_per_stage() -> None:
+    """KEV badge counts per stage — so operators see "the runtime
+    stage has 1 KEV finding" at a glance."""
+    d_build = _dep(name="gcc", scope="builder")
+    d_run = _dep(name="libc6", scope="runtime")
+    findings = []
+    findings.extend(build_vuln_findings(
+        [d_build], [OsvResult(d_build.key(),
+                              [_adv("GHSA-b", "high", 7.0)])],
+    ))
+    f_run = build_vuln_findings(
+        [d_run], [OsvResult(d_run.key(),
+                            [_adv("GHSA-r", "critical", 9.5)])],
+    )
+    f_run[0].in_kev = True
+    findings.extend(f_run)
+    md = render_markdown_report(
+        target=Path("/x"),
+        deps_analysed=2,
+        vuln_findings=findings,
+        hygiene_findings=[],
+    )
+    # The KEV column should show 1 on the runtime row, 0 on builder.
+    assert "### Build-stage breakdown" in md
+    # Find the runtime row line and verify it carries the KEV count.
+    runtime_line = next(
+        l for l in md.splitlines() if "`runtime`" in l
+    )
+    builder_line = next(
+        l for l in md.splitlines() if "`builder`" in l
+    )
+    cells_runtime = [c.strip() for c in runtime_line.split("|") if c.strip()]
+    cells_builder = [c.strip() for c in builder_line.split("|") if c.strip()]
+    # Stage | Critical | High | Medium | Low | KEV | Total
+    assert cells_runtime[5] == "1"   # KEV col
+    assert cells_builder[5] == "0"
 
 
 def test_no_emoji_or_red_green_indicators() -> None:

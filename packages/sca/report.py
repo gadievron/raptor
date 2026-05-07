@@ -208,6 +208,64 @@ def _render_summary(
             f"({rate}%)**"
         )
     rows.append("")
+
+    # Build-stage breakdown: only render when more than one distinct
+    # scope appears across vuln findings (otherwise it would be a
+    # single-row table with no value). Multi-stage Dockerfiles
+    # produce build-only deps (e.g. gcc in a builder stage) and
+    # runtime deps (e.g. libc6 in the runtime stage); operators
+    # care more about runtime CVEs since builder layers don't ship.
+    stage_table = _render_stage_breakdown(vuln_findings)
+    if stage_table:
+        rows.append(stage_table)
+
+    return "\n".join(rows)
+
+
+def _render_stage_breakdown(
+    vuln_findings: Sequence[VulnFinding],
+) -> str:
+    """Render a per-scope breakdown table when ≥2 scopes have findings.
+
+    Empty string when only one scope is present (the breakdown
+    would be a single-row table with the same totals as the main
+    summary — visual noise).
+    """
+    by_scope: dict[str, Counter[str]] = {}
+    kev_by_scope: Counter[str] = Counter()
+    for f in vuln_findings:
+        if f.suppressed:
+            continue
+        scope = f.dependency.scope or "main"
+        by_scope.setdefault(scope, Counter())
+        by_scope[scope][f.severity] += 1
+        if f.in_kev:
+            kev_by_scope[scope] += 1
+    if len(by_scope) < 2:
+        return ""
+    rows = [
+        "### Build-stage breakdown\n",
+        "| Stage | Critical | High | Medium | Low | KEV | Total |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    # Sort by total findings descending so the noisiest stage leads;
+    # ``main`` last when totals tie so Dockerfile-derived stages
+    # surface first (the SBOM-split use case).
+    def sort_key(item):
+        scope, counts = item
+        return (-sum(counts.values()), scope == "main", scope)
+    for scope, counts in sorted(by_scope.items(), key=sort_key):
+        total = sum(counts.values())
+        rows.append(
+            f"| `{scope}` "
+            f"| {counts.get('critical', 0)} "
+            f"| {counts.get('high', 0)} "
+            f"| {counts.get('medium', 0)} "
+            f"| {counts.get('low', 0)} "
+            f"| {kev_by_scope.get(scope, 0)} "
+            f"| {total} |"
+        )
+    rows.append("")
     return "\n".join(rows)
 
 
@@ -322,8 +380,15 @@ def _render_one_vuln(f: VulnFinding, *, omit_source: bool = False) -> str:
                 bullets.append(
                     f"- Base image: `{image}`{stage_part}"
                 )
+    # Non-``main`` scope is significant for Dockerfile multi-stage
+    # builds: emphasise so operators triage runtime/builder distinctly.
+    scope_part = (
+        f"scope: **`{dep.scope}`** stage"
+        if dep.scope and dep.scope != "main"
+        else f"scope: {dep.scope}"
+    )
     bullets.append(f"- Direct: {'yes' if dep.direct else 'no'}; "
-                   f"scope: {dep.scope}; pin: {dep.pin_style.value}")
+                   f"{scope_part}; pin: {dep.pin_style.value}")
 
     reach_reason = f.reachability.confidence.reason
     reach_line = (f"- Reachability: {f.reachability.verdict} "
