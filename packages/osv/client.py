@@ -125,8 +125,21 @@ class OsvClient:
                 return cached
         if self._offline:
             return None
+        # Percent-encode `vuln_id` before interpolating into the
+        # URL. Pre-fix the raw `vuln_id` flowed straight into the
+        # path segment — for IDs containing `/` (rare but real
+        # in some ecosystem prefixes), `?` (would split into
+        # query string), `#` (fragment), spaces, or control
+        # bytes (worst case), the resulting URL was either
+        # malformed (server returned 400) or resolved to the
+        # wrong endpoint silently. `_safe_id` already sanitises
+        # for the CACHE KEY but the URL path needed proper
+        # percent-encoding via `urllib.parse.quote(..., safe="")`
+        # so even `/` gets encoded as %2F.
+        from urllib.parse import quote
+        encoded_id = quote(vuln_id, safe="")
         try:
-            data = self._http.get_json(f"{OSV_BASE_URL}/vulns/{vuln_id}")
+            data = self._http.get_json(f"{OSV_BASE_URL}/vulns/{encoded_id}")
         except HttpError as exc:
             if exc.status == 404:
                 return None
