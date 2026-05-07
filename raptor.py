@@ -42,6 +42,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+# raptor.py -> repo root.
+# Belt + braces against subprocess invocation under a sandboxed env
+# that strips PYTHONPATH; today's "script-dir on sys.path[0]" default
+# happens to land on the repo root because we live here, but explicit
+# is safer than implicit.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from core.run.output import get_output_dir, TargetMismatchError
 from core.run.metadata import start_run, complete_run, fail_run
 from core.run.safe_io import safe_run_mkdir

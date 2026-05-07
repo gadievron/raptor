@@ -15,6 +15,10 @@ import argparse
 import sys
 from pathlib import Path
 
+# generate_diagram.py -> repo root. Belt + braces against subprocess
+# invocation under a sandboxed env that strips PYTHONPATH.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(

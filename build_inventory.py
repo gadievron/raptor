@@ -10,6 +10,11 @@ Usage:
 
 import argparse
 import sys
+from pathlib import Path
+
+# build_inventory.py -> repo root. Belt + braces against subprocess
+# invocation under a sandboxed env that strips PYTHONPATH.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from core.inventory import build_inventory, format_coverage_summary
 
