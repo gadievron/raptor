@@ -94,7 +94,19 @@ def _repo_key(repo_path: str) -> str:
     # Resolve before hashing so that different paths that reach the same repo
     # (symlinks, relative paths) collapse to the same key, and same-basename
     # repos at different locations stay distinct.
-    resolved = str(Path(repo_path).resolve()) if repo_path else ""
+    #
+    # Empty path → empty key. Pre-fix the empty-path branch fed `""`
+    # through `sha256_string` and returned the SHA-256 prefix of the
+    # empty string ("e3b0c44298fc"). Every caller that fired without
+    # a known repo (typically a hook fired before the run lifecycle
+    # set the active path) ended up writing into the SAME domain
+    # `raptor-findings-e3b0c44298fc` — cross-contaminating findings
+    # from unrelated runs into a shared bucket. Returning the empty
+    # string lets the caller filter (`if not _repo_key(...): return`)
+    # without inventing a synthetic-but-shared bucket.
+    if not repo_path:
+        return ""
+    resolved = str(Path(repo_path).resolve())
     return sha256_string(resolved)[:12]
 
 
