@@ -1033,19 +1033,29 @@ class CrashAnalyser:
     def _get_memory_layout_info(self) -> Dict[str, str]:
         """Get information about memory layout and protections."""
         info = {}
-        
+
+        # ASLR detection is platform-specific. Pre-fix the code
+        # tried `sysctl kern.aslr` then fell back to
+        # /proc/sys/kernel/randomize_va_space:
+        #   * macOS doesn't expose `kern.aslr` via sysctl
+        #     (system-wide ASLR is always on since OS X 10.7,
+        #     not operator-controllable). The sysctl call
+        #     returned non-zero with "unknown oid", and the
+        #     /proc fallback then failed because /proc doesn't
+        #     exist on macOS — `info["aslr_enabled"]` was
+        #     never set, leaving the field absent in the
+        #     report.
+        #   * Linux + /proc was fine.
+        # Branch on platform.system() so each OS uses its
+        # canonical detection method.
         try:
-            # Check ASLR status
-            result = _run_trusted(
-                ["sysctl", "kern.aslr"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0:
-                info["aslr_enabled"] = "1" in result.stdout
-            else:
-                # Try Linux way
+            sys_platform = platform.system()
+            if sys_platform == "Darwin":
+                # macOS: ASLR has been mandatory since 10.7
+                # (Lion, 2011) and is not operator-controllable.
+                info["aslr_enabled"] = True
+                info["aslr_level"] = "macos-default"
+            elif sys_platform == "Linux":
                 result = _run_trusted(
                     ["cat", "/proc/sys/kernel/randomize_va_space"],
                     capture_output=True,
@@ -1056,6 +1066,21 @@ class CrashAnalyser:
                     aslr_level = result.stdout.strip()
                     info["aslr_enabled"] = aslr_level != "0"
                     info["aslr_level"] = aslr_level
+                else:
+                    info["aslr_enabled"] = "unknown"
+            else:
+                # Other unixes (BSD variants etc) — best-effort
+                # try sysctl, otherwise mark unknown.
+                result = _run_trusted(
+                    ["sysctl", "kern.aslr"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if result.returncode == 0:
+                    info["aslr_enabled"] = "1" in result.stdout
+                else:
+                    info["aslr_enabled"] = "unknown"
         except (OSError, subprocess.SubprocessError):
             info["aslr_enabled"] = "unknown"
             
