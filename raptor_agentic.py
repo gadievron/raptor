@@ -1169,8 +1169,59 @@ Examples:
         print(f"   Exploits generated: {exploits_count}")
     if patches_count > 0:
         print(f"   Patches generated: {patches_count}")
-    if (args.codeql or args.codeql_only) and analysis.get('dataflow_validated', 0) > 0:
-        print(f"   Dataflow paths validated: {analysis.get('dataflow_validated', 0)}")
+    # IRIS Tier 1 / 2 / 3 dataflow validation surfacing. The full
+    # metrics block lives at orchestration_result["dataflow_validation"]
+    # (n_eligible, n_validated, n_tier1_prebuilt, n_tier2_template,
+    # n_tier3_retry, n_recommended_downgrades, n_applied_downgrades,
+    # n_soft_downgrades, n_skipped_no_db_for_language, …). Surface a
+    # short structured summary so operators see what IRIS did without
+    # needing to dig into orchestrated_report.json. Suppressed when
+    # validation didn't run (no CodeQL DB, --no-validate-dataflow).
+    dv = (orchestration_result or {}).get("dataflow_validation") or {}
+    n_validated = dv.get("n_validated", 0)
+    n_cache_hits = dv.get("n_cache_hits", 0)
+    if dv and (n_validated or n_cache_hits):
+        n_tier1 = dv.get("n_tier1_prebuilt", 0)
+        n_tier2 = dv.get("n_tier2_template", 0)
+        n_tier3 = dv.get("n_tier3_retry", 0)
+        n_recommended = dv.get("n_recommended_downgrades", 0)
+        n_hard = dv.get("n_applied_downgrades", 0)
+        n_soft = dv.get("n_soft_downgrades", 0)
+        # Header line matches the existing summary cadence
+        # ("Exploits generated: N", "Patches generated: N", …).
+        print(f"   Dataflow validated: {n_validated}"
+              + (f" (+{n_cache_hits} cache hit{'s' if n_cache_hits != 1 else ''})"
+                 if n_cache_hits else ""))
+        # Tier breakdown: Tier 1 is free CodeQL; Tier 2/3 burn LLM
+        # tokens. Worth showing the split so operators can tell whether
+        # --deep-validate is paying off.
+        tier_parts = []
+        if n_tier1:
+            tier_parts.append(f"{n_tier1} Tier 1 (free)")
+        if n_tier2:
+            tier_parts.append(f"{n_tier2} Tier 2 (LLM)")
+        if n_tier3:
+            tier_parts.append(f"{n_tier3} Tier 3 (LLM retry)")
+        if tier_parts:
+            print(f"     by tier: {', '.join(tier_parts)}")
+        # Downgrade outcome: distinguish "recommended" from "applied"
+        # (the latter is post-reconciliation with consensus/judge).
+        # Soft downgrades = recommendation overruled by consensus/judge.
+        if n_recommended:
+            outcome = []
+            outcome.append(f"{n_recommended} flagged")
+            if n_hard or n_soft:
+                bits = []
+                if n_hard:
+                    bits.append(f"{n_hard} hard")
+                if n_soft:
+                    bits.append(f"{n_soft} soft (consensus override)")
+                outcome.append(f"applied: {', '.join(bits)}")
+            print(f"     downgrades: {' · '.join(outcome)}")
+    elif dv.get("skipped_reason"):
+        # Validation was attempted but skipped — surface the reason so
+        # operators know IRIS noticed but couldn't help.
+        print(f"   Dataflow validation skipped: {dv['skipped_reason']}")
     aggregation = orchestration_result.get("aggregation", {}) if orchestration_result else {}
     if aggregation:
         summary = str(aggregation.get("summary") or "").strip()
@@ -1359,6 +1410,9 @@ Examples:
     extra_sections = []
     if aggregation:
         extra_sections.append(_build_aggregation_report_section(aggregation))
+    dv = (orchestration_result or {}).get("dataflow_validation") or {}
+    if dv and (dv.get("n_validated") or dv.get("n_cache_hits") or dv.get("skipped_reason")):
+        extra_sections.append(_build_dataflow_validation_report_section(dv))
 
     spec = build_findings_spec(
         analysed_results,
@@ -1474,6 +1528,90 @@ def _build_aggregation_report_section(aggregation):
     return ReportSection(
         title="Aggregate Synthesis",
         content="\n".join(lines) if lines else "Aggregate synthesis was requested, but the model returned no reportable fields.",
+    )
+
+
+def _build_dataflow_validation_report_section(dv):
+    """Render IRIS dataflow-validation metrics for the agentic report.
+
+    Surfaces the same Tier 1 / Tier 2 / 3 + downgrade breakdown that
+    the console summary shows, plus a couple of fields useful for
+    post-hoc review (skipped reasons, stale-DB warnings) that aren't
+    worth taking up a console line for.
+    """
+    from core.reporting import ReportSection
+
+    skipped = dv.get("skipped_reason") or ""
+    if skipped:
+        return ReportSection(
+            title="IRIS Dataflow Validation",
+            content=f"Validation was attempted but skipped: `{skipped}`.",
+        )
+
+    n_eligible = dv.get("n_eligible", 0)
+    n_validated = dv.get("n_validated", 0)
+    n_cache_hits = dv.get("n_cache_hits", 0)
+    n_errors = dv.get("n_errors", 0)
+    n_skip_no_db = dv.get("n_skipped_no_db_for_language", 0)
+    n_stale_warnings = dv.get("n_stale_db_warnings", 0)
+    n_tier1 = dv.get("n_tier1_prebuilt", 0)
+    n_tier2 = dv.get("n_tier2_template", 0)
+    n_tier3 = dv.get("n_tier3_retry", 0)
+    n_recommended = dv.get("n_recommended_downgrades", 0)
+    n_hard = dv.get("n_applied_downgrades", 0)
+    n_soft = dv.get("n_soft_downgrades", 0)
+
+    lines = []
+    lines.append(
+        f"Eligible findings: **{n_eligible}** · "
+        f"validated: **{n_validated}**"
+        + (f" (+{n_cache_hits} cache hit{'s' if n_cache_hits != 1 else ''})"
+           if n_cache_hits else "")
+    )
+    if n_tier1 or n_tier2 or n_tier3:
+        lines.append("")
+        lines.append("**By tier:**")
+        # Tier 1 is mechanical / free (CodeQL only — pre-built or
+        # in-repo LocalFlowSource queries). Tier 2 and 3 burn LLM
+        # tokens; only run when `--deep-validate` is set.
+        if n_tier1:
+            lines.append(f"- Tier 1 (free, prebuilt query): {n_tier1}")
+        if n_tier2:
+            lines.append(f"- Tier 2 (LLM-customised predicates): {n_tier2}")
+        if n_tier3:
+            lines.append(f"- Tier 3 (LLM compile-error retry): {n_tier3}")
+    if n_recommended:
+        lines.append("")
+        lines.append("**Downgrades:**")
+        lines.append(f"- Recommended (validation refuted claim): {n_recommended}")
+        if n_hard:
+            lines.append(f"- Applied hard (no consensus override): {n_hard}")
+        if n_soft:
+            lines.append(
+                f"- Applied soft (kept exploitable, lowered confidence — "
+                f"consensus or judge agreed with original analysis): {n_soft}"
+            )
+        if not (n_hard or n_soft):
+            lines.append(
+                "- *Note:* recommendations were not applied — "
+                "reconciliation may have been skipped or all overruled."
+            )
+    if n_errors:
+        lines.append("")
+        lines.append(f"**Errors:** {n_errors} validation(s) failed (loop did not crash).")
+    if n_skip_no_db:
+        lines.append(
+            f"**Skipped (no CodeQL DB for finding's language):** {n_skip_no_db}"
+        )
+    if n_stale_warnings:
+        lines.append(
+            f"**Stale-DB warnings:** {n_stale_warnings} — DB mtime predates "
+            "recent source changes; results may not reflect current code."
+        )
+
+    return ReportSection(
+        title="IRIS Dataflow Validation",
+        content="\n".join(lines),
     )
 
 
