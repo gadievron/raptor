@@ -84,12 +84,38 @@ def _find_sca_agent() -> Optional[Path]:
     file (which is the raptor-side bridge).
     """
     # Explicit override — useful for CI or custom layouts.
+    # Run the same content check we apply to the auto-discovered
+    # candidates (the `from packages.sca import SCA_ALLOWED_HOSTS`
+    # import is a discriminator). Pre-fix the env-override path
+    # only checked `is_file()`, so an operator pointing
+    # RAPTOR_SCA_AGENT at the WRONG file (e.g. an old `agent.py`
+    # from a sibling project, this bridge file itself, or a
+    # placeholder script with the wrong shape) silently launched
+    # subprocess that didn't have the SCA-agent contract — leading
+    # to confusing "no SCA findings" / opaque crash output. The
+    # content check makes a wrong override fail loud at discovery
+    # time with a clear log line.
     env_path = os.environ.get("RAPTOR_SCA_AGENT")
     if env_path:
         p = Path(env_path).resolve()
-        if p.is_file():
-            return p
-        logger.warning("RAPTOR_SCA_AGENT=%s does not exist — ignoring", env_path)
+        if not p.is_file():
+            logger.warning("RAPTOR_SCA_AGENT=%s does not exist — ignoring", env_path)
+        else:
+            try:
+                text = p.read_text(encoding="utf-8")
+            except OSError:
+                logger.warning(
+                    "RAPTOR_SCA_AGENT=%s could not be read — ignoring",
+                    env_path,
+                )
+            else:
+                if "from packages.sca import SCA_ALLOWED_HOSTS" in text:
+                    return p
+                logger.warning(
+                    "RAPTOR_SCA_AGENT=%s does not look like a raptor-sca "
+                    "agent (missing SCA_ALLOWED_HOSTS import) — ignoring",
+                    env_path,
+                )
 
     for candidate in _SCA_AGENT_CANDIDATES:
         resolved = candidate.resolve()
