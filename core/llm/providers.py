@@ -10,6 +10,7 @@ JSON-in-prompt fallback for providers that lack native structured support.
 
 import json
 import logging
+import os
 import sys
 import time
 from abc import ABC, abstractmethod
@@ -741,11 +742,33 @@ class OpenAICompatibleProvider(LLMProvider):
                 "OpenAI SDK not installed. Run: pip install openai"
             )
 
-        self.client = OpenAI(
-            api_key=config.api_key or "unused",
-            base_url=config.api_base,
-            timeout=config.timeout,
+        # Dispatcher route only when (a) dispatcher session is set,
+        # (b) provider is OpenAI proper (not Ollama / vLLM / LM Studio),
+        # AND (c) ``api_base`` is None — i.e., default upstream is
+        # ``api.openai.com``. Operators routing through a custom
+        # OpenAI-compatible gateway (e.g. corporate proxy at
+        # ``my-corp-gw/v1``) keep their ``api_base`` and the
+        # dispatcher's hard-coded ``api.openai.com`` upstream would
+        # be the wrong destination — fall back to env-direct in
+        # that case.
+        use_dispatcher = (
+            os.environ.get("RAPTOR_LLM_SOCKET")
+            and config.provider == "openai"
+            and not config.api_base
         )
+        if use_dispatcher:
+            from core.llm.dispatcher.client import make_openai_client
+            self.client = make_openai_client(timeout=config.timeout)
+            logger.debug("OpenAICompatibleProvider: routing via credential-isolation dispatcher")
+        else:
+            self.client = OpenAI(
+                api_key=config.api_key or "unused",
+                base_url=config.api_base,
+                timeout=config.timeout,
+            )
+            logger.debug(
+                f"OpenAICompatibleProvider: direct SDK (no dispatcher) provider={config.provider}"
+            )
 
         self.instructor_client = None
         self._instructor_warned = False
@@ -1284,10 +1307,22 @@ class AnthropicProvider(LLMProvider):
                 "Anthropic SDK not installed. Run: pip install anthropic"
             )
 
-        self.client = anthropic.Anthropic(
-            api_key=config.api_key,
-            timeout=config.timeout,
-        )
+        # Phase B: route through the credential-isolation dispatcher when
+        # the worker has been spawned with one in place. Tie-breaker:
+        # ``RAPTOR_LLM_SOCKET`` wins over ``config.api_key`` so the
+        # dispatcher path actually gets exercised in opt-in workflows.
+        # The env-direct fallback stays in place until Phase C drops the
+        # API-key passthrough entirely.
+        if os.environ.get("RAPTOR_LLM_SOCKET"):
+            from core.llm.dispatcher.client import make_anthropic_client
+            self.client = make_anthropic_client(timeout=config.timeout)
+            logger.debug("AnthropicProvider: routing via credential-isolation dispatcher")
+        else:
+            self.client = anthropic.Anthropic(
+                api_key=config.api_key,
+                timeout=config.timeout,
+            )
+            logger.debug("AnthropicProvider: direct SDK (no dispatcher)")
 
         self.instructor_client = None
         self._instructor_warned = False
@@ -1843,7 +1878,25 @@ class GeminiProvider(LLMProvider):
     def client(self):
         """Per-thread client — google-genai is not guaranteed thread-safe."""
         if not hasattr(self._local, 'client'):
-            self._local.client = _genai_module.Client(api_key=self.config.api_key)
+            # Phase B: dispatcher-route when ``RAPTOR_LLM_SOCKET`` set.
+            # google-genai 1.70+ accepts a custom ``base_url`` and
+            # ``httpx_client`` via ``HttpOptions`` — :func:`make_gemini_base_url`
+            # returns the (base_url, http_client) pair the SDK needs.
+            if os.environ.get("RAPTOR_LLM_SOCKET"):
+                from core.llm.dispatcher.client import make_gemini_base_url
+                from google.genai.types import HttpOptions
+                base_url, http_client = make_gemini_base_url()
+                self._local.client = _genai_module.Client(
+                    api_key="dummy-not-used",
+                    http_options=HttpOptions(
+                        base_url=base_url,
+                        httpx_client=http_client,
+                    ),
+                )
+                logger.debug("GeminiProvider: routing via credential-isolation dispatcher")
+            else:
+                self._local.client = _genai_module.Client(api_key=self.config.api_key)
+                logger.debug("GeminiProvider: direct SDK (no dispatcher)")
         return self._local.client
 
     def generate(self, prompt: str, system_prompt: Optional[str] = None,

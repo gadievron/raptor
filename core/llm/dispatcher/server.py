@@ -14,10 +14,14 @@ Five security layers, in the order an attacker must defeat them:
       (NOT env var — same-UID processes can read ``/proc/N/environ``
       on Linux). Worker presents the token in the ``X-Raptor-Token``
       header on its first request.
-  L4. **Single-use connection tokens with per-token budget.** Token
-      authorises one connection; revoked when connection closes,
-      after ``request_budget`` requests, or after ``ttl_s`` seconds.
-      Replay after legitimate session ends fails.
+  L4. **Token bounded by request budget + TTL + explicit revocation.**
+      Token can establish multiple connections within its budget +
+      TTL — required so a worker process that spawns its own
+      grandchildren (relayed via :func:`relay_for_grandchild`) can
+      share the session without round-tripping the dispatcher for a
+      fresh token. Connections after ``request_budget`` requests or
+      ``ttl_s`` seconds are rejected; an explicit ``revoke`` flips
+      the record to terminal state.
   L5. **Audit log.** Every accept / reject / dispatch event lands
       in a JSONL log. Body content is intentionally never logged.
 
@@ -58,8 +62,13 @@ _logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-_TOKEN_DEFAULT_TTL_S = 60 * 60       # one hour
-_TOKEN_DEFAULT_BUDGET = 1000         # requests per worker run
+_TOKEN_DEFAULT_TTL_S = 8 * 60 * 60   # 8 hours — long-running /agentic
+                                     # and /validate runs on large
+                                     # codebases comfortably exceed
+                                     # the original 1-hour cap.
+_TOKEN_DEFAULT_BUDGET = 10_000       # requests per worker run — agentic
+                                     # workflows over many findings can
+                                     # easily clear 1k LLM calls.
 _TOKEN_HEADER = "X-Raptor-Token"
 
 
@@ -168,10 +177,32 @@ class LLMDispatcher:
         self._audit_path = audit_path
         self._audit_lock = threading.Lock()
 
+        # Init may fail past this point (bind error, thread start
+        # failure). On failure the tempdir would otherwise leak.
+        try:
+            self._init_server(run_id)
+        except Exception:
+            # Best-effort cleanup so /tmp/raptor-llm-* doesn't
+            # accumulate after init failures.
+            try:
+                self.socket_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            try:
+                self._sock_dir.rmdir()
+            except OSError:
+                pass
+            raise
+
+    def _init_server(self, run_id: str) -> None:
+        # The body below was inlined in __init__ pre-cleanup-fix; lifted
+        # here so the try/except wrapper can clean up the tempdir on
+        # any partial-init failure.
+
         # Pass dispatcher self into the request handler via the server.
         # http.server's HTTPServer accepts a ``RequestHandlerClass`` so
         # we close over the dispatcher in a per-instance handler.
-        dispatcher = self
+        dispatcher = self  # noqa: F841 — closed over by handler factory
 
         class _UnixThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
             address_family = socket.AF_UNIX

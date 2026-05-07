@@ -27,6 +27,7 @@ from .client import (
     make_anthropic_client,
     make_gemini_base_url,
     make_openai_client,
+    relay_for_grandchild,
 )
 from .lifecycle import dispatcher_for_run, llm_dispatcher_in_run
 from .server import LLMDispatcher, AuditEvent
@@ -40,5 +41,6 @@ __all__ = [
     "make_anthropic_client",
     "make_gemini_base_url",
     "make_openai_client",
+    "relay_for_grandchild",
     "spawn_worker",
 ]

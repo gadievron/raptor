@@ -469,11 +469,23 @@ def detect_llm_availability() -> LLMAvailability:
 
     has_cloud_keys = has_anthropic or has_openai or has_gemini or has_mistral
 
+    # Phase B credential-isolation: a worker spawned via the
+    # dispatcher has ``RAPTOR_LLM_SOCKET`` set but no API keys in
+    # env (post-Phase-C this is the steady state). The dispatcher
+    # itself was constructed in the parent against the parent's
+    # keys, so external-LLM access is in fact available via the
+    # UDS — count it as ``external_llm`` for downstream gating
+    # (Phase 4 orchestration in raptor_agentic.py, the ``--prep-only``
+    # decision in agent.py, etc.). Without this, Phase C would
+    # silently degrade ``--sequential`` runs to ClaudeCodeProvider /
+    # manual-review even though the operator configured an API key.
+    has_dispatcher_route = bool(os.getenv("RAPTOR_LLM_SOCKET"))
+
     # Check config file for models with valid keys (no import from config.py
     # needed — just check if any model entry has an API key, either inline
     # or via env var for its provider)
     has_config_file = False
-    if not has_cloud_keys:
+    if not has_cloud_keys and not has_dispatcher_route:
         has_config_file = _config_has_keyed_models()
 
     # Check Ollama reachability (requires OpenAI SDK for API calls)
@@ -484,7 +496,9 @@ def detect_llm_availability() -> LLMAvailability:
     claude_on_path = shutil.which("claude") is not None
     claude_code = in_claude_code or claude_on_path
 
-    external_llm = has_cloud_keys or has_config_file or has_ollama
+    external_llm = (
+        has_cloud_keys or has_config_file or has_ollama or has_dispatcher_route
+    )
 
     availability = LLMAvailability(
         external_llm=external_llm,
