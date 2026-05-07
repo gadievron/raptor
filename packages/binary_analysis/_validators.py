@@ -10,7 +10,19 @@ import re
 
 # 1-16 hex digits fits every real architecture (64-bit max). Rejecting
 # unbounded length is defence-in-depth, not exploit-prevention.
-_HEX_ADDRESS_RE = re.compile(r'^0x[0-9a-fA-F]{1,16}$')
+#
+# `\Z` instead of `$` for the end anchor. Pre-fix `$` in
+# Python regex matches end-of-string OR just before a trailing
+# newline — so `"0x12abc\n"` passed validation. The address
+# is interpolated into a GDB script as `print *((int*)0xADDR)`
+# style commands; a trailing `\n` then split the GDB command
+# into the operator-supplied address PLUS whatever appeared
+# on the next line of the script — GDB-command injection
+# from data the validator was supposed to vet.
+#
+# `\Z` matches strict end-of-string only. `\n` after the hex
+# digits is now correctly rejected.
+_HEX_ADDRESS_RE = re.compile(r'\A0x[0-9a-fA-F]{1,16}\Z')
 
 # 4 KB: well above any realistic `x/Nxb` caller, small enough to prevent
 # a bad int from embedding megabytes of output request into a GDB script.
