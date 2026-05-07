@@ -502,6 +502,124 @@ def run_codeql(repo_path: Path, out_dir: Path, languages):
     return sarif_paths
 
 
+def _sarif_has_findings(sarif_path: Path) -> bool:
+    """Return True iff the SARIF file contains at least one result.
+
+    Failures (missing file, unparseable JSON) return False — callers treat
+    "unknown" the same as "empty" because the goal is opportunistic cleanup.
+    """
+    try:
+        data = json.loads(sarif_path.read_text())
+    except Exception:
+        return False
+    for run_obj in data.get("runs", []) or []:
+        if run_obj.get("results"):
+            return True
+    return False
+
+
+def cleanup_per_pack_artifacts(out_dir: Path) -> int:
+    """Remove redundant per-pack semgrep files after combined.sarif is written.
+
+    Per-pack files (semgrep_<suffix>.{exit,json,sarif,stderr.log}) are
+    intermediate: combined.sarif is the canonical post-merge artefact, and
+    scan_metrics.json captures the per-run accounting. Keep the minimum
+    needed for post-mortem of failed packs.
+
+    Cleanup rules (per pack):
+      - Always remove: .exit, .json, empty .stderr.log
+      - On exit==0: also remove .sarif
+      - On exit!=0: keep .exit, keep non-empty .stderr.log, keep .sarif if
+        it has findings; delete the .sarif if it is empty/zero-results
+        (still redundant — combined.sarif holds those results too)
+
+    Strict glob (semgrep_*.{exit,json,sarif,stderr.log}) and os.unlink
+    only — never follow symlinks or recurse.
+
+    Returns the number of files removed.
+    """
+    removed = 0
+    # Group by suffix using a strict glob set.
+    suffixes: set = set()
+    for ext in (".exit", ".json", ".sarif", ".stderr.log"):
+        for p in out_dir.glob(f"semgrep_*{ext}"):
+            # glob does not follow symlinks for matching, but the resolved
+            # entry might still be one — defend with is_symlink check.
+            if p.is_symlink() or not p.is_file():
+                continue
+            name = p.name[len("semgrep_"):-len(ext)]
+            if name:
+                suffixes.add(name)
+
+    for suffix in suffixes:
+        exit_file = out_dir / f"semgrep_{suffix}.exit"
+        json_file = out_dir / f"semgrep_{suffix}.json"
+        sarif_file = out_dir / f"semgrep_{suffix}.sarif"
+        stderr_file = out_dir / f"semgrep_{suffix}.stderr.log"
+
+        # Read exit code BEFORE any deletion.
+        exit_code: Optional[int]
+        try:
+            exit_code = int(exit_file.read_text().strip())
+        except Exception:
+            exit_code = None
+
+        success = exit_code == 0
+
+        # Always delete: .json (intermediate machine output)
+        for victim in (json_file,):
+            try:
+                if victim.is_file() and not victim.is_symlink():
+                    os.unlink(victim)
+                    removed += 1
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                logger.debug(f"cleanup: could not remove {victim}: {e}")
+
+        # Empty stderr — always delete
+        try:
+            if (stderr_file.is_file() and not stderr_file.is_symlink()
+                    and stderr_file.stat().st_size == 0):
+                os.unlink(stderr_file)
+                removed += 1
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            logger.debug(f"cleanup: could not stat/remove {stderr_file}: {e}")
+
+        if success:
+            # On success, .exit and .sarif are both redundant (combined.sarif
+            # is canonical and metrics record the success).
+            for victim in (exit_file, sarif_file):
+                try:
+                    if victim.is_file() and not victim.is_symlink():
+                        os.unlink(victim)
+                        removed += 1
+                except FileNotFoundError:
+                    pass
+                except OSError as e:
+                    logger.debug(f"cleanup: could not remove {victim}: {e}")
+        else:
+            # Failed pack: keep .exit. Keep .sarif only if it has findings;
+            # otherwise it is redundant noise (an empty {"runs":[]} stub).
+            if sarif_file.is_file() and not sarif_file.is_symlink():
+                if not _sarif_has_findings(sarif_file):
+                    try:
+                        os.unlink(sarif_file)
+                        removed += 1
+                    except OSError as e:
+                        logger.debug(
+                            f"cleanup: could not remove {sarif_file}: {e}"
+                        )
+
+    if removed:
+        logger.info(
+            f"Cleaned up {removed} redundant per-pack scan files in {out_dir}"
+        )
+    return removed
+
+
 def main():
     ap = argparse.ArgumentParser(description="RAPTOR Automated Code Security Agent with parallel scanning")
     ap.add_argument("--repo", required=True, help="Path or Git URL")
@@ -672,6 +790,16 @@ def main():
                 save_json(out_dir / "scan_metrics.json", metrics)
         except Exception as e:
             logger.debug(f"Coverage record write failed (non-fatal): {e}")
+
+        # Per-pack file cleanup. Runs AFTER combined.sarif and
+        # scan_metrics.json are finalised. The merged SARIF is canonical;
+        # per-pack semgrep_*.{exit,json,sarif,stderr.log} files are
+        # intermediate. Keep only what's useful for post-mortem of failed
+        # packs (exit code + non-empty stderr + sarif-with-findings).
+        try:
+            cleanup_per_pack_artifacts(out_dir)
+        except Exception as e:
+            logger.debug(f"Per-pack cleanup failed (non-fatal): {e}")
 
         # Verification plan
         verification = {
