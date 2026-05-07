@@ -185,7 +185,34 @@ class SageClient:
             if embedding is None:
                 embedding = client.embed(content)
 
-            mt = getattr(_MemoryType, memory_type, _MemoryType.observation)
+            # Explicit allowlist via dict membership rather than
+            # `getattr(_MemoryType, memory_type, default)`. Pre-fix
+            # `getattr` accepted *any* attribute on the enum
+            # — including dunder methods (`__init__`, `__class__`,
+            # `__hash__`) which would either break the propose call
+            # downstream with a cryptic type error or silently
+            # succeed with the wrong type. A typo (`observatoin`)
+            # also fell through to the `observation` default
+            # silently, hiding the bug from the operator.
+            #
+            # Dict-keyed by the canonical lower-case name so a typo
+            # surfaces as an explicit "unknown memory_type ..." log
+            # and the call falls back deliberately, not by accident.
+            allowed = {
+                "observation": _MemoryType.observation,
+                "hypothesis": getattr(_MemoryType, "hypothesis", None),
+                "evidence": getattr(_MemoryType, "evidence", None),
+                "decision": getattr(_MemoryType, "decision", None),
+                "lesson": getattr(_MemoryType, "lesson", None),
+            }
+            mt = allowed.get(memory_type)
+            if mt is None:
+                if memory_type != "observation":
+                    logger.warning(
+                        "SAGE propose: unknown memory_type=%r, "
+                        "falling back to observation", memory_type,
+                    )
+                mt = _MemoryType.observation
             client.propose(
                 content=content,
                 memory_type=mt,
