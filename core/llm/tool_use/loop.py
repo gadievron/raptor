@@ -497,27 +497,33 @@ class ToolUseLoop:
                     duration = time.monotonic() - start
 
                 # ---- tool-result injection defence -----------------------
-                # Wrap tool-result content in an untrusted envelope so
-                # the LLM consistently treats it as data, not
-                # instructions. Defends against prompt-injection
-                # payloads embedded in attacker-controlled content the
-                # model fetches via tool calls (target source files,
-                # web pages, command stdout). Both success AND error
-                # results are wrapped — error content can carry
-                # attacker text via handler exception messages
-                # (e.g. ``raise ValueError(target_content)``).
+                # Two layers:
+                #   Layer 1 (always-on): wrap content in an untrusted
+                #     envelope so the LLM consistently treats tool
+                #     output as data, not instructions. Both success
+                #     AND error content gets wrapped — handler
+                #     exception messages can carry attacker text
+                #     via ``raise ValueError(target_content)``.
+                #   Layer 2 (opt-in): ``refuse_on_indicators`` —
+                #     replace the result with a synthetic
+                #     ``is_error=True`` placeholder if a high-
+                #     confidence injection pattern fires.
+                #
+                # The ``ToolCallReturned`` event carries the RAW
+                # result for consumer/operator observability (cve_diff
+                # parses tool-output JSON from this stream to extract
+                # verified-commit candidates; envelope-wrapped JSON
+                # would break their parser). Only the
+                # ``messages``-bound copy is wrapped.
                 #
                 # Order is critical:
-                #   1. Run preflight on RAW content (advisory event;
-                #      consumers can subscribe + opt-in via
-                #      ``refuse_on_indicators`` for fail-closed
-                #      enforcement on confident patterns).
-                #   2. Extract x-source values from RAW content
-                #      (envelope tags would otherwise pollute the
-                #      discovered-values set with envelope-token noise).
-                #   3. Optionally REFUSE if a high-confidence corpus
-                #      fired and the consumer opted in.
-                #   4. Wrap; that's what the LLM sees.
+                #   1. Preflight on RAW content (event always fires
+                #      so operators see indicators regardless of
+                #      whether refuse is opted-in).
+                #   2. Extract x-source values from RAW (envelope
+                #      tags would pollute the discovered-values set).
+                #   3. Emit ToolCallReturned with the RAW result.
+                #   4. Wrap (or refuse) for the message copy.
                 raw_content = result.content
                 pf = preflight(raw_content)
                 if pf.has_injection_indicators:
@@ -533,13 +539,19 @@ class ToolUseLoop:
                 if not result.is_error:
                     known_values |= _extract_values_from_json(raw_content)
 
-                # Refuse-on-injection: replace result with synthetic
-                # error if any indicator from the consumer's
-                # opt-in list fired. The original content never
-                # reaches the LLM. Operator still sees the
-                # ToolResultPreflight event above, plus the synthetic
-                # error includes the indicator names so the model
-                # knows why its tool call returned filtered.
+                self._emit(ToolCallReturned(
+                    iteration=iteration,
+                    call_id=call.id,
+                    result=result,
+                    duration_s=duration,
+                ))
+
+                # Refuse-on-injection: replace the message copy with
+                # a synthetic error if any indicator from the
+                # consumer's opt-in list fired. The original content
+                # never reaches the LLM but consumers/operators saw
+                # it via the ToolCallReturned event above and the
+                # ToolResultPreflight event further above.
                 refuse_hit = (
                     self._refuse_on_indicators
                     and pf.has_injection_indicators
@@ -553,7 +565,7 @@ class ToolUseLoop:
                         ind for ind in pf.indicators
                         if ind in self._refuse_on_indicators
                     )
-                    result = ToolResult(
+                    message_result = ToolResult(
                         tool_use_id=result.tool_use_id,
                         content=(
                             "tool result filtered: matched injection "
@@ -566,19 +578,13 @@ class ToolUseLoop:
                         is_error=True,
                     )
                 else:
-                    result = ToolResult(
+                    message_result = ToolResult(
                         tool_use_id=result.tool_use_id,
                         content=wrap_tool_result(raw_content, call.name),
                         is_error=result.is_error,
                     )
 
-                self._emit(ToolCallReturned(
-                    iteration=iteration,
-                    call_id=call.id,
-                    result=result,
-                    duration_s=duration,
-                ))
-                tool_results.append(result)
+                tool_results.append(message_result)
 
                 if (
                     self._terminal_tool is not None
