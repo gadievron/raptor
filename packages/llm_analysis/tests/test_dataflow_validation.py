@@ -293,6 +293,7 @@ class TestTierSelection:
         h, f = self._make_hyp_and_finding(cwe="CWE-78", file="x.py", line=10)
 
         adapter = MagicMock()
+        adapter._database_path = None  # bypass file-coverage gate (no real DB)
         adapter.run_prebuilt_query.return_value = ToolEvidence(
             tool="codeql", rule=str(self._FAKE_PREBUILT), success=True,
             matches=[{"file": "x.py", "line": 10,
@@ -329,6 +330,7 @@ class TestTierSelection:
         h, f = self._make_hyp_and_finding(file="x.py", line=10)
 
         adapter = MagicMock()
+        adapter._database_path = None  # bypass file-coverage gate (no real DB)
         # Tier 1 → matches elsewhere → inconclusive
         adapter.run_prebuilt_query.return_value = ToolEvidence(
             tool="codeql", rule=str(self._FAKE_PREBUILT), success=True,
@@ -369,6 +371,7 @@ class TestTierSelection:
         h, f = self._make_hyp_and_finding()
 
         adapter = MagicMock()
+        adapter._database_path = None  # bypass file-coverage gate (no real DB)
         adapter.run_prebuilt_query.return_value = ToolEvidence(
             tool="codeql", rule=str(self._FAKE_PREBUILT), success=True,
             matches=[], summary="no matches",
@@ -400,12 +403,17 @@ class TestTierSelection:
 
     def test_extras_pack_no_matches_refutes_at_tier1(self, tmp_path, monkeypatch):
         """When discovery returns an in-repo (extras) query and CodeQL
-        finds zero matches, Tier 1 refutes immediately — no Tier 2
-        fallthrough, no LLM call. This is the key PR-B behaviour: the
-        broader LocalFlowSource model rules out CLI / env / stdin
-        variants the stdlib query would have missed."""
+        finds zero matches AND the DB confirms file+function are
+        indexed, Tier 1 refutes immediately — no Tier 2 fallthrough,
+        no LLM call. This is the key PR-B behaviour: the broader
+        LocalFlowSource model rules out CLI / env / stdin variants
+        the stdlib query would have missed."""
+        import zipfile
         from core.config import RaptorConfig
         from packages.hypothesis_validation.adapters.base import ToolEvidence
+        from packages.llm_analysis.dataflow_validation import (
+            _db_indexed_files, _read_db_source,
+        )
         h, f = self._make_hyp_and_finding()
 
         # Build a fake extras-rooted query path
@@ -415,7 +423,18 @@ class TestTierSelection:
         ql.write_text("// stub")
         monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [extras])
 
+        # Build a fake CodeQL DB with the finding's file + function
+        # present in src.zip — both coverage layers must pass for the
+        # refute to fire.
+        db = tmp_path / "fake-db"
+        db.mkdir()
+        with zipfile.ZipFile(db / "src.zip", "w") as zf:
+            zf.writestr(f["file_path"], "def vuln():\n    pass\n")
+        _db_indexed_files.cache_clear()
+        _read_db_source.cache_clear()
+
         adapter = MagicMock()
+        adapter._database_path = db
         adapter.run_prebuilt_query.return_value = ToolEvidence(
             tool="codeql", rule=str(ql), success=True,
             matches=[], summary="no matches",
@@ -449,6 +468,7 @@ class TestTierSelection:
              "rule_id": "raptor.injection.command-shell"}
 
         adapter = MagicMock()
+        adapter._database_path = None  # bypass file-coverage gate (no real DB)
         adapter.run_prebuilt_query.return_value = ToolEvidence(
             tool="codeql", rule=str(self._FAKE_PREBUILT), success=True,
             matches=[{"file": "x.py", "line": 10}],
@@ -484,6 +504,7 @@ class TestTierSelection:
         h, f = self._make_hyp_and_finding(cwe="CWE-9999")
 
         adapter = MagicMock()
+        adapter._database_path = None  # bypass file-coverage gate (no real DB)
         adapter.run.return_value = ToolEvidence(
             tool="codeql", rule="...", success=True,
             matches=[{"file": "x.py", "line": 10, "message": "match"}],
@@ -532,6 +553,7 @@ class TestTierSelection:
             ),
         ]
         adapter = MagicMock()
+        adapter._database_path = None  # bypass file-coverage gate (no real DB)
         adapter.run.side_effect = adapter_returns
 
         llm_responses = [
@@ -568,6 +590,7 @@ class TestTierSelection:
             error="ERROR: could not resolve type Foo", matches=[],
         )
         adapter = MagicMock()
+        adapter._database_path = None  # bypass file-coverage gate (no real DB)
         adapter.run.return_value = compile_fail
 
         llm = MagicMock()
@@ -594,6 +617,7 @@ class TestTierSelection:
         h, f = self._make_hyp_and_finding(cwe="CWE-9999")
 
         adapter = MagicMock()
+        adapter._database_path = None  # bypass file-coverage gate (no real DB)
         adapter.run.return_value = ToolEvidence(
             tool="codeql", rule="...", success=False,
             error="codeql timeout after 300s", matches=[],
@@ -645,23 +669,59 @@ class TestVerdictFromPrebuilt:
 
     def test_no_matches_extras_path_refutes(self, tmp_path, monkeypatch):
         """When the discovered query lives under an in-repo extras pack
-        (LocalFlowSource coverage), no-match IS a refutation signal —
-        the broader source model rules out CLI / env / stdin variants
-        that the stdlib query would miss."""
+        (LocalFlowSource coverage) AND the DB confirms the file (and
+        function, if named) is indexed, no-match IS a refutation
+        signal — the broader source model rules out CLI / env / stdin
+        variants that the stdlib query would miss."""
+        import zipfile
         from core.config import RaptorConfig
         from packages.hypothesis_validation.adapters.base import ToolEvidence
+        from packages.llm_analysis.dataflow_validation import _db_indexed_files
         # Synthetic extras root with a query path under it
         extras = tmp_path / "raptor-packs"
         ql = extras / "python-queries" / "Security" / "CWE-078" / "CmdInj.ql"
         ql.parent.mkdir(parents=True)
         ql.write_text("// stub")
-
         monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [extras])
+
+        # Build a fake DB whose src.zip contains the finding's file.
+        db = tmp_path / "fake-db"
+        db.mkdir()
+        with zipfile.ZipFile(db / "src.zip", "w") as zf:
+            zf.writestr("x.py", "// stub\n")
+        _db_indexed_files.cache_clear()
 
         ev = ToolEvidence(tool="codeql", rule=str(ql), success=True, matches=[])
         assert _verdict_from_prebuilt(
-            ev, {"file_path": "x.py", "start_line": 1}, ql,
+            ev, {"file_path": "x.py", "start_line": 1}, ql, codeql_db=db,
         ) == "refuted"
+
+    def test_no_codeql_db_refuses_to_refute(self, tmp_path, monkeypatch):
+        """Hardening: even with an extras pack and 0 matches, a missing
+        codeql_db arg means we can't verify coverage. Refuse to refute
+        and log a WARNING — closes the silent-FN backdoor where a
+        caller drops the DB arg by accident."""
+        import logging
+        from core.config import RaptorConfig
+        from packages.hypothesis_validation.adapters.base import ToolEvidence
+        extras = tmp_path / "raptor-packs"
+        ql = extras / "python-queries" / "Security" / "CWE-078" / "CmdInj.ql"
+        ql.parent.mkdir(parents=True)
+        ql.write_text("// stub")
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [extras])
+
+        ev = ToolEvidence(tool="codeql", rule=str(ql), success=True, matches=[])
+        with patch(
+            "packages.llm_analysis.dataflow_validation.logger"
+        ) as mock_logger:
+            verdict = _verdict_from_prebuilt(
+                ev, {"file_path": "x.py", "start_line": 1}, ql,
+                # codeql_db deliberately omitted
+            )
+        assert verdict == "inconclusive"
+        # The WARNING is the operator-visible signal that the silent-
+        # fail path was hit. Verify it fired.
+        assert mock_logger.warning.called
 
     def test_no_matches_extras_path_no_extras_configured(self, monkeypatch):
         """If extras is empty, even a path that LOOKS like it's under
@@ -748,6 +808,531 @@ class TestVerdictFromPrebuilt:
                           matches=[{"file": "/abs/path/to/x.py", "line": 10}])
         f = {"file_path": "src/x.py", "start_line": 10}
         assert _verdict_from_prebuilt(ev, f) == "confirmed"
+
+
+class TestFindingFileInDb:
+    """File-coverage gate: refuse to refute when the finding's file
+    isn't in the CodeQL DB's `src.zip` index. Without this, an
+    incomplete DB silently flips real findings to `refuted` because
+    the LocalFlowSource query has nothing to match against.
+    """
+
+    def _make_db(self, tmp_path, indexed_files):
+        """Build a fake CodeQL DB directory with a populated src.zip."""
+        import zipfile
+        db = tmp_path / "fake-db"
+        db.mkdir()
+        zf_path = db / "src.zip"
+        with zipfile.ZipFile(zf_path, "w") as zf:
+            for f in indexed_files:
+                zf.writestr(f, "// stub\n")
+        return db
+
+    def test_full_path_suffix_match(self, tmp_path):
+        from packages.llm_analysis.dataflow_validation import (
+            _db_indexed_files, _finding_file_in_db,
+        )
+        db = self._make_db(tmp_path, ["home/me/repo/src/foo.py"])
+        _db_indexed_files.cache_clear()
+        assert _finding_file_in_db({"file_path": "src/foo.py"}, db)
+
+    def test_basename_fallback(self, tmp_path):
+        from packages.llm_analysis.dataflow_validation import (
+            _db_indexed_files, _finding_file_in_db,
+        )
+        db = self._make_db(tmp_path, ["a/b/c/foo.py"])
+        _db_indexed_files.cache_clear()
+        # Different parent dirs but same basename → still True
+        assert _finding_file_in_db({"file_path": "x/y/foo.py"}, db)
+
+    def test_file_not_in_db_returns_false(self, tmp_path):
+        from packages.llm_analysis.dataflow_validation import (
+            _db_indexed_files, _finding_file_in_db,
+        )
+        db = self._make_db(tmp_path, ["src/other.py"])
+        _db_indexed_files.cache_clear()
+        assert not _finding_file_in_db({"file_path": "src/foo.py"}, db)
+
+    def test_empty_index_refuses_match(self, tmp_path):
+        """Empty src.zip means we can't verify coverage → False
+        (caller treats this as 'can't refute')."""
+        from packages.llm_analysis.dataflow_validation import (
+            _db_indexed_files, _finding_file_in_db,
+        )
+        db = self._make_db(tmp_path, [])
+        _db_indexed_files.cache_clear()
+        assert not _finding_file_in_db({"file_path": "src/foo.py"}, db)
+
+    def test_missing_src_zip_returns_false(self, tmp_path):
+        from packages.llm_analysis.dataflow_validation import (
+            _db_indexed_files, _finding_file_in_db,
+        )
+        db = tmp_path / "no-src-zip"
+        db.mkdir()
+        _db_indexed_files.cache_clear()
+        assert not _finding_file_in_db({"file_path": "src/foo.py"}, db)
+
+    def test_missing_file_path_returns_false(self, tmp_path):
+        from packages.llm_analysis.dataflow_validation import (
+            _db_indexed_files, _finding_file_in_db,
+        )
+        db = self._make_db(tmp_path, ["src/foo.py"])
+        _db_indexed_files.cache_clear()
+        assert not _finding_file_in_db({}, db)
+
+    def test_file_uri_prefix_stripped(self, tmp_path):
+        from packages.llm_analysis.dataflow_validation import (
+            _db_indexed_files, _finding_file_in_db,
+        )
+        db = self._make_db(tmp_path, ["src/foo.py"])
+        _db_indexed_files.cache_clear()
+        assert _finding_file_in_db({"file_path": "file:///abs/src/foo.py"}, db)
+
+    def test_verdict_refuses_to_refute_when_file_not_in_db(self, tmp_path, monkeypatch):
+        """The end-to-end safety property: with an extras pack query
+        and a successful 0-match run, `_verdict_from_prebuilt` flips
+        refuted → inconclusive when the finding's file isn't in the
+        DB's index."""
+        from core.config import RaptorConfig
+        from packages.hypothesis_validation.adapters.base import ToolEvidence
+        from packages.llm_analysis.dataflow_validation import (
+            _db_indexed_files, _verdict_from_prebuilt,
+        )
+
+        extras = tmp_path / "raptor-packs"
+        ql = extras / "python-queries" / "Security" / "CWE-078" / "CmdInj.ql"
+        ql.parent.mkdir(parents=True)
+        ql.write_text("// stub")
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [extras])
+
+        db = self._make_db(tmp_path, ["src/other.py"])  # NOT covering foo.py
+        _db_indexed_files.cache_clear()
+
+        ev = ToolEvidence(tool="codeql", rule=str(ql), success=True, matches=[])
+        # With codeql_db where foo.py isn't indexed: must NOT refute
+        assert _verdict_from_prebuilt(
+            ev, {"file_path": "src/foo.py", "start_line": 1}, ql,
+            codeql_db=db,
+        ) == "inconclusive"
+
+    def test_tier1_check_finding_skips_when_file_not_in_db(self, tmp_path, monkeypatch):
+        """The wasteful-call-skipping property: when the finding's file
+        isn't in the DB index, `tier1_check_finding` returns `no_check`
+        without invoking CodeQL at all (the adapter's
+        `run_prebuilt_query` must never be called).
+        """
+        from core.config import RaptorConfig
+        from packages.llm_analysis.dataflow_validation import (
+            _db_indexed_files, tier1_check_finding,
+        )
+
+        extras = tmp_path / "raptor-packs"
+        ql = extras / "python-queries" / "Security" / "CWE-078" / "CmdInj.ql"
+        ql.parent.mkdir(parents=True)
+        ql.write_text("// stub")
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [extras])
+
+        db = self._make_db(tmp_path, ["src/other.py"])
+        _db_indexed_files.cache_clear()
+
+        # Make discover_prebuilt_query return our fake .ql so we don't
+        # depend on real packs being installed.
+        with patch(
+            "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
+            return_value=ql,
+        ), patch(
+            "packages.llm_analysis.dataflow_validation.CodeQLAdapter",
+        ) as mock_adapter_cls:
+            verdict = tier1_check_finding(
+                {"file_path": "src/foo.py", "start_line": 1, "language": "python", "cwe_id": "CWE-78"},
+                {"python": db},
+            )
+        assert verdict == "no_check"
+        # The early-exit gate fires BEFORE the adapter is constructed,
+        # so CodeQLAdapter must not have been called.
+        mock_adapter_cls.assert_not_called()
+
+
+class TestFindingFunctionInDb:
+    """Layer 2 coverage check: function name appears in the DB-indexed
+    source text. Catches the case where a file got into src.zip but
+    the named function changed/was-removed since DB build, or
+    extraction silently dropped it.
+    """
+
+    def _make_db(self, tmp_path, files: dict):
+        """Build fake CodeQL DB. `files` is {indexed_path: source_text}."""
+        import zipfile
+        db = tmp_path / "fake-db"
+        db.mkdir()
+        with zipfile.ZipFile(db / "src.zip", "w") as zf:
+            for path, text in files.items():
+                zf.writestr(path, text)
+        return db
+
+    def _clear_caches(self):
+        from packages.llm_analysis.dataflow_validation import (
+            _db_indexed_files, _read_db_source,
+        )
+        _db_indexed_files.cache_clear()
+        _read_db_source.cache_clear()
+
+    def test_function_present_returns_true(self, tmp_path):
+        from packages.llm_analysis.dataflow_validation import _finding_function_in_db
+        db = self._make_db(tmp_path, {"src/foo.py": "def vuln_func():\n    pass\n"})
+        self._clear_caches()
+        f = {"file_path": "src/foo.py", "function_name": "vuln_func"}
+        assert _finding_function_in_db(f, db)
+
+    def test_function_absent_returns_false(self, tmp_path):
+        from packages.llm_analysis.dataflow_validation import _finding_function_in_db
+        db = self._make_db(tmp_path, {"src/foo.py": "def other_func():\n    pass\n"})
+        self._clear_caches()
+        f = {"file_path": "src/foo.py", "function_name": "vuln_func"}
+        assert not _finding_function_in_db(f, db)
+
+    def test_no_function_name_returns_true(self, tmp_path):
+        """Conservative bias: if the finding has no function name to
+        check, don't block refutation."""
+        from packages.llm_analysis.dataflow_validation import _finding_function_in_db
+        db = self._make_db(tmp_path, {"src/foo.py": "x = 1\n"})
+        self._clear_caches()
+        f = {"file_path": "src/foo.py"}  # no function name
+        assert _finding_function_in_db(f, db)
+
+    def test_unreadable_file_returns_true(self, tmp_path):
+        """Conservative bias: if we can't read the source text, don't
+        block refutation."""
+        from packages.llm_analysis.dataflow_validation import _finding_function_in_db
+        # Build DB without src.zip — _read_db_source returns None
+        db = tmp_path / "no-zip-db"
+        db.mkdir()
+        self._clear_caches()
+        f = {"file_path": "src/foo.py", "function_name": "vuln_func"}
+        assert _finding_function_in_db(f, db)
+
+    def test_word_boundary_match(self, tmp_path):
+        """`process` must not match `preprocess`."""
+        from packages.llm_analysis.dataflow_validation import _finding_function_in_db
+        db = self._make_db(tmp_path, {"src/foo.py": "def preprocess():\n    pass\n"})
+        self._clear_caches()
+        f = {"file_path": "src/foo.py", "function_name": "process"}
+        assert not _finding_function_in_db(f, db)
+
+    def test_function_field_aliases(self, tmp_path):
+        """`function` and `entry_function` are accepted as fallbacks."""
+        from packages.llm_analysis.dataflow_validation import _finding_function_in_db
+        db = self._make_db(tmp_path, {"src/foo.py": "def vuln():\n    pass\n"})
+        self._clear_caches()
+        # function_name preferred
+        assert _finding_function_in_db(
+            {"file_path": "src/foo.py", "function": "vuln"}, db,
+        )
+        self._clear_caches()
+        assert _finding_function_in_db(
+            {"file_path": "src/foo.py", "entry_function": "vuln"}, db,
+        )
+
+    def test_java_dotted_method_name(self, tmp_path):
+        """Java `Class.method` survives regex.escape for the dot."""
+        from packages.llm_analysis.dataflow_validation import _finding_function_in_db
+        db = self._make_db(tmp_path, {
+            "src/Foo.java": "public void Foo.method() { /* */ }\n",
+        })
+        self._clear_caches()
+        f = {"file_path": "src/Foo.java", "function_name": "Foo.method"}
+        assert _finding_function_in_db(f, db)
+
+    def test_verdict_blocks_refute_when_function_missing(self, tmp_path, monkeypatch):
+        """End-to-end: file IS in DB but function is NOT in source text →
+        verdict flips refuted → inconclusive."""
+        from core.config import RaptorConfig
+        from packages.hypothesis_validation.adapters.base import ToolEvidence
+        from packages.llm_analysis.dataflow_validation import _verdict_from_prebuilt
+
+        extras = tmp_path / "raptor-packs"
+        ql = extras / "python-queries" / "Security" / "CWE-078" / "CmdInj.ql"
+        ql.parent.mkdir(parents=True)
+        ql.write_text("// stub")
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [extras])
+
+        # File IS in DB but function `vuln` is NOT in source text
+        db = self._make_db(tmp_path, {"src/foo.py": "def other():\n    pass\n"})
+        self._clear_caches()
+
+        ev = ToolEvidence(tool="codeql", rule=str(ql), success=True, matches=[])
+        assert _verdict_from_prebuilt(
+            ev,
+            {"file_path": "src/foo.py", "start_line": 1, "function_name": "vuln"},
+            ql, codeql_db=db,
+        ) == "inconclusive"
+
+    def test_tier1_check_finding_skips_codeql_when_function_missing(
+        self, tmp_path, monkeypatch,
+    ):
+        """Layer 2 short-circuits CodeQL invocation just like Layer 1."""
+        from core.config import RaptorConfig
+        from packages.llm_analysis.dataflow_validation import tier1_check_finding
+
+        extras = tmp_path / "raptor-packs"
+        ql = extras / "python-queries" / "Security" / "CWE-078" / "CmdInj.ql"
+        ql.parent.mkdir(parents=True)
+        ql.write_text("// stub")
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [extras])
+
+        # File in DB; function not in DB-source text
+        db = self._make_db(tmp_path, {"src/foo.py": "def other():\n    pass\n"})
+        self._clear_caches()
+
+        with patch(
+            "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
+            return_value=ql,
+        ), patch(
+            "packages.llm_analysis.dataflow_validation.CodeQLAdapter",
+        ) as mock_adapter_cls:
+            verdict = tier1_check_finding(
+                {
+                    "file_path": "src/foo.py",
+                    "start_line": 1,
+                    "language": "python",
+                    "cwe_id": "CWE-78",
+                    "function_name": "vuln",
+                },
+                {"python": db},
+            )
+        assert verdict == "no_check"
+        mock_adapter_cls.assert_not_called()
+
+
+class TestCallableInventoryProbe:
+    """Layer 3 (Java only) — authoritative coverage check via a CodeQL
+    callable-inventory probe. Catches the bytecode-extraction failure
+    case where a .java file is in `src.zip` and the function name
+    appears in the source text (so Layers 1+2 pass) but the AST
+    extraction silently dropped the callable.
+    """
+
+    def _stub_probe_file(self, tmp_path, monkeypatch):
+        """Create a fake extras root with a Java probe `.ql`."""
+        from core.config import RaptorConfig
+        extras = tmp_path / "extras"
+        probe = extras / "java-queries" / "Raptor" / "CallableInventory.ql"
+        probe.parent.mkdir(parents=True)
+        probe.write_text("// stub probe\n")
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [extras])
+        return probe
+
+    def _clear_caches(self):
+        from packages.llm_analysis.dataflow_validation import (
+            _db_callable_inventory,
+        )
+        _db_callable_inventory.cache_clear()
+
+    def test_layer3_disabled_for_python(self, tmp_path, monkeypatch):
+        """Python is text-extracted; Layer 3 returns None to defer to L2."""
+        from packages.llm_analysis.dataflow_validation import (
+            _function_in_codeql_inventory,
+        )
+        self._stub_probe_file(tmp_path, monkeypatch)
+        self._clear_caches()
+        result = _function_in_codeql_inventory(
+            {"file_path": "src/foo.py", "function_name": "vuln"},
+            tmp_path / "fake-db", "python",
+        )
+        assert result is None
+
+    def test_layer3_no_function_name_returns_none(self, tmp_path, monkeypatch):
+        from packages.llm_analysis.dataflow_validation import (
+            _function_in_codeql_inventory,
+        )
+        self._stub_probe_file(tmp_path, monkeypatch)
+        self._clear_caches()
+        result = _function_in_codeql_inventory(
+            {"file_path": "src/Foo.java"},  # no function_name
+            tmp_path / "fake-db", "java",
+        )
+        assert result is None
+
+    def test_layer3_probe_unavailable_returns_none(self, tmp_path, monkeypatch):
+        """Probe fails to run → None (caller defers to Layer 2 verdict)."""
+        from packages.llm_analysis.dataflow_validation import (
+            _function_in_codeql_inventory,
+        )
+        self._stub_probe_file(tmp_path, monkeypatch)
+        self._clear_caches()
+        # Mock the adapter to be unavailable
+        with patch(
+            "packages.llm_analysis.dataflow_validation.CodeQLAdapter"
+        ) as mock_cls:
+            mock_inst = MagicMock()
+            mock_inst.is_available.return_value = False
+            mock_cls.return_value = mock_inst
+            result = _function_in_codeql_inventory(
+                {"file_path": "src/Foo.java", "function_name": "vuln"},
+                tmp_path / "fake-db", "java",
+            )
+        assert result is None
+
+    def test_layer3_function_in_inventory_returns_true(self, tmp_path, monkeypatch):
+        from packages.hypothesis_validation.adapters.base import ToolEvidence
+        from packages.llm_analysis.dataflow_validation import (
+            _function_in_codeql_inventory,
+        )
+        self._stub_probe_file(tmp_path, monkeypatch)
+        self._clear_caches()
+        with patch(
+            "packages.llm_analysis.dataflow_validation.CodeQLAdapter"
+        ) as mock_cls:
+            mock_inst = MagicMock()
+            mock_inst.is_available.return_value = True
+            mock_inst.run_prebuilt_query.return_value = ToolEvidence(
+                tool="codeql", rule="probe", success=True,
+                matches=[
+                    {"file": "src/Foo.java", "line": 10,
+                     "message": "RAPTOR_CALLABLE:vuln"},
+                    {"file": "src/Foo.java", "line": 20,
+                     "message": "RAPTOR_CALLABLE:other"},
+                ],
+            )
+            mock_cls.return_value = mock_inst
+            result = _function_in_codeql_inventory(
+                {"file_path": "src/Foo.java", "function_name": "vuln"},
+                tmp_path / "fake-db", "java",
+            )
+        assert result is True
+
+    def test_layer3_function_missing_returns_false(self, tmp_path, monkeypatch):
+        from packages.hypothesis_validation.adapters.base import ToolEvidence
+        from packages.llm_analysis.dataflow_validation import (
+            _function_in_codeql_inventory,
+        )
+        self._stub_probe_file(tmp_path, monkeypatch)
+        self._clear_caches()
+        with patch(
+            "packages.llm_analysis.dataflow_validation.CodeQLAdapter"
+        ) as mock_cls:
+            mock_inst = MagicMock()
+            mock_inst.is_available.return_value = True
+            mock_inst.run_prebuilt_query.return_value = ToolEvidence(
+                tool="codeql", rule="probe", success=True,
+                matches=[
+                    {"file": "src/Other.java", "line": 10,
+                     "message": "RAPTOR_CALLABLE:other"},
+                ],
+            )
+            mock_cls.return_value = mock_inst
+            result = _function_in_codeql_inventory(
+                {"file_path": "src/Foo.java", "function_name": "vuln"},
+                tmp_path / "fake-db", "java",
+            )
+        assert result is False  # extraction missed it → caller refuses to refute
+
+    def test_layer3_probe_runs_only_once_per_db(self, tmp_path, monkeypatch):
+        """Per-DB cache: 10 findings → 1 probe invocation."""
+        from packages.hypothesis_validation.adapters.base import ToolEvidence
+        from packages.llm_analysis.dataflow_validation import (
+            _function_in_codeql_inventory,
+        )
+        self._stub_probe_file(tmp_path, monkeypatch)
+        self._clear_caches()
+        with patch(
+            "packages.llm_analysis.dataflow_validation.CodeQLAdapter"
+        ) as mock_cls:
+            mock_inst = MagicMock()
+            mock_inst.is_available.return_value = True
+            mock_inst.run_prebuilt_query.return_value = ToolEvidence(
+                tool="codeql", rule="probe", success=True,
+                matches=[
+                    {"file": "src/Foo.java", "line": 10,
+                     "message": "RAPTOR_CALLABLE:vuln"},
+                ],
+            )
+            mock_cls.return_value = mock_inst
+            db = tmp_path / "fake-db"
+            for _ in range(10):
+                _function_in_codeql_inventory(
+                    {"file_path": "src/Foo.java", "function_name": "vuln"},
+                    db, "java",
+                )
+        # Probe ran exactly once despite 10 lookups
+        assert mock_inst.run_prebuilt_query.call_count == 1
+
+    def test_layer3_probe_failure_returns_none_safe_direction(
+        self, tmp_path, monkeypatch,
+    ):
+        """Probe raises → return None → caller defers (refuses to refute)."""
+        from packages.llm_analysis.dataflow_validation import (
+            _function_in_codeql_inventory,
+        )
+        self._stub_probe_file(tmp_path, monkeypatch)
+        self._clear_caches()
+        with patch(
+            "packages.llm_analysis.dataflow_validation.CodeQLAdapter"
+        ) as mock_cls:
+            mock_inst = MagicMock()
+            mock_inst.is_available.return_value = True
+            mock_inst.run_prebuilt_query.side_effect = RuntimeError("boom")
+            mock_cls.return_value = mock_inst
+            result = _function_in_codeql_inventory(
+                {"file_path": "src/Foo.java", "function_name": "vuln"},
+                tmp_path / "fake-db", "java",
+            )
+        assert result is None
+
+    def test_verdict_blocks_refute_when_layer3_says_function_missing(
+        self, tmp_path, monkeypatch,
+    ):
+        """End-to-end: Layers 1+2 pass, real query 0-matches, Layer 3
+        says function not in DB → refute flips to inconclusive."""
+        from core.config import RaptorConfig
+        from packages.hypothesis_validation.adapters.base import ToolEvidence
+        from packages.llm_analysis.dataflow_validation import (
+            _db_indexed_files, _read_db_source, _verdict_from_prebuilt,
+        )
+
+        # Set up extras pack with the dataflow query AND the probe
+        extras = tmp_path / "extras"
+        ql = extras / "java-queries" / "Security" / "CWE-078" / "CmdInj.ql"
+        ql.parent.mkdir(parents=True)
+        ql.write_text("// stub")
+        probe = extras / "java-queries" / "Raptor" / "CallableInventory.ql"
+        probe.parent.mkdir(parents=True)
+        probe.write_text("// stub probe")
+        monkeypatch.setattr(RaptorConfig, "EXTRA_CODEQL_PACK_ROOTS", [extras])
+
+        # Build a fake DB: file IS in src.zip, function name IS in
+        # source text → Layers 1+2 pass.
+        import zipfile
+        db = tmp_path / "fake-db"
+        db.mkdir()
+        with zipfile.ZipFile(db / "src.zip", "w") as zf:
+            zf.writestr("src/Foo.java", "void vuln() {}\n")
+        _db_indexed_files.cache_clear()
+        _read_db_source.cache_clear()
+        self._clear_caches()
+
+        ev = ToolEvidence(tool="codeql", rule=str(ql), success=True, matches=[])
+        # Mock probe: returns inventory WITHOUT vuln (extraction failed)
+        with patch(
+            "packages.llm_analysis.dataflow_validation.CodeQLAdapter"
+        ) as mock_cls:
+            mock_inst = MagicMock()
+            mock_inst.is_available.return_value = True
+            mock_inst.run_prebuilt_query.return_value = ToolEvidence(
+                tool="codeql", rule=str(probe), success=True,
+                matches=[
+                    {"file": "src/Foo.java", "line": 1,
+                     "message": "RAPTOR_CALLABLE:other"},
+                ],
+            )
+            mock_cls.return_value = mock_inst
+            verdict = _verdict_from_prebuilt(
+                ev,
+                {"file_path": "src/Foo.java", "start_line": 1,
+                 "function_name": "vuln"},
+                ql, codeql_db=db,
+            )
+        assert verdict == "inconclusive"
 
 
 class TestCompileErrorDetection:
@@ -1581,11 +2166,16 @@ class TestRunValidationPass:
         args["dispatch_mode"] = "cc_dispatch"
         args["findings"], args["results_by_id"] = self._make_finding()
         # Force Tier 1 to fire with a synthetic discovery result so the
-        # test is deterministic regardless of host pack state.
+        # test is deterministic regardless of host pack state. Patch
+        # the file-coverage gate too so the synthetic DB path doesn't
+        # short-circuit before invocation (no src.zip on disk).
         fake_path = Path("/fake/pack/codeql/cpp-queries/1.0/Security/CWE-078/CmdInj.ql")
         with patch(
             "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
             return_value=fake_path,
+        ), patch(
+            "packages.llm_analysis.dataflow_validation._finding_file_in_db",
+            return_value=True,
         ), patch(
             "packages.hypothesis_validation.adapters.CodeQLAdapter.is_available",
             return_value=True,

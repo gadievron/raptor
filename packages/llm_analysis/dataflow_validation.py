@@ -19,6 +19,7 @@ pre-built CodeQL database (typically produced by the same /agentic run's
 exhausted, the helper is a no-op.
 """
 
+import functools
 import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -693,6 +694,34 @@ def tier1_check_finding(
     if db is None or not Path(db).exists():
         return "no_check"
 
+    # Coverage gate — runs BEFORE the CodeQL invocation, not after.
+    # Two layers, cheapest first:
+    #
+    #   Layer 1: finding's file in `<db>/src.zip`?
+    #   Layer 2: function name appears in that file's source text?
+    #
+    # Either failing means the in-repo query would silently return
+    # zero matches and (without this gate) PR-B's verdict relaxation
+    # would refute a finding the DB simply didn't cover. Returning
+    # early as `no_check` avoids the multi-second `codeql database
+    # analyze` call entirely AND makes the verdict semantically
+    # correct: we genuinely haven't checked.
+    if not _finding_file_in_db(finding, Path(db)):
+        logger.debug(
+            "tier1_check_finding: %s not in DB index — skipping CodeQL invocation",
+            finding.get("file_path") or finding.get("file"),
+        )
+        return "no_check"
+    if not _finding_function_in_db(finding, Path(db)):
+        logger.debug(
+            "tier1_check_finding: function %r not in DB source text "
+            "for %s — skipping CodeQL invocation",
+            finding.get("function_name") or finding.get("function")
+            or finding.get("entry_function"),
+            finding.get("file_path") or finding.get("file"),
+        )
+        return "no_check"
+
     adapter = CodeQLAdapter(database_path=Path(db))
     if not adapter.is_available():
         return "no_check"
@@ -706,7 +735,10 @@ def tier1_check_finding(
 
     if not ev.success:
         return "no_check"
-    return _verdict_from_prebuilt(ev, finding, prebuilt_path)
+    # The DB-coverage check above already passed; the codeql_db
+    # argument here is belt-and-braces in case a future caller bypasses
+    # the early-out (e.g. by constructing the adapter themselves).
+    return _verdict_from_prebuilt(ev, finding, prebuilt_path, codeql_db=Path(db))
 
 
 def _validate_one_hypothesis(
@@ -766,22 +798,46 @@ def _validate_one_hypothesis(
     if language and cwe:
         prebuilt_path = discover_prebuilt_query(language, cwe)
         if prebuilt_path is not None:
-            ev = adapter.run_prebuilt_query(prebuilt_path, hypothesis.target)
-            verdict = _verdict_from_prebuilt(ev, finding, prebuilt_path)
-            if verdict in ("confirmed", "refuted"):
-                # Tier 1 produced a definitive answer. Done.
-                return _wrap_result(ev, verdict, tier="prebuilt"), "prebuilt"
-            # Otherwise (inconclusive). When deep_validate=False, stop
-            # here and return the inconclusive Tier 1 result. The user
-            # didn't authorise spending LLM tokens on Tier 2 refinement;
-            # Tier 1's free signal is what they asked for.
-            if not deep_validate:
-                return (
-                    _wrap_result(ev, "inconclusive", tier="prebuilt"),
-                    "prebuilt-inconclusive",
+            # Coverage gate before the CodeQL invocation. Two layers:
+            # (1) finding's file in src.zip; (2) function name in that
+            # file's text. Either failing means the query would
+            # silently return 0 matches and PR-B's relaxation would
+            # refute a finding the DB simply didn't cover. Skip the
+            # wasteful invocation entirely; the rest of the function
+            # then either returns inconclusive (deep_validate=False)
+            # or falls through to Tier 2 (deep_validate=True).
+            adapter_db = getattr(adapter, "_database_path", None)
+            tier1_ran = adapter_db is None or (
+                _finding_file_in_db(finding, adapter_db)
+                and _finding_function_in_db(finding, adapter_db)
+            )
+            if not tier1_ran:
+                logger.debug(
+                    "Tier 1 skipped for %s: coverage gate (file/function) "
+                    "missed in DB at %s",
+                    finding.get("file_path") or finding.get("file"),
+                    adapter_db,
                 )
-            # deep_validate=True: fall through to Tier 2 for a chance at
-            # refutation via LLM-customised predicates.
+            else:
+                ev = adapter.run_prebuilt_query(prebuilt_path, hypothesis.target)
+                verdict = _verdict_from_prebuilt(
+                    ev, finding, prebuilt_path, codeql_db=adapter_db,
+                )
+                if verdict in ("confirmed", "refuted"):
+                    # Tier 1 produced a definitive answer. Done.
+                    return _wrap_result(ev, verdict, tier="prebuilt"), "prebuilt"
+                # Otherwise (inconclusive). When deep_validate=False,
+                # stop here and return the inconclusive Tier 1 result.
+                # The user didn't authorise spending LLM tokens on
+                # Tier 2 refinement; Tier 1's free signal is what
+                # they asked for.
+                if not deep_validate:
+                    return (
+                        _wrap_result(ev, "inconclusive", tier="prebuilt"),
+                        "prebuilt-inconclusive",
+                    )
+                # deep_validate=True: fall through to Tier 2 for a
+                # chance at refutation via LLM-customised predicates.
 
     # ----- Tier 2 + 3: language template + LLM-filled predicates +
     #                    compile-error retry -----
@@ -928,6 +984,7 @@ def _verdict_from_prebuilt(
     evidence: ToolEvidence,
     finding: Dict,
     query_path: Optional[Path] = None,
+    codeql_db: Optional[Path] = None,
 ) -> str:
     """Derive verdict from a prebuilt-query result.
 
@@ -944,16 +1001,32 @@ def _verdict_from_prebuilt(
       - tool failed → inconclusive
       - matches at finding location → confirmed
       - matches elsewhere → inconclusive
-      - no matches, query from in-repo extras pack → refuted
       - no matches, query from stdlib pack → inconclusive
         (caller falls through to Tier 2 for LLM-customised refutation)
+      - no matches, query from in-repo extras pack:
+        - and `codeql_db` provided AND finding's file is in DB index
+            → refuted
+        - else → inconclusive (DB coverage couldn't be verified, so
+            "no matches" might just mean "file wasn't extracted" —
+            silent false negatives that direction are worse than a
+            slightly weaker Tier 1 signal)
 
-    Empirical: pre-LocalFlowSource, a real CLI-driven command injection
-    using `sys.argv → subprocess.call(shell=True)` produced no matches
-    against the stdlib query, and treating that as refutation would
-    have downgraded a true positive. The relaxed branch only fires
-    when an in-repo query (which DOES cover sys.argv) returned no
-    matches — at which point refutation is justified.
+    The DB-coverage gate matters because real-world CodeQL DBs miss
+    files for ordinary reasons: build failures skipping a class,
+    paths-ignore in the operator's codeql-config.yml, the DB being
+    from a different commit than the finding's source. Without the
+    gate, "DB doesn't index this file" silently looks identical to
+    "the flow truly doesn't exist", and refutation downgrades a real
+    finding. Empirical motivation: the bug was caught in PR-G's
+    adversarial review (Q1).
+
+    `codeql_db` is required for refutation. Calling without it (or
+    passing None) when the query is in an extras pack is treated as
+    "coverage cannot be verified" — the function logs a WARNING and
+    returns inconclusive rather than silently refuting. This closes
+    the false-negative backdoor where an unset `_database_path`
+    (e.g. via a defensive getattr fallback) would silently bypass
+    the coverage gate.
     """
     if not evidence.success:
         return "inconclusive"
@@ -962,10 +1035,343 @@ def _verdict_from_prebuilt(
             return "confirmed"
         return "inconclusive"
     # No matches. Refutation is justified only when the query has broad
-    # source coverage — which only the in-repo extras packs do.
-    if query_path is not None and _query_is_in_extras_pack(query_path):
-        return "refuted"
-    return "inconclusive"
+    # source coverage AND we can verify the finding's file is in the
+    # DB. The two checks together rule out the most common false-
+    # negative mode: the in-repo query ran cleanly against a DB that
+    # never indexed the finding's file.
+    if query_path is None or not _query_is_in_extras_pack(query_path):
+        return "inconclusive"
+    if codeql_db is None:
+        # No DB to verify coverage against — refuse to refute. This is
+        # a hard guarantee against the silent-FN path where a caller
+        # accidentally drops the DB arg (or `_database_path` was None).
+        # Always log at WARNING so the gap is visible in operator logs.
+        logger.warning(
+            "Tier 1 declines to refute %s: no codeql_db supplied for "
+            "coverage check (caller bug or test misconfiguration)",
+            finding.get("file_path") or finding.get("file"),
+        )
+        return "inconclusive"
+    if not _finding_file_in_db(finding, codeql_db):
+        logger.info(
+            "Tier 1 declines to refute %s: file not in DB index at %s",
+            finding.get("file_path") or finding.get("file"), codeql_db,
+        )
+        return "inconclusive"
+    # Layer 2 coverage check: file is indexed but the named function
+    # may have changed since DB build, or extraction silently dropped
+    # it. Cheap second-line check before allowing refutation.
+    if not _finding_function_in_db(finding, codeql_db):
+        logger.info(
+            "Tier 1 declines to refute %s: function %r not in DB source text",
+            finding.get("file_path") or finding.get("file"),
+            finding.get("function_name") or finding.get("function")
+            or finding.get("entry_function"),
+        )
+        return "inconclusive"
+    # Layer 3 (Java only): authoritative check via CodeQL callable
+    # inventory. Catches the bytecode-extraction failure case where
+    # the .java file IS in src.zip and the function name appears in
+    # the source text (so Layers 1+2 pass) but the AST extraction
+    # silently dropped the callable (e.g. a single Maven module
+    # failed to compile). Returns None for non-Java languages, where
+    # extraction is text-based and Layer 2 is authoritative.
+    language = _finding_language(finding)
+    if language:
+        layer3 = _function_in_codeql_inventory(finding, codeql_db, language)
+        if layer3 is False:
+            logger.info(
+                "Tier 1 declines to refute %s: function %r not in CodeQL "
+                "callable inventory (extraction missed it)",
+                finding.get("file_path") or finding.get("file"),
+                finding.get("function_name") or finding.get("function")
+                or finding.get("entry_function"),
+            )
+            return "inconclusive"
+    return "refuted"
+
+
+@functools.lru_cache(maxsize=64)
+def _db_indexed_files(db_path: Path) -> "frozenset[str]":
+    """Return the set of source file paths indexed in a CodeQL DB.
+
+    CodeQL stores the extracted source as `<db>/src.zip`; entries are
+    the file paths with the leading slash stripped (e.g.
+    `home/raptor/repo/src/foo.py`). We surface the full set so callers
+    can match by suffix — finding paths are typically relative
+    (`src/foo.py`) and may not anchor to the same root.
+
+    Cached per (resolved) DB path. The src.zip is read once per
+    process per DB; subsequent queries are a frozenset membership
+    check. Falls back to `frozenset()` (i.e. "DB has no indexed
+    files we know about") on any I/O / zip error — the caller
+    should treat empty as "can't verify coverage" and avoid the
+    refuted verdict, which is the safe default.
+    """
+    src_zip = Path(db_path) / "src.zip"
+    if not src_zip.is_file():
+        return frozenset()
+    try:
+        import zipfile
+        with zipfile.ZipFile(src_zip) as zf:
+            return frozenset(name for name in zf.namelist()
+                             if not name.endswith("/"))
+    except (zipfile.BadZipFile, OSError) as e:
+        logger.debug("could not read CodeQL src.zip at %s: %s", src_zip, e)
+        return frozenset()
+
+
+def _resolve_finding_in_db(finding: Dict, db_path: Path) -> Optional[str]:
+    """Return the indexed-source entry that matches the finding's file,
+    or None if no match.
+
+    Match strategy: (1) full file_path suffix match; (2) basename
+    fallback. The two-step approach trades a tiny FP risk (two files
+    with the same basename in different dirs) for catching real-world
+    cases where the finding's path is project-relative but the DB's
+    index is repo-root-relative — they don't anchor to the same root.
+
+    Used by both `_finding_file_in_db` (returns bool) and
+    `_finding_function_in_db` (needs the entry path to read its
+    contents).
+    """
+    file_path = (finding.get("file_path") or finding.get("file") or "").strip()
+    if not file_path:
+        return None
+    # Strip uri-style prefixes some scanners use
+    if file_path.startswith("file://"):
+        file_path = file_path[len("file://"):]
+    indexed = _db_indexed_files(Path(db_path))
+    if not indexed:
+        return None
+    needle = file_path.lstrip("/")
+    # Step 1: full-path suffix match (preferred — unambiguous)
+    for entry in indexed:
+        if entry.endswith(needle) or entry.endswith("/" + needle):
+            return entry
+    # Step 2: basename fallback
+    basename = Path(needle).name
+    if not basename:
+        return None
+    for entry in indexed:
+        if Path(entry).name == basename:
+            return entry
+    return None
+
+
+def _finding_file_in_db(finding: Dict, db_path: Path) -> bool:
+    """True when the finding's file path appears in the DB's source
+    archive. Thin wrapper over `_resolve_finding_in_db`.
+
+    Returns False on any error / empty index — caller should treat
+    that as 'can't verify' and refuse to refute.
+    """
+    return _resolve_finding_in_db(finding, db_path) is not None
+
+
+@functools.lru_cache(maxsize=128)
+def _read_db_source(db_path: Path, indexed_path: str) -> Optional[str]:
+    """Read a single indexed source file's text from `<db>/src.zip`.
+
+    Returns None on any error — caller treats that as 'can't verify'
+    and biases away from refutation. Cached per (db, path) so repeat
+    findings in the same file don't re-open the zip.
+    """
+    src_zip = Path(db_path) / "src.zip"
+    if not src_zip.is_file():
+        return None
+    try:
+        import zipfile
+        with zipfile.ZipFile(src_zip) as zf:
+            with zf.open(indexed_path) as f:
+                return f.read().decode("utf-8", errors="replace")
+    except (zipfile.BadZipFile, OSError, KeyError) as e:
+        logger.debug("could not read %s from %s: %s", indexed_path, src_zip, e)
+        return None
+
+
+def _finding_function_in_db(finding: Dict, db_path: Path) -> bool:
+    """Layer 2 coverage check: does the finding's named function appear
+    in the indexed source text?
+
+    Runs ONLY after `_finding_file_in_db` has confirmed the file is in
+    the DB. Catches the case where a file got into `src.zip` but the
+    specific function changed/was-removed/never-extracted — refuting
+    such findings is a silent FN.
+
+    Conservative: only blocks refutation on POSITIVE evidence the
+    function is missing (file content readable AND name absent under
+    word boundary). All other paths return True so the gate doesn't
+    cascade-block real refutations.
+
+    Cost: ~ms. One zip-entry read (cached), one regex scan. No CodeQL
+    invocation. Cheap enough to run before every refute decision.
+    """
+    fn = (
+        finding.get("function_name")
+        or finding.get("function")
+        or finding.get("entry_function")
+        or ""
+    ).strip()
+    if not fn:
+        return True  # nothing to check — don't block
+    entry = _resolve_finding_in_db(finding, db_path)
+    if entry is None:
+        return True  # file check should have already failed; defer to caller
+    contents = _read_db_source(Path(db_path), entry)
+    if contents is None:
+        return True  # can't verify — don't block
+    # Word-boundary match. Function names can include dots (e.g. Java
+    # `Class.method`); the dot is a regex metachar, so escape() handles
+    # it. \b respects underscore-letter boundaries which is what we
+    # want for source-text identifiers.
+    import re
+    return re.search(r"\b" + re.escape(fn) + r"\b", contents) is not None
+
+
+# Languages where Layer 3 (CodeQL callable-inventory probe) catches
+# real false-negative refutations. Only Java qualifies: its
+# bytecode-based extraction can silently drop callables when a
+# single class fails to compile, even though the .java source still
+# ends up in `src.zip`. Python/JS/Go/TS extraction is text-based and
+# all-or-nothing per file, so Layer 2 (function name in source text)
+# is sufficient for them.
+_LAYER3_LANGUAGES = frozenset({"java"})
+
+
+def _layer3_probe_path(language: str) -> Optional[Path]:
+    """Locate the callable-inventory probe `.ql` shipped with the
+    in-repo extras pack for `language`. Returns None if no probe is
+    available — caller treats that as 'Layer 3 disabled' and biases
+    toward inconclusive on 0-match results.
+    """
+    if language not in _LAYER3_LANGUAGES:
+        return None
+    try:
+        from core.config import RaptorConfig
+        roots = list(RaptorConfig.EXTRA_CODEQL_PACK_ROOTS or [])
+    except ImportError:
+        return None
+    for root in roots:
+        candidate = (
+            Path(root) / f"{language}-queries" / "Raptor" / "CallableInventory.ql"
+        )
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+@functools.lru_cache(maxsize=8)
+def _db_callable_inventory(
+    db_path: Path, language: str,
+) -> "Optional[frozenset[tuple[str, str]]]":
+    """Return the set of `(relative_path, function_name)` callables
+    extracted in the DB, by running a one-time probe query.
+
+    Returns:
+        frozenset of `(file_path, function_name)` tuples on success.
+        None if Layer 3 is disabled for this language, the probe
+        query is missing, the probe failed, or codeql isn't
+        available. Callers MUST treat None as 'Layer 3 unavailable'
+        and bias toward inconclusive (refuse to refute) — never
+        toward refute, since None is indistinguishable from
+        'function genuinely not in DB'.
+
+    Cached per (db, language). The probe runs at most once per
+    (DB, language) per process; subsequent finding-level lookups
+    are O(1) frozenset membership tests.
+
+    Cost: ~5-15s warm (CodeQL evaluator startup + SARIF interpret),
+    ~30-60s cold (compile + eval + interpret). In a typical
+    /agentic run the dataflow query has already been compiled
+    before Layer 3 fires, so we pay the warm cost only.
+    """
+    probe_path = _layer3_probe_path(language)
+    if probe_path is None:
+        logger.debug(
+            "Layer 3 inventory probe unavailable for language %r", language,
+        )
+        return None
+    try:
+        adapter = CodeQLAdapter(database_path=Path(db_path))
+        if not adapter.is_available():
+            logger.debug("Layer 3 probe: CodeQL adapter unavailable")
+            return None
+        ev = adapter.run_prebuilt_query(probe_path, Path(db_path))
+    except Exception as e:
+        logger.warning(
+            "Layer 3 callable-inventory probe failed for %s (%s): %s",
+            db_path, language, e,
+        )
+        return None
+    if not ev.success:
+        logger.warning(
+            "Layer 3 callable-inventory probe returned no result for %s "
+            "(%s): %s", db_path, language, ev.error or "unknown",
+        )
+        return None
+    inventory: set = set()
+    prefix = "RAPTOR_CALLABLE:"
+    for m in ev.matches:
+        msg = m.get("message", "")
+        if not msg.startswith(prefix):
+            continue
+        fn = msg[len(prefix):].strip()
+        f = m.get("file", "")
+        if f and fn:
+            inventory.add((f, fn))
+    logger.info(
+        "Layer 3 callable inventory: %d callables in %d files (%s, %s)",
+        len(inventory),
+        len({f for f, _ in inventory}),
+        language, db_path,
+    )
+    return frozenset(inventory)
+
+
+def _function_in_codeql_inventory(
+    finding: Dict, db_path: Path, language: str,
+) -> Optional[bool]:
+    """Layer 3 coverage check: does the finding's named function
+    actually exist in the CodeQL-extracted callable inventory?
+
+    Returns:
+        True  — function found in DB; refute is safe.
+        False — function NOT in DB; extraction missed it; refuse to
+                refute (would be a false negative).
+        None  — Layer 3 not applicable (language not in
+                _LAYER3_LANGUAGES) OR finding has no function name OR
+                probe failed. Caller defers to Layers 1+2 verdict.
+    """
+    if language not in _LAYER3_LANGUAGES:
+        return None  # Layer 2 is sufficient for this language
+    fn = (
+        finding.get("function_name")
+        or finding.get("function")
+        or finding.get("entry_function")
+        or ""
+    ).strip()
+    if not fn:
+        return None  # nothing to check
+    inventory = _db_callable_inventory(Path(db_path), language)
+    if inventory is None:
+        return None  # probe unavailable — defer to Layer 2
+    file_path = (finding.get("file_path") or finding.get("file") or "").strip()
+    if file_path.startswith("file://"):
+        file_path = file_path[len("file://"):]
+    needle = file_path.lstrip("/")
+    # Suffix match — finding's path may not anchor to DB's source root.
+    for entry_file, entry_fn in inventory:
+        if entry_fn != fn:
+            continue
+        if entry_file.endswith(needle) or entry_file.endswith("/" + needle):
+            return True
+    # Basename fallback — same trade-off as Layer 1
+    basename = Path(needle).name
+    for entry_file, entry_fn in inventory:
+        if entry_fn == fn and Path(entry_file).name == basename:
+            return True
+    return False
 
 
 def _query_is_in_extras_pack(query_path: Path) -> bool:

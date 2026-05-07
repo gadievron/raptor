@@ -83,10 +83,15 @@ class TestTier1CheckFinding:
         fake_path = Path("/fake/extras/python-queries/Security/CWE-078/CmdInj.ql")
 
         # Patch discovery to return our fake path; patch adapter to
-        # return a confirmed match at the finding's location.
+        # return a confirmed match at the finding's location. Patch
+        # the file-coverage gate too — the fake DB has no src.zip so
+        # the gate would otherwise short-circuit before invocation.
         with patch(
             "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
             return_value=fake_path,
+        ), patch(
+            "packages.llm_analysis.dataflow_validation._finding_file_in_db",
+            return_value=True,
         ), patch(
             "packages.hypothesis_validation.adapters.CodeQLAdapter.is_available",
             return_value=True,
@@ -126,6 +131,9 @@ class TestTier1CheckFinding:
             "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
             return_value=ql,
         ), patch(
+            "packages.llm_analysis.dataflow_validation._finding_file_in_db",
+            return_value=True,
+        ), patch(
             "packages.hypothesis_validation.adapters.CodeQLAdapter.is_available",
             return_value=True,
         ), patch(
@@ -151,6 +159,9 @@ class TestTier1CheckFinding:
             "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
             return_value=Path("/fake/path.ql"),
         ), patch(
+            "packages.llm_analysis.dataflow_validation._finding_file_in_db",
+            return_value=True,
+        ), patch(
             "packages.hypothesis_validation.adapters.CodeQLAdapter.is_available",
             return_value=True,
         ), patch(
@@ -172,6 +183,9 @@ class TestTier1CheckFinding:
         with patch(
             "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
             return_value=Path("/fake/path.ql"),
+        ), patch(
+            "packages.llm_analysis.dataflow_validation._finding_file_in_db",
+            return_value=True,
         ), patch(
             "packages.hypothesis_validation.adapters.CodeQLAdapter.is_available",
             return_value=True,
