@@ -606,8 +606,20 @@ class DatabaseManager:
                 # if we reach the outer try — so guard create+write+chmod
                 # atomically here: clean up our own mess if any of the three
                 # raises, then re-raise so the caller still sees the error.
+                #
+                # `dir=` is `self.db_root / "tmp"`, NOT `working_dir`. Pre-fix
+                # the build script was written into the operator's REPO
+                # directory (`dir=working_dir`). On cleanup-failure paths
+                # (cleanup at line ~831 unlinks but only if exists; sandbox
+                # crashes mid-build skip it) the user found
+                # `.raptor_codeql_build_*.sh` files in their git checkout —
+                # `git status` noise, accidental `git add -A` commits,
+                # confused operators. Keep our scratch under our managed
+                # area where we control cleanup.
+                tmp_dir = self.db_root / "tmp"
+                tmp_dir.mkdir(parents=True, exist_ok=True)
                 fd, script_name = tempfile.mkstemp(
-                    prefix=".raptor_codeql_build_", suffix=".sh", dir=working_dir,
+                    prefix=".raptor_codeql_build_", suffix=".sh", dir=str(tmp_dir),
                 )
                 os.close(fd)
                 build_script = Path(script_name)
