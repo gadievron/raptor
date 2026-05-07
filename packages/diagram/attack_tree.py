@@ -126,11 +126,27 @@ def _find_subgraph_groups(
         raw = node_map.get(nid, {}).get("leads_to", "") or ""
         return [t.strip() for t in raw.split(",") if t.strip() and t.strip() in node_map]
 
-    def descendants(nid: str) -> list[str]:
+    def descendants(nid: str, _seen: set | None = None) -> list[str]:
+        # Cycle protection. Pre-fix `descendants(child)` recursed
+        # without tracking visited nodes — if the input tree had
+        # ANY cycle in `leads_to` chains (LLM-generated attack
+        # trees occasionally produce A→B→A loops; manually-edited
+        # JSON can introduce them), the recursion ran until
+        # RecursionError was raised somewhere ~1000 levels deep.
+        # The diagram render then aborted with a stack-overflow
+        # traceback shown to the operator instead of "your input
+        # has a cycle, here's where".
+        if _seen is None:
+            _seen = set()
+        if nid in _seen:
+            return []
+        _seen.add(nid)
         result = []
         for child in children_of(nid):
+            if child in _seen:
+                continue
             result.append(child)
-            result.extend(descendants(child))
+            result.extend(descendants(child, _seen))
         return result
 
     if not root_id or root_id not in node_map:
