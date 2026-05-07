@@ -563,8 +563,16 @@ class BuildDetector:
         build_type = "synthesised"
         confidence = 0.7
 
-        # If heuristic has failures, try CC for better flags
-        if failures:
+        # `failures is None` → dry-run never ran (script crashed,
+        # sandbox-launch failed, timeout). We can't measure
+        # whether the heuristic flags work, so don't attempt a
+        # CC-suggest retry (the second dry-run would fail the same
+        # way and waste budget).
+        if failures is None:
+            logger.warning(
+                "  Dry-run didn't execute — using heuristic flags without measurement",
+            )
+        elif failures:
             heuristic_ok = len(source_files) - len(failures)
             logger.info(f"  Dry-run: {heuristic_ok}/{len(source_files)} compiled, {len(failures)} failed")
 
@@ -576,12 +584,15 @@ class BuildDetector:
                     define_flags + cc_flags.get("defines", []),
                 )
                 cc_failures = self._dry_run(script_path, language=language)
-                cc_ok = len(source_files) - len(cc_failures)
-                if cc_ok > heuristic_ok:
-                    logger.info(f"  CC improved: {heuristic_ok} → {cc_ok} compiled")
-                    build_type = "synthesised-cc"
+                if cc_failures is None:
+                    logger.info("  CC retry didn't run — keeping heuristic")
                 else:
-                    logger.info("  CC didn't improve, using heuristic")
+                    cc_ok = len(source_files) - len(cc_failures)
+                    if cc_ok > heuristic_ok:
+                        logger.info(f"  CC improved: {heuristic_ok} → {cc_ok} compiled")
+                        build_type = "synthesised-cc"
+                    else:
+                        logger.info("  CC didn't improve, using heuristic")
                     self._write_build_script(
                         script_path, build_dir,
                         source_files, compiler, include_flags, define_flags,
@@ -760,8 +771,24 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
         script_path.chmod(0o500)
         return script_path
 
-    def _dry_run(self, script_path, language: Optional[str] = None) -> list:
+    def _dry_run(self, script_path, language: Optional[str] = None) -> Optional[list]:
         """Run the build script and return compilation failures.
+
+        Returns:
+          * ``list`` of failures (possibly empty) — script ran to
+            completion. `[]` means "ran successfully, no errors".
+          * ``None`` — script did NOT run at all (subprocess failed to
+            spawn, timeout, sandbox-launch error). Distinct from
+            "ran with zero failures" because the CC-flag-suggest path
+            (which kicks in `if failures:`) shouldn't fire when we
+            simply couldn't measure anything.
+
+        Pre-fix this returned `[]` for both cases. The caller's
+        `if failures:` then took the "no improvement needed" branch
+        when the script crashed at startup (interpreter mismatch,
+        sandbox eviction), silently degrading the synthesised-build
+        flow to "use heuristic flags" when the actual problem was
+        "we never compiled anything to know if the heuristic worked".
 
         `language` is used to pick the env vars the build tool expects
         — for Java synthesised builds we auto-detect JAVA_HOME and
@@ -806,12 +833,17 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
                 tool_paths=_tps or None,
                 capture_output=True, text=True, timeout=300,
             )
-            # Script crash (not compilation failure) — treat as unknown
+            # Script crash (not compilation failure) — treat as
+            # "didn't actually run a build" via None sentinel, NOT
+            # `[]` ("ran with zero failures"). Pre-fix the empty
+            # list collapsed both cases and the CC-flag-suggest
+            # path silently skipped its retry attempt.
             if result.returncode != 0 and "Traceback" in result.stderr:
                 logger.warning(f"Build script crashed: {result.stderr.split(chr(10))[-2]}")
-                return []
-        except (subprocess.TimeoutExpired, Exception):
-            return []
+                return None
+        except (subprocess.TimeoutExpired, Exception) as e:
+            logger.warning("Build script never ran (%r) — treating as 'didn't run'", e)
+            return None
 
         # Parse gcc/g++ errors from stderr
         failures = []
