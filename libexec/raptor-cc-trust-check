@@ -120,4 +120,32 @@ if [ "$DRY_RUN" = "1" ] && [ "$rc" = "2" ]; then
     echo "raptor-cc-trust-check: --dry-run suppressed the block (would have exited 2)" >&2
     exit 0
 fi
+
+# Fail-closed on undocumented exit codes. The Python checker
+# documents three exit codes: 0 (clean), 2 (blocked), 3 (error
+# during scan). Any other code (1 from interpreter crash, 137
+# from OOM, 139 from segfault, 99 from a future-added code we
+# haven't taught the launcher about) is undefined behaviour
+# from the trust-check perspective.
+#
+# Pre-fix `exit "$rc"` propagated whatever the Python returned.
+# The launcher's downstream wrapper (bin/raptor) only treats
+# rc=2 as "blocked" and rc=0 as "clean"; everything else
+# silently fell through to the "proceed" path. So a corrupted
+# Python that crashed with rc=137 looked like rc=137 to the
+# launcher, which interpreted it as "unknown — proceed" — the
+# trust check effectively didn't run. SECURITY BUG: an
+# attacker who can OOM the trust-check process gets to bypass
+# the trust check entirely.
+#
+# Map any non-{0,2,3} code to rc=2 (blocked). Better to fail
+# noisy than silently-bypass the security gate.
+case "$rc" in
+    0|2|3)
+        ;;
+    *)
+        echo "raptor-cc-trust-check: undocumented exit code $rc — failing closed (treating as 'blocked')" >&2
+        rc=2
+        ;;
+esac
 exit "$rc"
