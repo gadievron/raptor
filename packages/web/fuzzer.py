@@ -135,7 +135,19 @@ class WebFuzzer:
             return payloads
 
         except Exception as e:
-            logger.error(f"Failed to generate payloads: {e}")
+            # Redact exception text — `str(e)` for HTTPError /
+            # ConnectionError / urllib3 wrappers includes the
+            # full requested URL, which during web fuzzing
+            # frequently embeds bearer tokens, basic-auth
+            # credentials, or API keys (`https://user:pass@target`,
+            # `?api_key=...`). Pre-fix raw `{e}` in operator-
+            # visible logs leaked those credentials. The same
+            # reveal_secrets toggle the client respects gates
+            # whether the operator sees the raw form.
+            logger.error(
+                "Failed to generate payloads: %s",
+                redact_secrets(str(e), reveal_secrets=self.client.reveal_secrets),
+            )
             # Fallback to basic payloads
             return self._get_basic_payloads(vuln_type)
 
@@ -171,7 +183,14 @@ class WebFuzzer:
                 }
 
         except Exception as e:
-            logger.debug(f"Error testing payload: {e}")
+            # Same redaction reasoning as the payload-generation
+            # site above — exception text from request failures
+            # often contains the full URL with embedded
+            # credentials.
+            logger.debug(
+                "Error testing payload: %s",
+                redact_secrets(str(e), reveal_secrets=self.client.reveal_secrets),
+            )
 
         return None
 
