@@ -96,8 +96,13 @@ def test_web_crawler_redacts_secret_urls_in_logs(monkeypatch):
 
     joined = "\n".join(recorder.messages)
     assert api_key not in joined
-    assert "api_key" not in joined
-    assert recorder.messages[0] == "Starting crawl from https://example.test"
+    assert "api_key=[REDACTED]" in joined
+    assert "Starting crawl from https://example.test/start?api_key=[REDACTED]" in joined
+    assert "Crawling: https://example.test/start?api_key=[REDACTED]" in joined
+    assert (
+        "Non-200 response for https://example.test/start?api_key=[REDACTED]: 404"
+        in joined
+    )
 
 
 def test_web_crawler_redacts_secret_urls_inside_exception_messages(monkeypatch):
@@ -118,9 +123,9 @@ def test_web_crawler_redacts_secret_urls_inside_exception_messages(monkeypatch):
 
     joined = "\n".join(recorder.messages)
     assert request_probe not in joined
-    assert "api_key" not in joined
-    assert "trace=1" not in joined
-    assert "RuntimeError" in joined
+    assert "api_key=[REDACTED]" in joined
+    assert "trace=1" in joined
+    assert "failed for https://example.test/start?api_key=[REDACTED]&trace=1" in joined
 
 
 def test_web_client_redacts_secret_urls_in_history_by_default():
@@ -283,6 +288,58 @@ def test_web_crawler_redacts_secret_urls_inside_non_sensitive_form_values():
     assert refresh_probe not in rendered
     assert "refresh_token=[REDACTED]" in rendered
     assert "ok=1" in rendered
+
+
+def test_web_crawler_redacts_concatenated_secret_form_input_names():
+    access_probe = "access-" + "z" * 24
+    client_probe = "client-" + "a" * 24
+    refresh_probe = "refresh-" + "b" * 24
+    crawler = WebCrawler(WebClient("https://example.test"))
+    crawler.discovered_forms.append(
+        {
+            "action": "https://example.test/login",
+            "method": "POST",
+            "inputs": {
+                "accessToken": {"type": "hidden", "value": access_probe},
+                "clientSecret": {"type": "hidden", "value": client_probe},
+                "refreshToken": {"type": "hidden", "value": refresh_probe},
+            },
+            "page_url": "https://example.test/form",
+        }
+    )
+
+    rendered = str(crawler.get_results())
+
+    assert access_probe not in rendered
+    assert client_probe not in rendered
+    assert refresh_probe not in rendered
+    assert rendered.count("[REDACTED]") >= 3
+
+
+def test_web_crawler_preserves_redacted_page_context_in_parser_logs(monkeypatch):
+    import packages.web.crawler as crawler_module
+
+    access_probe = "access-" + "c" * 24
+    recorder = RecordingLogger()
+    crawler = WebCrawler(WebClient("https://example.test"))
+    monkeypatch.setattr(crawler_module, "logger", recorder)
+
+    class BadJsonResponse:
+        def json(self):
+            raise RuntimeError(
+                f"failed for https://example.test/api?access_token={access_probe}&trace=1"
+            )
+
+    crawler._process_json_response(
+        f"https://example.test/api?access_token={access_probe}&debug=1",
+        BadJsonResponse(),
+    )
+
+    joined = "\n".join(recorder.messages)
+    assert access_probe not in joined
+    assert "access_token=[REDACTED]" in joined
+    assert "debug=1" in joined
+    assert "trace=1" in joined
 
 
 class RecordingLogger:
