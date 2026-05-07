@@ -71,7 +71,29 @@ def main() -> None:
         sys.exit(1)
 
     corpus_dir = Path(args.corpus) if args.corpus else None
-    out_dir = Path(args.out) if args.out else Path(f"out/fuzz_{binary_path.stem}_{int(time.time())}")
+    # Anchor default output_dir to RaptorConfig.get_out_dir().
+    # Pre-fix `Path(f"out/fuzz_...")` was relative to the cwd at
+    # script-launch time. Two failure modes:
+    #   * Operator running RAPTOR from `~/work/foo/` got fuzz
+    #     output in `~/work/foo/out/...` instead of the
+    #     configured project run dir. Subsequent /project status
+    #     showed "no fuzz output for project" because the artifacts
+    #     landed somewhere unrelated.
+    #   * Script invoked from `/` (cron / systemd / CI without
+    #     chdir set) wrote `/out/...` — permission denied or
+    #     pollution of the root filesystem.
+    #
+    # Use unique_run_suffix instead of bare `int(time.time())` so
+    # two parallel fuzz runs in the same wall-clock second get
+    # distinct output dirs (already learned this pattern in
+    # `core/run/output.py`; the bare-time-suffix collision is
+    # rare but real on multi-instance fuzz dispatch).
+    if args.out:
+        out_dir = Path(args.out)
+    else:
+        from core.config import RaptorConfig
+        from core.run.output import unique_run_suffix
+        out_dir = RaptorConfig.get_out_dir() / f"fuzz_{binary_path.stem}_{unique_run_suffix()}"
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     safe_run_mkdir(out_dir)
 
