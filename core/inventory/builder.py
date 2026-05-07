@@ -25,6 +25,7 @@ from .exclusions import (
 from .extractors import extract_functions, extract_items, count_sloc
 from .call_graph import (
     extract_call_graph_go,
+    extract_call_graph_java,
     extract_call_graph_javascript,
     extract_call_graph_python,
 )
@@ -376,6 +377,10 @@ def _process_single_file(
             ).to_dict()
         elif language == 'go':
             record['call_graph'] = extract_call_graph_go(
+                content,
+            ).to_dict()
+        elif language == 'java':
+            record['call_graph'] = extract_call_graph_java(
                 content,
             ).to_dict()
         return record

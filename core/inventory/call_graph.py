@@ -27,6 +27,8 @@ project?":
         ``eval`` / ``new Function(...)``.
       * Go: dot import ``. "pkg"`` (analog of wildcard),
         ``reflect`` package usage (any reflective dispatch).
+      * Java: wildcard imports ``import x.*``, ``Class.forName``
+        / ``Method.invoke`` reflective dispatch.
 
 Indirection flags are file-scoped (not per-call) because once any
 of them is present, every NOT_CALLED claim about that file becomes
@@ -39,11 +41,9 @@ Pure-AST. We never import / require / eval the target, never look
 at any filesystem outside the source tree. String-shape only.
 
 Languages today: Python (stdlib ``ast``) + JavaScript /
-TypeScript + Go (all tree-sitter-driven for non-Python; gracefully
-empty when the grammar isn't installed). Adding Java means writing
-one more ``extract_call_graph_<lang>`` function emitting the same
-dataclasses; the resolver in :mod:`core.inventory.reachability` is
-language-agnostic.
+TypeScript + Go + Java (all tree-sitter-driven for non-Python;
+gracefully empty when the grammar isn't installed). The resolver
+in :mod:`core.inventory.reachability` is language-agnostic.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ import ast
 import logging
 import warnings
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -1001,6 +1001,327 @@ class _GoCallGraph:
         return last
 
 
+# ---------------------------------------------------------------------------
+# Java
+# ---------------------------------------------------------------------------
+
+
+def extract_call_graph_java(content: str) -> FileCallGraph:
+    """Walk a Java source string via tree-sitter and return its
+    :class:`FileCallGraph`.
+
+    Returns an empty graph when:
+      * tree-sitter or ``tree_sitter_java`` isn't installed
+      * The file is unparseable
+
+    Java-specific shapes:
+
+      * ``import com.example.Util;`` →
+        ``imports["Util"] = "com.example.Util"`` (last
+        component binds; full path is the value).
+      * ``import static com.example.Helpers.helper;`` →
+        ``imports["helper"] = "com.example.Helpers.helper"``
+        (static imports bind the symbol directly).
+      * ``import com.example.*;`` → flagged as
+        ``INDIRECTION_WILDCARD_IMPORT`` (analog of Python
+        ``from x import *`` — the bound names are statically
+        unknowable).
+      * ``Class.forName("x.y.Z")`` →
+        ``INDIRECTION_IMPORTLIB`` (Java analog of Python
+        ``importlib.import_module``).
+      * ``method.invoke(target, args)`` /
+        ``Class.getMethod(...).invoke(...)`` →
+        ``INDIRECTION_REFLECT`` (reflective method dispatch).
+
+    Documented limitation: Java's dominant call shape is
+    instance-method calls where the variable name doesn't match
+    the type (``Util util = ...; util.execute()``). The resolver's
+    chain matching follows imports, not type-tracking. Operators
+    will see correct verdicts for STATIC method calls and
+    CLASS-level access (``Util.staticMethod()``,
+    ``Cls.method()``) but instance-method calls show the variable
+    name in the chain and won't bind to the type's qualified
+    name. Same limitation as Go interface dispatch and Python
+    method-on-instance — out of scope; CodeQL is the right tool
+    when type-aware reachability matters.
+    """
+    try:
+        import tree_sitter_java as ts_java
+        from tree_sitter import Language, Parser
+    except ImportError:
+        logger.debug(
+            "call_graph: tree-sitter Java grammar not installed; "
+            "returning empty graph",
+        )
+        return FileCallGraph()
+
+    try:
+        parser = Parser(Language(ts_java.language()))
+        tree = parser.parse(content.encode("utf-8", errors="replace"))
+    except Exception as e:                          # noqa: BLE001
+        logger.debug("call_graph: Java parse failed (%s)", e)
+        return FileCallGraph()
+
+    walker = _JavaCallGraph()
+    walker.walk(tree.root_node)
+    return walker.graph
+
+
+class _JavaCallGraph:
+    """Single-pass tree-sitter walk emitting imports + call sites
+    + indirection flags for one Java file."""
+
+    _METHOD_INVOCATION = "method_invocation"
+    _IMPORT_DECL = "import_declaration"
+    _SCOPED_IDENT = "scoped_identifier"
+    _IDENT = "identifier"
+    _FIELD_ACCESS = "field_access"
+    _ARG_LIST = "argument_list"
+    _METHOD_DECL = "method_declaration"
+    _CONSTRUCTOR_DECL = "constructor_declaration"
+    _CLASS_DECL = "class_declaration"
+    _ASTERISK = "asterisk"
+    _STATIC = "static"
+    _STRING_LIT = "string_literal"
+
+    def __init__(self) -> None:
+        self.graph = FileCallGraph()
+        self._enclosing: List[str] = []
+
+    def walk(self, node) -> None:
+        """Recursive descent. Push/pop enclosing-method stack so
+        ``CallSite.caller`` carries the innermost named method."""
+        if node.type == self._METHOD_DECL:
+            name = self._first_child_of_type(node, (self._IDENT,))
+            self._enclosing.append(
+                name.text.decode() if name else "<anon>"
+            )
+            try:
+                for child in node.children:
+                    self.walk(child)
+            finally:
+                self._enclosing.pop()
+            return
+
+        if node.type == self._CONSTRUCTOR_DECL:
+            # Constructors use the class name as the identifier.
+            name = self._first_child_of_type(node, (self._IDENT,))
+            self._enclosing.append(
+                name.text.decode() if name else "<ctor>"
+            )
+            try:
+                for child in node.children:
+                    self.walk(child)
+            finally:
+                self._enclosing.pop()
+            return
+
+        if node.type == self._IMPORT_DECL:
+            self._visit_import(node)
+            return
+
+        if node.type == self._METHOD_INVOCATION:
+            self._visit_call(node)
+            # Continue recursion to capture nested calls in args.
+
+        for child in node.children:
+            self.walk(child)
+
+    # ------------------------------------------------------------------
+    # Imports
+    # ------------------------------------------------------------------
+
+    def _visit_import(self, node) -> None:
+        """``import x.y.Z;`` / ``import static x.y.Z.method;`` /
+        ``import x.y.*;``."""
+        # Wildcard import — has an ``asterisk`` child.
+        has_asterisk = any(
+            c.type == self._ASTERISK for c in node.children
+        )
+        if has_asterisk:
+            self.graph.indirection.add(INDIRECTION_WILDCARD_IMPORT)
+            return
+
+        # The path is the scoped_identifier child.
+        scoped = self._first_child_of_type(node, (self._SCOPED_IDENT,))
+        if scoped is None:
+            # Single-segment import (rare; e.g.
+            # ``import Foo;`` for unnamed-package types).
+            simple = self._first_child_of_type(node, (self._IDENT,))
+            if simple is not None:
+                name = simple.text.decode()
+                self.graph.imports[name] = name
+            return
+
+        full_path = self._scoped_identifier_text(scoped)
+        if not full_path:
+            return
+        # Bound name = last component.
+        last_dot = full_path.rfind(".")
+        bound = full_path[last_dot + 1:] if last_dot >= 0 else full_path
+        if not bound:
+            return
+        self.graph.imports[bound] = full_path
+
+    def _scoped_identifier_text(self, node) -> str:
+        """Convert a ``scoped_identifier`` subtree to its dotted
+        form. Tree-sitter-java emits a left-recursive nested
+        structure (``a.b.c`` is ``scoped_identifier(
+        scoped_identifier(a, b), c)``); we just take the source
+        text which has the right shape."""
+        try:
+            return node.text.decode().strip()
+        except Exception:                           # noqa: BLE001
+            return ""
+
+    # ------------------------------------------------------------------
+    # Calls + indirection
+    # ------------------------------------------------------------------
+
+    def _visit_call(self, node) -> None:
+        """Every ``method_invocation``. Detect:
+
+          * Plain ``foo()`` — chain ``["foo"]``.
+          * ``Cls.staticMethod()`` — chain ``["Cls", "staticMethod"]``.
+          * ``a.b.c()`` (field access chain) — chain
+            ``["a", "b", "c"]``.
+          * ``Class.forName("x.y.Z")`` →
+            ``INDIRECTION_IMPORTLIB``.
+          * ``<anything>.invoke(...)`` →
+            ``INDIRECTION_REFLECT``.
+        """
+        chain = self._invocation_chain(node)
+        if chain is None:
+            return
+
+        # Reflective dispatch — Java's analog of Python's
+        # importlib / getattr-by-name. We flag the file
+        # whenever the standard reflective shapes appear:
+        #   * Class.forName(...)
+        #   * <method-or-class>.invoke(...) — covers the
+        #     Method.invoke / Constructor.newInstance patterns.
+        if chain == ["Class", "forName"]:
+            self.graph.indirection.add(INDIRECTION_IMPORTLIB)
+        elif chain[-1:] == ["invoke"] and len(chain) >= 2:
+            self.graph.indirection.add(INDIRECTION_REFLECT)
+        elif chain[-1:] == ["newInstance"] and len(chain) >= 2:
+            self.graph.indirection.add(INDIRECTION_REFLECT)
+
+        caller = self._enclosing[-1] if self._enclosing else None
+        self.graph.calls.append(CallSite(
+            line=node.start_point[0] + 1,
+            chain=chain,
+            caller=caller,
+        ))
+
+    def _invocation_chain(self, node) -> Optional[List[str]]:
+        """Convert a ``method_invocation`` node into the dotted
+        chain.
+
+        Shapes:
+          * ``foo()`` — single ``identifier`` child + arg list.
+          * ``Cls.method()`` — ``identifier`` + ``.`` +
+            ``identifier`` + arg list.
+          * ``a.b.c()`` — ``field_access`` (operand) + ``.`` +
+            ``identifier`` (method name) + arg list.
+
+        Returns None for non-name shapes (call results,
+        casts, parenthesised expressions, etc.).
+        """
+        # The method_invocation's named children before
+        # ``argument_list`` are some subset of:
+        #   * receiver — identifier OR field_access (optional)
+        #   * method name — identifier (always present)
+        #   * type arguments — type_arguments (optional, ignored)
+        #
+        # The method name is always the LAST named identifier
+        # before the argument_list; preceding names are the
+        # receiver chain.
+        named_before_args: List[Any] = []
+        for child in node.children:
+            if child.type == self._ARG_LIST:
+                break
+            if not child.is_named:
+                continue
+            if child.type in (self._IDENT, self._FIELD_ACCESS):
+                named_before_args.append(child)
+            elif child.type == "type_arguments":
+                # Java generics on the call: ``foo.<T>bar()`` —
+                # not relevant for chain extraction.
+                continue
+            else:
+                # Unhandled operand shape (call result, cast,
+                # parenthesised, etc.). Out of scope.
+                return None
+
+        if not named_before_args:
+            return None
+        method_ident = named_before_args[-1]
+        if method_ident.type != self._IDENT:
+            return None
+        operand = (
+            named_before_args[-2]
+            if len(named_before_args) >= 2 else None
+        )
+
+        method_name = method_ident.text.decode()
+
+        if operand is None:
+            return [method_name]
+
+        if operand.type == self._IDENT:
+            return [operand.text.decode(), method_name]
+
+        if operand.type == self._FIELD_ACCESS:
+            parts = self._field_access_chain(operand)
+            if parts is None:
+                return None
+            return parts + [method_name]
+
+        return None
+
+    def _field_access_chain(self, node) -> Optional[List[str]]:
+        """``a.b.c`` (a ``field_access`` subtree) → ``["a", "b", "c"]``."""
+        # field_access children: object + . + field
+        parts: List[str] = []
+        cur = node
+        while cur is not None and cur.type == self._FIELD_ACCESS:
+            field = self._last_child_of_type(cur, (self._IDENT,))
+            if field is None:
+                return None
+            parts.append(field.text.decode())
+            # Operand is the first named child.
+            operand = None
+            for c in cur.children:
+                if c.is_named:
+                    operand = c
+                    break
+            cur = operand
+        if cur is not None and cur.type == self._IDENT:
+            parts.append(cur.text.decode())
+            return list(reversed(parts))
+        return None
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _first_child_of_type(node, types):
+        for c in node.children:
+            if c.type in types:
+                return c
+        return None
+
+    @staticmethod
+    def _last_child_of_type(node, types):
+        last = None
+        for c in node.children:
+            if c.type in types:
+                last = c
+        return last
+
+
 __all__ = [
     "CallSite",
     "FileCallGraph",
@@ -1013,6 +1334,7 @@ __all__ = [
     "INDIRECTION_REFLECT",
     "INDIRECTION_WILDCARD_IMPORT",
     "extract_call_graph_go",
+    "extract_call_graph_java",
     "extract_call_graph_javascript",
     "extract_call_graph_python",
 ]
