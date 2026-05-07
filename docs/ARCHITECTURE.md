@@ -68,22 +68,39 @@ raptor/
 │
 ├── core/                           # Shared utilities layer
 │   ├── __init__.py
+│   ├── build/                      # Build-system detection + toolchain probes
 │   ├── config.py                   # RaptorConfig (paths, settings)
-│   ├── git/                        # Sandbox-routed clone + URL allowlist (clone_repository, validate_repo_url)
-│   ├── hash/                       # SHA-256 helpers (sha256_tree/file/bytes/string)
+│   ├── coverage/                   # Read-coverage tracking + summary
+│   ├── dockerfile/                 # Dockerfile parsing helpers (FROM/ENV)
+│   ├── git/                        # Sandbox-routed clone + URL allowlist
+│   ├── hash/                       # SHA-256 helpers (tree/file/bytes/string)
+│   ├── http/                       # EgressClient + per-host allowlists
+│   ├── inventory/                  # Shared source inventory
+│   │   ├── builder.py              # build_inventory() — file enumeration + checksums
+│   │   ├── extractors.py           # Language-aware function extraction
+│   │   ├── languages.py            # LANGUAGE_MAP, detect_language
+│   │   ├── exclusions.py           # File exclusion + generated-file detection
+│   │   ├── lookup.py               # lookup_function() — file:line → function
+│   │   ├── diff.py                 # compare_inventories() — SHA-256 diffing
+│   │   ├── reachability.py         # Function-call reachability (substrate)
+│   │   └── coverage.py             # checked_by tracking + coverage stats
+│   ├── json/                       # BOM-tolerant JSON utils + cache helpers
+│   ├── llm/                        # LLM substrate (clients, providers, scorecard, tool-use loop)
 │   ├── logging.py                  # Structured logging with JSONL audit trail
+│   ├── oci/                        # OCI image-ref parsing + canonicalisation
+│   ├── orchestration/              # Pipeline orchestration helpers (understand_bridge, agentic_passes)
 │   ├── progress.py                 # Progress tracking utilities
+│   ├── project/                    # Project workspace mgmt (CLI, merge, clean, export, diff)
+│   ├── reporting/                  # Findings/report formatting (markdown, summary lines)
+│   ├── run/                        # Per-run lifecycle (output dir, suffixes)
+│   ├── sage/                       # SAGE inception client + hooks (memory layer)
+│   ├── sandbox/                    # subprocess isolation (Landlock + seccomp + namespaces)
 │   ├── sarif/
-│   │   ├── __init__.py
 │   │   └── parser.py               # SARIF 2.1.0 parsing utilities
-│   └── inventory/                  # Shared source inventory
-│       ├── __init__.py
-│       ├── builder.py              # build_inventory() — file enumeration + checksums
-│       ├── extractors.py           # Language-aware function extraction (12 languages)
-│       ├── languages.py            # LANGUAGE_MAP, detect_language
-│       ├── exclusions.py           # File exclusion logic + generated file detection
-│       ├── diff.py                 # compare_inventories() — SHA-256 diffing
-│       └── coverage.py             # checked_by tracking + coverage stats
+│   ├── schema_constants.py         # Shared schema field-name constants
+│   ├── security/                   # Prompt envelope, secret redaction, env sanitisation, cc_trust
+│   ├── smt_solver/                 # Z3-based path-feasibility (rejection, witness, csem)
+│   └── startup/                    # CLI startup banner + env validation
 │
 ├── packages/                       # Security capabilities layer
 │   ├── __init__.py
