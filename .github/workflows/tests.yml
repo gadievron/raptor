@@ -8,9 +8,9 @@ on:
   merge_group:
   schedule:
     # Daily full-suite run catches indirect breakage a path filter
-    # would miss (e.g. scanner.py refactor breaks sandbox API contract
-    # without touching core/sandbox/). Daily rather than weekly given
-    # the codebase's churn rate.
+    # would miss (e.g. a refactor breaks an API contract without
+    # touching the tests that exercise it). Daily rather than weekly
+    # given the codebase's churn rate.
     - cron: '0 6 * * *'
   workflow_dispatch:
 
@@ -23,28 +23,55 @@ env:
   VENV_PATH: .venv
 
 permissions:
-    contents: read
+  contents: read
+  # Needed by the pre_check job to query prior workflow runs at the
+  # current SHA via ``gh api repos/.../actions/runs``.
+  actions: read
 
 jobs:
-  # Skip the whole workflow if a previous successful run already covered
-  # this exact tree (e.g. PR run passed, then merged to main with no
-  # intervening changes — the post-merge push run is redundant).
+  # Skip the workflow if a previous successful run of this same workflow
+  # already passed at the exact same commit SHA — catches the
+  # "PR fast-forward-merged → main push reruns the same SHA" case and
+  # explicit re-runs. Doc-only / .claude-only PRs are skipped naturally
+  # by the per-job path-filter gate in `changes`, not here.
   pre_check:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:
-      should_skip: ${{ steps.skip_check.outputs.should_skip }}
+      should_skip: ${{ steps.dup.outputs.should_skip }}
     steps:
-      - id: skip_check
-        uses: fkirc/skip-duplicate-actions@v5
-        with:
-          concurrent_skipping: same_content_newer
-          skip_after_successful_duplicate: 'true'
-          paths_ignore: '["**/*.md", "**/.gitignore", ".claude/**"]'
+      - id: dup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW: ${{ github.workflow }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          should_skip=false
+          # Never dedup forced-full events: the operator triggered them
+          # deliberately (cron, manual dispatch) or the merge queue needs
+          # an authoritative pass.
+          if [[ "$EVENT" != "schedule" && "$EVENT" != "workflow_dispatch" \
+             && "$EVENT" != "merge_group" ]]; then
+            dup=$(gh api -X GET "repos/${REPO}/actions/runs" \
+                    -f "head_sha=${SHA}" -f "status=success" \
+                    --jq ".workflow_runs[] | select(.name==\"${WORKFLOW}\" and .id != ${RUN_ID}) | .id" \
+                  | head -n1 || true)
+            if [[ -n "${dup:-}" ]]; then
+              should_skip=true
+              echo "Skipping: prior successful run ${dup} already covered SHA ${SHA}"
+            fi
+          fi
+          echo "should_skip=${should_skip}" >> "$GITHUB_OUTPUT"
 
-  # Detect which subsystems the change touches so we can scope tests.
-  # On schedule/workflow_dispatch/merge_group, downstream jobs bypass
-  # this filter and run unconditionally (see `force_full` outputs).
+  # Path-filter equivalent of dorny/paths-filter, implemented with the
+  # GitHub API for changed-file enumeration and a small in-tree Python
+  # script (``.github/scripts/compute_filters.py``) for glob matching.
+  # The script's FILTERS dict is the single source of truth, also
+  # imported by ``.github/tests/test_filter_coverage.py``.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -58,69 +85,66 @@ jobs:
       force_full: ${{ steps.force.outputs.force_full }}
     steps:
       - uses: actions/checkout@v6
+
       - id: force
+        env:
+          EVENT: ${{ github.event_name }}
         run: |
-          if [[ "${{ github.event_name }}" == "schedule" \
-             || "${{ github.event_name }}" == "workflow_dispatch" \
-             || "${{ github.event_name }}" == "merge_group" ]]; then
+          if [[ "$EVENT" == "schedule" || "$EVENT" == "workflow_dispatch" \
+             || "$EVENT" == "merge_group" ]]; then
             echo "force_full=true" >> "$GITHUB_OUTPUT"
           else
             echo "force_full=false" >> "$GITHUB_OUTPUT"
           fi
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            python:
-              - 'core/**'
-              - 'packages/**'
-              - 'libexec/tests/**'
-              - '.github/tests/**'
-              - '*.py'
-              - 'requirements*.txt'
-              - 'pyproject.toml'
-              - '.github/workflows/tests.yml'
-            bash_surface:
-              - 'raptor.py'
-              - 'libexec/**'
-              - 'core/**'
-              - 'packages/**'
-              - 'plugins/**'
-              - 'test/**'
-              - '**.sh'
-              - 'requirements*.txt'
-              - 'pyproject.toml'
-              - '.github/workflows/tests.yml'
-              - '.github/workflows/bash-test.yml'
-            # Direct + transitive deps for sandbox (validated by
-            # .github/tests/test_filter_coverage.py).
-            sandbox:
-              - 'core/sandbox/**'
-              - 'core/security/**'
-              - 'core/config.py'
-              - 'core/run/**'
-              - 'libexec/raptor-run-sandboxed'
-              - 'libexec/raptor-pid1-shim'
-              - 'requirements*.txt'
-              - '.github/workflows/tests.yml'
-            # Direct + transitive deps for exploit_feasibility. Note that
-            # several core/ modules are flat files (logging.py, config.py)
-            # so we list them by name rather than as glob prefixes — the
-            # path-filter test enforces this.
-            exploit_feasibility:
-              - 'packages/exploit_feasibility/**'
-              - 'packages/binary_analysis/**'
-              - 'packages/codeql/smt_path_validator.py'
-              - 'core/hash/**'
-              - 'core/json/**'
-              - 'core/logging.py'
-              - 'core/logging/**'
-              - 'core/config.py'
-              - 'core/orchestration/**'
-              - 'core/sandbox/**'
-              - 'core/smt_solver/**'
-              - 'requirements*.txt'
-              - '.github/workflows/tests.yml'
+
+      - id: changed_files
+        if: steps.force.outputs.force_full == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          out=/tmp/changed_files.txt
+          : > "$out"
+          case "$EVENT" in
+            pull_request|pull_request_target)
+              gh api --paginate \
+                "repos/${REPO}/pulls/${PR_NUMBER}/files" \
+                --jq '.[].filename' >> "$out"
+              ;;
+            push)
+              if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
+                # First push to a new branch — no diff base. Fall through
+                # to the no-list path so compute_filters forces all true.
+                rm -f "$out"
+              else
+                gh api --paginate \
+                  "repos/${REPO}/compare/${BEFORE}...${AFTER}" \
+                  --jq '.files[].filename' >> "$out"
+              fi
+              ;;
+            *)
+              # Other event types reach this step only if force_full was
+              # false (shouldn't happen given the if: above). Treat as
+              # "unknown diff" → force all filters on.
+              rm -f "$out"
+              ;;
+          esac
+          if [[ -f "$out" ]]; then
+            echo "list=$out" >> "$GITHUB_OUTPUT"
+            echo "Changed files ($(wc -l < "$out")):"
+            cat "$out"
+          fi
+
+      - id: filter
+        env:
+          CHANGED_FILES_LIST: ${{ steps.changed_files.outputs.list }}
+        run: |
+          python3 .github/scripts/compute_filters.py
 
   deps:
     needs: [pre_check, changes]
@@ -210,9 +234,9 @@ jobs:
       - name: Run CI lint tests
         run: |
           source $VENV_PATH/bin/activate
-          # Validates path-filter globs in this workflow cover the actual
-          # import dependencies of subsystem-scoped test jobs. Same
-          # collision-avoidance reasoning as libexec/tests above.
+          # Validates path-filter globs in compute_filters.py cover the
+          # actual import dependencies of subsystem-scoped test jobs.
+          # Same collision-avoidance reasoning as libexec/tests above.
           pytest .github/tests
 
   # Sandbox tier: ~251 heavyweight tests doing real namespace/mount/seccomp
@@ -253,7 +277,8 @@ jobs:
           python -m pytest core/sandbox/tests
 
   # Exploit-feasibility integration tier: 11 × ~15 s tests calling
-  # analyze_binary against real binaries. Gated on the relevant packages.
+  # analyze_binary against real binaries. Gated on the package's real
+  # upstream dependency surface.
   python-unit-tests-exploit-feasibility:
     needs: [pre_check, changes, deps]
     if: |

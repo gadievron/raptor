@@ -1,72 +1,39 @@
-"""Verify path-filter globs in tests.yml cover real import dependencies.
+"""Verify path-filter globs cover real import dependencies.
 
 Why this test exists
 --------------------
-``.github/workflows/tests.yml`` declares per-subsystem path filters
-(e.g. ``sandbox:``, ``exploit_feasibility:``) that scope which test
-jobs fire on a given PR. If a subsystem's source code gains an import
-to a module whose path is not covered by its filter glob, an
-indirect-breakage refactor in that path won't trigger the subsystem's
-tests on a normal PR — only on the weekly cron, up to 7 days late.
+``.github/scripts/compute_filters.py`` declares per-subsystem path
+filters in its ``FILTERS`` dict. If a subsystem's source code gains
+an import to a module whose path is not covered by its filter glob,
+an indirect-breakage refactor in that path won't trigger the
+subsystem's tests on a normal PR — only on the daily cron, up to a
+day late.
 
-This test parses the filter block, collects every ``core.*`` /
-``packages.*`` import made by the subsystem's source, resolves each
-import to a file path, and fails if any path is not covered by a
-glob in the corresponding filter.
+This test imports ``FILTERS`` directly, walks each subsystem's source
+tree, collects every ``core.*`` / ``packages.*`` import, resolves
+each to a file path, and fails if any path is not covered by a glob
+in the corresponding filter. The same ``match_glob`` helper used by
+the workflow does the matching, so the test and the runtime stay
+aligned automatically.
 """
 
 from __future__ import annotations
 
 import ast
-import fnmatch
-import re
+import sys
 import unittest
 from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[2]
-TESTS_YML = REPO / ".github/workflows/tests.yml"
+sys.path.insert(0, str(REPO / ".github" / "scripts"))
+import compute_filters  # noqa: E402
 
-# (filter_name_in_tests_yml, package_dir_relative_to_repo)
+# (filter_name_in_FILTERS, package_dir_relative_to_repo)
 SUBSYSTEMS: list[tuple[str, str]] = [
     ("sandbox", "core/sandbox"),
     ("exploit_feasibility", "packages/exploit_feasibility"),
 ]
-
-
-def _parse_filter_globs(name: str) -> list[str]:
-    """Extract globs for the named filter from the dorny/paths-filter
-    block in tests.yml without depending on PyYAML.
-
-    The block looks like::
-
-        <name>:
-          - 'glob1'
-          - 'glob2'
-
-    nested under ``filters: |`` inside the ``changes`` job.
-    """
-    globs: list[str] = []
-    in_filter = False
-    filter_indent: int | None = None
-    item_re = re.compile(r"-\s*['\"]([^'\"]+)['\"]\s*$")
-    for line in TESTS_YML.read_text(encoding="utf-8").splitlines():
-        stripped = line.lstrip()
-        if not in_filter:
-            if stripped == f"{name}:":
-                in_filter = True
-                filter_indent = len(line) - len(stripped)
-            continue
-        if not stripped:
-            continue
-        cur_indent = len(line) - len(stripped)
-        assert filter_indent is not None
-        if cur_indent <= filter_indent:
-            break
-        m = item_re.match(stripped)
-        if m:
-            globs.append(m.group(1))
-    return globs
 
 
 def _collect_external_imports(pkg_dir: Path) -> set[str]:
@@ -105,30 +72,14 @@ def _module_to_path(module: str) -> Path | None:
     return None
 
 
-def _glob_covers(rel_path: Path, globs: list[str]) -> bool:
-    """Approximate dorny/paths-filter (minimatch) coverage."""
-    s = str(rel_path)
-    for g in globs:
-        if g.endswith("/**"):
-            prefix = g[: -len("/**")]
-            if s == prefix or s.startswith(prefix + "/"):
-                return True
-        elif "*" in g:
-            if fnmatch.fnmatch(s, g):
-                return True
-        elif s == g:
-            return True
-    return False
-
-
 class CIFilterCoverageTests(unittest.TestCase):
     """Every external import a subsystem makes must be covered by its
-    path-filter glob in tests.yml."""
+    path-filter glob in compute_filters.FILTERS."""
 
-    def test_tests_yml_exists(self):
+    def test_compute_filters_importable(self):
         self.assertTrue(
-            TESTS_YML.is_file(),
-            msg=f"workflow file missing: {TESTS_YML}",
+            hasattr(compute_filters, "FILTERS"),
+            msg="compute_filters.py is missing the FILTERS dict",
         )
 
     def test_each_subsystem_filter_covers_its_imports(self):
@@ -139,10 +90,10 @@ class CIFilterCoverageTests(unittest.TestCase):
                 pkg_dir.is_dir(),
                 msg=f"subsystem dir missing: {pkg_dir}",
             )
-            globs = _parse_filter_globs(filter_name)
+            globs = compute_filters.FILTERS.get(filter_name)
             self.assertTrue(
                 globs,
-                msg=f"filter `{filter_name}:` not found in {TESTS_YML}",
+                msg=f"filter `{filter_name}` not in compute_filters.FILTERS",
             )
 
             uncovered: list[tuple[str, Path]] = []
@@ -150,12 +101,14 @@ class CIFilterCoverageTests(unittest.TestCase):
                 path = _module_to_path(imp)
                 if path is None:
                     continue
-                if not _glob_covers(path, globs):
+                if not any(
+                    compute_filters.match_glob(str(path), g) for g in globs
+                ):
                     uncovered.append((imp, path))
 
             if uncovered:
                 problems.append(
-                    f"`{filter_name}:` filter does not cover imports made by"
+                    f"`{filter_name}` filter does not cover imports made by"
                     f" {pkg_rel}/:"
                 )
                 for imp, path in uncovered:
@@ -165,7 +118,7 @@ class CIFilterCoverageTests(unittest.TestCase):
             problems.append("")
             problems.append(
                 "Fix: add globs covering each path to the relevant filter"
-                " in .github/workflows/tests.yml, or narrow the import."
+                " in .github/scripts/compute_filters.py, or narrow the import."
             )
             self.fail("\n".join(problems))
 

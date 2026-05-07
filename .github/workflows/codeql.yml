@@ -23,26 +23,119 @@ on:
 
 jobs:
   # Skip the analyze job if a previous successful run already covered
-  # this exact tree, or if the change touches only docs / .claude / etc.
-  # We use job-level `if:` (rather than top-level `paths-ignore:`) so that
-  # skipped runs still report as "Skipped = success" to branch protection,
-  # rather than never starting and blocking required-check enforcement.
+  # this exact commit SHA. Same homebrew dedup pattern as tests.yml.
+  # Uses job-level ``if:`` rather than top-level ``paths-ignore:`` so
+  # skipped jobs report as Skipped (= success) to branch protection
+  # rather than never starting and stalling required-check enforcement.
   pre_check:
     runs-on: ubuntu-latest
     timeout-minutes: 2
+    permissions:
+      actions: read
     outputs:
-      should_skip: ${{ steps.skip_check.outputs.should_skip }}
+      should_skip: ${{ steps.dup.outputs.should_skip }}
     steps:
-      - id: skip_check
-        uses: fkirc/skip-duplicate-actions@v5
-        with:
-          concurrent_skipping: same_content_newer
-          skip_after_successful_duplicate: 'true'
-          paths_ignore: '["**/*.md", "**/.gitignore", ".claude/**"]'
+      - id: dup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW: ${{ github.workflow }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          should_skip=false
+          if [[ "$EVENT" != "schedule" && "$EVENT" != "workflow_dispatch" \
+             && "$EVENT" != "merge_group" ]]; then
+            dup=$(gh api -X GET "repos/${REPO}/actions/runs" \
+                    -f "head_sha=${SHA}" -f "status=success" \
+                    --jq ".workflow_runs[] | select(.name==\"${WORKFLOW}\" and .id != ${RUN_ID}) | .id" \
+                  | head -n1 || true)
+            if [[ -n "${dup:-}" ]]; then
+              should_skip=true
+              echo "Skipping: prior successful run ${dup} already covered SHA ${SHA}"
+            fi
+          fi
+          echo "should_skip=${should_skip}" >> "$GITHUB_OUTPUT"
 
-  analyze:
+  # Per-language path scoping — the analyze matrix gates each entry on
+  # its corresponding filter so a python-only PR skips the c-cpp and
+  # actions matrix entries, etc. Reuses tests.yml's compute_filters.py
+  # for filter logic so both workflows stay in sync.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
     needs: pre_check
     if: needs.pre_check.outputs.should_skip != 'true'
+    permissions:
+      contents: read
+    outputs:
+      codeql_python: ${{ steps.filter.outputs.codeql_python }}
+      codeql_cpp: ${{ steps.filter.outputs.codeql_cpp }}
+      codeql_actions: ${{ steps.filter.outputs.codeql_actions }}
+      force_full: ${{ steps.force.outputs.force_full }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: force
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT" == "schedule" || "$EVENT" == "workflow_dispatch" \
+             || "$EVENT" == "merge_group" ]]; then
+            echo "force_full=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "force_full=false" >> "$GITHUB_OUTPUT"
+          fi
+      - id: changed_files
+        if: steps.force.outputs.force_full == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          out=/tmp/changed_files.txt
+          : > "$out"
+          case "$EVENT" in
+            pull_request|pull_request_target)
+              gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/files" \
+                --jq '.[].filename' >> "$out"
+              ;;
+            push)
+              if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
+                rm -f "$out"
+              else
+                gh api --paginate "repos/${REPO}/compare/${BEFORE}...${AFTER}" \
+                  --jq '.files[].filename' >> "$out"
+              fi
+              ;;
+            *)
+              rm -f "$out"
+              ;;
+          esac
+          if [[ -f "$out" ]]; then
+            echo "list=$out" >> "$GITHUB_OUTPUT"
+          fi
+      - id: filter
+        env:
+          CHANGED_FILES_LIST: ${{ steps.changed_files.outputs.list }}
+        run: |
+          python3 .github/scripts/compute_filters.py
+
+  analyze:
+    needs: [pre_check, changes]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (
+        needs.changes.outputs.force_full == 'true' ||
+        (matrix.language == 'actions' && needs.changes.outputs.codeql_actions == 'true') ||
+        (matrix.language == 'c-cpp' && needs.changes.outputs.codeql_cpp == 'true') ||
+        (matrix.language == 'python' && needs.changes.outputs.codeql_python == 'true')
+      )
     name: Analyze (${{ matrix.language }})
     # Runner size impacts CodeQL analysis time. To learn more, please see:
     # - https://gh.io/recommended-hardware-resources-for-running-codeql
