@@ -186,9 +186,17 @@ def _is_inline_install_source(path: Path) -> bool:
         return True
     if path.suffix in (".yml", ".yaml"):
         parts = path.parts
+        # ``.github/workflows/*.yml`` — workflows at any depth.
         for j in range(len(parts) - 2):
             if parts[j] == ".github" and parts[j + 1] == "workflows":
                 return True
+        # Composite actions: ``action.yml`` / ``action.yaml`` at the
+        # repo root (when the repo IS an action) or under any
+        # ``.github/actions/<name>/`` directory. They carry the same
+        # ``uses:`` and ``run:`` shapes the workflow parser already
+        # handles.
+        if name in ("action.yml", "action.yaml"):
+            return True
     return False
 
 
@@ -261,12 +269,31 @@ def _walk(root: Path, max_depth: int, excludes: Set[str]) -> Iterator[Path]:
         if depth >= max_depth:
             # Don't recurse further; still yield files at this depth.
             dirnames[:] = []
+        elif _is_composite_actions_parent(cur):
+            # Inside ``.github/actions/`` — don't apply the
+            # generic exclude list. Composite-action directories
+            # commonly use names like ``build`` / ``setup`` /
+            # ``dist`` / ``out`` that collide with EXCLUDED_DIR_NAMES;
+            # pruning them silently drops the embedded
+            # ``action.yml``.
+            pass
         else:
             # In-place prune.
             dirnames[:] = [d for d in dirnames if not _should_skip_dir(d, excludes)]
 
         for fn in filenames:
             yield cur / fn
+
+
+def _is_composite_actions_parent(cur: Path) -> bool:
+    """True when ``cur`` is the ``.github/actions`` directory whose
+    immediate children are individual composite-action folders."""
+    parts = cur.parts
+    return (
+        len(parts) >= 2
+        and parts[-1] == "actions"
+        and parts[-2] == ".github"
+    )
 
 
 def _should_skip_dir(name: str, excludes: Set[str]) -> bool:

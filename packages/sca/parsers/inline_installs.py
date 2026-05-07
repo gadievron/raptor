@@ -1224,10 +1224,18 @@ def _is_gha_workflow(path: Path) -> bool:
     if path.suffix not in (".yml", ".yaml"):
         return False
     parts = path.parts
-    # ``.github/workflows/foo.yml`` — match any depth.
+    # ``.github/workflows/foo.yml`` — workflows at any depth.
     for j in range(len(parts) - 2):
         if parts[j] == ".github" and parts[j + 1] == "workflows":
             return True
+    # Composite-action manifests carry the same ``uses:`` / ``run:``
+    # shapes — same parser handles them. Two locations:
+    #   * Repo-root ``action.yml`` / ``action.yaml`` (when the repo
+    #     IS the action).
+    #   * ``.github/actions/<name>/action.yml`` (composite actions
+    #     defined inside a regular project).
+    if path.name in ("action.yml", "action.yaml"):
+        return True
     return False
 
 

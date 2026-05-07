@@ -148,3 +148,102 @@ jobs:
     deps = [d for d in parse_gha_workflow(p) if d.ecosystem == "GitHub Actions"]
     assert len(deps) == 2
     assert all(d.name == "actions/checkout" for d in deps)
+
+
+# ---------------------------------------------------------------------------
+# Composite actions — action.yml at repo root or under .github/actions/
+# ---------------------------------------------------------------------------
+
+
+def test_composite_action_at_github_actions_path(tmp_path):
+    """``.github/actions/<name>/action.yml`` — composite action
+    defined inside a regular project. The same parser extracts
+    ``uses:`` from its ``runs.steps[]`` block."""
+    composite = tmp_path / ".github/actions/build/action.yml"
+    composite.parent.mkdir(parents=True)
+    composite.write_text("""\
+name: Build composite
+description: Composite action
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+    - run: pip install -e .
+      shell: bash
+""")
+    deps = parse_gha_workflow(composite)
+    by_name = {d.name: d for d in deps if d.ecosystem == "GitHub Actions"}
+    assert "actions/checkout" in by_name
+    assert "actions/setup-python" in by_name
+
+
+def test_action_yaml_extension_also_matched(tmp_path):
+    """Both ``action.yml`` and ``action.yaml`` are valid GHA
+    composite-action filenames."""
+    composite = tmp_path / "action.yaml"
+    composite.write_text("""\
+name: my-action
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+""")
+    deps = parse_gha_workflow(composite)
+    assert any(
+        d.name == "actions/checkout" and d.ecosystem == "GitHub Actions"
+        for d in deps
+    )
+
+
+def test_repo_root_action_yml(tmp_path):
+    """Repo-root ``action.yml`` (the repo IS an action). Composite
+    runs.steps[].uses extracted; run blocks too."""
+    root_action = tmp_path / "action.yml"
+    root_action.write_text("""\
+name: my-action
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+    - run: npm install
+      shell: bash
+""")
+    deps = parse_gha_workflow(root_action)
+    eco_kinds = {(d.ecosystem, d.source_kind) for d in deps}
+    assert ("GitHub Actions", "gha_uses") in eco_kinds
+
+
+def test_is_gha_workflow_matches_composite_paths(tmp_path):
+    """Predicate-level check: both workflows and action manifests
+    route to ``parse_gha_workflow``."""
+    from packages.sca.parsers.inline_installs import _is_gha_workflow
+
+    # Standard workflow.
+    assert _is_gha_workflow(
+        tmp_path / ".github/workflows/ci.yml"
+    )
+    # Composite under .github/actions/.
+    assert _is_gha_workflow(
+        tmp_path / ".github/actions/build/action.yml"
+    )
+    # Repo-root action manifest.
+    assert _is_gha_workflow(tmp_path / "action.yml")
+    assert _is_gha_workflow(tmp_path / "action.yaml")
+    # Random YAML file — not a workflow.
+    assert not _is_gha_workflow(tmp_path / "config.yml")
+
+
+def test_discovery_recognises_composite_action(tmp_path):
+    """End-to-end: ``find_manifests`` actually picks up
+    composite-action files and they reach the parser dispatch."""
+    from packages.sca.discovery import find_manifests
+
+    composite = tmp_path / ".github/actions/build/action.yml"
+    composite.parent.mkdir(parents=True)
+    composite.write_text(
+        "runs:\n  using: composite\n  steps:\n    - uses: actions/checkout@v4\n"
+    )
+    manifests = find_manifests(tmp_path)
+    found = [m for m in manifests if m.path.name == "action.yml"]
+    assert len(found) == 1
