@@ -69,7 +69,10 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .call_graph import (
+    INDIRECTION_BRACKET_DISPATCH,
     INDIRECTION_DUNDER_IMPORT,
+    INDIRECTION_DYNAMIC_IMPORT,
+    INDIRECTION_EVAL,
     INDIRECTION_GETATTR,
     INDIRECTION_IMPORTLIB,
     INDIRECTION_WILDCARD_IMPORT,
@@ -118,11 +121,17 @@ _TEST_FILE_PATTERN = re.compile(
 
 
 # Indirection flags that can mask a static "not called" claim.
+# Python flags first; JS flags second. The resolver doesn't
+# distinguish — any present flag → file is a confounder when it
+# also mentions the target tail name.
 _MASKING_FLAGS: Set[str] = {
     INDIRECTION_GETATTR,
     INDIRECTION_IMPORTLIB,
     INDIRECTION_DUNDER_IMPORT,
     INDIRECTION_WILDCARD_IMPORT,
+    INDIRECTION_BRACKET_DISPATCH,
+    INDIRECTION_DYNAMIC_IMPORT,
+    INDIRECTION_EVAL,
 }
 
 

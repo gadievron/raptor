@@ -70,8 +70,9 @@ Why: `mock.patch("requests.get")` mentions a qualified name without calling it. 
 
 The resolver is a static AST walker. It cannot rule out, and so returns UNCERTAIN for:
 
-- **String dispatch**: `getattr(mod, "name")(...)`, `importlib.import_module(mod_name)`, `__import__(mod_name)`.
-- **Wildcard imports** when the source module's root matches the target's root.
+- **Python string dispatch**: `getattr(mod, "name")(...)`, `importlib.import_module(mod_name)`, `__import__(mod_name)`.
+- **JavaScript dynamic constructs**: `import(<var>)`, `require(<var>)`, `obj[<var>](...)` (bracket dispatch), `eval(...)`, `new Function(...)()`.
+- **Wildcard imports** (Python) when the source module's root matches the target's root.
 - **Decorator-driven dispatch**, plugin registries, runtime `setattr` injection.
 - **Method override on subclassed instances** (e.g. subclass `requests.Session`, override `get`). This is module-function reachability, not method-resolution-order reachability.
 - **Reflective dispatch via `eval` / `exec` / `pickle` / RPC**.
@@ -79,7 +80,14 @@ The resolver is a static AST walker. It cannot rule out, and so returns UNCERTAI
 
 ## Language support
 
-Python only at first cut. The resolver itself is language-agnostic — it operates on the `call_graph` field of each file record. Adding JavaScript / Go / Java is a matter of writing a `extract_call_graph_<lang>` function in `core/inventory/call_graph.py` that emits the same `FileCallGraph` dataclass and wiring it from `_process_single_file`.
+The resolver is language-agnostic — it operates on the `call_graph` field of each file record. Per-language extractors in `core/inventory/call_graph.py`:
+
+- **Python** (`extract_call_graph_python`) — uses stdlib `ast`. Always available.
+- **JavaScript / TypeScript** (`extract_call_graph_javascript`) — uses tree-sitter when `tree_sitter_javascript` is installed; gracefully empty otherwise. Handles ES-module imports (default + named + namespace + alias), CommonJS `require` (simple + destructured + alias), call sites with attribute chains, and the JS analogs of Python's indirection flags (`import(<var>)`, `require(<var>)`, `obj[<var>](...)`, `eval`, `new Function(...)()`).
+
+For npm consumers in particular, OSV advisories often ship `imports[].symbols` data — the SCA function-level reachability tier can match these against project source via the JS extractor, getting precise per-CVE function reachability for the npm ecosystem.
+
+Adding Go / Java is a matter of writing one more `extract_call_graph_<lang>` function emitting the same `FileCallGraph` dataclass and wiring it from `_process_single_file`.
 
 ## Performance
 
