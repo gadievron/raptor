@@ -241,14 +241,42 @@ class TestDebuggerTempFile:
         assert not Path(script_paths[0]).exists(), "Script should be cleaned up after"
 
     def test_temp_file_cleaned_up_on_error(self, debugger, tmp_path):
-        """Script file should be deleted even if GDB fails."""
+        """Script file should be deleted even if GDB fails.
+
+        Pre-fix this test had NO assertion — it called
+        run_commands inside a try/except, swallowed the
+        exception, and returned. The test "passed" trivially
+        whether or not cleanup actually fired. Per cluster
+        720, the test now captures the script path BEFORE
+        the simulated failure (via the fake_run side_effect)
+        and asserts the file is gone afterwards.
+        """
         import subprocess as sp
 
-        with patch("subprocess.run", side_effect=sp.TimeoutExpired("gdb", 30)):
+        script_paths = []
+
+        def fake_run_then_fail(cmd, **kw):
+            # Capture the script path the same way the
+            # success-path test does, then raise to simulate
+            # GDB failure. The file MUST exist at this moment
+            # (pre-cleanup) so we can confirm it was deleted
+            # by the cleanup path after the exception.
+            for i, arg in enumerate(cmd):
+                if arg == "-x" and i + 1 < len(cmd):
+                    script_paths.append(cmd[i + 1])
+                    assert Path(cmd[i + 1]).exists(), \
+                        "Script should exist before GDB raises"
+            raise sp.TimeoutExpired("gdb", 30)
+
+        with patch("subprocess.run", side_effect=fake_run_then_fail):
             try:
                 debugger.run_commands(["run", "quit"])
             except sp.TimeoutExpired:
                 pass
+
+        assert script_paths, "test fixture didn't capture the script path"
+        assert not Path(script_paths[0]).exists(), \
+            "Script should be cleaned up after error"
 
 
 class TestLLDBNoPathInjection:
