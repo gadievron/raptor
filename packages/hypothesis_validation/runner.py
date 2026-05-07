@@ -258,11 +258,21 @@ def _build_system_prompt(adapters: List[ToolAdapter]) -> str:
 
 
 def _build_generate_prompt(hypothesis: Hypothesis) -> str:
+    # ``hypothesis.context`` and ``hypothesis.claim`` originate from
+    # callers that may have pulled text from advisory metadata, target
+    # source, or prior LLM output — defang any forged envelope-close
+    # tags before interpolating into the prompt template. Audit
+    # surface enforced by core/security/prompt_envelope_audit.
+    safe_context = (
+        _neutralize_forged_tags(hypothesis.context)
+        if hypothesis.context else ""
+    )
+    safe_claim = _neutralize_forged_tags(hypothesis.claim)
     function_line = f"Target function: {hypothesis.target_function}\n" if hypothesis.target_function else ""
     cwe_line = f"CWE class: {hypothesis.cwe}\n" if hypothesis.cwe else ""
-    context_line = f"\nContext:\n{hypothesis.context}\n" if hypothesis.context else ""
+    context_line = f"\nContext:\n{safe_context}\n" if safe_context else ""
     return _GENERATE_RULE_PROMPT.format(
-        claim=hypothesis.claim,
+        claim=safe_claim,
         target=str(hypothesis.target),
         function_line=function_line,
         cwe_line=cwe_line,
@@ -293,11 +303,11 @@ def _build_evaluate_prompt(hypothesis: Hypothesis, evidence: ToolEvidence) -> st
     )
 
     return _EVALUATE_PROMPT.format(
-        claim=hypothesis.claim,
+        claim=_neutralize_forged_tags(hypothesis.claim),
         target=str(hypothesis.target),
         tool=evidence.tool,
         rule=evidence.rule,
-        summary=evidence.summary or "(no summary)",
+        summary=_neutralize_forged_tags(evidence.summary or "(no summary)"),
         success=evidence.success,
         matches_block=matches_block,
         error_block=error_block,

@@ -20,6 +20,7 @@ from core.security.prompt_envelope import (
     TaintedString,
     UntrustedBlock,
     build_prompt,
+    neutralize_tag_forgery,
 )
 
 logger = get_logger()
@@ -560,11 +561,20 @@ class MultiTurnAnalyser:
         return f"Memory validation: consistent with history (p={probability:.2f})"
 
     def _messages_to_context(self, messages: List[Message]) -> str:
-        """Convert message history to context string for LLM."""
+        """Convert message history to context string for LLM.
+
+        ``msg.content`` may carry attacker-influenced text (prior
+        assistant turns can echo target source, prior user turns can
+        carry tool output). Defang any forged envelope-close tags
+        before interpolating so an attacker can't break out of the
+        surrounding envelope. Audit surface enforced by
+        core/security/prompt_envelope_audit.
+        """
         context = ""
         for msg in messages[-4:]:  # Last 4 messages for context
             role = "User" if msg.role == "user" else "Assistant"
-            context += f"{role}: {msg.content[:300]}\n\n"
+            safe_content = neutralize_tag_forgery(msg.content[:300])
+            context += f"{role}: {safe_content}\n\n"
         return context
 
     def get_dialogue_summary(self) -> Dict:

@@ -1530,16 +1530,21 @@ def _ask_llm_for_predicates(
     appended to the prompt so the LLM can correct AST class names or
     other resolution errors.
     """
+    # ``hypothesis.claim`` and ``hypothesis.context`` originate from
+    # callers that may have pulled text from external advisory data
+    # or prior LLM output — defang forged envelope-close tags before
+    # interpolating into the prompt. Audit surface enforced by
+    # core/security/prompt_envelope_audit.
     prompt_parts = [
         f"Language: {language}",
-        f"Hypothesis: {hypothesis.claim}",
+        f"Hypothesis: {_sanitize_for_prompt(hypothesis.claim)}",
     ]
     if hypothesis.target_function:
         prompt_parts.append(f"Target function: {hypothesis.target_function}")
     if hypothesis.cwe:
         prompt_parts.append(f"CWE: {hypothesis.cwe}")
     if hypothesis.context:
-        prompt_parts.append(hypothesis.context)
+        prompt_parts.append(_sanitize_for_prompt(hypothesis.context))
     prompt_parts.append(
         "Write ONLY the bodies of the isSource(DataFlow::Node n) and "
         "isSink(DataFlow::Node n) predicates. The surrounding query "
