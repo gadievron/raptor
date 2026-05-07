@@ -354,6 +354,24 @@ class RaptorConfig:
                                # $PYTHONUSERBASE/lib/pythonX.Y/site-packages/.
                                # .pth files beginning with "import " are
                                # exec'd by site.py before any user code runs.
+        "VIRTUAL_ENV",         # When set, Python's `site.py` and
+                               # various tools (semgrep, pip)
+                               # adjust import paths to prefer
+                               # `$VIRTUAL_ENV/lib/...` first.
+                               # Inheriting the parent's VIRTUAL_ENV
+                               # into a subprocess that targets a
+                               # DIFFERENT interpreter (system
+                               # python, vendored binary) makes the
+                               # subprocess silently load packages
+                               # from the wrong venv — wrong
+                               # versions, broken native deps, or
+                               # hostile site-packages content if
+                               # the venv was attacker-controlled.
+                               # `packages/static-analysis/scanner.py`
+                               # was already stripping it locally;
+                               # promote here so all callers get
+                               # the same guarantee from
+                               # `get_safe_env()`.
         "GIT_CONFIG_GLOBAL",   # Overrides ~/.gitconfig path. A malicious
                                # config provides aliases that map to `!sh`
                                # commands, core.editor that execs arbitrary

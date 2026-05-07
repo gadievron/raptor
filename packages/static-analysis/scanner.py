@@ -221,10 +221,11 @@ def run_single_semgrep(
         semgrep_bin=semgrep_cmd,
     )
 
-    # Create clean environment without venv contamination or dangerous vars
+    # Create clean environment without venv contamination or dangerous vars.
+    # `VIRTUAL_ENV` and `PYTHONPATH` are now stripped by
+    # `get_safe_env()` itself (DANGEROUS_ENV_VARS); the local
+    # strips were redundant.
     clean_env = RaptorConfig.get_safe_env()
-    clean_env.pop('VIRTUAL_ENV', None)
-    clean_env.pop('PYTHONPATH', None)
     # Remove venv from PATH
     if 'PATH' in clean_env:
         path_parts = clean_env['PATH'].split(':')
