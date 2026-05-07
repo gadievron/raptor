@@ -246,7 +246,11 @@ jobs:
       - name: Run sandbox tests
         run: |
           source $VENV_PATH/bin/activate
-          pytest core/sandbox/tests
+          # `python -m pytest` (rather than bare `pytest`) puts the repo
+          # root on sys.path so `from core.security.redaction import ...`
+          # in sandbox sources resolves. Bare pytest only works when
+          # `core` is included in the args (e.g. `pytest core packages`).
+          python -m pytest core/sandbox/tests
 
   # Exploit-feasibility integration tier: 11 × ~15 s tests calling
   # analyze_binary against real binaries. Gated on the relevant packages.
@@ -279,7 +283,9 @@ jobs:
       - name: Run exploit_feasibility integration tests
         run: |
           source $VENV_PATH/bin/activate
-          pytest packages/exploit_feasibility/tests
+          # See sandbox tests above for why `python -m pytest` is needed
+          # rather than bare `pytest`.
+          python -m pytest packages/exploit_feasibility/tests
 
   test-workflows:
     needs: [pre_check, changes, deps]
