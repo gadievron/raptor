@@ -68,14 +68,49 @@ _CVSS_NOTE = "CVSS scores reflect **inherent vulnerability impact** — not bina
 
 
 def build_findings_summary(findings: List[Dict[str, Any]]) -> Dict[str, int]:
-    """Count findings by status category."""
-    counts = {"total": len(findings), "exploitable": 0, "confirmed": 0,
-              "false_positive": 0, "ruled_out": 0, "error": 0, "other": 0}
+    """Count findings by status category.
+
+    Splits the ``Confirmed`` family into three sub-counts so the
+    summary line can show the operationally distinct outcomes
+    separately (an operator triaging a report needs to see
+    "real and reachable in production" vs "real but mitigated by
+    a runtime control" vs "real but completely blocked by mitigations"
+    as separate numbers, not one collapsed `Confirmed` count):
+
+    * ``confirmed_unrestricted`` — `"Confirmed"` (plain): real,
+      reachable, no notable mitigation
+    * ``confirmed_constrained`` — `"Confirmed (Constrained)"`:
+      real, reachable, but a runtime control narrows the
+      exploit window (e.g. ASLR + partial overwrite needed)
+    * ``confirmed_blocked`` — `"Confirmed (Blocked)"`: real,
+      but mitigations make the path infeasible from the
+      attacker's perspective (e.g. Full RELRO + non-writable
+      .got blocks the only viable hijack target)
+
+    The ``confirmed`` umbrella key is retained as a sum across the
+    three sub-counts so older consumers that read just ``confirmed``
+    still see the right total.
+    """
+    counts = {"total": len(findings),
+              "exploitable": 0,
+              "confirmed": 0,
+              "confirmed_unrestricted": 0,
+              "confirmed_constrained": 0,
+              "confirmed_blocked": 0,
+              "false_positive": 0,
+              "ruled_out": 0, "error": 0, "other": 0}
     for f in findings:
         status = get_display_status(f)
         if status == "Exploitable":
             counts["exploitable"] += 1
+        elif status == "Confirmed (Constrained)":
+            counts["confirmed_constrained"] += 1
+            counts["confirmed"] += 1
+        elif status == "Confirmed (Blocked)":
+            counts["confirmed_blocked"] += 1
+            counts["confirmed"] += 1
         elif status.startswith("Confirmed"):
+            counts["confirmed_unrestricted"] += 1
             counts["confirmed"] += 1
         elif status == "False Positive":
             counts["false_positive"] += 1
@@ -93,8 +128,23 @@ def findings_summary_line(counts: Dict[str, int], vuln_count: Optional[int] = No
     parts = []
     if counts["exploitable"]:
         parts.append(f"{counts['exploitable']} Exploitable")
-    if counts["confirmed"]:
+    # Render the three Confirmed sub-buckets independently so an
+    # operator sees "5 Confirmed, 2 Confirmed (Constrained), 1
+    # Confirmed (Blocked)" rather than a collapsed "8 Confirmed"
+    # that hides the operational distinction. Older callers passing
+    # legacy `counts` dicts without the sub-keys still render via
+    # `counts.get(..., 0)` (zero falls through the truthy guards).
+    if counts.get("confirmed_unrestricted"):
+        parts.append(f"{counts['confirmed_unrestricted']} Confirmed")
+    elif counts["confirmed"] and not (
+        counts.get("confirmed_constrained") or counts.get("confirmed_blocked")
+    ):
+        # Legacy summary: only the umbrella key was populated.
         parts.append(f"{counts['confirmed']} Confirmed")
+    if counts.get("confirmed_constrained"):
+        parts.append(f"{counts['confirmed_constrained']} Confirmed (Constrained)")
+    if counts.get("confirmed_blocked"):
+        parts.append(f"{counts['confirmed_blocked']} Confirmed (Blocked)")
     if counts["false_positive"]:
         parts.append(f"{counts['false_positive']} False Positive")
     if counts["ruled_out"]:
