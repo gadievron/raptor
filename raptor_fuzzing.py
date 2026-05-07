@@ -89,15 +89,14 @@ def main() -> None:
     logger.info(f"Sanitizer check: {'enabled' if args.check_sanitizers else 'disabled'}")
     logger.info(f"Recompile guide: {'will be shown' if args.recompile_guide else 'disabled'}")
     logger.info(f"Coverage analysis: {'enabled' if args.use_showmap else 'disabled'}")
-    logger.info(f"Input mode: {args.input_mode}")
-    if args.dict:
-        logger.info(f"Dictionary: {args.dict}")
-    if args.check_sanitizers:
-        logger.info("Sanitizer check: enabled")
-    if args.recompile_guide:
-        logger.info("Recompile guide: will be shown")
-    if args.use_showmap:
-        logger.info("Coverage analysis: enabled")
+    # Pre-fix this block had DUPLICATE log lines for input_mode,
+    # dict, check_sanitizers, recompile_guide, use_showmap (5
+    # lines repeated immediately after the first set). Operators
+    # saw each setup detail printed twice in their fuzzing
+    # output — minor but persistent UX bug. The conditional-
+    # form duplicates have been removed; the unconditional
+    # ternary-form lines above remain as the single source of
+    # truth for these fields.
 
     # ========================================================================
     # AUTONOMOUS SYSTEM INITIALIZATION
