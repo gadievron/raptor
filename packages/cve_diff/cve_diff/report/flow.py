@@ -64,8 +64,26 @@ def write_outcome_patches(
         for method, text in pairs:
             if text:
                 seen[method] = text
+        # Sanitize `method` before interpolating into a filename.
+        # `method` comes from per-extractor metadata — for the
+        # canonical extractors it's always a clean identifier
+        # (`source`, `clone`, `tarball`), but extractors are
+        # extension points and a malformed entry could carry
+        # path-meaningful characters (`/`, `\`, `..`) that would
+        # interpolate into the filename and either:
+        #   (a) escape `output_dir` via traversal, writing
+        #       attacker-supplied patch content to arbitrary
+        #       paths, or
+        #   (b) corrupt the filename pattern that downstream
+        #       consumers (cve_diff oracle, report aggregators)
+        #       rely on for parsing back the method.
+        # Whitelist `[A-Za-z0-9_-]` for method; anything else
+        # gets sanitised to `_`.
+        import re
+        _method_re = re.compile(r"[^A-Za-z0-9_-]")
         for method, text in seen.items():
-            (output_dir / f"{cve_id}.{method}.patch").write_text(text)
+            safe_method = _method_re.sub("_", str(method)) or "unknown"
+            (output_dir / f"{cve_id}.{safe_method}.patch").write_text(text)
     except Exception:  # noqa: BLE001 — patch writes are best-effort
         pass
 
