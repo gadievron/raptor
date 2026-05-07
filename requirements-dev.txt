@@ -14,7 +14,7 @@ mypy>=1.0.0
 # and ``pythonpath`` (pytest 7+ features) to fix a ``tests`` namespace
 # collision between packages that all carry ``tests/__init__.py``. Pinning
 # avoids surprise regressions from collection-mode changes between minors.
-pytest==9.0.2
+pytest==9.0.3
 pytest-cov==7.0.0
 gcovr==8.4
 
