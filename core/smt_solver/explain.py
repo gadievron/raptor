@@ -71,9 +71,30 @@ def core_names(solver: Any, rev: Dict[str, str]) -> List[str]:
 
     Call after ``solver.check()`` returns ``z3.unsat``. Labels added by
     other callers (not present in ``rev``) are silently omitted.
+
+    Guards against bad solver state. Z3's ``unsat_core()`` raises
+    ``z3.Z3Exception`` when:
+
+    * `check()` was never called on the solver
+    * `check()` was called but returned `sat` or `unknown` (the unsat
+      core is only defined for `unsat`)
+    * `check()` was called with no tracked assertions present
+    * The solver was constructed without `set_param("unsat_core", True)`
+      (some Z3 builds), or with a tactic that doesn't produce cores
+
+    Pre-fix any of these leaked a `Z3Exception` out of `core_names`,
+    crashing Stage-E `chain_breaks` reporting. Treat all of them as
+    "no nameable core available" — return an empty list, which the
+    caller already handles (no constraints to display). The caller
+    is responsible for verifying `solver.check() == z3.unsat` before
+    expecting a populated list.
     """
     names: List[str] = []
-    for label in solver.unsat_core():
+    try:
+        core = solver.unsat_core()
+    except (z3.Z3Exception, AttributeError):
+        return names
+    for label in core:
         name = rev.get(str(label))
         if name is not None:
             names.append(name)
