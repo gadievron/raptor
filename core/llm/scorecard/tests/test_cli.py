@@ -82,6 +82,7 @@ def _make_args(**kwargs):
         model_a=None, model_b=None,
         decision_class=None, model=None, as_=None,
         older_than_days=None, all=False,
+        outcome=None, note=None,
     )
     base.update(kwargs)
     return SimpleNamespace(**base)
@@ -301,6 +302,161 @@ def test_reset_all(seeded_scorecard):
     _capture(cli_mod.cmd_reset, args)
     sc = ModelScorecard(seeded_scorecard)
     assert sc.get_stats() == []
+
+
+# ---------------------------------------------------------------------------
+# mark — operator_feedback producer
+# ---------------------------------------------------------------------------
+
+
+def test_mark_correct_records_operator_feedback(seeded_scorecard):
+    args = _make_args(
+        path=seeded_scorecard,
+        decision_class="codeql:py/sql-injection",
+        model="claude-haiku-4-5",
+        outcome="correct",
+    )
+    rc, _, err = _capture(cli_mod.cmd_mark, args)
+    assert rc == 0
+    assert "operator_feedback 'correct'" in err
+    sc = ModelScorecard(seeded_scorecard)
+    stat = sc.get_stat("codeql:py/sql-injection", "claude-haiku-4-5")
+    from core.llm.scorecard.scorecard import EventType
+    assert stat.events[EventType.OPERATOR_FEEDBACK].correct == 1
+    assert stat.events[EventType.OPERATOR_FEEDBACK].incorrect == 0
+
+
+def test_mark_incorrect_records_and_attaches_note(seeded_scorecard):
+    args = _make_args(
+        path=seeded_scorecard,
+        decision_class="codeql:py/sql-injection",
+        model="claude-haiku-4-5",
+        outcome="incorrect",
+        note="Verified false positive — sanitiser was applied upstream.",
+    )
+    rc, _, _ = _capture(cli_mod.cmd_mark, args)
+    assert rc == 0
+    sc = ModelScorecard(seeded_scorecard)
+    stat = sc.get_stat("codeql:py/sql-injection", "claude-haiku-4-5")
+    from core.llm.scorecard.scorecard import EventType
+    assert stat.events[EventType.OPERATOR_FEEDBACK].incorrect == 1
+    # Note attached to the disagreement-samples log on incorrect.
+    notes = [s.get("note") for s in stat.disagreement_samples
+             if s.get("event_type") == EventType.OPERATOR_FEEDBACK]
+    assert "sanitiser was applied upstream" in (notes[0] or "")
+
+
+def test_mark_correct_with_note_does_not_attach_note(seeded_scorecard):
+    """retain_samples policy: notes only kept on incorrect outcomes
+    (mirrors the cheap/full producer's behaviour). Correct + note is
+    accepted but the note doesn't accumulate — keeps the cell from
+    becoming an operator notebook."""
+    args = _make_args(
+        path=seeded_scorecard,
+        decision_class="codeql:py/sql-injection",
+        model="claude-haiku-4-5",
+        outcome="correct",
+        note="great catch",
+    )
+    _capture(cli_mod.cmd_mark, args)
+    sc = ModelScorecard(seeded_scorecard)
+    stat = sc.get_stat("codeql:py/sql-injection", "claude-haiku-4-5")
+    correct_notes = [s for s in stat.disagreement_samples
+                     if s.get("note") == "great catch"]
+    assert correct_notes == []
+
+
+def test_mark_creates_cell_when_absent(seeded_scorecard):
+    """The cell may not yet exist (operator marking a finding before
+    the model has any cheap-tier history). ``record_event`` creates
+    it on demand."""
+    args = _make_args(
+        path=seeded_scorecard,
+        decision_class="codeql:py/never-seen",
+        model="brand-new-model",
+        outcome="correct",
+    )
+    _capture(cli_mod.cmd_mark, args)
+    sc = ModelScorecard(seeded_scorecard)
+    stat = sc.get_stat("codeql:py/never-seen", "brand-new-model")
+    from core.llm.scorecard.scorecard import EventType
+    assert stat.events[EventType.OPERATOR_FEEDBACK].correct == 1
+
+
+def test_mark_does_not_pollute_cheap_short_circuit_counters(seeded_scorecard):
+    """Operator feedback is its own counter; the prefilter gate's
+    Wilson math runs over CHEAP_SHORT_CIRCUIT only. Marking does
+    NOT shift the auto-policy decision."""
+    sc = ModelScorecard(seeded_scorecard)
+    from core.llm.scorecard.scorecard import EventType
+    before = sc.get_stat("codeql:py/sql-injection", "claude-haiku-4-5")
+    before_cheap = (
+        before.events[EventType.CHEAP_SHORT_CIRCUIT].correct,
+        before.events[EventType.CHEAP_SHORT_CIRCUIT].incorrect,
+    )
+    args = _make_args(
+        path=seeded_scorecard,
+        decision_class="codeql:py/sql-injection",
+        model="claude-haiku-4-5",
+        outcome="incorrect",
+    )
+    _capture(cli_mod.cmd_mark, args)
+    after = sc.get_stat("codeql:py/sql-injection", "claude-haiku-4-5")
+    after_cheap = (
+        after.events[EventType.CHEAP_SHORT_CIRCUIT].correct,
+        after.events[EventType.CHEAP_SHORT_CIRCUIT].incorrect,
+    )
+    assert before_cheap == after_cheap
+
+
+def test_mark_emits_typo_notice_on_new_cell(seeded_scorecard):
+    """Adversarial: catch decision_class / --model typos that would
+    silently create a fresh cell no producer touches. Soft notice
+    rather than refusal — operator may legitimately be marking a
+    brand-new finding."""
+    args = _make_args(
+        path=seeded_scorecard,
+        decision_class="codeql:py/typo-class",  # no prior events
+        model="brand-new-model",
+        outcome="correct",
+    )
+    rc, _, err = _capture(cli_mod.cmd_mark, args)
+    assert rc == 0
+    assert "no prior events" in err
+    assert "typo" in err
+
+
+def test_mark_no_notice_on_existing_cell(seeded_scorecard):
+    """Marking a cell with prior history → no typo notice (it's
+    clearly the right cell). Reduces operator-friction on the
+    expected case."""
+    # seeded_scorecard already has codeql:py/sql-injection on
+    # claude-haiku-4-5 with cheap-tier history.
+    args = _make_args(
+        path=seeded_scorecard,
+        decision_class="codeql:py/sql-injection",
+        model="claude-haiku-4-5",
+        outcome="correct",
+    )
+    rc, _, err = _capture(cli_mod.cmd_mark, args)
+    assert rc == 0
+    assert "no prior events" not in err
+
+
+def test_mark_invalid_outcome_rejected(seeded_scorecard):
+    """``outcome`` must be ``correct`` or ``incorrect`` —
+    ``record_event`` raises on anything else. The argparse ``choices=``
+    layer is the first defence; this test pins the substrate-side
+    validation that catches direct API misuse."""
+    import pytest
+    args = _make_args(
+        path=seeded_scorecard,
+        decision_class="codeql:py/sql-injection",
+        model="claude-haiku-4-5",
+        outcome="maybe",
+    )
+    with pytest.raises(ValueError, match="outcome must be"):
+        _capture(cli_mod.cmd_mark, args)
 
 
 # ---------------------------------------------------------------------------

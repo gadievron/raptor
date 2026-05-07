@@ -311,6 +311,7 @@ def _render_samples(stat: DecisionClassStats) -> str:
         lines.append(f"## Sample {i} — {sample.get('ts', '?')} ({sample.get('event_type', '?')})")
         cheap_r = sample.get("this_reasoning", "")
         full_r = sample.get("other_reasoning", "")
+        note = sample.get("note", "")
         if cheap_r:
             lines.append("**Cheap (clear_fp):**")
             lines.append(cheap_r)
@@ -318,6 +319,12 @@ def _render_samples(stat: DecisionClassStats) -> str:
         if full_r:
             lines.append("**Full (overruled):**")
             lines.append(full_r)
+            lines.append("")
+        if note:
+            # Operator-feedback shape: a single ``note`` field rather
+            # than the cheap-vs-full disagreement pair.
+            lines.append("**Operator note:**")
+            lines.append(note)
             lines.append("")
     return "\n".join(lines)
 
@@ -411,6 +418,144 @@ def cmd_reset(args: argparse.Namespace) -> int:
         all_=args.all,
     )
     print(f"Deleted {n} cell(s).", file=sys.stderr)
+    return 0
+
+
+def cmd_tool_evidence(args: argparse.Namespace) -> int:
+    """Walk an /agentic ``orchestrated_report.json`` + a /validate
+    ``validation_report.json``, joining on ``finding_id``, and record
+    one ``TOOL_EVIDENCE`` event per finding the validator concluded
+    on. Skips findings the validator marked inconclusive.
+
+    Operator-driven back-propagation: run after a /validate completes
+    to update the scorecard with downstream-validation truth signal.
+    """
+    import json as _json
+    from .tool_evidence import record_tool_evidence_outcomes
+
+    try:
+        analysis = _json.loads(Path(args.analysis).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        print(f"error: cannot read analysis report {args.analysis!r}: {e}",
+              file=sys.stderr)
+        return 2
+    try:
+        validation = _json.loads(Path(args.validation).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        print(f"error: cannot read validation report {args.validation!r}: {e}",
+              file=sys.stderr)
+        return 2
+
+    # Build {finding_id: validation_verdict} from the validation report.
+    # Tolerate multiple possible shapes — both a flat ``findings`` list
+    # and a nested ``results`` array.
+    val_by_id: dict = {}
+    val_findings = validation.get("findings") or validation.get("results") or []
+    for vf in val_findings:
+        fid = vf.get("finding_id")
+        if not fid:
+            continue
+        verdict = vf.get("is_exploitable")
+        if verdict is None:
+            # inconclusive — skip
+            continue
+        val_by_id[fid] = bool(verdict)
+
+    # Walk analysis records; emit one evidence record per finding the
+    # validator concluded on. Skip records missing the model — without
+    # an attributable model, a recorded event lands on a "?"-keyed
+    # cell that no producer ever revisits and that would silently
+    # accumulate noise.
+    records = []
+    skipped_no_model = 0
+    analysis_records = analysis.get("results") or []
+    for r in analysis_records:
+        fid = r.get("finding_id")
+        if not fid or fid not in val_by_id:
+            continue
+        model = r.get("analysed_by")
+        if not model:
+            skipped_no_model += 1
+            continue
+        records.append({
+            "model": model,
+            "rule_id": r.get("rule_id") or "unknown",
+            "analysis_verdict": bool(r.get("is_exploitable", False)),
+            "validation_verdict": val_by_id[fid],
+            "finding_id": fid,
+            "analysis_reasoning": r.get("reasoning") or "",
+        })
+
+    sc = ModelScorecard(args.path)
+    n = record_tool_evidence_outcomes(
+        sc, records=records,
+        decision_class_prefix=args.prefix,
+    )
+    print(
+        f"Recorded {n} tool_evidence event(s) "
+        f"from {len(records)} joined finding(s).",
+        file=sys.stderr,
+    )
+    if skipped_no_model:
+        print(
+            f"  notice: {skipped_no_model} analysis record(s) skipped "
+            "(no analysed_by field — can't attribute to a model)",
+            file=sys.stderr,
+        )
+    print(
+        "  reminder: re-running this command on the same reports "
+        "double-records. Track external state (commit hash, run id) "
+        "if invoking from automation.",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def cmd_mark(args: argparse.Namespace) -> int:
+    """Record an explicit operator-feedback event on a (model,
+    decision_class) cell. Operator override of automated signals —
+    the operator inspected an output and is asserting whether the
+    model got it right or wrong. Increments the
+    ``operator_feedback`` event counter; the cell's auto-policy
+    surface still runs over the cheap-short-circuit math (per the
+    SHORT_CIRCUIT gate's design). The operator can read this
+    surface back through ``list``, ``compare``, or ``samples`` to
+    track whether their own feedback aligns with the model's
+    track record.
+    """
+    from .scorecard import EventType, ModelScorecard
+    sc = ModelScorecard(args.path)
+    # Soft notice when the targeted cell didn't pre-exist — catches
+    # decision_class / --model typos that would otherwise silently
+    # create a fresh cell that no producer ever touches again. Doesn't
+    # block (the operator may legitimately be marking a brand-new
+    # finding before any cheap-tier history has accumulated).
+    pre_existing = sc.get_stat(args.decision_class, args.model) is not None
+    sample = None
+    if args.note:
+        # Single-line operator note attached to the disagreement-
+        # samples log on incorrect outcomes. Bounded by
+        # ``record_event``'s caps + retain_samples gate.
+        sample = {"note": args.note}
+    sc.record_event(
+        decision_class=args.decision_class,
+        model=args.model,
+        event_type=EventType.OPERATOR_FEEDBACK,
+        outcome=args.outcome,
+        sample=sample,
+    )
+    print(
+        f"Recorded operator_feedback {args.outcome!r} on "
+        f"{args.decision_class} for {args.model}.",
+        file=sys.stderr,
+    )
+    if not pre_existing:
+        print(
+            f"  notice: {args.decision_class!r} on {args.model!r} had "
+            "no prior events — created a new cell. Double-check the "
+            "decision_class + --model spelling if this looks like a typo.",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -534,6 +679,70 @@ def _build_parser() -> argparse.ArgumentParser:
         help="delete every cell",
     )
     p_rst.set_defaults(handler=cmd_reset)
+
+    # mark — operator-feedback producer.
+    p_mark = sub.add_parser(
+        "mark",
+        help=(
+            "record an explicit operator-feedback event on a cell "
+            "(operator inspected a model's output and is asserting "
+            "whether it got it right). Bumps the operator_feedback "
+            "counter; visible via list/compare/samples."
+        ),
+    )
+    p_mark.add_argument(
+        "decision_class",
+        help="decision class — usually 'codeql:<rule_id>' or "
+             "'agentic:<rule_id>'",
+    )
+    p_mark.add_argument(
+        "outcome", choices=("correct", "incorrect"),
+        help="operator's verdict on the model's output for this cell",
+    )
+    p_mark.add_argument(
+        "--model", required=True,
+        help="model_name the verdict is being recorded against",
+    )
+    p_mark.add_argument(
+        "--note",
+        help=(
+            "short operator note attached to the disagreement-samples "
+            "log (only retained on outcome=incorrect, per the "
+            "scorecard's existing retain_samples policy). Avoid "
+            "including any code under analysis."
+        ),
+    )
+    p_mark.set_defaults(handler=cmd_mark)
+
+    # tool-evidence — automated back-propagation from /validate.
+    p_te = sub.add_parser(
+        "tool-evidence",
+        help=(
+            "back-propagate /validate outcomes onto the scorecard. "
+            "Joins an /agentic orchestrated_report.json with a "
+            "/validate validation_report.json by finding_id and "
+            "records one TOOL_EVIDENCE event per finding the "
+            "validator concluded on (skips inconclusive)."
+        ),
+    )
+    p_te.add_argument(
+        "--analysis", required=True, type=Path,
+        help="path to /agentic's orchestrated_report.json",
+    )
+    p_te.add_argument(
+        "--validation", required=True, type=Path,
+        help="path to /validate's validation_report.json",
+    )
+    p_te.add_argument(
+        "--prefix", default="agentic",
+        help=(
+            "decision_class prefix (default: 'agentic'). Use "
+            "'codeql' when validating /codeql findings so cells "
+            "land under codeql:<rule_id> matching the prefilter "
+            "producer's existing convention."
+        ),
+    )
+    p_te.set_defaults(handler=cmd_tool_evidence)
 
     return p
 

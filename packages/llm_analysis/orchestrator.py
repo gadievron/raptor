@@ -728,11 +728,39 @@ def orchestrate(
     # Judge review (if configured) — sees primary reasoning, critiques it
     judge_models = role_resolution.get("judge_models", [])
     if judge_models:
+        # Snapshot primary verdicts BEFORE JudgeTask runs — its
+        # finalize() overwrites ``primary["is_exploitable"]`` with
+        # the panel-majority verdict. The JUDGE_REVIEW producer
+        # below needs the original to know which way primary voted.
+        primary_verdicts_before_judge: Dict[str, bool] = {}
+        for fid, r in results_by_id.items():
+            if isinstance(r, dict) and "error" not in r:
+                primary_verdicts_before_judge[fid] = bool(
+                    r.get("is_exploitable", False)
+                )
         dispatch_task(
             JudgeTask(results_by_id=results_by_id, profile=profile),
             findings, dispatch_fn, role_resolution,
             results_by_id, cost_tracker, max_parallel,
         )
+
+        # Record JUDGE_REVIEW scorecard events for multi-judge
+        # disputes. Single-judge disputes are skipped (the JudgeTask
+        # keeps primary's verdict in that mode — no panel-majority
+        # signal to attribute). Agreed findings skipped (no useful
+        # per-model signal).
+        if client is not None:
+            sc = getattr(client, "scorecard", None)
+            if sc is not None:
+                from core.llm.scorecard.judge import record_judge_outcomes
+                try:
+                    record_judge_outcomes(
+                        sc,
+                        results_by_id=results_by_id,
+                        primary_verdicts_before_judge=primary_verdicts_before_judge,
+                    )
+                except Exception as e:                  # noqa: BLE001
+                    logger.debug("judge producer failed: %s", e)
 
     # Multi-model correlation (pure Python, no LLM)
     correlation = None
@@ -749,6 +777,37 @@ def orchestrate(
         n_disputed = corr_summary.get("disputed", 0)
         if n_corr:
             print(f"\n  Correlation: {n_corr} findings — {n_agreed} agreed, {n_disputed} disputed")
+
+        # Record MULTI_MODEL_CONSENSUS scorecard events for disputed
+        # findings: minority models → incorrect, majority → correct.
+        # Agreed findings produce no signal (every model gets the
+        # same bump → noise). Ties are skipped (no clear majority).
+        # Per-cell auto-policy unaffected — this populates its own
+        # event slot, distinct from the cheap-tier prefilter
+        # counters that drive the gate.
+        if client is not None:
+            sc = getattr(client, "scorecard", None)
+            if sc is not None:
+                # Pass ``_multi_results`` directly so the producer can
+                # attribute each minority model's reasoning to the
+                # right model. Decoupled from results_by_id to avoid
+                # mutating records that get serialised into
+                # orchestrated_report.json.
+                from core.llm.scorecard.consensus import (
+                    record_consensus_outcomes,
+                )
+                try:
+                    record_consensus_outcomes(
+                        sc,
+                        correlation=correlation,
+                        results_by_id=results_by_id,
+                        per_finding_results=_multi_results,
+                    )
+                except Exception as e:                  # noqa: BLE001
+                    # Never let scorecard wiring abort orchestration.
+                    logger.debug(
+                        "consensus producer failed: %s", e,
+                    )
 
     # Final LLM aggregation over independent analysis outputs. This is distinct
     # from consensus/judge: it produces a downstream artifact instead of
