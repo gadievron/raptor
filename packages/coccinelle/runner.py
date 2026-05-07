@@ -136,10 +136,28 @@ def run_rule(
             env=run_env,
             input=effective_rule,
         )
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
+        # Capture partial output before giving up. spatch on
+        # large repos sometimes runs past the timeout AFTER
+        # producing partial results — pre-fix we threw away
+        # everything (returned only "Timeout" error). Now we
+        # parse whatever it managed to emit before the timeout
+        # so operators see those matches in the report
+        # alongside the timeout warning.
+        partial_stdout = exc.stdout if isinstance(exc.stdout, str) else (
+            exc.stdout.decode("utf-8", errors="replace") if exc.stdout else ""
+        )
+        partial_stderr = exc.stderr if isinstance(exc.stderr, str) else (
+            exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
+        )
+        partial_matches = _dedup_matches(
+            _parse_results(partial_stdout, rule_name)
+            + _parse_results(partial_stderr, rule_name)
+        )
         return SpatchResult(
             rule=rule_name, rule_path=str(rule),
-            errors=[f"Timeout after {timeout}s"],
+            matches=partial_matches,
+            errors=[f"Timeout after {timeout}s (partial output captured)"],
             returncode=-1,
         )
     except OSError as e:
