@@ -335,6 +335,145 @@ class TestExploitGenGate:
         mock_gate.assert_not_called()
 
 
+# ----- /analyze (validate_dataflow) Tier 1 gate ------------------------
+
+
+class TestValidateDataflowGate:
+    """`agent.analyze_vulnerability` skips the LLM-backed
+    `validate_dataflow` deep-validation call when Tier 1 returns
+    `refuted`. Same shape as the `generate_exploit` gate: free CodeQL
+    refutation short-circuits an expensive LLM call. Affects /analyze,
+    /agentic without --validate-dataflow, /patch.
+    """
+
+    def _make_vuln(self):
+        v = MagicMock()
+        v.exploitable = True
+        v.has_dataflow = True
+        v.rule_id = "py/command-injection"
+        v.file_path = "src/x.py"
+        v.start_line = 10
+        v.end_line = 12
+        v.level = "error"
+        v.message = "command injection"
+        v.full_code = "subprocess.run(sys.argv[1])"
+        v.surrounding_context = ""
+        v.dataflow_source = {"code": "sys.argv", "file": "src/x.py", "line": 1}
+        v.dataflow_sink = {"code": "subprocess.run", "file": "src/x.py", "line": 10}
+        v.dataflow_steps = []
+        v.sanitizers_found = []
+        v.repo_path = Path("/repo")
+        v.finding = {
+            "finding_id": "F1", "tool": "semgrep",
+            "rule_id": "raptor.injection.command-shell",
+            "file_path": "src/x.py", "start_line": 10, "cwe_id": "CWE-78",
+        }
+        v.finding_id = "F1"
+        v.analysis = None
+        v.read_vulnerable_code = MagicMock(return_value=True)
+        v.extract_dataflow = MagicMock(return_value=True)
+        return v
+
+    def _agent(self, tmp_path):
+        from packages.llm_analysis.agent import AutonomousSecurityAgentV2
+        return AutonomousSecurityAgentV2(
+            repo_path=tmp_path / "repo",
+            out_dir=tmp_path / "out",
+            prep_only=True,
+        )
+
+    def _llm_analysis_response(self, is_exploitable=True):
+        """Stand-in for the LLM analysis dict the schema validator
+        would produce on success."""
+        return {
+            "is_exploitable": is_exploitable,
+            "exploitability_score": 0.8,
+            "severity_assessment": "high",
+            "reasoning": "stub",
+        }
+
+    def test_refuted_skips_validate_dataflow(self, tmp_path):
+        agent = self._agent(tmp_path)
+        v = self._make_vuln()
+        analysis = self._llm_analysis_response(is_exploitable=True)
+
+        # Wire the LLM chain so analyze_vulnerability reaches the gate
+        # with vuln.exploitable=True and vuln.has_dataflow=True.
+        agent.llm = MagicMock()
+        agent.llm.generate_structured.return_value = (analysis, None)
+
+        with patch(
+            "core.llm.response_validation.validate_structured_response",
+        ) as mock_validate, patch.object(
+            agent, "_tier1_pre_flight", return_value="refuted",
+        ), patch.object(
+            agent, "validate_dataflow",
+        ) as mock_validate_df:
+            mock_validate.return_value = MagicMock(
+                data=analysis, quality=1.0, incomplete=False,
+            )
+            agent.analyze_vulnerability(v)
+
+        # The expensive LLM call must NOT have fired
+        mock_validate_df.assert_not_called()
+        # Finding marked unexploitable, with the refute marker in the
+        # dataflow_validation record so `_tier1_pre_flight` cache reuse
+        # works in the subsequent generate_exploit step.
+        assert v.exploitable is False
+        assert v.exploitability_score == 0.0
+        assert v.analysis["dataflow_validation"]["verdict"] == "refuted"
+        assert "iris_tier1_refuted" in (
+            v.analysis["dataflow_validation"]["false_positive_reason"] or ""
+        )
+
+    def test_inconclusive_proceeds_to_validate_dataflow(self, tmp_path):
+        agent = self._agent(tmp_path)
+        v = self._make_vuln()
+        analysis = self._llm_analysis_response(is_exploitable=True)
+
+        agent.llm = MagicMock()
+        agent.llm.generate_structured.return_value = (analysis, None)
+
+        with patch(
+            "core.llm.response_validation.validate_structured_response",
+        ) as mock_validate, patch.object(
+            agent, "_tier1_pre_flight", return_value="inconclusive",
+        ), patch.object(
+            agent, "validate_dataflow", return_value={"is_exploitable": True},
+        ) as mock_validate_df:
+            mock_validate.return_value = MagicMock(
+                data=analysis, quality=1.0, incomplete=False,
+            )
+            agent.analyze_vulnerability(v)
+
+        # Inconclusive does NOT block the LLM validation
+        mock_validate_df.assert_called_once()
+
+    def test_no_check_proceeds_to_validate_dataflow(self, tmp_path):
+        """`no_check` (no DB, no query, etc.) means the gate couldn't
+        run. Caller must NOT be gated — same as pre-PR-G+ behaviour."""
+        agent = self._agent(tmp_path)
+        v = self._make_vuln()
+        analysis = self._llm_analysis_response(is_exploitable=True)
+
+        agent.llm = MagicMock()
+        agent.llm.generate_structured.return_value = (analysis, None)
+
+        with patch(
+            "core.llm.response_validation.validate_structured_response",
+        ) as mock_validate, patch.object(
+            agent, "_tier1_pre_flight", return_value="no_check",
+        ), patch.object(
+            agent, "validate_dataflow", return_value={"is_exploitable": True},
+        ) as mock_validate_df:
+            mock_validate.return_value = MagicMock(
+                data=analysis, quality=1.0, incomplete=False,
+            )
+            agent.analyze_vulnerability(v)
+
+        mock_validate_df.assert_called_once()
+
+
 # ----- /codeql analyze_iris_packs --------------------------------------
 
 

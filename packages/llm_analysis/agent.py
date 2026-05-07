@@ -658,45 +658,79 @@ class AutonomousSecurityAgentV2:
 
             # Deep dataflow validation for high-confidence findings
             if vuln.has_dataflow and vuln.exploitable:
-                logger.info("\n" + "─" * 70)
-                logger.info("🔍 Performing DEEP DATAFLOW VALIDATION...")
-                logger.info("─" * 70)
+                # IRIS Tier 1 pre-flight — same pattern as the
+                # `generate_exploit` gate below. A free CodeQL refutation
+                # short-circuits the LLM-backed deep validation entirely.
+                # Reuses the cached Tier 1 verdict if `validate_dataflow_claims`
+                # already ran (the /agentic --validate-dataflow path);
+                # otherwise discovers DBs lazily and runs Tier 1 against
+                # this finding. Inconclusive / confirmed / no_check fall
+                # through and the LLM call proceeds as before.
+                gate = self._tier1_pre_flight(vuln)
+                if gate == "refuted":
+                    logger.info(
+                        f"⚠️  IRIS Tier 1 refuted dataflow for "
+                        f"{vuln.rule_id} at "
+                        f"{vuln.file_path}:{vuln.start_line} — "
+                        f"skipping LLM deep validation"
+                    )
+                    vuln.exploitable = False
+                    vuln.exploitability_score = 0.0
+                    # Record the verdict in the same shape the LLM-backed
+                    # validation would, so downstream consumers (report
+                    # rendering, _tier1_pre_flight cache reuse from
+                    # `generate_exploit`) see a consistent dataflow_validation
+                    # record.
+                    analysis["dataflow_validation"] = {
+                        "verdict": "refuted",
+                        "tier": "iris_tier1",
+                        "false_positive": True,
+                        "false_positive_reason": (
+                            "iris_tier1_refuted: LocalFlowSource query "
+                            "found no path; LLM deep validation skipped"
+                        ),
+                        "is_exploitable": False,
+                    }
+                else:
+                    logger.info("\n" + "─" * 70)
+                    logger.info("🔍 Performing DEEP DATAFLOW VALIDATION...")
+                    logger.info("─" * 70)
 
-                validation = self.validate_dataflow(vuln)
+                    validation = self.validate_dataflow(vuln)
 
-                if validation:
-                    # Update exploitability based on validation
-                    if validation.get('false_positive'):
-                        logger.info(f"⚠️  Validation marked as FALSE POSITIVE:")
-                        logger.info(f"    Reason: {validation.get('false_positive_reason')}")
-                        vuln.exploitable = False
-                        vuln.exploitability_score = 0.0
-                    elif not validation.get('is_exploitable'):
-                        logger.info(f"⚠️  Validation determined NOT EXPLOITABLE:")
-                        logger.info(f"    Reason: {(validation.get('exploitability_reasoning') or '')[:150]}")
-                        vuln.exploitable = False
-                        # Same null-vs-missing distinction as the
-                        # log site above — explicit None from the
-                        # LLM crashes `None * 0.5`.
-                        _conf = validation.get('exploitability_confidence')
-                        if _conf is None:
-                            _conf = 0.0
-                        vuln.exploitability_score = _conf * 0.5
-                    else:
-                        # Validation confirms exploitability
-                        logger.info(f"✓ Validation confirms EXPLOITABLE")
-                        # Use validation confidence to refine score —
-                        # fall back to existing score if missing OR
-                        # explicit null (max(float, None) → TypeError).
-                        _conf = validation.get('exploitability_confidence')
-                        if _conf is None:
-                            _conf = vuln.exploitability_score
-                        vuln.exploitability_score = max(
-                            vuln.exploitability_score, _conf,
-                        )
+                    if validation:
+                        # Update exploitability based on validation
+                        if validation.get('false_positive'):
+                            logger.info(f"⚠️  Validation marked as FALSE POSITIVE:")
+                            logger.info(f"    Reason: {validation.get('false_positive_reason')}")
+                            vuln.exploitable = False
+                            vuln.exploitability_score = 0.0
+                        elif not validation.get('is_exploitable'):
+                            logger.info(f"⚠️  Validation determined NOT EXPLOITABLE:")
+                            logger.info(f"    Reason: {(validation.get('exploitability_reasoning') or '')[:150]}")
+                            vuln.exploitable = False
+                            # Same null-vs-missing distinction as the
+                            # log site above — explicit None from the
+                            # LLM crashes `None * 0.5`.
+                            _conf = validation.get('exploitability_confidence')
+                            if _conf is None:
+                                _conf = 0.0
+                            vuln.exploitability_score = _conf * 0.5
+                        else:
+                            # Validation confirms exploitability
+                            logger.info(f"✓ Validation confirms EXPLOITABLE")
+                            # Use validation confidence to refine score —
+                            # fall back to existing score if missing OR
+                            # explicit null (max(float, None) → TypeError).
+                            _conf = validation.get('exploitability_confidence')
+                            if _conf is None:
+                                _conf = vuln.exploitability_score
+                            vuln.exploitability_score = max(
+                                vuln.exploitability_score, _conf,
+                            )
 
-                    # Store validation in analysis
-                    analysis['dataflow_validation'] = validation
+                        # Store validation in analysis
+                        analysis['dataflow_validation'] = validation
 
             # Save detailed analysis
             analysis_file = self.out_dir / "analysis" / f"{vuln.finding_id}.json"
