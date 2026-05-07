@@ -14,9 +14,16 @@ mypy>=1.0.0
 # and ``pythonpath`` (pytest 7+ features) to fix a ``tests`` namespace
 # collision between packages that all carry ``tests/__init__.py``. Pinning
 # avoids surprise regressions from collection-mode changes between minors.
-pytest==9.0.3
+pytest==9.0.2
 pytest-cov==7.0.0
 gcovr==8.4
+
+# Optional runtime deps that gate test collection. Listed here (not in
+# requirements.txt) so CI runs the full /web test suite without
+# affecting the user-facing "Optional: For web scanning package" path.
+# Tests retain their @skipUnless guards as defense-in-depth for devs
+# running pytest without bs4 installed.
+beautifulsoup4==4.14.3
 
 # test for Z3 solver
 z3-solver==4.16.0.0
