@@ -50,6 +50,9 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from core.llm.providers import LLMProvider
 
+from core.security.prompt_envelope import wrap_tool_result
+from core.security.prompt_input_preflight import preflight
+
 from .types import (
     CacheControl,
     ContextOverflow,
@@ -68,6 +71,7 @@ from .types import (
     ToolHandlerTimeout,
     ToolLoopResult,
     ToolResult,
+    ToolResultPreflight,
     TurnCompleted,
     TurnResponse,
     TurnStarted,
@@ -106,8 +110,20 @@ class ToolUseLoop:
         cache_control: CacheControl = CacheControl(),
         events: Callable[[LoopEvent], None] | None = None,
         terminate_on_handler_error: bool = False,
+        refuse_on_indicators: Sequence[str] = (),
         **provider_specific: Any,
     ) -> None:
+        """``refuse_on_indicators``: prompt-injection corpus names
+        (file stems from ``core/security/injection_patterns/``)
+        that, when matched on a tool-result's RAW content, cause
+        the loop to replace the result with a synthetic
+        ``is_error=True`` placeholder before the LLM sees it. The
+        ``ToolResultPreflight`` event still fires so operators see
+        what was filtered. Empty (default) → advisory-only.
+        Consumers willing to fail-closed pass ``("role_injection",
+        ...)`` etc.; the loop validates each name against the
+        loaded corpora so a typo can't silently disable
+        enforcement."""
         if not provider.supports_tool_use():
             raise ValueError(
                 "ToolUseLoop requires a provider with tool-use support; "
@@ -139,6 +155,20 @@ class ToolUseLoop:
                 f"got {max_iterations!r}"
             )
 
+        # Validate refuse-on-indicators against loaded corpora so a
+        # typo in the consumer's allowlist surfaces at construction
+        # time (loud error) rather than silently disabling
+        # enforcement when the corpus name doesn't match.
+        if refuse_on_indicators:
+            from core.security.prompt_input_preflight import loaded_corpora
+            known = set(loaded_corpora())
+            unknown = [c for c in refuse_on_indicators if c not in known]
+            if unknown:
+                raise ValueError(
+                    f"ToolUseLoop refuse_on_indicators contains unknown "
+                    f"corpora {unknown!r}. Loaded corpora: {sorted(known)!r}"
+                )
+
         self._system = system
         self._terminal_tool = terminal_tool
         self._max_iterations = max_iterations
@@ -151,6 +181,7 @@ class ToolUseLoop:
         self._cache_control = cache_control
         self._events = events
         self._terminate_on_handler_error = terminate_on_handler_error
+        self._refuse_on_indicators = frozenset(refuse_on_indicators)
         self._provider_specific = provider_specific
 
     # ------------------------------------------------------------------
@@ -465,13 +496,95 @@ class ToolUseLoop:
                         )
                     duration = time.monotonic() - start
 
+                # ---- tool-result injection defence -----------------------
+                # Two layers:
+                #   Layer 1 (always-on): wrap content in an untrusted
+                #     envelope so the LLM consistently treats tool
+                #     output as data, not instructions. Both success
+                #     AND error content gets wrapped — handler
+                #     exception messages can carry attacker text
+                #     via ``raise ValueError(target_content)``.
+                #   Layer 2 (opt-in): ``refuse_on_indicators`` —
+                #     replace the result with a synthetic
+                #     ``is_error=True`` placeholder if a high-
+                #     confidence injection pattern fires.
+                #
+                # The ``ToolCallReturned`` event carries the RAW
+                # result for consumer/operator observability (cve_diff
+                # parses tool-output JSON from this stream to extract
+                # verified-commit candidates; envelope-wrapped JSON
+                # would break their parser). Only the
+                # ``messages``-bound copy is wrapped.
+                #
+                # Order is critical:
+                #   1. Preflight on RAW content (event always fires
+                #      so operators see indicators regardless of
+                #      whether refuse is opted-in).
+                #   2. Extract x-source values from RAW (envelope
+                #      tags would pollute the discovered-values set).
+                #   3. Emit ToolCallReturned with the RAW result.
+                #   4. Wrap (or refuse) for the message copy.
+                raw_content = result.content
+                pf = preflight(raw_content)
+                if pf.has_injection_indicators:
+                    self._emit(ToolResultPreflight(
+                        iteration=iteration,
+                        call_id=call.id,
+                        tool_name=call.name,
+                        indicators=pf.indicators,
+                    ))
+
+                # x-source value discovery: only on successful raw
+                # results (errors don't carry tool-output values).
+                if not result.is_error:
+                    known_values |= _extract_values_from_json(raw_content)
+
                 self._emit(ToolCallReturned(
                     iteration=iteration,
                     call_id=call.id,
                     result=result,
                     duration_s=duration,
                 ))
-                tool_results.append(result)
+
+                # Refuse-on-injection: replace the message copy with
+                # a synthetic error if any indicator from the
+                # consumer's opt-in list fired. The original content
+                # never reaches the LLM but consumers/operators saw
+                # it via the ToolCallReturned event above and the
+                # ToolResultPreflight event further above.
+                refuse_hit = (
+                    self._refuse_on_indicators
+                    and pf.has_injection_indicators
+                    and any(
+                        ind in self._refuse_on_indicators
+                        for ind in pf.indicators
+                    )
+                )
+                if refuse_hit:
+                    matched = sorted(
+                        ind for ind in pf.indicators
+                        if ind in self._refuse_on_indicators
+                    )
+                    message_result = ToolResult(
+                        tool_use_id=result.tool_use_id,
+                        content=(
+                            "tool result filtered: matched injection "
+                            "pattern(s) " + ", ".join(matched)
+                            + ". The original content was not surfaced "
+                            "to preserve safety. If this is a false "
+                            "positive, the operator can adjust "
+                            "refuse_on_indicators."
+                        ),
+                        is_error=True,
+                    )
+                else:
+                    message_result = ToolResult(
+                        tool_use_id=result.tool_use_id,
+                        content=wrap_tool_result(raw_content, call.name),
+                        is_error=result.is_error,
+                    )
+
+                tool_results.append(message_result)
 
                 if (
                     self._terminal_tool is not None
@@ -483,11 +596,6 @@ class ToolUseLoop:
             # Append tool results as user message — this keeps multi-call
             # batches in one message, matching Anthropic's wire shape.
             messages.append(Message(role="user", content=list(tool_results)))
-
-            # x-source: grow known_values from successful results
-            for tr in tool_results:
-                if not tr.is_error:
-                    known_values |= _extract_values_from_json(tr.content)
 
             # ---- post-dispatch termination checks -----------------------
             if terminal_tool_input is not None:
