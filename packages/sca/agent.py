@@ -145,6 +145,7 @@ def run_sca_subprocess(
     sandbox_args: Sequence[str] = (),
     env: Optional[dict] = None,
     timeout: int = 600,
+    writable_paths: Optional[Sequence[Path]] = None,
 ) -> tuple:
     """Run the raptor-sca agent as a sandboxed subprocess.
 
@@ -152,6 +153,21 @@ def run_sca_subprocess(
     child's outbound HTTPS is funnelled through the in-process proxy
     with :data:`packages.sca.SCA_ALLOWED_HOSTS` as the hostname
     allowlist.  Landlock confines writes to ``output_dir``.
+
+    Args:
+        writable_paths: Additional directories the agent needs write
+            access to. Pre-fix the agent could ONLY write to
+            ``output_dir`` — but raptor-sca's resolver subprocesses
+            (pip-compile, `npm install --package-lock-only`,
+            `mvn dependency:resolve`) need to write into their own
+            scratch dirs (`~/.cache/pip`, `~/.npm`, `~/.m2`) and
+            many also need to populate a `.venv/` next to the target
+            manifest. Pre-fix the resolver hit Landlock EACCES on
+            those dirs and silently fell back to "no resolution"
+            (treating every dep as unconstrained / not-pinned),
+            producing inflated false-positive SCA reports. Pass the
+            cache dirs and per-resolver scratch dirs here so the
+            agent has the writable surface it actually needs.
 
     Returns ``(returncode, stdout, stderr)``.
     """
@@ -166,6 +182,13 @@ def run_sca_subprocess(
         *sandbox_args,
     ]
 
+    # `output` is the canonical-write location; additional writable
+    # paths are layered via the sandbox's `writable_paths` kwarg.
+    # Empty / None tuple is harmless to sandbox_run.
+    extra_writable = (
+        tuple(str(p) for p in writable_paths) if writable_paths else ()
+    )
+
     result = sandbox_run(
         cmd,
         use_egress_proxy=True,
@@ -173,6 +196,7 @@ def run_sca_subprocess(
         caller_label="sca-agent",
         target=str(target),
         output=str(output_dir),
+        writable_paths=extra_writable,
         # `env if env is not None else ...` — pre-fix `env or` was
         # truthy-tested, so an EXPLICIT `env={}` (caller's signal
         # "spawn with empty env") got replaced with the default

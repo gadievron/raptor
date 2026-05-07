@@ -202,7 +202,8 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             fake_home: bool = False,
             tool_paths: list = None,
             audit: bool = False, audit_verbose: bool = False,
-            audit_run_dir: Optional[str] = None):
+            audit_run_dir: Optional[str] = None,
+            writable_paths: Optional[list] = None):
     """Context manager for sandboxed subprocess execution.
 
     Each run() call inside the context runs the target command with the
@@ -601,8 +602,19 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
     # Landlock and mount-ns combine cleanly because the mount-ns path
     # engages via core.sandbox._spawn, which runs mount ops BEFORE
     # landlock_restrict_self — Landlock doesn't block them.
+    # `writable_paths` from caller is layered on top of the canonical
+    # writable surface (output + /tmp). Use case: SCA agents whose
+    # resolver subprocesses (pip-compile, npm install
+    # --package-lock-only, mvn dependency:resolve) need to write
+    # into their own scratch dirs (~/.cache/pip, ~/.npm, ~/.m2)
+    # outside the per-run output dir. Pre-fix the only way to
+    # extend the surface was to add the path to `output`, which
+    # broke Landlock's invariant that `output` is the canonical
+    # write location. Naming `writable_paths` separately keeps
+    # the canonical / extra distinction explicit.
+    extra_writable_paths = list(writable_paths or [])
     writable_paths = None
-    if target or output or allowed_tcp_ports:
+    if target or output or allowed_tcp_ports or extra_writable_paths:
         writable_paths = ["/tmp"]
         if output:
             # Absolutize: a relative path like "out/foo" fails Landlock
@@ -612,6 +624,8 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             # stderr line. The bind-mount fallback masks the failure
             # as a silent enforcement gap on writes to `output`.
             writable_paths.append(os.path.abspath(output))
+        for extra in extra_writable_paths:
+            writable_paths.append(os.path.abspath(extra))
 
     # Loud warnings when caller requested Landlock features but the kernel
     # does not actually support them — silent degradation here would mean
@@ -1733,6 +1747,7 @@ def run(cmd: List[str], block_network: bool = False, target: str = None,
         tool_paths: list = None,
         audit: bool = False, audit_verbose: bool = False,
         audit_run_dir: Optional[str] = None,
+        writable_paths: Optional[list] = None,
         **kwargs) -> subprocess.CompletedProcess:
     """Run a single command in a sandbox. Convenience wrapper.
 
@@ -1754,7 +1769,8 @@ def run(cmd: List[str], block_network: bool = False, target: str = None,
                  fake_home=fake_home,
                  tool_paths=tool_paths,
                  audit=audit, audit_verbose=audit_verbose,
-                 audit_run_dir=audit_run_dir) as _run:
+                 audit_run_dir=audit_run_dir,
+                 writable_paths=writable_paths) as _run:
         return _run(cmd, **kwargs)
 
 
