@@ -272,6 +272,26 @@ class LLMClient:
         # the parent dir, so we defer until needed.
         self._scorecard = None
 
+        # Route in-process LLM SDK calls through the in-process
+        # egress proxy (matches what cc_dispatch.py already does for
+        # the CC subprocess). Idempotent across multiple LLMClient
+        # constructions in the same process; no-op on Ollama-only or
+        # autodetect-empty configs. See core/llm/egress.py for the
+        # full rationale (chokepoint, hostname allowlist, corporate
+        # proxy chain, subprocess-env separation).
+        from .egress import enable_llm_egress
+        try:
+            enable_llm_egress(self.config)
+        except Exception as e:                          # noqa: BLE001
+            # Fail open: a proxy bring-up failure must not block LLM
+            # calls entirely. Log and continue with direct egress.
+            # Operator who needs the chokepoint will see the warning.
+            logger.warning(
+                "LLM egress proxy bring-up failed (%s) — falling back "
+                "to direct outbound. Allowlist enforcement disabled "
+                "for this run.", e,
+            )
+
         # HEALTH CHECK: Warn if no API keys configured
         from .detection import detect_llm_availability
         availability = detect_llm_availability()
