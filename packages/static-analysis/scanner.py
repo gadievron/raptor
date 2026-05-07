@@ -30,7 +30,7 @@ from core.run.output import unique_run_suffix
 from core.run.safe_io import safe_run_mkdir
 from core.logging import get_logger
 from core.git import clone_repository
-from core.sarif.parser import generate_scan_metrics, validate_sarif
+from core.sarif.parser import generate_scan_metrics, merge_sarif, validate_sarif
 from core.hash import sha256_tree
 from packages import semgrep as semgrep_pkg
 
@@ -622,15 +622,13 @@ def main():
         merged = out_dir / "combined.sarif"
         if sarif_inputs:
             logger.info(f"Merging {len(sarif_inputs)} SARIF files...")
-            # Use the shipped merge utility; all imports are module-scope
-            merge_tool = RaptorConfig.ENGINE_DIR / "semgrep" / "tools" / "sarif_merge.py"
-            rc, so, se = run(["python3", str(merge_tool), str(merged)] + sarif_inputs, timeout=300)
-            if rc != 0:
-                # Non-fatal: keep per-stage SARIFs
-                logger.warning("SARIF merge failed, using individual files")
-                (out_dir / "sarif_merge.stderr.log").write_text(se or "")
-            else:
+            try:
+                merged_data = merge_sarif([str(p) for p in sarif_inputs])
+                save_json(merged, merged_data)
                 logger.info(f"Merged SARIF created: {merged}")
+            except Exception as e:
+                logger.warning(f"SARIF merge failed, using individual files: {e}")
+                (out_dir / "sarif_merge.stderr.log").write_text(str(e))
 
         # Generate metrics
         logger.info("Generating scan metrics...")
