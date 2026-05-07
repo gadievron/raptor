@@ -24,12 +24,15 @@ each LLM-calling subprocess and switches it to ``spawn_worker`` +
 """
 
 from .client import make_anthropic_client
+from .lifecycle import dispatcher_for_run, llm_dispatcher_in_run
 from .server import LLMDispatcher, AuditEvent
 from .spawn import spawn_worker
 
 __all__ = [
     "LLMDispatcher",
     "AuditEvent",
+    "dispatcher_for_run",
+    "llm_dispatcher_in_run",
     "make_anthropic_client",
     "spawn_worker",
 ]
