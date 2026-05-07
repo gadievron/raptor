@@ -8,8 +8,16 @@
 import argparse, json, os, shutil, sys, tempfile, time
 from pathlib import Path
 
-# Setup path for core module imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+# Setup path for core module imports. Use RAPTOR_DIR env var
+# (the canonical project root marker — see CLAUDE.md "Python
+# path safety" rule). Pre-fix `Path(__file__).parent.parent.parent`
+# was a positional walk that broke whenever the agent module
+# was relocated, symlinked into a different layout, or invoked
+# from a worktree where the relative depth differed.
+# `os.environ["RAPTOR_DIR"]` (no fallback) raises KeyError if
+# unset — surfacing the configuration problem at startup
+# rather than at first import-of-core.
+sys.path.insert(0, os.environ["RAPTOR_DIR"])
 from core.json import save_json
 from core.git import clone_repository
 from core.hash import sha256_tree
