@@ -90,7 +90,21 @@ def main():
         else:
             repo_path = Path(args.repo).resolve()
             if not repo_path.exists():
-                raise SystemExit('Repository path does not exist')
+                # Raise FileNotFoundError instead of SystemExit.
+                # Pre-fix `raise SystemExit(...)` worked when the
+                # agent was invoked as a standalone script from
+                # the shell, but when imported and invoked by
+                # other Python code (orchestrator, test suite,
+                # programmatic wrappers) SystemExit terminated
+                # the calling process — surprising and hard to
+                # catch at the call site without an explicit
+                # `try: ... except SystemExit:`. FileNotFoundError
+                # is the standard exception type for this
+                # condition, can be caught uniformly via
+                # `except OSError`, and keeps the standalone-
+                # script case working (uncaught exceptions
+                # produce the same operator-visible behaviour).
+                raise FileNotFoundError(f"Repository path does not exist: {repo_path}")
 
         out_dir = get_out_dir()
         out_dir.mkdir(parents=True, exist_ok=True)
