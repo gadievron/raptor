@@ -1322,6 +1322,1000 @@ class _JavaCallGraph:
         return last
 
 
+# ===========================================================================
+# Rust
+# ===========================================================================
+
+
+def extract_call_graph_rust(content: str) -> FileCallGraph:
+    """Walk a Rust source string via tree-sitter-rust and return its
+    :class:`FileCallGraph`.
+
+    Returns an empty graph when ``tree_sitter_rust`` isn't installed
+    or the file is unparseable.
+
+    Rust shapes:
+
+      * ``use foo::bar::Baz;`` -> ``imports["Baz"] = "foo::bar::Baz"``
+      * ``use foo::bar as alias;`` -> ``imports["alias"] = "foo::bar"``
+      * ``use foo::{Bar, Baz as B};`` -> binds both
+      * ``use foo::*;`` -> ``INDIRECTION_WILDCARD_IMPORT``
+      * ``Baz::new()`` (scoped path call) -> chain ``["Baz", "new"]``
+      * ``a::b::c()`` -> chain ``["a", "b", "c"]``
+      * ``inst.method()`` -> chain ``["inst", "method"]``
+        (instance-method limitation as in Java/Go)
+
+    Reflection-style indirection is uncommon in Rust; we don't flag
+    macros (compile-time expansion is genuinely transparent). Type
+    erasure (``Any::downcast_ref``) is rare in CVE-relevant code
+    and emits a normal call chain.
+    """
+    try:
+        import tree_sitter_rust as ts_rust
+        from tree_sitter import Language, Parser
+    except ImportError:
+        logger.debug(
+            "call_graph: tree-sitter Rust grammar not installed; "
+            "returning empty graph",
+        )
+        return FileCallGraph()
+
+    try:
+        parser = Parser(Language(ts_rust.language()))
+        tree = parser.parse(content.encode("utf-8", errors="replace"))
+    except Exception as e:                              # noqa: BLE001
+        logger.debug("call_graph: Rust parse failed (%s)", e)
+        return FileCallGraph()
+
+    walker = _RustCallGraph()
+    walker.walk(tree.root_node)
+    return walker.graph
+
+
+class _RustCallGraph:
+    """Single-pass tree-sitter-rust walk."""
+
+    _USE_DECL = "use_declaration"
+    _SCOPED_IDENT = "scoped_identifier"
+    _SCOPED_USE_LIST = "scoped_use_list"
+    _USE_LIST = "use_list"
+    _USE_AS_CLAUSE = "use_as_clause"
+    _USE_WILDCARD = "use_wildcard"
+    _IDENT = "identifier"
+    _FIELD_IDENT = "field_identifier"
+    _FUNCTION_ITEM = "function_item"
+    _CALL_EXPR = "call_expression"
+    _FIELD_EXPR = "field_expression"
+    _ARGS = "arguments"
+
+    def __init__(self) -> None:
+        self.graph = FileCallGraph()
+        self._enclosing: List[str] = []
+
+    def walk(self, node) -> None:
+        if node.type == self._FUNCTION_ITEM:
+            name = self._first_child_of_type(node, (self._IDENT,))
+            self._enclosing.append(
+                name.text.decode() if name else "<anon>"
+            )
+            try:
+                for c in node.children:
+                    self.walk(c)
+            finally:
+                self._enclosing.pop()
+            return
+
+        if node.type == self._USE_DECL:
+            self._handle_use(node)
+            return
+
+        if node.type == self._CALL_EXPR:
+            chain = self._call_chain(node)
+            if chain:
+                line = node.start_point[0] + 1
+                caller = self._enclosing[-1] if self._enclosing else None
+                self.graph.calls.append(
+                    CallSite(line=line, chain=chain, caller=caller)
+                )
+            for c in node.children:
+                self.walk(c)
+            return
+
+        for c in node.children:
+            self.walk(c)
+
+    # --- use ---
+
+    def _handle_use(self, node) -> None:
+        for c in node.children:
+            if c.type == self._USE_WILDCARD:
+                self.graph.indirection.add(INDIRECTION_WILDCARD_IMPORT)
+            elif c.type == self._SCOPED_IDENT:
+                parts = self._scoped_parts(c)
+                if parts:
+                    bound = parts[-1]
+                    # Use ``.`` separator (matches the cross-language
+                    # resolver's qualified-name convention) even
+                    # though Rust source uses ``::``. Keeps OSV
+                    # symbol matching uniform across ecosystems.
+                    self.graph.imports[bound] = ".".join(parts)
+            elif c.type == self._SCOPED_USE_LIST:
+                self._handle_scoped_use_list(c)
+            elif c.type == self._USE_AS_CLAUSE:
+                # Top-level ``use foo::bar::Baz as Q;`` — no prefix.
+                self._handle_use_as(c, prefix=())
+            elif c.type == "use_wildcard":
+                self.graph.indirection.add(INDIRECTION_WILDCARD_IMPORT)
+            elif c.type == self._IDENT:
+                # ``use foo;`` (rare standalone)
+                name = c.text.decode()
+                self.graph.imports[name] = name
+
+    def _handle_scoped_use_list(self, node) -> None:
+        prefix: List[str] = []
+        list_node = None
+        for c in node.children:
+            if c.type == self._IDENT:
+                prefix.append(c.text.decode())
+            elif c.type == self._SCOPED_IDENT:
+                prefix.extend(self._scoped_parts(c))
+            elif c.type == self._USE_LIST:
+                list_node = c
+        if list_node is None:
+            return
+        for c in list_node.children:
+            if c.type == self._IDENT:
+                name = c.text.decode()
+                self.graph.imports[name] = ".".join(prefix + [name])
+            elif c.type == self._USE_AS_CLAUSE:
+                self._handle_use_as(c, prefix=tuple(prefix))
+            elif c.type == self._USE_WILDCARD:
+                self.graph.indirection.add(INDIRECTION_WILDCARD_IMPORT)
+            elif c.type == self._SCOPED_IDENT:
+                parts = self._scoped_parts(c)
+                if parts:
+                    bound = parts[-1]
+                    self.graph.imports[bound] = ".".join(
+                        prefix + parts
+                    )
+
+    def _handle_use_as(self, node, *, prefix=()) -> None:
+        """``Original as Alias`` (use_as_clause). The original
+        side may be a bare identifier (inside a use_list) or a
+        scoped_identifier (top-level ``use foo::bar::Baz as Q;``)."""
+        original_parts: List[str] = []
+        alias: Optional[str] = None
+        idents_seen = 0
+        for c in node.children:
+            if c.type == self._SCOPED_IDENT:
+                original_parts = self._scoped_parts(c)
+            elif c.type == self._IDENT:
+                if not original_parts and idents_seen == 0:
+                    original_parts = [c.text.decode()]
+                    idents_seen += 1
+                else:
+                    alias = c.text.decode()
+        if not original_parts or alias is None:
+            return
+        full = ".".join(list(prefix) + original_parts)
+        self.graph.imports[alias] = full
+
+    def _scoped_parts(self, node) -> List[str]:
+        """``foo::bar::Baz`` -> ``["foo", "bar", "Baz"]``."""
+        out: List[str] = []
+        # Recursive: scoped_identifier nests with deeper scope_identifier
+        # on the left.
+        cur = node
+        stack: List[List[str]] = []
+        # Walk down the LHS scoped_identifier chain.
+        while cur is not None and cur.type == self._SCOPED_IDENT:
+            named = [c for c in cur.children if c.is_named]
+            if not named:
+                return []
+            # Last named is the trailing identifier; first is the
+            # remaining LHS (recurse).
+            trailing = named[-1]
+            if trailing.type != self._IDENT:
+                return []
+            stack.append([trailing.text.decode()])
+            cur = named[0] if named[0].type == self._SCOPED_IDENT else None
+            if named[0].type == self._IDENT:
+                out.append(named[0].text.decode())
+                break
+        # Append the popped trailing names in left-to-right order.
+        for s in reversed(stack):
+            out.extend(s)
+        return out
+
+    # --- calls ---
+
+    def _call_chain(self, node) -> Optional[List[str]]:
+        """First named child is the callee. ``arguments`` follows."""
+        callee = None
+        for c in node.children:
+            if c.type == self._ARGS:
+                break
+            if c.is_named:
+                callee = c
+                break
+        if callee is None:
+            return None
+        if callee.type == self._IDENT:
+            return [callee.text.decode()]
+        if callee.type == self._SCOPED_IDENT:
+            return self._scoped_parts(callee) or None
+        if callee.type == self._FIELD_EXPR:
+            return self._field_chain(callee)
+        return None
+
+    def _field_chain(self, node) -> Optional[List[str]]:
+        """``a.b.c`` (field_expression) -> ``["a", "b", "c"]``."""
+        parts: List[str] = []
+        cur = node
+        while cur is not None and cur.type == self._FIELD_EXPR:
+            field = None
+            for c in cur.children:
+                if c.type == self._FIELD_IDENT:
+                    field = c
+            if field is None:
+                return None
+            parts.append(field.text.decode())
+            operand = None
+            for c in cur.children:
+                if c.is_named:
+                    operand = c
+                    break
+            cur = operand
+        if cur is None:
+            return None
+        if cur.type == self._IDENT:
+            parts.append(cur.text.decode())
+            return list(reversed(parts))
+        if cur.type == self._SCOPED_IDENT:
+            scoped = self._scoped_parts(cur)
+            if not scoped:
+                return None
+            return scoped + list(reversed(parts))
+        return None
+
+    @staticmethod
+    def _first_child_of_type(node, types):
+        for c in node.children:
+            if c.type in types:
+                return c
+        return None
+
+
+# ===========================================================================
+# Ruby
+# ===========================================================================
+
+
+def extract_call_graph_ruby(content: str) -> FileCallGraph:
+    """Walk a Ruby source string via tree-sitter-ruby and return its
+    :class:`FileCallGraph`.
+
+    Returns an empty graph when ``tree_sitter_ruby`` isn't installed
+    or the file is unparseable.
+
+    Ruby shapes:
+
+      * ``require "json"`` / ``require_relative "x/y"`` -> imports
+      * ``Foo.bar`` (constant + method) -> chain ``["Foo", "bar"]``
+      * ``foo`` (bare) -> chain ``["foo"]``
+      * ``a.b.c`` -> chain ``["a", "b", "c"]``
+      * ``send / public_send / __send__`` -> ``INDIRECTION_REFLECT``
+      * ``Object.const_get("X")`` /
+        ``Kernel.const_get("X")`` -> ``INDIRECTION_IMPORTLIB``
+      * ``eval(...)`` / ``instance_eval`` / ``class_eval`` ->
+        ``INDIRECTION_EVAL``
+
+    Limitation: Ruby's metaprogramming is heavy. We catch the
+    common reflection vectors but ``define_method`` /
+    ``method_missing`` / etc. produce calls invisible to static
+    analysis — same family of limitation as Python ``getattr``.
+    """
+    try:
+        import tree_sitter_ruby as ts_ruby
+        from tree_sitter import Language, Parser
+    except ImportError:
+        logger.debug(
+            "call_graph: tree-sitter Ruby grammar not installed; "
+            "returning empty graph",
+        )
+        return FileCallGraph()
+
+    try:
+        parser = Parser(Language(ts_ruby.language()))
+        tree = parser.parse(content.encode("utf-8", errors="replace"))
+    except Exception as e:                              # noqa: BLE001
+        logger.debug("call_graph: Ruby parse failed (%s)", e)
+        return FileCallGraph()
+
+    walker = _RubyCallGraph()
+    walker.walk(tree.root_node)
+    return walker.graph
+
+
+class _RubyCallGraph:
+    """Single-pass tree-sitter-ruby walk."""
+
+    _CALL = "call"
+    _METHOD = "method"
+    _IDENT = "identifier"
+    _CONSTANT = "constant"
+    _SCOPE_RES = "scope_resolution"
+    _STRING = "string"
+    _STRING_CONTENT = "string_content"
+    _ARG_LIST = "argument_list"
+
+    _REFLECT_NAMES = {"send", "public_send", "__send__"}
+    _CONST_GET_NAMES = {"const_get"}
+    _EVAL_NAMES = {"eval", "instance_eval", "class_eval", "module_eval"}
+    _REQUIRE_NAMES = {"require", "require_relative", "load"}
+
+    def __init__(self) -> None:
+        self.graph = FileCallGraph()
+        self._enclosing: List[str] = []
+
+    def walk(self, node) -> None:
+        if node.type == self._METHOD:
+            name = self._first_child_of_type(node, (self._IDENT,))
+            self._enclosing.append(
+                name.text.decode() if name else "<anon>"
+            )
+            try:
+                for c in node.children:
+                    self.walk(c)
+            finally:
+                self._enclosing.pop()
+            return
+
+        if node.type == "identifier" and node.parent and node.parent.type not in (
+            self._CALL, self._METHOD,
+        ):
+            # bare-identifier "call" — Ruby allows ``foo`` without
+            # parens to call ``foo()``. Tree-sitter wraps this as
+            # an identifier in some contexts; for static analysis
+            # we focus on explicit ``call`` nodes (see below) to
+            # avoid over-reporting.
+            pass
+
+        if node.type == self._CALL:
+            self._handle_call(node)
+            for c in node.children:
+                self.walk(c)
+            return
+
+        for c in node.children:
+            self.walk(c)
+
+    def _handle_call(self, node) -> None:
+        # ``call`` shape: receiver + . + method + arguments
+        receiver = None
+        method = None
+        for c in node.children:
+            if c.type == self._ARG_LIST:
+                break
+            if c.is_named:
+                if method is None and c.type in (
+                    self._IDENT, self._CONSTANT,
+                ):
+                    if receiver is None:
+                        # First named child — could be the method
+                        # (no receiver) or the receiver of a chain.
+                        receiver = c
+                    else:
+                        method = c
+                elif c.type == self._SCOPE_RES:
+                    receiver = c
+                elif c.type == self._CALL:
+                    receiver = c
+                else:
+                    continue
+        # Bare-call branch: ``foo()`` or ``require "x"`` parses as
+        # a call with only a receiver (the function name itself)
+        # and an arg_list, no separate ``method`` child.
+        if method is None and receiver is not None:
+            chain = self._chain_from_node(receiver)
+            if chain:
+                self._record(node, chain)
+                bare = chain[0]
+                if bare in self._REQUIRE_NAMES:
+                    self._extract_require_arg(node)
+                if bare in self._EVAL_NAMES:
+                    self.graph.indirection.add(INDIRECTION_EVAL)
+                if bare in self._REFLECT_NAMES:
+                    self.graph.indirection.add(INDIRECTION_REFLECT)
+                if bare in self._CONST_GET_NAMES:
+                    self.graph.indirection.add(INDIRECTION_IMPORTLIB)
+            return
+
+        # Method-found branch: ``Foo.bar(...)`` / ``inst.method(...)``.
+        if method is None:
+            return
+        receiver_chain = (
+            self._chain_from_node(receiver) if receiver else []
+        )
+        method_name = method.text.decode()
+        chain = receiver_chain + [method_name]
+        self._record(node, chain)
+        if method_name in self._REFLECT_NAMES:
+            self.graph.indirection.add(INDIRECTION_REFLECT)
+        if method_name in self._CONST_GET_NAMES:
+            self.graph.indirection.add(INDIRECTION_IMPORTLIB)
+        if method_name in self._EVAL_NAMES:
+            self.graph.indirection.add(INDIRECTION_EVAL)
+
+    def _extract_require_arg(self, node) -> None:
+        """For a ``require "x"`` call node, register the string arg
+        as an import binding."""
+        args = self._first_child_of_type(node, (self._ARG_LIST,))
+        if args is None:
+            return
+        for a in args.children:
+            if a.type == self._STRING:
+                for sc in a.children:
+                    if sc.type == self._STRING_CONTENT:
+                        path = sc.text.decode()
+                        bound = path.split("/")[-1]
+                        self.graph.imports[bound] = path
+
+    def _chain_from_node(self, node) -> List[str]:
+        if node is None:
+            return []
+        if node.type in (self._IDENT, self._CONSTANT):
+            return [node.text.decode()]
+        if node.type == self._SCOPE_RES:
+            parts: List[str] = []
+            for c in node.children:
+                if c.type in (self._IDENT, self._CONSTANT):
+                    parts.append(c.text.decode())
+                elif c.type == self._SCOPE_RES:
+                    parts = self._chain_from_node(c) + parts
+            return parts
+        if node.type == self._CALL:
+            # nested chain a.b.c
+            return self._chain_from_call(node)
+        return []
+
+    def _chain_from_call(self, node) -> List[str]:
+        receiver = None
+        method = None
+        for c in node.children:
+            if c.type == self._ARG_LIST:
+                break
+            if c.is_named:
+                if receiver is None and c.type in (
+                    self._IDENT, self._CONSTANT, self._SCOPE_RES, self._CALL,
+                ):
+                    receiver = c
+                elif method is None and c.type in (
+                    self._IDENT, self._CONSTANT,
+                ):
+                    method = c
+        if receiver is None:
+            return []
+        rc = self._chain_from_node(receiver)
+        if method is None:
+            return rc
+        return rc + [method.text.decode()]
+
+    def _record(self, node, chain: List[str]) -> None:
+        line = node.start_point[0] + 1
+        caller = self._enclosing[-1] if self._enclosing else None
+        self.graph.calls.append(
+            CallSite(line=line, chain=chain, caller=caller)
+        )
+
+    @staticmethod
+    def _first_child_of_type(node, types):
+        for c in node.children:
+            if c.type in types:
+                return c
+        return None
+
+
+# ===========================================================================
+# C# (NuGet)
+# ===========================================================================
+
+
+def extract_call_graph_csharp(content: str) -> FileCallGraph:
+    """Walk a C# source string via tree-sitter-c-sharp and return
+    its :class:`FileCallGraph`.
+
+    Returns an empty graph when ``tree_sitter_c_sharp`` isn't
+    installed or the file is unparseable.
+
+    C# shapes:
+
+      * ``using System.Text;`` -> ``imports["Text"] = "System.Text"``
+      * ``using static System.Math;`` -> static-class import
+      * ``using JsonNet = Newtonsoft.Json.Linq;`` -> alias import
+      * ``Foo.Bar()`` (static class) -> chain ``["Foo", "Bar"]``
+      * ``inst.Method()`` -> chain ``["inst", "Method"]``
+      * ``Type.GetMethod("X")`` /
+        ``Activator.CreateInstance(...)`` -> ``INDIRECTION_REFLECT``
+      * ``Assembly.Load(...)`` -> ``INDIRECTION_IMPORTLIB``
+    """
+    try:
+        import tree_sitter_c_sharp as ts_cs
+        from tree_sitter import Language, Parser
+    except ImportError:
+        logger.debug(
+            "call_graph: tree-sitter C# grammar not installed; "
+            "returning empty graph",
+        )
+        return FileCallGraph()
+
+    try:
+        parser = Parser(Language(ts_cs.language()))
+        tree = parser.parse(content.encode("utf-8", errors="replace"))
+    except Exception as e:                              # noqa: BLE001
+        logger.debug("call_graph: C# parse failed (%s)", e)
+        return FileCallGraph()
+
+    walker = _CSharpCallGraph()
+    walker.walk(tree.root_node)
+    return walker.graph
+
+
+class _CSharpCallGraph:
+    """Single-pass tree-sitter-c-sharp walk."""
+
+    _USING = "using_directive"
+    _QUALIFIED = "qualified_name"
+    _IDENT = "identifier"
+    _METHOD_DECL = "method_declaration"
+    _CONSTRUCTOR_DECL = "constructor_declaration"
+    _INVOCATION = "invocation_expression"
+    _MEMBER_ACCESS = "member_access_expression"
+    _ARG_LIST = "argument_list"
+
+    _REFLECT_METHODS = {
+        "Invoke", "GetMethod", "CreateInstance",
+        "InvokeMember",
+    }
+    _ASSEMBLY_LOAD = {"Load", "LoadFrom", "LoadFile", "LoadWithPartialName"}
+
+    def __init__(self) -> None:
+        self.graph = FileCallGraph()
+        self._enclosing: List[str] = []
+
+    def walk(self, node) -> None:
+        if node.type in (self._METHOD_DECL, self._CONSTRUCTOR_DECL):
+            name = self._first_child_of_type(node, (self._IDENT,))
+            self._enclosing.append(
+                name.text.decode() if name else "<anon>"
+            )
+            try:
+                for c in node.children:
+                    self.walk(c)
+            finally:
+                self._enclosing.pop()
+            return
+
+        if node.type == self._USING:
+            self._handle_using(node)
+            return
+
+        if node.type == self._INVOCATION:
+            chain = self._invocation_chain(node)
+            if chain:
+                line = node.start_point[0] + 1
+                caller = self._enclosing[-1] if self._enclosing else None
+                self.graph.calls.append(
+                    CallSite(line=line, chain=chain, caller=caller)
+                )
+                # Indirection flags
+                tail = chain[-1]
+                if tail in self._REFLECT_METHODS:
+                    self.graph.indirection.add(INDIRECTION_REFLECT)
+                # ``Assembly.Load`` / ``Assembly.LoadFrom``
+                if (
+                    tail in self._ASSEMBLY_LOAD
+                    and len(chain) >= 2
+                    and chain[-2] == "Assembly"
+                ):
+                    self.graph.indirection.add(INDIRECTION_IMPORTLIB)
+            else:
+                # Couldn't reduce to a clean chain — but we should
+                # still flag reflection if a known reflect method
+                # name appears as the trailing identifier of the
+                # invocation's callee subtree.
+                tail_name = self._tail_identifier(node)
+                if tail_name in self._REFLECT_METHODS:
+                    self.graph.indirection.add(INDIRECTION_REFLECT)
+            for c in node.children:
+                self.walk(c)
+            return
+
+        for c in node.children:
+            self.walk(c)
+
+    def _handle_using(self, node) -> None:
+        # ``using System.Text;`` -> binds last component to full name.
+        # ``using JsonNet = Newtonsoft.Json.Linq;`` -> alias.
+        # ``using static System.Math;`` -> static-class import.
+        target = None
+        alias = None
+        for c in node.children:
+            if c.type == self._QUALIFIED:
+                target = c
+            elif c.type == self._IDENT:
+                # First identifier could be alias name (when followed by '=')
+                if alias is None:
+                    alias = c
+        if target is None:
+            return
+        parts = self._qualified_parts(target)
+        if not parts:
+            return
+        full = ".".join(parts)
+        if alias is not None and alias.text.decode() != parts[-1]:
+            self.graph.imports[alias.text.decode()] = full
+        else:
+            self.graph.imports[parts[-1]] = full
+
+    def _qualified_parts(self, node) -> List[str]:
+        if node.type == self._IDENT:
+            return [node.text.decode()]
+        if node.type == self._QUALIFIED:
+            parts: List[str] = []
+            for c in node.children:
+                if c.type == self._IDENT:
+                    parts.append(c.text.decode())
+                elif c.type == self._QUALIFIED:
+                    parts = self._qualified_parts(c) + parts
+            return parts
+        return []
+
+    def _invocation_chain(self, node) -> Optional[List[str]]:
+        # invocation_expression: function + argument_list
+        callee = None
+        for c in node.children:
+            if c.type == self._ARG_LIST:
+                break
+            if c.is_named:
+                callee = c
+                break
+        if callee is None:
+            return None
+        if callee.type == self._IDENT:
+            return [callee.text.decode()]
+        if callee.type == self._MEMBER_ACCESS:
+            return self._member_access_chain(callee)
+        if callee.type == self._QUALIFIED:
+            return self._qualified_parts(callee) or None
+        return None
+
+    def _member_access_chain(self, node) -> Optional[List[str]]:
+        """``a.b.c`` (member_access_expression)."""
+        parts: List[str] = []
+        cur = node
+        while cur is not None and cur.type == self._MEMBER_ACCESS:
+            # member_access: expression + . + name (identifier)
+            named = [c for c in cur.children if c.is_named]
+            if len(named) < 2:
+                return None
+            tail = named[-1]
+            if tail.type != self._IDENT:
+                return None
+            parts.append(tail.text.decode())
+            cur = named[0]
+        if cur is None:
+            return None
+        if cur.type == self._IDENT:
+            parts.append(cur.text.decode())
+            return list(reversed(parts))
+        if cur.type == self._QUALIFIED:
+            qparts = self._qualified_parts(cur)
+            if not qparts:
+                return None
+            return qparts + list(reversed(parts))
+        return None
+
+    def _tail_identifier(self, node) -> Optional[str]:
+        """Return the rightmost simple identifier reachable from
+        the invocation's callee subtree. Used as a fallback when
+        the chain is too complex to extract cleanly."""
+        callee = None
+        for c in node.children:
+            if c.type == self._ARG_LIST:
+                break
+            if c.is_named:
+                callee = c
+                break
+        if callee is None:
+            return None
+        # Walk down member_access tail
+        cur = callee
+        while cur is not None:
+            if cur.type == self._IDENT:
+                return cur.text.decode()
+            if cur.type == self._MEMBER_ACCESS:
+                # last named child is the tail name
+                named = [c for c in cur.children if c.is_named]
+                if not named:
+                    return None
+                tail = named[-1]
+                if tail.type == self._IDENT:
+                    return tail.text.decode()
+                cur = tail
+                continue
+            if cur.type == self._QUALIFIED:
+                parts = self._qualified_parts(cur)
+                return parts[-1] if parts else None
+            return None
+        return None
+
+    @staticmethod
+    def _first_child_of_type(node, types):
+        for c in node.children:
+            if c.type in types:
+                return c
+        return None
+
+
+# ===========================================================================
+# PHP (Composer / Packagist)
+# ===========================================================================
+
+
+def extract_call_graph_php(content: str) -> FileCallGraph:
+    """Walk a PHP source string via tree-sitter-php and return its
+    :class:`FileCallGraph`.
+
+    Returns an empty graph when ``tree_sitter_php`` isn't installed
+    or the file is unparseable.
+
+    PHP shapes:
+
+      * ``use Foo\\Bar\\Baz;`` -> ``imports["Baz"] = "Foo\\Bar\\Baz"``
+      * ``use Foo\\Bar as B;`` -> alias
+      * ``use function Foo\\bar;`` / ``use const Foo\\BAR;``
+      * ``Baz::method()`` (static) -> chain ``["Baz", "method"]``
+      * ``$inst->method()`` -> chain ``["inst", "method"]``
+      * ``call_user_func(...)`` /
+        ``call_user_func_array(...)`` -> ``INDIRECTION_REFLECT``
+      * ``$$var(...)`` (variable variable as call) ->
+        ``INDIRECTION_REFLECT``
+      * ``eval(...)`` / ``create_function(...)`` ->
+        ``INDIRECTION_EVAL``
+      * ``include`` / ``require`` (with var) ->
+        ``INDIRECTION_DYNAMIC_IMPORT``
+    """
+    try:
+        import tree_sitter_php as ts_php
+        from tree_sitter import Language, Parser
+    except ImportError:
+        logger.debug(
+            "call_graph: tree-sitter PHP grammar not installed; "
+            "returning empty graph",
+        )
+        return FileCallGraph()
+
+    try:
+        # tree-sitter-php exports php_only / php (with HTML mixed).
+        # For .php files we use php_only, but tolerate either.
+        lang_fn = getattr(ts_php, "language_php", None) or ts_php.language()
+        if callable(lang_fn):
+            lang_fn = lang_fn()
+        parser = Parser(Language(lang_fn))
+        tree = parser.parse(content.encode("utf-8", errors="replace"))
+    except Exception as e:                              # noqa: BLE001
+        logger.debug("call_graph: PHP parse failed (%s)", e)
+        return FileCallGraph()
+
+    walker = _PhpCallGraph()
+    walker.walk(tree.root_node)
+    return walker.graph
+
+
+class _PhpCallGraph:
+    """Single-pass tree-sitter-php walk."""
+
+    _NAMESPACE_USE_DECL = "namespace_use_declaration"
+    _NAMESPACE_USE_CLAUSE = "namespace_use_clause"
+    _NAMESPACE_NAME = "namespace_name"
+    _QUALIFIED = "qualified_name"
+    _NAME = "name"
+    _IDENT = "name"          # PHP grammar uses ``name`` for identifiers
+    _FUNCTION_DEF = "function_definition"
+    _METHOD_DECL = "method_declaration"
+    _FUNCTION_CALL = "function_call_expression"
+    _SCOPED_CALL = "scoped_call_expression"
+    _MEMBER_CALL = "member_call_expression"
+    _MEMBER_ACCESS = "member_access_expression"
+    _ARGS = "arguments"
+    _VAR = "variable_name"
+
+    _REFLECT_FNS = {
+        "call_user_func", "call_user_func_array",
+        "ReflectionMethod", "ReflectionClass",
+    }
+    _EVAL_FNS = {"eval", "create_function", "assert"}
+    _DYNAMIC_INCLUDE = {
+        "include", "include_once", "require", "require_once",
+    }
+
+    def __init__(self) -> None:
+        self.graph = FileCallGraph()
+        self._enclosing: List[str] = []
+
+    def walk(self, node) -> None:
+        if node.type in (self._FUNCTION_DEF, self._METHOD_DECL):
+            name = self._first_child_of_type(node, (self._NAME,))
+            self._enclosing.append(
+                name.text.decode() if name else "<anon>"
+            )
+            try:
+                for c in node.children:
+                    self.walk(c)
+            finally:
+                self._enclosing.pop()
+            return
+
+        if node.type == self._NAMESPACE_USE_DECL:
+            self._handle_use(node)
+            return
+
+        if node.type in (
+            self._FUNCTION_CALL, self._SCOPED_CALL, self._MEMBER_CALL,
+        ):
+            self._handle_call(node)
+            for c in node.children:
+                self.walk(c)
+            return
+
+        for c in node.children:
+            self.walk(c)
+
+    def _handle_use(self, node) -> None:
+        for c in node.children:
+            if c.type == self._NAMESPACE_USE_CLAUSE:
+                self._handle_use_clause(c)
+
+    def _handle_use_clause(self, node) -> None:
+        target_parts: List[str] = []
+        alias_name: Optional[str] = None
+        for c in node.children:
+            if c.type in (self._QUALIFIED, self._NAMESPACE_NAME):
+                target_parts = self._namespace_parts(c)
+            elif c.type == self._NAME and target_parts:
+                alias_name = c.text.decode()
+        if not target_parts:
+            return
+        full = "\\".join(target_parts)
+        bound = alias_name or target_parts[-1]
+        self.graph.imports[bound] = full
+
+    def _namespace_parts(self, node) -> List[str]:
+        """``Foo\\Bar\\Baz`` (qualified_name with nested
+        namespace_name LHS) -> ``["Foo", "Bar", "Baz"]``.
+
+        tree-sitter-php nests deep namespaces: ``qualified_name``
+        contains ``namespace_name`` (Foo\\Bar) plus a trailing
+        ``name`` (Baz). Recurse into any child of type
+        ``qualified_name`` / ``namespace_name`` for the LHS.
+        """
+        parts: List[str] = []
+        for c in node.children:
+            if c.type == self._NAME:
+                parts.append(c.text.decode())
+            elif c.type in (self._QUALIFIED, self._NAMESPACE_NAME):
+                parts = self._namespace_parts(c) + parts
+        return parts
+
+    def _handle_call(self, node) -> None:
+        chain = None
+        if node.type == self._FUNCTION_CALL:
+            chain = self._function_call_chain(node)
+        elif node.type == self._SCOPED_CALL:
+            chain = self._scoped_call_chain(node)
+        elif node.type == self._MEMBER_CALL:
+            chain = self._member_call_chain(node)
+        if not chain:
+            return
+        line = node.start_point[0] + 1
+        caller = self._enclosing[-1] if self._enclosing else None
+        self.graph.calls.append(
+            CallSite(line=line, chain=chain, caller=caller)
+        )
+        # Indirection flags
+        tail = chain[-1]
+        if tail in self._REFLECT_FNS or chain[0] in self._REFLECT_FNS:
+            self.graph.indirection.add(INDIRECTION_REFLECT)
+        if tail in self._EVAL_FNS or chain[0] in self._EVAL_FNS:
+            self.graph.indirection.add(INDIRECTION_EVAL)
+        if chain[0] in self._DYNAMIC_INCLUDE:
+            self.graph.indirection.add(INDIRECTION_DYNAMIC_IMPORT)
+
+    def _function_call_chain(self, node) -> Optional[List[str]]:
+        # function_call_expression: function (qualified_name | name | variable) + arguments
+        for c in node.children:
+            if c.type == self._ARGS:
+                break
+            if c.type in (self._QUALIFIED, self._NAMESPACE_NAME):
+                parts = self._namespace_parts(c)
+                if parts:
+                    return parts
+            if c.type == self._NAME:
+                return [c.text.decode()]
+            if c.type == self._VAR:
+                # ``$fn(...)`` — variable callable. Unknowable.
+                self.graph.indirection.add(INDIRECTION_REFLECT)
+                return None
+        return None
+
+    def _scoped_call_chain(self, node) -> Optional[List[str]]:
+        # scoped_call_expression: scope (Class) :: name + arguments
+        scope = None
+        method = None
+        for c in node.children:
+            if c.type == self._ARGS:
+                break
+            if c.is_named:
+                if scope is None:
+                    scope = c
+                elif method is None:
+                    method = c
+        if scope is None or method is None:
+            return None
+        if scope.type == self._NAME:
+            scope_parts = [scope.text.decode()]
+        elif scope.type in (self._QUALIFIED, self._NAMESPACE_NAME):
+            scope_parts = self._namespace_parts(scope)
+        else:
+            return None
+        return scope_parts + [method.text.decode()]
+
+    def _member_call_chain(self, node) -> Optional[List[str]]:
+        # member_call_expression: object -> name + arguments
+        obj = None
+        method = None
+        for c in node.children:
+            if c.type == self._ARGS:
+                break
+            if c.is_named:
+                if obj is None:
+                    obj = c
+                elif method is None:
+                    method = c
+        if obj is None or method is None:
+            return None
+        obj_chain = self._object_chain(obj)
+        if obj_chain is None:
+            return None
+        return obj_chain + [method.text.decode()]
+
+    def _object_chain(self, node) -> Optional[List[str]]:
+        if node.type == self._VAR:
+            return [node.text.decode().lstrip("$")]
+        if node.type == self._NAME:
+            return [node.text.decode()]
+        if node.type == self._MEMBER_ACCESS:
+            parts: List[str] = []
+            for c in node.children:
+                if c.is_named:
+                    parts.append(self._object_chain(c) or [])
+            flat: List[str] = []
+            for p in parts:
+                flat.extend(p)
+            return flat
+        if node.type == self._MEMBER_CALL:
+            return self._member_call_chain(node)
+        return None
+
+    @staticmethod
+    def _first_child_of_type(node, types):
+        for c in node.children:
+            if c.type in types:
+                return c
+        return None
+
+
 __all__ = [
     "CallSite",
     "FileCallGraph",
@@ -1333,8 +2327,12 @@ __all__ = [
     "INDIRECTION_IMPORTLIB",
     "INDIRECTION_REFLECT",
     "INDIRECTION_WILDCARD_IMPORT",
+    "extract_call_graph_csharp",
     "extract_call_graph_go",
     "extract_call_graph_java",
     "extract_call_graph_javascript",
+    "extract_call_graph_php",
     "extract_call_graph_python",
+    "extract_call_graph_ruby",
+    "extract_call_graph_rust",
 ]

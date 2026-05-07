@@ -24,10 +24,14 @@ from .exclusions import (
 )
 from .extractors import extract_functions, extract_items, count_sloc
 from .call_graph import (
+    extract_call_graph_csharp,
     extract_call_graph_go,
     extract_call_graph_java,
     extract_call_graph_javascript,
+    extract_call_graph_php,
     extract_call_graph_python,
+    extract_call_graph_ruby,
+    extract_call_graph_rust,
 )
 from .diff import compare_inventories
 
@@ -381,6 +385,22 @@ def _process_single_file(
             ).to_dict()
         elif language == 'java':
             record['call_graph'] = extract_call_graph_java(
+                content,
+            ).to_dict()
+        elif language == 'rust':
+            record['call_graph'] = extract_call_graph_rust(
+                content,
+            ).to_dict()
+        elif language == 'ruby':
+            record['call_graph'] = extract_call_graph_ruby(
+                content,
+            ).to_dict()
+        elif language in ('csharp', 'c_sharp'):
+            record['call_graph'] = extract_call_graph_csharp(
+                content,
+            ).to_dict()
+        elif language == 'php':
+            record['call_graph'] = extract_call_graph_php(
                 content,
             ).to_dict()
         return record
