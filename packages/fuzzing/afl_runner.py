@@ -48,7 +48,28 @@ class AFLRunner:
             raise PermissionError(f"Binary is not executable: {binary_path}")
 
         self.corpus_dir = Path(corpus_dir) if corpus_dir else self._create_default_corpus()
-        self.output_dir = Path(output_dir) if output_dir else Path(f"out/fuzz_{self.binary.stem}")
+        # Anchor default output to RaptorConfig.get_out_dir() so
+        # fuzz output lands under the operator-configured run
+        # base, NOT a literal `out/` relative to whatever
+        # cwd the script happened to launch from. Pre-fix
+        # `Path(f"out/fuzz_{name}")` was relative to the current
+        # working directory at runner-construction time. Two
+        # failure modes:
+        #   * Operator running RAPTOR from `~/work/foo/` got
+        #     fuzz output in `~/work/foo/out/fuzz_*` instead of
+        #     the configured project run dir.
+        #   * Script invoked via cron / systemd / CI from `/`
+        #     wrote `/out/fuzz_*` (or failed with permission
+        #     denied), polluting the root filesystem.
+        # `RaptorConfig.get_out_dir()` resolves to the active
+        # project's run dir (or DEFAULT_OUTPUT_BASE when no
+        # project is active) per the standard run-lifecycle
+        # rule.
+        if output_dir:
+            self.output_dir = Path(output_dir)
+        else:
+            from core.config import RaptorConfig
+            self.output_dir = RaptorConfig.get_out_dir() / f"fuzz_{self.binary.stem}"
         self.dict_path = Path(dict_path) if dict_path else None
         self.input_mode = input_mode
         self.check_sanitizers = check_sanitizers
