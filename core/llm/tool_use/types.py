@@ -329,6 +329,31 @@ class ToolCallReturned:
 
 
 @dataclass(frozen=True)
+class ToolResultPreflight:
+    """Advisory event: prompt-injection preflight on the raw tool-result
+    content surfaced one or more pattern indicators.
+
+    Non-blocking — the dispatch loop wraps the content in an
+    untrusted-envelope (the primary defence) and proceeds. This event
+    lets operators see in the run log when a target's tool output
+    matches known injection-pattern corpora ("ignore previous
+    instructions", role-flip, encoding evasion, etc.). Consumers can
+    subscribe to apply stricter policy (e.g. lower their own confidence
+    verdict, refuse the result) without the substrate prejudging.
+
+    See ``core.security.prompt_input_preflight`` for the corpora and
+    pattern semantics. ``indicators`` carries the corpus file stems
+    (``role_injection``, ``english_multiline``, etc.) — stable signal
+    even as individual regexes evolve.
+    """
+
+    iteration: int
+    call_id: str
+    tool_name: str
+    indicators: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ToolCallBlocked:
     """x-source validation blocked a tool call before dispatch.
 
@@ -382,6 +407,7 @@ LoopEvent = Union[
     ToolCallDispatched,
     ToolCallBlocked,
     ToolCallReturned,
+    ToolResultPreflight,
     LoopTerminated,
 ]
 

@@ -219,6 +219,43 @@ def _generate_nonce() -> str:
     return secrets.token_hex(_NONCE_BYTES)
 
 
+def wrap_tool_result(content: str, tool_name: str) -> str:
+    """Wrap tool-result content in an envelope so the LLM consistently
+    treats it as data rather than instructions.
+
+    Used by the ``ToolUseLoop`` to defend against prompt-injection
+    payloads embedded in attacker-controlled content that comes back
+    via tool calls (target source files read by ``Read``, web pages
+    fetched by ``WebFetch``, command stdout from ``Bash``, etc.).
+    Without this, the LLM sees the content as a native ``tool_result``
+    message and may follow embedded instructions.
+
+    Same envelope shape as the static-prompt
+    ``UntrustedBlock`` rendering: ``<untrusted-{nonce} kind=...
+    origin=...>`` open + the content with closing-tag forgery
+    neutralised + ``</untrusted-{nonce}>`` close. Per-call random
+    nonce makes the close tag unforgeable from the content side.
+
+    The ``tool_name`` is RAPTOR-controlled (set by the consumer's
+    ``ToolDef``), so safe to interpolate into the ``origin`` attribute
+    after the standard XML-attr escape.
+
+    No defence-profile knobs — tool-result wrapping is always-on at
+    the substrate level. Consumers that genuinely return trusted
+    content (rare; would need a pre-validated internal-only tool
+    surface) can pre-approve their own ``ToolDef`` and skip the
+    wrapping at the consumer layer.
+    """
+    nonce = _generate_nonce()
+    safe_origin = _xml_attr_escape(tool_name)
+    safe_content = neutralize_tag_forgery(content)
+    return (
+        f'<untrusted-{nonce} kind="tool-result" origin="{safe_origin}">\n'
+        f'{safe_content}\n'
+        f'</untrusted-{nonce}>'
+    )
+
+
 _HEX_DIGITS = frozenset('0123456789abcdefABCDEF')
 
 

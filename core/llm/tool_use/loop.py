@@ -50,6 +50,9 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from core.llm.providers import LLMProvider
 
+from core.security.prompt_envelope import wrap_tool_result
+from core.security.prompt_input_preflight import preflight
+
 from .types import (
     CacheControl,
     ContextOverflow,
@@ -68,6 +71,7 @@ from .types import (
     ToolHandlerTimeout,
     ToolLoopResult,
     ToolResult,
+    ToolResultPreflight,
     TurnCompleted,
     TurnResponse,
     TurnStarted,
@@ -106,8 +110,20 @@ class ToolUseLoop:
         cache_control: CacheControl = CacheControl(),
         events: Callable[[LoopEvent], None] | None = None,
         terminate_on_handler_error: bool = False,
+        refuse_on_indicators: Sequence[str] = (),
         **provider_specific: Any,
     ) -> None:
+        """``refuse_on_indicators``: prompt-injection corpus names
+        (file stems from ``core/security/injection_patterns/``)
+        that, when matched on a tool-result's RAW content, cause
+        the loop to replace the result with a synthetic
+        ``is_error=True`` placeholder before the LLM sees it. The
+        ``ToolResultPreflight`` event still fires so operators see
+        what was filtered. Empty (default) → advisory-only.
+        Consumers willing to fail-closed pass ``("role_injection",
+        ...)`` etc.; the loop validates each name against the
+        loaded corpora so a typo can't silently disable
+        enforcement."""
         if not provider.supports_tool_use():
             raise ValueError(
                 "ToolUseLoop requires a provider with tool-use support; "
@@ -139,6 +155,20 @@ class ToolUseLoop:
                 f"got {max_iterations!r}"
             )
 
+        # Validate refuse-on-indicators against loaded corpora so a
+        # typo in the consumer's allowlist surfaces at construction
+        # time (loud error) rather than silently disabling
+        # enforcement when the corpus name doesn't match.
+        if refuse_on_indicators:
+            from core.security.prompt_input_preflight import loaded_corpora
+            known = set(loaded_corpora())
+            unknown = [c for c in refuse_on_indicators if c not in known]
+            if unknown:
+                raise ValueError(
+                    f"ToolUseLoop refuse_on_indicators contains unknown "
+                    f"corpora {unknown!r}. Loaded corpora: {sorted(known)!r}"
+                )
+
         self._system = system
         self._terminal_tool = terminal_tool
         self._max_iterations = max_iterations
@@ -151,6 +181,7 @@ class ToolUseLoop:
         self._cache_control = cache_control
         self._events = events
         self._terminate_on_handler_error = terminate_on_handler_error
+        self._refuse_on_indicators = frozenset(refuse_on_indicators)
         self._provider_specific = provider_specific
 
     # ------------------------------------------------------------------
@@ -465,6 +496,82 @@ class ToolUseLoop:
                         )
                     duration = time.monotonic() - start
 
+                # ---- tool-result injection defence -----------------------
+                # Wrap tool-result content in an untrusted envelope so
+                # the LLM consistently treats it as data, not
+                # instructions. Defends against prompt-injection
+                # payloads embedded in attacker-controlled content the
+                # model fetches via tool calls (target source files,
+                # web pages, command stdout). Both success AND error
+                # results are wrapped — error content can carry
+                # attacker text via handler exception messages
+                # (e.g. ``raise ValueError(target_content)``).
+                #
+                # Order is critical:
+                #   1. Run preflight on RAW content (advisory event;
+                #      consumers can subscribe + opt-in via
+                #      ``refuse_on_indicators`` for fail-closed
+                #      enforcement on confident patterns).
+                #   2. Extract x-source values from RAW content
+                #      (envelope tags would otherwise pollute the
+                #      discovered-values set with envelope-token noise).
+                #   3. Optionally REFUSE if a high-confidence corpus
+                #      fired and the consumer opted in.
+                #   4. Wrap; that's what the LLM sees.
+                raw_content = result.content
+                pf = preflight(raw_content)
+                if pf.has_injection_indicators:
+                    self._emit(ToolResultPreflight(
+                        iteration=iteration,
+                        call_id=call.id,
+                        tool_name=call.name,
+                        indicators=pf.indicators,
+                    ))
+
+                # x-source value discovery: only on successful raw
+                # results (errors don't carry tool-output values).
+                if not result.is_error:
+                    known_values |= _extract_values_from_json(raw_content)
+
+                # Refuse-on-injection: replace result with synthetic
+                # error if any indicator from the consumer's
+                # opt-in list fired. The original content never
+                # reaches the LLM. Operator still sees the
+                # ToolResultPreflight event above, plus the synthetic
+                # error includes the indicator names so the model
+                # knows why its tool call returned filtered.
+                refuse_hit = (
+                    self._refuse_on_indicators
+                    and pf.has_injection_indicators
+                    and any(
+                        ind in self._refuse_on_indicators
+                        for ind in pf.indicators
+                    )
+                )
+                if refuse_hit:
+                    matched = sorted(
+                        ind for ind in pf.indicators
+                        if ind in self._refuse_on_indicators
+                    )
+                    result = ToolResult(
+                        tool_use_id=result.tool_use_id,
+                        content=(
+                            "tool result filtered: matched injection "
+                            "pattern(s) " + ", ".join(matched)
+                            + ". The original content was not surfaced "
+                            "to preserve safety. If this is a false "
+                            "positive, the operator can adjust "
+                            "refuse_on_indicators."
+                        ),
+                        is_error=True,
+                    )
+                else:
+                    result = ToolResult(
+                        tool_use_id=result.tool_use_id,
+                        content=wrap_tool_result(raw_content, call.name),
+                        is_error=result.is_error,
+                    )
+
                 self._emit(ToolCallReturned(
                     iteration=iteration,
                     call_id=call.id,
@@ -483,11 +590,6 @@ class ToolUseLoop:
             # Append tool results as user message — this keeps multi-call
             # batches in one message, matching Anthropic's wire shape.
             messages.append(Message(role="user", content=list(tool_results)))
-
-            # x-source: grow known_values from successful results
-            for tr in tool_results:
-                if not tr.is_error:
-                    known_values |= _extract_values_from_json(tr.content)
 
             # ---- post-dispatch termination checks -----------------------
             if terminal_tool_input is not None:
