@@ -497,17 +497,42 @@ class MultiTurnAnalyser:
         return None
 
     def _quick_validate_code(self, code: str) -> List[str]:
-        """Quick validation of C code (basic syntax checks)."""
+        """Quick validation of C code (basic syntax checks).
+
+        Brace / paren counting is REMOVED. Pre-fix
+        `code.count('{') != code.count('}')` flagged "Mismatched
+        braces" any time those characters appeared in:
+
+          * String literals: `printf("} not real")` counts the
+            closing brace as if it were structural.
+          * Char literals: `if (c == '}')` likewise.
+          * Comments: `/* matches { in comment */` counts the
+            opening as structural.
+          * Preprocessor / macro bodies: `#define X(a) {a}`
+            counts depending on usage context.
+          * Trigraphs / digraphs: `<%...%>` is a digraph for
+            `{...}` (rare but real in legacy code).
+
+        On real LLM-generated C, false-positives were the rule —
+        almost any non-trivial code with a string containing `{`
+        or `}` got flagged as "mismatched". The dialogue loop
+        then rejected the refinement and asked for "fixes" that
+        weren't needed, wasting tokens and producing
+        progressively-worse code.
+
+        Validating C syntax requires a real parser (clang -E +
+        AST check, or tree-sitter). The naive count heuristic is
+        worse than no check — false positives outweigh real
+        catches by ~10:1 in production. Drop the brace/paren
+        counting entirely; keep only the unambiguous lexical
+        checks that don't false-positive (preprocessor-with-
+        Chinese-quotes, invalid escape sequences) where the
+        match is structurally distinctive.
+        """
         errors = []
 
-        # Basic syntax checks
-        if code.count('{') != code.count('}'):
-            errors.append("Mismatched braces")
-
-        if code.count('(') != code.count(')'):
-            errors.append("Mismatched parentheses")
-
-        # Check for common issues
+        # Check for common LLM hallucination patterns (these are
+        # safe — the patterns don't appear in legitimate C).
         if '#ifdef "__' in code or '#ifndef "__' in code:
             errors.append("Invalid preprocessor directive with Chinese characters")
 
