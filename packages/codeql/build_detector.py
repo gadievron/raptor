@@ -277,7 +277,23 @@ class BuildDetector:
 
             # Check for extension match (e.g., *.csproj)
             if build_file.startswith("."):
-                matches = list(self.repo_path.rglob(f"*{build_file}"))
+                # Sort matches for determinism. `rglob` returns
+                # filesystem-iteration order (varies between
+                # machines and even between runs on the same
+                # machine after FS metadata reordering); without
+                # sorting `matches[0].parent` was non-
+                # deterministic — repos with multiple .csproj /
+                # .sln / .gradle files picked DIFFERENT
+                # working_dirs across runs, producing different
+                # CodeQL DBs and different SARIF outputs for the
+                # same source. Sort by path string to pin the
+                # selection to "shallowest-then-alphabetical"
+                # which matches operator intuition for "primary"
+                # build root.
+                matches = sorted(
+                    self.repo_path.rglob(f"*{build_file}"),
+                    key=lambda p: (len(p.parts), str(p)),
+                )
                 if matches:
                     detected_files.append(build_file)
                     # Use the directory of the first match WITH
