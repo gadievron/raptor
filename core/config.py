@@ -547,7 +547,7 @@ class RaptorConfig:
         return RaptorConfig.MCP_JOB_DIR / job_id
 
     @staticmethod
-    def get_safe_env() -> dict:
+    def get_safe_env(*, preserve_proxy: bool = False) -> dict:
         """Return a sanitised copy of os.environ for subprocess use.
 
         Two-stage filter:
@@ -558,8 +558,18 @@ class RaptorConfig:
              through unless we explicitly add them.
           2. Blocklist (DANGEROUS_ENV_VARS + PROXY_ENV_VARS) — overlay.
              Belt + braces against an accidentally-over-broad allowlist
-             prefix. Also still removes proxy vars (HTTP_PROXY etc.)
-             that we want gone regardless.
+             prefix. By default also strips proxy vars (HTTP_PROXY,
+             HTTPS_PROXY, NO_PROXY) — most subprocesses (codeql build,
+             fuzzing harness, gdb) shouldn't be making outbound HTTP
+             on the operator's behalf, and a proxy that was set for
+             interactive use can leak through.
+
+        ``preserve_proxy=True`` keeps the proxy vars in the returned
+        env. Use only for subprocesses that legitimately need to
+        proxy outbound HTTP — typically the egress wrapper, the
+        sandbox proxy itself, or LLM clients that need to honour
+        an operator's HTTPS_PROXY setting. The dangerous-env-var
+        strip still applies.
 
         Callers who need a specific extra var (JAVA_HOME for a Java tool,
         a custom CA bundle, etc.) should add it to the returned dict
@@ -575,7 +585,8 @@ class RaptorConfig:
                 env[name] = value
         # Belt + braces: strip anything dangerous that somehow made it
         # through (either allowlisted explicitly or matching a prefix).
-        env = strip_env_vars(env, RaptorConfig.PROXY_ENV_VARS)
+        if not preserve_proxy:
+            env = strip_env_vars(env, RaptorConfig.PROXY_ENV_VARS)
         env = strip_env_vars(env, RaptorConfig.DANGEROUS_ENV_VARS)
         env["PYTHONUNBUFFERED"] = "1"
         return env
