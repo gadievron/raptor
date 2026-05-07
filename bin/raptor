@@ -130,8 +130,23 @@ if ! command -v claude >/dev/null 2>&1; then
     exit 1
 fi
 
-# Export static env vars
-export RAPTOR_CALLER_DIR="$(pwd)"
+# Export static env vars. RAPTOR_CALLER_DIR holds the
+# operator's PWD at launch time (used to resolve targets +
+# project paths in subcommands). Reject control bytes
+# (newlines, tabs, NULs, escape) so a pathologically-crafted
+# pwd value can't smuggle CLI-arg / line-injection payloads
+# downstream — a directory path SHOULD never contain
+# whitespace control chars on a healthy filesystem.
+_caller_dir="$(pwd)"
+case "$_caller_dir" in
+    *[$'\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x1b']*)
+        echo "raptor: RAPTOR_CALLER_DIR contains control bytes — refusing" >&2
+        echo "  (\$PWD has chars in the C0 control range; this is suspicious — bailing safely)" >&2
+        exit 1
+        ;;
+esac
+export RAPTOR_CALLER_DIR="$_caller_dir"
+unset _caller_dir
 export RAPTOR_DIR
 # Trust marker — libexec/ scripts refuse to run without one of
 # CLAUDECODE, _RAPTOR_TRUSTED, or RAPTOR_DIR. We've stripped env above
