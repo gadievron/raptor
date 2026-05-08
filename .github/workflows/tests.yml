@@ -75,8 +75,6 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 2
-    needs: pre_check
-    if: needs.pre_check.outputs.should_skip != 'true'
     outputs:
       python: ${{ steps.filter.outputs.python }}
       bash_surface: ${{ steps.filter.outputs.bash_surface }}
@@ -166,12 +164,17 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "requirements*.txt"
+
       - name: Create venv and install deps
         run: |
-          python -m venv $VENV_PATH
+          uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
-          python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          uv pip install -r requirements-dev.txt
 
       - name: Verify venv exists
         run: test -d "$VENV_PATH" || (echo "venv missing at $VENV_PATH" && exit 1)
