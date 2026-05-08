@@ -80,6 +80,7 @@ jobs:
       bash_surface: ${{ steps.filter.outputs.bash_surface }}
       sandbox: ${{ steps.filter.outputs.sandbox }}
       exploit_feasibility: ${{ steps.filter.outputs.exploit_feasibility }}
+      prompt_audit: ${{ steps.filter.outputs.prompt_audit }}
       force_full: ${{ steps.force.outputs.force_full }}
     steps:
       - uses: actions/checkout@v6
@@ -223,9 +224,13 @@ jobs:
       - name: Run unit tests (fast tier)
         run: |
           source $VENV_PATH/bin/activate
+          # The prompt-envelope audit runs in its own narrowly-scoped
+          # job (python-prompt-audit) so it doesn't fire on unrelated
+          # Python changes. Exclude it here to avoid duplicate runs.
           pytest -n auto core packages \
             --ignore=core/sandbox/tests \
-            --ignore=packages/exploit_feasibility/tests
+            --ignore=packages/exploit_feasibility/tests \
+            --ignore=core/security/tests/test_prompt_envelope_audit.py
 
       - name: Run libexec wrapper tests
         run: |
@@ -314,6 +319,38 @@ jobs:
           # See sandbox tests above for why `python -m pytest` is needed
           # rather than bare `pytest`.
           python -m pytest packages/exploit_feasibility/tests
+
+  # Prompt-envelope audit: AST-based heuristic over the registered
+  # prompt-construction files. The test only needs stdlib + pytest
+  # (no project deps), so it skips the venv artefact entirely and
+  # installs pytest standalone. Gated on the narrow ``prompt_audit``
+  # filter so it only fires when an audited file, the audit module,
+  # or the test itself actually changes.
+  python-prompt-audit:
+    needs: [pre_check, changes]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.prompt_audit == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run prompt-envelope audit
+        run: |
+          # `python -m pytest` so `from core.security...` resolves
+          # without needing the repo on PYTHONPATH.
+          python -m pytest core/security/tests/test_prompt_envelope_audit.py -q
 
   test-workflows:
     needs: [pre_check, changes, deps]
