@@ -76,11 +76,16 @@ def annotate(
 
     Returns a NEW Reachability — the input is not mutated. When evidence
     files match an entry-point / sink / boundary, the verdict is
-    promoted from ``imported`` → ``likely_called`` (with a clear reason)
-    and the confidence reason is updated. ``not_reachable`` /
-    ``not_evaluated`` verdicts are returned unchanged.
+    promoted (``imported`` → ``likely_called`` when the file is a
+    sink; ``called_in_dead_code`` → ``likely_called`` when the file
+    is an entry point or sink — operator's /understand pass has
+    direct evidence the host is reachable, overriding our static
+    "no callers" claim). ``not_reachable`` / ``not_evaluated`` /
+    ``not_function_reachable`` verdicts are returned unchanged.
     """
-    if reach.verdict not in ("imported", "likely_called"):
+    if reach.verdict not in (
+        "imported", "likely_called", "called_in_dead_code",
+    ):
         return reach
     matched_kinds: List[str] = []
     matched_paths: List[str] = []
@@ -100,9 +105,19 @@ def annotate(
     if not matched_kinds:
         return reach
 
-    new_verdict = ("likely_called"
-                    if "sink" in matched_kinds
-                    else reach.verdict)
+    # Promote to ``likely_called`` when:
+    #   * the file is a sink (vulnerable code path is in scope), OR
+    #   * the file is an entry point and we'd previously classified
+    #     the call as ``called_in_dead_code`` — operator's
+    #     /understand pass identified the host as a real entry,
+    #     so the static "no callers" claim was wrong.
+    if "sink" in matched_kinds:
+        new_verdict = "likely_called"
+    elif (reach.verdict == "called_in_dead_code"
+            and "entry_point" in matched_kinds):
+        new_verdict = "likely_called"
+    else:
+        new_verdict = reach.verdict
     kinds_uniq = sorted(set(matched_kinds))
     reason = (
         f"{reach.confidence.reason}; context-map: dep "

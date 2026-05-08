@@ -176,9 +176,21 @@ ReachabilityVerdict = Literal[
     "not_function_reachable",  # imported, but the OSV-listed affected function(s)
                        # aren't called by the project (function-level resolver
                        # — currently PyPI when OSV ships affected_functions)
+    "called_in_dead_code",     # vulnerable function called from project source,
+                       # but EVERY call site lives in a project function with
+                       # no callers (1-hop empty AND reverse closure empty).
+                       # The vulnerable code path isn't exercised at runtime
+                       # under normal use. Confidence is ``medium`` not
+                       # ``high`` — a no-caller host might still be an entry
+                       # point we can't see (CLI main, HTTP handler registered
+                       # via decorator, pytest fixture, ``__main__`` module,
+                       # packaging entry-point). Operators viewing medium
+                       # confidence can override.
     "likely_called",   # vulnerable function/symbol confirmed at a call site
-                       # (Go function-level when OSV ships symbols; PyPI
-                       # function-level via core.inventory.reachability)
+                       # in a project function that IS reachable — the call
+                       # sits on a live execution path. (Go function-level
+                       # when OSV ships symbols; PyPI function-level via
+                       # core.inventory.reachability)
 ]
 
 

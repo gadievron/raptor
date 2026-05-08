@@ -138,17 +138,15 @@ def refine_cargo_verdicts(
                     evidence.extend(
                         f"{p}:{ln}" for p, ln in r.evidence
                     )
-            out[d.key()] = Reachability(
-                verdict="likely_called",
-                confidence=Confidence(
-                    "high",
-                    reason=(
-                        "OSV-listed affected symbol called from "
-                        f"project Rust source: "
-                        f"{', '.join(sorted(set(called)))}"
-                    ),
+            from ._host_reachability import classify_called_or_dead
+            affected = ", ".join(sorted(set(called)))
+            out[d.key()] = classify_called_or_dead(
+                inventory, evidence,
+                likely_called_reason=(
+                    "OSV-listed affected symbol called from "
+                    f"project Rust source: {affected}"
                 ),
-                evidence=evidence[:5],
+                affected_summary=affected,
             )
         elif Verdict.UNCERTAIN in verdicts:
             continue

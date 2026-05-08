@@ -208,17 +208,15 @@ def refine_pypi_verdicts(
                     evidence_lines.extend(
                         f"{path}:{line}" for path, line in r.evidence
                     )
-            out[d.key()] = Reachability(
-                verdict="likely_called",
-                confidence=Confidence(
-                    "high",
-                    reason=(
-                        "OSV-listed affected function called from "
-                        f"project source: "
-                        f"{', '.join(sorted(set(called_fn_names)))}"
-                    ),
+            from ._host_reachability import classify_called_or_dead
+            affected = ", ".join(sorted(set(called_fn_names)))
+            out[d.key()] = classify_called_or_dead(
+                inventory, evidence_lines,
+                likely_called_reason=(
+                    "OSV-listed affected function called from "
+                    f"project source: {affected}"
                 ),
-                evidence=evidence_lines[:5],
+                affected_summary=affected,
             )
         elif Verdict.UNCERTAIN in verdicts:
             # Mixed / uncertain — leave at module-level imported.

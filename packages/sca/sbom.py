@@ -255,6 +255,19 @@ def _build_vulnerabilities(
             analysis["state"] = "not_affected"
             analysis["justification"] = "code_not_reachable"
             analysis["detail"] = f.reachability.confidence.reason
+        elif f.reachability.verdict == "called_in_dead_code":
+            # The vulnerable function IS called from project code,
+            # but the call sites all live in private-named hosts
+            # with no callers — likely dead code, but the host
+            # could still be an unseen entry point. Medium
+            # confidence on the dead-code claim doesn't justify a
+            # ``not_affected`` VEX state (which would silently hide
+            # the finding from SBOM consumers); ``in_triage``
+            # surfaces it for human review with the supporting
+            # reason.
+            analysis["state"] = "in_triage"
+            analysis["justification"] = "code_not_reachable"
+            analysis["detail"] = f.reachability.confidence.reason
         elif f.in_kev:
             analysis["state"] = "exploitable"
             analysis["justification"] = "in_triage"

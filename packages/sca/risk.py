@@ -116,14 +116,23 @@ def compute_risk_estimate(
     # 4. Reachability: confidently-not-reachable downgrades; uncertain
     # stays neutral; not_evaluated gets a small penalty.
     r = finding.reachability
-    if r.verdict in ("not_reachable", "not_function_reachable"):
+    if r.verdict in (
+        "not_reachable", "not_function_reachable", "called_in_dead_code",
+    ):
         # confidence.numeric is 0..1; max reduction at numeric=1.0.
-        # ``not_function_reachable`` uses the same downgrade as
-        # ``not_reachable``: both are "we have evidence the
-        # vulnerable code path isn't exercised". The function-level
-        # verdict is strictly stronger evidence (we know the dep IS
-        # imported but the specific affected function isn't called),
-        # so the confidence numeric does the work of distinguishing.
+        # All three verdicts share the "code path not exercised"
+        # rationale and the same downgrade group; ``confidence.numeric``
+        # does the work of distinguishing how strong the evidence is:
+        #   * ``not_reachable``           — confidence high (~0.95):
+        #     full downgrade. Module isn't imported.
+        #   * ``not_function_reachable``  — confidence high (~0.95):
+        #     full downgrade. Module imported but the specific
+        #     affected function isn't called.
+        #   * ``called_in_dead_code``     — confidence medium (~0.7):
+        #     about 75% of the full downgrade. Function IS called,
+        #     but the call site is in a private-named host with no
+        #     callers in the static graph; less certain because the
+        #     host could still be an unseen entry point.
         conf_numeric = r.confidence.numeric or 0.0
         reach_mult = 1.0 - _REACH_NOT_REACHABLE_MAX_REDUCTION * conf_numeric
     elif r.verdict == "not_evaluated":
