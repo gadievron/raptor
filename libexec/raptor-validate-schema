@@ -115,7 +115,38 @@ def _validate_stage_file(data, filename):
 
 
 def is_already_validated(filepath):
-    """Check if file was already validated and hasn't changed."""
+    """Check if file was already validated and hasn't changed.
+
+    Looks up the file's content hash in the per-directory
+    `.validated` index file. Returns True only when:
+      * the index has an entry for `filepath.name`, AND
+      * the recorded hash matches the file's CURRENT hash
+        (i.e., the file hasn't changed since the last
+        successful validation).
+
+    Returns False when the file has no recorded validation,
+    when the index file is missing/unreadable, or when the
+    file has been modified since the last validation
+    (re-validation needed).
+
+    The hash check covers in-place edits — mtime checks would
+    miss content-preserving touches and false-positive on
+    rsync-with-preserve-mtime, so we hash. The cost is one
+    file read per check; for the validate stage that runs
+    sub-second per file, this is acceptable.
+
+    Used by `main()` to short-circuit re-validation of
+    unchanged files in batch runs (Stage 0 inventory walk
+    re-runs `raptor-validate-schema` over every stage file
+    on each Stage A boot — without this skip, validation
+    cost was O(N) per A-boot per file, multiplied by every
+    A-boot in a long-running pipeline).
+
+    Distinct from `validate(...)` which does the actual
+    schema check — the helper here is purely "did we already
+    do that check, and is the result still valid?". A True
+    result means the caller can skip the validate() call.
+    """
     filepath = Path(filepath)
     validated = _read_validated(filepath.parent)
     recorded = validated.get(filepath.name)
