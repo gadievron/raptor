@@ -143,12 +143,24 @@ def _write(
 # ---------------------------------------------------------------------------
 
 
+def _safe_list_of_dicts(obj: Any, key: str) -> Iterable[Dict[str, Any]]:
+    """Read ``obj[key]`` defensively — an LLM-emitted JSON could put
+    a string, null, or scalar where we expect a list of dicts. Yield
+    only the items that are actually dicts, silently dropping the rest."""
+    raw = obj.get(key) if isinstance(obj, dict) else None
+    if not isinstance(raw, list):
+        return
+    for item in raw:
+        if isinstance(item, dict):
+            yield item
+
+
 def _emit_entry_points(
     cmap: Dict[str, Any],
     base_dir: Path, checklist: Dict[str, Any], repo_root: Path,
     counts: SynthCounts,
 ) -> None:
-    for ep in cmap.get("entry_points", []) or []:
+    for ep in _safe_list_of_dicts(cmap, "entry_points"):
         file_path = ep.get("file")
         line = ep.get("line")
         func = _resolve(checklist, file_path, line, repo_root)
@@ -190,7 +202,7 @@ def _emit_sinks(
     base_dir: Path, checklist: Dict[str, Any], repo_root: Path,
     counts: SynthCounts,
 ) -> None:
-    for sink in cmap.get("sink_details", []) or []:
+    for sink in _safe_list_of_dicts(cmap, "sink_details"):
         file_path = sink.get("file")
         line = sink.get("line")
         func = _resolve(checklist, file_path, line, repo_root)
@@ -235,7 +247,7 @@ def _emit_trust_boundaries(
     base_dir: Path, checklist: Dict[str, Any], repo_root: Path,
     counts: SynthCounts,
 ) -> None:
-    for bound in cmap.get("boundary_details", []) or []:
+    for bound in _safe_list_of_dicts(cmap, "boundary_details"):
         file_path = bound.get("file")
         line = bound.get("line")
         func = _resolve(checklist, file_path, line, repo_root)
@@ -276,10 +288,10 @@ def _emit_unchecked_flows(
     to re-resolve the entry-point's file:line."""
     eps_by_id = {
         ep.get("id"): ep
-        for ep in cmap.get("entry_points", []) or []
+        for ep in _safe_list_of_dicts(cmap, "entry_points")
         if ep.get("id")
     }
-    for flow in cmap.get("unchecked_flows", []) or []:
+    for flow in _safe_list_of_dicts(cmap, "unchecked_flows"):
         ep_id = flow.get("entry_point")
         ep = eps_by_id.get(ep_id)
         if not ep:
@@ -336,7 +348,7 @@ def _emit_trace_steps(
     base_dir: Path, checklist: Dict[str, Any], repo_root: Path,
     counts: SynthCounts,
 ) -> None:
-    for step in trace.get("steps", []) or []:
+    for step in _safe_list_of_dicts(trace, "steps"):
         defn = _parse_definition(step.get("definition", ""))
         if not defn:
             # External library or non-resolvable target — skip.
