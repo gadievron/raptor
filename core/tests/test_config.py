@@ -5,9 +5,30 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
+# Pre-fix this file did:
+#
+#   import sys
+#   sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+#
+# in order to make the bare `from core.config import RaptorConfig`
+# import below work when pytest is run from a deep cwd.
+#
+# Two problems with that:
+#
+#   1. Project rule (CLAUDE.md "Python path safety"): NEVER add
+#      anything to sys.path except `os.environ["RAPTOR_DIR"]`. The
+#      `parent.parent.parent` walk hard-codes the test's distance
+#      from the repo root, so moving the file (e.g. into
+#      `core/tests/unit/`) would silently start importing from
+#      whatever stray directory happened to be three levels up.
+#   2. Mutating sys.path at MODULE-import time leaks the entry
+#      into every other test that imports later in the same
+#      session — a global side-effect from a single test file.
+#
+# pytest's top-level `conftest.py` already adds the repo root
+# to sys.path before any test module imports. The bare
+# `from core.config import RaptorConfig` works without the
+# manual insert. Drop the mutation.
 from core.config import RaptorConfig
 
 
