@@ -214,20 +214,28 @@ class OciRegistryClient:
         headers: Optional[Dict[str, str]] = None,
         stream: bool = False,
     ):
-        """Issue ``METHOD https://<registry><url_path>`` with the
-        appropriate auth header. On 401, parse the
-        ``WWW-Authenticate`` challenge, exchange for a bearer token
-        (cached), and retry once. Subsequent failures bubble up as
-        :class:`RegistryError`."""
-        full_url = f"https://{registry}{url_path}"
+        """Issue ``METHOD https://<api-endpoint><url_path>`` with the
+        appropriate auth header. The API endpoint is resolved via
+        :func:`api_endpoint_for` — for most registries this is just
+        ``registry`` itself, but Docker Hub canonical ``docker.io``
+        rewrites to ``registry-1.docker.io`` (the v2 API endpoint).
+        On 401, parse the ``WWW-Authenticate`` challenge, exchange
+        for a bearer token (cached), and retry once. Subsequent
+        failures bubble up as :class:`RegistryError`."""
+        from .registry_hosts import api_endpoint_for
+        full_url = f"https://{api_endpoint_for(registry)}{url_path}"
         req_headers = dict(headers) if headers else {}
         # First attempt with whatever auth is already cached for
         # this registry's most-recent (realm, service, scope) tuple.
         # Cache is keyed by the challenge triple, so we don't have
         # one yet — make the unauthenticated attempt first to
         # discover the realm.
+        # raise_on_status=False so the 401-with-WWW-Authenticate
+        # challenge reaches the retry path below instead of being
+        # converted to an exception by the backend.
         resp = self.http.request(
             method, full_url, headers=req_headers, stream=stream,
+            raise_on_status=False,
         )
         if resp.status_code != 401:
             return resp
@@ -291,11 +299,18 @@ class OciRegistryClient:
         if cached is not None:
             return cached
 
-        params: Dict[str, str] = {}
+        # Encode service+scope into the URL ourselves — the
+        # core.http backend doesn't support requests-style ``params=``.
+        from urllib.parse import urlencode
+        qs_pairs = []
         if service:
-            params["service"] = service
+            qs_pairs.append(("service", service))
         if scope:
-            params["scope"] = scope
+            qs_pairs.append(("scope", scope))
+        token_url = realm
+        if qs_pairs:
+            sep = "&" if "?" in realm else "?"
+            token_url = f"{realm}{sep}{urlencode(qs_pairs)}"
 
         headers: Dict[str, str] = {}
         creds = self._lookup(registry)
@@ -303,7 +318,8 @@ class OciRegistryClient:
             headers["Authorization"] = f"Basic {creds.to_basic_header()}"
 
         resp = self.http.request(
-            "GET", realm, params=params, headers=headers,
+            "GET", token_url, headers=headers,
+            raise_on_status=False,
         )
         if resp.status_code != 200:
             raise RegistryError(

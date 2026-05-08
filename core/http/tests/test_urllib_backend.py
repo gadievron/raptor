@@ -835,3 +835,66 @@ class TestStreamKwargAccepted:
         # was stripped by request() before dispatch.
         assert len(captured) == 2
         assert captured[0] == captured[1]
+
+
+class TestRaiseOnStatus:
+    """``raise_on_status=False`` returns the Response on 4xx instead
+    of raising HttpError. Needed by the OCI client which inspects
+    401 responses for ``WWW-Authenticate`` to drive the bearer-
+    token exchange retry."""
+
+    def test_raise_on_status_default_true_raises_on_401(self):
+        client, _ = _client_with_mock_pool(
+            _stub_response(b"unauthorized", status=401, reason="Unauthorized"),
+        )
+        with pytest.raises(HttpError) as exc:
+            client.request("GET", "https://example.com/")
+        assert exc.value.status == 401
+
+    def test_raise_on_status_false_returns_401_response(self):
+        client, _ = _client_with_mock_pool(
+            _stub_response(
+                b"unauthorized", status=401, reason="Unauthorized",
+                extra_headers={"WWW-Authenticate": 'Bearer realm="x"'},
+            ),
+        )
+        resp = client.request(
+            "GET", "https://example.com/", raise_on_status=False,
+        )
+        assert resp.status == 401
+        # WWW-Authenticate (lowercased) reaches the caller — that's
+        # exactly what the OCI client needs for the auth dance.
+        assert "www-authenticate" in resp.headers
+        assert 'realm="x"' in resp.headers["www-authenticate"]
+
+    def test_raise_on_status_false_still_returns_2xx_normally(self):
+        client, _ = _client_with_mock_pool(
+            _stub_response(b'{"ok": true}'),
+        )
+        resp = client.request(
+            "GET", "https://example.com/", raise_on_status=False,
+        )
+        assert resp.status == 200
+        assert resp.body == b'{"ok": true}'
+
+    def test_raise_on_status_false_passes_through_to_fetch(
+        self, monkeypatch,
+    ):
+        """The kwarg is plumbed end-to-end: request -> _fetch ->
+        _fetch_once. Verify by mocking _fetch_once and asserting
+        it received the value."""
+        client = UrllibClient()
+        captured = {}
+
+        def fake_fetch_once(*args, **kwargs):
+            captured.update(kwargs)
+            from core.http import Response
+            return Response(
+                status=401, headers={}, body=b"", url=args[0],
+            )
+
+        monkeypatch.setattr(client, "_fetch_once", fake_fetch_once)
+        client.request(
+            "GET", "https://example.com/", raise_on_status=False,
+        )
+        assert captured.get("raise_on_status") is False

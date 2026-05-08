@@ -163,3 +163,30 @@ def test_dedup_preserves_order():
     """No duplicates in the output, original order preserved."""
     hosts = registry_hosts_for("python:3.11")
     assert len(hosts) == len(set(hosts))
+
+
+# ---------------------------------------------------------------------------
+# api_endpoint_for — canonical-name → API-host resolution for HTTP requests
+# ---------------------------------------------------------------------------
+
+def test_api_endpoint_for_docker_hub_routes_to_registry_1():
+    """Docker Hub canonical ``docker.io`` is a brand identifier;
+    the v2 API actually lives at ``registry-1.docker.io``."""
+    from core.oci.registry_hosts import api_endpoint_for
+    assert api_endpoint_for("docker.io") == "registry-1.docker.io"
+
+
+def test_api_endpoint_for_ghcr_passthrough():
+    from core.oci.registry_hosts import api_endpoint_for
+    assert api_endpoint_for("ghcr.io") == "ghcr.io"
+
+
+def test_api_endpoint_for_self_hosted_passthrough():
+    from core.oci.registry_hosts import api_endpoint_for
+    assert api_endpoint_for("registry.corp.example") \
+        == "registry.corp.example"
+
+
+def test_api_endpoint_for_quay_passthrough():
+    from core.oci.registry_hosts import api_endpoint_for
+    assert api_endpoint_for("quay.io") == "quay.io"

@@ -179,6 +179,7 @@ class UrllibClient:
         retries: int = DEFAULT_RETRIES,
         follow_redirects: bool = True,
         stream: bool = False,
+        raise_on_status: bool = True,
     ) -> Response:
         """Low-level HTTP request — returns a full :class:`Response` object.
 
@@ -197,6 +198,17 @@ class UrllibClient:
         backend buffers the response body either way, so the
         ``stream`` value is ignored. For true streaming downloads,
         use :meth:`stream_bytes`.
+
+        ``raise_on_status`` (default True) raises ``HttpError`` on
+        4xx/5xx responses — the standard behaviour every consumer
+        relies on. Pass ``raise_on_status=False`` when you need to
+        inspect a 4xx response yourself (notably the OCI client's
+        401 → token-exchange retry path, where the WWW-Authenticate
+        header on the 401 IS the signal to act on, not a failure to
+        propagate). With ``raise_on_status=False`` the Response is
+        returned for any status; transient 5xx still triggers
+        backoff retry, but the final Response (whatever its status)
+        is handed back instead of raising.
         """
         del stream                      # accepted for compat; no-op
         self._validate_url(url)
@@ -209,6 +221,7 @@ class UrllibClient:
             total_timeout=total_timeout,
             retries=retries,
             follow_redirects=follow_redirects,
+            raise_on_status=raise_on_status,
         )
 
     def post_json(
@@ -401,6 +414,7 @@ class UrllibClient:
         total_timeout: int = DEFAULT_TOTAL_TIMEOUT,
         retries: int = DEFAULT_RETRIES,
         follow_redirects: bool = True,
+        raise_on_status: bool = True,
     ) -> Response:
         # Wall-clock deadline for the whole retry loop. Without this,
         # the full backoff schedule (~1h worst case) can dominate
@@ -434,6 +448,7 @@ class UrllibClient:
                     url, method=method, timeout=timeout, max_bytes=max_bytes,
                     body=body, headers=headers,
                     follow_redirects=follow_redirects,
+                    raise_on_status=raise_on_status,
                 )
             except HttpError as e:
                 # Retry only on transient status codes (429, 5xx).
@@ -535,6 +550,7 @@ class UrllibClient:
         body: Optional[bytes],
         headers: Dict[str, str],
         follow_redirects: bool = True,
+        raise_on_status: bool = True,
     ) -> Response:
         # urllib3.Timeout(total=N) caps both connect and read; matches
         # the per-call semantics our public API exposes.
@@ -580,12 +596,13 @@ class UrllibClient:
                         resp.headers.get("Retry-After"),
                     ),
                 )
-            # Treat 4xx/5xx as HttpError. The exception is non-retryable
-            # for 4xx (we don't loop on auth/validation errors) and
-            # retried by _fetch for 5xx via the is_transient check.
-            # 3xx-with-follow_redirects=False reaches here too — surface
-            # the Location header in the exception for caller inspection.
-            if resp.status >= 400:
+            # Treat 4xx/5xx as HttpError unless caller opted out via
+            # ``raise_on_status=False`` (e.g. OCI client's 401 →
+            # token-exchange retry needs to inspect WWW-Authenticate
+            # on the 401 response). When opting out we still bound
+            # the body read by max_bytes — a 4xx response can carry
+            # an arbitrary body.
+            if resp.status >= 400 and raise_on_status:
                 # Drain enough body for the error message — bounded.
                 snippet = resp.read(512, decode_content=True) or b""
                 reason = resp.reason or "?"

@@ -146,4 +146,25 @@ def _aws_ecr_hosts(registry: str) -> List[str]:
     ]
 
 
-__all__ = ["registry_hosts_for"]
+def api_endpoint_for(registry: str) -> str:
+    """Return the actual HTTPS hostname to send registry-API requests to.
+
+    For most registries this is the canonical name itself
+    (``ghcr.io`` -> ``ghcr.io``). Docker Hub is the notable
+    exception: the canonical name ``docker.io`` is a brand /
+    namespace identifier, but the v2 API lives at
+    ``registry-1.docker.io``. Connecting to ``docker.io`` directly
+    returns 301-to-marketing-page or fails, depending on the path.
+
+    Used by :class:`core.oci.client.RegistryClient` when building
+    request URLs. Pairs with :func:`registry_hosts_for` which
+    returns the same hostnames for sandbox-allowlist purposes —
+    the proxy must permit whatever the client actually CONNECTs to,
+    not the canonical name.
+    """
+    if registry == "docker.io":
+        return "registry-1.docker.io"
+    return registry
+
+
+__all__ = ["api_endpoint_for", "registry_hosts_for"]
