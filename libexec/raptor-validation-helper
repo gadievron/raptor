@@ -1028,26 +1028,52 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False):
 
     start_run(out_dir, "validate", target=target)
 
-    # Snapshot understand hashes before the rebuild overwrites checklist.json.
-    # In the shared --out case (tier 1), the understand run's checklist is in
-    # the same directory.  build_checklist will overwrite it with current hashes,
-    # so we capture the old hashes now for stale-file detection.
-    pre_rebuild_checklist = None
-    checklist_path = out_dir / "checklist.json"
-    if checklist_path.exists() and (out_dir / "context-map.json").exists():
-        from core.json import load_json
-        pre_rebuild_checklist = load_json(checklist_path)
+    # Wrap the rest of stage-0 prep in try/except so a failure
+    # AFTER `start_run` (which created the run dir + lifecycle
+    # marker) flips the run to "failed" instead of leaving an
+    # orphan "running" run forever. Pre-fix the function had
+    # only the early `try/except TargetMismatchError` around
+    # `get_output_dir`; if `build_checklist` / inventory walk /
+    # `_bridge_understand_output` raised, the run dir stayed
+    # marked "running" indefinitely. Subsequent operator runs
+    # of `/project status` listed the orphan as in-progress;
+    # `coverage-summary` skipped it; cleanup never fired.
+    from core.run.metadata import fail_run
+    try:
+        # Snapshot understand hashes before the rebuild overwrites checklist.json.
+        # In the shared --out case (tier 1), the understand run's checklist is in
+        # the same directory.  build_checklist will overwrite it with current hashes,
+        # so we capture the old hashes now for stale-file detection.
+        pre_rebuild_checklist = None
+        checklist_path = out_dir / "checklist.json"
+        if checklist_path.exists() and (out_dir / "context-map.json").exists():
+            from core.json import load_json
+            pre_rebuild_checklist = load_json(checklist_path)
 
-    checklist = build_checklist(target, str(out_dir))
+        checklist = build_checklist(target, str(out_dir))
 
-    (out_dir / "build").mkdir(exist_ok=True)
+        (out_dir / "build").mkdir(exist_ok=True)
 
-    if not no_bridge:
-        _bridge_understand_output(out_dir, checklist, target,
-                                  pre_rebuild_checklist=pre_rebuild_checklist)
+        if not no_bridge:
+            _bridge_understand_output(out_dir, checklist, target,
+                                      pre_rebuild_checklist=pre_rebuild_checklist)
 
-    print(f"Checklist: {checklist['total_files']} files, {checklist['total_items']} items")
-    print(f"OUTPUT_DIR={out_dir}")
+        print(f"Checklist: {checklist['total_files']} files, {checklist['total_items']} items")
+        print(f"OUTPUT_DIR={out_dir}")
+    except Exception as e:
+        # Mark the run as failed so /project status / cleanup
+        # see the right state. Re-raise so the caller (validate
+        # CLI) sees the exception and can surface it to the
+        # operator with stack trace.
+        try:
+            fail_run(out_dir, str(e))
+        except Exception:
+            # Best-effort — if even fail_run breaks (filesystem
+            # error mid-stage), we'd rather the original
+            # exception propagate than mask it with a metadata-
+            # write error.
+            pass
+        raise
 
 
 def prepare_1(workdir, target=None):
