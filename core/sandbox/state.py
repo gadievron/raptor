@@ -85,6 +85,11 @@ _landlock_warned_abi_v4 = False
 _landlock_warned_abi_v3 = False  # TRUNCATE coverage missing (kernel <6.2)
 _landlock_warned_abi_v2 = False  # REFER coverage missing (kernel <5.19)
 _sandbox_unavailable_warned = False
+# Mount-ns unavailable but Landlock did engage — see THREAT_MODEL.md I2-(a).
+# Distinguished from `_mount_unavailable_warned` (which is set by the lower-
+# level mount probe); this flag is for the user-facing warning emitted from
+# the public sandbox() path that names the practical posture and remediation.
+_sandbox_landlock_only_warned = False
 _net_and_tcp_allowlist_warned = False
 _seccomp_arch_missing_warned = False
 _mount_unavailable_warned = False

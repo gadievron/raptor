@@ -41,7 +41,8 @@ def _sandbox_state_guard():
         # Once-per-process warnings
         "_landlock_warned_unavailable", "_landlock_warned_abi_v4",
         "_landlock_warned_abi_v3", "_landlock_warned_abi_v2",
-        "_sandbox_unavailable_warned", "_net_and_tcp_allowlist_warned",
+        "_sandbox_unavailable_warned", "_sandbox_landlock_only_warned",
+        "_net_and_tcp_allowlist_warned",
         "_seccomp_arch_missing_warned", "_mount_unavailable_warned",
         "_ptrace_unavailable_warned", "_audit_warned_no_spawn",
         # Availability caches — deliberately EXCLUDING _landlock_cache:

@@ -592,6 +592,26 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             logger.warning(
                 "Sandbox unavailable — subprocesses run without namespace isolation"
             )
+    elif sys.platform != "darwin" and use_sandbox and not use_mount and (target or output):
+        # Linux Landlock-only mode: sandbox engaged but mount-ns
+        # didn't (typically because unprivileged user namespaces are
+        # disabled — Ubuntu 24.04+ ships with
+        # ``kernel.apparmor_restrict_unprivileged_userns=1`` as the
+        # default).  Without mount-ns, ``$HOME`` and the host's
+        # ``/tmp`` are visible to the sandboxed child, and same-UID
+        # ``/proc/<pid>/`` reads are not UID-remapped.  ``restrict_reads=True``
+        # is the load-bearing defence in this mode.  See
+        # ``core/security/THREAT_MODEL.md`` (invariant I2-(a)).
+        if state.warn_once("_sandbox_landlock_only_warned"):
+            logger.warning(
+                "RAPTOR: sandbox running in Landlock-only mode — "
+                "mount namespace unavailable, likely "
+                "kernel.apparmor_restrict_unprivileged_userns=1. "
+                "Credential exfil is bounded only by Landlock; "
+                "callers that dispatch LLM-driven sub-agents on "
+                "hostile source should set restrict_reads=True. "
+                "See core/security/THREAT_MODEL.md (I2-(a)).",
+            )
 
     effective_limits = dict(_DEFAULT_LIMITS)
     effective_limits.update(_load_user_limits())  # User config overrides defaults
@@ -1539,6 +1559,14 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         # Interpret process termination for observability
         _interpret_result(result, cmd_display)
 
+        # Record whether mount-ns engaged on this run so per-run
+        # forensic readers (sandbox-summary.json consumers) can tell
+        # if the child had mount-ns isolation or fell back to
+        # Landlock-only mode. See ``core/security/THREAT_MODEL.md``
+        # I2-(a) for why this matters.
+        result.sandbox_info["mount_ns_active"] = bool(use_mount)
+        result.sandbox_info["restrict_reads"] = bool(restrict_reads)
+
         # Attach proxy events (allow + deny + dns_fail + bytes) to
         # sandbox_info. Available to callers as
         # `result.sandbox_info["proxy_events"]` for diagnostics — lets
@@ -1930,3 +1958,86 @@ def run_untrusted(cmd: List[str], *, target: str = None, output: str = None,
                readable_paths=readable_paths,
                fake_home=fake_home,
                **kwargs)
+
+
+def run_untrusted_networked(
+    cmd: List[str],
+    *,
+    target: str = None,
+    output: str = None,
+    proxy_hosts: list,
+    limits: dict = None,
+    restrict_reads: bool = True,
+    readable_paths: list = None,
+    fake_home: bool = False,
+    **kwargs,
+) -> subprocess.CompletedProcess:
+    """Variant of :func:`run_untrusted` that allows hostname-allowlisted
+    HTTPS egress instead of full network block.
+
+    Use case: an LLM-driven sub-agent or tool that must reach a known
+    upstream API (e.g. ``api.anthropic.com``) but is otherwise treated
+    as adversarial — Claude Code dispatches, future LLM-callers that
+    need network. ``run_untrusted()``'s namespace-level network block
+    makes those calls impossible; ad-hoc :func:`sandbox()` callers
+    forget to set ``restrict_reads=True`` and lose credential isolation
+    on Landlock-only hosts (Ubuntu 24.04+ default — see
+    ``core/security/THREAT_MODEL.md`` I2-(a)).
+
+    This helper enforces the safe defaults for that case:
+
+      * ``restrict_reads=True`` — kernel-level read allowlist; $HOME
+        is denied. Callers that need extra paths pass
+        ``readable_paths=[...]``.
+      * ``fake_home=False`` — Claude Code reads ``~/.claude.json`` and
+        is incompatible with HOME-redirection; callers with no such
+        constraint can override.
+      * ``use_egress_proxy=True`` + ``proxy_hosts=[...]`` — egress
+        proxy with hostname allowlist (the only network this child can
+        reach is the listed hosts on port 443).
+      * ``allowed_tcp_ports=[443]`` — only HTTPS to the proxy.
+      * ``block_network=False`` — must be False so the proxy is
+        reachable from inside the sandbox.
+
+    Mirrors :func:`run_untrusted`'s stdin / start_new_session
+    defaults — DEVNULL stdin, setsid — for the same passive-sniffer +
+    controlling-tty reasons.
+
+    No callers in this PR. Provides the safe shape for future
+    cc_dispatch-style migrations to use; see THREAT_MODEL.md.
+    """
+    if not (target or output):
+        raise ValueError(
+            "run_untrusted_networked() requires at least one non-empty of "
+            "target= or output= so Landlock actually engages."
+        )
+    if not proxy_hosts:
+        raise ValueError(
+            "run_untrusted_networked() requires proxy_hosts=[...] — "
+            "the egress allowlist is mandatory; callers wanting unrestricted "
+            "network should use sandbox() directly."
+        )
+    for forbidden in ("block_network", "allowed_tcp_ports", "use_egress_proxy"):
+        if forbidden in kwargs:
+            raise TypeError(
+                f"run_untrusted_networked() does not accept {forbidden}= — "
+                f"the network policy is fixed to egress-proxy-only on port "
+                f"443. Use sandbox() directly for varied network policy."
+            )
+    if "stdin" not in kwargs and "input" not in kwargs:
+        kwargs["stdin"] = subprocess.DEVNULL
+    if "start_new_session" not in kwargs:
+        kwargs["start_new_session"] = True
+    return run(
+        cmd,
+        block_network=False,
+        target=target, output=output,
+        limits=limits,
+        restrict_reads=restrict_reads,
+        readable_paths=readable_paths,
+        fake_home=fake_home,
+        use_egress_proxy=True,
+        proxy_hosts=list(proxy_hosts),
+        allowed_tcp_ports=[443],
+        **kwargs,
+    )
