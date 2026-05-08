@@ -84,7 +84,9 @@ SYNTHESIS_SCHEMA: Dict[str, Any] = {
 
 
 def build_synthesis_prompt(
-    seed: SeedBug, engine: str, retry_feedback: str = "",
+    seed: SeedBug, engine: str,
+    retry_feedback: str = "",
+    prior_fps: "Iterable[Match]" = (),
 ) -> str:
     """Compose the synthesis prompt body.
 
@@ -92,6 +94,12 @@ def build_synthesis_prompt(
     failure mode of the previous attempt (e.g. "rule did not match
     the seed function" or "rule produced invalid YAML") so the LLM
     can refine rather than regenerate from scratch.
+
+    ``prior_fps`` is non-empty during the iterative FP-elimination
+    loop — it carries matches from previous iterations that
+    triage classified as false positives. The synthesis prompt
+    appends them as negative examples so the next rule tightens
+    away from those locations while still hitting the seed bug.
     """
     parts = [
         f"BUG TO REPLICATE AS A CHECKER ({engine})",
@@ -133,6 +141,29 @@ def build_synthesis_prompt(
             retry_feedback,
             "Refine the rule, don't regenerate from scratch.",
         ]
+    fps = list(prior_fps) if prior_fps else []
+    if fps:
+        parts += [
+            "",
+            "PRIOR FALSE POSITIVES — earlier rules matched the "
+            "following locations that triage classified as NOT the "
+            "same bug. Refine your rule to AVOID matching these "
+            "while still hitting the seed at the lines above:",
+        ]
+        # Cap the per-prompt FP context to avoid context blow-up.
+        # 8 examples × ~200 chars each ≈ 1.6KB — enough signal,
+        # bounded cost.
+        for fp in fps[:8]:
+            line = f"  - {fp.file}:{fp.line}"
+            if fp.snippet:
+                # Trim the snippet so context stays bounded.
+                snip = " ".join(fp.snippet.split())[:160]
+                line += f"\n      {snip}"
+            parts.append(line)
+        if len(fps) > 8:
+            parts.append(
+                f"  ... ({len(fps) - 8} more false positives elided)"
+            )
     return "\n".join(parts)
 
 

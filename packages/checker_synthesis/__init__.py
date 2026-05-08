@@ -40,7 +40,11 @@ from .models import (
     SeedBug,
     SynthesisedRule,
 )
-from .synthesise import LLMCallable, synthesise_and_run
+from .synthesise import (
+    LLMCallable,
+    synthesise_and_run,
+    synthesise_with_refinement,
+)
 
 __all__ = [
     "CheckerSynthesisResult",
@@ -52,4 +56,5 @@ __all__ = [
     "detect_engine",
     "supported_engines",
     "synthesise_and_run",
+    "synthesise_with_refinement",
 ]
