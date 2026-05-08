@@ -229,7 +229,11 @@ def build_from_findings(findings_path: Path, reads_manifest_path: Path = None,
     return record
 
 
-def build_from_annotations(annotations_dir: Path) -> Optional[Dict[str, Any]]:
+def build_from_annotations(
+    annotations_dir: Path,
+    *,
+    tool_name: str = "annotations",
+) -> Optional[Dict[str, Any]]:
     """Build a coverage record from a tree of annotation .md files.
 
     Every annotated function counts as "examined" for coverage purposes:
@@ -241,10 +245,22 @@ def build_from_annotations(annotations_dir: Path) -> Optional[Dict[str, Any]]:
     Args:
         annotations_dir: Directory containing the annotation tree
             (typically ``<run_output_dir>/annotations``).
+        tool_name: ``tool`` field for the resulting record. Defaults
+            to ``"annotations"`` for back-compat with /agentic and
+            /understand consumers; ``/audit`` passes ``"audit"`` so
+            its records land as ``coverage-audit.json`` and are
+            distinguishable from generic annotation-derived
+            coverage.
 
     Returns:
         Coverage record dict, or None if the directory doesn't exist
         or contains no annotations.
+
+    Per-function entries include ``status`` and ``hash`` when those
+    fields are present in the annotation's metadata — ``/audit``
+    populates both at write time, so the resulting record carries
+    the verdict and source-line hash inline. Readers that don't
+    expect these fields ignore unknown keys.
     """
     annotations_dir = Path(annotations_dir)
     if not annotations_dir.exists():
@@ -265,17 +281,26 @@ def build_from_annotations(annotations_dir: Path) -> Optional[Dict[str, Any]]:
         if key in seen:
             continue
         seen.add(key)
-        functions.append({"file": ann.file, "function": ann.function})
+        entry: Dict[str, str] = {"file": ann.file, "function": ann.function}
+        # Include verdict + source-line hash inline when the
+        # annotation metadata carries them. /audit's status enum
+        # (clean / suspicious / finding / error) flows straight
+        # through; staleness detection downstream uses the hash.
         st = ann.metadata.get("status")
         if st:
+            entry["status"] = st
             statuses[st] = statuses.get(st, 0) + 1
+        h = ann.metadata.get("hash")
+        if h:
+            entry["hash"] = h
+        functions.append(entry)
         src = ann.metadata.get("source")
         if src:
             sources[src] = sources.get(src, 0) + 1
     if not files and not functions:
         return None
     return {
-        "tool": "annotations",
+        "tool": tool_name,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "files_examined": sorted(files),
         "functions_analysed": functions,

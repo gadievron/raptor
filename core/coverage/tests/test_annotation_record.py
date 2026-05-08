@@ -32,10 +32,61 @@ class TestBuildFromAnnotations:
         assert record is not None
         assert record["tool"] == "annotations"
         assert record["files_examined"] == ["src/auth.py"]
-        assert record["functions_analysed"] == [
-            {"file": "src/auth.py", "function": "check_pw"}
-        ]
+        # The function entry has at minimum file + function. Status
+        # and hash are populated when the annotation metadata carries
+        # them — pinned in the per-function-metadata test below.
+        assert len(record["functions_analysed"]) == 1
+        entry = record["functions_analysed"][0]
+        assert entry["file"] == "src/auth.py"
+        assert entry["function"] == "check_pw"
         assert "timestamp" in record
+
+    def test_per_function_status_and_hash_inlined(self, tmp_path):
+        """Annotation metadata's ``status`` and ``hash`` flow into
+        each function entry — /audit's coverage-audit.json schema
+        wants these inline so consumers see verdict + freshness
+        without re-reading annotations."""
+        write_annotation(tmp_path, Annotation(
+            file="src/x.py", function="suspicious_fn",
+            metadata={
+                "status": "suspicious",
+                "hash": "abc123def456",
+                "source": "llm",
+            },
+        ))
+        record = build_from_annotations(tmp_path)
+        entry = record["functions_analysed"][0]
+        assert entry["status"] == "suspicious"
+        assert entry["hash"] == "abc123def456"
+
+    def test_status_and_hash_omitted_when_absent(self, tmp_path):
+        write_annotation(tmp_path, Annotation(
+            file="src/x.py", function="bare_fn",
+            metadata={"source": "human"},  # no status, no hash
+        ))
+        record = build_from_annotations(tmp_path)
+        entry = record["functions_analysed"][0]
+        assert "status" not in entry
+        assert "hash" not in entry
+
+    def test_tool_name_override(self, tmp_path):
+        """``/audit`` passes ``tool_name="audit"`` so its records
+        land as ``coverage-audit.json``, distinct from /agentic and
+        /understand's annotation-derived ``coverage-annotations.json``."""
+        write_annotation(tmp_path, Annotation(
+            file="src/x.py", function="f",
+            metadata={"status": "clean"},
+        ))
+        record = build_from_annotations(tmp_path, tool_name="audit")
+        assert record["tool"] == "audit"
+
+    def test_default_tool_name_is_annotations(self, tmp_path):
+        write_annotation(tmp_path, Annotation(
+            file="src/x.py", function="f",
+            metadata={"status": "clean"},
+        ))
+        record = build_from_annotations(tmp_path)
+        assert record["tool"] == "annotations"
 
     def test_aggregates_status_and_source_counts(self, tmp_path):
         for fn, status, source in [

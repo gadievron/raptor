@@ -249,10 +249,15 @@ def _run_engine(
 def _propose_rule(
     seed: SeedBug, engine: str, attempt: int, llm: LLMCallable,
     retry_feedback: str = "",
+    prior_fps: Tuple[Match, ...] = (),
 ) -> Tuple[Optional[SynthesisedRule], Optional[str]]:
     """Single LLM round-trip producing one candidate rule.
     Returns ``(rule, error)``; exactly one is set."""
-    prompt = build_synthesis_prompt(seed, engine, retry_feedback=retry_feedback)
+    prompt = build_synthesis_prompt(
+        seed, engine,
+        retry_feedback=retry_feedback,
+        prior_fps=prior_fps,
+    )
     try:
         data = llm(prompt, SYNTHESIS_SCHEMA, SYNTHESIS_SYSTEM)
     except Exception as e:
@@ -358,6 +363,7 @@ def synthesise_and_run(
     max_matches: int = 50,
     triage_each: bool = False,
     max_triage_calls: int = 50,
+    prior_fps: Tuple[Match, ...] = (),
 ) -> CheckerSynthesisResult:
     """End-to-end: propose → validate → run → optionally triage.
 
@@ -375,6 +381,11 @@ def synthesise_and_run(
         triage_each: when True, every match gets an LLM verdict.
             Off by default — costs N×LLM calls per synthesis.
         max_triage_calls: hard ceiling on triage LLM calls.
+        prior_fps: matches from earlier iterations of an FP-elimination
+            loop, classified as false positives by triage. The
+            synthesis prompt appends them as negative examples. Empty
+            for single-shot synthesis; populated by
+            ``synthesise_with_refinement``.
     """
     repo_root = Path(repo_root).resolve()
     out_dir = Path(out_dir)
@@ -398,7 +409,10 @@ def synthesise_and_run(
     rule_path: Optional[Path] = None
 
     for attempt in range(max_retries + 1):
-        rule, err = _propose_rule(seed, engine, attempt, llm, feedback)
+        rule, err = _propose_rule(
+            seed, engine, attempt, llm, feedback,
+            prior_fps=tuple(prior_fps),
+        )
         if err:
             result.errors.append(f"attempt {attempt}: {err}")
             rule = None
@@ -459,3 +473,153 @@ def synthesise_and_run(
         result.errors.extend(t_errors)
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Iterative FP-elimination wrapper (Phase A Mode 2)
+# ---------------------------------------------------------------------------
+
+
+def _fp_rate(result: CheckerSynthesisResult) -> Optional[float]:
+    """Fraction of triaged matches classified as false positive.
+
+    Returns None when the rate can't be computed (no triage,
+    everything skipped). Excludes ``skipped`` from the denominator
+    — those are budget-truncated, not classified.
+    """
+    triaged = [t for t in result.triage if t.status != "skipped"]
+    if not triaged:
+        return None
+    fps = [t for t in triaged if t.status == "false_positive"]
+    return len(fps) / len(triaged)
+
+
+def synthesise_with_refinement(
+    seed: SeedBug,
+    repo_root: Path,
+    out_dir: Path,
+    llm: LLMCallable,
+    *,
+    max_iterations: int = 5,
+    max_acceptable_fp_rate: float = 0.2,
+    max_matches: int = 50,
+    max_triage_calls: int = 50,
+) -> CheckerSynthesisResult:
+    """Iterative checker synthesis with FP-elimination.
+
+    The KNighter pipeline that ``synthesise_and_run`` implements has
+    a single shot at the rule. The /audit design (2026-05-08) and
+    KNighter's own paper observe that 5–10 iterations of FP-driven
+    refinement typically converge a noisy rule to a tight one. This
+    wrapper provides that loop.
+
+    Each iteration:
+
+      1. Run ``synthesise_and_run`` with ``triage_each=True``,
+         passing the accumulated FPs from prior iterations as
+         negative examples.
+      2. Compute FP rate from the triage verdicts.
+      3. If FP rate ≤ ``max_acceptable_fp_rate``: converged, return
+         the current result.
+      4. Otherwise, append this iteration's FPs to the running list
+         and try again.
+
+    Convergence rules:
+      * Always returns the iteration with the LOWEST FP rate. If
+        no iteration beat the threshold, the best-so-far still
+        wins over the worst.
+      * If positive control fails on an iteration (no rule produced),
+        it doesn't count toward the best-so-far — just bumps to the
+        next iteration with the existing FP context.
+      * If we exhaust ``max_iterations`` without improvement, the
+        best-so-far is returned with an error log entry naming
+        the situation.
+      * If triage couldn't run at all (e.g. zero matches), there's
+        nothing to learn from; return immediately after iteration 1.
+
+    The first iteration is identical to a vanilla
+    ``synthesise_and_run(triage_each=True)`` call. Operators who
+    don't want refinement should call ``synthesise_and_run`` directly.
+    """
+    if max_iterations <= 0:
+        return CheckerSynthesisResult(
+            seed=seed,
+            errors=["max_iterations must be > 0"],
+        )
+
+    prior_fps: List[Match] = []
+    best: Optional[CheckerSynthesisResult] = None
+    best_rate: Optional[float] = None
+
+    for iteration in range(max_iterations):
+        result = synthesise_and_run(
+            seed, repo_root, out_dir, llm,
+            max_matches=max_matches,
+            triage_each=True,
+            max_triage_calls=max_triage_calls,
+            prior_fps=tuple(prior_fps),
+        )
+
+        # If synthesis failed entirely, bump to next iteration.
+        # The accumulated FP context from prior rounds carries
+        # forward — maybe a different rule will land this round.
+        if result.rule is None:
+            result.errors.append(
+                f"iteration {iteration}: no rule produced"
+            )
+            if best is None:
+                best = result  # at least surface SOMETHING
+            continue
+
+        rate = _fp_rate(result)
+        if rate is None:
+            # Triage didn't run — no signal to refine on. Take this
+            # result and stop; refinement can't help without verdicts.
+            result.errors.append(
+                f"iteration {iteration}: no triage verdicts; "
+                f"refinement loop has nothing to learn"
+            )
+            return result
+
+        # Track best-so-far by rate (lower is better).
+        if best_rate is None or rate < best_rate:
+            best = result
+            best_rate = rate
+
+        if rate <= max_acceptable_fp_rate:
+            # Converged.
+            return result
+
+        # Accumulate FPs for the next prompt. Cap to keep prompt
+        # size bounded across iterations — the prompt builder also
+        # caps to 8 in the prompt itself.
+        new_fps = [t.match for t in result.triage
+                   if t.status == "false_positive"]
+        # Avoid duplicate locations (dedup by file:line).
+        seen = {(m.file, m.line) for m in prior_fps}
+        for m in new_fps:
+            key = (m.file, m.line)
+            if key in seen:
+                continue
+            prior_fps.append(m)
+            seen.add(key)
+
+    # Exhausted without converging — return best-so-far with a note.
+    if best is None:
+        return CheckerSynthesisResult(
+            seed=seed,
+            errors=["refinement: no result across all iterations"],
+        )
+    if best_rate is None:
+        # No iteration ever produced a triageable rule.
+        best.errors.append(
+            f"refinement: did not converge in {max_iterations} "
+            f"iterations (no rule reached triage)"
+        )
+    else:
+        best.errors.append(
+            f"refinement: did not converge in {max_iterations} "
+            f"iterations (best fp_rate={best_rate:.2f} > threshold "
+            f"{max_acceptable_fp_rate:.2f})"
+        )
+    return best

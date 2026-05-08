@@ -103,3 +103,45 @@ exemplars:
       locally true but globally violated. No race needed; a
       straight-line syscall sequence corrupts arbitrary readable
       files in the cache.
+
+  - cve: CVE-2026-43284
+    title: DirtyFrag (xfrm-ESP) — page-cache page reaches sk_buff frag, treated
+      as writable scratch
+    pattern: |
+      The xfrm-ESP transmit path obtains pages via the splice /
+      sendmsg path, which can hand back page-cache pages. Those
+      pages are placed into a ``struct sk_buff`` ``frag`` and the
+      ESP transform writes ICV / scratch bytes through the frag.
+      The networking-stack ``sk_buff`` is the wrong semantic
+      container for an immutable page-cache page — it's used as
+      scratch by every layer it passes through.
+    why_buggy: |
+      Two subsystems with different ownership models converge on
+      one piece of memory. The page-cache layer's contract
+      ("this page is shared and immutable for non-writers") and
+      the networking layer's contract ("frag pages are scratch I
+      own") are both locally consistent. The bug is the bridge:
+      ``sendmsg`` of file pages produces a frag whose contents
+      will be overwritten by xfrm-ESP. Same shape as CopyFail,
+      different subsystem — networking + page cache instead of
+      crypto + page cache.
+
+  - cve: CVE-2026-43500
+    title: DirtyFrag (AF_RXRPC) — same page-cache → sk_buff frag pattern in a
+      different protocol
+    pattern: |
+      AF_RXRPC's send path takes pages provided via splice or
+      sendmsg, places them into ``sk_buff`` frags, and lets the
+      RxRPC packet-construction code write through those frags.
+      Same as the xfrm-ESP case: page-cache pages that callers
+      assumed were read-only are mutated by the networking-stack
+      packet builder.
+    why_buggy: |
+      One bug pattern, two independent subsystems. The
+      generalisation lesson is the point: any networking path
+      that accepts caller-supplied pages and treats the resulting
+      frags as writable scratch is suspect. A Mode-2 checker
+      synthesised from CVE-2026-43284 should fire on this code
+      automatically; the bug class is "page-cache pages flow
+      into a downstream subsystem's writable buffer", not "this
+      specific protocol's send path".
