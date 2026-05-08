@@ -343,12 +343,28 @@ class TestLLDBNoPathInjection:
             except Exception:
                 pass
 
-        if captured_scripts:
-            for script in captured_scripts:
-                assert str(input_file) not in script, \
-                    f"Input file path found in LLDB script: {script[:200]}"
-                assert "-i " not in script or str(input_file) not in script, \
-                    "LLDB script should not use -i with input file path"
+        # REQUIRE that at least one script was captured. Pre-fix
+        # the assertion was guarded by `if captured_scripts:`,
+        # so a regression that caused `_run_lldb_analysis` to
+        # exit BEFORE writing the LLDB script (e.g. the binary-
+        # validation early-return, an exception in the script-
+        # building code path, a future refactor that moved the
+        # subprocess invocation out of the function) would leave
+        # `captured_scripts` empty and the test would PASS
+        # vacuously — exactly the false-positive shape cluster
+        # 720 fixed for the GDB equivalent. Make the test fail
+        # loud if no scripts got written; that's the contract
+        # we're testing.
+        assert captured_scripts, (
+            "LLDB analysis didn't write any script — assertion vacuous. "
+            "Either _run_lldb_analysis short-circuited or the test setup "
+            "failed to mock subprocess correctly."
+        )
+        for script in captured_scripts:
+            assert str(input_file) not in script, \
+                f"Input file path found in LLDB script: {script[:200]}"
+            assert "-i " not in script or str(input_file) not in script, \
+                "LLDB script should not use -i with input file path"
 
 
 class TestPathTraversal:
