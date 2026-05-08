@@ -240,8 +240,17 @@ def _apply_stage_file(workdir, stage_letter):
         save_json(findings_path, container)
         print(f"  Merged stage-{stage_letter.lower()}.json: {applied} findings updated")
 
-    # Delete the stage file
-    stage_path.unlink()
+    # Delete the stage file. Guard the unlink — pre-fix
+    # `stage_path.unlink()` raised `FileNotFoundError` if the
+    # file disappeared between the read above and here (rare
+    # but real: parallel /project clean, operator manually
+    # rm'ing the file mid-stage, an aborted-and-restarted
+    # validate run that moved the file). The exception leaked
+    # and crashed the stage-merge call, leaving the operator
+    # with a partial state where the merge happened but the
+    # cleanup didn't. Subsequent stage retries hit the same
+    # condition. `missing_ok=True` makes the unlink idempotent.
+    stage_path.unlink(missing_ok=True)
     return True
 
 
