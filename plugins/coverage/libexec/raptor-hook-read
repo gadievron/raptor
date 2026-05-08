@@ -36,8 +36,23 @@ LINK_TARGET=$(readlink "$ACTIVE_LINK")
 PROJECT_FILE="$HOME/.raptor/projects/$LINK_TARGET"
 [ ! -f "$PROJECT_FILE" ] && exit 0
 
-# Read project output dir and target
+# Cache the jq detection: pre-fix the script called
+# `command -v jq` THREE times (once per JSON parse site).
+# `command -v` shells out to a builtin lookup, but in
+# repeated calls the cumulative wall time was measurable
+# on hosts where /usr/bin is on a slow PATH (NFS-mounted
+# corp envs, container filesystems with lazy-resolved
+# paths). For an async hook fired hundreds of times per
+# Claude Code session, the per-call overhead summed to
+# noticeable latency. Cache once at the top of the script
+# and branch on the cached value.
+HAVE_JQ=0
 if command -v jq >/dev/null 2>&1; then
+    HAVE_JQ=1
+fi
+
+# Read project output dir and target
+if [ "$HAVE_JQ" = "1" ]; then
     PROJECT_DIR=$(jq -r '.output_dir // empty' "$PROJECT_FILE" 2>/dev/null)
     PROJECT_TARGET=$(jq -r '.target // empty' "$PROJECT_FILE" 2>/dev/null)
 else
@@ -51,7 +66,7 @@ fi
 RUN_DIR=""
 for d in "$PROJECT_DIR"/*/; do
     [ -f "${d}.raptor-run.json" ] || continue
-    if command -v jq >/dev/null 2>&1; then
+    if [ "$HAVE_JQ" = "1" ]; then
         STATUS=$(jq -r '.status // empty' "${d}.raptor-run.json" 2>/dev/null)
     else
         STATUS=$(python3 -c "import json;print(json.load(open('${d}.raptor-run.json')).get('status',''))" 2>/dev/null)
@@ -61,7 +76,7 @@ done
 [ -z "$RUN_DIR" ] && exit 0
 
 # Extract file path from hook payload (JSON on stdin)
-if command -v jq >/dev/null 2>&1; then
+if [ "$HAVE_JQ" = "1" ]; then
     FILE_PATH=$(jq -r '.tool_input.file_path // empty' 2>/dev/null)
 else
     FILE_PATH=$(python3 -c "import json,sys;print(json.load(sys.stdin).get('tool_input',{}).get('file_path',''))" 2>/dev/null)
