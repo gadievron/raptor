@@ -184,6 +184,43 @@ class TestPrintAnnotations(unittest.TestCase):
             assert "1 annotation(s)" in output
             assert " a " in output
 
+    def test_since_filter_recent(self):
+        """All freshly-written annotations are within a wide window."""
+        with TemporaryDirectory() as d:
+            project = _build_project(Path(d))
+            with patch("sys.stdout", new_callable=StringIO) as buf:
+                _print_annotations(project, since="7d")
+            output = buf.getvalue()
+            assert "2 annotation(s)" in output
+
+    def test_since_filter_excludes_old(self):
+        import os, time
+        with TemporaryDirectory() as d:
+            project = _build_project(Path(d))
+            # Backdate the run-level annotation file by 30 days.
+            for run in project._run_dirs:
+                for md in (run / "annotations").rglob("*.md"):
+                    old_ts = time.time() - (30 * 86400)
+                    os.utime(md, (old_ts, old_ts))
+            # Also backdate the project-level file.
+            for md in (Path(project.output_dir) / "annotations").rglob("*.md"):
+                old_ts = time.time() - (30 * 86400)
+                os.utime(md, (old_ts, old_ts))
+            with patch("sys.stdout", new_callable=StringIO) as buf:
+                _print_annotations(project, since="7d")
+            output = buf.getvalue()
+            # All annotations are now older than 7d → filter shows
+            # "no annotations match".
+            assert "No annotations match" in output
+
+    def test_since_bad_value_errors(self):
+        with TemporaryDirectory() as d:
+            project = _build_project(Path(d))
+            with patch("sys.stdout", new_callable=StringIO) as buf:
+                _print_annotations(project, since="garbage")
+            output = buf.getvalue()
+            assert "bad --since" in output
+
     def test_no_runs_no_project_annotations(self):
         with TemporaryDirectory() as d:
             project_root = Path(d) / "empty"

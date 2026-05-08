@@ -123,6 +123,11 @@ def main():
         "--grep",
         help="Case-insensitive substring search across body + metadata",
     )
+    p_anns.add_argument(
+        "--since",
+        help="Annotation file mtime within window: ``7d`` / ``24h`` / "
+             "``30m`` / ``120s`` / ``1w``",
+    )
 
     # delete
     p_delete = sub.add_parser("delete", help="Delete a project",
@@ -327,6 +332,7 @@ def main():
                 cwe_filter=args.cwe,
                 rule_id_filter=args.rule_id,
                 grep=args.grep,
+                since=args.since,
             )
 
         elif args.subcommand == "use":
@@ -881,9 +887,29 @@ def _finding_label(f):
     return f"{f.get('file', '?')}:{f.get('function', '?')}:{f.get('line', '?')}"
 
 
+def _parse_since(spec: str):
+    """Parse a ``--since`` value (``7d`` / ``24h`` etc.) into a
+    cutoff timestamp. Returns None on bad input."""
+    import time
+    if not spec:
+        return None
+    spec = spec.strip().lower()
+    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+    if spec[-1] in multipliers:
+        try:
+            n = float(spec[:-1])
+        except ValueError:
+            return None
+        return time.time() - n * multipliers[spec[-1]]
+    try:
+        return time.time() - float(spec)
+    except ValueError:
+        return None
+
+
 def _print_annotations(
     project, status_filter=None, source_filter=None, file_filter=None,
-    cwe_filter=None, rule_id_filter=None, grep=None,
+    cwe_filter=None, rule_id_filter=None, grep=None, since=None,
 ):
     """List annotations across all runs in the project.
 
@@ -913,30 +939,55 @@ def _print_annotations(
     # Sort by mtime (oldest first) so later writes overwrite earlier
     # in the dedup map.
     roots.sort(key=lambda r: r[0])
-    by_pair = {}  # (file, function) → Annotation
+    # Track origin root per (file, function) so the --since filter
+    # can stat the right annotation .md file post-dedup.
+    by_pair = {}  # (file, function) → (Annotation, root)
     for _mtime, root in roots:
         for ann in iter_all_annotations(root):
-            by_pair[(ann.file, ann.function)] = ann
+            by_pair[(ann.file, ann.function)] = (ann, root)
 
-    anns = list(by_pair.values())
+    pairs = list(by_pair.values())
     if status_filter:
-        anns = [a for a in anns if a.metadata.get("status") == status_filter]
+        pairs = [(a, r) for (a, r) in pairs
+                 if a.metadata.get("status") == status_filter]
     if source_filter:
-        anns = [a for a in anns if a.metadata.get("source") == source_filter]
+        pairs = [(a, r) for (a, r) in pairs
+                 if a.metadata.get("source") == source_filter]
     if file_filter:
-        anns = [a for a in anns if a.file == file_filter]
+        pairs = [(a, r) for (a, r) in pairs if a.file == file_filter]
     if cwe_filter:
-        anns = [a for a in anns if a.metadata.get("cwe") == cwe_filter]
+        pairs = [(a, r) for (a, r) in pairs
+                 if a.metadata.get("cwe") == cwe_filter]
     if rule_id_filter:
-        anns = [a for a in anns
-                if rule_id_filter in (a.metadata.get("rule_id") or "")]
+        pairs = [(a, r) for (a, r) in pairs
+                 if rule_id_filter in (a.metadata.get("rule_id") or "")]
     if grep:
         needle = grep.lower()
-        anns = [
-            a for a in anns
-            if needle in a.body.lower()
-            or any(needle in str(v).lower() for v in a.metadata.values())
-        ]
+        def _matches(a):
+            if needle in a.body.lower():
+                return True
+            return any(
+                needle in str(v).lower() for v in a.metadata.values()
+            )
+        pairs = [(a, r) for (a, r) in pairs if _matches(a)]
+    if since:
+        cutoff = _parse_since(since)
+        if cutoff is None:
+            print(f"raptor: bad --since value {since!r}; expected "
+                  f"e.g. ``7d`` / ``24h`` / ``30m``")
+            return
+        from core.annotations import annotation_path
+        kept = []
+        for a, r in pairs:
+            try:
+                mtime = annotation_path(r, a.file).stat().st_mtime
+            except OSError:
+                continue
+            if mtime >= cutoff:
+                kept.append((a, r))
+        pairs = kept
+
+    anns = [a for a, _r in pairs]
     anns.sort(key=lambda a: (a.file, a.function))
     if not anns:
         print("No annotations match the filter.")
