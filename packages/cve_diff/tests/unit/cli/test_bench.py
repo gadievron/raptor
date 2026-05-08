@@ -246,6 +246,23 @@ from cve_diff.cli import bench as _bench_mod  # noqa: E402
 from cve_diff.cli.main import app  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _isolate_persist_summary_dir(tmp_path_factory, monkeypatch):
+    """Sandbox `_persist_summary`'s data/runs/ writes into a tmp dir.
+
+    The end-to-end CLI tests below invoke the real `bench` command, which
+    calls `_persist_summary` to copy summary.json into
+    `packages/cve_diff/data/runs/<date>_<stem>.json` — a tracked dir.
+    Without this fixture, every test run pollutes the working tree with a
+    new dated file. Redirecting `_PACKAGE_DATA_DIR` to a per-session tmp
+    keeps the writes sandboxed (the helper-only tests are unaffected — they
+    never reach `_persist_summary`).
+    """
+    sandbox = tmp_path_factory.mktemp("cve-diff-data")
+    (sandbox / "runs").mkdir()
+    monkeypatch.setattr(_bench_mod, "_PACKAGE_DATA_DIR", sandbox)
+
+
 def _write_sample(path: _Path, cve_ids: list[str]) -> None:
     """Drop a minimal sample JSON the bench reader knows how to parse."""
     path.write_text(_json.dumps({
