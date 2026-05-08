@@ -241,9 +241,32 @@ class AgentLoop:
                 result = event.result
                 # Find which tool this was from the most recent dispatch
                 call_name = tool_call_log[-1] if tool_call_log else ""
+                # Cap before json.loads. Pre-fix the parser ate
+                # whatever the tool returned — `gh_commit_detail`
+                # response from a hostile / malformed cgit mirror,
+                # an oversized cgit_fetch response (rare but a
+                # mis-configured mirror can return a multi-MB blob
+                # in place of a structured JSON answer), or a
+                # gitlab_commit response from a self-hosted GitLab
+                # that bundles full file contents — all flowed
+                # straight into json.loads without bounds. A 100MB
+                # tool_result hung the pipeline on the parse and
+                # then again on the dict comprehension over it.
+                # Real cve-diff tool responses are <50 KB; cap at
+                # 1 MB to leave headroom for unusual cgit responses.
+                _TOOL_RESULT_CAP = 1 * 1024 * 1024
+                content = result.content
+                if isinstance(content, str) and len(content) > _TOOL_RESULT_CAP:
+                    # Skip parse — over-cap responses are almost
+                    # certainly garbage, not legitimate JSON. Returns
+                    # silently from the event callback (this is
+                    # best-effort hint gathering for verification
+                    # chain). `_on_event` is a callback, not a loop
+                    # body — no `continue` available.
+                    return
                 if call_name == "gh_commit_detail" and not result.is_error:
                     try:
-                        parsed = json.loads(result.content)
+                        parsed = json.loads(content)
                         if isinstance(parsed, dict) and "error" not in parsed:
                             slug = (parsed.get("slug") or "").strip().lower()
                             sha = (parsed.get("sha") or "").strip().lower()
@@ -253,7 +276,7 @@ class AgentLoop:
                         pass
                 elif call_name in ("cgit_fetch", "gitlab_commit") and not result.is_error:
                     try:
-                        parsed = json.loads(result.content)
+                        parsed = json.loads(content)
                         if isinstance(parsed, dict) and "error" not in parsed and last_dispatched_input[0] is not None:
                             a = last_dispatched_input[0]
                             slug = (a.get("slug") or "").strip().lower()
