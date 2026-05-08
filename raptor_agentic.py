@@ -251,6 +251,11 @@ Examples:
     parser.add_argument("--max-findings", type=int, default=10, help="Maximum findings to process (default: 10)")
     parser.add_argument("--no-exploits", action="store_true", help="Skip exploit generation")
     parser.add_argument("--no-patches", action="store_true", help="Skip patch generation")
+    parser.add_argument(
+        "--no-annotations",
+        action="store_true",
+        help="Skip per-finding annotation emission (default: emit)",
+    )
     parser.add_argument("--out", help="Output directory")
     parser.add_argument("--mode", choices=["fast", "thorough"], default="thorough",
                        help="fast: quick scan, thorough: detailed analysis")
@@ -998,6 +1003,11 @@ Examples:
         # Attach checklist for metadata lookup
         if (out_dir / "checklist.json").exists():
             analysis_cmd.extend(["--checklist", str(out_dir / "checklist.json")])
+
+        # Forward --no-annotations opt-out so operators who don't
+        # want annotation side effects (CI / scratch runs) can suppress.
+        if args.no_annotations:
+            analysis_cmd.append("--no-annotations")
 
         # Phase 3 preps data; Phase 4 handles LLM work (unless --sequential)
         if (llm_env.claude_code or llm_env.external_llm) and not args.sequential:

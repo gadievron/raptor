@@ -1070,8 +1070,16 @@ class AutonomousSecurityAgentV2:
             return None
 
     def process_findings(self, sarif_paths: List[str] = None, findings_path: str = None,
-                         max_findings: int = 10, checklist: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Process findings with full LLM-powered autonomous workflow."""
+                         max_findings: int = 10, checklist: Dict[str, Any] = None,
+                         emit_annotations: bool = True) -> Dict[str, Any]:
+        """Process findings with full LLM-powered autonomous workflow.
+
+        ``emit_annotations``: when False, skip the per-finding
+        annotation emit and the end-of-run coverage record. Useful
+        for operators who want analysis without the side effect of
+        modifying the annotation tree (e.g. CI runs that compare
+        scanner output rather than persist review state).
+        """
         start_time = time.time()
 
         # Parse findings
@@ -1169,8 +1177,9 @@ class AutonomousSecurityAgentV2:
                 # 1. Autonomous analysis (LLM-powered, or prep-only)
                 if self.analyze_vulnerability(vuln):
                     analyzed += 1
-                    if self._emit_finding_annotation(vuln, checklist):
-                        annotations_emitted += 1
+                    if emit_annotations:
+                        if self._emit_finding_annotation(vuln, checklist):
+                            annotations_emitted += 1
 
                     # Track dataflow validation
                     if vuln.has_dataflow and vuln.analysis and 'dataflow_validation' in vuln.analysis:
@@ -1238,16 +1247,18 @@ class AutonomousSecurityAgentV2:
         # Emit a coverage record from the annotations tree, so
         # ``raptor-coverage-summary`` picks them up as reviewed
         # functions. Best-effort — coverage record failures should
-        # not break the analysis report.
-        try:
-            from core.coverage.record import (
-                build_from_annotations, write_record,
-            )
-            ann_record = build_from_annotations(self.out_dir / "annotations")
-            if ann_record:
-                write_record(self.out_dir, ann_record, tool_name="annotations")
-        except Exception:
-            logger.debug("annotation coverage record failed", exc_info=True)
+        # not break the analysis report. Skipped when annotation
+        # emission was suppressed.
+        if emit_annotations:
+            try:
+                from core.coverage.record import (
+                    build_from_annotations, write_record,
+                )
+                ann_record = build_from_annotations(self.out_dir / "annotations")
+                if ann_record:
+                    write_record(self.out_dir, ann_record, tool_name="annotations")
+            except Exception:
+                logger.debug("annotation coverage record failed", exc_info=True)
 
         if is_prep_only:
             logger.debug(f"Prep complete: {len(unique_findings)} findings")
@@ -1322,6 +1333,12 @@ def main() -> None:
     ap.add_argument("--out", help="Output directory")
     ap.add_argument("--max-findings", type=int, default=10, help="Max findings to process")
     ap.add_argument("--checklist", help="Inventory checklist.json for function metadata lookup")
+    ap.add_argument(
+        "--no-annotations",
+        action="store_true",
+        help="Skip per-finding annotation emission and the "
+             "annotation-derived coverage record",
+    )
     ap.add_argument("--prep-only", action="store_true",
                     help="Skip LLM analysis; produce structured findings for external orchestration")
     ap.add_argument("--max-parallel", type=int, default=3, help="Max parallel dispatch threads")
@@ -1382,12 +1399,15 @@ def main() -> None:
             logger.warning(f"Could not load checklist: {args.checklist}")
 
     # Process findings - route based on input type
+    emit_annotations = not args.no_annotations
     if args.findings:
         report = agent.process_findings(findings_path=args.findings, max_findings=args.max_findings,
-                                        checklist=checklist)
+                                        checklist=checklist,
+                                        emit_annotations=emit_annotations)
     else:
         report = agent.process_findings(sarif_paths=args.sarif, max_findings=args.max_findings,
-                                        checklist=checklist)
+                                        checklist=checklist,
+                                        emit_annotations=emit_annotations)
 
     # Orchestrated path: role flags → prep then parallel dispatch
     if _has_role_flags and report.get("mode") == "prep_only":
