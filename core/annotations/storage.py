@@ -38,8 +38,15 @@ import os
 import re
 import tempfile
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Optional
+
+try:
+    import fcntl  # POSIX
+    _HAS_FCNTL = True
+except ImportError:  # pragma: no cover — only triggers on Windows
+    _HAS_FCNTL = False
 
 from .models import Annotation
 
@@ -178,6 +185,42 @@ def annotation_path(base_dir: Path, source_file: str) -> Path:
     create the file; callers do."""
     _validate_source_path(source_file)
     return base_dir / (source_file + ".md")
+
+
+@contextmanager
+def _file_lock(path: Path):
+    """Cross-process exclusive lock on the annotation file's read-
+    modify-write window.
+
+    Two operators (or LLM + operator) writing to the same source
+    file's annotations concurrently could otherwise lose data via
+    last-writer-wins on the read-modify-write cycle: both read state
+    A, both write back A+B1 / A+B2 → one of B1/B2 is dropped.
+
+    The lock target is a sibling ``.lock`` file in the parent dir.
+    Using a sibling rather than the .md itself avoids racing on the
+    .md's existence (atomic writes replace it) and avoids leaving
+    a lock fd on a file we just unlinked.
+
+    On non-POSIX (Windows): no-op. The substrate's typical deployment
+    is Linux/macOS dev or CI; Windows operators get last-writer-wins
+    semantics — same as before this commit, no regression.
+    """
+    if not _HAS_FCNTL:
+        yield
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    # Open with O_CREAT — creates if absent, doesn't truncate.
+    fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def _parse_meta(comment_body: str) -> Dict[str, str]:
@@ -327,38 +370,42 @@ def write_annotation(
     _validate_function_name(ann.function)
     _validate_metadata(ann.metadata)
 
-    if overwrite == "respect-manual":
-        prior = read_annotation(base_dir, ann.file, ann.function)
-        if prior is not None and prior.metadata.get("source") == "human":
-            return None
-
     path = annotation_path(base_dir, ann.file)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    existing = read_file_annotations(base_dir, ann.file)
-    by_name = {a.function: a for a in existing}
-    by_name[ann.function] = ann
-    rendered = _render_file(ann.file, by_name.values())
+    # Cross-process lock around the read-modify-write cycle. Without
+    # it, two concurrent writers could each load state A, then write
+    # A+B1 and A+B2 — one B is dropped. The lock serialises them.
+    with _file_lock(path):
+        if overwrite == "respect-manual":
+            prior = read_annotation(base_dir, ann.file, ann.function)
+            if prior is not None and prior.metadata.get("source") == "human":
+                return None
 
-    # Atomic write — tempfile in same directory so rename is on
-    # the same filesystem (cross-fs rename isn't atomic).
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8",
-        dir=path.parent, prefix=".annotation-", suffix=".tmp",
-        delete=False,
-    )
-    try:
-        tmp.write(rendered)
-        tmp.flush()
-        os.fsync(tmp.fileno())
-        tmp.close()
-        os.replace(tmp.name, path)
-    except Exception:
+        existing = read_file_annotations(base_dir, ann.file)
+        by_name = {a.function: a for a in existing}
+        by_name[ann.function] = ann
+        rendered = _render_file(ann.file, by_name.values())
+
+        # Atomic write — tempfile in same directory so rename is on
+        # the same filesystem (cross-fs rename isn't atomic).
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8",
+            dir=path.parent, prefix=".annotation-", suffix=".tmp",
+            delete=False,
+        )
         try:
-            os.unlink(tmp.name)
-        except OSError:
-            pass
-        raise
+            tmp.write(rendered)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            tmp.close()
+            os.replace(tmp.name, path)
+        except Exception:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+            raise
     return path
 
 
@@ -371,35 +418,36 @@ def remove_annotation(
     Removes the file entirely when the last annotation is deleted —
     keeps the annotation tree from accumulating empty .md files.
     """
-    existing = read_file_annotations(base_dir, source_file)
-    if not any(a.function == function for a in existing):
-        return False
-    remaining = [a for a in existing if a.function != function]
     path = annotation_path(base_dir, source_file)
-    if not remaining:
+    with _file_lock(path):
+        existing = read_file_annotations(base_dir, source_file)
+        if not any(a.function == function for a in existing):
+            return False
+        remaining = [a for a in existing if a.function != function]
+        if not remaining:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            return True
+        rendered = _render_file(source_file, remaining)
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8",
+            dir=path.parent, prefix=".annotation-", suffix=".tmp",
+            delete=False,
+        )
         try:
-            path.unlink()
-        except OSError:
-            pass
-        return True
-    rendered = _render_file(source_file, remaining)
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8",
-        dir=path.parent, prefix=".annotation-", suffix=".tmp",
-        delete=False,
-    )
-    try:
-        tmp.write(rendered)
-        tmp.flush()
-        os.fsync(tmp.fileno())
-        tmp.close()
-        os.replace(tmp.name, path)
-    except Exception:
-        try:
-            os.unlink(tmp.name)
-        except OSError:
-            pass
-        raise
+            tmp.write(rendered)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            tmp.close()
+            os.replace(tmp.name, path)
+        except Exception:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+            raise
     return True
 
 
