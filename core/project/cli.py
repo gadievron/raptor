@@ -110,6 +110,19 @@ def main():
         "--file",
         help="Filter by source file path",
     )
+    p_anns.add_argument(
+        "--cwe",
+        help="Filter by metadata.cwe (exact match)",
+    )
+    p_anns.add_argument(
+        "--rule-id",
+        dest="rule_id",
+        help="Filter by metadata.rule_id (substring match)",
+    )
+    p_anns.add_argument(
+        "--grep",
+        help="Case-insensitive substring search across body + metadata",
+    )
 
     # delete
     p_delete = sub.add_parser("delete", help="Delete a project",
@@ -299,6 +312,9 @@ def main():
                 status_filter=args.status,
                 source_filter=args.source,
                 file_filter=args.file,
+                cwe_filter=args.cwe,
+                rule_id_filter=args.rule_id,
+                grep=args.grep,
             )
 
         elif args.subcommand == "use":
@@ -834,6 +850,7 @@ def _finding_label(f):
 
 def _print_annotations(
     project, status_filter=None, source_filter=None, file_filter=None,
+    cwe_filter=None, rule_id_filter=None, grep=None,
 ):
     """List annotations across all runs in the project.
 
@@ -875,6 +892,18 @@ def _print_annotations(
         anns = [a for a in anns if a.metadata.get("source") == source_filter]
     if file_filter:
         anns = [a for a in anns if a.file == file_filter]
+    if cwe_filter:
+        anns = [a for a in anns if a.metadata.get("cwe") == cwe_filter]
+    if rule_id_filter:
+        anns = [a for a in anns
+                if rule_id_filter in (a.metadata.get("rule_id") or "")]
+    if grep:
+        needle = grep.lower()
+        anns = [
+            a for a in anns
+            if needle in a.body.lower()
+            or any(needle in str(v).lower() for v in a.metadata.values())
+        ]
     anns.sort(key=lambda a: (a.file, a.function))
     if not anns:
         print("No annotations match the filter.")

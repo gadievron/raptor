@@ -263,6 +263,27 @@ def cmd_add(opts: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _parse_since(spec: str) -> Optional[float]:
+    """Parse ``--since`` value (``7d`` / ``24h`` / ``30m``) into a
+    cutoff timestamp (mtime threshold). Returns None on bad input."""
+    import time
+    if not spec:
+        return None
+    spec = spec.strip().lower()
+    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+    if spec[-1] in multipliers:
+        try:
+            n = float(spec[:-1])
+        except ValueError:
+            return None
+        return time.time() - n * multipliers[spec[-1]]
+    try:
+        # Bare number → seconds
+        return time.time() - float(spec)
+    except ValueError:
+        return None
+
+
 def cmd_ls(opts: argparse.Namespace) -> int:
     base = _resolve_base(opts.base)
     if opts.file:
@@ -274,6 +295,47 @@ def cmd_ls(opts: argparse.Namespace) -> int:
         anns = [a for a in anns if a.metadata.get("status") == opts.status]
     if opts.source:
         anns = [a for a in anns if a.metadata.get("source") == opts.source]
+    if opts.cwe:
+        anns = [a for a in anns if a.metadata.get("cwe") == opts.cwe]
+    if opts.rule_id:
+        # Substring match — operator can pass "py/" to scope to a
+        # language family.
+        anns = [a for a in anns
+                if opts.rule_id in (a.metadata.get("rule_id") or "")]
+    if opts.grep:
+        # Case-insensitive substring search across body + metadata
+        # values. Useful for "find every annotation that mentions
+        # subprocess" style queries.
+        needle = opts.grep.lower()
+        def _match(a):
+            if needle in a.body.lower():
+                return True
+            return any(
+                needle in str(v).lower() for v in a.metadata.values()
+            )
+        anns = [a for a in anns if _match(a)]
+    if opts.since:
+        cutoff = _parse_since(opts.since)
+        if cutoff is None:
+            sys.stderr.write(
+                f"raptor-annotate: bad --since value {opts.since!r}; "
+                f"expected e.g. ``7d`` / ``24h`` / ``30m``\n"
+            )
+            return 2
+        # Filter by the containing annotation file's mtime — annotations
+        # inside one file share a timestamp. Coarse-grained but
+        # operationally useful (operators usually want "what changed
+        # this week" not "which exact records were touched").
+        kept = []
+        for a in anns:
+            ann_file = annotation_path(base, a.file)
+            try:
+                mtime = ann_file.stat().st_mtime
+            except OSError:
+                continue
+            if mtime >= cutoff:
+                kept.append(a)
+        anns = kept
     # Sort for stable output.
     anns.sort(key=lambda a: (a.file, a.function))
     if not anns:
@@ -427,6 +489,21 @@ def _build_parser() -> argparse.ArgumentParser:
     pl.add_argument("--file")
     pl.add_argument("--status")
     pl.add_argument("--source")
+    pl.add_argument("--cwe", help="filter by metadata.cwe (exact)")
+    pl.add_argument(
+        "--rule-id",
+        dest="rule_id",
+        help="filter by metadata.rule_id (substring match)",
+    )
+    pl.add_argument(
+        "--grep",
+        help="case-insensitive substring search across body + metadata",
+    )
+    pl.add_argument(
+        "--since",
+        help="annotation file mtime within window: ``7d`` / "
+             "``24h`` / ``30m`` / ``120s``",
+    )
 
     # show
     ps = sub.add_parser("show", help="show one annotation")

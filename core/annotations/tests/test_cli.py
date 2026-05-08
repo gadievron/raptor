@@ -315,6 +315,77 @@ class TestLs:
         assert "src/b.py" in r.stdout
         assert "src/a.py" not in r.stdout
 
+    def test_filter_by_cwe(self, tmp_path):
+        _run("add", "src/a.py", "f1", "--base", str(tmp_path),
+             "--status", "finding", "--cwe", "CWE-78", "-m", "x")
+        _run("add", "src/b.py", "f2", "--base", str(tmp_path),
+             "--status", "finding", "--cwe", "CWE-89", "-m", "x")
+        r = _run("ls", "--base", str(tmp_path), "--cwe", "CWE-78")
+        assert "src/a.py" in r.stdout
+        assert "src/b.py" not in r.stdout
+
+    def test_filter_by_rule_id_substring(self, tmp_path):
+        _run("add", "src/a.py", "f1", "--base", str(tmp_path),
+             "--meta", "rule_id=py/sql-injection", "-m", "x")
+        _run("add", "src/b.py", "f2", "--base", str(tmp_path),
+             "--meta", "rule_id=cpp/buffer-overflow", "-m", "x")
+        # Substring "py/" scopes to Python rules.
+        r = _run("ls", "--base", str(tmp_path), "--rule-id", "py/")
+        assert "src/a.py" in r.stdout
+        assert "src/b.py" not in r.stdout
+
+    def test_grep_body(self, tmp_path):
+        _run("add", "src/a.py", "f1", "--base", str(tmp_path),
+             "-m", "uses subprocess.call shell=True")
+        _run("add", "src/b.py", "f2", "--base", str(tmp_path),
+             "-m", "constant-time compare")
+        r = _run("ls", "--base", str(tmp_path), "--grep", "subprocess")
+        assert "src/a.py" in r.stdout
+        assert "src/b.py" not in r.stdout
+
+    def test_grep_case_insensitive(self, tmp_path):
+        _run("add", "src/a.py", "f1", "--base", str(tmp_path),
+             "-m", "Subprocess Call")
+        r = _run("ls", "--base", str(tmp_path), "--grep", "SUBPROCESS")
+        assert "src/a.py" in r.stdout
+
+    def test_grep_metadata_value(self, tmp_path):
+        _run("add", "src/a.py", "f1", "--base", str(tmp_path),
+             "--meta", "ticket=BUG-42", "-m", "x")
+        _run("add", "src/b.py", "f2", "--base", str(tmp_path),
+             "-m", "x")
+        r = _run("ls", "--base", str(tmp_path), "--grep", "BUG-42")
+        assert "src/a.py" in r.stdout
+        assert "src/b.py" not in r.stdout
+
+    def test_since_filter_all_recent(self, tmp_path):
+        _run("add", "src/a.py", "f1", "--base", str(tmp_path), "-m", "x")
+        # Just-written annotation falls inside any reasonable window.
+        r = _run("ls", "--base", str(tmp_path), "--since", "1h")
+        assert "src/a.py" in r.stdout
+
+    def test_since_filter_excludes_old(self, tmp_path):
+        import os, time
+        _run("add", "src/a.py", "f1", "--base", str(tmp_path), "-m", "x")
+        # Backdate the annotation file by 30 days.
+        ann_file = tmp_path / "src" / "a.py.md"
+        old_ts = time.time() - (30 * 86400)
+        os.utime(ann_file, (old_ts, old_ts))
+        r = _run("ls", "--base", str(tmp_path), "--since", "7d")
+        assert "src/a.py" not in r.stdout
+
+    def test_since_bad_value_errors(self, tmp_path):
+        _run("add", "src/a.py", "f1", "--base", str(tmp_path), "-m", "x")
+        r = _run("ls", "--base", str(tmp_path), "--since", "garbage")
+        assert r.returncode == 2
+        assert "since" in r.stderr.lower()
+
+    def test_since_supported_units(self, tmp_path):
+        _run("add", "src/a.py", "f1", "--base", str(tmp_path), "-m", "x")
+        for unit in ("60s", "5m", "1h", "1d", "1w"):
+            r = _run("ls", "--base", str(tmp_path), "--since", unit)
+            assert r.returncode == 0, f"{unit}: {r.stderr}"
+
     def test_filter_by_file(self, tmp_path):
         _run("add", "src/a.py", "f1", "--base", str(tmp_path),
              "--status", "clean", "-m", "ok")

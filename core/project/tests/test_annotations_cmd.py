@@ -129,6 +129,61 @@ class TestPrintAnnotations(unittest.TestCase):
             output = buf.getvalue()
             assert "No annotations match" in output
 
+    def test_filter_by_cwe(self):
+        with TemporaryDirectory() as d:
+            project = _build_project(Path(d))
+            with patch("sys.stdout", new_callable=StringIO) as buf:
+                _print_annotations(project, cwe_filter="CWE-89")
+            output = buf.getvalue()
+            # Only run-a's login had CWE-89, but it's overridden by
+            # the project-level entry without a CWE — so no match.
+            assert "No annotations match" in output
+
+    def test_filter_by_rule_id_substring(self):
+        with TemporaryDirectory() as d:
+            out = Path(d) / "p"
+            out.mkdir()
+            run = out / "run-x"
+            run.mkdir()
+            write_annotation(run / "annotations", Annotation(
+                file="src/foo.py", function="a",
+                metadata={"source": "llm", "rule_id": "py/sql-injection"},
+            ))
+            write_annotation(run / "annotations", Annotation(
+                file="src/foo.py", function="b",
+                metadata={"source": "llm", "rule_id": "cpp/buffer-overflow"},
+            ))
+            project = _FakeProject(out, [run])
+            with patch("sys.stdout", new_callable=StringIO) as buf:
+                _print_annotations(project, rule_id_filter="py/")
+            output = buf.getvalue()
+            assert "1 annotation(s)" in output
+            assert "::a" in output or " a " in output  # function name
+            assert "::b" not in output
+
+    def test_grep(self):
+        with TemporaryDirectory() as d:
+            out = Path(d) / "p"
+            out.mkdir()
+            run = out / "run-x"
+            run.mkdir()
+            write_annotation(run / "annotations", Annotation(
+                file="src/foo.py", function="a",
+                body="uses subprocess.call shell=True",
+                metadata={"source": "llm"},
+            ))
+            write_annotation(run / "annotations", Annotation(
+                file="src/foo.py", function="b",
+                body="constant-time compare",
+                metadata={"source": "llm"},
+            ))
+            project = _FakeProject(out, [run])
+            with patch("sys.stdout", new_callable=StringIO) as buf:
+                _print_annotations(project, grep="subprocess")
+            output = buf.getvalue()
+            assert "1 annotation(s)" in output
+            assert " a " in output
+
     def test_no_runs_no_project_annotations(self):
         with TemporaryDirectory() as d:
             project_root = Path(d) / "empty"

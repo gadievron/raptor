@@ -56,6 +56,10 @@ LLM passes (`/agentic`, `/understand` post-processor) that pass
 | `--file PATH` | Show only annotations for one source file |
 | `--status VALUE` | Filter by `metadata.status` |
 | `--source VALUE` | Filter by `metadata.source` |
+| `--cwe CWE-XX` | Filter by `metadata.cwe` (exact match) |
+| `--rule-id PATTERN` | Filter by `metadata.rule_id` substring (e.g. `py/`) |
+| `--grep TEXT` | Case-insensitive substring search across body + metadata |
+| `--since 7d` | Annotation file mtime within window (`Nd`/`Nh`/`Nm`/`Ns`/`Nw`) |
 
 ## stale options
 
