@@ -203,3 +203,190 @@ def test_path_to_module():
     assert _path_to_module("packages/foo/bar.py") == "packages.foo.bar"
     assert _path_to_module("Makefile") is None
     assert _path_to_module("") is None
+
+
+# ---------------------------------------------------------------------------
+# Caller-context enrichment
+# ---------------------------------------------------------------------------
+
+
+def test_enrich_caller_context_attaches_counts(tmp_path):
+    """A function with two callers gains caller_count_direct=2,
+    caller_count_transitive>=2, and direct_caller_names lists
+    them."""
+    from core.orchestration.reachability_enrichment import (
+        enrich_with_caller_context,
+    )
+    target = _project(tmp_path, {
+        "src/vuln.py": (
+            "def affected():\n"             # line 1
+            "    pass\n"
+        ),
+        "src/main.py": (
+            "from src.vuln import affected\n"
+            "def use_a():\n"                 # caller 1
+            "    affected()\n"
+            "def use_b():\n"                 # caller 2
+            "    affected()\n"
+        ),
+    })
+    checklist = _checklist({
+        "src/vuln.py": [{
+            "name": "affected", "kind": "function",
+            "line_start": 1, "line_end": 2,
+        }],
+    })
+    enriched = enrich_with_caller_context(checklist, target)
+    assert enriched == 1
+    func = checklist["files"][0]["items"][0]
+    assert func["caller_count_direct"] == 2
+    assert func["caller_count_transitive"] >= 2
+    assert func["caller_count_uncertain"] == 0
+    assert len(func["direct_caller_names"]) == 2
+
+
+def test_enrich_caller_context_skips_low_priority(tmp_path):
+    """A function already marked priority=low (dead code) doesn't
+    need caller context — the LLM is going to deprioritise it
+    regardless. Skip to save the lookup."""
+    from core.orchestration.reachability_enrichment import (
+        enrich_with_caller_context,
+    )
+    target = _project(tmp_path, {
+        "src/vuln.py": "def dead(): pass\n",
+    })
+    checklist = _checklist({
+        "src/vuln.py": [{
+            "name": "dead", "kind": "function",
+            "line_start": 1, "line_end": 1,
+            "priority": "low",
+            "priority_reason": "reachability:not_called",
+        }],
+    })
+    enriched = enrich_with_caller_context(checklist, target)
+    assert enriched == 0
+    func = checklist["files"][0]["items"][0]
+    assert "caller_count_direct" not in func
+
+
+def test_enrich_caller_context_caps_caller_names(tmp_path):
+    """``direct_caller_names`` is capped at ``max_direct_caller_names``."""
+    from core.orchestration.reachability_enrichment import (
+        enrich_with_caller_context,
+    )
+    target = _project(tmp_path, {
+        "src/vuln.py": "def affected(): pass\n",
+        "src/main.py": (
+            "from src.vuln import affected\n"
+            "def c1(): affected()\n"
+            "def c2(): affected()\n"
+            "def c3(): affected()\n"
+            "def c4(): affected()\n"
+            "def c5(): affected()\n"
+            "def c6(): affected()\n"
+            "def c7(): affected()\n"
+        ),
+    })
+    checklist = _checklist({
+        "src/vuln.py": [{
+            "name": "affected", "kind": "function",
+            "line_start": 1, "line_end": 1,
+        }],
+    })
+    enriched = enrich_with_caller_context(
+        checklist, target, max_direct_caller_names=3,
+    )
+    assert enriched == 1
+    func = checklist["files"][0]["items"][0]
+    assert func["caller_count_direct"] == 7
+    assert len(func["direct_caller_names"]) == 3
+
+
+def test_enrich_caller_context_handles_no_callers(tmp_path):
+    """A function with no callers — counts are 0 but the function
+    is still enriched (consumer can read 0 to know "lonely")."""
+    from core.orchestration.reachability_enrichment import (
+        enrich_with_caller_context,
+    )
+    target = _project(tmp_path, {
+        "src/vuln.py": "def lonely(): pass\n",
+    })
+    checklist = _checklist({
+        "src/vuln.py": [{
+            "name": "lonely", "kind": "function",
+            "line_start": 1, "line_end": 1,
+        }],
+    })
+    enriched = enrich_with_caller_context(checklist, target)
+    assert enriched == 1
+    func = checklist["files"][0]["items"][0]
+    assert func["caller_count_direct"] == 0
+    assert func["caller_count_transitive"] == 0
+    assert func["direct_caller_names"] == []
+
+
+def test_enrich_caller_context_skips_non_function_items(tmp_path):
+    from core.orchestration.reachability_enrichment import (
+        enrich_with_caller_context,
+    )
+    target = _project(tmp_path, {
+        "src/v.py": "x = 1\n",
+    })
+    checklist = _checklist({
+        "src/v.py": [{
+            "name": "GLOBAL_VAR", "kind": "global",
+            "line_start": 1, "line_end": 1,
+        }],
+    })
+    enriched = enrich_with_caller_context(checklist, target)
+    assert enriched == 0
+    func = checklist["files"][0]["items"][0]
+    assert "caller_count_direct" not in func
+
+
+def test_enrich_caller_context_handles_missing_line_start(tmp_path):
+    """Defensive: a checklist item without line_start can't be
+    resolved to an InternalFunction — skip silently."""
+    from core.orchestration.reachability_enrichment import (
+        enrich_with_caller_context,
+    )
+    target = _project(tmp_path, {
+        "src/v.py": "def f(): pass\n",
+    })
+    checklist = _checklist({
+        "src/v.py": [{
+            "name": "f", "kind": "function",
+            # line_start missing
+        }],
+    })
+    enriched = enrich_with_caller_context(checklist, target)
+    assert enriched == 0
+
+
+def test_enrich_caller_context_uncertain_caller_counted_separately(
+    tmp_path,
+):
+    """A function called via getattr counts as an UNCERTAIN
+    caller — surfaced in caller_count_uncertain."""
+    from core.orchestration.reachability_enrichment import (
+        enrich_with_caller_context,
+    )
+    target = _project(tmp_path, {
+        "src/v.py": "def affected(q): pass\n",
+        "src/dyn.py": (
+            "from src import v\n"
+            "def dispatch():\n"
+            "    fn = getattr(v, 'affected')\n"
+            "    fn('x')\n"
+        ),
+    })
+    checklist = _checklist({
+        "src/v.py": [{
+            "name": "affected", "kind": "function",
+            "line_start": 1, "line_end": 1,
+        }],
+    })
+    enriched = enrich_with_caller_context(checklist, target)
+    assert enriched == 1
+    func = checklist["files"][0]["items"][0]
+    assert func["caller_count_uncertain"] >= 1

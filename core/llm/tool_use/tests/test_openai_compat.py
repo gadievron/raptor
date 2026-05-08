@@ -507,8 +507,16 @@ def test_permanent_4xx_fails_fast(monkeypatch) -> None:
 
     def _403(**_kwargs: Any) -> _FakeResponse:
         attempts["n"] += 1
-        err = APIStatusError.__new__(APIStatusError)
-        err.status_code = 403                                # type: ignore[attr-defined]
+        # Construct via the proper signature so the SDK's own
+        # retry-classifier sees `request` / `response` /
+        # `status_code` consistently with production. See
+        # cluster 726 / `_tool_unsupported_error` rationale.
+        import httpx
+        response = httpx.Response(
+            status_code=403,
+            request=httpx.Request("POST", "https://example.invalid/v1/chat/completions"),
+        )
+        err = APIStatusError("Forbidden", response=response, body={"error": "Forbidden"})
         raise err
 
     c.chat.completions.create = _403                         # type: ignore[method-assign]
@@ -528,12 +536,31 @@ def test_permanent_4xx_fails_fast(monkeypatch) -> None:
 
 
 def _tool_unsupported_error(message: str = "model 'foo' does not support tools"):
-    """Build a 400 APIStatusError whose body matches the heuristic."""
+    """Build a 400 APIStatusError whose body matches the heuristic.
+
+    Cluster 726: pre-fix this used `APIStatusError.__new__(...)`
+    to bypass the SDK constructor, then manually set
+    `status_code` / `body` / `message`. The mock skipped the
+    SDK's `__init__` which sets `request` and `response`
+    attributes too — code paths that read `err.request` /
+    `err.response` (the SDK's own retry-classification logic
+    in newer versions) hit AttributeError instead of seeing
+    the simulated 400. The mock contract drifted from the
+    real API and tests could pass while production code
+    silently skipped its branch on the same shape.
+    Construct via the proper `__init__` signature
+    `(message, *, response, body)` with a stub
+    `httpx.Response` so the SDK sees the same attribute
+    surface it does in real life.
+    """
     from openai import APIStatusError                         # type: ignore[import-not-found]
-    err = APIStatusError.__new__(APIStatusError)
-    err.status_code = 400                                     # type: ignore[attr-defined]
-    err.body = {"error": {"message": message}}                # type: ignore[attr-defined]
-    err.message = message                                     # type: ignore[attr-defined]
+    import httpx
+    response = httpx.Response(
+        status_code=400,
+        request=httpx.Request("POST", "https://example.invalid/v1/chat/completions"),
+    )
+    body = {"error": {"message": message}}
+    err = APIStatusError(message, response=response, body=body)
     return err
 
 

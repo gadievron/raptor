@@ -66,14 +66,29 @@ class WebScanner:
 
         if self.fuzzer:
             logger.info("Phase 2: Intelligent Fuzzing")
-            # Fuzz all discovered parameters
-            for param in crawl_results['discovered_parameters']:
-                findings = self.fuzzer.fuzz_parameter(
-                    self.base_url,
-                    param,
-                    vulnerability_types=['sqli', 'xss', 'command_injection']
-                )
-                fuzzing_findings.extend(findings)
+            # Fuzz each discovered URL × discovered parameter pair.
+            # Pre-fix the loop only fuzzed `self.base_url` against
+            # every parameter — every subpath / endpoint discovered
+            # by the crawler (`/api/v1/users`, `/admin/login`,
+            # `/search?q=`) was IGNORED. Vulnerabilities reachable
+            # only via specific endpoints (an SQLi on
+            # `/api/users?id=` but not on `/`) never got tested
+            # because the fuzzer always targeted the root.
+            #
+            # Iterate over `discovered_urls` (which includes the
+            # base URL itself, set by `crawl()` at start). For
+            # large crawls, the cross-product can be N×M; the
+            # fuzzer's own per-call rate limiting bounds the
+            # wall time.
+            target_urls = list(crawl_results.get('discovered_urls') or [self.base_url])
+            for target_url in target_urls:
+                for param in crawl_results['discovered_parameters']:
+                    findings = self.fuzzer.fuzz_parameter(
+                        target_url,
+                        param,
+                        vulnerability_types=['sqli', 'xss', 'command_injection']
+                    )
+                    fuzzing_findings.extend(findings)
         else:
             logger.warning("Phase 2: Skipping fuzzing (no LLM available)")
 

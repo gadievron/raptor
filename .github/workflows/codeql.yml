@@ -254,3 +254,33 @@ jobs:
         uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{matrix.language}}"
+
+      # When the per-language gate skipped this matrix entry (no
+      # relevant changes), upload an empty SARIF stub for the same
+      # `category` so the CodeQL Advanced Security comparison
+      # engine doesn't flag "configuration not found" against the
+      # base branch's CodeQL results. Pre-fix the skipped languages
+      # produced no SARIF at all; the PR-side comparison saw `main`
+      # had alerts metadata for c-cpp / actions / python but only
+      # one matched on the PR side, surfacing as:
+      #
+      #   "Code scanning cannot determine the alerts introduced by
+      #    this pull request, because N configurations present on
+      #    refs/heads/main were not found"
+      #
+      # An empty SARIF (zero results) for the gated-out language
+      # tells the engine "this language was checked, no new alerts"
+      # — comparison runs to completion with no warning.
+      # Cost: ~10s per skipped language for the upload step;
+      # cheap relative to a real analyse pass (~5-30 min).
+      - name: Write empty SARIF for skipped language
+        if: steps.gate.outputs.run != 'true'
+        run: |
+          mkdir -p /tmp/empty-sarif
+          printf '%s\n' '{"$schema":"https://json.schemastore.org/sarif-2.1.0.json","version":"2.1.0","runs":[{"tool":{"driver":{"name":"CodeQL","rules":[]}},"results":[]}]}' > /tmp/empty-sarif/empty.sarif
+      - name: Upload empty SARIF for skipped language
+        if: steps.gate.outputs.run != 'true'
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: /tmp/empty-sarif/empty.sarif
+          category: "/language:${{matrix.language}}"

@@ -70,6 +70,39 @@ output_dir = os.environ.get("OUTPUT_DIR")
 if not output_dir:
     _die("OUTPUT_DIR env var must be set to a writable dir for the sandboxed child")
 
+# Validate the OUTPUT_DIR shape before handing it to Landlock.
+# Pre-fix any string went straight to `output=output_dir` —
+# a value containing newlines / NULs / shell metas would either
+# blow up Landlock with an opaque kernel error or, worse, silently
+# pass through (Landlock accepts any string but the bind-mount
+# fallback path didn't). Concrete failures the validation catches:
+#
+# * `OUTPUT_DIR=` (empty value, somehow set but empty) — the
+#   `if not output_dir` above catches this; belt-and-braces here.
+# * `OUTPUT_DIR=/nonexistent/parent/leaf` — Landlock errors with
+#   "writable path could not be opened"; caller sees a sandbox
+#   error instead of "your OUTPUT_DIR doesn't exist".
+# * `OUTPUT_DIR=/tmp/foo\n/etc/passwd` (newline injection from
+#   a shell var that captured user input) — Landlock open on
+#   the literal-with-newline path likely errors, but better to
+#   reject up-front with a clear message.
+# * Non-absolute path — relative to where? The mount-ns child
+#   pivots root, so `out/foo` opens under the new rootfs (which
+#   doesn't have `out/`). Reject relative paths with a hint.
+if "\x00" in output_dir or "\n" in output_dir or "\r" in output_dir:
+    _die("OUTPUT_DIR contains control bytes (NUL / newline / CR); refusing")
+if not os.path.isabs(output_dir):
+    _die(f"OUTPUT_DIR must be an absolute path (got {output_dir!r})")
+# Resolve & ensure parent exists. The dir itself may not exist
+# yet — Landlock will create it if absent; that's fine.
+output_dir_resolved = os.path.realpath(output_dir)
+if not os.path.isdir(os.path.dirname(output_dir_resolved)):
+    _die(
+        f"OUTPUT_DIR parent does not exist: "
+        f"{os.path.dirname(output_dir_resolved)!r}"
+    )
+output_dir = output_dir_resolved
+
 # basicConfig sets the root logger at WARNING so unrelated modules stay
 # quiet, then we raise ONLY core.sandbox to INFO so its enforcement
 # diagnostics (network blocked, write denied, etc.) reach stderr. Without

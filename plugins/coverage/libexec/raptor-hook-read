@@ -7,6 +7,25 @@
 # appends the file path to the run's reads manifest.
 #
 
+# `set -euo pipefail` — pre-fix the script ran without strict
+# mode, so:
+#   * `set -e`: a failing command in the middle (e.g. `realpath`
+#     returning nothing for a deleted file mid-resolve, mktemp
+#     failing under disk pressure) silently continued, often
+#     writing partial / corrupted manifest entries.
+#   * `set -u`: typos in variable names (e.g. `$RUNDIR` vs
+#     `$RUN_DIR`) silently expanded to empty, producing manifest
+#     paths like `/tmp/.reads-manifest` (the `/` came from a bare
+#     empty interpolation) — pollution at a path the operator
+#     didn't own.
+#   * `set -o pipefail`: failing pipe stages (e.g. `jq` rejecting
+#     malformed input but `$()` still succeeding because the tail
+#     command exited 0) hid parse errors, producing empty
+#     PROJECT_DIR / PROJECT_TARGET that bypassed the prefix check.
+# All three protections are appropriate for an async hook where
+# silent partial success is worse than a clean exit.
+set -euo pipefail
+
 umask 077
 
 # Find active project
@@ -17,8 +36,23 @@ LINK_TARGET=$(readlink "$ACTIVE_LINK")
 PROJECT_FILE="$HOME/.raptor/projects/$LINK_TARGET"
 [ ! -f "$PROJECT_FILE" ] && exit 0
 
-# Read project output dir and target
+# Cache the jq detection: pre-fix the script called
+# `command -v jq` THREE times (once per JSON parse site).
+# `command -v` shells out to a builtin lookup, but in
+# repeated calls the cumulative wall time was measurable
+# on hosts where /usr/bin is on a slow PATH (NFS-mounted
+# corp envs, container filesystems with lazy-resolved
+# paths). For an async hook fired hundreds of times per
+# Claude Code session, the per-call overhead summed to
+# noticeable latency. Cache once at the top of the script
+# and branch on the cached value.
+HAVE_JQ=0
 if command -v jq >/dev/null 2>&1; then
+    HAVE_JQ=1
+fi
+
+# Read project output dir and target
+if [ "$HAVE_JQ" = "1" ]; then
     PROJECT_DIR=$(jq -r '.output_dir // empty' "$PROJECT_FILE" 2>/dev/null)
     PROJECT_TARGET=$(jq -r '.target // empty' "$PROJECT_FILE" 2>/dev/null)
 else
@@ -32,26 +66,59 @@ fi
 RUN_DIR=""
 for d in "$PROJECT_DIR"/*/; do
     [ -f "${d}.raptor-run.json" ] || continue
-    if command -v jq >/dev/null 2>&1; then
+    if [ "$HAVE_JQ" = "1" ]; then
         STATUS=$(jq -r '.status // empty' "${d}.raptor-run.json" 2>/dev/null)
     else
-        STATUS=$(python3 -c "import json;print(json.load(open('${d}.raptor-run.json')).get('status',''))" 2>/dev/null)
+        # Pass the path via argv (sys.argv[1]), NOT via shell-
+        # interpolation into the Python source string. Pre-fix
+        # `python3 -c "...open('${d}.raptor-run.json')..."` baked
+        # the bash variable into the Python literal — a path with
+        # a single quote, newline, or backslash broke the Python
+        # syntax (SyntaxError → silent failure under
+        # `2>/dev/null`). Worse: an attacker-controlled `${d}`
+        # (paths under a target repo could conceivably be named
+        # to inject) could close the string and append arbitrary
+        # Python code to the `-c` source, executing under the
+        # hook's uid (the parent Claude Code process).
+        # `sys.argv[1]` passes the value as DATA, not code.
+        STATUS=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('status',''))" "${d}.raptor-run.json" 2>/dev/null)
     fi
     [ "$STATUS" = "running" ] && RUN_DIR="$d" && break
 done
 [ -z "$RUN_DIR" ] && exit 0
 
 # Extract file path from hook payload (JSON on stdin)
-if command -v jq >/dev/null 2>&1; then
+if [ "$HAVE_JQ" = "1" ]; then
     FILE_PATH=$(jq -r '.tool_input.file_path // empty' 2>/dev/null)
 else
     FILE_PATH=$(python3 -c "import json,sys;print(json.load(sys.stdin).get('tool_input',{}).get('file_path',''))" 2>/dev/null)
 fi
 [ -z "$FILE_PATH" ] && exit 0
 
-# Skip non-source files
+# Skip non-source files. Pre-fix the extension check fired on
+# `${FILE_PATH##*.}` which strips through the LAST `.` — but if
+# the path has no `.`, the result is the WHOLE path, which
+# obviously doesn't match any extension and we exit 0. That's
+# fine for files. But for DIRECTORIES (paths with no extension):
+# the same logic skips them, which is the right outcome for
+# coverage tracking (we record file reads, not dir lists).
+#
+# What's NOT fine: the `${FILE_PATH##*.}` extension check matches
+# directory paths whose final component HAS a `.` (e.g.
+# `/repo/some.dir/`). Those falsely pass the extension filter
+# (last component after final `.` matches `dir`, which doesn't
+# match the case arm — fine for `dir`, but `/repo/foo.py/`
+# matches `py` and the dir would get appended as if it were a
+# read of a file). Coverage records then carry directory paths
+# which downstream fail to look up as files.
+#
+# Add an explicit `[ -d ]` filter so directories are rejected
+# regardless of trailing-component shape.
+if [ -d "$FILE_PATH" ]; then
+    exit 0
+fi
 case "${FILE_PATH##*.}" in
-    py|js|ts|jsx|tsx|c|h|cpp|hpp|cc|cxx|java|go|rs|rb|php|cs|swift|kt|scala|sh) ;;
+    py|js|ts|jsx|tsx|c|h|cpp|hpp|cc|cxx|java|go|rs|rb|php|cs|swift|kt|scala|sh|bash|zsh|zig|nim|cr|sol|dart|m|mm|lua|pl|pm|jl|ex|exs|erl|hrl|fs|fsi|fsx|ml|mli|clj|cljs|cljc|groovy|gradle|r|hs|elm|vue|svelte|astro|tf|tofu|nix) ;;
     *) exit 0 ;;
 esac
 
@@ -64,11 +131,48 @@ esac
 FILE_PATH=$(realpath "$FILE_PATH" 2>/dev/null) || exit 0
 if [ -n "$PROJECT_TARGET" ]; then
     PROJECT_TARGET=$(realpath "$PROJECT_TARGET" 2>/dev/null) || exit 0
+    # Path-separator-anchored prefix match. Pre-fix the bare
+    # `"$PROJECT_TARGET"*` glob matched any path starting with the
+    # target STRING — so:
+    #   PROJECT_TARGET=/home/user/foo
+    #   FILE_PATH=/home/user/foobar/x.py
+    # matched the prefix "/home/user/foo" even though `foobar/` is
+    # a sibling, not a child. Reads under sibling-named projects
+    # were silently attributed to the active project's coverage,
+    # inflating its read counts and polluting the active manifest.
+    # Match either an exact-equal target dir OR target dir + `/`.
     case "$FILE_PATH" in
-        "$PROJECT_TARGET"*) ;;
+        "$PROJECT_TARGET") ;;
+        "$PROJECT_TARGET"/*) ;;
         *) exit 0 ;;
     esac
 fi
 
-# Append to manifest
-echo "$FILE_PATH" >> "${RUN_DIR}.reads-manifest"
+# Append to manifest under flock so concurrent hook fires don't
+# interleave their writes mid-line.
+#
+# The hook is registered as PostToolUse on Read, which Claude
+# Code can fire concurrently from multiple worker threads
+# (parallel agentic tool dispatch, batch_tool_use). Pre-fix bare
+# `>>` was atomic per-write up to PIPE_BUF (4096 bytes on Linux)
+# — a single short path is fine, but two appends from two threads
+# on the same file at the same instant could interleave their
+# data in the kernel pipe buffer for buffered IO chains, leaving
+# manifest entries like `/path/A/path/B\n\n` (the second's
+# leading content stuck onto the first's trailing newline).
+# Downstream coverage parsing then saw a nonexistent path
+# `/path/A/path/B` and lost both real reads.
+#
+# `flock -x` on the manifest path serialises the appends. The
+# fd-3 redirect keeps the lock fd open across the inner echo
+# while flock holds the lock; closing fd 3 on exit releases
+# the lock implicitly when the script ends. 5s timeout because
+# the hook runs async and shouldn't block tool dispatch — if
+# 5s isn't enough to acquire the lock there's something seriously
+# wrong with the hook concurrency.
+manifest="${RUN_DIR}.reads-manifest"
+exec 3>>"$manifest"
+if flock -w 5 -x 3; then
+    echo "$FILE_PATH" >&3
+fi
+exec 3>&-

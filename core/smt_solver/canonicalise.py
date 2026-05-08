@@ -76,10 +76,18 @@ _REWRITES: Tuple[Tuple[re.Pattern[str], str], ...] = (
     # semantically identical for it: both reach ``lhs == 0``).
     (re.compile(r'\bis\s+null\b',                             re.IGNORECASE), ' == NULL '),
     (re.compile(r'\bis\s+zero\b',                             re.IGNORECASE), ' == 0 '),
-    # Single-word synonyms.
-    (re.compile(r'\bequals\b',                                re.IGNORECASE), ' == '),
-    (re.compile(r'\bexceeds\b',                               re.IGNORECASE), ' > '),
-    (re.compile(r'\bbelow\b',                                 re.IGNORECASE), ' < '),
+    # Single-word synonyms. Tightened to require WHITESPACE
+    # (or string boundary) on both sides — `\b` alone matches
+    # at any word/non-word transition, including code-form
+    # identifiers like `a.equals(b)` (`.` and `(` are
+    # non-word, so `\bequals\b` matches the method name and
+    # rewrites to `==`, breaking the parse downstream). Real-
+    # world hit: any constraint expression that quotes
+    # source-form text with `.equals(`, `.exceeds(`,
+    # `.below(` — common in Java/Kotlin/C# audits.
+    (re.compile(r'(?:^|\s)equals(?:\s|$)',                    re.IGNORECASE), ' == '),
+    (re.compile(r'(?:^|\s)exceeds(?:\s|$)',                   re.IGNORECASE), ' > '),
+    (re.compile(r'(?:^|\s)below(?:\s|$)',                     re.IGNORECASE), ' < '),
     # ``up to N`` is read as inclusive (``<= N``) — the most common
     # convention in maths/CS, though some writers treat it as exclusive.
     # Document the choice rather than guess case-by-case.

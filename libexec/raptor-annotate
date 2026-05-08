@@ -1,0 +1,557 @@
+#!/usr/bin/env python3
+"""Operator CLI for per-function annotations.
+
+Usage:
+  raptor-annotate add <file> <function> [options]
+  raptor-annotate ls [options]
+  raptor-annotate show <file> <function> [options]
+  raptor-annotate edit <file> <function> [options]
+  raptor-annotate rm <file> <function> [options]
+  raptor-annotate stale [options]
+
+Common options:
+  --base PATH           Annotation base directory. Defaults to
+                        ``<active-project-output>/annotations`` when
+                        a project is active, otherwise required.
+
+Add options:
+  --status VALUE        clean / suspicious / finding / error
+  --cwe CWE-XX          CWE identifier
+  -m, --body TEXT       Annotation prose
+  --body-file PATH      Read body from file (use '-' for stdin)
+  --lines N-M           Source line range (1-indexed, inclusive)
+                        used to compute ``metadata.hash`` for
+                        staleness detection.
+  --target REPO_ROOT    Where to find the source file for hash
+                        computation. Defaults to current directory.
+  --meta KEY=VALUE      Extra metadata (repeatable)
+  --source VALUE        Defaults to ``human``. Set ``llm`` only for
+                        scripted, non-operator-driven adds.
+  --overwrite MODE      ``all`` (default) or ``respect-manual``.
+
+ls options:
+  --file PATH           Show only annotations for one source file
+  --status VALUE        Filter by metadata.status
+  --source VALUE        Filter by metadata.source
+
+stale options:
+  --target REPO_ROOT    Where to resolve source files for hash
+                        recomputation. Defaults to current directory.
+
+All ``add`` calls default to ``metadata.source=human``, so subsequent
+LLM passes that pass ``overwrite=respect-manual`` will not clobber
+operator notes.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+from typing import List, Optional
+
+# ─── trust-marker check (do not import; inline by design) ───
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.annotations import (  # noqa: E402
+    Annotation,
+    annotation_path,
+    compute_function_hash,
+    iter_all_annotations,
+    read_annotation,
+    read_file_annotations,
+    remove_annotation,
+    write_annotation,
+)
+
+
+# ---------------------------------------------------------------------------
+# Base-dir resolution
+# ---------------------------------------------------------------------------
+
+
+def _resolve_base(explicit: Optional[str]) -> Path:
+    """Pick the annotation base directory.
+
+    Priority:
+      1. ``--base`` arg if given.
+      2. Active project output dir + ``/annotations`` (created on demand).
+      3. Error — ask the operator to specify ``--base`` or set an
+         active project.
+    """
+    if explicit:
+        return Path(explicit).resolve()
+    try:
+        from core.project.project import ProjectManager
+        mgr = ProjectManager()
+        name = mgr.get_active()
+        if name:
+            project = mgr.load(name)
+            if project:
+                return Path(project.output_dir).resolve() / "annotations"
+    except Exception:
+        pass
+    sys.stderr.write(
+        "raptor-annotate: no annotation base — pass --base PATH or "
+        "activate a project with `/project use <name>`.\n"
+    )
+    sys.exit(2)
+
+
+def _find_checklist(base_dir: Path, explicit: Optional[str]) -> Optional[Path]:
+    """Locate a checklist.json for inventory lookups.
+
+    Priority:
+      1. ``--checklist PATH`` if explicit.
+      2. ``<base_dir>/../checklist.json`` (works when ``base_dir`` is
+         a run dir's ``annotations`` subdir — most common case).
+      3. Walk up two more levels in case ``base_dir`` is nested deeper.
+    """
+    if explicit:
+        p = Path(explicit)
+        return p if p.exists() else None
+    candidate = base_dir.parent / "checklist.json"
+    if candidate.exists():
+        return candidate
+    # Two more levels up — generous but bounded.
+    candidate = base_dir.parent.parent / "checklist.json"
+    if candidate.exists():
+        return candidate
+    candidate = base_dir.parent.parent.parent / "checklist.json"
+    if candidate.exists():
+        return candidate
+    return None
+
+
+def _lookup_bounds_by_name(
+    checklist_path: Path, file_path: str, function: str,
+) -> Optional[tuple[int, int]]:
+    """Look up ``(line_start, line_end)`` for ``function`` in
+    ``file_path`` from a checklist. Returns ``None`` if either is
+    missing or the function isn't in the inventory."""
+    try:
+        import json
+        data = json.loads(checklist_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    for file_entry in data.get("files", []):
+        if file_entry.get("path") != file_path:
+            continue
+        for item in file_entry.get("items", file_entry.get("functions", [])):
+            if item.get("name") == function:
+                ls = item.get("line_start")
+                le = item.get("line_end")
+                if ls and le:
+                    return int(ls), int(le)
+    return None
+
+
+def _read_body(opts: argparse.Namespace) -> str:
+    """Body resolution: explicit ``-m`` wins, else --body-file (or
+    stdin), else empty."""
+    if opts.body is not None:
+        return opts.body
+    if opts.body_file:
+        if opts.body_file == "-":
+            return sys.stdin.read()
+        return Path(opts.body_file).read_text(encoding="utf-8")
+    return ""
+
+
+def _parse_meta(items: List[str]) -> dict:
+    """Parse ``--meta KEY=VALUE`` pairs."""
+    out = {}
+    for item in items:
+        if "=" not in item:
+            sys.stderr.write(f"raptor-annotate: bad --meta {item!r}, "
+                             f"expected KEY=VALUE\n")
+            sys.exit(2)
+        k, v = item.split("=", 1)
+        out[k] = v
+    return out
+
+
+def _parse_lines(spec: str) -> tuple[int, int]:
+    """Parse ``N-M`` line range."""
+    if "-" not in spec:
+        raise ValueError(f"--lines expects N-M form, got {spec!r}")
+    a, b = spec.split("-", 1)
+    return int(a), int(b)
+
+
+# ---------------------------------------------------------------------------
+# add
+# ---------------------------------------------------------------------------
+
+
+def cmd_add(opts: argparse.Namespace) -> int:
+    base = _resolve_base(opts.base)
+    metadata = _parse_meta(opts.meta or [])
+    if opts.status:
+        metadata["status"] = opts.status
+    if opts.cwe:
+        metadata["cwe"] = opts.cwe
+    metadata.setdefault("source", opts.source or "human")
+    # Resolve line bounds: explicit --lines wins; otherwise try to
+    # discover via inventory checklist when one is available.
+    line_bounds: Optional[tuple[int, int]] = None
+    if opts.lines:
+        try:
+            line_bounds = _parse_lines(opts.lines)
+        except ValueError as e:
+            sys.stderr.write(f"raptor-annotate: {e}\n")
+            return 2
+    else:
+        ck_path = _find_checklist(base, opts.checklist)
+        if ck_path:
+            line_bounds = _lookup_bounds_by_name(
+                ck_path, opts.file, opts.function,
+            )
+
+    if line_bounds:
+        start, end = line_bounds
+        target = Path(opts.target or ".").resolve()
+        src = target / opts.file
+        h = compute_function_hash(src, start, end)
+        if h:
+            metadata["hash"] = h
+            metadata["start_line"] = str(start)
+            metadata["end_line"] = str(end)
+        elif opts.lines:
+            # Only warn when the operator explicitly asked. Silent
+            # auto-discovery skip.
+            sys.stderr.write(
+                f"raptor-annotate: warning — couldn't compute hash for "
+                f"{opts.file}:{start}-{end} (file unreadable or empty)\n"
+            )
+
+    body = _read_body(opts)
+    ann = Annotation(
+        file=opts.file, function=opts.function,
+        body=body, metadata=metadata,
+    )
+    try:
+        path = write_annotation(base, ann, overwrite=opts.overwrite or "all")
+    except ValueError as e:
+        sys.stderr.write(f"raptor-annotate: {e}\n")
+        return 2
+    if path is None:
+        sys.stderr.write(
+            f"raptor-annotate: skipped — existing annotation for "
+            f"{opts.file}:{opts.function} has source=human and "
+            f"--overwrite is respect-manual\n"
+        )
+        return 1
+    print(f"wrote {path}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# ls
+# ---------------------------------------------------------------------------
+
+
+def _parse_since(spec: str) -> Optional[float]:
+    """Parse ``--since`` value (``7d`` / ``24h`` / ``30m``) into a
+    cutoff timestamp (mtime threshold). Returns None on bad input."""
+    import time
+    if not spec:
+        return None
+    spec = spec.strip().lower()
+    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+    if spec[-1] in multipliers:
+        try:
+            n = float(spec[:-1])
+        except ValueError:
+            return None
+        return time.time() - n * multipliers[spec[-1]]
+    try:
+        # Bare number → seconds
+        return time.time() - float(spec)
+    except ValueError:
+        return None
+
+
+def cmd_ls(opts: argparse.Namespace) -> int:
+    base = _resolve_base(opts.base)
+    if opts.file:
+        anns = read_file_annotations(base, opts.file)
+    else:
+        anns = list(iter_all_annotations(base))
+    # Filter
+    if opts.status:
+        anns = [a for a in anns if a.metadata.get("status") == opts.status]
+    if opts.source:
+        anns = [a for a in anns if a.metadata.get("source") == opts.source]
+    if opts.cwe:
+        anns = [a for a in anns if a.metadata.get("cwe") == opts.cwe]
+    if opts.rule_id:
+        # Substring match — operator can pass "py/" to scope to a
+        # language family.
+        anns = [a for a in anns
+                if opts.rule_id in (a.metadata.get("rule_id") or "")]
+    if opts.grep:
+        # Case-insensitive substring search across body + metadata
+        # values. Useful for "find every annotation that mentions
+        # subprocess" style queries.
+        needle = opts.grep.lower()
+        def _match(a):
+            if needle in a.body.lower():
+                return True
+            return any(
+                needle in str(v).lower() for v in a.metadata.values()
+            )
+        anns = [a for a in anns if _match(a)]
+    if opts.since:
+        cutoff = _parse_since(opts.since)
+        if cutoff is None:
+            sys.stderr.write(
+                f"raptor-annotate: bad --since value {opts.since!r}; "
+                f"expected e.g. ``7d`` / ``24h`` / ``30m``\n"
+            )
+            return 2
+        # Filter by the containing annotation file's mtime — annotations
+        # inside one file share a timestamp. Coarse-grained but
+        # operationally useful (operators usually want "what changed
+        # this week" not "which exact records were touched").
+        kept = []
+        for a in anns:
+            ann_file = annotation_path(base, a.file)
+            try:
+                mtime = ann_file.stat().st_mtime
+            except OSError:
+                continue
+            if mtime >= cutoff:
+                kept.append(a)
+        anns = kept
+    # Sort for stable output.
+    anns.sort(key=lambda a: (a.file, a.function))
+    if not anns:
+        print("(no annotations)")
+        return 0
+    # Print: file:function   status   source   body-snippet
+    file_w = max(len(a.file) for a in anns)
+    fn_w = max(len(a.function) for a in anns)
+    for a in anns:
+        status = a.metadata.get("status", "-")
+        source = a.metadata.get("source", "-")
+        snippet = " ".join(a.body.split())[:60]
+        print(f"{a.file:<{file_w}}  {a.function:<{fn_w}}  "
+              f"{status:<11}  {source:<5}  {snippet}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# show
+# ---------------------------------------------------------------------------
+
+
+def cmd_show(opts: argparse.Namespace) -> int:
+    base = _resolve_base(opts.base)
+    ann = read_annotation(base, opts.file, opts.function)
+    if ann is None:
+        sys.stderr.write(
+            f"raptor-annotate: no annotation for "
+            f"{opts.file}:{opts.function}\n"
+        )
+        return 1
+    print(f"## {ann.function}")
+    if ann.metadata:
+        meta_str = " ".join(f"{k}={v}" for k, v in sorted(ann.metadata.items()))
+        print(f"<!-- meta: {meta_str} -->")
+    if ann.body:
+        print()
+        print(ann.body)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# edit
+# ---------------------------------------------------------------------------
+
+
+def cmd_edit(opts: argparse.Namespace) -> int:
+    base = _resolve_base(opts.base)
+    path = annotation_path(base, opts.file)
+    if not path.exists():
+        # Create an empty placeholder so $EDITOR has something to open.
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"# {opts.file}\n\n## {opts.function}\n", encoding="utf-8")
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "vi"
+    cmd = shlex.split(editor) + [str(path)]
+    rc = subprocess.call(cmd)
+    if rc != 0:
+        sys.stderr.write(f"raptor-annotate: editor exited with {rc}\n")
+        return rc
+    # Re-parse to verify the user didn't break the format.
+    anns = read_file_annotations(base, opts.file)
+    print(f"saved {path} ({len(anns)} annotation(s))")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# rm
+# ---------------------------------------------------------------------------
+
+
+def cmd_rm(opts: argparse.Namespace) -> int:
+    base = _resolve_base(opts.base)
+    removed = remove_annotation(base, opts.file, opts.function)
+    if not removed:
+        sys.stderr.write(
+            f"raptor-annotate: no annotation for "
+            f"{opts.file}:{opts.function}\n"
+        )
+        return 1
+    print(f"removed {opts.file}:{opts.function}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# stale
+# ---------------------------------------------------------------------------
+
+
+def cmd_stale(opts: argparse.Namespace) -> int:
+    base = _resolve_base(opts.base)
+    target = Path(opts.target or ".").resolve()
+    stale = []
+    for ann in iter_all_annotations(base):
+        meta = ann.metadata
+        h = meta.get("hash")
+        sl = meta.get("start_line")
+        el = meta.get("end_line")
+        if not (h and sl and el):
+            continue
+        try:
+            start, end = int(sl), int(el)
+        except ValueError:
+            continue
+        src = target / ann.file
+        current = compute_function_hash(src, start, end)
+        if current and current != h:
+            stale.append((ann, h, current))
+    if not stale:
+        print("(no stale annotations)")
+        return 0
+    for ann, old, new in stale:
+        print(f"{ann.file}:{ann.function}  "
+              f"stored={old}  current={new}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Argparse wiring
+# ---------------------------------------------------------------------------
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="raptor-annotate")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    # add
+    pa = sub.add_parser("add", help="add or update an annotation")
+    pa.add_argument("file")
+    pa.add_argument("function")
+    pa.add_argument("--base")
+    pa.add_argument("--status")
+    pa.add_argument("--cwe")
+    pa.add_argument("-m", "--body")
+    pa.add_argument("--body-file")
+    pa.add_argument("--lines", help="N-M source line range")
+    pa.add_argument("--target", help="repo root for hash computation")
+    pa.add_argument(
+        "--checklist",
+        help="inventory checklist.json for auto-discovering function "
+             "bounds when --lines is omitted (default: search base "
+             "dir's ancestors)",
+    )
+    pa.add_argument("--meta", action="append")
+    pa.add_argument("--source", default="human")
+    pa.add_argument("--overwrite", default="all",
+                    choices=("all", "respect-manual"))
+
+    # ls
+    pl = sub.add_parser("ls", help="list annotations")
+    pl.add_argument("--base")
+    pl.add_argument("--file")
+    pl.add_argument("--status")
+    pl.add_argument("--source")
+    pl.add_argument("--cwe", help="filter by metadata.cwe (exact)")
+    pl.add_argument(
+        "--rule-id",
+        dest="rule_id",
+        help="filter by metadata.rule_id (substring match)",
+    )
+    pl.add_argument(
+        "--grep",
+        help="case-insensitive substring search across body + metadata",
+    )
+    pl.add_argument(
+        "--since",
+        help="annotation file mtime within window: ``7d`` / "
+             "``24h`` / ``30m`` / ``120s``",
+    )
+
+    # show
+    ps = sub.add_parser("show", help="show one annotation")
+    ps.add_argument("file")
+    ps.add_argument("function")
+    ps.add_argument("--base")
+
+    # edit
+    pe = sub.add_parser("edit",
+                        help="open the source file's annotation .md "
+                             "in $EDITOR")
+    pe.add_argument("file")
+    pe.add_argument("function")
+    pe.add_argument("--base")
+
+    # rm
+    pr = sub.add_parser("rm", help="remove an annotation")
+    pr.add_argument("file")
+    pr.add_argument("function")
+    pr.add_argument("--base")
+
+    # stale
+    pst = sub.add_parser(
+        "stale",
+        help="list annotations whose source-line hash no longer matches",
+    )
+    pst.add_argument("--base")
+    pst.add_argument("--target")
+
+    return p
+
+
+_DISPATCH = {
+    "add": cmd_add,
+    "ls": cmd_ls,
+    "show": cmd_show,
+    "edit": cmd_edit,
+    "rm": cmd_rm,
+    "stale": cmd_stale,
+}
+
+
+def main() -> int:
+    parser = _build_parser()
+    opts = parser.parse_args()
+    fn = _DISPATCH[opts.cmd]
+    return fn(opts)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

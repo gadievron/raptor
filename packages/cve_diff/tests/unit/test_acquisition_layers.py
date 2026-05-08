@@ -59,7 +59,7 @@ def _make_origin(tmp_path: Path, n_commits: int = 3) -> tuple[Path, list[str]]:
     """Build a bare-cloneable origin repo with `n_commits` commits."""
     repo = tmp_path / "origin"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, timeout=15)
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "Test")
     shas: list[str] = []

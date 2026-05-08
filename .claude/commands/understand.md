@@ -88,6 +88,15 @@ libexec/raptor-coverage-summary "$OUTPUT_DIR" --mark-file "$OUTPUT_DIR/reviewed-
 libexec/raptor-render-diagrams "$OUTPUT_DIR"
 ```
 
+**Step 4.5: Synthesise per-function annotations** (for `--map` or `--trace`):
+```bash
+libexec/raptor-understand-annotate "$OUTPUT_DIR"
+```
+Reads `context-map.json` + any `flow-trace-*.json`, attaches per-function
+annotations under `$OUTPUT_DIR/annotations/` for entry points, sinks,
+trust boundaries, unchecked flows, and trace steps. Best-effort — exits
+0 with "nothing to synthesise" when no inputs are present.
+
 **Step 5: Complete the run:**
 ```bash
 libexec/raptor-run-lifecycle complete "$OUTPUT_DIR"

@@ -735,7 +735,19 @@ class RetryTask(AnalysisTask):
                 score = float(r.get("exploitability_score"))
             except (ValueError, TypeError):
                 continue
-            if self.LOW <= score <= self.HIGH:
+            # Half-open interval `[LOW, HIGH)` so the band edges
+            # don't overlap with the "decisive" check below at
+            # line ~795. Pre-fix both bands used the closed form
+            # `LOW <= score <= HIGH`, which made score==LOW (0.3)
+            # or score==HIGH (0.7) BOTH "selected for retry" AND
+            # "not decisive" simultaneously. Result: a finding
+            # whose retry returned the same edge score got
+            # re-selected next iteration — a ping-pong loop that
+            # only terminated when the LLM produced a score
+            # strictly inside or outside the band by chance.
+            # Lower-inclusive / upper-exclusive matches
+            # convention for "uncertainty band" semantics.
+            if self.LOW <= score < self.HIGH:
                 selected.append(f)
         return selected
 
@@ -792,7 +804,13 @@ class RetryTask(AnalysisTask):
 
             prior = prior_results.get(fid, {})
             was_contradictory = prior.get("self_contradictory")
-            decisive = score is not None and not (self.LOW <= score <= self.HIGH)
+            # Mirror the half-open select interval (cluster 861):
+            # decisive = score outside `[LOW, HIGH)`. Without the
+            # mirror, score == HIGH (0.7) would be both "selected
+            # for retry" by the select band AND "decisive" here —
+            # a logical contradiction that produced ping-pong
+            # retries on edge scores.
+            decisive = score is not None and not (self.LOW <= score < self.HIGH)
 
             if was_contradictory or decisive:
                 # Merge instead of replace. Pre-fix this was

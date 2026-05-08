@@ -22,6 +22,8 @@ Manage projects — named workspaces that corral analysis runs into one director
 | `status [<name>]` | Show project summary with run history |
 | `coverage [<name>] [--detailed]` | Show tool coverage summary (or per-file table) |
 | `findings [<name>] [--detailed]` | Show merged findings (or per-finding detail) |
+| `annotations [<name>] [--status S] [--source S] [--file PATH] [--cwe X] [--rule-id P] [--grep T] [--since 7d]` | List annotations across all runs (project-level overrides run-level) |
+| `annotations-diff <run-a> <run-b>` | Compare annotation state between two runs |
 | `none` | Clear the active project |
 | `use [<name>]` | Set active project (no arg = show current, `none` = clear) |
 | `delete <name> [--purge] [--yes]` | Remove project (--purge also deletes output) |

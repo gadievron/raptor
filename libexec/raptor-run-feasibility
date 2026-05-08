@@ -45,6 +45,38 @@ def main():
         print(f"ERROR: binary not found: {binary_path}")
         sys.exit(1)
 
+    # Acquire an advisory flock on findings.json before the
+    # read-modify-write cycle. Pre-fix the script did
+    # `load_json(findings_path)` → mutate → `save_json(findings_path)`
+    # without any synchronisation. Real-world race:
+    #
+    #   1. Stage E orchestrator spawns multiple instances of
+    #      this script in parallel — one per (binary,
+    #      vuln_type) tuple — by design (different binaries
+    #      analyse independently).
+    #   2. Two instances both `load_json(findings_path)` at
+    #      the same instant; both see the same pre-state.
+    #   3. Each mutates a DIFFERENT subset of findings (binary
+    #      A's findings vs binary B's), then `save_json()` —
+    #      atomic rename, but the LOSER overwrites the
+    #      winner's mutation. Whichever instance wrote last
+    #      "won"; the other's feasibility data was lost.
+    #
+    # Advisory flock(LOCK_EX) on the file serialises the
+    # read-modify-write so concurrent instances of this
+    # script line up and don't clobber each other. Other
+    # writers (validate orchestrator's own writes) also need
+    # to acquire the same flock to participate; for now this
+    # is internal-callers-only and the orchestrator
+    # serialises stage transitions, so this script's lock is
+    # the only contended writer.
+    import fcntl
+    findings_lock_fh = open(findings_path, "rb")
+    try:
+        fcntl.flock(findings_lock_fh.fileno(), fcntl.LOCK_EX)
+    except OSError as e:
+        print(f"WARNING: could not acquire flock on {findings_path}: {e} — proceeding without lock")
+
     findings_data = load_json(findings_path)
     if not findings_data:
         print("ERROR: cannot load findings")
@@ -116,6 +148,12 @@ def main():
             print(f"  {finding['id']}: {assessment.verdict}")
 
     save_json(findings_path, findings_data)
+    # Release the advisory flock by closing the lock handle.
+    try:
+        fcntl.flock(findings_lock_fh.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+    findings_lock_fh.close()
     print(f"Updated {len(mapped)} finding(s)")
 
 

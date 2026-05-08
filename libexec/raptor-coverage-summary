@@ -39,7 +39,32 @@ def _is_project_dir(d: Path) -> bool:
 
 
 def _is_run_dir(d: Path) -> bool:
-    return (d / ".raptor-run.json").exists() or (d / "checklist.json").exists()
+    """Run-dir discriminator.
+
+    Pre-fix the predicate matched any directory with EITHER
+    `.raptor-run.json` OR `checklist.json` — but `checklist.json`
+    is ALSO present in project directories (project-level
+    checklist). The bug was masked at the call site by check
+    order: `_is_project_dir(d)` is tested FIRST in
+    `_resolve_dir`, so a project dir was correctly classified
+    despite this predicate claiming True.
+
+    "Saved by check order" is fragile — any future caller that
+    skips the project-dir check (or reorders) hits the
+    misclassification. Tighten the predicate to require the
+    run-specific marker (`.raptor-run.json`) AND the absence of
+    a project-level marker. `checklist.json` alone is no longer
+    sufficient because it's ambiguous between project and run
+    dirs.
+    """
+    if not (d / ".raptor-run.json").exists():
+        return False
+    # Negative check: project-dir marker should NOT be present.
+    # `_is_project_dir` is the canonical project-dir check; if
+    # the dir has both markers, it's a project dir, not a run.
+    if _is_project_dir(d):
+        return False
+    return True
 
 
 def _resolve_dir(path_arg: str):

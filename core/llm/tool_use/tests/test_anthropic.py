@@ -611,10 +611,19 @@ def test_permanent_4xx_fails_fast_no_retry(monkeypatch) -> None:
 
     def _403(**_kwargs: Any) -> _StubResponse:
         attempts["n"] += 1
-        # APIStatusError(message, response, body); we synthesise minimum
-        # shape needed for status_code attr.
-        err = APIStatusError.__new__(APIStatusError)
-        err.status_code = 403                              # type: ignore[attr-defined]
+        # Construct via the proper APIStatusError signature
+        # `(message, *, response, body)` so the SDK's own
+        # retry-classifier sees `request` / `response` /
+        # `status_code` consistently with production. Pre-fix
+        # `__new__` skipped __init__ and the SDK's classifier
+        # could AttributeError on `err.request` in newer
+        # SDK versions. See cluster 726.
+        import httpx
+        response = httpx.Response(
+            status_code=403,
+            request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+        )
+        err = APIStatusError("Forbidden", response=response, body={"error": "Forbidden"})
         raise err
 
     c.messages.create = _403                               # type: ignore[method-assign]
@@ -639,8 +648,13 @@ def test_429_is_retried(monkeypatch) -> None:
     def _flaky(**_kwargs: Any) -> _StubResponse:
         attempts["n"] += 1
         if attempts["n"] == 1:
-            err = APIStatusError.__new__(APIStatusError)
-            err.status_code = 429                          # type: ignore[attr-defined]
+            # See _403 above for the proper-signature rationale.
+            import httpx
+            response = httpx.Response(
+                status_code=429,
+                request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+            )
+            err = APIStatusError("Rate limited", response=response, body={"error": "rate_limited"})
             raise err
         return _StubResponse(
             [_StubBlock("text", text="ok")],

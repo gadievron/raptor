@@ -89,6 +89,46 @@ def main():
     p_findings.add_argument("name", nargs="?", help="Project name")
     p_findings.add_argument("--detailed", action="store_true", help="Per-finding detail (reasoning, proof, PoC)")
 
+    # annotations
+    p_anns = sub.add_parser(
+        "annotations",
+        help="List annotations across all runs in the project",
+        usage="raptor project annotations [<name>] [--status S] "
+              "[--source S] [--file PATH]",
+        **_F,
+    )
+    p_anns.add_argument("name", nargs="?", help="Project name")
+    p_anns.add_argument(
+        "--status",
+        help="Filter by metadata.status (clean / suspicious / finding / etc.)",
+    )
+    p_anns.add_argument(
+        "--source",
+        help="Filter by metadata.source (human / llm)",
+    )
+    p_anns.add_argument(
+        "--file",
+        help="Filter by source file path",
+    )
+    p_anns.add_argument(
+        "--cwe",
+        help="Filter by metadata.cwe (exact match)",
+    )
+    p_anns.add_argument(
+        "--rule-id",
+        dest="rule_id",
+        help="Filter by metadata.rule_id (substring match)",
+    )
+    p_anns.add_argument(
+        "--grep",
+        help="Case-insensitive substring search across body + metadata",
+    )
+    p_anns.add_argument(
+        "--since",
+        help="Annotation file mtime within window: ``7d`` / ``24h`` / "
+             "``30m`` / ``120s`` / ``1w``",
+    )
+
     # delete
     p_delete = sub.add_parser("delete", help="Delete a project",
                               usage="raptor project delete <name> [--purge] [--yes]", **_F)
@@ -136,6 +176,18 @@ def main():
     p_report = sub.add_parser("report", help="Generate merged report across all runs",
                               usage="raptor project report [<name>]", **_F)
     p_report.add_argument("name", nargs="?", help="Project name")
+
+    # annotations-diff
+    p_anndiff = sub.add_parser(
+        "annotations-diff",
+        help="Compare annotations between two runs",
+        usage="raptor project annotations-diff <run-a> <run-b> "
+              "[--name <project>]",
+        **_F,
+    )
+    p_anndiff.add_argument("run_a", help="First run dir or run name")
+    p_anndiff.add_argument("run_b", help="Second run dir or run name")
+    p_anndiff.add_argument("--name", help="Project name (default: active)")
 
     # diff
     p_diff = sub.add_parser("diff", help="Compare findings between two runs",
@@ -262,6 +314,26 @@ def main():
                 print(f"Project '{name}' not found.")
                 return
             _print_findings(p, detailed=args.detailed)
+
+        elif args.subcommand == "annotations":
+            name = args.name or _get_active_project()
+            if not name:
+                print("No project specified.")
+                return
+            p = mgr.load(name)
+            if not p:
+                print(f"Project '{name}' not found.")
+                return
+            _print_annotations(
+                p,
+                status_filter=args.status,
+                source_filter=args.source,
+                file_filter=args.file,
+                cwe_filter=args.cwe,
+                rule_id_filter=args.rule_id,
+                grep=args.grep,
+                since=args.since,
+            )
 
         elif args.subcommand == "use":
             if args.name is None:
@@ -479,6 +551,27 @@ def main():
             print(f"Diff: {args.run1} (baseline) → {args.run2}")
             _print_diff(result)
 
+        elif args.subcommand == "annotations-diff":
+            from .annotations_diff import diff_annotations, format_diff
+            name = args.name or _get_active_project()
+            if not name:
+                print("No project specified.")
+                return
+            p = mgr.load(name)
+            if not p:
+                print(f"Project '{name}' not found.")
+                return
+            dir1 = p.output_path / args.run_a
+            dir2 = p.output_path / args.run_b
+            if not dir1.exists():
+                print(f"Run not found: {args.run_a}")
+                return
+            if not dir2.exists():
+                print(f"Run not found: {args.run_b}")
+                return
+            result = diff_annotations(dir1, dir2)
+            print(format_diff(result), end="")
+
         elif args.subcommand == "report":
             name = args.name or _get_active_project()
             if not name:
@@ -494,6 +587,8 @@ def main():
             if stats.get("findings_dir"):
                 print(f"  Findings directory: {stats['findings_dir']}")
             print(f"  Merged findings: {stats['findings']}")
+            if stats.get("annotations") is not None:
+                print(f"  Annotations: {stats['annotations']}")
 
         elif args.subcommand == "export":
             from .export import export_project
@@ -792,6 +887,123 @@ def _finding_label(f):
     return f"{f.get('file', '?')}:{f.get('function', '?')}:{f.get('line', '?')}"
 
 
+def _parse_since(spec: str):
+    """Parse a ``--since`` value (``7d`` / ``24h`` etc.) into a
+    cutoff timestamp. Returns None on bad input."""
+    import time
+    if not spec:
+        return None
+    spec = spec.strip().lower()
+    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+    if spec[-1] in multipliers:
+        try:
+            n = float(spec[:-1])
+        except ValueError:
+            return None
+        return time.time() - n * multipliers[spec[-1]]
+    try:
+        return time.time() - float(spec)
+    except ValueError:
+        return None
+
+
+def _print_annotations(
+    project, status_filter=None, source_filter=None, file_filter=None,
+    cwe_filter=None, rule_id_filter=None, grep=None, since=None,
+):
+    """List annotations across all runs in the project.
+
+    Walks every run dir's ``annotations/`` subdir plus the project's
+    own top-level ``annotations/`` dir (operator-driven manual notes
+    land there when the active project has no specific run scope).
+    Deduplicates on (file, function), keeping the most recent annotation
+    per pair (last-writer-wins by run mtime).
+    """
+    from core.annotations import iter_all_annotations
+
+    # Candidate annotation roots: one per run dir + the project root.
+    roots = []
+    for rd in project.get_run_dirs(sweep=False):
+        ann_dir = rd / "annotations"
+        if ann_dir.exists():
+            roots.append((rd.stat().st_mtime, ann_dir))
+    project_ann = Path(project.output_dir) / "annotations"
+    if project_ann.exists():
+        # Project-level annotations win over run-level (operator
+        # notes are higher-priority than LLM emissions).
+        roots.append((float("inf"), project_ann))
+    if not roots:
+        print("No annotations.")
+        return
+
+    # Sort by mtime (oldest first) so later writes overwrite earlier
+    # in the dedup map.
+    roots.sort(key=lambda r: r[0])
+    # Track origin root per (file, function) so the --since filter
+    # can stat the right annotation .md file post-dedup.
+    by_pair = {}  # (file, function) → (Annotation, root)
+    for _mtime, root in roots:
+        for ann in iter_all_annotations(root):
+            by_pair[(ann.file, ann.function)] = (ann, root)
+
+    pairs = list(by_pair.values())
+    if status_filter:
+        pairs = [(a, r) for (a, r) in pairs
+                 if a.metadata.get("status") == status_filter]
+    if source_filter:
+        pairs = [(a, r) for (a, r) in pairs
+                 if a.metadata.get("source") == source_filter]
+    if file_filter:
+        pairs = [(a, r) for (a, r) in pairs if a.file == file_filter]
+    if cwe_filter:
+        pairs = [(a, r) for (a, r) in pairs
+                 if a.metadata.get("cwe") == cwe_filter]
+    if rule_id_filter:
+        pairs = [(a, r) for (a, r) in pairs
+                 if rule_id_filter in (a.metadata.get("rule_id") or "")]
+    if grep:
+        needle = grep.lower()
+        def _matches(a):
+            if needle in a.body.lower():
+                return True
+            return any(
+                needle in str(v).lower() for v in a.metadata.values()
+            )
+        pairs = [(a, r) for (a, r) in pairs if _matches(a)]
+    if since:
+        cutoff = _parse_since(since)
+        if cutoff is None:
+            print(f"raptor: bad --since value {since!r}; expected "
+                  f"e.g. ``7d`` / ``24h`` / ``30m``")
+            return
+        from core.annotations import annotation_path
+        kept = []
+        for a, r in pairs:
+            try:
+                mtime = annotation_path(r, a.file).stat().st_mtime
+            except OSError:
+                continue
+            if mtime >= cutoff:
+                kept.append((a, r))
+        pairs = kept
+
+    anns = [a for a, _r in pairs]
+    anns.sort(key=lambda a: (a.file, a.function))
+    if not anns:
+        print("No annotations match the filter.")
+        return
+
+    print(f"{len(anns)} annotation(s):")
+    file_w = max(len(a.file) for a in anns)
+    fn_w = max(len(a.function) for a in anns)
+    for a in anns:
+        status = a.metadata.get("status", "-")
+        source = a.metadata.get("source", "-")
+        snippet = " ".join(a.body.split())[:60]
+        print(f"  {a.file:<{file_w}}  {a.function:<{fn_w}}  "
+              f"{status:<14}  {source:<5}  {snippet}")
+
+
 def _print_diff(result):
     """Print diff results."""
     if result["new"]:
@@ -992,7 +1204,23 @@ def _do_merge(project, merge_type, yes):
                 "extra": {"merged_from": len(dirs), "unique_findings": stats["unique_findings"]},
             })
         except Exception as e:
-            print(f"  {cmd_type}: warning — metadata write failed ({e}), proceeding anyway")
+            # Pre-fix this printed a warning and PROCEEDED to delete
+            # source runs. The merged output then existed without
+            # `RUN_METADATA_FILE`, which downstream consumers
+            # (`load_run_metadata`, `get_run_dirs_by_type`) treat as
+            # "not a completed run" and silently skip — so the
+            # operator's merged data became invisible while the
+            # source runs were already gone. Net data loss with no
+            # error message after the warning.
+            #
+            # Abort the delete step instead. Merged dir stays on
+            # disk (operator can inspect / retry the metadata
+            # write); source dirs stay on disk (no data lost). The
+            # operator sees both the warning AND a clear "source
+            # runs preserved" line so they know to re-run.
+            print(f"  {cmd_type}: ERROR — metadata write failed ({e})")
+            print(f"  {cmd_type}: source runs PRESERVED (merged output left at {merged_dir})")
+            continue
 
         # Delete source runs (continue on individual failures)
         failed_deletes = []

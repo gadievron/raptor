@@ -304,7 +304,7 @@ def get_logger(name: str = "raptor") -> logging.Logger:
 - `get_severity(result)`: Map SARIF levels to severity
 - (Additional utilities as needed)
 
-**Why Separate Module**: SARIF parsing is shared by scanner, llm-analysis, and reporting. Centralization prevents duplication.
+**Why Separate Module**: SARIF parsing is shared by scanner, llm_analysis, and reporting. Centralization prevents duplication.
 
 
 ## Packages Layer
@@ -409,7 +409,7 @@ python3 packages/codeql/agent.py \
 **Entry Point**: Also accessible via `raptor_codeql.py` for full workflow
 
 
-### Package: `llm-analysis`
+### Package: `llm_analysis`
 
 **Purpose**: LLM-powered autonomous vulnerability analysis
 
@@ -419,7 +419,7 @@ python3 packages/codeql/agent.py \
 
 **CLI Interface (agent.py)**:
 ```bash
-python3 packages/llm-analysis/agent.py \
+python3 packages/llm_analysis/agent.py \
   --repo /path/to/code \
   --sarif findings1.sarif findings2.sarif \
   --max-findings 10 \
@@ -924,7 +924,7 @@ All package agents follow a consistent CLI pattern:
 **static-analysis/scanner.py**:
 - `--policy_groups`: Comma-separated policy groups (e.g., `secrets,owasp`)
 
-**llm-analysis/agent.py**:
+**llm_analysis/agent.py**:
 - `--sarif`: SARIF file(s) to analyze (can specify multiple)
 - `--max-findings`: Limit number of findings to process
 - `--no-exploits`: Skip exploit generation
@@ -1098,7 +1098,7 @@ We think it useful to include such costings, just so people understand how much 
 - External: `codeql` CLI (must be installed - see https://codeql.github.com/)
 - Supports multiple languages (Python, Java, C/C++, JavaScript, Go, Ruby, etc.)
 
-**llm-analysis**:
+**llm_analysis**:
 - `anthropic` SDK (if using Claude)
 - `openai` SDK (if using GPT-4)
 - OR local model server
@@ -1155,7 +1155,7 @@ python3 packages/static-analysis/scanner.py --help
 python3 raptor_codeql.py --help
 
 # Test LLM analysis
-python3 packages/llm-analysis/agent.py --help
+python3 packages/llm_analysis/agent.py --help
 
 # Test full workflows
 python3 raptor_agentic.py --help

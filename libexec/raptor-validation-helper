@@ -97,14 +97,28 @@ def _is_validated(workdir, filename):
 
 
 def _validate_file(workdir, filename, validator_func):
-    """Validate a file, skipping if already validated by raptor-validate-schema."""
+    """Validate a file, skipping if already validated by raptor-validate-schema.
+
+    Returns ``(valid, errors)``:
+      * ``(True, [])`` — file exists, validator approved
+      * ``(False, [...])`` — file exists, validator rejected
+      * ``(False, ["missing"])`` — file does not exist or is empty
+
+    Pre-fix the missing-file path returned ``(True, [])``, which
+    conflated "file doesn't exist" with "file exists and is
+    valid". Callers that just printed didn't notice — but any
+    consumer that checks the boolean return ("did validation
+    pass?") incorrectly saw True when there was nothing to
+    validate. Return False with a sentinel error string so
+    callers can distinguish the three states.
+    """
     if _is_validated(workdir, filename):
         print(f"  {filename}: OK (cached)")
         return True, []
     data = load_json(Path(workdir) / filename)
     if not data:
         print(f"  {filename}: not found")
-        return True, []
+        return False, ["missing"]
     valid, errors = validator_func(data)
     if not valid:
         print(f"  {filename}: ERRORS {errors}")
@@ -226,8 +240,17 @@ def _apply_stage_file(workdir, stage_letter):
         save_json(findings_path, container)
         print(f"  Merged stage-{stage_letter.lower()}.json: {applied} findings updated")
 
-    # Delete the stage file
-    stage_path.unlink()
+    # Delete the stage file. Guard the unlink — pre-fix
+    # `stage_path.unlink()` raised `FileNotFoundError` if the
+    # file disappeared between the read above and here (rare
+    # but real: parallel /project clean, operator manually
+    # rm'ing the file mid-stage, an aborted-and-restarted
+    # validate run that moved the file). The exception leaked
+    # and crashed the stage-merge call, leaving the operator
+    # with a partial state where the merge happened but the
+    # cleanup didn't. Subsequent stage retries hit the same
+    # condition. `missing_ok=True` makes the unlink idempotent.
+    stage_path.unlink(missing_ok=True)
     return True
 
 
@@ -266,12 +289,30 @@ def _build_standalone_pocs(target, build_dir):
         print("Target has a build system — skipping PoC build")
         return
 
+    # Read each candidate file ONCE, not twice. Pre-fix the
+    # `("int main" in f.read_text(...)) or ("void main" in
+    # f.read_text(...))` shape called `read_text` twice per
+    # file — the second call only happened when "int main" was
+    # absent, but the first call always ran. For C/C++ source
+    # trees with hundreds of files (heavy projects, big test
+    # corpuses), the per-file cost doubled for the
+    # "int main"-less subset (typically the majority — most
+    # files are headers / library code, not standalone main()
+    # programs). Materialise the text once via a generator
+    # filter so each file is read at most once regardless of
+    # which marker matches.
     extensions = {".c", ".cpp", ".cc", ".cxx"}
+
+    def _has_main(f):
+        try:
+            text = f.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return False
+        return "int main" in text or "void main" in text
+
     sources = [
         f for f in sorted(target.iterdir())
-        if f.is_file() and f.suffix.lower() in extensions
-        and ("int main" in f.read_text(encoding="utf-8", errors="ignore")
-             or "void main" in f.read_text(encoding="utf-8", errors="ignore"))
+        if f.is_file() and f.suffix.lower() in extensions and _has_main(f)
     ]
     if not sources:
         return
@@ -289,6 +330,39 @@ def _build_standalone_pocs(target, build_dir):
             print("No C compiler found — skipping PoC build")
             return
 
+    # Sandbox the compile invocations. Pre-fix `_sp.run(cmd)`
+    # spawned the compiler with the operator's full env and no
+    # filesystem isolation. Two failure modes:
+    #
+    # 1. The PoC source files come from an LLM-supplied stage-D
+    #    output (`build/poc-*.c`). A hostile / errant LLM
+    #    response could embed `#include` directives pointing at
+    #    `/etc/`, attribute pragmas with code-exec side effects
+    #    (gcc's `__attribute__((constructor))` runs at -E preprocess
+    #    time on some toolchains), or `#error` directives that
+    #    leak environment via the error message.
+    # 2. Compiler env injection: `CC` / `CFLAGS` / `LDFLAGS` /
+    #    `LD_PRELOAD` from the operator's shell flowed into the
+    #    compile, potentially building with attacker-controlled
+    #    flags (e.g. `LDFLAGS="-Wl,--no-as-needed -lattackerlib"`
+    #    auto-loads attacker code into the resulting binary).
+    #
+    # Route through `_sandbox_run` (already used elsewhere in
+    # this file): seccomp + landlock confines reads to the
+    # source dir + standard system paths, writes to the build
+    # dir, blocks network. `RaptorConfig.get_safe_env()` strips
+    # the dangerous env vars before the compile sees them.
+    # Fall back to plain `_sp.run` only if `_sandbox_run` import
+    # fails — preserves pre-fix behaviour for unusual install
+    # layouts where core.sandbox isn't reachable.
+    try:
+        from core.sandbox import run as _sandbox_run
+        from core.config import RaptorConfig
+        _safe_env = RaptorConfig.get_safe_env()
+    except ImportError:
+        _sandbox_run = None
+        _safe_env = None
+
     built = 0
     for source in sources:
         output = build_dir / source.stem
@@ -297,7 +371,17 @@ def _build_standalone_pocs(target, build_dir):
             continue
         cmd = [compiler] + _POC_GCC_FLAGS + ["-o", str(output), str(source)]
         try:
-            result = _sp.run(cmd, capture_output=True, text=True, timeout=30)
+            if _sandbox_run is not None:
+                result = _sandbox_run(
+                    cmd,
+                    target=str(target.resolve()),
+                    output=str(build_dir.resolve()),
+                    block_network=True,
+                    capture_output=True, text=True, timeout=30,
+                    env=_safe_env,
+                )
+            else:
+                result = _sp.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
                 print(f"  Built: {source.name} -> {output.name}")
                 if result.stderr.strip():
@@ -646,7 +730,23 @@ def prepare_D(workdir, target=None):
 # ---------------------------------------------------------------------------
 
 def _discover_executables(target):
-    """Find executable files in target directory. Returns {stem: path}."""
+    """Find executable files in target directory. Returns {stem: path}.
+
+    Pre-fix used `find -executable` which is a GNU find extension.
+    On BSD find (macOS, FreeBSD), `-executable` is unrecognised
+    and the find call exits non-zero with empty stdout — Stage E
+    on macOS got an empty executables map and silently failed
+    to map findings to binaries.
+
+    Fall back to `-perm +111` (BSD-compatible) when GNU
+    `-executable` isn't supported. The two predicates aren't
+    semantically identical (`-executable` checks effective
+    permissions for the running user; `-perm +111` matches any
+    executable bit), but for the "discover binaries to validate"
+    use case both are correct: a binary with execute bits set
+    by SOMEONE is a candidate; we'll fail-loud later if we
+    can't actually exec it.
+    """
     import subprocess as _sp
     result = {}
     try:
@@ -654,10 +754,46 @@ def _discover_executables(target):
             ["find", target, "-executable", "-type", "f"],
             capture_output=True, text=True, timeout=30
         )
+        # GNU find returns rc=0 on success; BSD find with
+        # `-executable` errors out (rc!=0, stderr "find: -executable:
+        # unknown primary or operator"). Detect the BSD case and
+        # retry with the portable `-perm +111` predicate.
+        if proc.returncode != 0 or "unknown primary" in (proc.stderr or "").lower():
+            proc = _sp.run(
+                ["find", target, "-type", "f", "-perm", "+111"],
+                capture_output=True, text=True, timeout=30
+            )
+        # Track collisions on stem. Pre-fix `result[p.stem] = str(p)`
+        # silently OVERWROTE earlier entries when two binaries
+        # shared a stem (e.g. `bin/foo` and `lib/foo`, or
+        # `build/release/test` and `build/debug/test` — common
+        # in projects with multi-target builds). Whichever path
+        # `find` returned LAST won; the other was dropped without
+        # a log line. Operator's Stage E then mapped findings to
+        # the wrong binary (e.g. release-build binary chosen
+        # when the finding came from the debug-build's source).
+        # Build a per-stem LIST so the caller can choose
+        # (currently picks the first, but the data structure
+        # supports an explicit selector / log when multiple).
+        seen_stems: dict[str, list[str]] = {}
         for line in proc.stdout.strip().split("\n"):
             if line:
                 p = Path(line)
-                result[p.stem] = str(p)
+                seen_stems.setdefault(p.stem, []).append(str(p))
+        for stem, paths in seen_stems.items():
+            if len(paths) > 1:
+                # Log the collision so operator sees they have
+                # multiple build outputs with the same stem.
+                # Pick the SHORTEST path — heuristic for "most
+                # canonical" (build/release/test < build/debug/test
+                # only when sorted lexically; shortest works for
+                # `bin/foo` < `tools/_aux/foo`).
+                paths.sort(key=lambda s: (len(s), s))
+                print(
+                    f"WARNING: multiple executables named {stem!r}: "
+                    f"{paths!r} — picking {paths[0]!r}",
+                )
+            result[stem] = paths[0]
     except Exception:
         pass
     return result
@@ -976,26 +1112,52 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False):
 
     start_run(out_dir, "validate", target=target)
 
-    # Snapshot understand hashes before the rebuild overwrites checklist.json.
-    # In the shared --out case (tier 1), the understand run's checklist is in
-    # the same directory.  build_checklist will overwrite it with current hashes,
-    # so we capture the old hashes now for stale-file detection.
-    pre_rebuild_checklist = None
-    checklist_path = out_dir / "checklist.json"
-    if checklist_path.exists() and (out_dir / "context-map.json").exists():
-        from core.json import load_json
-        pre_rebuild_checklist = load_json(checklist_path)
+    # Wrap the rest of stage-0 prep in try/except so a failure
+    # AFTER `start_run` (which created the run dir + lifecycle
+    # marker) flips the run to "failed" instead of leaving an
+    # orphan "running" run forever. Pre-fix the function had
+    # only the early `try/except TargetMismatchError` around
+    # `get_output_dir`; if `build_checklist` / inventory walk /
+    # `_bridge_understand_output` raised, the run dir stayed
+    # marked "running" indefinitely. Subsequent operator runs
+    # of `/project status` listed the orphan as in-progress;
+    # `coverage-summary` skipped it; cleanup never fired.
+    from core.run.metadata import fail_run
+    try:
+        # Snapshot understand hashes before the rebuild overwrites checklist.json.
+        # In the shared --out case (tier 1), the understand run's checklist is in
+        # the same directory.  build_checklist will overwrite it with current hashes,
+        # so we capture the old hashes now for stale-file detection.
+        pre_rebuild_checklist = None
+        checklist_path = out_dir / "checklist.json"
+        if checklist_path.exists() and (out_dir / "context-map.json").exists():
+            from core.json import load_json
+            pre_rebuild_checklist = load_json(checklist_path)
 
-    checklist = build_checklist(target, str(out_dir))
+        checklist = build_checklist(target, str(out_dir))
 
-    (out_dir / "build").mkdir(exist_ok=True)
+        (out_dir / "build").mkdir(exist_ok=True)
 
-    if not no_bridge:
-        _bridge_understand_output(out_dir, checklist, target,
-                                  pre_rebuild_checklist=pre_rebuild_checklist)
+        if not no_bridge:
+            _bridge_understand_output(out_dir, checklist, target,
+                                      pre_rebuild_checklist=pre_rebuild_checklist)
 
-    print(f"Checklist: {checklist['total_files']} files, {checklist['total_items']} items")
-    print(f"OUTPUT_DIR={out_dir}")
+        print(f"Checklist: {checklist['total_files']} files, {checklist['total_items']} items")
+        print(f"OUTPUT_DIR={out_dir}")
+    except Exception as e:
+        # Mark the run as failed so /project status / cleanup
+        # see the right state. Re-raise so the caller (validate
+        # CLI) sees the exception and can surface it to the
+        # operator with stack trace.
+        try:
+            fail_run(out_dir, str(e))
+        except Exception:
+            # Best-effort — if even fail_run breaks (filesystem
+            # error mid-stage), we'd rather the original
+            # exception propagate than mask it with a metadata-
+            # write error.
+            pass
+        raise
 
 
 def prepare_1(workdir, target=None):

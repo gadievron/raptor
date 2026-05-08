@@ -636,14 +636,25 @@ class TestRetryTask:
         assert selected[0]["finding_id"] == "f-001"
 
     def test_selects_boundaries(self):
+        """Half-open `[LOW, HIGH)` band — cluster 861.
+
+        Pre-fix both the select band and the decisive check used
+        the closed form `LOW <= score <= HIGH`, which made
+        score == 0.7 BOTH "selected for retry" AND "decisive
+        after retry" — a logical contradiction that produced
+        ping-pong retries on edge scores. Half-open resolves the
+        overlap: LOW (0.3) is selected; HIGH (0.7) is decisive
+        (NOT selected for retry).
+        """
         task = RetryTask()
         findings = [_make_finding("f-001"), _make_finding("f-002")]
         prior = {
-            "f-001": {"exploitability_score": 0.3},   # At LOW boundary
-            "f-002": {"exploitability_score": 0.7},   # At HIGH boundary
+            "f-001": {"exploitability_score": 0.3},   # At LOW boundary — selected
+            "f-002": {"exploitability_score": 0.7},   # At HIGH boundary — decisive (NOT selected)
         }
         selected = task.select_items(findings, prior)
-        assert len(selected) == 2
+        assert len(selected) == 1
+        assert selected[0]["finding_id"] == "f-001"
 
     def test_skips_missing_score(self):
         task = RetryTask()

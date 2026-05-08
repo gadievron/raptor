@@ -26,7 +26,7 @@ def test_extract_diff_raises_analysis_error_on_empty_diff(tmp_path: Path, monkey
     """Identical trees at before/after: git diff returns empty; extractor raises."""
     repo = tmp_path / "origin"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, timeout=15)
     _git(repo, "config", "user.email", "t@e.com")
     _git(repo, "config", "user.name", "T")
     (repo / "f.txt").write_text("a\n")

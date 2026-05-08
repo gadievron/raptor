@@ -301,6 +301,98 @@ def export_findings_directory(
     }
 
 
+def gather_project_annotations(project) -> List[Dict[str, Any]]:
+    """Walk every run dir's ``annotations/`` subdir plus the project's
+    own top-level ``annotations/`` dir, dedup on (file, function),
+    project-level wins. Returns a list of dicts with ``file``,
+    ``function``, ``status``, ``source``, ``body``, ``metadata``.
+
+    Used by the project report (counts + annotations.md section)
+    and reused by ``raptor project annotations``-style consumers.
+    """
+    from core.annotations import iter_all_annotations
+
+    roots = []
+    for rd in project.get_run_dirs(sweep=False):
+        ann_dir = rd / "annotations"
+        if ann_dir.exists():
+            roots.append((rd.stat().st_mtime, ann_dir))
+    project_ann = project.output_path / "annotations"
+    if project_ann.exists():
+        roots.append((float("inf"), project_ann))
+
+    if not roots:
+        return []
+
+    roots.sort(key=lambda r: r[0])
+    by_pair = {}
+    for _mt, root in roots:
+        for ann in iter_all_annotations(root):
+            by_pair[(ann.file, ann.function)] = ann
+
+    out = []
+    for ann in by_pair.values():
+        out.append({
+            "file": ann.file,
+            "function": ann.function,
+            "status": ann.metadata.get("status"),
+            "source": ann.metadata.get("source"),
+            "body": ann.body,
+            "metadata": dict(ann.metadata),
+        })
+    out.sort(key=lambda r: (r["file"], r["function"]))
+    return out
+
+
+def render_annotations_markdown(records: List[Dict[str, Any]],
+                                project_name: str) -> str:
+    """Render the deduped project-level annotation list as markdown
+    suitable for ``annotations.md`` in the report dir."""
+    lines: List[str] = [f"# Annotations — {project_name}", ""]
+    if not records:
+        lines.append("_No annotations._")
+        return "\n".join(lines) + "\n"
+
+    # Status counts up top.
+    status_counts: Dict[str, int] = {}
+    source_counts: Dict[str, int] = {}
+    for r in records:
+        s = r.get("status") or "—"
+        src = r.get("source") or "—"
+        status_counts[s] = status_counts.get(s, 0) + 1
+        source_counts[src] = source_counts.get(src, 0) + 1
+
+    lines.append(f"_{len(records)} unique annotation(s) "
+                 f"(deduped, project-level wins)._")
+    lines.append("")
+    lines.append("**By status:** " + ", ".join(
+        f"{k}={v}" for k, v in sorted(status_counts.items())
+    ))
+    lines.append("")
+    lines.append("**By source:** " + ", ".join(
+        f"{k}={v}" for k, v in sorted(source_counts.items())
+    ))
+    lines.append("")
+    lines.append("## Per-function entries")
+    lines.append("")
+    for r in records:
+        # Header line: file:function (status, source)
+        title = f"### `{r['file']}` :: `{r['function']}`"
+        meta = []
+        if r["status"]:
+            meta.append(f"status=`{r['status']}`")
+        if r["source"]:
+            meta.append(f"source=`{r['source']}`")
+        lines.append(title)
+        if meta:
+            lines.append(" · ".join(meta))
+        if r["body"]:
+            lines.append("")
+            lines.append(r["body"])
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
 def generate_project_report(project) -> Dict[str, Any]:
     """Generate a merged report across all runs in _report/ directory.
 
@@ -314,7 +406,7 @@ def generate_project_report(project) -> Dict[str, Any]:
 
     run_dirs = project.get_run_dirs(sweep=True)
     if not run_dirs:
-        return {"findings": 0, "runs": 0}
+        return {"findings": 0, "runs": 0, "annotations": 0}
 
     # Merge findings
     merged = merge_findings(run_dirs)
@@ -325,11 +417,20 @@ def generate_project_report(project) -> Dict[str, Any]:
         project_name=project.name,
     )
 
+    # Aggregate annotations across runs + project-level overrides.
+    annotations = gather_project_annotations(project)
+    save_json(report_dir / "annotations.json", {"annotations": annotations})
+    annotations_md = render_annotations_markdown(annotations, project.name)
+    annotations_md_path = report_dir / "annotations.md"
+    annotations_md_path.write_text(annotations_md, encoding="utf-8")
+
     return {
         "findings": len(merged),
         "runs": len(run_dirs),
+        "annotations": len(annotations),
         "report_dir": str(report_dir),
         "findings_dir": findings_export["findings_dir"],
         "aggregate_markdown": findings_export["aggregate_markdown"],
         "finding_buckets": findings_export["counts"],
+        "annotations_markdown": str(annotations_md_path),
     }

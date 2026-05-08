@@ -63,7 +63,21 @@ Session impact: +___ tokens when auto-loaded
 
 ### Step 5: Create Skill File
 
-Save to: `tiers/specialists/custom/[skill_name].md`
+Save to: `.claude/skills/[skill_name]/SKILL.md` (the
+canonical Claude Code skills directory). For
+single-file skills, `.claude/skills/[skill_name].md`
+also works — Claude Code's skill discovery walks
+`.claude/skills/` and picks up both layouts.
+
+(Pre-fix this said `tiers/specialists/custom/[name].md`.
+That path is from an earlier RAPTOR layout that
+predates Claude Code's skills mechanism — files there
+aren't auto-loaded by Claude Code today, so saving
+new skills there would have made them invisible to
+the LLM. Existing files under `tiers/personas/` and
+`tiers/specialists/` are still loaded VIA EXPLICIT
+prompts, but new skills should go under
+`.claude/skills/` for auto-load.)
 
 **Skill structure:**
 ```markdown

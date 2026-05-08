@@ -84,12 +84,38 @@ def _iris_pack_deps_already_resolved(pack_dir: Path) -> bool:
     return True
 
 
+_STDERR_LENGTH_CAP = 256 * 1024  # 256 KB; codeql stderr is typically <16 KB
+
+
 def _extract_missing_pack(stderr: str) -> str | None:
     """Extract the missing pack name from a CodeQL 'cannot be found' error.
 
     Matches: "Query pack codeql/cpp-queries:suites/foo.qls cannot be found."
     Does NOT match: "Could not read /path/to/suite.qls" (different error).
+
+    Caps stderr length before the regex match to bound wallclock.
+    Pre-fix the regex ran against unbounded stderr — codeql stderr
+    is typically <16 KB, but a misbehaving build that streamed
+    multi-MB output (build-mode=manual with verbose logging,
+    java-kotlin builds dumping JVM stack traces from a crash)
+    could feed pathological input to the regex. The pattern
+    contains nested quantifiers that, while not catastrophic-
+    backtracking, scan O(N) per failed match attempt — multi-MB
+    input → measurable wallclock per stderr scan.
+
+    Also: the captured pack name flows into a CLI-arg execve
+    (`codeql pack download <pack>`), so a too-long match could
+    trigger E2BIG from the kernel. The regex itself bounds the
+    pack-name shape to small strings, but the WHOLE-STDERR scan
+    is still proportional to input size.
+
+    256 KB cap covers any realistic codeql stderr while refusing
+    pathological input. Above the cap we return None — the same
+    behaviour as a non-matching stderr; caller falls through to
+    the normal "no pack to retry" path.
     """
+    if len(stderr) > _STDERR_LENGTH_CAP:
+        return None
     m = _PACK_NOT_FOUND_RE.search(stderr)
     if m:
         # Strip trailing colon or version: "codeql/cpp-queries:" → "codeql/cpp-queries"

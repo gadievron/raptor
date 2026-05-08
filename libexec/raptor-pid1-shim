@@ -93,6 +93,31 @@ def main() -> int:
 
     target_argv = sys.argv[1:]
 
+    # Install signal handlers BEFORE fork. The shim runs as pid-1
+    # in the new pid namespace, where the kernel's default
+    # delivery policy DROPS signals from same-namespace senders
+    # but external signals (delivered before the namespace is
+    # fully sealed) still hit pid-1 with the default disposition.
+    # Pre-fix the four-signal install happened AFTER the fork,
+    # so a SIGINT delivered in the brief fork→install window
+    # killed pid-1 with the default disposition (terminate),
+    # which tore down the entire pid namespace before the target
+    # had a chance to start. Race window was small but real on
+    # heavily-loaded hosts; surfaced as "agentic run died with
+    # no output" with no traceback.
+    #
+    # Initial install ignores the signals (SIG_IGN) — at the
+    # parent layer they're harmless once the target is up
+    # because we'll replace them with `_forward` below. The
+    # forked child resets handlers to default automatically at
+    # execvp() (POSIX), so the IGN doesn't propagate to the
+    # target binary.
+    for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
+        try:
+            signal.signal(s, signal.SIG_IGN)
+        except (OSError, ValueError):
+            pass
+
     child = os.fork()
     if child == 0:
         # Target branch. We want the target to be the session leader
@@ -137,6 +162,25 @@ def main() -> int:
                 os.setsid()
             except OSError:
                 pass
+            # Reset the four termination signals to SIG_DFL before
+            # exec. POSIX execve(2) rule: handlers reset to default
+            # across exec, BUT signals set to SIG_IGN STAY ignored
+            # in the new image. The pre-fork shim installs SIG_IGN
+            # to close the race window where pid-1 has default
+            # handlers — that's correct for the shim, but the IGN
+            # disposition is then INHERITED through the
+            # intermediate fork AND survives the target's execvp
+            # below. The target binary then ignores SIGTERM /
+            # SIGINT / SIGHUP / SIGQUIT silently, breaking
+            # `kill -TERM $$` from inside a shell-form target
+            # (and breaking the shim's own forwarder, which kills
+            # a target that won't die). Reset to SIG_DFL here so
+            # the target sees default disposition.
+            for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
+                try:
+                    signal.signal(s, signal.SIG_DFL)
+                except (OSError, ValueError):
+                    pass
             try:
                 os.execvp(target_argv[0], target_argv)
             except FileNotFoundError:

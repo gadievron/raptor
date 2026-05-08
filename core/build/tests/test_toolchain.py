@@ -122,8 +122,14 @@ class TestDetectRustupHome(unittest.TestCase):
             )
 
     def test_fallback_to_home_rustup_when_rustup_not_on_path(self):
+        # `pwd.getpwuid(os.geteuid()).pw_dir` is queried first
+        # (kernel-ratified user identity, can't be hijacked by
+        # `HOME=/etc` env injection — see cluster 231 fix).
+        # Env-var fallback only fires when pwd lookup fails.
+        from collections import namedtuple
+        FakePw = namedtuple("FakePw", ["pw_dir"])
         with patch("shutil.which", return_value=None), \
-             patch.dict(os.environ, {"HOME": "/home/alice"}, clear=False), \
+             patch("pwd.getpwuid", return_value=FakePw(pw_dir="/home/alice")), \
              patch("os.path.isdir", lambda p: p == "/home/alice/.rustup"):
             self.assertEqual(
                 toolchain.detect_RUSTUP_HOME(),

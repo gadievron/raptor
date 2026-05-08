@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import functools
 import json
+import os
 import re
 import sys
 from collections import Counter
@@ -137,7 +138,26 @@ def main() -> int:
     jsonl_path = out_dir / "oracle_verdicts.jsonl"
 
     print(f"Cross-checking {len(results)} CVEs from {summary_path} → {out_dir}", file=sys.stderr)
-    with jsonl_path.open("w", encoding="utf-8") as fh:
+    # Write to a `.tmp` file then atomically rename to the final
+    # path. Pre-fix the writer wrote directly to `oracle_verdicts.jsonl`
+    # — if the oracle was interrupted (Ctrl-C, OOM kill, parent
+    # process exit) mid-run, the partial file looked legitimate to
+    # downstream consumers (file exists, parses as JSONL up to
+    # truncation point) but was missing the tail of CVE verdicts.
+    # Re-running the oracle then double-counted the already-written
+    # head of the previous run if the consumer didn't notice.
+    #
+    # Atomic temp-then-rename pattern: writer flushes + fsyncs
+    # before rename so the on-disk content is durable; rename is
+    # atomic at the filesystem-metadata layer. Consumer sees either
+    # the OLD complete file or the NEW complete file, never a
+    # truncated transition.
+    #
+    # Per-iteration `fh.flush()` is intentional checkpoint behaviour
+    # — operator can `tail -f oracle_verdicts.jsonl.tmp` to watch
+    # progress in real time on large runs (1000+ CVEs take 30+ min).
+    tmp_path = jsonl_path.with_suffix(jsonl_path.suffix + ".tmp")
+    with tmp_path.open("w", encoding="utf-8") as fh:
         for i, r in enumerate(results, 1):
             cve_id = r.get("cve_id", "UNKNOWN")
             status = _classify_bench_status(r)
@@ -149,8 +169,16 @@ def main() -> int:
             verdicts_by_status.setdefault(status, []).append(v)
             verdicts_flat.append((status, v))
             fh.write(json.dumps({"bench_status": status, **v.to_dict()}) + "\n")
+            fh.flush()  # checkpoint — see comment above
             if i % 20 == 0:
                 print(f"  … {i}/{len(results)}", file=sys.stderr)
+        # fsync before rename so the data pages are on disk before
+        # the rename's metadata change becomes visible.
+        try:
+            os.fsync(fh.fileno())
+        except OSError:
+            pass
+    os.replace(str(tmp_path), str(jsonl_path))
 
     # Aggregate markdown.
     # `errors="replace"` so a stray surrogate or other non-roundtripable

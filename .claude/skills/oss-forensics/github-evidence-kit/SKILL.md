@@ -300,7 +300,7 @@ Available IOC types: `COMMIT_SHA`, `FILE_PATH`, `FILE_HASH`, `CODE_SNIPPET`, `EM
 ### Run Unit Tests
 
 ```bash
-cd .claude/skills/github-forensics/github-evidence-kit
+cd .claude/skills/oss-forensics/github-evidence-kit
 pip install -r requirements.txt
 pytest tests/ -v --ignore=tests/test_integration.py
 ```

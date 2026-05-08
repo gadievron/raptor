@@ -288,11 +288,55 @@ def _try_kill_and_reap(pid: int) -> None:
     Routes through _waitpid_eintr_safe so a signal-interrupted reap
     doesn't silently leave a zombie (same EINTR concern as the main
     probe waitpid calls).
+
+    Uses pidfd to close the PID-reuse window. Pre-fix the kill+wait
+    sequence had a race:
+
+      1. probe child exits naturally
+      2. another process spawns, kernel allocates the same PID
+      3. our `os.kill(pid, SIGKILL)` lands on the unrelated
+         new process
+
+    The window is microseconds wide on a typical host but real —
+    PID-wraparound on a busy machine completes in seconds and
+    probe paths run repeatedly. `pidfd_open(pid)` (Linux 5.3+)
+    refers to the process by FD, then `pidfd_send_signal(fd, SIG)`
+    delivers via fd — both refuse silently if the original
+    process exited (no PID-reuse hazard). Fall back to the
+    PID-based kill on older kernels (pidfd_open returns ENOSYS
+    pre-5.3, or AttributeError if Python is older than 3.9 which
+    added `os.pidfd_open`).
     """
+    pidfd = None
     try:
-        os.kill(pid, signal.SIGKILL)
-    except (OSError, ProcessLookupError):
+        pidfd = os.pidfd_open(pid)
+    except (OSError, AttributeError):
+        # OSError (ENOSYS) on pre-5.3 kernels; AttributeError on
+        # Python <3.9 (no os.pidfd_open). Fall through to PID-based.
         pass
+
+    if pidfd is not None:
+        try:
+            try:
+                signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+            except (OSError, AttributeError):
+                # AttributeError on Python <3.9; OSError if the
+                # process exited between pidfd_open and the send
+                # (rare but possible — pidfd is bound to a
+                # specific process instance, so the send fails
+                # with ESRCH rather than hitting a reused PID).
+                pass
+        finally:
+            try:
+                os.close(pidfd)
+            except OSError:
+                pass
+    else:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            pass
+
     try:
         _waitpid_eintr_safe(pid, 0)
     except (OSError, ChildProcessError):

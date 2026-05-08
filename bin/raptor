@@ -34,19 +34,15 @@ fi
 # vars, editor/pager, Kerberos, etc.) are handled by
 # core.config.get_safe_env() when we spawn children — stripping them
 # here would needlessly break the user's legitimate environment.
-for _var in \
-    LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT \
-    LD_DEBUG LD_PROFILE LD_PROFILE_OUTPUT \
-    GCONV_PATH \
-    PYTHONSTARTUP PYTHONPATH PYTHONHOME PYTHONUSERBASE \
-    PYTHONBREAKPOINT PYTHONINSPECT \
-    OPENSSL_CONF SSLKEYLOGFILE \
-    NODE_OPTIONS NODE_PATH NODE_EXTRA_CA_CERTS \
-    MALLOC_CONF JE_MALLOC_CONF MALLOC_CHECK_ MALLOC_PERTURB_ \
-    BASH_ENV ENV ; do
-    unset "$_var"
-done
-unset _var
+# Sourced from core/security/_dangerous_env_strip.sh — single
+# source of truth shared with bin/cve-diff. Lives next to its
+# Python siblings (core/config.RaptorConfig.DANGEROUS_ENV_VARS
+# + core/security/env_sanitisation.strip_env_vars) so a single
+# `git grep` over core/security/ surfaces the canonical list
+# regardless of which language layer is enforcing.
+# RAPTOR_DIR isn't set yet (this runs before the python entry
+# point), so we resolve the strip-list path relative to this script.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../core/security/_dangerous_env_strip.sh"
 # Added by batch 581:
 #   * LD_DEBUG / LD_PROFILE / LD_PROFILE_OUTPUT — glibc loader
 #     diagnostic env vars that write profile data to operator-
@@ -232,10 +228,18 @@ fi
 # Same policy shared with raptor_agentic.py + build_detector.py.
 if [ -n "$CHECK_TARGET" ]; then
     set +e
+    # `--` terminator before the target separates flags from the
+    # positional path. Pre-fix a target path that started with
+    # `-` (rare but legitimate: someone scanning a sibling
+    # checkout named `--branch-foo/`) was interpreted by the
+    # cc-trust-check arg parser as a flag, triggering "unknown
+    # option" + exit 2 — which the launcher then treated as
+    # "refused to launch", failing the run on a path the
+    # operator never intended as a flag.
     if [ -n "$TRUST_REPO_ARG" ]; then
-        "$RAPTOR_DIR/libexec/raptor-cc-trust-check" "$TRUST_REPO_ARG" "$CHECK_TARGET"
+        "$RAPTOR_DIR/libexec/raptor-cc-trust-check" "$TRUST_REPO_ARG" -- "$CHECK_TARGET"
     else
-        "$RAPTOR_DIR/libexec/raptor-cc-trust-check" "$CHECK_TARGET"
+        "$RAPTOR_DIR/libexec/raptor-cc-trust-check" -- "$CHECK_TARGET"
     fi
     trust_rc=$?
     set -e
@@ -258,8 +262,27 @@ if [ -d "$RAPTOR_DIR/plugins/coverage" ]; then
 fi
 
 clear
+# `env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS` defensively
+# strips a small set of shell-eval env vars at the exec boundary,
+# even if our earlier source of `_dangerous_env_strip.sh` missed
+# them somehow (e.g. a bash plugin or hook re-set BASH_ENV between
+# the strip and here, or an operator's late-loaded config). The
+# strip-list source above already covers the common case; this is
+# pure defence-in-depth for the moment of `exec`.
+#
+# Why these four specifically and not the whole strip-list? Most
+# of the other vars in the strip-list affect Python / glibc / Node
+# loaders, not the bash shell that wraps a launched binary. The
+# four here are the ones that bash itself reads from the env at
+# startup (BASH_ENV, ENV, SHELLOPTS, BASHOPTS) — if claude
+# happens to be a bash wrapper script (some package-manager installs
+# of claude are wrapper scripts that exec node with the right
+# args), these are the vars that influence its startup before
+# `--noprofile --norc` would help.
 if [[ -n "$INITIAL_PROMPT" ]]; then
-    exec claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}" "$INITIAL_PROMPT"
+    exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
+        claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}" "$INITIAL_PROMPT"
 else
-    exec claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}"
+    exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
+        claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}"
 fi

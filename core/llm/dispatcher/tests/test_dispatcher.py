@@ -189,10 +189,24 @@ class TestLayer3TokenAuth:
 class TestLayer4TokenLifecycle:
 
     def test_token_budget_exhaustion(self, fake_creds, tmp_path):
+        # Budget enforcement is gate logic — must not depend on the
+        # real anthropic.com upstream (CI may have no network).
+        # Point the anthropic rule at a captive in-process server so
+        # the first two requests resolve quickly and we observe the
+        # gate's third-request rejection deterministically.
+        upstream = _CaptiveUpstream()
         d = LLMDispatcher(
             run_id="budget", creds=fake_creds,
             audit_path=tmp_path / "audit.jsonl",
             token_ttl_s=3600, token_budget=2,
+        )
+        from core.llm.dispatcher.auth import ProviderRule
+        original = d._rules["anthropic"]
+        d._rules["anthropic"] = ProviderRule(
+            name=original.name,
+            upstream_base_url=upstream.base_url,
+            inject_headers=original.inject_headers,
+            strip_request_headers=original.strip_request_headers,
         )
         try:
             socket_path, fd = d.allocate_worker(label="budget-test")
@@ -215,6 +229,7 @@ class TestLayer4TokenLifecycle:
                 assert r.status_code == 401
                 assert "exhausted" in r.text
         finally:
+            upstream.shutdown()
             d.shutdown()
 
     def test_token_expiry(self, fake_creds, tmp_path):
@@ -666,7 +681,12 @@ class TestSubprocessE2E:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-            stdout, stderr = proc.communicate(timeout=15)
+            # 30s, not 15s: this 1-deep Python subprocess (worker.py
+            # imports anthropic + core.llm) takes ~10-12s in isolation
+            # but can exceed 15s on a contended xdist runner. 30s
+            # matches the timeout used by the grandchild-relay sibling
+            # in core/llm/tests/test_dispatcher_integration.py.
+            stdout, stderr = proc.communicate(timeout=30)
             assert proc.returncode == 0, (
                 f"worker failed: rc={proc.returncode} "
                 f"stdout={stdout.decode()!r} stderr={stderr.decode()!r}"

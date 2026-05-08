@@ -106,6 +106,17 @@ class FileCallGraph:
     calls: List[CallSite] = field(default_factory=list)
     indirection: Set[str] = field(default_factory=set)
     getattr_targets: Set[str] = field(default_factory=set)
+    # Relative imports (Python ``from . import x`` /
+    # ``from ..pkg import y``). Stored as
+    # ``(level, module_or_empty, name, asname_or_None)`` quads. Not
+    # resolved at extraction time — the package root depends on the
+    # file's location in the inventory tree, which the per-file
+    # extractor doesn't know. The resolver in
+    # :mod:`core.inventory.reachability` consumes these to model
+    # ``__init__.py`` re-exports.
+    relative_imports: List[Tuple[int, str, str, Optional[str]]] = field(
+        default_factory=list,
+    )
 
     def to_dict(self) -> dict:
         return {
@@ -117,10 +128,12 @@ class FileCallGraph:
             ],
             "indirection": sorted(self.indirection),
             "getattr_targets": sorted(self.getattr_targets),
+            "relative_imports": [list(ri) for ri in self.relative_imports],
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "FileCallGraph":
+        rel = d.get("relative_imports") or []
         return cls(
             imports=dict(d.get("imports") or {}),
             calls=[
@@ -133,6 +146,11 @@ class FileCallGraph:
             ],
             indirection=set(d.get("indirection") or []),
             getattr_targets=set(d.get("getattr_targets") or []),
+            relative_imports=[
+                (int(r[0]), str(r[1] or ""), str(r[2] or ""),
+                 r[3] if len(r) > 3 else None)
+                for r in rel if isinstance(r, (list, tuple)) and len(r) >= 3
+            ],
         )
 
 
@@ -188,16 +206,22 @@ class _PythonCallGraph(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        # ``from x.y import z``         → {"z": "x.y.z"}
-        # ``from x.y import z as q``    → {"q": "x.y.z"}
+        # ``from x.y import z``         → imports {"z": "x.y.z"}
+        # ``from x.y import z as q``    → imports {"q": "x.y.z"}
         # ``from x import *``           → flag wildcard, no map entry
-        # ``from . import z``           → relative; skip (we don't
-        #                                  resolve package roots here)
+        # ``from . import z``           → relative_imports entry; the
+        #                                  resolver in reachability.py
+        #                                  resolves the package root
+        #                                  from the file's path
         module = node.module or ""
         if node.level and node.level > 0:
-            # Relative import — without the package root we can't
-            # resolve to a qualified name. Don't record; let downstream
-            # treat as out-of-scope.
+            for alias in node.names:
+                if alias.name == "*":
+                    self.graph.indirection.add(INDIRECTION_WILDCARD_IMPORT)
+                    continue
+                self.graph.relative_imports.append(
+                    (node.level, module, alias.name, alias.asname),
+                )
             self.generic_visit(node)
             return
         for alias in node.names:

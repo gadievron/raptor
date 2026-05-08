@@ -47,12 +47,14 @@
 - If all fail: Analyze SARIF files manually
 
 **Placeholder exploits (TODO comments):**
-- Use: exploit developer persona explicitly
-- Command: "Use exploit developer persona to fix finding #X"
+- Load: `tiers/personas/exploit_developer.md` explicitly
+- Command: "Load tiers/personas/exploit_developer.md and fix finding #X"
 
 **Template patches (recommendations not code):**
-- Use: exploit developer persona to generate actual diffs
-- Command: "Use exploit developer persona to create working patch"
+- Load: `tiers/personas/patch_engineer.md` (or
+  `tiers/personas/exploit_developer.md` for exploit
+  PoC patches)
+- Command: "Load tiers/personas/patch_engineer.md and create working patch"
 
 **Model not found (Ollama):**
 - Check: `ollama list` for available models

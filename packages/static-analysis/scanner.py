@@ -195,7 +195,27 @@ def run_single_semgrep(
         Tuple of (sarif_path, success)
     """
     def sanitize_name(name: str) -> str:
-        return name.replace("/", "_").replace(":", "_")
+        # Strict allowlist: alphanumeric + dash + underscore +
+        # dot. Pre-fix only `/` and `:` were replaced — but
+        # `name` is the policy-pack name from
+        # `RaptorConfig.BASELINE_SEMGREP_PACKS` /
+        # `POLICY_GROUP_TO_SEMGREP_PACK` (operator can extend
+        # via `--policy-groups`), and the sanitised result
+        # becomes part of an output FILE PATH. Any other shell
+        # / filesystem-special character (`*`, `?`, `[`, `]`,
+        # `\\`, space, NUL, newline, control bytes) flowed
+        # straight into `out_dir / f"semgrep_{suffix}.sarif"`.
+        # Concrete failure: a custom policy pack named with a
+        # space (e.g. `--policy-groups "my pack"`) produced
+        # `semgrep_my pack.sarif` — a path with embedded
+        # whitespace that subsequent `find` / `glob` calls
+        # mishandled (split on whitespace, missing the second
+        # half).
+        import re as _re
+        # Replace any non-allowed char with underscore. Preserve
+        # the legacy `/` → `_` and `:` → `_` mapping (those are
+        # both in the disallowed set, so they get replaced anyway).
+        return _re.sub(r'[^A-Za-z0-9._-]', '_', name)
 
     suffix = sanitize_name(name)
     sarif = out_dir / f"semgrep_{suffix}.sarif"
@@ -489,7 +509,24 @@ def run_codeql(repo_path: Path, out_dir: Path, languages):
         # execution. Quiet codeql query suites (cpp / java)
         # have hundreds of queries; serial execution wastes
         # 80%+ of CPU time on machines with multiple cores.
-        query_dir = Path("codeql-queries") / lang
+        # Resolve the query directory via RaptorConfig instead of
+        # the bare relative path "codeql-queries". Pre-fix
+        # `Path("codeql-queries") / lang` was relative to the
+        # CALLER'S CWD, so:
+        #   * Operators running from /tmp / their home / a
+        #     subdirectory got `query_dir.exists() == False` and
+        #     the queries silently skipped (sarif_paths stayed
+        #     empty, no findings reported even though the DB was
+        #     built).
+        #   * The actual queries live under
+        #     `engine/codeql/queries/` (RaptorConfig.CODEQL_QUERIES_DIR).
+        # Use the canonical config path; falls back to the relative
+        # form if for some reason CODEQL_QUERIES_DIR isn't set.
+        try:
+            from core.config import RaptorConfig as _RC
+            query_dir = _RC.CODEQL_QUERIES_DIR / lang
+        except (ImportError, AttributeError):
+            query_dir = Path("codeql-queries") / lang
         if not query_dir.exists():
             continue
         rc, so, se = run(

@@ -51,13 +51,13 @@ class TestValidateDifferent:
 
 
 def _init_tiny_repo(path: Path) -> tuple[str, str]:
-    subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True, timeout=15)
     subprocess.run(
         ["git", "-C", str(path), "config", "user.email", "t@t"], check=True
     )
-    subprocess.run(["git", "-C", str(path), "config", "user.name", "t"], check=True)
+    subprocess.run(["git", "-C", str(path), "config", "user.name", "t"], check=True, timeout=15)
     (path / "a").write_text("v1\n")
-    subprocess.run(["git", "-C", str(path), "add", "a"], check=True)
+    subprocess.run(["git", "-C", str(path), "add", "a"], check=True, timeout=15)
     subprocess.run(
         ["git", "-C", str(path), "commit", "-q", "-m", "first"], check=True
     )

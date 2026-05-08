@@ -179,7 +179,26 @@ class OSVDiscoverer:
                 ]
                 for event in rng.events:
                     fixed = event.get("fixed")
-                    if not fixed:
+                    # `if not fixed` is falsy for empty string AND
+                    # for non-string types like 0/None/[], but a
+                    # TRUTHY non-string (e.g. an int sha that some
+                    # OSV emitters serialise wrong, a dict/list
+                    # from a malformed schema, or a hex BYTES blob
+                    # from a Python re-serialisation glitch) slips
+                    # through and lands as `CommitSha(fixed)` —
+                    # `CommitSha` is a `NewType(str)` so it just
+                    # casts without runtime check, but downstream
+                    # consumers that string-format / regex-match
+                    # the SHA hit TypeError on non-str. Tighten:
+                    # require fixed to be a non-empty str AND
+                    # match the SHA shape.
+                    if not isinstance(fixed, str) or not fixed:
+                        continue
+                    if not _COMMIT_SHA_RE.fullmatch(fixed):
+                        # Some emitters put non-SHA "fixed"
+                        # markers (version strings like "1.2.3").
+                        # Skip — Pass 2 only consumes SHA-shaped
+                        # fix events.
                         continue
                     key = (repo, fixed)
                     if key in seen:

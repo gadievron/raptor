@@ -653,10 +653,21 @@ class CrashAnalyser:
         """Fallback LLDB analysis with simpler commands."""
         logger.info("Using simplified LLDB analysis")
 
-        # Simpler commands that should complete faster
+        # Stdin redirect via subprocess fd, NOT via interpolating
+        # `input_file` into the LLDB script string. Pre-fix
+        # `f"process launch -i {input_file}"` interpolated the
+        # path raw — for paths with spaces, quotes, backslashes,
+        # or shell metacharacters the LLDB parser broke (LLDB's
+        # `process launch -i` arg is shell-tokenised; spaces in
+        # the path split it into multiple args). Same threat
+        # model as the GDB-debugger.py path that already feeds
+        # input via subprocess stdin (cluster 720). LLDB can
+        # accept stdin via `process launch` with no `-i` flag
+        # — the inferior inherits the parent's stdin by default,
+        # which is the subprocess fd we open below.
         lldb_commands = [
             "settings set auto-confirm true",
-            f"process launch -i {input_file}",  # LLDB syntax for stdin input
+            "process launch",  # inferior inherits parent stdin
             "bt",  # Simple backtrace
             "register read",  # Registers
             "quit",
@@ -675,14 +686,16 @@ class CrashAnalyser:
 
             # LLDB fallback — also a debugger, needs ptrace (profile='debug').
             binary_dir = str(self.binary.parent.resolve())
-            result = _sandbox_run(
-                ["lldb", "-b", "-s", str(cmd_file), str(self.binary)],
-                profile="debug",
-                target=binary_dir, output=binary_dir,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
+            with open(input_file, "rb") as fh_in:
+                result = _sandbox_run(
+                    ["lldb", "-b", "-s", str(cmd_file), str(self.binary)],
+                    stdin=fh_in,
+                    profile="debug",
+                    target=binary_dir, output=binary_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
             return result.stdout
         except subprocess.TimeoutExpired:
             logger.error("LLDB fallback also timed out")
@@ -721,20 +734,51 @@ class CrashAnalyser:
                 context.signal = "05"
                 break
 
-        # Extract registers (LLDB format: register read output)
+        # Extract registers (LLDB format: register read output).
+        # State-machine terminators: pre-fix the only reset of
+        # `in_registers` was the `elif "thread backtrace"` clause.
+        # If LLDB output had a registers section followed by
+        # something OTHER than backtrace (e.g. `disassemble` block,
+        # `image lookup`, `expression result`), in_registers stayed
+        # True for the rest of the loop and any line containing
+        # ` = 0x` got misclassified as a register (e.g. a disasm
+        # line `0x12345 movq $0x10, %rax` has ` = 0x` after split,
+        # producing fictional register entries).
+        # Add the standard LLDB section terminators:
+        # `disassemble`, `info ` (info-* command output), `frame `,
+        # `(lldb)` (command prompt re-emergence), and any blank
+        # line followed by an indent-0 token (typical LLDB section
+        # boundary).
         in_registers = False
+        section_terminators = (
+            "thread backtrace",
+            "disassemble",
+            "image lookup",
+            "expression",
+            "(lldb)",
+        )
         for line in lines:
             if "register read" in line.lower() or in_registers:
                 in_registers = True
+                lower = line.lower()
+                # Reset on any known section start.
+                if any(term in lower for term in section_terminators):
+                    in_registers = False
+                    continue
                 # LLDB register format: "    x0 = 0x0000000000000000"
                 if " = 0x" in line and not line.startswith("General Purpose Registers"):
                     parts = line.strip().split(" = ")
                     if len(parts) == 2:
                         reg_name = parts[0].strip()
                         reg_value = parts[1].strip()
-                        context.registers[reg_name] = reg_value
-                elif "thread backtrace" in line.lower():
-                    in_registers = False
+                        # Reject keys that contain whitespace —
+                        # those aren't real register names; they're
+                        # disasm bytes or other section content
+                        # that slipped past the terminator (e.g.
+                        # an unknown new section that we don't
+                        # have a terminator for yet).
+                        if reg_name and " " not in reg_name and "\t" not in reg_name:
+                            context.registers[reg_name] = reg_value
 
         # Extract stack trace (LLDB format).
         # Frame lines start with `frame #0:`, `frame #1:`, etc.
@@ -869,19 +913,49 @@ class CrashAnalyser:
                     context.signal = "15"
                 break
 
-        # Extract registers
+        # Extract registers. Pre-fix the parser had two bugs:
+        #
+        # 1. Discriminator: `"=" in line` — but GDB's `info
+        #    registers` output does NOT use `=` between name and
+        #    value (the format is whitespace-separated:
+        #    `rax            0x7fffffffe5e8      140737488349160`).
+        #    The `=`-bearing condition rarely matched, so most
+        #    register lines were silently skipped. The few that
+        #    did match were typically NON-register lines (disasm
+        #    instructions like `mov $0x10 = $immediate, %rax`)
+        #    which then got mis-stored as fake registers via
+        #    `parts[0]`/`parts[1]`.
+        #
+        # 2. Filter: `any(reg in line for reg in [...])` matches
+        #    `rax` as a SUBSTRING of any text — including disasm
+        #    operands (`mov %rax, %rcx`), comments, and the
+        #    register list itself (the line `info registers`
+        #    contains `register` which doesn't match, but
+        #    `info reg ...` echoes can contain the names).
+        #
+        # Match GDB's actual `info registers` output shape with
+        # a regex: line begins with optional whitespace, a
+        # register name (alphanumeric + underscore), whitespace,
+        # then a hex value. Anything else gets skipped.
+        import re as _re
+        gdb_reg_re = _re.compile(
+            r'^\s*([a-z][a-z0-9_]*)\s+(0x[0-9a-fA-F]+)\b'
+        )
         in_registers = False
         for line in lines:
-            if "info registers" in line.lower() or in_registers:
+            lower = line.lower()
+            if "info registers" in lower or in_registers:
                 in_registers = True
-                if "=" in line and any(reg in line for reg in ["rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rsp", "rbp", "rip"]):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        reg_name = parts[0]
-                        reg_value = parts[1]
-                        context.registers[reg_name] = reg_value
-                elif "backtrace" in line.lower():
+                # Section terminators (any other GDB command output
+                # below registers).
+                if any(t in lower for t in (
+                    "backtrace", "disassemble", "(gdb)", "info ",
+                )) and "info registers" not in lower:
                     in_registers = False
+                    continue
+                m = gdb_reg_re.match(line)
+                if m:
+                    context.registers[m.group(1)] = m.group(2)
 
         # Extract stack trace
         in_backtrace = False
@@ -1370,36 +1444,60 @@ class CrashAnalyser:
         return False
 
     def _run_asan_analysis(self, input_file: Path) -> str:
-        """Run ASan-instrumented binary to get detailed crash diagnostics."""
+        """Run ASan-instrumented binary to get detailed crash diagnostics.
+
+        Input is fed via STDIN, not as an argv path. Pre-fix the
+        invocation was `[binary, str(input_file)]`, passing the
+        file path as the first argv. Two failure modes:
+
+        * Binaries that read from stdin (the common shape for
+          fuzz harnesses, AFL++ targets, and CTF-style crash
+          repros) ignored the path argv entirely — ASan ran on
+          a no-input invocation, produced no crash, and the
+          analyser concluded the binary was healthy when it
+          wasn't.
+        * Binaries that DO accept a path on argv but treat it
+          as their config / input-list / something OTHER than
+          "the data to crash on" produced wrong-shape behaviour
+          when handed a raw crash blob path (e.g. `--config
+          file.cfg` syntax misread as the cfg path).
+
+        The crash-analyser flow's source-of-truth invocation is
+        the GDB debugger.py path which already feeds input via
+        stdin (cluster 720 batch). Mirror that convention here
+        so ASAN sees the same shape the debugger does.
+        """
         logger.info("Running ASan analysis for enhanced diagnostics")
-        
+
         try:
-            # Run the binary with the crash input — full sandbox. ASAN's
-            # own diagnostics don't need ptrace, so the default `full`
-            # profile (seccomp incl. ptrace block, Landlock, net block)
-            # is appropriate.
+            # Run the binary with the crash input on stdin — full
+            # sandbox. ASAN's own diagnostics don't need ptrace, so
+            # the default `full` profile (seccomp incl. ptrace
+            # block, Landlock, net block) is appropriate.
             binary_dir = str(self.binary.parent.resolve())
-            result = _sandbox_run(
-                [str(self.binary), str(input_file)],
-                block_network=True,
-                target=binary_dir, output=binary_dir,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                # Use get_safe_env() as the base, NOT os.environ.
-                # Pre-fix `{**os.environ, "ASAN_OPTIONS": ...}`
-                # passed the operator's full env (LLM API keys,
-                # AWS_*, GH_TOKEN, RAPTOR_internal vars) through
-                # to the binary being analysed. The crash binary
-                # is by definition INTERESTING — it crashed under
-                # adversarial input — and may have a malicious
-                # input that exfiltrates getenv() results into
-                # the crash output, which we then write to the
-                # report. Same threat model as fuzzing/afl_runner
-                # batch 454.
-                env={**RaptorConfig.get_safe_env(),
-                     "ASAN_OPTIONS": "abort_on_error=0:print_stacktrace=1"},
-            )
+            with open(input_file, "rb") as fh_in:
+                result = _sandbox_run(
+                    [str(self.binary)],
+                    stdin=fh_in,
+                    block_network=True,
+                    target=binary_dir, output=binary_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    # Use get_safe_env() as the base, NOT os.environ.
+                    # Pre-fix `{**os.environ, "ASAN_OPTIONS": ...}`
+                    # passed the operator's full env (LLM API keys,
+                    # AWS_*, GH_TOKEN, RAPTOR_internal vars) through
+                    # to the binary being analysed. The crash binary
+                    # is by definition INTERESTING — it crashed under
+                    # adversarial input — and may have a malicious
+                    # input that exfiltrates getenv() results into
+                    # the crash output, which we then write to the
+                    # report. Same threat model as fuzzing/afl_runner
+                    # batch 454.
+                    env={**RaptorConfig.get_safe_env(),
+                         "ASAN_OPTIONS": "abort_on_error=0:print_stacktrace=1"},
+                )
             
             # Combine stdout and stderr (ASan reports to stderr)
             asan_output = result.stdout + "\n" + result.stderr

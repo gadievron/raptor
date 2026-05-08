@@ -189,7 +189,13 @@ def _normalise_vuln_type(value: Any) -> tuple[Any, bool]:
 
 
 def _normalise_status_field(value: Any) -> tuple[Any, bool]:
-    from packages.exploitability_validation.orchestrator import normalize_status
+    # Direct import from `core.status` (the helper's new home).
+    # Pre-fix this imported from `packages.exploitability_validation.orchestrator`
+    # which was a layering inversion (core → packages); deferred via
+    # inline import but still a runtime cross-package coupling that
+    # broke clean dependency analysis (and would have hit a circular
+    # import the moment another core/ consumer also wanted the helper).
+    from core.status import normalize_status
     if not isinstance(value, str) or not value:
         return value, False
     normalised = normalize_status(value)

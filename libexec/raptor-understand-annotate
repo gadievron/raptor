@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""Synthesise annotations from /understand JSON outputs.
+
+Usage: raptor-understand-annotate <output_dir>
+
+Reads context-map.json, any flow-trace-*.json files, and the run's
+checklist.json from ``<output_dir>``. Writes per-function annotations
+under ``<output_dir>/annotations/``.
+
+Designed to run at the end of /understand --map and /understand --trace
+next to raptor-render-diagrams. Best-effort — exits 0 even when no
+JSON inputs are present, so the /understand command can call this
+unconditionally without conditional plumbing.
+"""
+import os
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        print("Usage: raptor-understand-annotate <output_dir>",
+              file=sys.stderr)
+        return 1
+
+    out_dir = Path(sys.argv[1])
+    if not out_dir.exists():
+        print(f"ERROR: directory not found: {out_dir}", file=sys.stderr)
+        return 1
+
+    try:
+        from packages.code_understanding.annotation_synth import (
+            synthesise_from_understand_output,
+        )
+        counts = synthesise_from_understand_output(out_dir)
+    except Exception as e:
+        print(f"Annotation synth error: {e}", file=sys.stderr)
+        return 1
+
+    if counts.emitted == 0 and counts.skipped_no_function == 0:
+        print("Annotations: nothing to synthesise (no JSON inputs)")
+        return 0
+
+    summary_parts = [f"emitted={counts.emitted}"]
+    if counts.sources:
+        breakdown = ", ".join(
+            f"{k}={v}" for k, v in sorted(counts.sources.items())
+        )
+        summary_parts.append(f"by_kind=[{breakdown}]")
+    if counts.skipped_no_function:
+        summary_parts.append(f"skipped_no_function={counts.skipped_no_function}")
+    if counts.skipped_manual_blocked:
+        summary_parts.append(
+            f"skipped_manual_blocked={counts.skipped_manual_blocked}"
+        )
+    if counts.errors:
+        summary_parts.append(f"errors={counts.errors}")
+    print("Annotations: " + ", ".join(summary_parts))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -187,10 +187,27 @@ def detect_RUSTUP_HOME() -> Optional[str]:
                     return candidate
         except (OSError, subprocess.SubprocessError):
             pass
-    # 2. Fallback: ~/.rustup if it's a real dir
-    home_env = os.environ.get("HOME")
-    if home_env:
-        candidate = os.path.join(home_env, ".rustup")
+    # 2. Fallback: ~/.rustup if it's a real dir.
+    # Prefer `pwd.getpwuid(os.geteuid()).pw_dir` over `$HOME` when
+    # available. Pre-fix the env-var lookup honoured a hostile
+    # `HOME=/etc` (set by an attacker via `env -` or a shell hook) —
+    # we'd then probe `/etc/.rustup`, find a planted dir, and
+    # report it as the user's RUSTUP_HOME. Subsequent rustc /
+    # cargo invocations under the build_detector flow would honour
+    # the attacker-controlled toolchain location. The pwd lookup
+    # reads from `/etc/passwd` (kernel-ratified user identity) so
+    # an attacker with shell access to set `HOME` can't redirect.
+    # Fall back to `$HOME` only when pwd lookup fails (e.g.
+    # nsswitch-broken container, custom auth backend that returns
+    # nothing for the running uid).
+    home = None
+    try:
+        import pwd
+        home = pwd.getpwuid(os.geteuid()).pw_dir
+    except (KeyError, ImportError, OSError):
+        home = os.environ.get("HOME")
+    if home:
+        candidate = os.path.join(home, ".rustup")
         if os.path.isdir(candidate):
             return candidate
     return None

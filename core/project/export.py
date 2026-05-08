@@ -55,6 +55,35 @@ def validate_zip_contents(zip_path: Path) -> Tuple[bool, List[str]]:
     return len(warnings) == 0, warnings
 
 
+def _is_transient_artefact(path: Path) -> bool:
+    """Per-process / per-machine files that shouldn't ship in a
+    portable export bundle.
+
+    Currently filters:
+      * ``*.lock`` — POSIX advisory lock files (e.g.
+        ``annotations/<src>.md.lock`` from
+        ``core.annotations.storage._file_lock``). They carry no
+        data — they're just stable file descriptors for
+        ``fcntl.flock``. A new importing process creates its own
+        lock file on first write; shipping the original is bundle
+        bloat and operator confusion.
+      * ``.annotation-*.tmp`` — orphaned tempfiles from
+        interrupted atomic writes. Should already be cleaned up
+        by the writer's ``except`` block, but this is belt-and-
+        braces.
+
+    Pre-existing exclusions are NOT widened by this commit — the
+    historical behaviour for ``.reads-manifest`` and
+    ``.raptor-run.json`` is preserved.
+    """
+    name = path.name
+    if name.endswith(".lock"):
+        return True
+    if name.startswith(".annotation-") and name.endswith(".tmp"):
+        return True
+    return False
+
+
 def export_project(project_output_dir: Path, dest_path: Path,
                    project_json_path: Path = None,
                    force: bool = False) -> Dict[str, str]:
@@ -87,12 +116,17 @@ def export_project(project_output_dir: Path, dest_path: Path,
     dest_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Build zip manually to skip symlinks (shutil.make_archive follows them)
+    # plus per-process / transient artefacts that shouldn't ship in a
+    # portable archive (POSIX advisory lock files, tempfile leftovers).
     with zipfile.ZipFile(dest_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for item in project_output_dir.rglob("*"):
             if item.is_symlink():
                 logger.debug(f"Skipping symlink in export: {item}")
                 continue
             if item.is_file():
+                if _is_transient_artefact(item):
+                    logger.debug(f"Skipping transient artefact: {item}")
+                    continue
                 arcname = f"{project_output_dir.name}/{item.relative_to(project_output_dir)}"
                 zf.write(item, arcname)
         # Include project metadata if provided

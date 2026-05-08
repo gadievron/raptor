@@ -314,18 +314,34 @@ class TestMergeResults:
         assert result["reasoning"] == "Test reasoning"
 
     def test_does_not_mutate_original(self):
-        """Merging does not mutate the original prep report."""
+        """Merging does not mutate the original prep report.
+
+        Pre-fix the snapshot was a shallow `report["results"][0].copy()`
+        and the assertion was `"analysis" not in report["results"][0]
+        OR report["results"][0] == original_finding`. The OR weakened
+        the test to "either the merge didn't add `analysis`, OR the
+        finding is still equal" — which a buggy merge that mutated
+        nested dicts but added the analysis key would satisfy if the
+        nested mutation happened to keep the dict equal under shallow
+        comparison.
+
+        Use `copy.deepcopy` for the "before" snapshot of the WHOLE
+        report and compare the whole thing post-merge. Catches any
+        mutation at any depth.
+        """
+        import copy
         finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
         report = _make_prep_report(findings=[finding])
-        original_mode = report["mode"]
-        original_finding = report["results"][0].copy()
+        snapshot = copy.deepcopy(report)
 
         cc_results = [_make_cc_result("f-001")]
         _merge_results(report, cc_results)
 
-        # Original report should be unchanged
-        assert report["mode"] == original_mode
-        assert "analysis" not in report["results"][0] or report["results"][0] == original_finding
+        # Original report must be unchanged at every depth.
+        assert report == snapshot, (
+            f"_merge_results mutated input report; "
+            f"diff: {report} != {snapshot}"
+        )
 
     def test_failed_finding_preserved(self):
         """Findings with CC errors keep prep data and get cc_error field."""

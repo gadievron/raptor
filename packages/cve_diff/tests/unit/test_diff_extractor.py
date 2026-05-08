@@ -8,13 +8,13 @@ from cve_diff.diffing.extractor import extract_diff
 
 
 def _init_two_commit_repo(path: Path) -> tuple[str, str]:
-    subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True, timeout=15)
     subprocess.run(
         ["git", "-C", str(path), "config", "user.email", "t@t"], check=True
     )
-    subprocess.run(["git", "-C", str(path), "config", "user.name", "t"], check=True)
+    subprocess.run(["git", "-C", str(path), "config", "user.name", "t"], check=True, timeout=15)
     (path / "a.c").write_text("int a = 1;\n")
-    subprocess.run(["git", "-C", str(path), "add", "a.c"], check=True)
+    subprocess.run(["git", "-C", str(path), "add", "a.c"], check=True, timeout=15)
     subprocess.run(
         ["git", "-C", str(path), "commit", "-q", "-m", "first"], check=True
     )

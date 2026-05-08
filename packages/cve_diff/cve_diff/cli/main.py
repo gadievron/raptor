@@ -187,8 +187,20 @@ app = typer.Typer(
 # Match the surrender-reason fragment produced by the agent layer:
 # `DiscoveryError: CVE-X: agent surrendered (REASON): ...`. Only the
 # budget_* family is eligible for interactive extension.
+#
+# `\b` word boundary on the leading `agent` so we don't match
+# substrings of compound words (`maintainer-agent surrendered`).
+# Anchored to the canonical "DiscoveryError" prefix on the same
+# line so a CVE description that happens to quote the marker
+# phrase (security advisories sometimes quote tool output
+# verbatim, especially for CVEs about tool behaviour) doesn't
+# trigger a false-positive "offer budget extension" prompt.
+# `re.MULTILINE` so `^` matches a line start anywhere in the
+# (potentially multi-line) error text.
 _BUDGET_REASON_RE = re.compile(
-    r"agent surrendered \((budget_cost_usd|budget_iterations|budget_tokens|budget_s)\)"
+    r"^DiscoveryError:.*?\bagent surrendered "
+    r"\((budget_cost_usd|budget_iterations|budget_tokens|budget_s)\)",
+    re.MULTILINE,
 )
 
 

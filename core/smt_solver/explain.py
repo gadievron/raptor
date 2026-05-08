@@ -55,12 +55,33 @@ def track(
 
     if rev is None:
         rev = {}
-    offset = len(rev)
     # 8 hex chars from a uuid4 = ~4 billion-call collision-resistance,
     # which is overkill for one process but cheap.
     call_prefix = uuid.uuid4().hex[:8]
+    # Per-call counter starts at zero. Pre-fix `offset = len(rev)`
+    # then `offset + i`. With the UUID prefix already guaranteeing
+    # cross-call collision-freedom, the `len(rev)` offset added no
+    # protection but introduced two correctness gaps:
+    #
+    # * If a caller mutated `rev` between batches (deleted some
+    #   entries to drop them from the tracked set), `len(rev)`
+    #   shrank and the next batch's labels overlapped with
+    #   already-issued ones from the SAME prefix's earlier batch
+    #   (rare in practice — the UUID is per-CALL so this only hit
+    #   the unusual "carry rev across calls" pattern, but the bug
+    #   was real).
+    # * Operators reading the label name in error logs saw an
+    #   index that depended on the dict's current size, not the
+    #   per-batch position — confusing because two re-runs of the
+    #   same batch produced different labels depending on what
+    #   else was tracked.
+    #
+    # A real per-call counter (`enumerate` from 0) gives stable,
+    # batch-local indices that are easy to reason about. UUID
+    # handles cross-call uniqueness; per-call counter handles
+    # in-call uniqueness.
     for i, (name, expr) in enumerate(labeled):
-        label = z3.Bool(f"_c{call_prefix}_{offset+i}")
+        label = z3.Bool(f"_c{call_prefix}_{i}")
         solver.assert_and_track(expr, label)
         rev[str(label)] = name
     return rev

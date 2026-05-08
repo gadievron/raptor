@@ -219,6 +219,32 @@ def main() -> None:
             print("    - Increasing duration (--duration)")
             print("    - Better seed corpus (--corpus)")
             print("    - Check if binary is working (./binary < test_input)")
+            # Write a minimal report before the early exit. Pre-fix
+            # the 0-crash branch jumped straight to `sys.exit(0)`
+            # and skipped the Phase-3 report writer entirely —
+            # downstream consumers checking
+            # `fuzzing_report.json` saw NO file and either crashed
+            # on FileNotFoundError or assumed the campaign failed
+            # silently (operationally indistinguishable from the
+            # afl-runner crashing). Emit a stub so the file
+            # presence + the explicit `total_crashes: 0` is the
+            # canonical "no findings" signal.
+            zero_report = {
+                "binary": str(binary_path),
+                "duration": args.duration,
+                "total_crashes": 0,
+                "analysed": 0,
+                "exploitable": 0,
+                "exploits_generated": 0,
+                "status": "no_crashes",
+            }
+            try:
+                from core.json import save_json as _save_json
+                _save_json(out_dir / "fuzzing_report.json", zero_report)
+            except Exception:
+                # Best effort — don't mask the operator's
+                # already-printed advice with a save error.
+                pass
             sys.exit(0)
 
     except Exception as e:

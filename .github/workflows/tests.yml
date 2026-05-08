@@ -77,7 +77,6 @@ jobs:
     timeout-minutes: 2
     outputs:
       python: ${{ steps.filter.outputs.python }}
-      bash_surface: ${{ steps.filter.outputs.bash_surface }}
       sandbox: ${{ steps.filter.outputs.sandbox }}
       exploit_feasibility: ${{ steps.filter.outputs.exploit_feasibility }}
       prompt_audit: ${{ steps.filter.outputs.prompt_audit }}
@@ -151,7 +150,6 @@ jobs:
       needs.pre_check.outputs.should_skip != 'true' &&
       (needs.changes.outputs.force_full == 'true' ||
        needs.changes.outputs.python == 'true' ||
-       needs.changes.outputs.bash_surface == 'true' ||
        needs.changes.outputs.sandbox == 'true' ||
        needs.changes.outputs.exploit_feasibility == 'true')
     runs-on: ubuntu-latest
@@ -248,6 +246,16 @@ jobs:
           # Keep this separate from `pytest core packages` to avoid pytest
           # import-name collisions with other top-level tests packages.
           pytest libexec/tests
+
+      - name: Run CLI smoke tests (group 1 only)
+        if: matrix.group == 1
+        run: |
+          source $VENV_PATH/bin/activate
+          # End-to-end argparse acceptance + entry-point smoke for
+          # raptor.py. Ported from the now-retired test/real_tests_fast.sh.
+          # Kept separate from `pytest core packages` for the same reason
+          # as libexec/tests above.
+          pytest test/test_cli_smoke.py -n auto
 
       - name: Run CI lint tests (group 1 only)
         if: matrix.group == 1
@@ -363,57 +371,3 @@ jobs:
           # without needing the repo on PYTHONPATH.
           python -m pytest core/security/tests/test_prompt_envelope_audit.py -q
 
-  test-workflows:
-    needs: [pre_check, changes, deps]
-    if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.bash_surface == 'true')
-    uses: ./.github/workflows/bash-test.yml
-    with:
-      test_script: test_workflows.sh
-      venv_artifact_name: venv-${{ github.run_id }}
-
-  test-fast:
-    needs: [pre_check, changes, deps]
-    if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.bash_surface == 'true')
-    uses: ./.github/workflows/bash-test.yml
-    with:
-      test_script: real_tests_fast.sh
-      venv_artifact_name: venv-${{ github.run_id }}
-
-  test-real:
-    needs: [pre_check, changes, deps]
-    if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.bash_surface == 'true')
-    uses: ./.github/workflows/bash-test.yml
-    with:
-      test_script: real_tests.sh
-      venv_artifact_name: venv-${{ github.run_id }}
-
-  test-comprehensive:
-    needs: [pre_check, changes, deps]
-    if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.bash_surface == 'true')
-    uses: ./.github/workflows/bash-test.yml
-    with:
-      test_script: comprehensive_test.sh
-      venv_artifact_name: venv-${{ github.run_id }}
-
-  test-integration:
-    needs: [pre_check, changes, deps]
-    if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.bash_surface == 'true')
-    uses: ./.github/workflows/bash-test.yml
-    with:
-      test_script: integration_tests.sh
-      venv_artifact_name: venv-${{ github.run_id }}

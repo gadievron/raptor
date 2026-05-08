@@ -193,18 +193,47 @@ def test_prefer_list_tries_each_in_order(
 
 
 def test_unknown_preferred_provider_silently_skipped(
-    clean_env, no_thinking_model, no_claudecode, no_ollama, caplog,
+    clean_env, no_thinking_model, no_claudecode, no_ollama, monkeypatch,
 ) -> None:
     """A preferred provider name that doesn't match any builder
     (typo, deprecated provider) logs a warning but falls through
-    to the rest — better than failing an entire run for a typo."""
+    to the rest — better than failing an entire run for a typo.
+
+    Cluster 728 strengthens the assertion: pre-fix the test only
+    checked the fallback succeeded (`config.provider == "openai"`),
+    not that the WARNING was actually logged. A regression that
+    silently dropped the unknown name without warning would still
+    pass — the operator wouldn't see "you typed `nonexistent`,
+    we ignored it and used openai" and might continue thinking
+    their preference was honoured.
+
+    Wrap `logger.warning` directly to capture calls — the
+    framework "raptor" logger has `propagate=False` and a
+    pre-attached console handler bound to the original stderr
+    fd, which defeats both caplog (no propagation) and capsys
+    (handler bypasses pytest's stderr swap). The wrap is the
+    one channel that always works.
+    """
+    import core.llm.config as _config_mod
+    captured_warnings: list[str] = []
+    real_warning = _config_mod.logger.warning
+
+    def _capture(message, *args, **kwargs):
+        captured_warnings.append(str(message))
+        return real_warning(message, *args, **kwargs)
+
+    monkeypatch.setattr(_config_mod.logger, "warning", _capture)
+
     clean_env.setenv("OPENAI_API_KEY", "o-key")
-    import logging
-    with caplog.at_level(logging.WARNING):
-        config = _get_default_primary_model(
-            prefer=["nonexistent", "openai"]
-        )
+    config = _get_default_primary_model(
+        prefer=["nonexistent", "openai"]
+    )
     assert config.provider == "openai"
+    matching = [m for m in captured_warnings if "nonexistent" in m]
+    assert matching, (
+        f"expected a logger.warning mentioning 'nonexistent'; "
+        f"got: {captured_warnings!r}"
+    )
 
 
 def test_prefer_falls_through_to_claudecode(

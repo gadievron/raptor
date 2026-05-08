@@ -47,17 +47,63 @@ TARGET_SET=0
 # Accept --dry-run / --trust in any position; first positional is TARGET;
 # unknown flags and extra positionals are rejected loudly so typos don't
 # silently change which path we check.
+#
+# Honour the `--` terminator: anything after `--` is treated as a
+# positional argument regardless of whether it starts with `-`.
+# bin/raptor (cluster 585) now passes `--` before the target path
+# so a target starting with `-` (rare but legitimate; e.g. a checkout
+# named `--branch-foo/`) doesn't trigger "unknown flag" + exit 2.
+# Pre-fix the loop's `case ... -*) ...` arm caught dash-prefixed
+# paths and exited 3, which the launcher mis-reported as
+# "refusing to launch".
+#
+# Also normalise `--trust=` / `--dry-run=` value forms for
+# operator ergonomics: pre-fix `--trust=1` was treated as an
+# unknown flag (the case arm matched only the bare form). Accept
+# the `=value` form too — any non-empty/non-"0"/non-"false"
+# value enables.
+end_of_flags=0
 for arg in "$@"; do
+    if [ "$end_of_flags" = "1" ]; then
+        if [ "$TARGET_SET" = "0" ]; then
+            TARGET="$arg"
+            TARGET_SET=1
+        else
+            echo "raptor-cc-trust-check: unexpected extra argument: $arg" >&2
+            echo "  usage: raptor-cc-trust-check [--dry-run] [--trust] [--] <target_path>" >&2
+            exit 3
+        fi
+        continue
+    fi
     case "$arg" in
-        --dry-run)
-            DRY_RUN=1
+        --)
+            end_of_flags=1
             ;;
-        --trust)
-            TRUST=1
+        --dry-run|--dry-run=*)
+            v="${arg#*=}"
+            # bare `--dry-run` (no `=`): v == "--dry-run" — treat as enable.
+            # `--dry-run=0` / `--dry-run=false` — disable.
+            if [ "$arg" = "--dry-run" ] || [ -z "$v" ] || [ "$v" = "--dry-run" ]; then
+                DRY_RUN=1
+            elif [ "$v" = "0" ] || [ "$v" = "false" ] || [ "$v" = "no" ]; then
+                DRY_RUN=0
+            else
+                DRY_RUN=1
+            fi
+            ;;
+        --trust|--trust=*)
+            v="${arg#*=}"
+            if [ "$arg" = "--trust" ] || [ -z "$v" ] || [ "$v" = "--trust" ]; then
+                TRUST=1
+            elif [ "$v" = "0" ] || [ "$v" = "false" ] || [ "$v" = "no" ]; then
+                TRUST=0
+            else
+                TRUST=1
+            fi
             ;;
         -*)
             echo "raptor-cc-trust-check: unknown flag: $arg" >&2
-            echo "  usage: raptor-cc-trust-check [--dry-run] [--trust] <target_path>" >&2
+            echo "  usage: raptor-cc-trust-check [--dry-run] [--trust] [--] <target_path>" >&2
             exit 3
             ;;
         *)
@@ -66,7 +112,7 @@ for arg in "$@"; do
                 TARGET_SET=1
             else
                 echo "raptor-cc-trust-check: unexpected extra argument: $arg" >&2
-                echo "  usage: raptor-cc-trust-check [--dry-run] [--trust] <target_path>" >&2
+                echo "  usage: raptor-cc-trust-check [--dry-run] [--trust] [--] <target_path>" >&2
                 exit 3
             fi
             ;;

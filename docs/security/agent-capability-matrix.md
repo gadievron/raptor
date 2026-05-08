@@ -16,12 +16,12 @@ Generated 2026-04-22. Anti-prompt-injection initiative, Commit 3 audit.
 
 | Agent | Tools | Reads Untrusted (A) | Sensitive Access (B) | External State (C) | RoT count | Verdict |
 | --- | --- | --- | --- | --- | --- | --- |
-| coverage-analyzer | all tools (default) | YES | YES | NO | 2 | needs-tightening |
+| coverage-analysis-generator-agent | all tools (default) | YES | YES | NO | 2 | needs-tightening |
 | crash-analysis-agent | Read, Write, Edit, Bash, Grep, Glob, WebFetch, WebSearch, Git, Task | YES | YES | YES | 3 | needs-HITL |
-| crash-analyzer | all tools (default) | YES | YES | NO | 2 | needs-tightening |
-| crash-analysis-checker | all tools (default) | YES | YES | NO | 2 | needs-tightening |
+| crash-analyzer-agent | all tools (default) | YES | YES | NO | 2 | needs-tightening |
+| crash-analyzer-checker-agent | all tools (default) | YES | YES | NO | 2 | needs-tightening |
 | exploitability-validator-agent | Read, Write, Edit, Bash, Grep, Glob, Task | YES | YES | NO | 2 | needs-tightening |
-| function-trace-generator | all tools (default) | YES | YES | NO | 2 | needs-tightening |
+| function-trace-generator-agent | all tools (default) | YES | YES | NO | 2 | needs-tightening |
 | offsec-specialist | all tools (default) | YES | YES | YES | 3 | needs-HITL |
 | oss-evidence-verifier-agent | Read, Write, Bash | YES | YES | NO | 2 | needs-tightening |
 | oss-hypothesis-checker-agent | Read, Write | NO | NO | NO | 0 | tight |
@@ -37,7 +37,7 @@ Generated 2026-04-22. Anti-prompt-injection initiative, Commit 3 audit.
 
 ## Per-agent notes
 
-### coverage-analyzer
+### coverage-analysis-generator-agent
 - **Purpose**: Generate gcov coverage data for C/C++ code repository
 - **A=YES** because: Reads and executes crashing example programs supplied as input (untrusted source)
 - **B=YES** because: Implicit unrestricted Bash access for building, compiling, and running target binaries
@@ -50,13 +50,13 @@ Generated 2026-04-22. Anti-prompt-injection initiative, Commit 3 audit.
 - **C=YES** because: Uses WebFetch/WebSearch to reach external bug tracker systems; orchestrates other agents via Task
 - **Verdict**: needs-HITL — Rule of Two ≥ 2 (A+B+C all YES). This is an orchestrator that reads untrusted crash data AND has full write/network access AND can delegate to other agents. Requires human approval gate before execution.
 
-### crash-analyzer
+### crash-analyzer-agent
 - **Purpose**: Root-cause analysis using rr recordings, function traces, and coverage data
 - **A=YES** because: Analyzes crash traces, rr output, function traces, and gcov data generated from untrusted crashing inputs
 - **B=YES** because: Implicit unrestricted Bash (needed to run rr replay, set breakpoints, evaluate debugger output). Agent documentation shows rr command execution.
 - **Verdict**: needs-tightening — Purpose is analysis-only on pre-generated data; no write tools documented needed. Recommend dropping Bash access and instead providing structured rr/gcov output via read-only interface. Write-up generation should use a separate pure-analysis agent without shell.
 
-### crash-analysis-checker
+### crash-analyzer-checker-agent
 - **Purpose**: Validate root-cause analysis reports for correctness against empirical data
 - **A=YES** because: Reads root-cause hypothesis and validates against rr recordings, function traces, coverage data (all from untrusted crash inputs)
 - **B=YES** because: Implicit unrestricted Bash for running grep checks and validating hypothesis content (see mechanical format check directives)
@@ -68,7 +68,7 @@ Generated 2026-04-22. Anti-prompt-injection initiative, Commit 3 audit.
 - **B=YES** because: Write, Edit, Bash, Grep, Glob — can write artifacts, run arbitrary processes on target
 - **Verdict**: needs-tightening — Reads untrusted code while having write+bash. Bash execution on target code is required, but Write should be restricted to `.out/exploitability-validation-*/` working directory only. Recommend: ensure Write tool restricted to sandboxed workdir, document scope of Bash (PoC only, no shell escapes).
 
-### function-trace-generator
+### function-trace-generator-agent
 - **Purpose**: Generate function-level execution traces for debugging and analysis
 - **A=YES** because: Builds and executes crashing example programs supplied as input (untrusted source code and binary inputs)
 - **B=YES** because: Implicit unrestricted Bash for building instrumentation library, compiling target with flags, executing target program
@@ -170,12 +170,12 @@ Sorted by priority:
 
 ### HIGH PRIORITY (Rule of Two = 2, over-permissive vs purpose)
 
-5. **crash-analyzer** (needs-tightening)
+5. **crash-analyzer-agent** (needs-tightening)
    - **Action**: Drop unrestricted Bash; provide structured rr/gcov outputs as read-only files
    - **Rationale**: Analysis-only purpose, but has Bash for running debugger commands. Recommend: pre-compute rr output, pass as structured data
    - **Implementation**: Have crash-analysis-agent prepare rr output as JSON, pass to crash-analyzer which reads JSON only (no shell)
 
-6. **crash-analysis-checker** (needs-tightening)
+6. **crash-analyzer-checker-agent** (needs-tightening)
    - **Action**: Drop Bash; have callers pre-compute format validation flags
    - **Rationale**: Checker consuming untrusted data. Mechanical format checks should not require shell access.
    - **Implementation**: Require input to include format validation metadata; checker only reads structured input
@@ -207,12 +207,12 @@ Sorted by priority:
 
 ### MEDIUM PRIORITY (Rule of Two = 2, less critical)
 
-12. **coverage-analyzer** (needs-tightening)
+12. **coverage-analysis-generator-agent** (needs-tightening)
     - **Action**: Restrict Bash to build-only commands; do NOT execute untrusted binaries
     - **Rationale**: Executes untrusted crash inputs. Analysis purpose doesn't require execution.
     - **Implementation**: Have function-trace-generator or crash-analysis-agent handle execution; coverage-analyzer only reads pre-collected traces
 
-13. **function-trace-generator** (needs-tightening)
+13. **function-trace-generator-agent** (needs-tightening)
     - **Action**: Keep Bash (required for instrumentation); drop Write/Edit if not needed for trace file management
     - **Rationale**: Needs Bash to build/execute, but write tools may be over-permissive
     - **Implementation**: Confirm Write scope is traces/ subdirectory only; remove Edit if not used
@@ -247,7 +247,7 @@ Sorted by priority:
 - Recommendation: use Write only for working directory artifacts; never write untrusted input to shared locations
 
 **Pattern 2: Checker/aggregator agents consuming raw untrusted data**
-- crash-analysis-checker reads untrusted crash hypothesis + empirical data; should consume only validated hypothesis
+- crash-analyzer-checker-agent reads untrusted crash hypothesis + empirical data; should consume only validated hypothesis
 - oss-evidence-verifier reads untrusted evidence; should consume only verified evidence
 - Recommendation: pipeline should validate data before passing to checker agents
 
@@ -257,7 +257,7 @@ Sorted by priority:
 - Recommendation: add domain allowlist to all WebFetch tools (github.com, web.archive.org, etc.)
 
 **Pattern 4: Default "all tools" agents**
-- coverage-analyzer, crash-analyzer, crash-analysis-checker, function-trace-generator, offsec-specialist all default to all tools
+- coverage-analysis-generator-agent, crash-analyzer-agent, crash-analyzer-checker-agent, function-trace-generator-agent, offsec-specialist all default to all tools
 - No documented tool scope limitation
 - Recommendation: explicitly specify tool list for each agent; never rely on defaults
 

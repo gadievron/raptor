@@ -48,15 +48,44 @@ def _find_active_run():
         if not project_dir or not Path(project_dir).is_dir():
             return None, None
 
-        # Find most recent running run
-        for d in sorted(Path(project_dir).iterdir(), key=lambda d: d.stat().st_mtime, reverse=True):
+        # Find most recent running run.
+        # `iterdir()` enumerates the directory; the sort key calls
+        # `.stat()` separately on each entry. Race: a run that exists
+        # at iterdir time can be deleted before `.stat()` runs (parent
+        # cleanup process, /project clean concurrent, manual rm), and
+        # `.stat()` then raises FileNotFoundError, leaking out of the
+        # try/except (OSError catches it but then we lose the WHOLE
+        # run discovery for THIS hook fire — the operator sees no
+        # tracked read for that file). Same for the `meta_file.exists()`
+        # → `read_text()` race below.
+        #
+        # Materialise the entries-with-mtimes pairs first, skipping
+        # any that fail to stat. Sort the surviving pairs only.
+        entries = []
+        for d in Path(project_dir).iterdir():
             if not d.is_dir() or d.name.startswith((".", "_")):
                 continue
+            try:
+                mtime = d.stat().st_mtime
+            except OSError:
+                continue  # raced with deletion; skip rather than abort the whole loop
+            entries.append((mtime, d))
+        for _mtime, d in sorted(entries, key=lambda t: t[0], reverse=True):
             meta_file = d / ".raptor-run.json"
-            if meta_file.exists():
-                meta = json.loads(meta_file.read_text())
-                if meta.get("status") == "running":
-                    return str(d), target
+            try:
+                # `read_text` raises FileNotFoundError if the file
+                # disappeared between the `entries` build above and
+                # this read; treat it as "no longer running" rather
+                # than aborting.
+                meta_text = meta_file.read_text()
+            except OSError:
+                continue
+            try:
+                meta = json.loads(meta_text)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if meta.get("status") == "running":
+                return str(d), target
 
     except (OSError, json.JSONDecodeError, KeyError):
         pass

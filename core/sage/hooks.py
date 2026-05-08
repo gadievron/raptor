@@ -31,6 +31,12 @@ logger = get_logger()
 _client_lock = threading.Lock()
 _client: Optional[SageClient] = None
 _client_initialised: bool = False
+# When `_client` was decided to be None (SAGE unavailable). After
+# `_CLIENT_NONE_TTL_S` we re-probe so a SAGE node that came up
+# after the process started is picked up. Successful init has no
+# TTL — once we have a working client, keep it for the lifetime.
+_client_none_decided_at: float = 0.0
+_CLIENT_NONE_TTL_S: float = 300.0  # 5 min; balances probe cost vs. recovery latency
 
 
 def _throttle() -> None:
@@ -74,18 +80,40 @@ def _get_client() -> Optional[SageClient]:
 
     The init decision is cached via `_client_initialised` so that a
     down-at-first-use SAGE doesn't trigger an `is_available()` probe
-    on every subsequent hook call for the rest of the process lifetime.
+    on every subsequent hook call.
+
+    Re-probe TTL on the unavailable path: pre-fix the latch was
+    permanent — once `_client = None` was decided, the process
+    never re-checked. Operators bringing SAGE up AFTER starting a
+    long-lived RAPTOR session (typical: forgot to start the SAGE
+    node before `/agentic`, started it mid-run after seeing the
+    "SAGE unavailable" log) saw zero recovery — every subsequent
+    hook silently no-op'd until the parent process restarted.
+    Re-probe every `_CLIENT_NONE_TTL_S` so a late-coming SAGE
+    eventually gets picked up. The successful-init path has no
+    TTL — once we have a working client, keep it; refresh is
+    only on the negative-cache side where the cost of being
+    wrong is "all SAGE features disabled for the rest of the run".
     """
-    global _client, _client_initialised
+    global _client, _client_initialised, _client_none_decided_at
     with _client_lock:
-        if not _client_initialised:
+        needs_init = not _client_initialised
+        if (
+            _client_initialised
+            and _client is None
+            and (time.time() - _client_none_decided_at) > _CLIENT_NONE_TTL_S
+        ):
+            needs_init = True
+        if needs_init:
             config = SageConfig.from_env()
             candidate = SageClient(config)
             if candidate.is_available():
                 _client = candidate
+                _client_none_decided_at = 0.0
             else:
                 logger.debug("SAGE unavailable — pipeline hooks disabled")
                 _client = None
+                _client_none_decided_at = time.time()
             _client_initialised = True
         return _client
 

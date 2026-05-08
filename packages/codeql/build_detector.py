@@ -423,8 +423,33 @@ class BuildDetector:
 
         validation_cmd = validation_commands.get(build_system.type)
         if not validation_cmd:
-            logger.debug(f"No validation command for {build_system.type}")
-            return True  # Assume it's OK if we can't validate
+            # Unknown build-tool type. Pre-fix we returned True
+            # ("Assume it's OK if we can't validate") — but the
+            # next caller-side step is `--build-command "<bs.cmd>"`
+            # against `codeql database create`, which spawns the
+            # tool and fails opaquely if it isn't installed. The
+            # operator sees a CodeQL extraction error two minutes
+            # into a database build, not a clear "tool missing"
+            # warning at validation time.
+            #
+            # Returning False here is the honest answer: we have
+            # no evidence the build will succeed. The caller's
+            # validation-failed branch logs and skips this
+            # language with a useful message; the optimistic-True
+            # branch silently let unbuildable matrix entries
+            # through.
+            #
+            # Still log at debug so legitimately-unknown tool
+            # types (e.g. obscure JVM build systems we haven't
+            # added probes for yet) leave a breadcrumb when
+            # operators report unexpected validation failures.
+            logger.debug(
+                "No validation command for %s; treating as "
+                "unvalidated (returning False) — add a probe "
+                "command to validation_commands above to opt in.",
+                build_system.type,
+            )
+            return False
 
         # Pre-flight working_dir exists + is a directory. Pre-fix
         # we passed `cwd=build_system.working_dir` directly to the
@@ -512,7 +537,31 @@ class BuildDetector:
 
         Returns None for unsupported languages or no source files.
         """
-        if language not in self.COMPILED_LANGUAGES or language not in ("cpp", "java"):
+        # Pre-fix:
+        #   if language not in self.COMPILED_LANGUAGES or language not in ("cpp", "java"):
+        #       return None
+        # COMPILED_LANGUAGES contains 5 entries (cpp, java,
+        # csharp, swift, rust), but the second `or` clause
+        # narrows the gate to ("cpp", "java"). With `or`, the
+        # condition is True (and we return None) whenever EITHER
+        # check trips — and the ("cpp", "java") tuple is strictly
+        # narrower than COMPILED_LANGUAGES, so the first check
+        # never independently rejects anything the second check
+        # accepts. The COMPILED_LANGUAGES test is dead.
+        #
+        # Worse, the dead check misleads readers: it suggests
+        # synthesise_build_command supports the full
+        # COMPILED_LANGUAGES set when in fact it gates on the
+        # narrow 2-language tuple. The synthesiser body assumes
+        # cpp/java only (compiler detection in
+        # _detect_build_params, .java vs .cpp source-file
+        # filtering); enabling csharp/swift/rust here would just
+        # produce empty source_files and return None one branch
+        # later — but the misleading first check made it look
+        # like the function had broader scope.
+        #
+        # Replace with the single, honest gate.
+        if language not in ("cpp", "java"):
             return None
 
         source_files, compiler, include_flags, define_flags = self._detect_build_params(language)

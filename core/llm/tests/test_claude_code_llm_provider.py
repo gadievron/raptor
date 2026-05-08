@@ -176,10 +176,19 @@ def test_generate_disables_internal_cc_tools(monkeypatch) -> None:
     assert cmd[tools_idx] == ""
 
 
-def test_generate_with_system_prompt_prepended(monkeypatch) -> None:
+def test_generate_with_system_prompt_uses_system_flag(monkeypatch) -> None:
+    """`system_prompt` flows through CC's --system flag, not via prompt prepend.
+
+    Pre-cluster-107 the provider concatenated `f"{system_prompt}\\n\\n{prompt}"`
+    and sent the combined text as the user message. That folded the
+    system instruction into user content, where a hostile user prompt
+    could re-instruct over it. Routing through `--system` keeps the
+    system layer in its own role-channel.
+    """
     captured: dict[str, Any] = {}
 
     def fake_run(cmd, **kw):
+        captured["cmd"] = list(cmd)
         captured["input"] = kw.get("input")
         return _FakeCompleted(stdout=_envelope(result="ok"))
 
@@ -187,8 +196,13 @@ def test_generate_with_system_prompt_prepended(monkeypatch) -> None:
     p = ClaudeCodeLLMProvider(_config())
     p.generate("user question", system_prompt="you are helpful")
 
-    assert captured["input"].startswith("you are helpful\n\n")
-    assert "user question" in captured["input"]
+    # User-side input contains only the user prompt — system was
+    # routed through the --system flag.
+    assert captured["input"] == "user question"
+    cmd = captured["cmd"]
+    assert "--system" in cmd
+    sys_idx = cmd.index("--system") + 1
+    assert cmd[sys_idx] == "you are helpful"
 
 
 def test_generate_extracts_cost_and_tokens(monkeypatch) -> None:
@@ -603,13 +617,17 @@ def test_turn_propagates_envelope_cost_to_compute_cost(monkeypatch) -> None:
 
 
 def test_turn_passes_system_through_to_subprocess(monkeypatch) -> None:
-    """``system`` arg goes via the prompt (not a CLI flag) — our fallback
-    appends the tool protocol to the system message before calling
-    ``generate()``, which prepends it to the prompt."""
+    """``system`` arg goes via the CC `--system` flag.
+
+    Pre-cluster-107 system was concatenated into the user prompt so
+    the assertion looked for `"be careful"` in the input. Now that
+    `ClaudeCodeLLMProvider.generate` routes system through the
+    `--system` argv flag, the assertion checks the cmd argv instead.
+    """
     captured: dict[str, Any] = {}
     monkeypatch.setattr(
         subprocess, "run",
-        lambda cmd, **k: (captured.update({"input": k["input"]}),
+        lambda cmd, **k: (captured.update({"cmd": list(cmd), "input": k["input"]}),
                           _FakeCompleted(stdout=_envelope(result="ok")))[1],
     )
     p = ClaudeCodeLLMProvider(_config())
@@ -618,7 +636,13 @@ def test_turn_passes_system_through_to_subprocess(monkeypatch) -> None:
         tools=[],
         system="be careful",
     )
-    assert "be careful" in captured["input"]
+    cmd = captured["cmd"]
+    assert "--system" in cmd
+    sys_idx = cmd.index("--system") + 1
+    # Tool-use fallback wraps the system message with the JSON
+    # protocol; the operator's "be careful" must be present
+    # inside the system block.
+    assert "be careful" in cmd[sys_idx]
 
 
 # ---------------------------------------------------------------------------

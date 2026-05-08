@@ -2217,9 +2217,10 @@ class ClaudeCodeLLMProvider(LLMProvider):
         import subprocess
         import time as _time
 
-        full_prompt = (
-            f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
-        )
+        # Pass the user prompt as-is and route the system prompt
+        # through CC's `--system` flag (see CCDispatchConfig.system_prompt
+        # comment for the prompt-injection rationale).
+        full_prompt = prompt
         cc_config = CCDispatchConfig(
             claude_bin=self._claude_bin,
             # Used as a pure-LLM substrate: disable CC's internal tools
@@ -2230,6 +2231,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
             budget_usd=self._budget_usd,
             timeout_s=self._timeout_s,
             capture_json_envelope=True,
+            system_prompt=system_prompt,
         )
         cmd = build_cc_command(cc_config)
 

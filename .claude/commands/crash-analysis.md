@@ -50,9 +50,9 @@ The following tools must be installed:
 
 This command invokes the `crash-analysis-agent` which orchestrates:
 1. **crash-analyzer-agent**: Performs deep root-cause analysis using rr traces
-2. **crash-analysis-checker-agent**: Validates the analysis rigorously
+2. **crash-analyzer-checker-agent**: Validates the analysis rigorously
 3. **function-trace-generator-agent**: Creates function execution traces
-4. **coverage-analyzer-agent**: Generates code coverage data
+4. **coverage-analysis-generator-agent**: Generates code coverage data
 
 The analysis follows a hypothesis-validation loop - if the checker rejects a hypothesis, the analyzer is re-invoked with feedback until a valid root cause is confirmed.
 

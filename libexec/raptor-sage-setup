@@ -74,12 +74,46 @@ EOF
 }
 
 MODE=install
+MODE_EXPLICIT=0
+# Pre-fix the parser only knew `--uninstall` (default install).
+# Two ambiguities operators hit:
+#
+# 1. Conflicting modes silently last-wins. Pre-fix
+#    `--install --uninstall` (operator typo or paste from
+#    a script that builds the argv) silently took the
+#    LAST mode flag, with no warning. Now: explicit
+#    flags conflict-detected; second mode flag errors.
+# 2. No symmetric `--install` flag. Operators following
+#    the README's "explicit is better" convention typed
+#    `--install` and got "unknown argument" — even
+#    though `--install` is exactly what the script does
+#    by default. Accept it for symmetry with `--uninstall`.
+# 3. No subcommand-style positional form. Operators used
+#    to `git fetch` / `docker pull` reach for
+#    `raptor-sage-setup install` / `raptor-sage-setup
+#    uninstall` and got "unknown argument". Accept the
+#    bare-word forms so the operator-facing surface is
+#    permissive without sacrificing the explicit-flag
+#    error path.
 for arg in "$@"; do
     case "$arg" in
-        --uninstall)
-            MODE=uninstall
+        --install|install)
+            if [ "$MODE_EXPLICIT" = "1" ] && [ "$MODE" != "install" ]; then
+                echo "raptor-sage-setup: conflicting modes: $arg vs --uninstall" >&2
+                exit 2
+            fi
+            MODE=install
+            MODE_EXPLICIT=1
             ;;
-        -h|--help)
+        --uninstall|uninstall)
+            if [ "$MODE_EXPLICIT" = "1" ] && [ "$MODE" != "uninstall" ]; then
+                echo "raptor-sage-setup: conflicting modes: $arg vs --install" >&2
+                exit 2
+            fi
+            MODE=uninstall
+            MODE_EXPLICIT=1
+            ;;
+        -h|--help|help)
             usage
             ;;
         *)
@@ -125,8 +159,22 @@ merge_mcp_entry() {
         echo "Created $MCP."
         return
     fi
+    # `mktemp -p` under the target directory so the subsequent
+    # `mv` is on the same filesystem (atomic rename). Pre-fix
+    # `mktemp` defaulted to `/tmp` (or whatever `$TMPDIR` resolved
+    # to), then `mv tmp $MCP` was a CROSS-FILESYSTEM move on
+    # systems where the target ($RAPTOR_DIR) and /tmp are on
+    # different mount points (common on container layouts where
+    # /tmp is tmpfs and $RAPTOR_DIR is a bind-mounted host dir;
+    # also common on dev hosts with a separate /tmp partition).
+    # Cross-fs `mv` is implemented as copy+unlink — NOT atomic;
+    # a Ctrl-C / OOM kill / power loss between the copy and the
+    # unlink leaves the source file in /tmp and the target
+    # half-written, so concurrent readers of $MCP see a partial
+    # file. Same-fs mktemp ensures the rename is atomic at the
+    # filesystem-metadata level.
     local tmp
-    tmp=$(mktemp); _RAPTOR_TMP_FILES+=("$tmp")
+    tmp=$(mktemp -p "$(dirname "$MCP")" .tmp.mcp.XXXXXX); _RAPTOR_TMP_FILES+=("$tmp")
     trap 'rm -f "$tmp"' RETURN
     jq -s '.[0] * .[1]' "$MCP" "$TEMPLATE" > "$tmp"
     mv "$tmp" "$MCP"
@@ -136,8 +184,9 @@ merge_mcp_entry() {
 
 remove_mcp_entry() {
     [ -f "$MCP" ] || return 0
+    # Same same-fs mktemp pattern as merge_mcp_entry above.
     local tmp
-    tmp=$(mktemp); _RAPTOR_TMP_FILES+=("$tmp")
+    tmp=$(mktemp -p "$(dirname "$MCP")" .tmp.mcp.XXXXXX); _RAPTOR_TMP_FILES+=("$tmp")
     trap 'rm -f "$tmp"' RETURN
     jq 'del(.mcpServers.sage)' "$MCP" > "$tmp"
     mv "$tmp" "$MCP"
@@ -247,16 +296,34 @@ disable_sage_env() {
     tmp=$(mktemp); _RAPTOR_TMP_FILES+=("$tmp")
     trap 'rm -f "$tmp"' RETURN
     # Remove env.SAGE_ENABLED; if env becomes empty, drop env entirely.
+    # Pre-fix the top-level "is the whole settings object now empty?"
+    # check happened AFTER the mv, opening a small race window where
+    # another process could read SETTINGS_LOCAL and observe `{}`
+    # (the post-removal state) before we got around to deleting the
+    # empty file. Two consequences:
+    #   * Any concurrent reader that special-cases "empty settings →
+    #     fall back to defaults" got a misleading "explicit empty"
+    #     signal.
+    #   * Any concurrent writer that merged into the empty file
+    #     wrote into a transient state we were about to delete,
+    #     racing the rm.
+    #
+    # Make the jq filter compute the top-level emptiness in the same
+    # pass and emit an empty document marker (`null`) when the whole
+    # object would become `{}` — bash then sees the marker and
+    # deletes the file directly without ever writing the empty `{}`
+    # state to disk.
     jq 'if has("env") then (.env |= del(.SAGE_ENABLED)
            | if .env == {} then del(.env) else . end)
-         else . end' "$SETTINGS_LOCAL" > "$tmp"
-    mv "$tmp" "$SETTINGS_LOCAL"
-    trap - RETURN
-    # If the file is now empty ({}), delete it.
-    if [ "$(jq -r 'length' "$SETTINGS_LOCAL" 2>/dev/null || echo 1)" = "0" ]; then
-        rm -f "$SETTINGS_LOCAL"
+         else . end
+       | if . == {} then null else . end' "$SETTINGS_LOCAL" > "$tmp"
+    if [ "$(cat "$tmp")" = "null" ]; then
+        rm -f "$SETTINGS_LOCAL" "$tmp"
+        trap - RETURN
         echo "Removed $SETTINGS_LOCAL (no settings remaining)."
     else
+        mv "$tmp" "$SETTINGS_LOCAL"
+        trap - RETURN
         echo "Removed SAGE_ENABLED from $SETTINGS_LOCAL."
     fi
 }
