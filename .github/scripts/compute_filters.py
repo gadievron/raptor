@@ -28,24 +28,11 @@ FILTERS: dict[str, list[str]] = {
         "packages/**",
         "libexec/tests/**",
         ".github/tests/**",
+        "test/**",
         "*.py",
         "requirements*.txt",
         "pyproject.toml",
         ".github/workflows/tests.yml",
-    ],
-    "bash_surface": [
-        "raptor.py",
-        "libexec/**",
-        "core/**",
-        "packages/**",
-        "plugins/**",
-        "test/**",
-        "*.sh",
-        "**/*.sh",
-        "requirements*.txt",
-        "pyproject.toml",
-        ".github/workflows/tests.yml",
-        ".github/workflows/bash-test.yml",
     ],
     # Direct + transitive deps for sandbox (validated by
     # .github/tests/test_filter_coverage.py).
@@ -103,6 +90,42 @@ FILTERS: dict[str, list[str]] = {
         "action.yml",
         "action.yaml",
         ".github/codeql/**",
+    ],
+    # Prompt-envelope audit: AST-based heuristic that scans a registered
+    # list of prompt-construction files for untrusted-attribute
+    # interpolations bypassing UntrustedBlock / neutralize_tag_forgery.
+    # Only re-runs when an audited file, the audit module, or the test
+    # itself changes. Hardcoded list mirrors
+    # ``_PROMPT_CONSTRUCTION_FILES`` in
+    # core/security/prompt_envelope_audit.py — drift caught by the
+    # filter-coverage lint in .github/tests/test_filter_coverage.py.
+    "prompt_audit": [
+        # Audit module + allowlist (same file)
+        "core/security/prompt_envelope_audit.py",
+        # Audit test file
+        "core/security/tests/test_prompt_envelope_audit.py",
+        # Registered prompt-builder files
+        "packages/llm_analysis/agent.py",
+        "packages/llm_analysis/dataflow_validation.py",
+        "packages/llm_analysis/orchestrator.py",
+        "packages/llm_analysis/prefilter.py",
+        "packages/llm_analysis/tasks.py",
+        "packages/llm_analysis/crash_agent.py",
+        "packages/llm_analysis/prompts/analysis.py",
+        "packages/llm_analysis/prompts/exploit.py",
+        "packages/llm_analysis/prompts/patch.py",
+        "packages/hypothesis_validation/runner.py",
+        "packages/codeql/autonomous_analyzer.py",
+        "packages/codeql/dataflow_validator.py",
+        "packages/codeql/build_detector.py",
+        "packages/web/fuzzer.py",
+        "packages/autonomous/dialogue.py",
+        "core/llm/multi_model/prompt_helpers.py",
+        "packages/cve_diff/cve_diff/agent/loop.py",
+        "packages/cve_diff/cve_diff/agent/prompt.py",
+        "packages/cve_diff/cve_diff/analysis/analyzer.py",
+        "requirements*.txt",
+        ".github/workflows/tests.yml",
     ],
 }
 

@@ -123,5 +123,58 @@ class CIFilterCoverageTests(unittest.TestCase):
             self.fail("\n".join(problems))
 
 
+class PromptAuditFilterCoverageTests(unittest.TestCase):
+    """The ``prompt_audit`` filter's globs must cover every file
+    registered in ``_PROMPT_CONSTRUCTION_FILES`` plus the audit module
+    and its test. Drift between the hardcoded list in
+    compute_filters.py and the runtime registry would silently shrink
+    the audit's CI coverage."""
+
+    def test_prompt_audit_covers_registered_files(self):
+        sys.path.insert(0, str(REPO))
+        try:
+            from core.security.prompt_envelope_audit import (  # noqa: E402
+                _PROMPT_CONSTRUCTION_FILES,
+            )
+        finally:
+            sys.path.pop(0)
+
+        globs = compute_filters.FILTERS.get("prompt_audit")
+        self.assertTrue(
+            globs,
+            msg="filter `prompt_audit` not in compute_filters.FILTERS",
+        )
+
+        # The audit module itself + the test file must be covered too —
+        # editing the audit logic / allowlist must trigger the job.
+        required = list(_PROMPT_CONSTRUCTION_FILES) + [
+            "core/security/prompt_envelope_audit.py",
+            "core/security/tests/test_prompt_envelope_audit.py",
+        ]
+
+        uncovered: list[str] = []
+        for rel in required:
+            if not any(
+                compute_filters.match_glob(rel, g) for g in globs
+            ):
+                uncovered.append(rel)
+
+        if uncovered:
+            msg_lines = [
+                "`prompt_audit` filter does not cover the following "
+                "registered prompt-builder files / audit modules:",
+            ]
+            msg_lines.extend(f"  {p}" for p in uncovered)
+            msg_lines.append("")
+            msg_lines.append(
+                "Fix: add globs covering each path to the "
+                "`prompt_audit` entry in "
+                ".github/scripts/compute_filters.py (the list there "
+                "must mirror _PROMPT_CONSTRUCTION_FILES in "
+                "core/security/prompt_envelope_audit.py)."
+            )
+            self.fail("\n".join(msg_lines))
+
+
 if __name__ == "__main__":
     unittest.main()

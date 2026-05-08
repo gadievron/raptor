@@ -77,9 +77,9 @@ jobs:
     timeout-minutes: 2
     outputs:
       python: ${{ steps.filter.outputs.python }}
-      bash_surface: ${{ steps.filter.outputs.bash_surface }}
       sandbox: ${{ steps.filter.outputs.sandbox }}
       exploit_feasibility: ${{ steps.filter.outputs.exploit_feasibility }}
+      prompt_audit: ${{ steps.filter.outputs.prompt_audit }}
       force_full: ${{ steps.force.outputs.force_full }}
     steps:
       - uses: actions/checkout@v6
@@ -150,7 +150,6 @@ jobs:
       needs.pre_check.outputs.should_skip != 'true' &&
       (needs.changes.outputs.force_full == 'true' ||
        needs.changes.outputs.python == 'true' ||
-       needs.changes.outputs.bash_surface == 'true' ||
        needs.changes.outputs.sandbox == 'true' ||
        needs.changes.outputs.exploit_feasibility == 'true')
     runs-on: ubuntu-latest
@@ -189,6 +188,11 @@ jobs:
 
   # Fast tier: everything under core/ and packages/ except the two
   # heavyweight subdirs that get their own jobs (sandbox, exploit_feasibility).
+  # Split 2-way via pytest-split so the slowest CI job runs in parallel.
+  # No .test_durations file is committed: pytest-split falls back to random
+  # distribution on first run and converges over subsequent runs. The
+  # max(group1, group2) wallclock is still well below the unsplit total
+  # even when unbalanced, so the saving is meaningful from day one.
   python-unit-tests-fast:
     needs: [pre_check, changes, deps]
     if: |
@@ -197,6 +201,10 @@ jobs:
        needs.changes.outputs.python == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -220,21 +228,37 @@ jobs:
           source $VENV_PATH/bin/activate
           python -m compileall -q core packages libexec/tests *.py
 
-      - name: Run unit tests (fast tier)
+      - name: Run unit tests (fast tier, group ${{ matrix.group }} of 2)
         run: |
           source $VENV_PATH/bin/activate
-          pytest core packages \
+          # The prompt-envelope audit runs in its own narrowly-scoped
+          # job (python-prompt-audit) so it doesn't fire on unrelated
+          # Python changes. Exclude it here to avoid duplicate runs.
+          pytest -n auto --splits 2 --group ${{ matrix.group }} core packages \
             --ignore=core/sandbox/tests \
-            --ignore=packages/exploit_feasibility/tests
+            --ignore=packages/exploit_feasibility/tests \
+            --ignore=core/security/tests/test_prompt_envelope_audit.py
 
-      - name: Run libexec wrapper tests
+      - name: Run libexec wrapper tests (group 1 only)
+        if: matrix.group == 1
         run: |
           source $VENV_PATH/bin/activate
           # Keep this separate from `pytest core packages` to avoid pytest
           # import-name collisions with other top-level tests packages.
           pytest libexec/tests
 
-      - name: Run CI lint tests
+      - name: Run CLI smoke tests (group 1 only)
+        if: matrix.group == 1
+        run: |
+          source $VENV_PATH/bin/activate
+          # End-to-end argparse acceptance + entry-point smoke for
+          # raptor.py. Ported from the now-retired test/real_tests_fast.sh.
+          # Kept separate from `pytest core packages` for the same reason
+          # as libexec/tests above.
+          pytest test/test_cli_smoke.py -n auto
+
+      - name: Run CI lint tests (group 1 only)
+        if: matrix.group == 1
         run: |
           source $VENV_PATH/bin/activate
           # Validates path-filter globs in compute_filters.py cover the
@@ -315,57 +339,35 @@ jobs:
           # rather than bare `pytest`.
           python -m pytest packages/exploit_feasibility/tests
 
-  test-workflows:
-    needs: [pre_check, changes, deps]
+  # Prompt-envelope audit: AST-based heuristic over the registered
+  # prompt-construction files. The test only needs stdlib + pytest
+  # (no project deps), so it skips the venv artefact entirely and
+  # installs pytest standalone. Gated on the narrow ``prompt_audit``
+  # filter so it only fires when an audited file, the audit module,
+  # or the test itself actually changes.
+  python-prompt-audit:
+    needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
       (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.bash_surface == 'true')
-    uses: ./.github/workflows/bash-test.yml
-    with:
-      test_script: test_workflows.sh
-      venv_artifact_name: venv-${{ github.run_id }}
+       needs.changes.outputs.prompt_audit == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
-  test-fast:
-    needs: [pre_check, changes, deps]
-    if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.bash_surface == 'true')
-    uses: ./.github/workflows/bash-test.yml
-    with:
-      test_script: real_tests_fast.sh
-      venv_artifact_name: venv-${{ github.run_id }}
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
 
-  test-real:
-    needs: [pre_check, changes, deps]
-    if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.bash_surface == 'true')
-    uses: ./.github/workflows/bash-test.yml
-    with:
-      test_script: real_tests.sh
-      venv_artifact_name: venv-${{ github.run_id }}
+      - name: Install pytest
+        run: pip install pytest
 
-  test-comprehensive:
-    needs: [pre_check, changes, deps]
-    if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.bash_surface == 'true')
-    uses: ./.github/workflows/bash-test.yml
-    with:
-      test_script: comprehensive_test.sh
-      venv_artifact_name: venv-${{ github.run_id }}
+      - name: Run prompt-envelope audit
+        run: |
+          # `python -m pytest` so `from core.security...` resolves
+          # without needing the repo on PYTHONPATH.
+          python -m pytest core/security/tests/test_prompt_envelope_audit.py -q
 
-  test-integration:
-    needs: [pre_check, changes, deps]
-    if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.bash_surface == 'true')
-    uses: ./.github/workflows/bash-test.yml
-    with:
-      test_script: integration_tests.sh
-      venv_artifact_name: venv-${{ github.run_id }}

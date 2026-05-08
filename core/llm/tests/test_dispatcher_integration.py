@@ -366,7 +366,12 @@ class TestGrandchildRelay:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-            stdout, stderr = proc.communicate(timeout=20)
+            # 30s rather than 20s: matches the timeout used by sibling
+            # parent+grandchild subprocess tests in this file (lines
+            # 573, 782) and gives parallel xdist runs enough headroom
+            # for the 2-deep Python startup chain when CPUs are
+            # contended by other workers.
+            stdout, stderr = proc.communicate(timeout=30)
             assert proc.returncode == 0, (
                 f"parent+grandchild chain failed: rc={proc.returncode} "
                 f"stdout={stdout.decode()!r} stderr={stderr.decode()!r}"
