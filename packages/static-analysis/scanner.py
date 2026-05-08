@@ -31,7 +31,7 @@ from core.run.safe_io import safe_run_mkdir
 from core.logging import get_logger
 from core.git import clone_repository
 from core.sarif.parser import generate_scan_metrics, merge_sarif, validate_sarif
-from core.hash import sha256_tree
+from core.hash import sha256_bytes, sha256_tree
 from packages import semgrep as semgrep_pkg
 
 logger = get_logger()
@@ -621,6 +621,118 @@ def cleanup_per_pack_artifacts(out_dir: Path) -> int:
     return removed
 
 
+def _count_sarif_results(sarif_data) -> int:
+    """Return the total number of results across runs in a parsed SARIF dict.
+
+    Tolerates malformed shapes — non-dict / non-list members count as zero
+    rather than raising. This is a provenance signal, not a validator.
+    """
+    if not isinstance(sarif_data, dict):
+        return 0
+    total = 0
+    for run_obj in sarif_data.get("runs", []) or []:
+        if not isinstance(run_obj, dict):
+            continue
+        results = run_obj.get("results") or []
+        if isinstance(results, list):
+            total += len(results)
+    return total
+
+
+def _pack_provenance_from_sarif(sarif_path: Path, out_dir: Path) -> dict:
+    """Compute provenance for one per-pack SARIF.
+
+    MUST be called before cleanup_per_pack_artifacts() runs, because
+    cleanup deletes the per-pack SARIF / .exit / .stderr.log it depends on.
+
+    Returns a dict with keys:
+        tool, name, exit, findings, sarif_sha256, stderr_size_bytes
+    Missing-file and parse failures degrade to safe defaults rather
+    than raising — provenance is best-effort.
+    """
+    p = Path(sarif_path)
+    stem = p.stem  # e.g. "semgrep_category_auth" or "codeql_cpp"
+    if stem.startswith("semgrep_"):
+        tool = "semgrep"
+        name = stem[len("semgrep_"):]
+    elif stem.startswith("codeql_"):
+        tool = "codeql"
+        name = stem[len("codeql_"):]
+    else:
+        tool = "unknown"
+        name = stem
+
+    # Hash + size + findings — read bytes once.
+    try:
+        raw = p.read_bytes()
+        sarif_sha256 = sha256_bytes(raw)
+        try:
+            data = json.loads(raw.decode("utf-8", errors="replace"))
+        except Exception:
+            data = None
+        findings = _count_sarif_results(data) if data is not None else 0
+    except OSError:
+        # Missing (FileNotFoundError) or unreadable (EACCES, EIO, …)
+        # — best-effort provenance, leave hash empty.
+        sarif_sha256 = ""
+        findings = 0
+
+    # Exit code: only semgrep packs write a .exit file. CodeQL only emits
+    # a SARIF on rc==0 (run_codeql appends only on success), so 0 is
+    # accurate when we can see the SARIF.
+    if tool == "semgrep":
+        exit_file = out_dir / f"{stem}.exit"
+        try:
+            exit_code = int(exit_file.read_text().strip())
+        except (OSError, ValueError):
+            exit_code = -1
+    else:
+        exit_code = 0
+
+    # Stderr size: again, semgrep-specific. CodeQL doesn't emit one in
+    # the per-pack pattern; report 0.
+    stderr_log = out_dir / f"{stem}.stderr.log"
+    try:
+        stderr_size = stderr_log.stat().st_size
+    except (OSError, FileNotFoundError):
+        stderr_size = 0
+
+    return {
+        "tool": tool,
+        "name": name,
+        "exit": exit_code,
+        "findings": findings,
+        "sarif_sha256": sarif_sha256,
+        "stderr_size_bytes": stderr_size,
+    }
+
+
+def _compose_verification_manifest(
+    sarif_inputs, combined_sarif: Path, out_dir: Path,
+) -> dict:
+    """Build the verification.json provenance manifest.
+
+    Computes per-pack hashes from the per-pack SARIFs while they're still
+    on disk — caller MUST invoke this before cleanup_per_pack_artifacts().
+    """
+    packs = [_pack_provenance_from_sarif(Path(p), out_dir) for p in sarif_inputs]
+
+    combined: dict = {"path": combined_sarif.name}
+    try:
+        raw = combined_sarif.read_bytes()
+        combined["sha256"] = sha256_bytes(raw)
+        combined["size_bytes"] = len(raw)
+    except FileNotFoundError:
+        combined["sha256"] = ""
+        combined["size_bytes"] = 0
+
+    return {
+        "schema_version": 1,
+        "combined_sarif": combined,
+        "packs": packs,
+    }
+
+
 def main():
     ap = argparse.ArgumentParser(description="RAPTOR Automated Code Security Agent with parallel scanning")
     ap.add_argument("--repo", required=True, help="Path or Git URL")
@@ -806,6 +918,20 @@ def main():
         except Exception as e:
             logger.debug(f"Coverage record write failed (non-fatal): {e}")
 
+        # Provenance manifest. MUST be composed BEFORE cleanup runs,
+        # because cleanup deletes most of the per-pack SARIFs we hash.
+        try:
+            verification = _compose_verification_manifest(
+                sarif_inputs, merged, out_dir,
+            )
+        except Exception as e:
+            logger.debug(f"verification manifest compose failed (non-fatal): {e}")
+            verification = {
+                "schema_version": 1,
+                "combined_sarif": {"path": merged.name, "sha256": "", "size_bytes": 0},
+                "packs": [],
+            }
+
         # Per-pack file cleanup. Runs AFTER combined.sarif and
         # scan_metrics.json are finalised. The merged SARIF is canonical;
         # per-pack semgrep_*.{exit,json,sarif,stderr.log} files are
@@ -816,12 +942,6 @@ def main():
         except Exception as e:
             logger.debug(f"Per-pack cleanup failed (non-fatal): {e}")
 
-        # Verification plan
-        verification = {
-            "verify": ["sarif_schema", "manifest_hash", "semgrep_exit_check"],
-            "sarif_inputs": sarif_inputs,
-            "metrics": metrics,
-        }
         save_json(out_dir / "verification.json", verification)
 
         duration = time.time() - start_time
@@ -841,7 +961,6 @@ def main():
         result = {
             "status": "ok",
             "manifest": manifest,
-            "sarif_inputs": sarif_inputs,
             "metrics": metrics,
             "duration": duration,
         }
