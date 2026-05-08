@@ -407,6 +407,27 @@ def enrich_licenses(
                 if spdx:
                     d.declared_license = spdx
                     enriched += 1
+            elif d.ecosystem == "RubyGems":
+                spdx = _fetch_rubygems_license(
+                    d.name, http=http, cache=cache,
+                )
+                if spdx:
+                    d.declared_license = spdx
+                    enriched += 1
+            elif d.ecosystem == "NuGet" and d.version:
+                spdx = _fetch_nuget_license(
+                    d.name, d.version, http=http, cache=cache,
+                )
+                if spdx:
+                    d.declared_license = spdx
+                    enriched += 1
+            elif d.ecosystem == "Packagist":
+                spdx = _fetch_packagist_license(
+                    d.name, d.version, http=http, cache=cache,
+                )
+                if spdx:
+                    d.declared_license = spdx
+                    enriched += 1
         except Exception as e:                          # noqa: BLE001
             logger.debug(
                 "sca.license: enrichment failed for %s:%s (%s)",
@@ -535,6 +556,149 @@ def _spdx_from_pom(pom_bytes: bytes) -> Optional[str]:
                 return None
         break
     return None
+
+
+# ---------------------------------------------------------------------------
+# RubyGems (rubygems.org)
+# ---------------------------------------------------------------------------
+
+
+def _fetch_rubygems_license(
+    name: str, *, http: Any, cache: Any,
+) -> Optional[str]:
+    """RubyGems API exposes ``licenses`` as an array of SPDX strings:
+
+        https://rubygems.org/api/v1/gems/<name>.json
+
+    Response shape includes ``licenses: ["MIT"]`` (sometimes
+    multi-license). We pick the first; multi-license expressions
+    are uncommon for Ruby gems and the policy can resolve via OR
+    semantics if the operator constructs one.
+    """
+    cache_key = f"rubygems-license:{name.lower()}"
+    if cache is not None:
+        cached = cache.get(cache_key, ttl_seconds=24 * 3600)
+        if cached is not None:
+            return cached or None
+    try:
+        url = f"https://rubygems.org/api/v1/gems/{name}.json"
+        data = http.get_json(url)
+    except Exception:                                   # noqa: BLE001
+        return None
+    licenses = (data or {}).get("licenses") if isinstance(data, dict) else None
+    result: Optional[str] = None
+    if isinstance(licenses, list) and licenses:
+        first = licenses[0]
+        if isinstance(first, str) and first.strip():
+            result = first.strip()
+    if cache is not None:
+        cache.put(cache_key, result or "", ttl_seconds=24 * 3600)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# NuGet (api.nuget.org — flat container per-version nuspec)
+# ---------------------------------------------------------------------------
+
+
+def _fetch_nuget_license(
+    name: str, version: str, *, http: Any, cache: Any,
+) -> Optional[str]:
+    """NuGet exposes per-package metadata via the registration
+    endpoint:
+
+        https://api.nuget.org/v3/registration5-semver1/<name-lower>/<version>.json
+
+    Response includes ``licenseExpression`` (SPDX) AND/OR
+    ``licenseUrl`` (legacy free-text URL). Modern packages carry
+    SPDX; older ones only have the URL. We use SPDX when present
+    and skip the URL (no SPDX mapping for arbitrary URLs).
+    """
+    cache_key = f"nuget-license:{name.lower()}@{version}"
+    if cache is not None:
+        cached = cache.get(cache_key, ttl_seconds=24 * 3600)
+        if cached is not None:
+            return cached or None
+    try:
+        url = (
+            f"https://api.nuget.org/v3/registration5-semver1/"
+            f"{name.lower()}/{version}.json"
+        )
+        data = http.get_json(url)
+    except Exception:                                   # noqa: BLE001
+        if cache is not None:
+            cache.put(cache_key, "", ttl_seconds=24 * 3600)
+        return None
+    # registration5 entries embed the catalog entry inline.
+    entry = (data or {}).get("catalogEntry") if isinstance(data, dict) else None
+    if not isinstance(entry, dict):
+        # Some endpoint shapes return the catalog entry as the
+        # whole document.
+        entry = data if isinstance(data, dict) else {}
+    spdx = entry.get("licenseExpression")
+    result: Optional[str] = None
+    if isinstance(spdx, str) and spdx.strip():
+        result = spdx.strip()
+    if cache is not None:
+        cache.put(cache_key, result or "", ttl_seconds=24 * 3600)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Packagist (repo.packagist.org)
+# ---------------------------------------------------------------------------
+
+
+def _fetch_packagist_license(
+    name: str, version: Optional[str], *, http: Any, cache: Any,
+) -> Optional[str]:
+    """Packagist exposes per-package metadata at:
+
+        https://repo.packagist.org/p2/<vendor>/<package>.json
+
+    Response: ``packages.<name>[]`` is a list of per-version
+    blocks; each carries a ``license`` array. We pick the entry
+    matching ``version`` when given, else the first entry.
+    """
+    if "/" not in name:
+        return None
+    cache_key = f"packagist-license:{name}@{version or '*'}"
+    if cache is not None:
+        cached = cache.get(cache_key, ttl_seconds=24 * 3600)
+        if cached is not None:
+            return cached or None
+    try:
+        url = f"https://repo.packagist.org/p2/{name}.json"
+        data = http.get_json(url)
+    except Exception:                                   # noqa: BLE001
+        if cache is not None:
+            cache.put(cache_key, "", ttl_seconds=24 * 3600)
+        return None
+    packages = (data or {}).get("packages") if isinstance(data, dict) else None
+    if not isinstance(packages, dict):
+        return None
+    versions = packages.get(name)
+    if not isinstance(versions, list) or not versions:
+        return None
+    chosen = None
+    if version:
+        for entry in versions:
+            if isinstance(entry, dict) and entry.get("version") == version:
+                chosen = entry
+                break
+    if chosen is None:
+        chosen = versions[0] if isinstance(versions[0], dict) else None
+    if not isinstance(chosen, dict):
+        return None
+    licenses = chosen.get("license")
+    result: Optional[str] = None
+    if isinstance(licenses, list) and licenses:
+        first = licenses[0]
+        if isinstance(first, str) and first.strip():
+            result = first.strip()
+    if cache is not None:
+        cache.put(cache_key, result or "", ttl_seconds=24 * 3600)
+    return result
 
 
 # Mapping of common Maven license-element names to SPDX IDs. POMs

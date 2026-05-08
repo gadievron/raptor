@@ -479,6 +479,158 @@ def test_enrich_licenses_dispatches_to_maven():
     assert deps[0].declared_license == "Apache-2.0"
 
 
+# ---------------------------------------------------------------------------
+# RubyGems / NuGet / Packagist enrichment
+# ---------------------------------------------------------------------------
+
+
+def test_enrich_rubygems_first_license_in_array():
+    from packages.sca.license import _fetch_rubygems_license
+
+    class _StubHttp:
+        def get_json(self, url):
+            assert url == "https://rubygems.org/api/v1/gems/rails.json"
+            return {"licenses": ["MIT"]}
+
+    spdx = _fetch_rubygems_license("rails", http=_StubHttp(), cache=None)
+    assert spdx == "MIT"
+
+
+def test_enrich_rubygems_empty_array_returns_none():
+    from packages.sca.license import _fetch_rubygems_license
+
+    class _StubHttp:
+        def get_json(self, url):
+            return {"licenses": []}
+
+    assert _fetch_rubygems_license("x", http=_StubHttp(), cache=None) is None
+
+
+def test_enrich_nuget_uses_license_expression():
+    from packages.sca.license import _fetch_nuget_license
+
+    class _StubHttp:
+        def get_json(self, url):
+            assert "newtonsoft.json" in url and "13.0.1" in url
+            return {"catalogEntry": {"licenseExpression": "MIT"}}
+
+    spdx = _fetch_nuget_license(
+        "Newtonsoft.Json", "13.0.1", http=_StubHttp(), cache=None,
+    )
+    assert spdx == "MIT"
+
+
+def test_enrich_nuget_no_license_expression_returns_none():
+    from packages.sca.license import _fetch_nuget_license
+
+    class _StubHttp:
+        def get_json(self, url):
+            return {"catalogEntry": {"licenseUrl": "https://..."}}
+
+    assert _fetch_nuget_license(
+        "X", "1.0", http=_StubHttp(), cache=None,
+    ) is None
+
+
+def test_enrich_packagist_per_version_match():
+    from packages.sca.license import _fetch_packagist_license
+
+    class _StubHttp:
+        def get_json(self, url):
+            assert "symfony/http-foundation" in url
+            return {
+                "packages": {
+                    "symfony/http-foundation": [
+                        {"version": "v5.4.0", "license": ["MIT"]},
+                        {"version": "v6.0.0", "license": ["BSD-3-Clause"]},
+                    ],
+                },
+            }
+
+    spdx = _fetch_packagist_license(
+        "symfony/http-foundation", "v6.0.0",
+        http=_StubHttp(), cache=None,
+    )
+    assert spdx == "BSD-3-Clause"
+
+
+def test_enrich_packagist_falls_back_to_first_when_version_missing():
+    from packages.sca.license import _fetch_packagist_license
+
+    class _StubHttp:
+        def get_json(self, url):
+            return {
+                "packages": {
+                    "vendor/pkg": [
+                        {"version": "1.0", "license": ["MIT"]},
+                    ],
+                },
+            }
+
+    spdx = _fetch_packagist_license(
+        "vendor/pkg", None, http=_StubHttp(), cache=None,
+    )
+    assert spdx == "MIT"
+
+
+def test_enrich_packagist_invalid_name_returns_none():
+    """Packagist names are ``vendor/package``; no slash -> not a
+    valid Packagist coord."""
+    from packages.sca.license import _fetch_packagist_license
+
+    class _StubHttp:
+        def get_json(self, *a, **kw):
+            raise AssertionError("should not be called")
+
+    assert _fetch_packagist_license(
+        "no-slash", "1.0", http=_StubHttp(), cache=None,
+    ) is None
+
+
+def test_enrich_dispatches_to_rubygems():
+    deps = [_dep(name="rails", version="7.1", ecosystem="RubyGems")]
+
+    class _StubHttp:
+        def get_json(self, url):
+            return {"licenses": ["MIT"]}
+
+    n = enrich_licenses(deps, http=_StubHttp())
+    assert n == 1
+    assert deps[0].declared_license == "MIT"
+
+
+def test_enrich_dispatches_to_nuget():
+    deps = [_dep(name="X", version="1.0", ecosystem="NuGet")]
+
+    class _StubHttp:
+        def get_json(self, url):
+            return {"catalogEntry": {"licenseExpression": "Apache-2.0"}}
+
+    n = enrich_licenses(deps, http=_StubHttp())
+    assert n == 1
+    assert deps[0].declared_license == "Apache-2.0"
+
+
+def test_enrich_dispatches_to_packagist():
+    deps = [_dep(
+        name="symfony/console", version="5.4", ecosystem="Packagist",
+    )]
+
+    class _StubHttp:
+        def get_json(self, url):
+            return {
+                "packages": {
+                    "symfony/console": [
+                        {"version": "5.4", "license": ["MIT"]},
+                    ],
+                },
+            }
+
+    n = enrich_licenses(deps, http=_StubHttp())
+    assert n == 1
+    assert deps[0].declared_license == "MIT"
+
+
 def test_enrich_licenses_skips_maven_without_version():
     """Maven enrichment requires a concrete version (POM URL
     needs it). Unpinned deps fall through."""
