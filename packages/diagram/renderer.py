@@ -70,6 +70,36 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
             diagram = context_map.generate(data)
             body = f"_Source: `{fname}`_\n\n```mermaid\n{diagram}\n```"
             sections.append(_section(title, body))
+            # Per-entry forward-reachable diagrams (substrate-derived
+            # call closure from /understand --map's MAP-5b step).
+            # Only fires for context-map.json today; attack-surface.json
+            # uses a different shape but the helper safely returns []
+            # when no entry has forward_reachable.
+            try:
+                fr_blocks = context_map.generate_forward_reachable_blocks(
+                    data,
+                )
+            except Exception as exc:
+                fr_blocks = []
+                sections.append(_section(
+                    f"{title} — Forward Reachability",
+                    f"> Could not render forward-reachable blocks: {exc}",
+                ))
+            if fr_blocks:
+                sub_sections: list[str] = []
+                for sub_title, sub_diagram in fr_blocks:
+                    sub_sections.append(_section(
+                        sub_title,
+                        f"```mermaid\n{sub_diagram}\n```",
+                        level=3,
+                    ))
+                sections.append(_section(
+                    f"{title} — Forward Reachability per Entry Point",
+                    "_Source: `" + fname + "` (`forward_reachable` "
+                    "field per entry, populated by "
+                    "`raptor-enrich-context-map-callgraph`)_\n\n"
+                    + "\n".join(sub_sections),
+                ))
         except Exception as exc:
             sections.append(_section(title, f"> Could not render `{fname}`: {exc}"))
 

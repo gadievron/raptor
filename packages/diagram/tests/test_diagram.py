@@ -392,6 +392,197 @@ class TestContextMap:
 
 
 # ---------------------------------------------------------------------------
+# context_map.generate_forward_reachable_blocks tests
+# ---------------------------------------------------------------------------
+
+
+class TestForwardReachableBlocks:
+    """Per-entry-point forward-reachable diagrams (substrate-derived
+    closures attached by /understand --map's MAP-5b step)."""
+
+    def _entry(self, fr=None, ep_id="EP-001",
+               file="src/r/q.py", line=34) -> dict:
+        ep = {"id": ep_id, "file": file, "line": line}
+        if fr is not None:
+            ep["forward_reachable"] = fr
+        return ep
+
+    def test_no_forward_reachable_returns_empty(self):
+        from packages.diagram.context_map import (
+            generate_forward_reachable_blocks,
+        )
+        data = {"entry_points": [self._entry()]}
+        assert generate_forward_reachable_blocks(data) == []
+
+    def test_renders_one_block_per_entry_with_field(self):
+        from packages.diagram.context_map import (
+            generate_forward_reachable_blocks,
+        )
+        fr = {
+            "host": "src/r/q.py:query_handler@34",
+            "internal_count": 2,
+            "external_count": 1,
+            "internal_names": [
+                "src/db.py:run_query@1",
+                "src/log.py:emit@5",
+            ],
+            "external_names": ["sqlite3.Cursor.execute"],
+            "truncated": False,
+        }
+        data = {"entry_points": [self._entry(fr=fr)]}
+        blocks = generate_forward_reachable_blocks(data)
+        assert len(blocks) == 1
+        title, diagram = blocks[0]
+        assert "EP-001" in title
+        assert "query_handler" in title
+        assert diagram.startswith("flowchart TD")
+        assert "query_handler" in diagram
+        assert "run_query" in diagram
+        assert "sqlite3.Cursor.execute" in diagram
+
+    def test_renders_internal_and_external_with_distinct_classes(self):
+        from packages.diagram.context_map import (
+            generate_forward_reachable_blocks,
+        )
+        fr = {
+            "host": "src/a.py:f@1",
+            "internal_count": 1, "external_count": 1,
+            "internal_names": ["src/b.py:g@1"],
+            "external_names": ["json.dumps"],
+            "truncated": False,
+        }
+        data = {"entry_points": [self._entry(fr=fr)]}
+        diagram = generate_forward_reachable_blocks(data)[0][1]
+        assert "classDef host" in diagram
+        assert "classDef int" in diagram
+        assert "classDef ext" in diagram
+        # Internal node is the rectangle shape; external uses the
+        # parallelogram shape ([/...\\]).
+        assert 'INT000["src/b.py:g@1"]' in diagram
+        assert 'EXT000[/"json.dumps"\\]' in diagram
+
+    def test_truncation_note_emitted_when_flag_set(self):
+        from packages.diagram.context_map import (
+            generate_forward_reachable_blocks,
+        )
+        fr = {
+            "host": "src/a.py:f@1",
+            "internal_count": 5, "external_count": 0,
+            "internal_names": ["src/b.py:g@1"],
+            "external_names": [],
+            "truncated": True,
+        }
+        diagram = generate_forward_reachable_blocks(
+            {"entry_points": [self._entry(fr=fr)]},
+        )[0][1]
+        assert "max_depth" in diagram
+        assert "TRUNC" in diagram
+        # Dashed edge syntax for the truncation note.
+        assert "-. truncated .->" in diagram
+
+    def test_cap_disclosure_when_count_exceeds_rendered(self):
+        from packages.diagram.context_map import (
+            generate_forward_reachable_blocks,
+        )
+        fr = {
+            "host": "src/a.py:f@1",
+            "internal_count": 50,    # full closure
+            "external_count": 20,
+            "internal_names": ["src/b.py:g1@1", "src/b.py:g2@1"],   # only 2
+            "external_names": ["json.dumps"],                        # only 1
+            "truncated": False,
+        }
+        diagram = generate_forward_reachable_blocks(
+            {"entry_points": [self._entry(fr=fr)]},
+        )[0][1]
+        assert "Showing 2/50 internal" in diagram
+        assert "1/20 external" in diagram
+
+    def test_skips_non_dict_entries(self):
+        """Defensive: entries that aren't dicts (malformed LLM
+        output) shouldn't crash the generator."""
+        from packages.diagram.context_map import (
+            generate_forward_reachable_blocks,
+        )
+        data = {"entry_points": [
+            "not-a-dict", 42, None,
+            self._entry(fr={
+                "host": "src/a.py:f@1",
+                "internal_count": 0, "external_count": 0,
+                "internal_names": [], "external_names": [],
+                "truncated": False,
+            }),
+        ]}
+        blocks = generate_forward_reachable_blocks(data)
+        assert len(blocks) == 1
+
+    def test_skips_entries_with_non_dict_forward_reachable(self):
+        from packages.diagram.context_map import (
+            generate_forward_reachable_blocks,
+        )
+        data = {"entry_points": [
+            self._entry(fr="not-a-dict"),
+            self._entry(fr=42),
+            self._entry(fr=None),
+        ]}
+        assert generate_forward_reachable_blocks(data) == []
+
+    def test_handles_missing_entry_points(self):
+        from packages.diagram.context_map import (
+            generate_forward_reachable_blocks,
+        )
+        assert generate_forward_reachable_blocks({}) == []
+        assert generate_forward_reachable_blocks(
+            {"entry_points": []},
+        ) == []
+
+    def test_multiple_entries_each_get_own_block(self):
+        from packages.diagram.context_map import (
+            generate_forward_reachable_blocks,
+        )
+        fr_a = {
+            "host": "a.py:f@1", "internal_count": 1, "external_count": 0,
+            "internal_names": ["b.py:g@1"], "external_names": [],
+            "truncated": False,
+        }
+        fr_b = {
+            "host": "x.py:y@1", "internal_count": 0, "external_count": 1,
+            "internal_names": [], "external_names": ["os.path.join"],
+            "truncated": False,
+        }
+        data = {"entry_points": [
+            self._entry(fr=fr_a, ep_id="EP-A"),
+            self._entry(fr=fr_b, ep_id="EP-B"),
+        ]}
+        blocks = generate_forward_reachable_blocks(data)
+        assert len(blocks) == 2
+        titles = [t for t, _ in blocks]
+        assert any("EP-A" in t for t in titles)
+        assert any("EP-B" in t for t in titles)
+
+    def test_html_special_chars_in_names_get_sanitised(self):
+        """Substrate-emitted identities can contain characters that
+        Mermaid would interpret as syntax. Names go through sanitize."""
+        from packages.diagram.context_map import (
+            generate_forward_reachable_blocks,
+        )
+        fr = {
+            "host": 'src/a.py:f"injected"@1',
+            "internal_count": 1, "external_count": 0,
+            "internal_names": ["src/b.py:g[evil]@1"],
+            "external_names": [],
+            "truncated": False,
+        }
+        diagram = generate_forward_reachable_blocks(
+            {"entry_points": [self._entry(fr=fr)]},
+        )[0][1]
+        # Sanitised — must not break the Mermaid parser.
+        assert 'flowchart TD' in diagram
+        # The host appears (with sanitisation applied).
+        assert "src/a.py" in diagram
+
+
+# ---------------------------------------------------------------------------
 # flow_trace tests
 # ---------------------------------------------------------------------------
 
