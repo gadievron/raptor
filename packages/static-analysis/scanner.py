@@ -509,7 +509,24 @@ def run_codeql(repo_path: Path, out_dir: Path, languages):
         # execution. Quiet codeql query suites (cpp / java)
         # have hundreds of queries; serial execution wastes
         # 80%+ of CPU time on machines with multiple cores.
-        query_dir = Path("codeql-queries") / lang
+        # Resolve the query directory via RaptorConfig instead of
+        # the bare relative path "codeql-queries". Pre-fix
+        # `Path("codeql-queries") / lang` was relative to the
+        # CALLER'S CWD, so:
+        #   * Operators running from /tmp / their home / a
+        #     subdirectory got `query_dir.exists() == False` and
+        #     the queries silently skipped (sarif_paths stayed
+        #     empty, no findings reported even though the DB was
+        #     built).
+        #   * The actual queries live under
+        #     `engine/codeql/queries/` (RaptorConfig.CODEQL_QUERIES_DIR).
+        # Use the canonical config path; falls back to the relative
+        # form if for some reason CODEQL_QUERIES_DIR isn't set.
+        try:
+            from core.config import RaptorConfig as _RC
+            query_dir = _RC.CODEQL_QUERIES_DIR / lang
+        except (ImportError, AttributeError):
+            query_dir = Path("codeql-queries") / lang
         if not query_dir.exists():
             continue
         rc, so, se = run(
