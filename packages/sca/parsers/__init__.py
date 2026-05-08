@@ -135,6 +135,7 @@ def _resolve(
 # Side-effect imports: each module calls register() at import time.
 # Order is irrelevant — the registry is keyed by filename.
 from . import cargo               # noqa: E402,F401
+from . import cmake_fetchcontent  # noqa: E402,F401
 from . import compose             # noqa: E402,F401
 from . import composer            # noqa: E402,F401
 from . import conan               # noqa: E402,F401

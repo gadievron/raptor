@@ -136,6 +136,11 @@ MANIFEST_FILENAMES = {
     "conanfile.py": "ConanCenter",
     "conan.lock": "ConanCenter",
     ".gitmodules": "GitHub",       # SCA-internal — see gitmodules.py
+    # CMake FetchContent_Declare blocks. Ecosystem is "GitHub" or
+    # "CMake-FetchContent" per-dep; the discovery classification
+    # here is just for "this file may yield dep rows" — the parser
+    # decides per-row.
+    "CMakeLists.txt": "CMake-FetchContent",
 
     # CI / dev-tooling — pre-commit hook configs. The parser
     # resolves each ``repo:`` URL to its underlying registry
