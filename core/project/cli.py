@@ -532,6 +532,8 @@ def main():
             if stats.get("findings_dir"):
                 print(f"  Findings directory: {stats['findings_dir']}")
             print(f"  Merged findings: {stats['findings']}")
+            if stats.get("annotations") is not None:
+                print(f"  Annotations: {stats['annotations']}")
 
         elif args.subcommand == "export":
             from .export import export_project
