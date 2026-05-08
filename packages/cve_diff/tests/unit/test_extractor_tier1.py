@@ -52,7 +52,7 @@ def test_count_hunks_empty_diff() -> None:
 
 def _git(repo: Path, *args: str) -> str:
     r = subprocess.run(["git", "-C", str(repo), *args],
-                       capture_output=True, text=True, check=True)
+                       capture_output=True, text=True, check=True, timeout=15)
     return r.stdout.strip()
 
 
@@ -61,7 +61,7 @@ def tiny_repo(tmp_path: Path) -> tuple[Path, str, str]:
     """Two commits: add f.c (with content A), then change to content B."""
     repo = tmp_path / "r"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, timeout=15)
     _git(repo, "config", "user.email", "t@e.com")
     _git(repo, "config", "user.name", "T")
     (repo / "f.c").write_text("aaaa\n")
@@ -90,7 +90,7 @@ def test_show_blob_returns_none_for_missing_path(tiny_repo) -> None:
 def test_show_blob_truncates_large_file(tmp_path: Path) -> None:
     repo = tmp_path / "r"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, timeout=15)
     _git(repo, "config", "user.email", "t@e.com")
     _git(repo, "config", "user.name", "T")
     big = "x" * (MAX_FILE_BYTES * 2)

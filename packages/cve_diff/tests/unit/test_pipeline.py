@@ -37,7 +37,7 @@ def _git(repo: Path, *args: str) -> str:
 def _make_origin(tmp_path: Path) -> tuple[Path, str, str]:
     repo = tmp_path / "origin"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, timeout=15)
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "Test")
     (repo / "f.txt").write_text("a\n")
@@ -116,7 +116,7 @@ def test_pipeline_diff_body_is_fix_parent_to_fix(tmp_path):
     diffed full ``introduced..fix`` spans and produced 20MB blobs."""
     repo = tmp_path / "origin"
     repo.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, timeout=15)
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "Test")
     shas = []
