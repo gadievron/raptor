@@ -87,6 +87,36 @@ def _content_suffix(name: str) -> str:
     return _hashlib.sha256(name.encode("utf-8", errors="replace")).hexdigest()[:12]
 
 
+def _uniquify(parent: Path, stem: str, date_tag: str, suffix: str) -> Path:
+    """Build a non-colliding path under ``parent`` of shape
+    ``<stem>-<date_tag><suffix>``, appending a numeric counter
+    if the date-tagged path already exists.
+
+    Caller has already checked the bare path collides and computed
+    the date-tag. We add a `.N` counter (1-indexed) before the
+    suffix on second+ collision so neither file ``shutil.copy2``
+    nor dir ``shutil.copytree`` silently overwrites/skips the
+    earlier-renamed entry.
+    """
+    base = f"{stem}-{date_tag}"
+    candidate = parent / f"{base}{suffix}"
+    if not candidate.exists():
+        return candidate
+    n = 1
+    while True:
+        candidate = parent / f"{base}.{n}{suffix}"
+        if not candidate.exists():
+            return candidate
+        n += 1
+        if n > 1000:
+            # Pathological: 1000 collisions on the same stem+date
+            # almost certainly indicates a bug in caller. Fail loud
+            # rather than spinning.
+            raise RuntimeError(
+                f"_uniquify: 1000 collisions on {base!r} — refusing to spin"
+            )
+
+
 def _finding_key(finding: Dict[str, Any]) -> tuple:
     """Dedup key for a finding: (file, function, line). More stable than ID."""
     return _dedup_key(finding)
@@ -228,11 +258,19 @@ def merge_runs(run_dirs: List[Path], output_dir: Path) -> Dict[str, Any]:
 
             dest = output_dir / item.name
             if dest.exists():
-                # Rename on collision: append source date
+                # Rename on collision: append source date, then a
+                # numeric counter if the date-tagged path itself
+                # collides. Pre-fix the date-only rename collided
+                # silently when two source runs shared the same
+                # date_tag (two runs the same day, or two runs
+                # sharing a content-derived hash from
+                # `_extract_date_from_dir`'s fallback) — `shutil.copy2`
+                # then OVERWROTE the earlier-renamed file without
+                # warning, losing the first run's artefact.
                 stem = item.stem
                 suffix = item.suffix
                 date_tag = _extract_date_from_dir(run_dir)
-                dest = output_dir / f"{stem}-{date_tag}{suffix}"
+                dest = _uniquify(output_dir, stem, date_tag, suffix)
 
             shutil.copy2(str(item), str(dest))
             artefacts_preserved += 1
@@ -248,12 +286,17 @@ def merge_runs(run_dirs: List[Path], output_dir: Path) -> Dict[str, Any]:
                 continue
             dest = output_dir / item.name
             if dest.exists():
-                # Rename on collision: append source date
+                # Rename on collision: same date-tag-then-counter
+                # uniquifier as the file path above. Pre-fix the
+                # date-only rename collided with the previous
+                # iteration's renamed dir; the `if not dest.exists()`
+                # guard then SILENTLY DROPPED the copy — the source
+                # dir's content disappeared from the merged output
+                # entirely.
                 date_tag = _extract_date_from_dir(run_dir)
-                dest = output_dir / f"{item.name}-{date_tag}"
-            if not dest.exists():
-                shutil.copytree(str(item), str(dest))
-                artefacts_preserved += 1
+                dest = _uniquify(output_dir, item.name, date_tag, "")
+            shutil.copytree(str(item), str(dest))
+            artefacts_preserved += 1
 
     vuln_count = _count_vulns(merged)
 
