@@ -65,13 +65,52 @@ def is_binary_file(filepath: Path, sample_size: int = 8192) -> bool:
 
 
 def is_generated_file(content: str, check_lines: int = 10) -> bool:
-    """Check if file appears to be auto-generated."""
-    lines = content.split('\n', check_lines)[:check_lines]
-    header = '\n'.join(lines).lower()
+    """Check if file appears to be auto-generated.
 
-    for marker in GENERATED_MARKERS:
-        if marker in header:
-            return True
+    Comment-anchored: each marker must appear inside a COMMENT line
+    (lines starting with `#`, `//`, `/*`, `*`, `--`, `<!--`,
+    optionally with leading whitespace) within the first
+    `check_lines` lines.
+
+    Pre-fix the substring scan checked the lowercased header
+    text without comment-anchoring, so:
+
+    * A regular Python file containing the string `"automatically
+      generated"` in a docstring, error message, or test fixture
+      (`"this script generates the report automatically generated
+      from..."`) was wrongly classified as auto-generated and
+      excluded from the inventory. Real callers had analysis-
+      target files dropped silently — coverage stats wrong, sinks
+      missed.
+    * A SARIF rule description that mentioned "do not edit"
+      (e.g. flagging hardcoded credentials with the message
+      "do not edit; this credential ...") triggered the marker
+      from inside the SARIF JSON.
+    * A test file documenting a generator's behaviour ("verify
+      that generated files contain the auto-generated marker")
+      excluded itself even though it was a test, not generated.
+
+    Anchor to comments: the marker must be inside a recognisable
+    comment to count. Generators emit their markers in comment
+    headers; the substring-only check matched any prose mention.
+    """
+    lines = content.split('\n', check_lines)[:check_lines]
+    # Comment-line shapes for the languages we extract from.
+    # `re.match` against the leading-whitespace + comment-start
+    # pattern. If the line isn't a comment, skip it for marker
+    # matching (but still consider it as "we've seen check_lines
+    # of content"). The comment-prefix list covers C/C++/Java
+    # (`//`, `/*`, ` *` continuation), Python/shell/Ruby (`#`),
+    # SQL/Lua (`--`), and HTML/XML (`<!--`).
+    import re as _re
+    comment_re = _re.compile(r'^\s*(#|//|/\*|\*|--|<!--)')
+    for raw in lines:
+        if not comment_re.match(raw):
+            continue
+        lowered = raw.lower()
+        for marker in GENERATED_MARKERS:
+            if marker in lowered:
+                return True
     return False
 
 
