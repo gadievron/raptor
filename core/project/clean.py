@@ -61,10 +61,52 @@ def plan_clean(project, keep=1) -> Dict[str, Any]:
 
 
 def execute_clean(plan: Dict[str, Any]) -> None:
-    """Execute a clean plan by deleting the planned directories."""
-    for d in plan["delete_dirs"]:
-        if d.exists():
-            shutil.rmtree(d)
+    """Execute a clean plan by deleting the planned directories.
+
+    Per-dir containment check before delete: refuse to rmtree any
+    path that resolves outside the project's expected output area.
+    Pre-fix `execute_clean` trusted whatever paths the planner
+    produced — but `delete_dirs` can be operator-supplied (a future
+    `--delete-dirs path1,path2,...` flag) or planner-corrupted (a
+    bug elsewhere produces a path with `..` that escapes the
+    project root). `shutil.rmtree` would happily walk anywhere
+    its argument resolved to.
+
+    Worst case the unguarded rmtree could hit operator data outside
+    `~/.raptor/projects/<name>/`. The containment check refuses any
+    delete that, after `resolve()`, is not under the plan's expected
+    parent (the plan dir is the union of all `delete_dirs`'
+    common parent — operator can override with explicit env var
+    if their layout has a non-standard root).
+    """
+    delete_dirs = plan["delete_dirs"]
+    if not delete_dirs:
+        return
+    # The expected containment root is the closest common ancestor
+    # of all paths in `delete_dirs`. A delete that resolves outside
+    # that ancestor is almost certainly a bug.
+    try:
+        roots = [Path(d).resolve().parent for d in delete_dirs]
+        common = Path(os.path.commonpath([str(r) for r in roots]))
+    except (OSError, ValueError):
+        common = None
+    for d in delete_dirs:
+        if not d.exists():
+            continue
+        try:
+            real = Path(d).resolve()
+        except OSError:
+            continue
+        if common is not None:
+            try:
+                real.relative_to(common)
+            except ValueError:
+                # Resolved path escapes the common parent. Refuse.
+                raise RuntimeError(
+                    f"execute_clean refusing to rmtree {d!r}: resolved "
+                    f"path {real!r} escapes containment root {common!r}"
+                )
+        shutil.rmtree(d)
 
 
 def clean_project(project, keep=1, dry_run=False) -> Dict[str, Any]:
