@@ -102,6 +102,29 @@ _OVERFLOW_MARKERS_RE = __import__("re").compile(
 )
 
 
+# Confidence we report alongside an SMT-infeasible verdict.
+#
+# Pre-fix this number was inlined as a magic literal `0.7` at
+# the verdict construction site, with an inline comment "Some
+# confidence since SMT is a strong signal, but not perfect."
+# The same value also appeared in the human-readable
+# `reasoning` string ("Confidence is capped at 0.7 because…").
+# Two copies = drift risk: a future tightening or loosening of
+# the calibration would change one site and silently leave the
+# user-facing reasoning text wrong.
+#
+# The value itself is policy: we trust SMT's `feasible=False`
+# verdict more than an LLM's gut call (so > 0.5) but not as
+# absolute (the verdict is conditional on LLM-extracted path
+# predicates, which can be wrong if the LLM misparses a
+# branch). 0.7 was chosen to match the existing scorecard
+# bucket "high but not certain" — see
+# `docs/scorecard/confidence-bands.md` for the calibration
+# reference (or, if absent, treat this constant as the source
+# of truth that doc should match).
+SMT_INFEASIBLE_CONFIDENCE = 0.7
+
+
 def _is_overflow_rule(rule_id: str) -> bool:
     """Word-boundary check whether the rule_id signals an integer
     overflow/underflow rule. See _OVERFLOW_MARKERS_RE comment for
@@ -543,14 +566,14 @@ class DataflowValidator:
             )
             return DataflowValidation(
                 is_exploitable=False,
-                confidence=0.7,  # Some confidence since SMT is a strong signal, but not perfect
+                confidence=SMT_INFEASIBLE_CONFIDENCE,
                 sanitizers_effective=True,
                 bypass_possible=False,
                 bypass_strategy=None,
                 attack_complexity="high",
                 reasoning=(
                     f"SMT analysis: {smt_result.reasoning}. Path conditions are mutually exclusive. "
-                    "Confidence is capped at 0.7 because this formal verdict depends on "
+                    f"Confidence is capped at {SMT_INFEASIBLE_CONFIDENCE} because this formal verdict depends on "
                     "LLM-extracted predicates which may have parsing or coverage limitations."
                 ),
                 barriers=smt_result.unsatisfied,
