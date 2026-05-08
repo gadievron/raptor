@@ -30,7 +30,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 from .availability import z3
 from .config import BVProfile
@@ -168,7 +168,12 @@ def propagate(text: str, sub: Rejection) -> Rejection:
     return Rejection(text, sub.kind, detail, sub.hint)
 
 
-def parse_literal_value(tok: str, profile: BVProfile) -> Union[int, Rejection]:
+def parse_literal_value(
+    tok: str,
+    profile: BVProfile,
+    *,
+    outer_text: Optional[str] = None,
+) -> Union[int, Rejection]:
     """Validate and convert a literal token, or return a structured rejection.
 
     Centralised so atom-position literals and bitmask-form literals
@@ -181,7 +186,24 @@ def parse_literal_value(tok: str, profile: BVProfile) -> Union[int, Rejection]:
       base-10) → :data:`RejectionKind.LITERAL_AMBIGUOUS`.
     - Anything that isn't a clean hex or decimal literal
       → :data:`RejectionKind.UNRECOGNIZED_OPERAND`.
+
+    Text-anchoring contract: by default the returned ``Rejection.text``
+    is the per-token slice (``tok``), and the caller is expected to
+    call :func:`propagate` to re-anchor on the parent expression's
+    text. Pre-fix every caller that forgot the propagate step
+    surfaced rejections to consumers with `text=tok` only — useful
+    for the LITERAL_AMBIGUOUS / OUT_OF_RANGE messages but unhelpful
+    for source-location lookup since the operator can't grep for a
+    bare token like `0x100` in a 5000-line constraint set. Pass
+    ``outer_text=<parent expression>`` to self-anchor: the function
+    stores ``outer_text`` in ``Rejection.text`` and folds the token
+    into the detail message, removing the propagate dependency.
     """
+    # Text anchor: prefer caller-supplied outer expression when
+    # provided, otherwise the bare token. Detail uniformly mentions
+    # the token via `{tok!r}` so the operator-facing message is the
+    # same regardless of anchoring choice.
+    text = outer_text if outer_text is not None else tok
     is_hex = bool(_HEX_LITERAL_RE.fullmatch(tok))
     if is_hex:
         v = int(tok, 16)
@@ -192,14 +214,14 @@ def parse_literal_value(tok: str, profile: BVProfile) -> Union[int, Rejection]:
         magnitude = tok.lstrip("-")
         if len(magnitude) > 1 and magnitude[0] == "0":
             return Rejection(
-                tok, RejectionKind.LITERAL_AMBIGUOUS,
-                "leading-zero decimal is ambiguous with C octal",
+                text, RejectionKind.LITERAL_AMBIGUOUS,
+                f"leading-zero decimal is ambiguous with C octal (token {tok!r})",
                 hint="rewrite as hex (0x...) or strip the leading zero",
             )
         v = int(tok)
     else:
         return Rejection(
-            tok, RejectionKind.UNRECOGNIZED_OPERAND,
+            text, RejectionKind.UNRECOGNIZED_OPERAND,
             f"token {tok!r} is not a hex or decimal literal",
         )
     # Range check, with hex vs decimal distinction:
@@ -242,8 +264,8 @@ def parse_literal_value(tok: str, profile: BVProfile) -> Union[int, Rejection]:
         else:
             range_desc = f"{profile.describe()} range"
         return Rejection(
-            tok, RejectionKind.LITERAL_OUT_OF_RANGE,
-            f"value {v:#x} outside {range_desc} "
+            text, RejectionKind.LITERAL_OUT_OF_RANGE,
+            f"value {v:#x} (from token {tok!r}) outside {range_desc} "
             f"({lower_inclusive:#x}..{upper_exclusive - 1:#x})",
         )
     return v
