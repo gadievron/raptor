@@ -125,6 +125,46 @@ def _set_analysis(vuln, **kwargs) -> None:
     }
 
 
+class TestTelemetry:
+    """Operator visibility: when emits succeed, the count must
+    surface in the report dict (and the operator-facing log line)."""
+
+    def test_emit_method_returns_path_on_success(self, tmp_path):
+        agent = _make_agent(tmp_path)
+        (agent.repo_path / "src" / "foo.py").write_text(
+            "\n" * 9 + "def login():\n    pass\n"
+        )
+        vuln = VulnerabilityContext(_make_finding(), agent.repo_path)
+        _set_analysis(vuln)
+        result = agent._emit_finding_annotation(vuln, _checklist())
+        assert result is not None
+        assert result.exists()
+
+    def test_emit_method_returns_none_on_skip(self, tmp_path):
+        agent = _make_agent(tmp_path)
+        vuln = VulnerabilityContext(_make_finding(), agent.repo_path)
+        _set_analysis(vuln)
+        # No checklist → emit returns None.
+        result = agent._emit_finding_annotation(vuln, None)
+        assert result is None
+
+    def test_emit_method_returns_none_on_helper_exception(
+        self, tmp_path, monkeypatch,
+    ):
+        agent = _make_agent(tmp_path)
+        vuln = VulnerabilityContext(_make_finding(), agent.repo_path)
+        _set_analysis(vuln)
+
+        from packages.llm_analysis import annotation_emit
+
+        def boom(*a, **kw):
+            raise RuntimeError("crash")
+
+        monkeypatch.setattr(annotation_emit, "emit_finding_annotation", boom)
+        result = agent._emit_finding_annotation(vuln, _checklist())
+        assert result is None
+
+
 class TestEmitMethod:
     def test_emits_annotation_with_correct_args(self, tmp_path):
         agent = _make_agent(tmp_path)

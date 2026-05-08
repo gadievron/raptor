@@ -1045,19 +1045,21 @@ class AutonomousSecurityAgentV2:
     def _emit_finding_annotation(
         self, vuln: "VulnerabilityContext",
         checklist: Optional[Dict[str, Any]],
-    ) -> None:
+    ) -> Optional[Path]:
         """Emit a per-function annotation for ``vuln`` after analysis
         completes. Best-effort — any exception is logged at DEBUG and
         swallowed so annotation failures cannot break the analysis loop.
 
-        Skipped silently when ``checklist`` is None or the function
-        name can't be resolved from the finding's file:line.
+        Returns the annotation path on success, or ``None`` if the
+        emit was skipped (no checklist, no inventory match, manual
+        annotation already present, or an error was swallowed).
+        Caller can use the return value for telemetry.
         """
         try:
             from packages.llm_analysis.annotation_emit import (
                 emit_finding_annotation,
             )
-            emit_finding_annotation(
+            return emit_finding_annotation(
                 vuln,
                 base_dir=self.out_dir / "annotations",
                 checklist=checklist,
@@ -1065,6 +1067,7 @@ class AutonomousSecurityAgentV2:
             )
         except Exception:
             logger.debug("annotation emit error", exc_info=True)
+            return None
 
     def process_findings(self, sarif_paths: List[str] = None, findings_path: str = None,
                          max_findings: int = 10, checklist: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -1118,6 +1121,7 @@ class AutonomousSecurityAgentV2:
         patches_generated = 0
         dataflow_validated = 0
         false_positives_found = 0
+        annotations_emitted = 0
         idx = 0  # Initialize idx to prevent UnboundLocalError when unique_findings is empty
 
         is_prep = isinstance(self.llm, ClaudeCodeProvider)
@@ -1165,7 +1169,8 @@ class AutonomousSecurityAgentV2:
                 # 1. Autonomous analysis (LLM-powered, or prep-only)
                 if self.analyze_vulnerability(vuln):
                     analyzed += 1
-                    self._emit_finding_annotation(vuln, checklist)
+                    if self._emit_finding_annotation(vuln, checklist):
+                        annotations_emitted += 1
 
                     # Track dataflow validation
                     if vuln.has_dataflow and vuln.analysis and 'dataflow_validation' in vuln.analysis:
@@ -1220,6 +1225,7 @@ class AutonomousSecurityAgentV2:
             "patches_generated": patches_generated,
             "dataflow_validated": dataflow_validated,
             "false_positives_caught": false_positives_found,
+            "annotations_emitted": annotations_emitted,
             "execution_time": execution_time,
             "llm_stats": llm_stats,
             "results": results,
@@ -1237,6 +1243,11 @@ class AutonomousSecurityAgentV2:
             logger.info(f"✓ Exploitable: {exploitable} vulnerabilities")
             logger.info(f"✓ Exploits generated: {exploits_generated}")
             logger.info(f"✓ Patches generated: {patches_generated}")
+            if annotations_emitted > 0:
+                logger.info(
+                    f"✓ Annotations emitted: {annotations_emitted} "
+                    f"(in {self.out_dir / 'annotations'})"
+                )
             logger.info(f"")
             if dataflow_validated > 0:
                 logger.info(f"Dataflow Validation:")
