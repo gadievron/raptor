@@ -172,6 +172,18 @@ def main():
                               usage="raptor project report [<name>]", **_F)
     p_report.add_argument("name", nargs="?", help="Project name")
 
+    # annotations-diff
+    p_anndiff = sub.add_parser(
+        "annotations-diff",
+        help="Compare annotations between two runs",
+        usage="raptor project annotations-diff <run-a> <run-b> "
+              "[--name <project>]",
+        **_F,
+    )
+    p_anndiff.add_argument("run_a", help="First run dir or run name")
+    p_anndiff.add_argument("run_b", help="Second run dir or run name")
+    p_anndiff.add_argument("--name", help="Project name (default: active)")
+
     # diff
     p_diff = sub.add_parser("diff", help="Compare findings between two runs",
                             usage="raptor project diff <name> <run1> <run2>", **_F)
@@ -532,6 +544,27 @@ def main():
             result = diff_runs(dir1, dir2)
             print(f"Diff: {args.run1} (baseline) → {args.run2}")
             _print_diff(result)
+
+        elif args.subcommand == "annotations-diff":
+            from .annotations_diff import diff_annotations, format_diff
+            name = args.name or _get_active_project()
+            if not name:
+                print("No project specified.")
+                return
+            p = mgr.load(name)
+            if not p:
+                print(f"Project '{name}' not found.")
+                return
+            dir1 = p.output_path / args.run_a
+            dir2 = p.output_path / args.run_b
+            if not dir1.exists():
+                print(f"Run not found: {args.run_a}")
+                return
+            if not dir2.exists():
+                print(f"Run not found: {args.run_b}")
+                return
+            result = diff_annotations(dir1, dir2)
+            print(format_diff(result), end="")
 
         elif args.subcommand == "report":
             name = args.name or _get_active_project()
