@@ -78,14 +78,53 @@ def extract_trace(trace_dir, steps=100, output_format="source", asan=False):
     # Create gdb batch commands
     gdb_batch = "\n".join(gdb_commands)
     
-    # Run rr replay with gdb commands
+    # Run rr replay with gdb commands.
+    # Pre-fix the subprocess inherited the parent's full env and
+    # cwd, and gdb honoured `~/.gdbinit` (and any `.gdbinit` in
+    # the rr-trace directory's path). Three concrete failure modes:
+    #   * Parent env injection: `LD_PRELOAD` / `LD_LIBRARY_PATH` /
+    #     `PYTHONPATH` set in the operator's shell flowed into
+    #     gdb's process — gdb is a Python-extension host, so
+    #     PYTHONPATH could load attacker-controlled Python at
+    #     gdb startup.
+    #   * Cwd-relative `.gdbinit`: gdb auto-loads `.gdbinit` from
+    #     `$HOME` AND from the current directory. If the operator
+    #     ran this script from inside a target-repo checkout,
+    #     gdb auto-sourced the repo's `.gdbinit` (any `python ...`
+    #     stanza in there ran arbitrary Python under the
+    #     analyser's uid).
+    #   * `~/.gdbinit` from $HOME: same hazard but from the
+    #     operator's own home — usually safe but composable with
+    #     an attacker that can write there (compromised
+    #     account, shared host).
+    # Mitigate: use a sanitised env (no LD_*, no PYTHONPATH),
+    # explicit cwd to a known-safe location, and `-nx` /
+    # `-iex "set auto-load no"` to suppress all auto-load
+    # behaviours (init files, JIT scripts, separate-debug
+    # python).
     try:
+        # `import os` is module-level in the consumers but defensive
+        # local import here keeps the script self-contained.
+        import os as _os
+        safe_env = {
+            k: v
+            for k, v in _os.environ.items()
+            if k in ("PATH", "HOME", "USER", "TERM", "LANG", "LC_ALL")
+        }
+        # Inject `-nx` at the start of the command so gdb skips
+        # init files. `cmd` is `["rr", "replay", ...]`; rr forwards
+        # extra args to gdb via `--`. Adding the gdb-suppression
+        # flags via `-x` is messy; rely on `set auto-load no` in
+        # the gdb-batch input itself.
+        gdb_batch_safe = "set auto-load no\nset auto-load python-scripts off\n" + gdb_batch
         result = subprocess.run(
             cmd,
-            input=gdb_batch.encode(),
+            input=gdb_batch_safe.encode(),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=60
+            timeout=60,
+            env=safe_env,
+            cwd=_os.path.expanduser("~"),  # known-safe cwd
         )
         
         output = result.stdout.decode('utf-8', errors='replace')
