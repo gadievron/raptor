@@ -64,9 +64,9 @@ from __future__ import annotations
 import logging
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple, Union
 
 from .call_graph import (
     INDIRECTION_BRACKET_DISPATCH,
@@ -324,8 +324,673 @@ def _is_test_file(path: str) -> bool:
     return bool(_TEST_FILE_PATTERN.search(norm))
 
 
+# ---------------------------------------------------------------------------
+# Adjacency primitives — 1-hop callers / callees
+# ---------------------------------------------------------------------------
+#
+# ``function_called`` (above) answers "is some call site in the project
+# resolved to ``X``?" — a *forward 1-hop* query specialised for external
+# targets. Consumers like ``/audit`` need a richer set of primitives:
+# given a project-internal function, who calls it and what does it call?
+# Given a CVE-affected dep function, walk back to find every caller chain
+# in the project.
+#
+# The primitives below are language-agnostic and operate on the same
+# inventory shape ``function_called`` consumes. They share a per-
+# inventory adjacency index built lazily on first query and memoised
+# weakly so batch queries (every function in the project) amortise.
+#
+# **Node identity.** A node in the call graph is one of:
+#
+#   * :class:`InternalFunction` — a project-defined function. Identity:
+#     ``(file_path, name, line)``. The line disambiguates same-name
+#     overloads / nested defs / methods of different classes that
+#     happen to share a name.
+#
+#   * :class:`ExternalFunction` — a dotted dep-name resolved via the
+#     containing file's import map. Identity: ``qualified_name``.
+#
+# **Method-call policy.** When a call site's chain is rooted in a name
+# that *isn't* in the file's import map — e.g. ``self.foo()``,
+# ``obj.foo()`` — we can't know which class's ``foo`` was invoked. Two
+# directions, two policies:
+#
+#   * **Caller direction (``callers_of``)**: over-inclusive. We add the
+#     enclosing function as a candidate caller of every project
+#     ``foo`` we know of. False positives in caller lists show up as
+#     visible noise; missing a real caller can lead a downstream
+#     consumer to demote a real vulnerability. Bias toward inclusion.
+#
+#   * **Callee direction (``callees_of``)**: under-inclusive +
+#     UNCERTAIN flag. We don't enumerate every possible ``foo`` in the
+#     project as a callee; instead we record an indirection-style
+#     uncertainty entry on the result. ``/audit``'s context slice
+#     would otherwise be flooded with non-callees.
+#
+# The asymmetry is deliberate. Documented; not "fix later".
+
+
+@dataclass(frozen=True)
+class InternalFunction:
+    """A project-defined function. Identity: ``(file_path, name, line)``.
+
+    ``line`` is the function's ``line_start`` from the inventory's item
+    record. Disambiguates two functions with the same name in the same
+    file (nested defs, methods of different classes inside one module).
+    """
+
+    file_path: str
+    name: str
+    line: int
+
+    def __str__(self) -> str:
+        return f"{self.file_path}:{self.name}@{self.line}"
+
+
+@dataclass(frozen=True)
+class ExternalFunction:
+    """A dep-defined function referenced by qualified name."""
+
+    qualified_name: str
+
+    def __str__(self) -> str:
+        return self.qualified_name
+
+
+FunctionId = Union[InternalFunction, ExternalFunction]
+
+
+@dataclass(frozen=True)
+class CallersResult:
+    """1-hop callers of a queried target.
+
+    ``definitive`` lists internal functions whose call sites
+    statically resolve to the target via the import map.
+
+    ``uncertain`` lists internal functions that *might* call the
+    target — typically because their enclosing file has masking
+    indirection flags (``getattr`` / wildcard import) AND mentions
+    the target's tail name. Consumers SHOULD NOT downgrade severity
+    based on an empty ``definitive`` if ``uncertain`` is non-empty.
+
+    ``method_match_overinclusive`` lists internal functions whose
+    enclosing function has a call chain rooted in an unresolved
+    name (``self.foo()``, ``obj.foo()``) where ``foo`` matches the
+    target's tail. These are over-inclusive matches per the
+    documented method-call policy.
+    """
+
+    definitive: Tuple[InternalFunction, ...] = ()
+    uncertain: Tuple[InternalFunction, ...] = ()
+    method_match_overinclusive: Tuple[InternalFunction, ...] = ()
+
+    @property
+    def all_callers(self) -> Tuple[InternalFunction, ...]:
+        """Union of definitive + uncertain + over-inclusive method
+        matches, deduplicated, in stable order. Useful when the
+        consumer just wants "everyone who might call this"."""
+        seen: Set[InternalFunction] = set()
+        out: List[InternalFunction] = []
+        for group in (self.definitive, self.uncertain,
+                      self.method_match_overinclusive):
+            for c in group:
+                if c not in seen:
+                    seen.add(c)
+                    out.append(c)
+        return tuple(out)
+
+
+@dataclass(frozen=True)
+class CalleesResult:
+    """1-hop callees of a queried internal source.
+
+    ``definitive`` lists callees the source's call sites statically
+    resolve to — a mix of :class:`InternalFunction` (project-internal
+    edges) and :class:`ExternalFunction` (dep-call edges).
+
+    ``uncertain`` lists qualified-name strings the source *mentions*
+    but for which the source's file has masking indirection. The
+    string form (rather than ``ExternalFunction``) reflects that we
+    don't know whether these are real callees.
+
+    ``has_method_dispatch`` is True iff the source contains call
+    chains rooted in unresolved names (``self.foo()`` etc.); the
+    actual callees can't be enumerated and consumers should treat
+    the source's internal callee set as incomplete.
+    """
+
+    definitive: Tuple[FunctionId, ...] = ()
+    uncertain: Tuple[str, ...] = ()
+    has_method_dispatch: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Adjacency index — internal substrate
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _AdjacencyIndex:
+    """Per-inventory derived call-graph indices.
+
+    Built once per ``inventory`` dict (memoised on object identity)
+    on first query, then reused. All maps are keyed by frozen,
+    hashable :class:`FunctionId` instances so consumers can dedup /
+    set-intersect cheaply.
+
+    Fields:
+
+    * ``forward[src] -> {callees}`` — mixed Internal+External nodes
+      reachable in 1 hop from ``src`` (which is always Internal).
+    * ``reverse[dst] -> {callers}`` — Internal callers of ``dst``,
+      where ``dst`` may be Internal or External.
+    * ``uncertain_callers[dst] -> {callers}`` — internal functions
+      flagged uncertain for ``dst`` (file has masking indirection +
+      mentions the target tail).
+    * ``method_match[tail] -> {callers}`` — internal functions whose
+      bodies contain unresolved ``...foo()`` chains where the tail
+      is ``foo``. Used to fill in ``method_match_overinclusive`` on
+      lookup against any internal target named ``foo``.
+    * ``uncertain_callees[src] -> {qualified_or_local_strings}`` —
+      see :class:`CalleesResult`.
+    * ``has_method_dispatch[src]`` — True iff ``src``'s body uses
+      unresolved-head method calls.
+    * ``definitions[(file_path, name)] -> {InternalFunction, ...}``
+      — every project-defined function indexed by its file+name
+      tuple. Multiple entries means name overloading within one
+      file (same-name nested defs). Used by callers_of when the
+      target is Internal: we need to find every InternalFunction
+      whose body has a call resolving to the target.
+    """
+
+    forward: Dict[InternalFunction, Set[FunctionId]] = field(default_factory=dict)
+    reverse: Dict[FunctionId, Set[InternalFunction]] = field(default_factory=dict)
+    # Uncertain callers are stashed by *target tail name*, not target
+    # FunctionId, because the same file-level masking flag taints
+    # every internal function in that file as a possible caller for
+    # any target the file mentions by tail. callers_of() looks up by
+    # the target's tail when assembling its result.
+    uncertain_callers_by_tail: Dict[str, Set[Tuple[InternalFunction, str]]] = (
+        field(default_factory=dict)
+    )
+    method_match: Dict[str, Set[InternalFunction]] = field(default_factory=dict)
+    uncertain_callees: Dict[InternalFunction, Set[str]] = field(default_factory=dict)
+    has_method_dispatch: Dict[InternalFunction, bool] = field(default_factory=dict)
+    definitions: Dict[Tuple[str, str], Set[InternalFunction]] = (
+        field(default_factory=dict)
+    )
+    # ``qualified_name -> InternalFunction`` for project-defined
+    # functions reachable via cross-package import. Used by
+    # callers_of() to follow ExternalFunction → InternalFunction
+    # aliasing at lookup time (the index already canonicalises
+    # forward edges; this map preserves the reverse lookup).
+    qualified_to_internal: Dict[str, InternalFunction] = (
+        field(default_factory=dict)
+    )
+    # Set of file paths classified as test files (cached).
+    test_paths: FrozenSet[str] = frozenset()
+
+
+# Memoisation: keyed on ``id(inventory)``. Cache entries hold a
+# strong reference to BOTH the inventory dict AND its index, so:
+#
+#   * The inventory can't be GC'd while the entry lives, which means
+#     ``id(inventory)`` cannot be reused for a different dict — the
+#     classic "stale id-keyed cache returns the wrong index" bug.
+#
+#   * On lookup we still verify ``cache[id(inv)][0] is inv`` as a
+#     belt-and-braces guard against eviction-then-reuse races.
+#
+# Bound: ``_CACHE_MAX_ENTRIES``. When full, drop the oldest entry
+# (insertion order; ``dict`` preserves it). 64 inventories is a
+# generous ceiling — typical workflows have at most one "active"
+# inventory plus the occasional historical comparison.
+_INDEX_CACHE: Dict[int, Tuple[Dict[str, Any], "_AdjacencyIndex"]] = {}
+_CACHE_MAX_ENTRIES = 64
+
+
+def _get_or_build_index(
+    inventory: Dict[str, Any],
+    *,
+    exclude_test_files: bool,
+) -> _AdjacencyIndex:
+    """Return the memoised adjacency index for ``inventory``.
+
+    Test-file exclusion is part of the cache key implicitly: we always
+    build the index over the FULL inventory and let the public API
+    filter results, so ``exclude_test_files`` doesn't change which
+    nodes / edges exist.
+    """
+    inv_id = id(inventory)
+    cached = _INDEX_CACHE.get(inv_id)
+    if cached is not None:
+        cached_inv, cached_idx = cached
+        # Identity check: id() reuse can't happen while the cache
+        # holds the dict, but a paranoid check costs nothing.
+        if cached_inv is inventory:
+            return cached_idx
+        # Stale slot — collision after eviction. Drop and rebuild.
+        _INDEX_CACHE.pop(inv_id, None)
+
+    idx = _AdjacencyIndex()
+    test_paths: Set[str] = set()
+
+    # Pass 1: gather every project-defined function as an
+    # InternalFunction and seed `definitions`.
+    for file_record in inventory.get("files", []):
+        path = file_record.get("path") or ""
+        if _is_test_file(path):
+            test_paths.add(path)
+        for item in file_record.get("items", []) or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("kind") not in (None, "function"):
+                # KIND_FUNCTION is the default; skip globals / macros / classes.
+                continue
+            name = item.get("name") or ""
+            if not name:
+                continue
+            line = int(item.get("line_start") or 0)
+            fn = InternalFunction(file_path=path, name=name, line=line)
+            idx.definitions.setdefault((path, name), set()).add(fn)
+
+    idx.test_paths = frozenset(test_paths)
+
+    # Pass 1.5: build a qualified-name → InternalFunction map so that
+    # external edges resolving to project-defined physical functions
+    # get rewritten into internal edges in pass 2.
+    #
+    # Without this, consumers asking ``callers_of(InternalFunction(F))``
+    # miss every caller that reaches ``F`` via a cross-file
+    # ``from pkg.mod import F`` import — those resolve through the
+    # file's import map to ``ExternalFunction("pkg.mod.F")``, which is
+    # a different graph node than the InternalFunction. The two are
+    # the same physical function; the substrate canonicalises on the
+    # InternalFunction.
+    #
+    # Heuristic: derive candidate dotted forms from each file path:
+    #   * ``a/b/c.py`` → ``a.b.c``
+    #   * ``a/b/__init__.py`` → ``a.b``
+    #   * ``src/a/b/c.py`` → also ``a.b.c`` (src-layout)
+    #
+    # Limitations (documented; consumer should be aware):
+    #   * Cross-package re-exports (``pkg/__init__.py`` does
+    #     ``from .helpers import foo``) — callers via ``pkg.foo`` are
+    #     NOT aliased to the def in ``pkg/helpers.py``. Same gap as
+    #     ``function_called``'s re-export documentation.
+    #   * Non-Python files: file-path-to-module heuristic doesn't run;
+    #     no internal aliasing for JS/Go/Java/etc.
+    for (file_path, fn_name), fns in idx.definitions.items():
+        # Pick the lowest-line def as canonical — typically the
+        # module-level one, which is the only one externally
+        # importable. Same-name nested defs aren't reachable from
+        # outside; we don't disambiguate further.
+        canonical = min(fns, key=lambda f: f.line)
+        for candidate in _candidate_qualified_names(file_path, fn_name):
+            idx.qualified_to_internal.setdefault(candidate, canonical)
+    qualified_to_internal = idx.qualified_to_internal
+
+    # Pass 2: walk every call site, resolve to a callee FunctionId
+    # (Internal or External), record forward + reverse edges.
+    for file_record in inventory.get("files", []):
+        path = file_record.get("path") or ""
+        cg = file_record.get("call_graph")
+        if not cg:
+            continue
+        imports: Dict[str, str] = cg.get("imports") or {}
+        flags: Set[str] = set(cg.get("indirection") or [])
+        getattr_targets: Set[str] = set(cg.get("getattr_targets") or [])
+        non_wildcard_masking = (flags & _MASKING_FLAGS) - {
+            INDIRECTION_WILDCARD_IMPORT,
+        }
+        has_wildcard = INDIRECTION_WILDCARD_IMPORT in flags
+
+        for call in cg.get("calls") or []:
+            chain: List[str] = list(call.get("chain") or [])
+            if not chain:
+                continue
+            line = int(call.get("line", 0) or 0)
+            caller_name: Optional[str] = call.get("caller")
+            caller_node = _resolve_caller(idx, path, caller_name, line)
+            if caller_node is None:
+                # Module-level call OR enclosing function not in the
+                # inventory's items (rare; could happen for code
+                # extracted from a file the items pass skipped).
+                # Edges from "module level" aren't useful for the
+                # primitives we expose; drop them.
+                continue
+
+            callee = _resolve_callee_chain(chain, imports)
+            if callee is not None:
+                # Canonicalise: if this external qualified name
+                # actually resolves to a project-defined function,
+                # use the InternalFunction node. Otherwise the
+                # callers_of(InternalFunction) lookup misses every
+                # caller reaching it via cross-package import.
+                aliased = qualified_to_internal.get(callee.qualified_name)
+                if aliased is not None:
+                    callee = aliased
+                idx.forward.setdefault(caller_node, set()).add(callee)
+                idx.reverse.setdefault(callee, set()).add(caller_node)
+                continue
+
+            # Couldn't resolve via import map. Two sub-cases:
+            #   (a) chain head is unbound — likely a method call
+            #       (``self.foo()`` / ``obj.foo()``). Tail name is
+            #       useful for the over-inclusive method-match index.
+            #   (b) chain is a single unbound name (``foo()`` where
+            #       ``foo`` is defined locally). Could be a call to
+            #       a peer function in the same file.
+            tail = chain[-1]
+            if len(chain) == 1:
+                # Sub-case (b): bare-name call. If this file defines
+                # a function with that name, record an internal edge.
+                local_defs = idx.definitions.get((path, tail))
+                if local_defs:
+                    for d in local_defs:
+                        idx.forward.setdefault(caller_node, set()).add(d)
+                        idx.reverse.setdefault(d, set()).add(caller_node)
+                    continue
+                # Local name not defined in this file — likely a
+                # builtin (open, len, ...) or a wildcard-imported
+                # name. Record nothing definitive; method-match
+                # index doesn't apply (no head-attr).
+                if has_wildcard:
+                    idx.uncertain_callees.setdefault(caller_node, set()).add(
+                        f"*.{tail}",
+                    )
+                continue
+
+            # Sub-case (a): unresolved attribute chain. Index for
+            # method-match over-inclusive caller lookup.
+            idx.method_match.setdefault(tail, set()).add(caller_node)
+            idx.has_method_dispatch[caller_node] = True
+            # And surface it on the source's callee set as
+            # uncertain-string so callees_of can flag it.
+            idx.uncertain_callees.setdefault(caller_node, set()).add(
+                ".".join(chain),
+            )
+
+        # Indirection flags on the file → every internal function
+        # defined IN this file inherits "uncertain caller" status
+        # for any target the file mentions by tail. We record this
+        # at file level: the keys we care about are tail names that
+        # appear in (a) call chains tail-side, (b) getattr_targets,
+        # (c) imports' tail components.
+        if non_wildcard_masking or has_wildcard:
+            file_internal_fns = [
+                fn for (p, _name), fns in idx.definitions.items()
+                if p == path for fn in fns
+            ]
+            mentioned_tails: Set[str] = set(getattr_targets)
+            for call in cg.get("calls") or []:
+                chain = list(call.get("chain") or [])
+                if chain:
+                    mentioned_tails.add(chain[-1])
+            for qualified in imports.values():
+                if not qualified:
+                    continue
+                mentioned_tails.add(qualified.rsplit(".", 1)[-1])
+            for tail in mentioned_tails:
+                for fn in file_internal_fns:
+                    # We don't know the *target* yet — that's keyed
+                    # on the lookup. Stash the (caller, tail, flag)
+                    # tuple under tail so callers_of can pick it
+                    # up.
+                    flag_label = (
+                        sorted(non_wildcard_masking)[0]
+                        if non_wildcard_masking
+                        else INDIRECTION_WILDCARD_IMPORT
+                    )
+                    idx.uncertain_callers_by_tail.setdefault(
+                        tail, set(),
+                    ).add((fn, flag_label))
+
+    _INDEX_CACHE[inv_id] = (inventory, idx)
+    if len(_INDEX_CACHE) > _CACHE_MAX_ENTRIES:
+        # Drop the oldest entry. dict preserves insertion order.
+        oldest = next(iter(_INDEX_CACHE))
+        _INDEX_CACHE.pop(oldest, None)
+    return idx
+
+
+def _resolve_caller(
+    idx: _AdjacencyIndex,
+    file_path: str,
+    caller_name: Optional[str],
+    call_line: int,
+) -> Optional[InternalFunction]:
+    """Map ``caller_name`` (lexical enclosing fn-name in ``file_path``)
+    to its :class:`InternalFunction` definition record.
+
+    When multiple definitions share the same ``(file_path, name)``
+    (rare: same-name nested defs), pick the one whose ``line`` is
+    the largest value ≤ ``call_line``. That's the lexically
+    innermost match. Falls through to the first def if heuristics
+    fail.
+    """
+    if not caller_name:
+        return None
+    candidates = idx.definitions.get((file_path, caller_name))
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return next(iter(candidates))
+    # Pick the def with greatest line ≤ call_line.
+    eligible = [c for c in candidates if c.line <= call_line]
+    if eligible:
+        return max(eligible, key=lambda c: c.line)
+    return min(candidates, key=lambda c: c.line)
+
+
+def _candidate_qualified_names(file_path: str, fn_name: str) -> List[str]:
+    """Heuristic: derive plausible Python qualified names for an
+    InternalFunction defined at ``(file_path, fn_name)``.
+
+    Returns at most a handful of candidates (typically 1-2). Used by
+    the index builder to canonicalise external callee edges that
+    actually resolve to project-defined functions.
+
+    Non-Python files: returns empty list. Other-language internal
+    aliasing isn't modelled.
+    """
+    if not (file_path.endswith(".py") or file_path.endswith(".pyi")):
+        return []
+    base = file_path
+    for suffix in (".pyi", ".py"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    if base.endswith("/__init__"):
+        base = base[: -len("/__init__")]
+    candidates: List[str] = []
+    if base:
+        candidates.append(f"{base.replace('/', '.')}.{fn_name}")
+    # ``src/`` layout: ``src/mypkg/foo.py`` is imported as
+    # ``mypkg.foo``, not ``src.mypkg.foo``. Generate both candidates.
+    if base.startswith("src/"):
+        stripped = base[len("src/"):]
+        if stripped:
+            candidates.append(f"{stripped.replace('/', '.')}.{fn_name}")
+    return candidates
+
+
+def _resolve_callee_chain(
+    chain: List[str],
+    imports: Dict[str, str],
+) -> Optional[ExternalFunction]:
+    """Map a call chain to an :class:`ExternalFunction` via the file's
+    import map. Returns None if the chain head isn't in the import
+    map.
+
+    Note: this never returns :class:`InternalFunction` — internal
+    edges via local bare-name calls are handled by the caller (the
+    fall-through path in ``_get_or_build_index`` looks up
+    ``definitions[(path, tail)]``).
+    """
+    if not chain:
+        return None
+    if len(chain) == 1:
+        bound = imports.get(chain[0])
+        if bound is None:
+            return None
+        return ExternalFunction(qualified_name=bound)
+    head = chain[0]
+    bound = imports.get(head)
+    if bound is None:
+        return None
+    middle = ".".join(chain[1:-1])
+    if middle:
+        qualified = f"{bound}.{middle}.{chain[-1]}"
+    else:
+        qualified = f"{bound}.{chain[-1]}"
+    return ExternalFunction(qualified_name=qualified)
+
+
+# ---------------------------------------------------------------------------
+# Public API: callers_of / callees_of
+# ---------------------------------------------------------------------------
+
+
+def callers_of(
+    inventory: Dict[str, Any],
+    target: FunctionId,
+    *,
+    exclude_test_files: bool = True,
+) -> CallersResult:
+    """Return 1-hop callers of ``target``.
+
+    ``target`` may be :class:`InternalFunction` (a project-defined
+    function — find every internal caller) or :class:`ExternalFunction`
+    (a dep-defined function — find every internal caller, same
+    semantics as ``function_called`` but returning structured caller
+    identities rather than evidence pairs).
+
+    Test-file callers are filtered when ``exclude_test_files`` is
+    True (the default; matches existing ``function_called``
+    behaviour).
+    """
+    idx = _get_or_build_index(
+        inventory, exclude_test_files=exclude_test_files,
+    )
+
+    # Aliasing: if the caller passes ``ExternalFunction("pkg.mod.fn")``
+    # but ``pkg.mod.fn`` is a project-defined function, follow the
+    # alias so we return the same callers as
+    # ``callers_of(InternalFunction(...))``. The index canonicalises
+    # forward edges to InternalFunction, so without this lookup the
+    # External form would silently return 0.
+    if isinstance(target, ExternalFunction):
+        aliased = idx.qualified_to_internal.get(target.qualified_name)
+        if aliased is not None:
+            target = aliased
+
+    definitive_set: Set[InternalFunction] = set(
+        idx.reverse.get(target, set())
+    )
+
+    # Uncertain: file-level masking flags on the caller's file +
+    # target tail mention. Indexed by tail (see _AdjacencyIndex).
+    target_tail = (
+        target.name if isinstance(target, InternalFunction)
+        else target.qualified_name.rsplit(".", 1)[-1]
+    )
+    uncertain_pairs = idx.uncertain_callers_by_tail.get(target_tail, set())
+    # Drop callers that are already definitive — uncertain only
+    # matters when there's NO definitive evidence in that file. But
+    # uncertain is per-fn, not per-file, so we filter by fn.
+    uncertain_set: Set[InternalFunction] = {
+        fn for (fn, _flag) in uncertain_pairs
+        if fn not in definitive_set
+    }
+
+    # Method-match overinclusive: only meaningful when target is
+    # internal (we're saying "any unresolved-head ...foo() chain
+    # might call this target named foo"). For external targets,
+    # method-match doesn't apply.
+    method_match_set: Set[InternalFunction] = set()
+    if isinstance(target, InternalFunction):
+        candidates = idx.method_match.get(target.name, set())
+        method_match_set = candidates - definitive_set - uncertain_set
+
+    if exclude_test_files:
+        definitive_set = {fn for fn in definitive_set
+                          if fn.file_path not in idx.test_paths}
+        uncertain_set = {fn for fn in uncertain_set
+                         if fn.file_path not in idx.test_paths}
+        method_match_set = {fn for fn in method_match_set
+                            if fn.file_path not in idx.test_paths}
+
+    return CallersResult(
+        definitive=tuple(_sorted_internal(definitive_set)),
+        uncertain=tuple(_sorted_internal(uncertain_set)),
+        method_match_overinclusive=tuple(_sorted_internal(method_match_set)),
+    )
+
+
+def callees_of(
+    inventory: Dict[str, Any],
+    source: InternalFunction,
+    *,
+    exclude_test_files: bool = True,
+) -> CalleesResult:
+    """Return 1-hop callees of ``source``.
+
+    ``source`` must be :class:`InternalFunction` (the question
+    "what does ``X`` call?" only makes sense when we have a
+    project-internal function whose body we've parsed).
+
+    Result mixes :class:`InternalFunction` (calls to peer project
+    functions) and :class:`ExternalFunction` (calls to dep
+    functions), reflecting that consumers like ``/audit`` want both
+    in their context slice.
+    """
+    idx = _get_or_build_index(
+        inventory, exclude_test_files=exclude_test_files,
+    )
+
+    definitive_set: Set[FunctionId] = set(idx.forward.get(source, set()))
+    uncertain: Set[str] = set(idx.uncertain_callees.get(source, set()))
+    has_method_dispatch = bool(idx.has_method_dispatch.get(source, False))
+
+    if exclude_test_files:
+        definitive_set = {
+            c for c in definitive_set
+            if not (isinstance(c, InternalFunction)
+                    and c.file_path in idx.test_paths)
+        }
+
+    return CalleesResult(
+        definitive=tuple(_sorted_callees(definitive_set)),
+        uncertain=tuple(sorted(uncertain)),
+        has_method_dispatch=has_method_dispatch,
+    )
+
+
+def _sorted_internal(s: Iterable[InternalFunction]) -> List[InternalFunction]:
+    """Stable order: by file path, then name, then line."""
+    return sorted(s, key=lambda fn: (fn.file_path, fn.name, fn.line))
+
+
+def _sorted_callees(s: Iterable[FunctionId]) -> List[FunctionId]:
+    """Stable order: Internal first (by path/name/line), External
+    second (by qualified_name)."""
+    internals = [c for c in s if isinstance(c, InternalFunction)]
+    externals = [c for c in s if isinstance(c, ExternalFunction)]
+    internals.sort(key=lambda fn: (fn.file_path, fn.name, fn.line))
+    externals.sort(key=lambda fn: fn.qualified_name)
+    return list(internals) + list(externals)
+
+
 __all__ = [
+    "CallersResult",
+    "CalleesResult",
+    "ExternalFunction",
+    "FunctionId",
+    "InternalFunction",
     "ReachabilityResult",
     "Verdict",
+    "callees_of",
+    "callers_of",
     "function_called",
 ]

@@ -1,0 +1,648 @@
+"""Tests for the 1-hop adjacency primitives in
+:mod:`core.inventory.reachability` — ``callers_of`` and
+``callees_of``.
+
+These exercise the resolver against synthetic inventory dicts that
+mirror the shape :func:`core.inventory.builder.build_inventory`
+produces: each file has ``items`` (function definitions with name +
+line_start) AND ``call_graph`` (imports, calls with caller name,
+indirection flags).
+
+Built-in policy points pinned by the tests below:
+
+  * Project-internal call edges (``foo()`` → local def of ``foo``)
+    appear in ``definitive``.
+  * Cross-package call edges (``mod.fn()`` → ``ExternalFunction``)
+    appear in ``definitive``.
+  * Method-dispatch chains (``self.foo()``, ``obj.foo()``) appear
+    in ``method_match_overinclusive`` for any project-internal
+    target named ``foo``, and in the source's
+    ``CalleesResult.uncertain`` + ``has_method_dispatch=True``.
+  * File-level masking flags (``getattr`` / ``importlib`` /
+    wildcard import) flag every internal function in that file
+    as an uncertain caller of any tail-name the file mentions.
+  * Test files (``tests/``, ``test_*.py``, ``*_test.py``,
+    ``conftest.py``) are filtered out by default.
+  * The adjacency index is memoised per-inventory so back-to-back
+    queries don't rebuild.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, List
+
+import pytest
+
+from core.inventory.call_graph import (
+    INDIRECTION_GETATTR,
+    INDIRECTION_WILDCARD_IMPORT,
+    extract_call_graph_python,
+)
+from core.inventory.reachability import (
+    CalleesResult,
+    CallersResult,
+    ExternalFunction,
+    InternalFunction,
+    callees_of,
+    callers_of,
+)
+
+
+# ---------------------------------------------------------------------------
+# Fixture helpers
+# ---------------------------------------------------------------------------
+
+
+def _file(path: str, source: str, *, items: List[Dict[str, Any]] = None,
+          ) -> Dict[str, Any]:
+    """Build one file record. Auto-derives items from the AST if not
+    supplied — convenient for most tests where the function defs in
+    the source are exactly what we want indexed."""
+    cg = extract_call_graph_python(source).to_dict()
+    if items is None:
+        items = _derive_items(source)
+    return {
+        "path": path,
+        "language": "python",
+        "items": items,
+        "call_graph": cg,
+    }
+
+
+def _derive_items(source: str) -> List[Dict[str, Any]]:
+    """Walk the source with stdlib ast and pull out top-level + nested
+    function defs. Mirrors what extract_items would do for the test's
+    purposes."""
+    import ast
+    out: List[Dict[str, Any]] = []
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            out.append({
+                "name": node.name,
+                "kind": "function",
+                "line_start": node.lineno,
+                "line_end": getattr(node, "end_lineno", None),
+            })
+    return out
+
+
+def _inv(*files: Dict[str, Any]) -> Dict[str, Any]:
+    return {"files": list(files)}
+
+
+# ---------------------------------------------------------------------------
+# callers_of — external target (the SCA / codeql case)
+# ---------------------------------------------------------------------------
+
+
+def test_external_callers_definitive_via_attribute_chain():
+    inv = _inv(_file("src/a.py",
+        "import requests\n"
+        "def fetch():\n"
+        "    requests.get('/')\n"
+    ))
+    r = callers_of(inv, ExternalFunction("requests.get"))
+    assert r.definitive == (InternalFunction("src/a.py", "fetch", 2),)
+    assert r.uncertain == ()
+    assert r.method_match_overinclusive == ()
+
+
+def test_external_callers_definitive_via_aliased_import():
+    inv = _inv(_file("src/a.py",
+        "from requests.utils import extract_zipped_paths as ezp\n"
+        "def unzip():\n"
+        "    ezp('/')\n"
+    ))
+    r = callers_of(inv, ExternalFunction(
+        "requests.utils.extract_zipped_paths"))
+    assert r.definitive == (InternalFunction("src/a.py", "unzip", 2),)
+
+
+def test_external_callers_multiple_callers_sorted():
+    inv = _inv(
+        _file("src/b.py", "import requests\ndef b1():\n    requests.get('/')\n"),
+        _file("src/a.py", "import requests\ndef a1():\n    requests.get('/')\n"),
+    )
+    r = callers_of(inv, ExternalFunction("requests.get"))
+    # Stable sort by (file_path, name, line).
+    assert r.definitive == (
+        InternalFunction("src/a.py", "a1", 2),
+        InternalFunction("src/b.py", "b1", 2),
+    )
+
+
+def test_external_callers_no_callers():
+    inv = _inv(_file("src/a.py",
+        "import json\n"
+        "def f():\n"
+        "    json.dumps({})\n"
+    ))
+    r = callers_of(inv, ExternalFunction("requests.get"))
+    assert r.definitive == ()
+    assert r.uncertain == ()
+
+
+# ---------------------------------------------------------------------------
+# callers_of — internal target
+# ---------------------------------------------------------------------------
+
+
+def test_internal_callers_via_local_bare_call():
+    """`foo()` referring to a peer function defined in the same file."""
+    inv = _inv(_file("src/a.py",
+        "def helper():\n"
+        "    pass\n"
+        "def main():\n"
+        "    helper()\n"
+    ))
+    target = InternalFunction("src/a.py", "helper", 1)
+    r = callers_of(inv, target)
+    assert r.definitive == (InternalFunction("src/a.py", "main", 3),)
+
+
+def test_internal_callers_method_match_overinclusive():
+    """``self.foo()`` is over-inclusive: any project function with
+    body containing an unresolved-head ``...foo()`` is listed under
+    ``method_match_overinclusive`` for every project-internal target
+    named ``foo``."""
+    inv = _inv(
+        _file("src/a.py",
+            "class A:\n"
+            "    def foo(self):\n"
+            "        pass\n"
+            "    def main(self):\n"
+            "        self.foo()\n"
+        ),
+        _file("src/b.py",
+            "class B:\n"
+            "    def foo(self):\n"
+            "        pass\n"
+        ),
+    )
+    target_a = InternalFunction("src/a.py", "foo", 2)
+    target_b = InternalFunction("src/b.py", "foo", 2)
+    r_a = callers_of(inv, target_a)
+    r_b = callers_of(inv, target_b)
+    main_fn = InternalFunction("src/a.py", "main", 4)
+    # `main` shows up over-inclusively for both targets.
+    assert main_fn in r_a.method_match_overinclusive
+    assert main_fn in r_b.method_match_overinclusive
+    # And NOT in either's definitive — we don't know which `foo`
+    # `self.foo()` resolved to.
+    assert main_fn not in r_a.definitive
+    assert main_fn not in r_b.definitive
+
+
+def test_internal_callers_method_match_skipped_for_external_target():
+    """Method-match over-inclusive is only meaningful for internal
+    targets (``the project's foo``). For ``requests.get`` we don't
+    want every ``self.get()`` showing up."""
+    inv = _inv(_file("src/a.py",
+        "class A:\n"
+        "    def main(self):\n"
+        "        self.get('/')\n"
+    ))
+    r = callers_of(inv, ExternalFunction("requests.get"))
+    assert r.method_match_overinclusive == ()
+
+
+# ---------------------------------------------------------------------------
+# callers_of — uncertain via masking flags
+# ---------------------------------------------------------------------------
+
+
+def test_uncertain_when_file_uses_getattr_and_mentions_target_tail():
+    inv = _inv(_file("src/a.py",
+        "import requests\n"
+        "def hidden():\n"
+        "    f = getattr(requests, 'get')\n"
+        "    f('/')\n"
+    ))
+    r = callers_of(inv, ExternalFunction("requests.get"))
+    # No definitive call (getattr indirection); uncertain because
+    # the file uses getattr AND mentions the tail 'get'.
+    assert r.definitive == ()
+    assert InternalFunction("src/a.py", "hidden", 2) in r.uncertain
+
+
+def test_uncertain_does_not_overlap_definitive():
+    """If a function has a definitive call AND its file uses getattr
+    on the same target, only the definitive entry should appear."""
+    inv = _inv(_file("src/a.py",
+        "import requests\n"
+        "def fetch():\n"
+        "    requests.get('/')\n"
+        "    f = getattr(requests, 'get')\n"
+    ))
+    r = callers_of(inv, ExternalFunction("requests.get"))
+    fetch_fn = InternalFunction("src/a.py", "fetch", 2)
+    assert fetch_fn in r.definitive
+    assert fetch_fn not in r.uncertain
+
+
+# ---------------------------------------------------------------------------
+# callees_of
+# ---------------------------------------------------------------------------
+
+
+def test_callees_internal_and_external_mixed():
+    inv = _inv(_file("src/a.py",
+        "import requests\n"
+        "def helper():\n"
+        "    pass\n"
+        "def main():\n"
+        "    helper()\n"
+        "    requests.get('/')\n"
+    ))
+    src = InternalFunction("src/a.py", "main", 4)
+    r = callees_of(inv, src)
+    assert InternalFunction("src/a.py", "helper", 2) in r.definitive
+    assert ExternalFunction("requests.get") in r.definitive
+    assert r.uncertain == ()
+    assert r.has_method_dispatch is False
+
+
+def test_callees_method_dispatch_marks_uncertain_and_flag():
+    inv = _inv(_file("src/a.py",
+        "class A:\n"
+        "    def main(self):\n"
+        "        self.foo()\n"
+        "        self.bar.baz()\n"
+    ))
+    src = InternalFunction("src/a.py", "main", 2)
+    r = callees_of(inv, src)
+    assert r.has_method_dispatch is True
+    # Both unresolved chains landed in uncertain (string form).
+    assert "self.foo" in r.uncertain
+    assert "self.bar.baz" in r.uncertain
+    # Definitive may be empty — neither call resolved via imports.
+    assert r.definitive == ()
+
+
+def test_callees_returns_empty_for_unknown_source():
+    inv = _inv(_file("src/a.py", "def f():\n    pass\n"))
+    bogus = InternalFunction("nope.py", "missing", 1)
+    r = callees_of(inv, bogus)
+    assert r == CalleesResult()
+
+
+# ---------------------------------------------------------------------------
+# Test-file exclusion
+# ---------------------------------------------------------------------------
+
+
+def test_test_file_caller_excluded_by_default():
+    inv = _inv(
+        _file("src/a.py",
+            "def helper():\n"
+            "    pass\n"
+        ),
+        _file("tests/test_a.py",
+            "from src.a import helper\n"
+            "def test_h():\n"
+            "    helper()\n",
+            items=[{"name": "test_h", "kind": "function",
+                    "line_start": 2, "line_end": 3}],
+        ),
+    )
+    target = InternalFunction("src/a.py", "helper", 1)
+    r = callers_of(inv, target)
+    # The test file's `test_h` would be a caller via wildcard, but
+    # the file isn't a true cross-import we can resolve from the
+    # local def. Either way, exclude_test_files=True means the test
+    # file shouldn't contribute.
+    for c in r.definitive + r.uncertain + r.method_match_overinclusive:
+        assert not c.file_path.startswith("tests/"), c
+
+
+def test_test_file_caller_included_when_opt_out():
+    """``exclude_test_files=False`` lets test-file callers through."""
+    inv = _inv(_file("tests/test_x.py",
+        "import requests\n"
+        "def test_get():\n"
+        "    requests.get('/')\n"
+    ))
+    r_excl = callers_of(inv, ExternalFunction("requests.get"))
+    r_incl = callers_of(inv, ExternalFunction("requests.get"),
+                        exclude_test_files=False)
+    assert r_excl.definitive == ()
+    assert r_incl.definitive == (
+        InternalFunction("tests/test_x.py", "test_get", 2),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Caller-resolution edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_module_level_calls_dropped():
+    """Calls outside any function don't have a useful caller node."""
+    inv = _inv(_file("src/a.py",
+        "import requests\n"
+        "requests.get('/')\n"      # module-level call, caller=None
+    ))
+    r = callers_of(inv, ExternalFunction("requests.get"))
+    assert r.definitive == ()
+
+
+def test_same_name_nested_def_picks_innermost_by_line():
+    """When two functions share name in one file (outer + nested
+    redefining), the call's caller-name resolves to the lexically
+    innermost one — the def with greatest line_start ≤ call_line."""
+    src = (
+        "def helper():\n"          # line 1
+        "    def helper():\n"      # line 2 — nested redefinition
+        "        import requests\n"
+        "        requests.get('/')\n"  # line 4 — caller is inner
+        "    return helper\n"
+    )
+    inv = _inv(_file("src/a.py", src))
+    r = callers_of(inv, ExternalFunction("requests.get"))
+    # The inner helper (line 2) should be the caller.
+    callers = r.definitive
+    assert any(c.line == 2 for c in callers)
+
+
+# ---------------------------------------------------------------------------
+# Memoisation
+# ---------------------------------------------------------------------------
+
+
+def test_index_memoised_across_queries():
+    """Two queries against the same inventory dict should not rebuild
+    the index. We verify by mocking the build pass and checking
+    invocation count."""
+    from core.inventory import reachability as r
+
+    inv = _inv(_file("src/a.py",
+        "import requests\n"
+        "def f():\n"
+        "    requests.get('/')\n"
+    ))
+
+    # Drop any cached entry for this exact inventory id.
+    r._INDEX_CACHE.pop(id(inv), None)
+
+    build_calls = {"n": 0}
+    real_build = r._get_or_build_index
+
+    def _spy(inv_arg, *, exclude_test_files):
+        # Detect a "miss" by checking the cache before delegating.
+        if id(inv_arg) not in r._INDEX_CACHE:
+            build_calls["n"] += 1
+        return real_build(inv_arg, exclude_test_files=exclude_test_files)
+
+    r._get_or_build_index = _spy        # type: ignore[assignment]
+    try:
+        callers_of(inv, ExternalFunction("requests.get"))
+        callers_of(inv, ExternalFunction("requests.get"))
+        callers_of(inv, ExternalFunction("requests.get"))
+    finally:
+        r._get_or_build_index = real_build  # type: ignore[assignment]
+
+    assert build_calls["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# CallersResult.all_callers convenience
+# ---------------------------------------------------------------------------
+
+
+def test_all_callers_dedups_and_orders():
+    """Each caller should appear at most once across all groups in the
+    union view, in (definitive, uncertain, method_match) priority."""
+    a = InternalFunction("src/a.py", "fn", 1)
+    b = InternalFunction("src/b.py", "fn", 1)
+    c = InternalFunction("src/c.py", "fn", 1)
+    res = CallersResult(
+        definitive=(a,),
+        uncertain=(a, b),
+        method_match_overinclusive=(c,),
+    )
+    assert res.all_callers == (a, b, c)
+
+
+# ---------------------------------------------------------------------------
+# FunctionId rendering
+# ---------------------------------------------------------------------------
+
+
+def test_internal_function_str_renders_path_name_line():
+    fn = InternalFunction("src/auth.py", "verify_token", 42)
+    assert str(fn) == "src/auth.py:verify_token@42"
+
+
+def test_external_function_str_is_qualified_name():
+    fn = ExternalFunction("requests.utils.extract_zipped_paths")
+    assert str(fn) == "requests.utils.extract_zipped_paths"
+
+
+def test_internal_functions_with_same_identity_are_equal():
+    """Frozen dataclass equality + hashable for set/dict use."""
+    a = InternalFunction("src/x.py", "f", 1)
+    b = InternalFunction("src/x.py", "f", 1)
+    assert a == b
+    assert hash(a) == hash(b)
+    assert {a, b} == {a}
+
+
+def test_internal_function_line_disambiguates():
+    a = InternalFunction("src/x.py", "f", 1)
+    b = InternalFunction("src/x.py", "f", 5)
+    assert a != b
+    assert {a, b} != {a}
+
+
+# ---------------------------------------------------------------------------
+# Cross-package import canonicalisation
+# ---------------------------------------------------------------------------
+
+
+def test_cross_package_import_call_resolves_to_internal():
+    """``from pkg.mod import fn; fn()`` should land in
+    ``callers_of(InternalFunction(pkg/mod.py, fn, ...))`` —
+    not just under ``ExternalFunction("pkg.mod.fn")``.
+
+    Pre-fix the substrate kept those as separate graph nodes, so a
+    consumer holding the InternalFunction def saw 0 callers despite
+    the function being demonstrably called from another file."""
+    inv = _inv(
+        _file("pkg/helpers.py",
+            "def fn():\n"
+            "    pass\n"
+        ),
+        _file("app.py",
+            "from pkg.helpers import fn\n"
+            "def main():\n"
+            "    fn()\n"
+        ),
+    )
+    target = InternalFunction("pkg/helpers.py", "fn", 1)
+    r = callers_of(inv, target)
+    assert r.definitive == (InternalFunction("app.py", "main", 2),)
+
+
+def test_external_form_returns_same_callers_when_aliased():
+    """Querying by the External qualified name should produce the
+    same answer as querying by the InternalFunction def — they're
+    the same physical function."""
+    inv = _inv(
+        _file("pkg/helpers.py",
+            "def fn():\n"
+            "    pass\n"
+        ),
+        _file("app.py",
+            "from pkg.helpers import fn\n"
+            "def main():\n"
+            "    fn()\n"
+        ),
+    )
+    via_internal = callers_of(inv, InternalFunction("pkg/helpers.py", "fn", 1))
+    via_external = callers_of(inv, ExternalFunction("pkg.helpers.fn"))
+    assert via_internal == via_external
+
+
+def test_attribute_call_to_project_internal_canonicalises():
+    """``import pkg.helpers; pkg.helpers.fn()`` (attribute chain
+    rather than ``from`` import) should also canonicalise."""
+    inv = _inv(
+        _file("pkg/helpers.py",
+            "def fn():\n"
+            "    pass\n"
+        ),
+        _file("app.py",
+            "import pkg.helpers\n"
+            "def main():\n"
+            "    pkg.helpers.fn()\n"
+        ),
+    )
+    target = InternalFunction("pkg/helpers.py", "fn", 1)
+    r = callers_of(inv, target)
+    assert r.definitive == (InternalFunction("app.py", "main", 2),)
+
+
+def test_init_py_module_resolves_to_package_dotted_name():
+    """``pkg/__init__.py`` corresponds to module ``pkg``, not
+    ``pkg.__init__``. The candidate-name heuristic must strip
+    ``__init__``."""
+    inv = _inv(
+        _file("pkg/__init__.py",
+            "def fn():\n"
+            "    pass\n"
+        ),
+        _file("app.py",
+            "from pkg import fn\n"
+            "def main():\n"
+            "    fn()\n"
+        ),
+    )
+    target = InternalFunction("pkg/__init__.py", "fn", 1)
+    r = callers_of(inv, target)
+    assert r.definitive == (InternalFunction("app.py", "main", 2),)
+
+
+def test_src_layout_alias():
+    """``src/mypkg/foo.py`` is imported as ``mypkg.foo``, not
+    ``src.mypkg.foo`` — the candidate-name helper handles the
+    standard src-layout."""
+    inv = _inv(
+        _file("src/mypkg/foo.py",
+            "def fn():\n"
+            "    pass\n"
+        ),
+        _file("app.py",
+            "from mypkg.foo import fn\n"
+            "def main():\n"
+            "    fn()\n"
+        ),
+    )
+    target = InternalFunction("src/mypkg/foo.py", "fn", 1)
+    r = callers_of(inv, target)
+    assert r.definitive == (InternalFunction("app.py", "main", 2),)
+
+
+def test_external_qualified_name_not_a_project_alias_unchanged():
+    """``requests.get`` doesn't resolve to anything project-internal;
+    callers_of should behave exactly like before for that case."""
+    inv = _inv(_file("src/a.py",
+        "import requests\n"
+        "def fetch():\n"
+        "    requests.get('/')\n"
+    ))
+    r = callers_of(inv, ExternalFunction("requests.get"))
+    assert r.definitive == (InternalFunction("src/a.py", "fetch", 2),)
+
+
+# ---------------------------------------------------------------------------
+# Cache safety: id() reuse guard + LRU eviction
+# ---------------------------------------------------------------------------
+
+
+def test_cache_identity_check_rejects_collision():
+    """Even if id(new_inv) collides with a stale cached id, the
+    identity check rejects the stale entry and rebuilds. We force
+    the collision deterministically by hand-poking the cache."""
+    from core.inventory import reachability as r
+
+    inv_a = _inv(_file("src/a.py",
+        "import requests\n"
+        "def f():\n"
+        "    requests.get('/')\n"
+    ))
+    callers_of(inv_a, ExternalFunction("requests.get"))
+    a_id = id(inv_a)
+    cached_a = r._INDEX_CACHE[a_id]
+    # Hand-poke a stale entry under a different id() — same shape
+    # the bug would produce when GC reuses an address.
+    inv_b = _inv(_file("src/b.py",
+        "import flask\n"
+        "def g():\n"
+        "    flask.run('/')\n"
+    ))
+    b_id = id(inv_b)
+    # Replace cache[b_id] with the OTHER inventory's entry — this
+    # simulates the post-eviction id-reuse race.
+    r._INDEX_CACHE[b_id] = cached_a
+    # Query inv_b. The identity check should detect the stale
+    # entry, drop it, and rebuild from inv_b's own data.
+    result = callers_of(inv_b, ExternalFunction("flask.run"))
+    assert result.definitive == (
+        InternalFunction("src/b.py", "g", 2),
+    )
+
+
+def test_cache_lru_eviction():
+    """Once the cache exceeds _CACHE_MAX_ENTRIES, the oldest entry
+    drops out. Bound by insertion order."""
+    from core.inventory import reachability as r
+
+    saved_max = r._CACHE_MAX_ENTRIES
+    r._CACHE_MAX_ENTRIES = 4
+    saved_cache = dict(r._INDEX_CACHE)
+    r._INDEX_CACHE.clear()
+    try:
+        invs = [
+            _inv(_file(f"src/m{i}.py",
+                "import requests\n"
+                f"def f{i}():\n"
+                "    requests.get('/')\n"
+            ))
+            for i in range(6)
+        ]
+        for inv in invs:
+            callers_of(inv, ExternalFunction("requests.get"))
+        # First two inventories should have been evicted; last 4 cached.
+        cached_ids = set(r._INDEX_CACHE.keys())
+        assert id(invs[0]) not in cached_ids
+        assert id(invs[1]) not in cached_ids
+        for inv in invs[2:]:
+            assert id(inv) in cached_ids
+    finally:
+        r._CACHE_MAX_ENTRIES = saved_max
+        r._INDEX_CACHE.clear()
+        r._INDEX_CACHE.update(saved_cache)
