@@ -177,14 +177,15 @@ class TestExportImportRoundTrip(unittest.TestCase):
                 )
 
     def test_lock_files_excluded_from_export(self):
-        """``.md.lock`` sibling files exist on disk but should NOT
-        be included in the export — they're per-process locking
-        primitives, not data."""
+        """``.md.lock`` sibling files exist on disk but MUST NOT
+        be included in the export — they're per-process advisory-
+        lock primitives, not data, and shipping them across machines
+        is bundle bloat + operator confusion."""
         with TemporaryDirectory() as d:
             d = Path(d)
             (d / "src").mkdir()
             src = _build_project_with_annotations(d / "src")
-            # Verify lock files exist before export.
+            # Verify lock files exist on disk before export.
             from core.annotations.storage import _HAS_FCNTL
             if _HAS_FCNTL:
                 lock_files = list(src.rglob("*.md.lock"))
@@ -201,24 +202,49 @@ class TestExportImportRoundTrip(unittest.TestCase):
             }))
             export_project(src, zip_path, project_json_path=project_json)
 
-            # Verify zip doesn't contain .md.lock entries.
             import zipfile
             with zipfile.ZipFile(zip_path) as zf:
-                # NOTE: this is currently a regression-pin test — if
-                # the export starts including lock files, this will
-                # fail and we'll know to filter them. Today, the export
-                # just zips everything in the dir.
-                lock_in_zip = [
-                    n for n in zf.namelist()
-                    if n.endswith(".md.lock")
-                ]
-            # If lock files are getting included, this surfaces it.
-            # NOT failing the test hard — the export today doesn't
-            # filter, so we accept the current state. Pin: at least
-            # data files survive.
+                names = zf.namelist()
+            lock_in_zip = [n for n in names if n.endswith(".lock")]
+            assert lock_in_zip == [], (
+                f"export must filter lock files; got {lock_in_zip}"
+            )
+            # Data files survive.
             assert any(
                 n.endswith(".md") and not n.endswith(".md.lock")
-                for n in zipfile.ZipFile(zip_path).namelist()
+                for n in names
+            )
+
+    def test_orphaned_tempfiles_excluded_from_export(self):
+        """``.annotation-*.tmp`` orphan tempfiles (e.g. from a writer
+        crashed mid-rename) shouldn't ship either. Pin the filter."""
+        with TemporaryDirectory() as d:
+            d = Path(d)
+            (d / "src").mkdir()
+            src = _build_project_with_annotations(d / "src")
+            # Plant a fake orphan tempfile.
+            ann_dir = src / "annotations" / "src"
+            ann_dir.mkdir(parents=True, exist_ok=True)
+            fake_tmp = ann_dir / ".annotation-orphan-xyz.tmp"
+            fake_tmp.write_text("would-be tempfile leftover")
+            assert fake_tmp.exists()
+
+            zip_path = d / "myproj.zip"
+            project_json = d / "myproj.json"
+            project_json.write_text(json.dumps({
+                "name": "myproj",
+                "target": "/tmp/fake-target",
+                "output_dir": str(src),
+            }))
+            export_project(src, zip_path, project_json_path=project_json)
+
+            import zipfile
+            with zipfile.ZipFile(zip_path) as zf:
+                names = zf.namelist()
+            tmp_in_zip = [n for n in names
+                          if "/.annotation-" in n and n.endswith(".tmp")]
+            assert tmp_in_zip == [], (
+                f"export must filter orphan tempfiles; got {tmp_in_zip}"
             )
 
 
