@@ -132,8 +132,40 @@ def propagate(text: str, sub: Rejection) -> Rejection:
     starts out as that slice.  When bubbling up to the caller we
     replace it with ``text`` (the parent's full input) so consumers
     can match the rejection back to the original source.
+
+    Carry the inner cause through the detail so chained propagations
+    don't lose the cause location. Pre-fix the propagate sequence
+    overwrote text at each hop without preserving the inner slice's
+    text in the visible output:
+
+        outer "(a + b) > 10"
+          inner "a + b" → Rejection(text="a + b", detail="bad token")
+          propagate("(a + b) > 10", sub) →
+              Rejection(text="(a + b) > 10", detail="bad token")
+
+    The operator saw "(a + b) > 10" with detail "bad token" and had
+    no signal that the failure originated in the inner `a + b` slice
+    — they had to re-parse the outer text to localise the cause.
+    Three levels of propagation lost the inner context twice over.
+
+    Append the inner slice to the detail when it differs from the
+    new outer text, so the cause-chain stays visible:
+
+        Rejection(text="(a + b) > 10",
+                  detail="bad token (in: 'a + b')")
+
+    Idempotent: if the sub.text already matches the new outer text
+    (caller propagates a same-level rejection), no annotation is
+    added — keeps the message clean for non-chained cases.
     """
-    return Rejection(text, sub.kind, sub.detail, sub.hint)
+    detail = sub.detail
+    if sub.text and sub.text != text and "(in:" not in detail:
+        # Truncate inner-text rendering at 80 chars so a deeply
+        # nested expression doesn't blow up the rejection message.
+        inner = sub.text if len(sub.text) <= 80 else sub.text[:77] + "..."
+        suffix = f" (in: {inner!r})" if not detail else f" (in: {inner!r})"
+        detail = f"{detail}{suffix}" if detail else f"(in: {inner!r})"
+    return Rejection(text, sub.kind, detail, sub.hint)
 
 
 def parse_literal_value(tok: str, profile: BVProfile) -> Union[int, Rejection]:
