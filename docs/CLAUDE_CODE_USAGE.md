@@ -4,7 +4,7 @@
 
 **Security testing:**
 ```
-/scan     - Static code analysis (Semgrep + CodeQL + LLM)
+/scan     - Static code analysis (Semgrep only — Semgrep + CodeQL + LLM is /agentic)
 /fuzz     - Binary fuzzing (AFL++ + crash analysis)
 /web      - Web application security testing
 /agentic  - Full autonomous workflow (most comprehensive)
