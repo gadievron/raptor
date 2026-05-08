@@ -33,6 +33,7 @@ adding manual notes shouldn't conflict with an LLM run).
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import tempfile
@@ -41,6 +42,15 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .models import Annotation
+
+
+# Allowed values for ``write_annotation(overwrite=...)``. ``all``
+# matches the original behaviour. ``respect-manual`` refuses to
+# overwrite an existing same-name annotation whose
+# ``metadata.source == "human"`` — used by LLM-driven callers
+# (``/agentic``, ``/understand`` post-processor) so a manual edit
+# is never silently clobbered.
+_OVERWRITE_MODES = ("all", "respect-manual")
 
 
 # Section heading regex. ``## name`` at start-of-line. Name captures
@@ -247,17 +257,42 @@ def read_annotation(
     return None
 
 
-def write_annotation(base_dir: Path, ann: Annotation) -> Path:
+def write_annotation(
+    base_dir: Path, ann: Annotation,
+    *, overwrite: str = "all",
+) -> Optional[Path]:
     """Write or replace one function's annotation in its source
-    file's annotation .md. Returns the path written.
+    file's annotation .md.
+
+    Returns the path written, or ``None`` if the write was refused
+    by the ``overwrite`` policy.
+
+    ``overwrite``:
+      * ``"all"`` (default) — always write, replacing any existing
+        same-name annotation. Existing annotations for OTHER
+        functions in the same file are still preserved.
+      * ``"respect-manual"`` — if an existing same-name annotation
+        carries ``metadata.source == "human"``, skip this write
+        (return ``None``). LLM-driven callers should pass this so
+        operator notes never get clobbered. LLM-over-LLM and
+        write-when-no-prior-record proceed normally.
 
     Atomic via tempfile + rename — concurrent readers see either the
     pre-write or post-write content, never a partial rewrite.
-    Existing annotations for OTHER functions in the same file are
-    preserved.
     """
+    if overwrite not in _OVERWRITE_MODES:
+        raise ValueError(
+            f"invalid overwrite mode {overwrite!r}; "
+            f"expected one of {_OVERWRITE_MODES}"
+        )
     _validate_function_name(ann.function)
     _validate_metadata(ann.metadata)
+
+    if overwrite == "respect-manual":
+        prior = read_annotation(base_dir, ann.file, ann.function)
+        if prior is not None and prior.metadata.get("source") == "human":
+            return None
+
     path = annotation_path(base_dir, ann.file)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -348,6 +383,40 @@ def iter_all_annotations(base_dir: Path) -> Iterator[Annotation]:
         # "packages/foo/bar.py" for "packages/foo/bar.py.md".
         source_file = str(rel.with_suffix(""))
         yield from read_file_annotations(base_dir, source_file)
+
+
+def compute_function_hash(
+    source_path: Path, start_line: int, end_line: int,
+) -> str:
+    """Compute a stable short hash of a function's source lines for
+    staleness detection.
+
+    Returns the first 12 hex chars of sha256 over the slice. 12 chars
+    keeps the metadata line short while still being collision-resistant
+    for the use case (a few thousand annotations per project).
+
+    ``start_line`` and ``end_line`` are 1-indexed and inclusive on
+    both ends. If the file is unreadable or the range is empty,
+    returns ``""`` so callers can detect "no hash available" and
+    skip the staleness check.
+
+    Lines are read with ``errors="replace"`` so a stray non-UTF-8
+    byte in source doesn't crash the hash computation — the hash
+    is for change-detection, not cryptographic integrity.
+    """
+    if start_line <= 0 or end_line < start_line:
+        return ""
+    try:
+        text = source_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    lines = text.splitlines()
+    s = max(0, start_line - 1)
+    e = min(len(lines), end_line)
+    if s >= e:
+        return ""
+    snippet = "\n".join(lines[s:e])
+    return hashlib.sha256(snippet.encode("utf-8")).hexdigest()[:12]
 
 
 def _render_file(source_file: str, anns) -> str:

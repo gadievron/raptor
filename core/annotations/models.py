@@ -31,9 +31,16 @@ class Annotation:
       * ``status``: ``clean`` / ``suspicious`` / ``finding`` /
         ``error`` (matches the audit coverage status enum)
       * ``cwe``: e.g. ``CWE-78``
-      * ``hash``: source-line hash captured at annotation time, so
-        callers can detect stale annotations after the source has
-        edited.
+      * ``source``: ``human`` / ``llm`` — who wrote the annotation.
+        ``write_annotation(..., overwrite="respect-manual")`` skips
+        writes whose existing record has ``source=human`` so LLM
+        passes never clobber operator notes. Operator-driven CLI
+        commands set ``source=human``; LLM-driven callers set
+        ``source=llm``.
+      * ``hash``: short sha256 prefix of the function's source lines,
+        captured at annotation time so callers can detect a stale
+        annotation when the source edits later. Use
+        ``core.annotations.compute_function_hash`` to populate.
 
     Other keys are accepted; readers tolerate unknown keys to allow
     consumer-specific extensions without schema migrations.

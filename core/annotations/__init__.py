@@ -42,6 +42,7 @@ from __future__ import annotations
 from .models import Annotation
 from .storage import (
     annotation_path,
+    compute_function_hash,
     iter_all_annotations,
     read_annotation,
     read_file_annotations,
@@ -53,6 +54,7 @@ from .storage import (
 __all__ = [
     "Annotation",
     "annotation_path",
+    "compute_function_hash",
     "iter_all_annotations",
     "read_annotation",
     "read_file_annotations",
