@@ -1,5 +1,6 @@
 """Tests for packages/fuzzing/afl_runner.py."""
 
+import os
 import sys
 from pathlib import Path
 
@@ -31,7 +32,7 @@ class TestCreateDefaultCorpus:
         runner.output_dir = output_dir
         return runner
 
-    def test_corpus_anchored_to_output_dir_not_cwd(self, tmp_path, monkeypatch):
+    def test_corpus_anchored_to_output_dir_not_cwd(self, tmp_path):
         # Two distinct directories: where the runner lives vs the
         # operator's CWD when they invoke /fuzz.
         output_dir = tmp_path / "fuzz_run"
@@ -39,10 +40,18 @@ class TestCreateDefaultCorpus:
         cwd = tmp_path / "operator_cwd"
         cwd.mkdir()
 
-        monkeypatch.chdir(cwd)
-
-        runner = self._make_runner(output_dir)
-        result = runner._create_default_corpus()
+        # Plain os.chdir + try/finally instead of monkeypatch.chdir():
+        # monkeypatch.chdir calls os.getcwd() to remember the original
+        # cwd, which fails in CI when a prior test left cwd dangling.
+        # Anchor restoration to Path(__file__) (always absolute, no
+        # cwd dependency).
+        safe_restore = Path(__file__).resolve().parent
+        os.chdir(cwd)
+        try:
+            runner = self._make_runner(output_dir)
+            result = runner._create_default_corpus()
+        finally:
+            os.chdir(safe_restore)
 
         # Seeds land under output_dir.
         expected = output_dir / "corpus_default"
@@ -56,16 +65,16 @@ class TestCreateDefaultCorpus:
         assert not (cwd / "out").exists()
         assert not (cwd / "out" / "corpus_default").exists()
 
-    def test_corpus_returns_absolute_path_under_output_dir(self, tmp_path, monkeypatch):
+    def test_corpus_returns_absolute_path_under_output_dir(self, tmp_path):
         output_dir = tmp_path / "fuzz_run"
         output_dir.mkdir()
-        monkeypatch.chdir(tmp_path)
 
         runner = self._make_runner(output_dir)
         result = runner._create_default_corpus()
 
-        # Path must be a child of output_dir (not interpreted relative
-        # to CWD by some downstream consumer).
+        # Path must be absolute and a child of output_dir (not
+        # interpreted relative to CWD by some downstream consumer).
+        assert result.is_absolute()
         assert output_dir in result.parents or result.parent == output_dir
 
     def test_seeds_have_expected_content(self, tmp_path):
