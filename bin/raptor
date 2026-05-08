@@ -228,10 +228,18 @@ fi
 # Same policy shared with raptor_agentic.py + build_detector.py.
 if [ -n "$CHECK_TARGET" ]; then
     set +e
+    # `--` terminator before the target separates flags from the
+    # positional path. Pre-fix a target path that started with
+    # `-` (rare but legitimate: someone scanning a sibling
+    # checkout named `--branch-foo/`) was interpreted by the
+    # cc-trust-check arg parser as a flag, triggering "unknown
+    # option" + exit 2 — which the launcher then treated as
+    # "refused to launch", failing the run on a path the
+    # operator never intended as a flag.
     if [ -n "$TRUST_REPO_ARG" ]; then
-        "$RAPTOR_DIR/libexec/raptor-cc-trust-check" "$TRUST_REPO_ARG" "$CHECK_TARGET"
+        "$RAPTOR_DIR/libexec/raptor-cc-trust-check" "$TRUST_REPO_ARG" -- "$CHECK_TARGET"
     else
-        "$RAPTOR_DIR/libexec/raptor-cc-trust-check" "$CHECK_TARGET"
+        "$RAPTOR_DIR/libexec/raptor-cc-trust-check" -- "$CHECK_TARGET"
     fi
     trust_rc=$?
     set -e
