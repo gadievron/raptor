@@ -89,6 +89,28 @@ def main():
     p_findings.add_argument("name", nargs="?", help="Project name")
     p_findings.add_argument("--detailed", action="store_true", help="Per-finding detail (reasoning, proof, PoC)")
 
+    # annotations
+    p_anns = sub.add_parser(
+        "annotations",
+        help="List annotations across all runs in the project",
+        usage="raptor project annotations [<name>] [--status S] "
+              "[--source S] [--file PATH]",
+        **_F,
+    )
+    p_anns.add_argument("name", nargs="?", help="Project name")
+    p_anns.add_argument(
+        "--status",
+        help="Filter by metadata.status (clean / suspicious / finding / etc.)",
+    )
+    p_anns.add_argument(
+        "--source",
+        help="Filter by metadata.source (human / llm)",
+    )
+    p_anns.add_argument(
+        "--file",
+        help="Filter by source file path",
+    )
+
     # delete
     p_delete = sub.add_parser("delete", help="Delete a project",
                               usage="raptor project delete <name> [--purge] [--yes]", **_F)
@@ -262,6 +284,22 @@ def main():
                 print(f"Project '{name}' not found.")
                 return
             _print_findings(p, detailed=args.detailed)
+
+        elif args.subcommand == "annotations":
+            name = args.name or _get_active_project()
+            if not name:
+                print("No project specified.")
+                return
+            p = mgr.load(name)
+            if not p:
+                print(f"Project '{name}' not found.")
+                return
+            _print_annotations(
+                p,
+                status_filter=args.status,
+                source_filter=args.source,
+                file_filter=args.file,
+            )
 
         elif args.subcommand == "use":
             if args.name is None:
@@ -790,6 +828,65 @@ def _print_findings(project, detailed=False):
 def _finding_label(f):
     """Location-based label for a finding."""
     return f"{f.get('file', '?')}:{f.get('function', '?')}:{f.get('line', '?')}"
+
+
+def _print_annotations(
+    project, status_filter=None, source_filter=None, file_filter=None,
+):
+    """List annotations across all runs in the project.
+
+    Walks every run dir's ``annotations/`` subdir plus the project's
+    own top-level ``annotations/`` dir (operator-driven manual notes
+    land there when the active project has no specific run scope).
+    Deduplicates on (file, function), keeping the most recent annotation
+    per pair (last-writer-wins by run mtime).
+    """
+    from core.annotations import iter_all_annotations
+
+    # Candidate annotation roots: one per run dir + the project root.
+    roots = []
+    for rd in project.get_run_dirs(sweep=False):
+        ann_dir = rd / "annotations"
+        if ann_dir.exists():
+            roots.append((rd.stat().st_mtime, ann_dir))
+    project_ann = Path(project.output_dir) / "annotations"
+    if project_ann.exists():
+        # Project-level annotations win over run-level (operator
+        # notes are higher-priority than LLM emissions).
+        roots.append((float("inf"), project_ann))
+    if not roots:
+        print("No annotations.")
+        return
+
+    # Sort by mtime (oldest first) so later writes overwrite earlier
+    # in the dedup map.
+    roots.sort(key=lambda r: r[0])
+    by_pair = {}  # (file, function) → Annotation
+    for _mtime, root in roots:
+        for ann in iter_all_annotations(root):
+            by_pair[(ann.file, ann.function)] = ann
+
+    anns = list(by_pair.values())
+    if status_filter:
+        anns = [a for a in anns if a.metadata.get("status") == status_filter]
+    if source_filter:
+        anns = [a for a in anns if a.metadata.get("source") == source_filter]
+    if file_filter:
+        anns = [a for a in anns if a.file == file_filter]
+    anns.sort(key=lambda a: (a.file, a.function))
+    if not anns:
+        print("No annotations match the filter.")
+        return
+
+    print(f"{len(anns)} annotation(s):")
+    file_w = max(len(a.file) for a in anns)
+    fn_w = max(len(a.function) for a in anns)
+    for a in anns:
+        status = a.metadata.get("status", "-")
+        source = a.metadata.get("source", "-")
+        snippet = " ".join(a.body.split())[:60]
+        print(f"  {a.file:<{file_w}}  {a.function:<{fn_w}}  "
+              f"{status:<14}  {source:<5}  {snippet}")
 
 
 def _print_diff(result):
