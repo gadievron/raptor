@@ -136,6 +136,73 @@ class TestGetOutDir:
             result = RaptorConfig.get_out_dir()
             assert result == RaptorConfig.BASE_OUT_DIR
 
+    def test_empty_raptor_out_dir_falls_back(self):
+        """Empty string for RAPTOR_OUT_DIR should fall back to base.
+
+        Pre-fix this branch was uncovered: the implementation
+        does ``if not base: return BASE_OUT_DIR``, which catches
+        BOTH unset (None) and empty (``""``) — but only the
+        unset case had a test. An accidental
+        ``RAPTOR_OUT_DIR=`` (e.g. shell-expansion of an
+        unset var with ``$RAPTOR_OUT_DIR``) used to surface as
+        a ``Path("").resolve()`` returning cwd, which the
+        forbidden-prefix check then rejected randomly depending
+        on cwd. Confirm the empty-string fallback explicitly.
+        """
+        with patch.dict(os.environ, {"RAPTOR_OUT_DIR": ""}):
+            result = RaptorConfig.get_out_dir()
+            assert result == RaptorConfig.BASE_OUT_DIR
+
+    @pytest.mark.parametrize("system_path", [
+        "/etc", "/etc/foo",
+        "/usr", "/usr/local/bin",
+        "/bin", "/sbin",
+        "/boot", "/dev", "/proc", "/sys",
+    ])
+    def test_rejects_system_paths(self, system_path):
+        """RAPTOR_OUT_DIR pointing at a system prefix raises ValueError.
+
+        Pre-fix the system-path warning branch was uncovered.
+        The branch existed (refusing /etc, /usr, etc.) but no
+        test verified it actually rejected. A regression that
+        accidentally downgraded the raise to a warning would
+        have shipped silently and caused operator output to
+        land under /etc on the next misconfigured run.
+
+        Test both the bare prefix (``/usr``) and a sub-path
+        (``/usr/local/bin``) — the implementation matches on
+        the path-component boundary specifically to allow
+        ``/usr-local-foo`` while still catching ``/usr/x``.
+        """
+        with patch.dict(os.environ, {"RAPTOR_OUT_DIR": system_path}):
+            with pytest.raises(ValueError, match="resolves under system path"):
+                RaptorConfig.get_out_dir()
+
+    def test_accepts_usr_local_lookalike(self):
+        """`/usr-local-foo` must NOT match the `/usr` rule.
+
+        The forbidden-prefix check uses component-boundary
+        matching specifically to avoid this false positive.
+        Pre-fix this case was uncovered, leaving the
+        component-boundary logic vulnerable to a "naive
+        startswith refactor for simplicity" that would have
+        broken legitimate operator paths.
+        """
+        with patch.dict(os.environ, {"RAPTOR_OUT_DIR": "/tmp/usr-local-foo"}):
+            # Resolved → /tmp/usr-local-foo, parent /tmp exists,
+            # so no ValueError on the system-path check; should
+            # return the resolved path.
+            try:
+                result = RaptorConfig.get_out_dir()
+                assert "/usr-local-foo" in str(result)
+            except ValueError as e:
+                if "system path" in str(e):
+                    pytest.fail(
+                        f"/usr-local-foo wrongly matched /usr rule: {e}"
+                    )
+                raise
+
+
 class TestEnsureDirectories:
     """Tests for RaptorConfig.ensure_directories()."""
 
