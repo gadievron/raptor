@@ -992,7 +992,23 @@ def _do_merge(project, merge_type, yes):
                 "extra": {"merged_from": len(dirs), "unique_findings": stats["unique_findings"]},
             })
         except Exception as e:
-            print(f"  {cmd_type}: warning — metadata write failed ({e}), proceeding anyway")
+            # Pre-fix this printed a warning and PROCEEDED to delete
+            # source runs. The merged output then existed without
+            # `RUN_METADATA_FILE`, which downstream consumers
+            # (`load_run_metadata`, `get_run_dirs_by_type`) treat as
+            # "not a completed run" and silently skip — so the
+            # operator's merged data became invisible while the
+            # source runs were already gone. Net data loss with no
+            # error message after the warning.
+            #
+            # Abort the delete step instead. Merged dir stays on
+            # disk (operator can inspect / retry the metadata
+            # write); source dirs stay on disk (no data lost). The
+            # operator sees both the warning AND a clear "source
+            # runs preserved" line so they know to re-run.
+            print(f"  {cmd_type}: ERROR — metadata write failed ({e})")
+            print(f"  {cmd_type}: source runs PRESERVED (merged output left at {merged_dir})")
+            continue
 
         # Delete source runs (continue on individual failures)
         failed_deletes = []
