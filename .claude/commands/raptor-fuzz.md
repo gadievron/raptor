@@ -36,9 +36,9 @@ You are helping the user fuzz a binary executable with RAPTOR's AFL++ integratio
 
 ## Example Commands
 
-Basic fuzzing (110 minutes, stdin mode):
+Basic fuzzing (60 minutes, stdin mode):
 ```bash
-python3 raptor.py fuzz --binary /path/to/binary --duration 6600
+python3 raptor.py fuzz --binary /path/to/binary --duration 3600
 ```
 
 Quick fuzz (10 minutes):
