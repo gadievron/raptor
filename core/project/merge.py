@@ -118,8 +118,33 @@ def _uniquify(parent: Path, stem: str, date_tag: str, suffix: str) -> Path:
 
 
 def _finding_key(finding: Dict[str, Any]) -> tuple:
-    """Dedup key for a finding: (file, function, line). More stable than ID."""
-    return _dedup_key(finding)
+    """Dedup key for a finding: (file, function, line, vuln_type).
+
+    Aligns with `count_vulns` (which groups by `(file, function, vuln_type)`)
+    so the merged-list raw count and the vuln count agree on the
+    "are these the same finding?" question:
+
+    * Two findings at the same `(file, function, line)` with
+      DIFFERENT `vuln_type` are now treated as distinct entries
+      (raw=2). Pre-fix they collided on the line-only dedup key
+      so one of the two was overwritten by `_status_rank` tie-
+      break — and `count_vulns` then reported `1 vuln` against
+      a `1 finding` raw count, hiding the second vulnerability
+      class entirely.
+    * Two findings with the same `vuln_type` at different lines
+      stay distinct in the raw count (different lines), and
+      `count_vulns` groups them as one logical vuln — so the
+      operator sees `2 findings (1 vuln)`, which correctly
+      reflects "one logical issue manifesting at two
+      locations".
+
+    The `_dedup_key` helper in `findings_utils` keeps its
+    line-only signature for consumers that want strict
+    location-based dedup; merge has its own slightly stricter
+    key that keeps vuln-class information visible.
+    """
+    base = _dedup_key(finding)
+    return base + (finding.get("vuln_type", ""),)
 
 
 # Status progression: higher rank = more information about the finding.
