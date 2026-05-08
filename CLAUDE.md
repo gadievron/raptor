@@ -23,6 +23,7 @@ VERY IMPORTANT: follow these steps in order.
 /validate - Exploitability validation pipeline (see below)
 /understand - Code understanding: map attack surface, trace flows, hunt variants (see below)
 /diagram - Generate Mermaid visual maps from /understand or /validate output (see below)
+/annotate - Per-function prose annotations (manual or LLM-emitted) attached to source files
 
 **Coverage:** When asked about coverage, run `libexec/raptor-coverage-summary` (no args = active project). Use `--detailed` for per-file table, `--gaps` for unreviewed functions. See `.claude/skills/coverage.md` for mark/unmark and the full API.
 
