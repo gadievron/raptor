@@ -30,6 +30,7 @@ from core.inventory.reachability import (
     ClosureResult,
     ExternalFunction,
     InternalFunction,
+    all_paths,
     forward_closure,
     reverse_closure,
     shortest_path,
@@ -609,3 +610,202 @@ def test_forward_closure_does_not_walk_through_test_files():
         not (isinstance(n, InternalFunction) and n.name == "real_target")
         for n in r.nodes
     )
+
+
+# ---------------------------------------------------------------------------
+# all_paths — k-shortest simple paths (no node repeats per chain).
+# Companion to shortest_path when consumers want evidence diversity.
+# ---------------------------------------------------------------------------
+
+
+def test_all_paths_single_chain():
+    inv = _inv(_file("src/a.py",
+        "def target():\n"
+        "    pass\n"
+        "def b():\n"
+        "    target()\n"
+        "def a():\n"
+        "    b()\n"
+    ))
+    a = InternalFunction("src/a.py", "a", 5)
+    target = InternalFunction("src/a.py", "target", 1)
+    paths = all_paths(inv, a, target)
+    assert len(paths) == 1
+    assert paths[0] == (a, InternalFunction("src/a.py", "b", 3), target)
+
+
+def test_all_paths_finds_multiple():
+    """entry has two paths to target: direct and via mid."""
+    inv = _inv(_file("src/a.py",
+        "def target():\n"
+        "    pass\n"
+        "def mid():\n"
+        "    target()\n"
+        "def entry():\n"
+        "    target()\n"
+        "    mid()\n"
+    ))
+    entry = InternalFunction("src/a.py", "entry", 5)
+    target = InternalFunction("src/a.py", "target", 1)
+    paths = all_paths(inv, entry, target)
+    assert len(paths) == 2
+    # Sorted by length: direct first.
+    assert paths[0] == (entry, target)
+    assert paths[1] == (entry, InternalFunction("src/a.py", "mid", 3),
+                        target)
+
+
+def test_all_paths_handles_cycles_no_repeated_node():
+    """A cycle shouldn't cause infinite recursion or duplicate paths.
+    Simple-path constraint: no node repeats in a single chain."""
+    inv = _inv(_file("src/a.py",
+        "def target():\n"
+        "    pass\n"
+        "def a():\n"
+        "    b()\n"
+        "    target()\n"
+        "def b():\n"
+        "    a()\n"
+    ))
+    a = InternalFunction("src/a.py", "a", 3)
+    target = InternalFunction("src/a.py", "target", 1)
+    paths = all_paths(inv, a, target)
+    assert any(p == (a, target) for p in paths)
+    for p in paths:
+        assert len(set(p)) == len(p), p
+
+
+def test_all_paths_max_paths_bound():
+    """Many distinct paths exist; max_paths caps the result."""
+    src_lines = ["def target():", "    pass"]
+    for n in "abcde":
+        src_lines.append(f"def {n}():")
+        src_lines.append("    target()")
+    src_lines.append("def entry():")
+    for n in "abcde":
+        src_lines.append(f"    {n}()")
+    src_lines.append("    target()")
+    inv = _inv(_file("src/a.py", "\n".join(src_lines) + "\n"))
+    entry = next(InternalFunction("src/a.py", "entry", item["line_start"])
+                 for f in inv["files"]
+                 for item in f.get("items", [])
+                 if item.get("name") == "entry")
+    target = InternalFunction("src/a.py", "target", 1)
+    all_p = all_paths(inv, entry, target, max_paths=10)
+    assert len(all_p) == 6     # direct + 5 via single intermediate
+    capped = all_paths(inv, entry, target, max_paths=2)
+    assert len(capped) == 2
+
+
+def test_all_paths_max_depth_bound():
+    src_lines = ["def f0():", "    f1()"]
+    for i in range(1, 5):
+        src_lines.append(f"def f{i}():")
+        if i == 4:
+            src_lines.append("    pass")
+        else:
+            src_lines.append(f"    f{i + 1}()")
+    inv = _inv(_file("src/a.py", "\n".join(src_lines) + "\n"))
+    src = InternalFunction("src/a.py", "f0", 1)
+    dst = InternalFunction("src/a.py", "f4", 9)
+    deep = all_paths(inv, src, dst, max_depth=10)
+    assert len(deep) == 1
+    shallow = all_paths(inv, src, dst, max_depth=2)
+    assert shallow == ()
+
+
+def test_all_paths_unreachable_returns_empty():
+    inv = _inv(_file("src/a.py",
+        "def isolated():\n"
+        "    pass\n"
+        "def standalone():\n"
+        "    pass\n"
+    ))
+    src = InternalFunction("src/a.py", "standalone", 3)
+    dst = InternalFunction("src/a.py", "isolated", 1)
+    assert all_paths(inv, src, dst) == ()
+
+
+def test_all_paths_source_equals_target():
+    inv = _inv(_file("src/a.py", "def f():\n    pass\n"))
+    f = InternalFunction("src/a.py", "f", 1)
+    assert all_paths(inv, f, f) == ((f,),)
+
+
+def test_all_paths_external_target_alias():
+    """External target aliasing to a project InternalFunction yields
+    paths to the InternalFunction (matches shortest_path / closure
+    semantics)."""
+    inv = _inv(
+        _file("pkg/helpers.py",
+            "def fn():\n"
+            "    pass\n"
+        ),
+        _file("app.py",
+            "from pkg.helpers import fn\n"
+            "def main():\n"
+            "    fn()\n"
+        ),
+    )
+    main = InternalFunction("app.py", "main", 2)
+    paths = all_paths(inv, main, ExternalFunction("pkg.helpers.fn"))
+    expected = InternalFunction("pkg/helpers.py", "fn", 1)
+    assert paths == ((main, expected),)
+
+
+def test_all_paths_excludes_test_files_when_requested():
+    inv = _inv(
+        _file("src/a.py",
+            "def target():\n"
+            "    pass\n"
+            "def app():\n"
+            "    target()\n"
+        ),
+        _file("tests/helpers.py",
+            "from src.a import target\n"
+            "def via_test():\n"
+            "    target()\n",
+            items=[{"name": "via_test", "kind": "function",
+                    "line_start": 2, "line_end": 3}],
+        ),
+        _file("src/entry.py",
+            "from tests.helpers import via_test\n"
+            "from src.a import app\n"
+            "def entry():\n"
+            "    via_test()\n"
+            "    app()\n"
+        ),
+    )
+    entry = InternalFunction("src/entry.py", "entry", 3)
+    target = InternalFunction("src/a.py", "target", 1)
+    p_default = all_paths(inv, entry, target)
+    assert len(p_default) == 2
+    p_filtered = all_paths(inv, entry, target, exclude_test_files=True)
+    assert len(p_filtered) == 1
+    assert all(
+        not (isinstance(s, InternalFunction)
+             and s.file_path.startswith("tests/"))
+        for s in p_filtered[0]
+    )
+
+
+def test_all_paths_sorted_by_length():
+    inv = _inv(_file("src/a.py",
+        "def target():\n"
+        "    pass\n"
+        "def m():\n"
+        "    target()\n"
+        "def n():\n"
+        "    target()\n"
+        "def via_m():\n"
+        "    m()\n"
+        "def entry():\n"
+        "    m()\n"
+        "    n()\n"
+        "    via_m()\n"
+    ))
+    entry = InternalFunction("src/a.py", "entry", 9)
+    target = InternalFunction("src/a.py", "target", 1)
+    paths = all_paths(inv, entry, target)
+    lengths = [len(p) for p in paths]
+    assert lengths == sorted(lengths)

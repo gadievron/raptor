@@ -43,6 +43,7 @@ from core.inventory.reachability import (
     CallersResult,
     ExternalFunction,
     InternalFunction,
+    call_lines_of,
     callees_of,
     callers_of,
 )
@@ -646,3 +647,287 @@ def test_cache_lru_eviction():
         r._CACHE_MAX_ENTRIES = saved_max
         r._INDEX_CACHE.clear()
         r._INDEX_CACHE.update(saved_cache)
+
+
+# ---------------------------------------------------------------------------
+# __init__.py re-export aliasing — extends the cross-package canonicalisation
+# above to handle ``pkg/__init__.py`` that re-exports from submodules,
+# both via relative (``from .helpers import foo``) and absolute (``from
+# pkg.helpers import foo``) import forms.
+# ---------------------------------------------------------------------------
+
+
+def test_reexport_basic():
+    """``pkg/__init__.py`` does ``from .helpers import foo`` and
+    ``app.py`` does ``from pkg import foo; foo()``. The caller must
+    resolve to the def in ``pkg/helpers.py``."""
+    inv = _inv(
+        _file("pkg/__init__.py",
+            "from .helpers import foo\n",
+            items=[],
+        ),
+        _file("pkg/helpers.py",
+            "def foo():\n"
+            "    pass\n"
+        ),
+        _file("app.py",
+            "from pkg import foo\n"
+            "def main():\n"
+            "    foo()\n"
+        ),
+    )
+    target = InternalFunction("pkg/helpers.py", "foo", 1)
+    r = callers_of(inv, target)
+    assert r.definitive == (InternalFunction("app.py", "main", 2),)
+
+
+def test_reexport_with_alias():
+    """``from .helpers import foo as bar`` — alias name must be the
+    one consumers can call by."""
+    inv = _inv(
+        _file("pkg/__init__.py",
+            "from .helpers import foo as bar\n",
+            items=[],
+        ),
+        _file("pkg/helpers.py",
+            "def foo():\n"
+            "    pass\n"
+        ),
+        _file("app.py",
+            "from pkg import bar\n"
+            "def main():\n"
+            "    bar()\n"
+        ),
+    )
+    target = InternalFunction("pkg/helpers.py", "foo", 1)
+    r = callers_of(inv, target)
+    assert r.definitive == (InternalFunction("app.py", "main", 2),)
+
+
+def test_reexport_transitive():
+    """``pkg/__init__.py`` re-exports from ``pkg/sub/__init__.py``
+    which re-exports from ``pkg/sub/impl.py``. Three-level chain;
+    fixed-point iteration must collapse them all to the same def."""
+    inv = _inv(
+        _file("pkg/__init__.py",
+            "from .sub import foo\n",
+            items=[],
+        ),
+        _file("pkg/sub/__init__.py",
+            "from .impl import foo\n",
+            items=[],
+        ),
+        _file("pkg/sub/impl.py",
+            "def foo():\n"
+            "    pass\n"
+        ),
+        _file("app.py",
+            "from pkg import foo\n"
+            "def main():\n"
+            "    foo()\n"
+        ),
+    )
+    target = InternalFunction("pkg/sub/impl.py", "foo", 1)
+    r = callers_of(inv, target)
+    assert InternalFunction("app.py", "main", 2) in r.definitive
+
+
+def test_reexport_via_double_dot():
+    """``pkg/sub/__init__.py`` does ``from ..other import x``,
+    making ``pkg.sub.x`` an alias for ``pkg.other.x``."""
+    inv = _inv(
+        _file("pkg/__init__.py", "", items=[]),
+        _file("pkg/sub/__init__.py",
+            "from ..other import x\n",
+            items=[],
+        ),
+        _file("pkg/other.py",
+            "def x():\n"
+            "    pass\n"
+        ),
+        _file("app.py",
+            "from pkg.sub import x\n"
+            "def main():\n"
+            "    x()\n"
+        ),
+    )
+    target = InternalFunction("pkg/other.py", "x", 1)
+    r = callers_of(inv, target)
+    assert InternalFunction("app.py", "main", 2) in r.definitive
+
+
+def test_reexport_doesnt_steal_unrelated():
+    """``pkg/__init__.py`` re-exporting ``foo`` shouldn't make
+    ``pkg.bar`` resolve to anything — there's no ``bar`` re-export."""
+    inv = _inv(
+        _file("pkg/__init__.py",
+            "from .helpers import foo\n",
+            items=[],
+        ),
+        _file("pkg/helpers.py",
+            "def foo():\n"
+            "    pass\n"
+            "def bar():\n"
+            "    pass\n"
+        ),
+        _file("app.py",
+            "from pkg import bar\n"
+            "def main():\n"
+            "    bar()\n"
+        ),
+    )
+    target = InternalFunction("pkg/helpers.py", "bar", 3)
+    r = callers_of(inv, target)
+    assert r.definitive == ()
+
+
+def test_reexport_src_layout():
+    """``src/mypkg/__init__.py`` re-exports from
+    ``src/mypkg/helpers.py``. Caller does ``from mypkg import foo``."""
+    inv = _inv(
+        _file("src/mypkg/__init__.py",
+            "from .helpers import foo\n",
+            items=[],
+        ),
+        _file("src/mypkg/helpers.py",
+            "def foo():\n"
+            "    pass\n"
+        ),
+        _file("app.py",
+            "from mypkg import foo\n"
+            "def main():\n"
+            "    foo()\n"
+        ),
+    )
+    target = InternalFunction("src/mypkg/helpers.py", "foo", 1)
+    r = callers_of(inv, target)
+    assert InternalFunction("app.py", "main", 2) in r.definitive
+
+
+def test_reexport_absolute_import():
+    """``core/__init__.py`` does ``from core.config import RaptorConfig``
+    (absolute import, not ``.config``). RAPTOR's actual
+    ``core/__init__.py`` uses this style."""
+    inv = _inv(
+        _file("core/__init__.py",
+            "from core.config import RaptorConfig\n",
+            items=[],
+        ),
+        _file("core/config.py",
+            "def RaptorConfig():\n"
+            "    pass\n"
+        ),
+        _file("app.py",
+            "from core import RaptorConfig\n"
+            "def main():\n"
+            "    RaptorConfig()\n"
+        ),
+    )
+    target = InternalFunction("core/config.py", "RaptorConfig", 1)
+    r = callers_of(inv, target)
+    assert InternalFunction("app.py", "main", 2) in r.definitive
+
+
+def test_reexport_target_not_in_project_unchanged():
+    """``from .nonexistent import foo`` where the source isn't a
+    project module — no alias should be created."""
+    inv = _inv(
+        _file("pkg/__init__.py",
+            "from .nonexistent import foo\n",
+            items=[],
+        ),
+        _file("app.py",
+            "from pkg import foo\n"
+            "def main():\n"
+            "    foo()\n"
+        ),
+    )
+    from core.inventory.reachability import _get_or_build_index
+    idx = _get_or_build_index(inv, exclude_test_files=False)
+    assert "pkg.foo" not in idx.qualified_to_internal
+
+
+# ---------------------------------------------------------------------------
+# call_lines_of — preserves multiplicity past the dedup'd forward / reverse
+# adjacency. Useful for evidence rendering ("X calls Y at lines …").
+# ---------------------------------------------------------------------------
+
+
+def test_call_lines_of_records_every_call_site():
+    inv = _inv(_file("src/a.py",
+        "def helper():\n"
+        "    pass\n"
+        "def main():\n"
+        "    helper()\n"
+        "    x = 1\n"
+        "    helper()\n"
+        "    y = 2\n"
+        "    helper()\n"
+    ))
+    main = InternalFunction("src/a.py", "main", 3)
+    helper = InternalFunction("src/a.py", "helper", 1)
+    assert call_lines_of(inv, main, helper) == (4, 6, 8)
+
+
+def test_call_lines_of_external_callee():
+    inv = _inv(_file("src/a.py",
+        "import requests\n"
+        "def f():\n"
+        "    requests.get('/')\n"
+        "    requests.get('/x')\n"
+    ))
+    f = InternalFunction("src/a.py", "f", 2)
+    assert call_lines_of(inv, f, ExternalFunction("requests.get")) == (3, 4)
+
+
+def test_call_lines_of_returns_empty_when_no_edge():
+    inv = _inv(_file("src/a.py",
+        "def a():\n"
+        "    pass\n"
+        "def b():\n"
+        "    pass\n"
+    ))
+    a = InternalFunction("src/a.py", "a", 1)
+    b = InternalFunction("src/a.py", "b", 3)
+    assert call_lines_of(inv, a, b) == ()
+
+
+def test_call_lines_of_internal_alias_target():
+    """A consumer holding ``ExternalFunction("pkg.helpers.foo")``
+    should get the same line numbers as one holding the
+    ``InternalFunction`` form — same alias semantics as
+    ``callers_of``."""
+    inv = _inv(
+        _file("pkg/helpers.py",
+            "def foo():\n"
+            "    pass\n"
+        ),
+        _file("app.py",
+            "from pkg.helpers import foo\n"
+            "def main():\n"
+            "    foo()\n"
+            "    foo()\n"
+        ),
+    )
+    main = InternalFunction("app.py", "main", 2)
+    foo = InternalFunction("pkg/helpers.py", "foo", 1)
+    via_internal = call_lines_of(inv, main, foo)
+    via_external = call_lines_of(
+        inv, main, ExternalFunction("pkg.helpers.foo"))
+    assert via_internal == via_external == (3, 4)
+
+
+def test_call_lines_dedups_same_line():
+    """The recorder is idempotent: repeated calls with the same
+    (line, edge) don't introduce duplicates."""
+    from core.inventory.reachability import (
+        _AdjacencyIndex, _record_call_line,
+    )
+    idx = _AdjacencyIndex()
+    fn = InternalFunction("a.py", "x", 1)
+    callee = ExternalFunction("os.path.join")
+    _record_call_line(idx, fn, callee, 5)
+    _record_call_line(idx, fn, callee, 5)
+    _record_call_line(idx, fn, callee, 7)
+    _record_call_line(idx, fn, callee, 3)
+    assert idx.call_lines[(fn, callee)] == (3, 5, 7)

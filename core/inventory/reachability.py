@@ -527,6 +527,15 @@ class _AdjacencyIndex:
     qualified_to_internal: Dict[str, InternalFunction] = (
         field(default_factory=dict)
     )
+    # ``(src, dst) -> sorted tuple of line numbers`` recording every
+    # call site where ``src`` calls ``dst``. ``forward`` is dedup'd
+    # by edge; ``call_lines`` preserves multiplicity for evidence
+    # rendering ("X calls Y at lines 12, 27, 45"). Lines are 1-based
+    # source-file lines from the call_graph extractor; 0 when the
+    # extractor couldn't attribute a line.
+    call_lines: Dict[
+        Tuple[InternalFunction, FunctionId], Tuple[int, ...],
+    ] = field(default_factory=dict)
     # Set of file paths classified as test files (cached).
     test_paths: FrozenSet[str] = frozenset()
 
@@ -614,10 +623,6 @@ def _get_or_build_index(
     #   * ``src/a/b/c.py`` → also ``a.b.c`` (src-layout)
     #
     # Limitations (documented; consumer should be aware):
-    #   * Cross-package re-exports (``pkg/__init__.py`` does
-    #     ``from .helpers import foo``) — callers via ``pkg.foo`` are
-    #     NOT aliased to the def in ``pkg/helpers.py``. Same gap as
-    #     ``function_called``'s re-export documentation.
     #   * Non-Python files: file-path-to-module heuristic doesn't run;
     #     no internal aliasing for JS/Go/Java/etc.
     for (file_path, fn_name), fns in idx.definitions.items():
@@ -628,6 +633,40 @@ def _get_or_build_index(
         canonical = min(fns, key=lambda f: f.line)
         for candidate in _candidate_qualified_names(file_path, fn_name):
             idx.qualified_to_internal.setdefault(candidate, canonical)
+
+    # Pass 1.6: ``__init__.py`` re-export aliasing.
+    # ``pkg/__init__.py`` doing ``from .helpers import foo`` makes
+    # ``pkg.foo`` an alias for ``pkg.helpers.foo``. Without this pass,
+    # consumers reaching the function via ``from pkg import foo`` end
+    # up with an ``ExternalFunction("pkg.foo")`` edge that doesn't
+    # canonicalise — mirror image of the cross-package gap PR-A's
+    # heuristic closed.
+    #
+    # We resolve relative imports ourselves (the call_graph extractor
+    # records ``(level, module, name, asname)`` quads but doesn't
+    # resolve them — package roots come from file paths, which the
+    # per-file extractor doesn't know).
+    #
+    # Repeat the alias-discovery pass until fixed-point so that
+    # transitive re-exports (``pkg/__init__.py`` re-exports from
+    # ``pkg/sub/__init__.py`` which re-exports from ``pkg/sub/impl.py``)
+    # all collapse to the same canonical InternalFunction. Bounded
+    # by a small iteration count — re-export chains in real codebases
+    # are at most 3-4 deep.
+    idx._inventory_for_reexport_pass = inventory  # type: ignore[attr-defined]
+    try:
+        for _ in range(8):
+            added = _apply_reexport_aliases(idx)
+            if not added:
+                break
+    finally:
+        # Don't keep a strong ref to the inventory on the index past
+        # build time — the cache layer manages inventory lifetime.
+        try:
+            del idx._inventory_for_reexport_pass        # type: ignore[attr-defined]
+        except AttributeError:
+            pass
+
     qualified_to_internal = idx.qualified_to_internal
 
     # Pass 2: walk every call site, resolve to a callee FunctionId
@@ -672,6 +711,7 @@ def _get_or_build_index(
                     callee = aliased
                 idx.forward.setdefault(caller_node, set()).add(callee)
                 idx.reverse.setdefault(callee, set()).add(caller_node)
+                _record_call_line(idx, caller_node, callee, line)
                 continue
 
             # Couldn't resolve via import map. Two sub-cases:
@@ -690,6 +730,7 @@ def _get_or_build_index(
                     for d in local_defs:
                         idx.forward.setdefault(caller_node, set()).add(d)
                         idx.reverse.setdefault(d, set()).add(caller_node)
+                        _record_call_line(idx, caller_node, d, line)
                     continue
                 # Local name not defined in this file — likely a
                 # builtin (open, len, ...) or a wildcard-imported
@@ -781,6 +822,144 @@ def _resolve_caller(
     if eligible:
         return max(eligible, key=lambda c: c.line)
     return min(candidates, key=lambda c: c.line)
+
+
+def _record_call_line(
+    idx: _AdjacencyIndex,
+    caller: InternalFunction,
+    callee: FunctionId,
+    line: int,
+) -> None:
+    """Append ``line`` to ``idx.call_lines[(caller, callee)]``,
+    keeping the tuple sorted with no duplicates.
+
+    Forward / reverse edges are deduplicated; this side-index keeps
+    multiplicity for evidence rendering ("X calls Y at lines …").
+    """
+    key = (caller, callee)
+    existing = idx.call_lines.get(key, ())
+    if line in existing:
+        return
+    merged = existing + (line,)
+    idx.call_lines[key] = tuple(sorted(merged))
+
+
+def _apply_reexport_aliases(idx: _AdjacencyIndex) -> int:
+    """One iteration of ``__init__.py`` re-export alias discovery.
+
+    Walks every ``__init__.py`` in the inventory's call-graph data,
+    resolves each relative import to a fully-qualified source, and
+    when that source is in ``qualified_to_internal``, registers the
+    re-exported alias as another entry pointing at the same
+    InternalFunction. Returns the number of new aliases added so the
+    caller can iterate to fixed-point (transitive re-exports).
+
+    The re-export pass needs the call_graph data, which lives on
+    ``file_record["call_graph"]`` not on the ``_AdjacencyIndex`` —
+    we receive the index because that's what we mutate, but reading
+    the data requires the inventory. We stash the inventory on the
+    index temporarily during build so this helper can find it.
+    """
+    inv = getattr(idx, "_inventory_for_reexport_pass", None)
+    if inv is None:
+        return 0
+    added = 0
+    for file_record in inv.get("files", []):
+        path = file_record.get("path") or ""
+        if not (path.endswith("/__init__.py") or path == "__init__.py"):
+            continue
+        cg = file_record.get("call_graph")
+        if not cg:
+            continue
+        rel_imports = cg.get("relative_imports") or []
+        abs_imports = cg.get("imports") or {}
+        if not rel_imports and not abs_imports:
+            continue
+        # Package this __init__.py defines (path → dotted form).
+        if path == "__init__.py":
+            pkg_path = ""
+        else:
+            pkg_path = path[: -len("/__init__.py")]
+        pkg_dotted_candidates: List[str] = []
+        if pkg_path:
+            pkg_dotted_candidates.append(pkg_path.replace("/", "."))
+            if pkg_path.startswith("src/"):
+                stripped = pkg_path[len("src/"):]
+                if stripped:
+                    pkg_dotted_candidates.append(stripped.replace("/", "."))
+        else:
+            pkg_dotted_candidates.append("")
+        for ri in rel_imports:
+            if not isinstance(ri, (list, tuple)) or len(ri) < 3:
+                continue
+            level = int(ri[0])
+            module = str(ri[1] or "")
+            name = str(ri[2] or "")
+            asname = ri[3] if len(ri) > 3 else None
+            if level <= 0 or not name:
+                continue
+            for pkg_dotted in pkg_dotted_candidates:
+                # Walk up ``level - 1`` package levels from the
+                # file's package. Level 1 means current package.
+                parts = pkg_dotted.split(".") if pkg_dotted else []
+                ascend = level - 1
+                if ascend > len(parts):
+                    # ``from ..`` from a top-level package — skip;
+                    # there's no further ancestor.
+                    continue
+                ancestor = ".".join(
+                    parts[: len(parts) - ascend] if ascend > 0 else parts
+                )
+                # Compose the source qualified name: ancestor + module
+                if module:
+                    source_module = (
+                        f"{ancestor}.{module}" if ancestor else module
+                    )
+                else:
+                    source_module = ancestor
+                if not source_module:
+                    continue
+                source_full = f"{source_module}.{name}"
+                target_internal = idx.qualified_to_internal.get(source_full)
+                if target_internal is None:
+                    continue
+                alias_name = asname or name
+                alias_full = (
+                    f"{pkg_dotted}.{alias_name}" if pkg_dotted
+                    else alias_name
+                )
+                if alias_full not in idx.qualified_to_internal:
+                    idx.qualified_to_internal[alias_full] = target_internal
+                    added += 1
+        # Absolute-import re-exports: ``core/__init__.py`` doing
+        # ``from core.config import RaptorConfig`` makes
+        # ``core.RaptorConfig`` available to callers via ``from core
+        # import RaptorConfig``. Walk this file's imports map and
+        # treat each entry as a potential re-export from this package.
+        # (The local-name → qualified-name map is exactly what we
+        # need: local_name is the alias-as-seen-from-outside, and
+        # qualified is the source we look up in qualified_to_internal.)
+        for local_name, qualified in abs_imports.items():
+            if not qualified:
+                continue
+            target_internal = idx.qualified_to_internal.get(qualified)
+            if target_internal is None:
+                continue
+            for pkg_dotted in pkg_dotted_candidates:
+                alias_full = (
+                    f"{pkg_dotted}.{local_name}" if pkg_dotted
+                    else local_name
+                )
+                if alias_full == qualified:
+                    # Trivial self-alias — qualified is already in
+                    # the map under itself. Skip (would be a no-op
+                    # but for the ``added`` counter, which would
+                    # let us re-process every iteration).
+                    continue
+                if alias_full not in idx.qualified_to_internal:
+                    idx.qualified_to_internal[alias_full] = target_internal
+                    added += 1
+    return added
 
 
 def _candidate_qualified_names(file_path: str, fn_name: str) -> List[str]:
@@ -965,6 +1144,33 @@ def callees_of(
         uncertain=tuple(sorted(uncertain)),
         has_method_dispatch=has_method_dispatch,
     )
+
+
+def call_lines_of(
+    inventory: Dict[str, Any],
+    caller: InternalFunction,
+    callee: FunctionId,
+) -> Tuple[int, ...]:
+    """Source lines where ``caller`` calls ``callee``.
+
+    Returns the sorted, dedup'd tuple of 1-based line numbers
+    recorded at index-build time, or ``()`` when no edge exists.
+    Useful for evidence rendering (``"X calls Y at lines 12, 27,
+    45"``) where ``callees_of`` only tells you the edge exists.
+
+    For ``callee`` aliasing: an ``ExternalFunction`` whose
+    qualified name resolves to a project-internal function is
+    canonicalised to that ``InternalFunction`` (matches
+    ``callers_of`` / closure semantics). A consumer holding the
+    ``ExternalFunction`` form gets the same line numbers as one
+    holding the ``InternalFunction`` form.
+    """
+    idx = _get_or_build_index(inventory, exclude_test_files=False)
+    if isinstance(callee, ExternalFunction):
+        aliased = idx.qualified_to_internal.get(callee.qualified_name)
+        if aliased is not None:
+            callee = aliased
+    return idx.call_lines.get((caller, callee), ())
 
 
 def _sorted_internal(s: Iterable[InternalFunction]) -> List[InternalFunction]:
@@ -1268,6 +1474,79 @@ def shortest_path(
     return None
 
 
+def all_paths(
+    inventory: Dict[str, Any],
+    source: InternalFunction,
+    target: FunctionId,
+    *,
+    max_paths: int = 10,
+    max_depth: int = 50,
+    exclude_test_files: bool = False,
+) -> Tuple[Tuple[FunctionId, ...], ...]:
+    """All simple call chains ``source`` → ``target``, sorted by
+    length (shortest first), bounded by ``max_paths`` and
+    ``max_depth``.
+
+    Useful for evidence diversity when ``shortest_path``'s pick
+    isn't the chain a consumer wants — e.g. /validate sees the
+    LLM proposed a different chain and wants to confirm there are
+    multiple valid evidence paths to choose between.
+
+    "Simple": no node repeats within a single path. Cycles are
+    handled via the per-path visited set rather than a global one,
+    so multiple distinct paths through a shared intermediate are
+    discoverable.
+
+    Cost: bounded DFS, worst case O(b^max_depth) where b is the
+    branching factor. Real codebases are sparse; ``max_depth``
+    bounds the runaway. Returns early on hitting ``max_paths``.
+
+    External targets follow the qualified-name → Internal alias
+    (matches ``shortest_path`` / closure semantics).
+    """
+    idx = _get_or_build_index(
+        inventory, exclude_test_files=exclude_test_files,
+    )
+    if isinstance(target, ExternalFunction):
+        aliased = idx.qualified_to_internal.get(target.qualified_name)
+        if aliased is not None:
+            target = aliased
+    if source == target:
+        return ((source,),)
+
+    found: List[Tuple[FunctionId, ...]] = []
+
+    def _dfs(node: FunctionId, path: Tuple[FunctionId, ...],
+              visited: Set[FunctionId]) -> None:
+        if len(found) >= max_paths:
+            return
+        if len(path) > max_depth:
+            return
+        if not isinstance(node, InternalFunction):
+            return
+        for callee in idx.forward.get(node, set()):
+            if callee in visited:
+                continue
+            if exclude_test_files and isinstance(callee, InternalFunction) \
+                    and callee.file_path in idx.test_paths:
+                continue
+            new_path = path + (callee,)
+            if callee == target:
+                found.append(new_path)
+                if len(found) >= max_paths:
+                    return
+                continue
+            visited.add(callee)
+            _dfs(callee, new_path, visited)
+            visited.discard(callee)
+            if len(found) >= max_paths:
+                return
+
+    _dfs(source, (source,), {source})
+    found.sort(key=len)
+    return tuple(found[:max_paths])
+
+
 def _closure_sort_key(fn: FunctionId) -> Tuple:
     """Stable order across mixed Internal+External: Internal first by
     (path, name, line); External after by qualified_name. Use a
@@ -1286,6 +1565,8 @@ __all__ = [
     "InternalFunction",
     "ReachabilityResult",
     "Verdict",
+    "all_paths",
+    "call_lines_of",
     "callees_of",
     "callers_of",
     "forward_closure",
