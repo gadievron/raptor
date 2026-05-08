@@ -664,6 +664,24 @@ class ToolUseLoop:
         # waits up to ``tool_timeout_s``. If the timeout fires the
         # handler keeps running but we stop waiting — leak documented
         # in the class docstring.
+        #
+        # `daemon=True` is intentional — we can't kill Python threads,
+        # so the only way to bound a runaway handler is to detach
+        # from it and let process exit clean up the OS-level
+        # resources. Tradeoff: any file handles, subprocess children,
+        # network sockets, or malloc'd memory inside the handler
+        # leak until process exit.
+        #
+        # Track stranded threads on the loop instance so the
+        # operator can inspect them after `run_with_history`
+        # returns (e.g. via diagnostics, or to reason about a
+        # process that's accumulating timed-out handlers across
+        # many turns). Pre-fix the daemon thread vanished from
+        # all references after `_dispatch_tool` returned —
+        # impossible to introspect even when the operator KNEW
+        # they had timeouts.
+        if not hasattr(self, "_stranded_tool_threads"):
+            self._stranded_tool_threads: list[threading.Thread] = []
         result_holder: dict[str, Any] = {}
         exc_holder: dict[str, BaseException] = {}
 
@@ -673,10 +691,19 @@ class ToolUseLoop:
             except BaseException as e:                    # noqa: BLE001
                 exc_holder["exc"] = e
 
-        thread = threading.Thread(target=_runner, daemon=True)
+        thread = threading.Thread(
+            target=_runner,
+            name=f"tool-handler-{call.name}-{call.id[:8]}",
+            daemon=True,
+        )
         thread.start()
         thread.join(self._tool_timeout_s)
         if thread.is_alive():
+            # Record the stranded thread so an operator can see
+            # accumulating leaks via `loop._stranded_tool_threads`.
+            # Don't try to kill — Python doesn't support it; the
+            # daemon flag handles process-exit cleanup.
+            self._stranded_tool_threads.append(thread)
             raise ToolHandlerTimeout(
                 f"tool {call.name!r} exceeded {self._tool_timeout_s}s timeout"
             )
