@@ -48,6 +48,21 @@ class TestSageFuzzingMemoryAPI(unittest.TestCase):
         config = SageConfig(enabled=False)
         self.memory = SageFuzzingMemory(memory_file=self.mem_file, sage_config=config)
 
+    def tearDown(self):
+        # Pre-fix `setUp` created a tmpdir via mkdtemp but no
+        # tearDown removed it — every test method in the class
+        # leaked a fresh directory under `$TMPDIR`. Across a
+        # full pytest run that's `len(test_methods)` directories
+        # left behind per invocation. On developer hosts the
+        # /tmp accumulation was harmless noise; in CI runners
+        # with constrained `/tmp` (or when the test ran inside
+        # a container with a small tmpfs) the leak eventually
+        # caused unrelated failures with cryptic ENOSPC errors.
+        # Clean the tmpdir best-effort — `ignore_errors=True`
+        # so a flaky FUSE mount doesn't fail the test.
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
     def test_record_strategy_success(self):
         """record_strategy_success should store knowledge."""
         self.memory.record_strategy_success(
