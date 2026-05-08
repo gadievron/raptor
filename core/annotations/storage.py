@@ -43,6 +43,30 @@ from typing import Dict, List, Optional
 
 from .models import Annotation
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+# Current on-disk format version. Bumped when the format changes in
+# a way that older readers can't handle. The marker is emitted as the
+# first line of every annotation file so that future readers can
+# detect format drift and either upgrade-in-place or refuse to read.
+#
+# Versioning policy:
+#   * v1 is the initial format (markdown with ``## function`` sections
+#     and ``<!-- meta: ... -->`` HTML-comment frontmatter).
+#   * Files without the marker are treated as v1 (legacy files written
+#     before this commit; reader is permissive).
+#   * Files with a marker > CURRENT_VERSION trigger a warning but the
+#     reader still tries — better to surface a partial result than to
+#     silently drop data.
+CURRENT_VERSION = 1
+_VERSION_MARKER_RE = re.compile(
+    r"^<!--\s*annotations-version:\s*(\d+)\s*-->\s*$",
+    re.MULTILINE,
+)
+
 
 # Allowed values for ``write_annotation(overwrite=...)``. ``all``
 # matches the original behaviour. ``respect-manual`` refuses to
@@ -235,6 +259,21 @@ def read_file_annotations(
         # decide what to do; crashing the reader on a single bad file
         # would block iter_all_annotations across the whole tree.
         return []
+    # Detect format version. Files without a marker are legacy v1 —
+    # parse permissively. Files with a future version emit a warning
+    # but still try (partial-results-better-than-nothing).
+    version_match = _VERSION_MARKER_RE.search(text)
+    if version_match:
+        try:
+            version = int(version_match.group(1))
+        except ValueError:
+            version = CURRENT_VERSION
+        if version > CURRENT_VERSION:
+            logger.warning(
+                f"annotation file {path} declares version {version} "
+                f"(reader supports up to {CURRENT_VERSION}); "
+                f"attempting to parse anyway"
+            )
     out: List[Annotation] = []
     for name, start, end in _split_sections(text):
         meta, body = _parse_section(text, name, start, end)
@@ -425,6 +464,9 @@ def _render_file(source_file: str, anns) -> str:
     (diff-friendly under git)."""
     sorted_anns = sorted(anns, key=lambda a: a.function)
     lines: List[str] = []
+    # Format version marker — first line. Reader uses this to detect
+    # future format changes and warn rather than silently mis-parse.
+    lines.append(f"<!-- annotations-version: {CURRENT_VERSION} -->")
     lines.append(f"# {source_file}")
     lines.append("")
     for ann in sorted_anns:
