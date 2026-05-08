@@ -17,6 +17,7 @@ mypy>=1.0.0
 pytest==9.0.3
 pytest-cov==7.0.0
 pytest-xdist==3.6.1
+pytest-split==0.11.0
 gcovr==8.4
 
 # Optional runtime deps that gate test collection. Listed here (not in

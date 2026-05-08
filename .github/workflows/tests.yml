@@ -190,6 +190,11 @@ jobs:
 
   # Fast tier: everything under core/ and packages/ except the two
   # heavyweight subdirs that get their own jobs (sandbox, exploit_feasibility).
+  # Split 2-way via pytest-split so the slowest CI job runs in parallel.
+  # No .test_durations file is committed: pytest-split falls back to random
+  # distribution on first run and converges over subsequent runs. The
+  # max(group1, group2) wallclock is still well below the unsplit total
+  # even when unbalanced, so the saving is meaningful from day one.
   python-unit-tests-fast:
     needs: [pre_check, changes, deps]
     if: |
@@ -198,6 +203,10 @@ jobs:
        needs.changes.outputs.python == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -221,25 +230,27 @@ jobs:
           source $VENV_PATH/bin/activate
           python -m compileall -q core packages libexec/tests *.py
 
-      - name: Run unit tests (fast tier)
+      - name: Run unit tests (fast tier, group ${{ matrix.group }} of 2)
         run: |
           source $VENV_PATH/bin/activate
           # The prompt-envelope audit runs in its own narrowly-scoped
           # job (python-prompt-audit) so it doesn't fire on unrelated
           # Python changes. Exclude it here to avoid duplicate runs.
-          pytest -n auto core packages \
+          pytest -n auto --splits 2 --group ${{ matrix.group }} core packages \
             --ignore=core/sandbox/tests \
             --ignore=packages/exploit_feasibility/tests \
             --ignore=core/security/tests/test_prompt_envelope_audit.py
 
-      - name: Run libexec wrapper tests
+      - name: Run libexec wrapper tests (group 1 only)
+        if: matrix.group == 1
         run: |
           source $VENV_PATH/bin/activate
           # Keep this separate from `pytest core packages` to avoid pytest
           # import-name collisions with other top-level tests packages.
           pytest libexec/tests
 
-      - name: Run CI lint tests
+      - name: Run CI lint tests (group 1 only)
+        if: matrix.group == 1
         run: |
           source $VENV_PATH/bin/activate
           # Validates path-filter globs in compute_filters.py cover the
