@@ -666,7 +666,12 @@ class TestSubprocessE2E:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
-            stdout, stderr = proc.communicate(timeout=15)
+            # 30s, not 15s: this 1-deep Python subprocess (worker.py
+            # imports anthropic + core.llm) takes ~10-12s in isolation
+            # but can exceed 15s on a contended xdist runner. 30s
+            # matches the timeout used by the grandchild-relay sibling
+            # in core/llm/tests/test_dispatcher_integration.py.
+            stdout, stderr = proc.communicate(timeout=30)
             assert proc.returncode == 0, (
                 f"worker failed: rc={proc.returncode} "
                 f"stdout={stdout.decode()!r} stderr={stderr.decode()!r}"
