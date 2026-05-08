@@ -243,6 +243,36 @@ very much a WIP but it could be of use for those wanting to see relationships an
 
 ---
 
+## ANNOTATIONS
+
+The `/annotate` command attaches free-form prose to individual functions, stored as markdown mirroring the source tree. Operators write manual review notes; LLM passes (`/agentic`, `/understand`) emit per-function annotations automatically.
+
+**Storage:** `<base>/<source_path>.md` — one annotation file per source file, with `## function_name` sections, an HTML-comment metadata line, and a free-form prose body. The base directory defaults to the active project's `<output_dir>/annotations`.
+
+**Status enum:** `clean` (reviewed, no concern) / `suspicious` (real bug, not exploitable) / `finding` (exploitable) / `entry_point` / `sink` / `trust_boundary` / `flow_step` / `unchecked_flow` / `error`.
+
+**Source attribution:** Every annotation carries `metadata.source=human` or `metadata.source=llm`. LLM-driven writes pass `overwrite=respect-manual` so a manual operator note is never silently clobbered. Operators using `/annotate add` set `source=human` by default.
+
+**Staleness:** Annotations stamped with `--lines N-M` carry a `metadata.hash` short prefix of the function's source. `/annotate stale` re-computes and lists annotations whose source has drifted.
+
+**Where annotations come from:**
+- `/agentic` — emits one annotation per analysed finding under `<run_output_dir>/annotations/`. Status mapped from the LLM's `is_true_positive` × `is_exploitable`. Body is the LLM's `reasoning`.
+- `/understand --map` / `--trace` — post-processor synthesises annotations for entry points, sinks, trust boundaries, unchecked flows, and per-step trace records.
+- `/annotate add` — operator-driven manual entry.
+
+**Operator workflow:**
+```
+/annotate add src/auth.py check_pw --status clean -m "Constant-time compare, no taint"
+/annotate ls --status finding              # cross-run view in active project
+/annotate show src/auth.py check_pw
+/annotate edit src/auth.py check_pw        # opens .md in $EDITOR
+/annotate stale --target ~/repos/myproj    # source drifted since note written
+```
+
+**Substrate:** `core/annotations/` — atomic write via tempfile + rename, path-traversal defended (rejects `..` segments and absolute paths), function-name and metadata-value validation prevents on-disk format corruption.
+
+---
+
 ## PROGRESSIVE LOADING
 
 **When scan completes:** Load `tiers/analysis-guidance.md` (adversarial thinking)
