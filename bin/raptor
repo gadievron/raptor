@@ -254,8 +254,27 @@ if [ -d "$RAPTOR_DIR/plugins/coverage" ]; then
 fi
 
 clear
+# `env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS` defensively
+# strips a small set of shell-eval env vars at the exec boundary,
+# even if our earlier source of `_dangerous_env_strip.sh` missed
+# them somehow (e.g. a bash plugin or hook re-set BASH_ENV between
+# the strip and here, or an operator's late-loaded config). The
+# strip-list source above already covers the common case; this is
+# pure defence-in-depth for the moment of `exec`.
+#
+# Why these four specifically and not the whole strip-list? Most
+# of the other vars in the strip-list affect Python / glibc / Node
+# loaders, not the bash shell that wraps a launched binary. The
+# four here are the ones that bash itself reads from the env at
+# startup (BASH_ENV, ENV, SHELLOPTS, BASHOPTS) — if claude
+# happens to be a bash wrapper script (some package-manager installs
+# of claude are wrapper scripts that exec node with the right
+# args), these are the vars that influence its startup before
+# `--noprofile --norc` would help.
 if [[ -n "$INITIAL_PROMPT" ]]; then
-    exec claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}" "$INITIAL_PROMPT"
+    exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
+        claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}" "$INITIAL_PROMPT"
 else
-    exec claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}"
+    exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
+        claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}"
 fi
