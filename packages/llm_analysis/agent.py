@@ -1142,6 +1142,26 @@ class AutonomousSecurityAgentV2:
                 if self.analyze_vulnerability(vuln):
                     analyzed += 1
 
+                    # Emit a per-function annotation summarising the
+                    # LLM's verdict + reasoning. Best-effort —
+                    # annotation failures don't break analysis.
+                    # Skipped when checklist is missing or function
+                    # name can't be resolved from file:line.
+                    try:
+                        from packages.llm_analysis.annotation_emit import (
+                            emit_finding_annotation,
+                        )
+                        emit_finding_annotation(
+                            vuln,
+                            base_dir=self.out_dir / "annotations",
+                            checklist=checklist,
+                            repo_root=self.repo_path,
+                        )
+                    except Exception:
+                        logger.debug(
+                            "annotation emit error", exc_info=True,
+                        )
+
                     # Track dataflow validation
                     if vuln.has_dataflow and vuln.analysis and 'dataflow_validation' in vuln.analysis:
                         dataflow_validated += 1
