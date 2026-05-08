@@ -22,7 +22,34 @@ class classproperty:  # noqa: N801
 
 
 class RaptorConfig:
-    """Centralized configuration for RAPTOR framework."""
+    """Centralized configuration for RAPTOR framework.
+
+    This class is a NAMESPACE — every public member is a class
+    attribute or @classmethod. Pre-fix RaptorConfig had no
+    `__init__` guard, so ``RaptorConfig()`` silently returned
+    a usable instance. Two surprises that fell out of that:
+
+      * ``cfg = RaptorConfig(); cfg.SOMETHING = 42`` set the
+        attribute on the INSTANCE, while every internal site
+        reads `RaptorConfig.SOMETHING` (the class attribute) —
+        so the override silently no-ops with no error. Operators
+        debugging a "my override isn't taking effect" issue had
+        no signal that the override sites were reading past the
+        instance.
+      * Test fixtures that did ``cfg = RaptorConfig()`` to scope
+        a `patch.object(cfg, "X", ...)` similarly mutated the
+        instance, leaving production code unaffected.
+
+    Block instantiation explicitly so the misuse fails fast at
+    the call site instead of producing a phantom instance.
+    """
+
+    def __init__(self) -> None:
+        raise TypeError(
+            "RaptorConfig is a class-level configuration namespace; "
+            "do NOT instantiate. Access members as RaptorConfig.X (or "
+            "patch via patch.object(RaptorConfig, ...) in tests)."
+        )
 
     # Version
     VERSION = "3.0.0"

@@ -48,8 +48,20 @@ class TestGetSafeEnv:
             env = RaptorConfig.get_safe_env()  # must not raise
             assert isinstance(env, dict)
 
-    def test_returns_copy_not_original(self):
-        """Mutations to the returned dict must not affect os.environ."""
+    def test_mutations_do_not_leak_to_os_environ(self):
+        """Mutating the returned dict must NOT propagate to os.environ.
+
+        Pre-fix this test was named ``test_returns_copy_not_
+        original``. The name implies an identity check
+        (``env is not os.environ``) — but the body asserts a
+        BEHAVIOURAL property: that mutations don't leak. The two
+        are not equivalent: a defensive shallow copy passes
+        ``is not`` but a deep nested mutation could still alias
+        through. Renaming clarifies what the test actually
+        guarantees, so future readers don't add a redundant
+        identity check or weaken the leak check thinking the
+        original name covers both.
+        """
         env = RaptorConfig.get_safe_env()
         env["RAPTOR_TEST_SENTINEL"] = "should_not_leak"
         assert "RAPTOR_TEST_SENTINEL" not in os.environ
