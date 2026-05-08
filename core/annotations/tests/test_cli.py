@@ -111,6 +111,107 @@ class TestAdd:
         assert r.returncode == 0
         assert "imported prose" in (tmp_path / "src" / "foo.py.md").read_text()
 
+    def test_auto_discovers_bounds_from_checklist_in_base_parent(
+        self, tmp_path,
+    ):
+        """When ``--lines`` is omitted, the CLI looks for a
+        checklist.json next to the base directory's parent."""
+        run_dir = tmp_path / "run"
+        ann_base = run_dir / "annotations"
+        run_dir.mkdir()
+        target = tmp_path / "repo"
+        target.mkdir()
+        (target / "src").mkdir()
+        (target / "src" / "foo.py").write_text(
+            "def f():\n    pass\n"
+        )
+        # Checklist sits next to the base dir's parent (i.e. in run_dir).
+        import json
+        (run_dir / "checklist.json").write_text(json.dumps({
+            "files": [{
+                "path": "src/foo.py",
+                "items": [{"name": "f", "line_start": 1, "line_end": 2}],
+            }],
+        }))
+        r = _run("add", "src/foo.py", "f",
+                 "--base", str(ann_base),
+                 "--status", "clean",
+                 "--target", str(target),
+                 "-m", "auto-discovered")
+        assert r.returncode == 0, r.stderr
+        text = (ann_base / "src" / "foo.py.md").read_text()
+        assert "hash=" in text
+        assert "start_line=1" in text
+        assert "end_line=2" in text
+
+    def test_auto_discovery_skipped_silently_no_checklist(self, tmp_path):
+        """No checklist anywhere → no hash, but the annotation
+        still lands. No warning printed (warnings are reserved for
+        explicit ``--lines`` failures)."""
+        r = _run("add", "src/foo.py", "f",
+                 "--base", str(tmp_path),
+                 "--status", "clean",
+                 "-m", "no hash possible")
+        assert r.returncode == 0
+        assert "warning" not in r.stderr
+        text = (tmp_path / "src" / "foo.py.md").read_text()
+        assert "hash=" not in text
+
+    def test_explicit_checklist_arg(self, tmp_path):
+        run_dir = tmp_path / "out"
+        run_dir.mkdir()
+        ann_base = run_dir / "annotations"
+        target = tmp_path / "repo"
+        target.mkdir()
+        (target / "src").mkdir()
+        (target / "src" / "foo.py").write_text("def f():\n    pass\n")
+        import json
+        ck = tmp_path / "custom-checklist.json"
+        ck.write_text(json.dumps({
+            "files": [{
+                "path": "src/foo.py",
+                "items": [{"name": "f", "line_start": 1, "line_end": 2}],
+            }],
+        }))
+        r = _run("add", "src/foo.py", "f",
+                 "--base", str(ann_base),
+                 "--checklist", str(ck),
+                 "--target", str(target),
+                 "-m", "from custom checklist")
+        assert r.returncode == 0
+        text = (ann_base / "src" / "foo.py.md").read_text()
+        assert "hash=" in text
+
+    def test_explicit_lines_overrides_checklist(self, tmp_path):
+        """If both --lines and --checklist could provide bounds,
+        --lines wins (operator's explicit intent)."""
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        ann_base = run_dir / "annotations"
+        target = tmp_path / "repo"
+        target.mkdir()
+        (target / "src").mkdir()
+        (target / "src" / "foo.py").write_text(
+            "def f():\n    return 1\n\ndef g():\n    return 2\n"
+        )
+        import json
+        (run_dir / "checklist.json").write_text(json.dumps({
+            "files": [{
+                "path": "src/foo.py",
+                "items": [{"name": "f", "line_start": 1, "line_end": 2}],
+            }],
+        }))
+        # Operator explicitly says lines 4-5 (the ``g`` body).
+        r = _run("add", "src/foo.py", "f",
+                 "--base", str(ann_base),
+                 "--lines", "4-5",
+                 "--target", str(target),
+                 "-m", "explicit override")
+        assert r.returncode == 0
+        text = (ann_base / "src" / "foo.py.md").read_text()
+        assert "start_line=4" in text
+        assert "end_line=5" in text
+
     def test_add_with_hash(self, tmp_path):
         # Set up a mock target repo with a real source file.
         target = tmp_path / "repo"
