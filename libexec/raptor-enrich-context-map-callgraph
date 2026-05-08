@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Enrich a context-map.json with substrate-derived forward-reachable
+closures per entry point. Runs after raptor-normalize-context-map.
+
+Usage: raptor-enrich-context-map-callgraph <understand_dir> [--max-depth N]
+
+Wraps core.orchestration.context_map_callgraph.enrich_with_forward_reachable
+for invocation from skill markdown. Adds a ``forward_reachable`` field
+to each entry point in context-map.json. Idempotent — safe to re-run.
+
+Best-effort: missing checklist / inventory build failure / unresolved
+host functions log warnings but never abort the run.
+"""
+import argparse
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+import os
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.json import load_json, save_json
+from core.orchestration.context_map_callgraph import (
+    DEFAULT_MAX_DEPTH,
+    enrich_with_forward_reachable,
+)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="raptor-enrich-context-map-callgraph",
+        description=(
+            "Enrich context-map.json entry points with substrate-derived "
+            "forward-reachable closures."
+        ),
+    )
+    parser.add_argument("understand_dir", help="path to /understand run dir")
+    parser.add_argument(
+        "--max-depth", type=int, default=DEFAULT_MAX_DEPTH,
+        help=(
+            f"BFS depth bound for the closure walk "
+            f"(default: {DEFAULT_MAX_DEPTH})"
+        ),
+    )
+    args = parser.parse_args()
+
+    understand_dir = Path(args.understand_dir).resolve()
+    if not understand_dir.is_dir():
+        print(
+            f"raptor-enrich-context-map-callgraph: {understand_dir} is "
+            "not a directory", file=sys.stderr,
+        )
+        return 1
+
+    context_map_path = understand_dir / "context-map.json"
+    if not context_map_path.exists():
+        print(
+            f"raptor-enrich-context-map-callgraph: {context_map_path} "
+            "does not exist", file=sys.stderr,
+        )
+        return 1
+
+    context_map = load_json(context_map_path)
+    if not isinstance(context_map, dict):
+        print(
+            f"raptor-enrich-context-map-callgraph: {context_map_path} "
+            "is not a JSON object", file=sys.stderr,
+        )
+        return 1
+
+    checklist = load_json(understand_dir / "checklist.json") or {}
+    target_path = (
+        checklist.get("target_path") if isinstance(checklist, dict) else None
+    )
+    if not target_path:
+        print(
+            "raptor-enrich-context-map-callgraph: checklist missing "
+            "target_path; skipping enrichment", file=sys.stderr,
+        )
+        return 0
+
+    enriched = enrich_with_forward_reachable(
+        context_map, Path(target_path), max_depth=args.max_depth,
+    )
+    if enriched:
+        save_json(context_map_path, context_map)
+        print(
+            f"raptor-enrich-context-map-callgraph: enriched {enriched} "
+            f"entry point(s) in {context_map_path}"
+        )
+    else:
+        print(
+            "raptor-enrich-context-map-callgraph: no entries enriched "
+            "(no entry_points field, all hosts unresolvable, or inventory "
+            "build skipped)"
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
