@@ -223,7 +223,7 @@ jobs:
       - name: Run unit tests (fast tier)
         run: |
           source $VENV_PATH/bin/activate
-          pytest core packages \
+          pytest -n auto core packages \
             --ignore=core/sandbox/tests \
             --ignore=packages/exploit_feasibility/tests
 
