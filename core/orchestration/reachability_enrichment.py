@@ -152,4 +152,134 @@ def _path_to_module(rel_path: str) -> Optional[str]:
     return ".".join(parts)
 
 
-__all__ = ["mark_unreachable_low_priority"]
+# ---------------------------------------------------------------------------
+# Caller-context enrichment — feed substrate-derived blast-radius data
+# into the /agentic triage LLM's per-function context.
+# ---------------------------------------------------------------------------
+
+
+def enrich_with_caller_context(
+    checklist: Dict[str, Any],
+    target_path: Path,
+    *,
+    inventory: Optional[Dict[str, Any]] = None,
+    max_direct_caller_names: int = 5,
+    max_depth: int = 20,
+) -> int:
+    """Walk ``checklist["files"][*]["items"]`` and attach
+    substrate-derived caller context to each function.
+
+    For each function, set:
+
+      * ``caller_count_direct`` — 1-hop callers (definitive +
+        uncertain + over-inclusive method match), via
+        ``callers_of``.
+      * ``caller_count_transitive`` — full reverse closure size.
+      * ``caller_count_uncertain`` — file-masking-flag uncertain
+        callers, surfaced separately because consumers may want
+        to discount them.
+      * ``direct_caller_names`` — first ``max_direct_caller_names``
+        ``"file:name"`` strings, sorted, for the LLM's display.
+
+    The /agentic triage prompt reads these alongside ``priority``
+    so the LLM can judge blast radius — a function called by 50
+    things has different stakes than one called by 1.
+
+    Skips functions already marked ``priority="low"`` by
+    ``mark_unreachable_low_priority`` — those are dead and the
+    LLM will deprioritise them regardless.
+
+    Returns the count of functions enriched.
+    """
+    if not isinstance(checklist, dict):
+        return 0
+    files = checklist.get("files")
+    if not isinstance(files, list):
+        return 0
+
+    if inventory is None:
+        try:
+            from core.inventory.builder import build_inventory
+            import tempfile
+            with tempfile.TemporaryDirectory() as td:
+                inventory = build_inventory(str(target_path), td)
+        except Exception as e:                          # noqa: BLE001
+            logger.debug(
+                "reachability_enrichment: inventory build failed (%s); "
+                "skipping caller-context pass", e,
+            )
+            return 0
+
+    try:
+        from core.inventory.reachability import (
+            InternalFunction,
+            callers_of,
+            reverse_closure,
+        )
+    except ImportError:
+        return 0
+
+    enriched = 0
+    for file_info in files:
+        if not isinstance(file_info, dict):
+            continue
+        rel_path = file_info.get("path")
+        if not isinstance(rel_path, str) or not rel_path:
+            continue
+
+        funcs = file_info.get("items")
+        if not isinstance(funcs, list):
+            funcs = file_info.get("functions")
+        if not isinstance(funcs, list):
+            continue
+
+        for func in funcs:
+            if not isinstance(func, dict):
+                continue
+            kind = func.get("kind")
+            if kind and kind != "function":
+                continue
+            # Already-dead functions don't need caller context —
+            # the LLM is going to deprioritise them anyway.
+            if func.get("priority") == "low":
+                continue
+            name = func.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            line_start = func.get("line_start")
+            if not isinstance(line_start, int) or line_start <= 0:
+                continue
+
+            target = InternalFunction(
+                file_path=rel_path, name=name, line=line_start,
+            )
+            try:
+                one_hop = callers_of(inventory, target)
+                closure = reverse_closure(
+                    inventory, target, max_depth=max_depth,
+                )
+            except Exception:                          # noqa: BLE001
+                continue
+
+            direct_callers = one_hop.all_callers
+            func["caller_count_direct"] = len(direct_callers)
+            func["caller_count_transitive"] = len(closure.nodes)
+            func["caller_count_uncertain"] = len(one_hop.uncertain)
+            sorted_names = sorted(str(c) for c in direct_callers)
+            func["direct_caller_names"] = (
+                sorted_names[:max_direct_caller_names]
+            )
+            enriched += 1
+
+    if enriched:
+        logger.info(
+            "reachability_enrichment: enriched %d function(s) with "
+            "caller-context fields", enriched,
+        )
+    return enriched
+
+
+__all__ = [
+    "enrich_with_caller_context",
+    "mark_unreachable_low_priority",
+]

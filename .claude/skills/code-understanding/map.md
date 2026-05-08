@@ -186,6 +186,23 @@ When you can, include the function `name` directly on each entry_point and
 sink_detail you emit — it helps the normaliser skip backfill and is
 clearer for human reviewers.
 
+**[MAP-5b] Enrich entry points with forward-reachable closures**
+
+After normalisation, run the call-graph enricher. Uses the inventory to
+attach a `forward_reachable` field to each entry point, listing the
+internal functions and external dep calls transitively reachable from
+the entry's host function.
+
+```bash
+libexec/raptor-enrich-context-map-callgraph "$WORKDIR"
+```
+
+The enriched context-map.json carries machine-derived "this entry
+reaches N internal + M external" data alongside the LLM's narrative —
+useful for `/diagram` rendering and downstream consumers (audit
+prioritisation, validate Stage F). Idempotent. Skip if
+`$WORKDIR/checklist.json` doesn't exist or doesn't carry `target_path`.
+
 **[MAP-6] Record Coverage**
 
 After writing `context-map.json`, update the inventory with which functions you examined.

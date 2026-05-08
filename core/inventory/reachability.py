@@ -1556,6 +1556,117 @@ def _closure_sort_key(fn: FunctionId) -> Tuple:
     return (1, "", "", 0, fn.qualified_name)
 
 
+# ---------------------------------------------------------------------------
+# Evidence-line helpers
+# ---------------------------------------------------------------------------
+#
+# Substrate consumers that walk evidence (``"path:line"`` pairs)
+# back to enclosing functions need a couple of small primitives.
+# These started life inside ``packages/sca/reachability/`` but every
+# consumer ends up needing them — /validate Stage F resolves
+# attack-path entry/sink to InternalFunctions; /agentic triage
+# resolves a finding's source line to its host for caller-summary
+# context; /understand --map renders host context for entry points.
+# Hoisted to share one implementation.
+
+
+def enclosing_function(
+    inventory: Dict[str, Any],
+    file_path: str,
+    line: int,
+) -> Optional[InternalFunction]:
+    """Return the project-internal function whose body contains
+    ``line`` in ``file_path``, or ``None`` if the line lives at
+    module scope (no enclosing def).
+
+    When two defs nest (``def outer(): ... def inner(): ...``)
+    and ``line`` falls in the inner body, the innermost match
+    wins — the def with the largest ``line_start`` ≤ ``line``
+    that also has ``line`` ≤ ``line_end`` (or no
+    ``line_end``).
+
+    Returns ``None`` for any of:
+      * file_path not in the inventory
+      * file has no items list
+      * line falls outside every function's range
+    """
+    file_record = _find_file_record(inventory, file_path)
+    if file_record is None:
+        return None
+    items = file_record.get("items") or []
+    if not isinstance(items, list):
+        return None
+
+    best: Optional[Dict[str, Any]] = None
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("kind") not in (None, "function"):
+            continue
+        line_start = item.get("line_start")
+        line_end = item.get("line_end")
+        if not isinstance(line_start, int) or line_start <= 0:
+            continue
+        if line_start > line:
+            continue
+        # When line_end is missing, treat the def's range as
+        # open-ended — pick the lexically last def that started
+        # before our line. Same line_start-greatest-match
+        # heuristic the substrate uses for nested-def
+        # disambiguation.
+        if isinstance(line_end, int) and line_end >= 0 and line_end < line:
+            continue
+        if best is None or item["line_start"] > best["line_start"]:
+            best = item
+
+    if best is None:
+        return None
+    name = best.get("name") or ""
+    if not name:
+        return None
+    return InternalFunction(
+        file_path=file_path,
+        name=name,
+        line=int(best["line_start"]),
+    )
+
+
+def parse_evidence_entry(entry: str) -> Tuple[Optional[str], int]:
+    """Split a ``"path:line"`` evidence string into ``(path, line)``.
+
+    Returns ``(None, 0)`` for malformed inputs. Handles paths
+    containing colons (``C:\\path`` on Windows, IPv6 fragments)
+    by ``rsplit``-ing on the LAST colon and requiring the suffix
+    to be a decimal int.
+    """
+    if not isinstance(entry, str) or ":" not in entry:
+        return None, 0
+    path, _, line_str = entry.rpartition(":")
+    if not path or not line_str:
+        return None, 0
+    try:
+        return path, int(line_str)
+    except ValueError:
+        return None, 0
+
+
+def _find_file_record(
+    inventory: Dict[str, Any],
+    path: str,
+) -> Optional[Dict[str, Any]]:
+    """Linear scan of the inventory's files for a path match.
+
+    Files lists are typically hundreds of entries; linear scan is
+    fast in practice (single-digit microseconds per query).
+    Consumers needing sub-millisecond latency across many queries
+    can pre-build a path→record map.
+    """
+    for file_record in inventory.get("files", []):
+        if file_record.get("path") == path:
+            return file_record
+    return None
+
+
 __all__ = [
     "CallersResult",
     "CalleesResult",
@@ -1569,8 +1680,10 @@ __all__ = [
     "call_lines_of",
     "callees_of",
     "callers_of",
+    "enclosing_function",
     "forward_closure",
     "function_called",
+    "parse_evidence_entry",
     "reverse_closure",
     "shortest_path",
 ]
