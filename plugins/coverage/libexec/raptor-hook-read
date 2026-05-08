@@ -69,7 +69,19 @@ for d in "$PROJECT_DIR"/*/; do
     if [ "$HAVE_JQ" = "1" ]; then
         STATUS=$(jq -r '.status // empty' "${d}.raptor-run.json" 2>/dev/null)
     else
-        STATUS=$(python3 -c "import json;print(json.load(open('${d}.raptor-run.json')).get('status',''))" 2>/dev/null)
+        # Pass the path via argv (sys.argv[1]), NOT via shell-
+        # interpolation into the Python source string. Pre-fix
+        # `python3 -c "...open('${d}.raptor-run.json')..."` baked
+        # the bash variable into the Python literal — a path with
+        # a single quote, newline, or backslash broke the Python
+        # syntax (SyntaxError → silent failure under
+        # `2>/dev/null`). Worse: an attacker-controlled `${d}`
+        # (paths under a target repo could conceivably be named
+        # to inject) could close the string and append arbitrary
+        # Python code to the `-c` source, executing under the
+        # hook's uid (the parent Claude Code process).
+        # `sys.argv[1]` passes the value as DATA, not code.
+        STATUS=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('status',''))" "${d}.raptor-run.json" 2>/dev/null)
     fi
     [ "$STATUS" = "running" ] && RUN_DIR="$d" && break
 done
