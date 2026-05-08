@@ -423,8 +423,33 @@ class BuildDetector:
 
         validation_cmd = validation_commands.get(build_system.type)
         if not validation_cmd:
-            logger.debug(f"No validation command for {build_system.type}")
-            return True  # Assume it's OK if we can't validate
+            # Unknown build-tool type. Pre-fix we returned True
+            # ("Assume it's OK if we can't validate") — but the
+            # next caller-side step is `--build-command "<bs.cmd>"`
+            # against `codeql database create`, which spawns the
+            # tool and fails opaquely if it isn't installed. The
+            # operator sees a CodeQL extraction error two minutes
+            # into a database build, not a clear "tool missing"
+            # warning at validation time.
+            #
+            # Returning False here is the honest answer: we have
+            # no evidence the build will succeed. The caller's
+            # validation-failed branch logs and skips this
+            # language with a useful message; the optimistic-True
+            # branch silently let unbuildable matrix entries
+            # through.
+            #
+            # Still log at debug so legitimately-unknown tool
+            # types (e.g. obscure JVM build systems we haven't
+            # added probes for yet) leave a breadcrumb when
+            # operators report unexpected validation failures.
+            logger.debug(
+                "No validation command for %s; treating as "
+                "unvalidated (returning False) — add a probe "
+                "command to validation_commands above to opt in.",
+                build_system.type,
+            )
+            return False
 
         # Pre-flight working_dir exists + is a directory. Pre-fix
         # we passed `cwd=build_system.working_dir` directly to the
