@@ -191,7 +191,7 @@ _ALLOWLIST: Tuple[AllowlistEntry, ...] = (
     ),
     # ----- packages/codeql/dataflow_validator.py -----
     AllowlistEntry(
-        file="packages/codeql/dataflow_validator.py", line=552,
+        file="packages/codeql/dataflow_validator.py", line=575,
         attr="reasoning",
         audit_note=(
             "f-string builds DataflowValidation.reasoning return "
@@ -201,12 +201,12 @@ _ALLOWLIST: Tuple[AllowlistEntry, ...] = (
         ),
     ),
     AllowlistEntry(
-        file="packages/codeql/dataflow_validator.py", line=570,
+        file="packages/codeql/dataflow_validator.py", line=593,
         attr="rule_id",
         audit_note="builds scorecard cell name (codeql:<rule_id>), not LLM prompt",
     ),
     AllowlistEntry(
-        file="packages/codeql/dataflow_validator.py", line=596,
+        file="packages/codeql/dataflow_validator.py", line=619,
         attr="reasoning",
         audit_note=(
             "DataflowValidation.reasoning return field; smt_result "
