@@ -1042,6 +1042,30 @@ class AutonomousSecurityAgentV2:
                     f"(skipped {len(data.get('findings', [])) - len(converted)} ruled out/unlikely)")
         return converted
 
+    def _emit_finding_annotation(
+        self, vuln: "VulnerabilityContext",
+        checklist: Optional[Dict[str, Any]],
+    ) -> None:
+        """Emit a per-function annotation for ``vuln`` after analysis
+        completes. Best-effort — any exception is logged at DEBUG and
+        swallowed so annotation failures cannot break the analysis loop.
+
+        Skipped silently when ``checklist`` is None or the function
+        name can't be resolved from the finding's file:line.
+        """
+        try:
+            from packages.llm_analysis.annotation_emit import (
+                emit_finding_annotation,
+            )
+            emit_finding_annotation(
+                vuln,
+                base_dir=self.out_dir / "annotations",
+                checklist=checklist,
+                repo_root=self.repo_path,
+            )
+        except Exception:
+            logger.debug("annotation emit error", exc_info=True)
+
     def process_findings(self, sarif_paths: List[str] = None, findings_path: str = None,
                          max_findings: int = 10, checklist: Dict[str, Any] = None) -> Dict[str, Any]:
         """Process findings with full LLM-powered autonomous workflow."""
@@ -1141,26 +1165,7 @@ class AutonomousSecurityAgentV2:
                 # 1. Autonomous analysis (LLM-powered, or prep-only)
                 if self.analyze_vulnerability(vuln):
                     analyzed += 1
-
-                    # Emit a per-function annotation summarising the
-                    # LLM's verdict + reasoning. Best-effort —
-                    # annotation failures don't break analysis.
-                    # Skipped when checklist is missing or function
-                    # name can't be resolved from file:line.
-                    try:
-                        from packages.llm_analysis.annotation_emit import (
-                            emit_finding_annotation,
-                        )
-                        emit_finding_annotation(
-                            vuln,
-                            base_dir=self.out_dir / "annotations",
-                            checklist=checklist,
-                            repo_root=self.repo_path,
-                        )
-                    except Exception:
-                        logger.debug(
-                            "annotation emit error", exc_info=True,
-                        )
+                    self._emit_finding_annotation(vuln, checklist)
 
                     # Track dataflow validation
                     if vuln.has_dataflow and vuln.analysis and 'dataflow_validation' in vuln.analysis:
