@@ -900,19 +900,49 @@ class CrashAnalyser:
                     context.signal = "15"
                 break
 
-        # Extract registers
+        # Extract registers. Pre-fix the parser had two bugs:
+        #
+        # 1. Discriminator: `"=" in line` — but GDB's `info
+        #    registers` output does NOT use `=` between name and
+        #    value (the format is whitespace-separated:
+        #    `rax            0x7fffffffe5e8      140737488349160`).
+        #    The `=`-bearing condition rarely matched, so most
+        #    register lines were silently skipped. The few that
+        #    did match were typically NON-register lines (disasm
+        #    instructions like `mov $0x10 = $immediate, %rax`)
+        #    which then got mis-stored as fake registers via
+        #    `parts[0]`/`parts[1]`.
+        #
+        # 2. Filter: `any(reg in line for reg in [...])` matches
+        #    `rax` as a SUBSTRING of any text — including disasm
+        #    operands (`mov %rax, %rcx`), comments, and the
+        #    register list itself (the line `info registers`
+        #    contains `register` which doesn't match, but
+        #    `info reg ...` echoes can contain the names).
+        #
+        # Match GDB's actual `info registers` output shape with
+        # a regex: line begins with optional whitespace, a
+        # register name (alphanumeric + underscore), whitespace,
+        # then a hex value. Anything else gets skipped.
+        import re as _re
+        gdb_reg_re = _re.compile(
+            r'^\s*([a-z][a-z0-9_]*)\s+(0x[0-9a-fA-F]+)\b'
+        )
         in_registers = False
         for line in lines:
-            if "info registers" in line.lower() or in_registers:
+            lower = line.lower()
+            if "info registers" in lower or in_registers:
                 in_registers = True
-                if "=" in line and any(reg in line for reg in ["rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rsp", "rbp", "rip"]):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        reg_name = parts[0]
-                        reg_value = parts[1]
-                        context.registers[reg_name] = reg_value
-                elif "backtrace" in line.lower():
+                # Section terminators (any other GDB command output
+                # below registers).
+                if any(t in lower for t in (
+                    "backtrace", "disassemble", "(gdb)", "info ",
+                )) and "info registers" not in lower:
                     in_registers = False
+                    continue
+                m = gdb_reg_re.match(line)
+                if m:
+                    context.registers[m.group(1)] = m.group(2)
 
         # Extract stack trace
         in_backtrace = False
