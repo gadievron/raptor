@@ -47,7 +47,6 @@ class AFLRunner:
         if not self.binary.stat().st_mode & 0o111:  # Check if executable
             raise PermissionError(f"Binary is not executable: {binary_path}")
 
-        self.corpus_dir = Path(corpus_dir) if corpus_dir else self._create_default_corpus()
         # Anchor default output to RaptorConfig.get_out_dir() so
         # fuzz output lands under the operator-configured run
         # base, NOT a literal `out/` relative to whatever
@@ -70,6 +69,9 @@ class AFLRunner:
         else:
             from core.config import RaptorConfig
             self.output_dir = RaptorConfig.get_out_dir() / f"fuzz_{self.binary.stem}"
+        # Resolve corpus AFTER output_dir so the default-corpus
+        # path can anchor under output_dir (rather than CWD).
+        self.corpus_dir = Path(corpus_dir) if corpus_dir else self._create_default_corpus()
         self.dict_path = Path(dict_path) if dict_path else None
         self.input_mode = input_mode
         self.check_sanitizers = check_sanitizers
@@ -112,8 +114,13 @@ class AFLRunner:
             raise RuntimeError(f"AFL++ validation failed: {e}")
 
     def _create_default_corpus(self) -> Path:
-        """Create minimal default corpus if none provided."""
-        corpus = Path("out/corpus_default")
+        """Create minimal default corpus if none provided.
+
+        Anchored to ``self.output_dir`` (not CWD) so running
+        ``/fuzz`` from inside a target tree does NOT plant seed
+        files in ``<target>/out/corpus_default/``.
+        """
+        corpus = self.output_dir / "corpus_default"
         corpus.mkdir(parents=True, exist_ok=True)
 
         # Create some basic seed inputs
