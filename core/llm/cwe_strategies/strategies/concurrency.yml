@@ -1,0 +1,89 @@
+name: concurrency
+description: |
+  Code that takes / drops locks, reads or writes refcounted
+  objects, or enters / exits RCU read-side critical sections.
+  The bug class: a window between two mutually-dependent operations
+  where another thread can intervene and invalidate the function's
+  assumptions.
+
+signals:
+  paths:
+    - kernel/locking/
+    - mm/
+    - fs/
+    - kernel/rcu/
+    - kernel/sched/
+    - kernel/futex/
+  includes:
+    - linux/mutex.h
+    - linux/spinlock.h
+    - linux/rwsem.h
+    - linux/rcupdate.h
+    - linux/refcount.h
+  function_keywords:
+    - lock
+    - unlock
+    - acquire
+    - release
+    - rcu
+    - refcount
+  function_calls:
+    - mutex_lock
+    - mutex_unlock
+    - spin_lock
+    - spin_unlock
+    - read_lock
+    - write_lock
+    - rcu_read_lock
+    - rcu_read_unlock
+    - rcu_dereference
+    - synchronize_rcu
+    - refcount_inc
+    - refcount_dec
+    - refcount_dec_and_test
+    - atomic_inc
+    - atomic_dec
+  cwes:
+    - CWE-362   # race condition / TOCTOU
+    - CWE-364   # signal handler race
+    - CWE-366   # race within thread
+    - CWE-367   # TOCTOU
+    - CWE-414   # missing lock check
+    - CWE-415   # double free (often racy)
+    - CWE-416   # use-after-free (often racy)
+    - CWE-667   # improper locking
+    - CWE-833   # deadlock
+
+key_questions:
+  - "Where is each lock acquired and released? Is there any function call BETWEEN acquire and release that could drop the lock?"
+  - "If the function drops a lock and reacquires it, what state could change in the window? What invariants are checked AFTER the reacquire — and against pre-drop or post-drop state?"
+  - "For refcounted objects: is every increment paired with exactly one decrement on every path (including error paths)?"
+  - "Are RCU read-side critical sections kept short and side-effect-free? Is freed memory ever accessed without an rcu_dereference + read lock?"
+
+prompt_addendum: |
+  Read this function imagining ANOTHER thread is watching every
+  load and store, free to call into the same function or related
+  ones at the worst possible moment. For every memory access,
+  ask: what guarantees this hasn't been freed / overwritten /
+  unmapped between the previous check and this use? For every
+  lock pair, ask: what is the LARGEST possible delta to global
+  state across the locked region — and is the post-region code
+  prepared for that delta? Lock windows that drop and reacquire
+  are the highest-yield place to look — bugs there are usually
+  TOCTOU on a scale of microseconds to seconds.
+
+exemplars:
+  - cve: CVE-2022-2602
+    title: io_uring / Unix GC use-after-free via dropped lock
+    pattern: |
+      The io_uring submission path drops a socket reference lock,
+      runs scheduling work, then re-checks state without
+      verifying the socket itself wasn't freed by a parallel
+      Unix garbage collection that ran while the lock was down.
+    why_buggy: |
+      Between lock_drop() and lock_reacquire(), the garbage
+      collector for AF_UNIX sockets could observe a refcount of
+      zero (the only ref-holder had already dropped) and free
+      the socket. The post-reacquire code dereferenced the now-
+      freed pointer. The fix added the missing reference grab
+      across the entire window, not just on entry.

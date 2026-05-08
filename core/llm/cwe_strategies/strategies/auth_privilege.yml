@@ -1,0 +1,82 @@
+name: auth_privilege
+description: |
+  Permission checks, capability checks, namespace boundaries,
+  ACLs. The bug class: a privileged operation runs with
+  insufficient (or stale) authorisation context, or a check that
+  appears to enforce a boundary actually misses an edge case.
+
+signals:
+  paths:
+    - security/
+    - kernel/cred.c
+    - kernel/capability.c
+    - kernel/user_namespace.c
+    - fs/namespace.c
+    - net/socket.c
+  includes:
+    - linux/capability.h
+    - linux/cred.h
+    - linux/security.h
+  function_keywords:
+    - capable
+    - permission
+    - authoriz
+    - privilege
+  function_calls:
+    - capable
+    - ns_capable
+    - capable_setid
+    - inode_permission
+    - file_permission
+    - generic_permission
+    - security_capable
+    - cred_alive
+    - override_creds
+    - revert_creds
+  cwes:
+    - CWE-20    # improper input validation (often gated by auth)
+    - CWE-269   # improper privilege management
+    - CWE-285   # improper authorization
+    - CWE-287   # improper authentication
+    - CWE-358   # improperly implemented standard
+    - CWE-732   # incorrect permissions
+    - CWE-862   # missing authorization
+    - CWE-863   # incorrect authorization
+
+key_questions:
+  - "Which privilege check gates this operation? Could the operation execute on a path where the check was skipped, or where the check returned 'allowed' for the wrong reason?"
+  - "For namespace-scoped privileges: does the check use ``ns_capable`` (correct) or ``capable`` (likely incorrect for unprivileged user namespaces)?"
+  - "Between check and use, can credentials change — process re-exec, SUID transition, fd inheritance — invalidating the prior decision?"
+  - "On error paths, is partial state visible to a less-privileged subsequent caller? Is sensitive data zeroed before being made reachable?"
+
+prompt_addendum: |
+  Imagine an unprivileged user with the most permissive
+  configuration available to them — for kernel code, this often
+  means inside a user namespace they created themselves. Walk
+  the privileged operation's call chain and look for any check
+  that grants based on a capability that's actually held INSIDE
+  the user namespace, even though the operation reaches resources
+  OUTSIDE it. The classic bug: ``capable(CAP_SYS_ADMIN)`` returns
+  true for a user with admin in their own namespace, but the
+  kernel object being modified is not namespace-scoped. The
+  unprivileged user reaches a privileged side effect.
+
+exemplars:
+  - cve: CVE-2022-0185
+    title: fs_context heap overflow via legacy filesystem mount in user_ns
+    pattern: |
+      A length is computed from a string formatted with attacker-
+      controlled keys/values, but the size validation uses the
+      pre-format length rather than the post-format length. The
+      operation runs because the user has CAP_SYS_ADMIN inside
+      their own user namespace.
+    why_buggy: |
+      The privilege check granted admin-equivalent access for an
+      operation that the namespace boundary should have prevented:
+      mount-related code paths that interact with non-namespaced
+      kernel state. The privilege check passed locally for the
+      wrong reason — a CAP_SYS_ADMIN check that's intended to
+      protect the kernel's mount table treated namespace-scoped
+      capability as equivalent to root capability for this code
+      path. The heap overflow itself is the consequence; the
+      auth bypass is what made it reachable.
