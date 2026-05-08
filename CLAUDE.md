@@ -156,8 +156,8 @@ The `/oss-forensics` command provides evidence-backed forensic investigation for
 **Agents:**
 - `oss-forensics-agent` - Main orchestrator
 - `oss-investigator-gh-archive-agent` - Queries GH Archive via BigQuery
-- `oss-investigator-gh-api-agent` - Queries live GitHub API
-- `oss-investigator-gh-recovery-agent` - Recovers deleted content (Wayback/commits)
+- `oss-investigator-github-agent` - Queries live GitHub API
+- `oss-investigator-wayback-agent` - Recovers deleted content (Wayback/commits)
 - `oss-investigator-local-git-agent` - Analyzes cloned repos for dangling commits
 - `oss-investigator-ioc-extractor-agent` - Extracts IOCs from vendor reports
 - `oss-hypothesis-former-agent` - Forms evidence-backed hypotheses
