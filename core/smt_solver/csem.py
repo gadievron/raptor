@@ -57,18 +57,67 @@ from .availability import z3
 # ---------------------------------------------------------------------------
 
 def truncate(bv: Any, to_width: int) -> Any:
-    """Discard high bits, keeping the low ``to_width`` bits."""
+    """Discard high bits, keeping the low ``to_width`` bits.
+
+    Pre-fix this called ``z3.Extract(to_width - 1, 0, bv)`` with no
+    width validation. Two crash modes that bypassed the encoder:
+
+      * ``to_width <= 0`` — Extract requires ``hi >= lo``, so a
+        zero-or-negative target width fed in by a buggy upstream
+        type-inference pass would surface as a Z3 internal
+        assertion failure instead of an actionable error.
+      * ``to_width > bv.size()`` — narrowing to a width WIDER than
+        the input is nonsensical (truncation can only lose bits)
+        and Z3 raises an assertion error from inside the C++
+        layer, where the operator can't tell which RAPTOR caller
+        produced the bad input.
+
+    Validate explicitly so a malformed call surfaces a Python
+    ValueError pointing at THIS function with both widths in the
+    message — the caller backtrace identifies the upstream bug.
+    """
+    src_width = bv.size()
+    if to_width <= 0 or to_width > src_width:
+        raise ValueError(
+            f"truncate: to_width={to_width} out of range for "
+            f"{src_width}-bit operand (must be 1..{src_width})"
+        )
     return z3.Extract(to_width - 1, 0, bv)
 
 
 def sign_extend(bv: Any, to_width: int) -> Any:
-    """Extend ``bv`` to ``to_width`` bits preserving the sign bit."""
-    return z3.SignExt(to_width - bv.size(), bv)
+    """Extend ``bv`` to ``to_width`` bits preserving the sign bit.
+
+    Pre-fix called ``z3.SignExt(to_width - bv.size(), bv)`` with
+    no validation. SignExt's first arg is the number of bits to
+    add and must be ``>= 0``; ``to_width < bv.size()`` produced
+    a negative ext-width and a Z3 assertion failure from inside
+    the C++ layer.
+    """
+    src_width = bv.size()
+    if to_width < src_width:
+        raise ValueError(
+            f"sign_extend: to_width={to_width} narrower than "
+            f"source {src_width}-bit operand (use truncate() to narrow)"
+        )
+    return z3.SignExt(to_width - src_width, bv)
 
 
 def zero_extend(bv: Any, to_width: int) -> Any:
-    """Extend ``bv`` to ``to_width`` bits padding with zeros."""
-    return z3.ZeroExt(to_width - bv.size(), bv)
+    """Extend ``bv`` to ``to_width`` bits padding with zeros.
+
+    Pre-fix called ``z3.ZeroExt(to_width - bv.size(), bv)`` with
+    no validation. Same crash mode as sign_extend: ``to_width <
+    bv.size()`` produced a negative ext-width and a Z3 assertion
+    failure.
+    """
+    src_width = bv.size()
+    if to_width < src_width:
+        raise ValueError(
+            f"zero_extend: to_width={to_width} narrower than "
+            f"source {src_width}-bit operand (use truncate() to narrow)"
+        )
+    return z3.ZeroExt(to_width - src_width, bv)
 
 
 def truncation_loses_bits(bv: Any, to_width: int, to_signed: bool) -> Any:
@@ -79,6 +128,15 @@ def truncation_loses_bits(bv: Any, to_width: int, to_signed: bool) -> Any:
     original — i.e. the C "value changes when assigned to a narrower type"
     semantic.  ``to_signed`` names the narrow type's signedness to
     parallel ``cast(..., from_signed=...)``.
+
+    Pre-fix this assumed ``to_width <= bv.size()`` (truncation must
+    narrow). When called with ``to_width > bv.size()`` (e.g. from a
+    miscalibrated overflow check that swapped the from/to widths),
+    the ``truncate(bv, to_width)`` call would have crashed inside Z3
+    with an opaque assertion error from C++. Now ``truncate``'s own
+    width guard fires first with a Python-readable ValueError that
+    pinpoints THIS predicate as the caller, so an incorrectly-flipped
+    width pair is debuggable from the traceback.
     """
     narrow = truncate(bv, to_width)
     wide = sign_extend(narrow, bv.size()) if to_signed else zero_extend(narrow, bv.size())
