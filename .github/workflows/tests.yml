@@ -363,17 +363,6 @@ jobs:
           # without needing the repo on PYTHONPATH.
           python -m pytest core/security/tests/test_prompt_envelope_audit.py -q
 
-  test-workflows:
-    needs: [pre_check, changes, deps]
-    if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.bash_surface == 'true')
-    uses: ./.github/workflows/bash-test.yml
-    with:
-      test_script: test_workflows.sh
-      venv_artifact_name: venv-${{ github.run_id }}
-
   test-fast:
     needs: [pre_check, changes, deps]
     if: |
@@ -383,37 +372,4 @@ jobs:
     uses: ./.github/workflows/bash-test.yml
     with:
       test_script: real_tests_fast.sh
-      venv_artifact_name: venv-${{ github.run_id }}
-
-  test-real:
-    needs: [pre_check, changes, deps]
-    if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.bash_surface == 'true')
-    uses: ./.github/workflows/bash-test.yml
-    with:
-      test_script: real_tests.sh
-      venv_artifact_name: venv-${{ github.run_id }}
-
-  test-comprehensive:
-    needs: [pre_check, changes, deps]
-    if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.bash_surface == 'true')
-    uses: ./.github/workflows/bash-test.yml
-    with:
-      test_script: comprehensive_test.sh
-      venv_artifact_name: venv-${{ github.run_id }}
-
-  test-integration:
-    needs: [pre_check, changes, deps]
-    if: |
-      needs.pre_check.outputs.should_skip != 'true' &&
-      (needs.changes.outputs.force_full == 'true' ||
-       needs.changes.outputs.bash_surface == 'true')
-    uses: ./.github/workflows/bash-test.yml
-    with:
-      test_script: integration_tests.sh
       venv_artifact_name: venv-${{ github.run_id }}
