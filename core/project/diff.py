@@ -16,15 +16,41 @@ logger = get_logger()
 
 
 def _get_status(finding: Dict[str, Any]) -> Optional[str]:
-    """Extract the ruling status from a finding."""
+    """Extract the ruling status from a finding.
+
+    Always returns a str or None, never a bool. Pre-fix the
+    agentic-format branch returned `finding["is_exploitable"]`
+    raw — a `bool` — even though the function signature
+    promised `Optional[str]`. Downstream consumers
+    (`diff` comparison logic, status diffing, JSON
+    serialisation) treated `True` and `False` as different
+    "status strings" but every string-formatting site
+    (markdown table cell, log line, report rendering)
+    showed `"True"` / `"False"` instead of the canonical
+    `"exploitable"` / `"not_exploitable"` label. Cross-format
+    diffs (one run reports `ruling.status="exploitable"`,
+    another run reports `is_exploitable=True`) compared
+    `"exploitable"` against `True` — never equal — so the
+    diff over-reported "status changed" for findings whose
+    actual verdict was unchanged.
+    """
     ruling = finding.get("ruling")
     if isinstance(ruling, dict) and ruling.get("status"):
         return ruling["status"]
     if isinstance(ruling, str) and ruling:
         return ruling
-    # Agentic format: boolean fields
+    # Agentic format: boolean fields → coerce to canonical
+    # status string so cross-format comparison and rendering
+    # both work.
     if "is_exploitable" in finding:
-        return finding["is_exploitable"]  # Return bool, not str
+        v = finding["is_exploitable"]
+        if v is True:
+            return "exploitable"
+        if v is False:
+            return "not_exploitable"
+        # Already a string (or other non-bool) — return as-is so
+        # callers that pre-coerced still pass through cleanly.
+        return v if isinstance(v, str) else None
     return None
 
 
