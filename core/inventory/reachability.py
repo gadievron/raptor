@@ -982,9 +982,305 @@ def _sorted_callees(s: Iterable[FunctionId]) -> List[FunctionId]:
     return list(internals) + list(externals)
 
 
+# ---------------------------------------------------------------------------
+# Closure primitives — transitive reverse / forward / shortest-path
+# ---------------------------------------------------------------------------
+#
+# 1-hop adjacency (``callers_of`` / ``callees_of``) answers "who DIRECTLY
+# calls X?" The closure primitives below answer the transitive question:
+# given a target, which project functions can reach it through ANY chain
+# of internal calls? Or symmetrically: from a set of entry points, what's
+# the full forward-reachable set?
+#
+# All three primitives walk the same definitive call-graph edges captured
+# by the adjacency index in pass 2. **Uncertain edges are NOT walked.**
+# A consumer wanting "could-possibly-reach" coverage should drill into
+# the boundary using ``callers_of`` / ``callees_of`` directly to inspect
+# the 1-hop uncertain neighbours; closure semantics are "demonstrably
+# reachable".
+#
+# This split is deliberate: the SCA / audit consumer that wants to demote
+# severity for unreachable code wants to be conservative — empty closure
+# under definitive-only walk, plus a non-empty 1-hop uncertain frontier,
+# means "we don't know" and severity should NOT be demoted. The two
+# halves of the answer come from separate primitives.
+#
+# **Termination at External nodes.** Forward closure expands
+# InternalFunction nodes only — ``ExternalFunction`` is recorded in the
+# closure when reached but its callees are unknown to the index (it's
+# a dep). Reverse closure has no analogous distinction: every caller of
+# anything is by definition an Internal project function (we don't
+# index how the project's deps call each other).
+#
+# **Cycles.** Visited-set BFS handles cycles trivially. We don't surface
+# strongly-connected-component structure — consumers that need it can
+# layer it on top of a closure result.
+
+
+@dataclass(frozen=True)
+class ClosureResult:
+    """Result of a transitive closure walk.
+
+    ``nodes`` is the set of project functions reachable from the seed
+    (forward) or that can reach the target (reverse), excluding the
+    seed/target itself, in stable order.
+
+    ``paths`` maps each reached node to a representative shortest call
+    chain. For ``forward_closure``, the chain runs entry → ... → node.
+    For ``reverse_closure``, the chain runs node → ... → target.
+    Useful for evidence rendering — a /validate consumer showing "this
+    sink is reachable from the HTTP entry via this chain" wants the
+    chain itself, not just the membership.
+
+    ``truncated`` is True iff the BFS hit ``max_depth`` on at least one
+    path. The closure is still useful (everything in ``nodes`` IS
+    reachable) but may be incomplete; consumers who care can re-run
+    with a higher ``max_depth``.
+    """
+
+    nodes: Tuple[FunctionId, ...] = ()
+    paths: Dict[FunctionId, Tuple[FunctionId, ...]] = field(
+        default_factory=dict,
+    )
+    truncated: bool = False
+
+
+def reverse_closure(
+    inventory: Dict[str, Any],
+    target: FunctionId,
+    *,
+    max_depth: int = 50,
+    exclude_test_files: bool = True,
+) -> ClosureResult:
+    """Project functions that can transitively reach ``target``.
+
+    BFS up the reverse-adjacency graph starting at ``target``. The
+    closure includes only :class:`InternalFunction` nodes — Externals
+    can't be callers in our model. The seed (``target``) is excluded
+    from the result.
+
+    ``target`` may be Internal or External. If External, the
+    qualified-name-to-internal alias is followed (same semantics as
+    ``callers_of``).
+
+    ``max_depth`` bounds the BFS depth. ``exclude_test_files``
+    filters test-file callers out of the result; the BFS itself
+    walks them so paths through tests reach internal seed functions
+    correctly.
+    """
+    from collections import deque
+
+    idx = _get_or_build_index(
+        inventory, exclude_test_files=exclude_test_files,
+    )
+    if isinstance(target, ExternalFunction):
+        aliased = idx.qualified_to_internal.get(target.qualified_name)
+        if aliased is not None:
+            target = aliased
+
+    paths: Dict[FunctionId, Tuple[FunctionId, ...]] = {target: (target,)}
+    queue: "deque[Tuple[FunctionId, int]]" = deque([(target, 0)])
+    truncated = False
+    while queue:
+        node, depth = queue.popleft()
+        if depth >= max_depth:
+            truncated = True
+            continue
+        for caller in idx.reverse.get(node, set()):
+            if caller in paths:
+                continue
+            # Don't traverse test-file functions when filtering them
+            # out — otherwise a non-test function reachable ONLY via
+            # a test caller ends up in the closure with a path that
+            # crosses test code, surprising the consumer. Symmetric
+            # with shortest_path's behaviour.
+            if exclude_test_files and isinstance(caller, InternalFunction) \
+                    and caller.file_path in idx.test_paths:
+                continue
+            paths[caller] = (caller,) + paths[node]
+            queue.append((caller, depth + 1))
+
+    nodes_list: List[FunctionId] = []
+    out_paths: Dict[FunctionId, Tuple[FunctionId, ...]] = {}
+    for n, p in paths.items():
+        if n == target:
+            continue
+        nodes_list.append(n)
+        out_paths[n] = p
+    nodes_list.sort(key=_closure_sort_key)
+    return ClosureResult(
+        nodes=tuple(nodes_list),
+        paths=out_paths,
+        truncated=truncated,
+    )
+
+
+def forward_closure(
+    inventory: Dict[str, Any],
+    entries: Iterable[InternalFunction],
+    *,
+    max_depth: int = 50,
+    exclude_test_files: bool = True,
+) -> ClosureResult:
+    """Functions transitively callable from any of ``entries``.
+
+    BFS down the forward-adjacency graph, seeding from every entry
+    in ``entries``. The closure includes both :class:`InternalFunction`
+    (project edges) and :class:`ExternalFunction` (dep calls) nodes
+    — the distinction matters for /validate Stage F asking "does the
+    chain reach this sink?" where the sink can be either form.
+
+    External nodes are TERMINAL: we record them but don't expand.
+    The substrate doesn't know an external dep's callees, only that
+    it was called.
+
+    ``entries`` is excluded from the result. Test-file results are
+    filtered when ``exclude_test_files`` is True.
+    """
+    from collections import deque
+
+    idx = _get_or_build_index(
+        inventory, exclude_test_files=exclude_test_files,
+    )
+
+    entry_set: Set[FunctionId] = set(entries)
+    paths: Dict[FunctionId, Tuple[FunctionId, ...]] = {}
+    queue: "deque[Tuple[FunctionId, int]]" = deque()
+    for entry in entry_set:
+        if entry not in paths:
+            paths[entry] = (entry,)
+            queue.append((entry, 0))
+
+    truncated = False
+    while queue:
+        node, depth = queue.popleft()
+        if depth >= max_depth:
+            truncated = True
+            continue
+        if not isinstance(node, InternalFunction):
+            # External — terminal. We have no internal definition,
+            # so no outgoing edges to expand.
+            continue
+        for callee in idx.forward.get(node, set()):
+            if callee in paths:
+                continue
+            # Don't traverse through test-file functions when
+            # excluding them — symmetric with reverse_closure /
+            # shortest_path. Reachability through tests isn't
+            # production reachability.
+            if exclude_test_files and isinstance(callee, InternalFunction) \
+                    and callee.file_path in idx.test_paths:
+                continue
+            paths[callee] = paths[node] + (callee,)
+            queue.append((callee, depth + 1))
+
+    nodes_list: List[FunctionId] = []
+    out_paths: Dict[FunctionId, Tuple[FunctionId, ...]] = {}
+    for n, p in paths.items():
+        if n in entry_set:
+            continue
+        nodes_list.append(n)
+        out_paths[n] = p
+    nodes_list.sort(key=_closure_sort_key)
+    return ClosureResult(
+        nodes=tuple(nodes_list),
+        paths=out_paths,
+        truncated=truncated,
+    )
+
+
+def shortest_path(
+    inventory: Dict[str, Any],
+    source: InternalFunction,
+    target: FunctionId,
+    *,
+    max_depth: int = 50,
+    exclude_test_files: bool = False,
+) -> Optional[Tuple[FunctionId, ...]]:
+    """Shortest call chain ``source`` → ``target``, or None.
+
+    BFS forward from ``source`` with early-exit on hitting
+    ``target``. Returns the chain inclusive of both endpoints, or
+    ``None`` if ``target`` is not reachable within ``max_depth``
+    hops. ``source == target`` returns ``(source,)``.
+
+    ``target`` may be Internal or External. External targets have
+    their qualified-name-to-internal alias followed (matches
+    callers_of / reverse_closure semantics).
+
+    ``exclude_test_files`` defaults to False here — when /validate
+    renders an evidence path, it usually wants the genuine chain
+    even if it crosses a test helper. Consumers that want the
+    audit-style filter pass ``exclude_test_files=True`` explicitly;
+    in that mode, the BFS rejects paths whose intermediate hops
+    cross a test file (endpoints are the consumer's responsibility).
+    """
+    from collections import deque
+
+    idx = _get_or_build_index(
+        inventory, exclude_test_files=exclude_test_files,
+    )
+    if isinstance(target, ExternalFunction):
+        aliased = idx.qualified_to_internal.get(target.qualified_name)
+        if aliased is not None:
+            target = aliased
+    if source == target:
+        return (source,)
+
+    visited: Dict[FunctionId, Tuple[FunctionId, ...]] = {source: (source,)}
+    queue: "deque[Tuple[FunctionId, int]]" = deque([(source, 0)])
+    while queue:
+        node, depth = queue.popleft()
+        if depth >= max_depth:
+            continue
+        if not isinstance(node, InternalFunction):
+            continue
+        for callee in idx.forward.get(node, set()):
+            if callee in visited:
+                continue
+            chain = visited[node] + (callee,)
+            if callee == target:
+                if exclude_test_files:
+                    intermediate_in_test = any(
+                        isinstance(s, InternalFunction)
+                        and s.file_path in idx.test_paths
+                        for s in chain[1:-1]
+                    )
+                    if intermediate_in_test:
+                        # Reject this chain as evidence — but don't
+                        # mark target visited (a different chain
+                        # via a non-test path may still reach it).
+                        # Don't enqueue target either: it has no
+                        # outgoing edges we'd want to walk.
+                        continue
+                return chain
+            # Same logic for intermediates: paths whose body crosses
+            # a test-file function shouldn't be propagated further
+            # under exclude_test_files=True. Otherwise we explore
+            # them and only filter at the endpoint, which can prune
+            # a clean sibling path that happened to be discovered
+            # through the same intermediate.
+            if exclude_test_files and isinstance(callee, InternalFunction) \
+                    and callee.file_path in idx.test_paths:
+                continue
+            visited[callee] = chain
+            queue.append((callee, depth + 1))
+    return None
+
+
+def _closure_sort_key(fn: FunctionId) -> Tuple:
+    """Stable order across mixed Internal+External: Internal first by
+    (path, name, line); External after by qualified_name. Use a
+    tuple-with-discriminant so heterogeneous comparison works."""
+    if isinstance(fn, InternalFunction):
+        return (0, fn.file_path, fn.name, fn.line, "")
+    return (1, "", "", 0, fn.qualified_name)
+
+
 __all__ = [
     "CallersResult",
     "CalleesResult",
+    "ClosureResult",
     "ExternalFunction",
     "FunctionId",
     "InternalFunction",
@@ -992,5 +1288,8 @@ __all__ = [
     "Verdict",
     "callees_of",
     "callers_of",
+    "forward_closure",
     "function_called",
+    "reverse_closure",
+    "shortest_path",
 ]
