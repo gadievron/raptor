@@ -457,14 +457,44 @@ class ProjectManager:
 
         The symlink is the single source of truth for project state.
         Uses atomic create-temp-then-rename to avoid TOCTOU races.
+
+        Per-process tmp-link name + name validation: pre-fix the
+        tmp link was a fixed `.active.tmp`, so two concurrent
+        `set_active` calls (rare but possible: two parallel
+        `/project use X` invocations, or a CLI race with a hook
+        fire) collided on the same tmp path. Each call's
+        `tmp_link.unlink(missing_ok=True)` then
+        `tmp_link.symlink_to(...)` lost the race — the second
+        caller's symlink_to would EEXIST against the first's
+        symlink in the gap between unlink and symlink_to,
+        crashing the second caller. Or worse, if both passed
+        their unlinks, both succeeded at symlink_to (different
+        targets), and `os.rename` was last-writer-wins with no
+        signal which name "won".
+
+        Suffix the tmp link with the PID so concurrent callers
+        each get their own tmp slot. The final `os.rename` is
+        still atomic and last-writer-wins — that's expected
+        semantics for "set the active project" — but the
+        intermediate setup no longer races.
+
+        Also validate `name` to refuse path traversal /
+        directory-separator injection. Pre-fix `name` flowed
+        straight into `f"{name}.json"` symlink target —
+        `name="../../../etc/passwd"` would create a symlink
+        pointing outside the projects dir. The existing
+        `_validate_name` covers project create / load; mirror
+        it here for the symlink target.
         """
         import os
+        if name is not None:
+            self._validate_name(name)
         active_link = self.projects_dir / ".active"
         auto_marker = self.projects_dir / ".auto"
         auto_marker.unlink(missing_ok=True)
         if name is not None:
-            # Atomic swap: create temp symlink then rename over the active link
-            tmp_link = self.projects_dir / ".active.tmp"
+            # Per-process tmp slot — see docstring.
+            tmp_link = self.projects_dir / f".active.tmp.{os.getpid()}"
             tmp_link.unlink(missing_ok=True)
             tmp_link.symlink_to(f"{name}.json")
             os.rename(str(tmp_link), str(active_link))
