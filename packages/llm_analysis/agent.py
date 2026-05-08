@@ -1235,6 +1235,20 @@ class AutonomousSecurityAgentV2:
         report_file = self.out_dir / "autonomous_analysis_report.json"
         save_json(report_file, report)
 
+        # Emit a coverage record from the annotations tree, so
+        # ``raptor-coverage-summary`` picks them up as reviewed
+        # functions. Best-effort — coverage record failures should
+        # not break the analysis report.
+        try:
+            from core.coverage.record import (
+                build_from_annotations, write_record,
+            )
+            ann_record = build_from_annotations(self.out_dir / "annotations")
+            if ann_record:
+                write_record(self.out_dir, ann_record, tool_name="annotations")
+        except Exception:
+            logger.debug("annotation coverage record failed", exc_info=True)
+
         if is_prep_only:
             logger.debug(f"Prep complete: {len(unique_findings)} findings")
         else:

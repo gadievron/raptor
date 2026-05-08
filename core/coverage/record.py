@@ -229,6 +229,62 @@ def build_from_findings(findings_path: Path, reads_manifest_path: Path = None,
     return record
 
 
+def build_from_annotations(annotations_dir: Path) -> Optional[Dict[str, Any]]:
+    """Build a coverage record from a tree of annotation .md files.
+
+    Every annotated function counts as "examined" for coverage purposes:
+    operator manual review and LLM analysis both produce a finished
+    record about the function. ``status=clean`` annotations are the
+    cleanest signal but any annotation is sufficient evidence — the
+    function was looked at.
+
+    Args:
+        annotations_dir: Directory containing the annotation tree
+            (typically ``<run_output_dir>/annotations``).
+
+    Returns:
+        Coverage record dict, or None if the directory doesn't exist
+        or contains no annotations.
+    """
+    annotations_dir = Path(annotations_dir)
+    if not annotations_dir.exists():
+        return None
+    # Local import — avoid circular dependency with packages that
+    # use coverage records.
+    from core.annotations import iter_all_annotations
+
+    files = set()
+    functions: List[Dict[str, str]] = []
+    seen = set()
+    statuses: Dict[str, int] = {}
+    sources: Dict[str, int] = {}
+    for ann in iter_all_annotations(annotations_dir):
+        if ann.file:
+            files.add(ann.file)
+        key = (ann.file, ann.function)
+        if key in seen:
+            continue
+        seen.add(key)
+        functions.append({"file": ann.file, "function": ann.function})
+        st = ann.metadata.get("status")
+        if st:
+            statuses[st] = statuses.get(st, 0) + 1
+        src = ann.metadata.get("source")
+        if src:
+            sources[src] = sources.get(src, 0) + 1
+    if not files and not functions:
+        return None
+    return {
+        "tool": "annotations",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "files_examined": sorted(files),
+        "functions_analysed": functions,
+        # Annotation-specific extension (readers ignore unknown keys).
+        "annotation_statuses": statuses,
+        "annotation_sources": sources,
+    }
+
+
 def write_record(run_dir: Path, record: Dict[str, Any],
                  tool_name: str = None) -> Path:
     """Write a coverage record to the run directory.

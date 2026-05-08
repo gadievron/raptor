@@ -442,4 +442,19 @@ def synthesise_from_understand_output(
             trace, trace_id, base_dir, checklist, repo_root, counts,
         )
 
+    # Emit a coverage record so ``raptor-coverage-summary`` picks
+    # up the annotated functions as reviewed. Best-effort.
+    if counts.emitted > 0:
+        try:
+            from core.coverage.record import (
+                build_from_annotations, write_record,
+            )
+            record = build_from_annotations(base_dir)
+            if record:
+                write_record(output_dir, record, tool_name="annotations")
+        except Exception:
+            logger.debug(
+                "annotation coverage record failed", exc_info=True,
+            )
+
     return counts

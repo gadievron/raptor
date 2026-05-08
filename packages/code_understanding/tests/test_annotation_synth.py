@@ -362,6 +362,31 @@ class TestEdgeCases:
         assert counts.emitted == 0
 
 
+class TestCoverageRecordWireIn:
+    """The synth writes a ``coverage-annotations.json`` record after
+    emitting annotations, so ``raptor-coverage-summary`` can pick
+    them up as reviewed functions."""
+
+    def test_writes_coverage_record_when_emit_succeeds(self, understand_run):
+        repo, out = understand_run
+        _make_context_map(out)
+        synthesise_from_understand_output(out)
+        record_path = out / "coverage-annotations.json"
+        assert record_path.exists(), (
+            "synth must write coverage-annotations.json"
+        )
+        import json
+        record = json.loads(record_path.read_text())
+        assert record["tool"] == "annotations"
+        assert len(record["functions_analysed"]) > 0
+
+    def test_no_record_when_no_emits(self, understand_run):
+        """Empty run (no JSON inputs) must not leave a stale record."""
+        repo, out = understand_run
+        synthesise_from_understand_output(out)
+        assert not (out / "coverage-annotations.json").exists()
+
+
 class TestRespectManual:
     def test_skips_manual_annotation(self, understand_run):
         repo, out = understand_run
