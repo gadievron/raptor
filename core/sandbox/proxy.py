@@ -478,7 +478,22 @@ class EgressProxy:
             daemon=True,
         )
         self._thread.start()
-        self._ready.wait()
+        # Bound the readiness wait. Pre-fix `self._ready.wait()` was
+        # unbounded — if the proxy thread crashed before reaching the
+        # `self._ready.set()` call AND before assigning to
+        # `_start_error` (race window between thread start and the
+        # first listening-socket bind), the caller would block forever
+        # holding the singleton lock that wraps `EgressProxy.start()`.
+        # Every subsequent sandbox acquire would then block waiting
+        # for the same lock — operator saw "everything hung after
+        # /scan started". 30s is well above any realistic
+        # asyncio-loop-startup latency on a busy host (sub-second in
+        # practice).
+        if not self._ready.wait(timeout=30.0):
+            raise RuntimeError(
+                "egress proxy did not become ready within 30s "
+                "(thread may have crashed before signalling)"
+            )
         if self._start_error is not None:
             raise RuntimeError(
                 f"egress proxy failed to start: {self._start_error}"
