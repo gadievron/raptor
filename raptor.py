@@ -38,6 +38,7 @@ Examples:
 """
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -145,10 +146,32 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
         try:
             from core.sage.hooks import store_scan_results
             import json
-            # Try to find and store SARIF results
-            # rglob matches both top-level and nested files; the older
-            # glob("*") + glob("**/*") form double-counted top-level files.
-            sarif_files = sorted({p for p in out_dir.rglob("*.sarif")})
+            # Try to find and store SARIF results.
+            # `os.walk(followlinks=False)` instead of `Path.rglob`:
+            # rglob follows symlinks under Python <3.13. A scanner
+            # that drops a stray symlink into out_dir (some tools'
+            # caches link to /tmp paths that themselves get cleaned
+            # mid-run, leaving dangling symlinks) would either hang
+            # the SARIF discovery in a loop or escape out of the
+            # out_dir entirely and pick up an unrelated SARIF file
+            # from somewhere else on the filesystem.
+            sarif_files = []
+            seen_sarif = set()
+            for dirpath, _dirnames, filenames in os.walk(
+                str(out_dir), followlinks=False
+            ):
+                for fname in filenames:
+                    if not fname.endswith(".sarif"):
+                        continue
+                    fpath = Path(dirpath) / fname
+                    if fpath.is_symlink():
+                        continue
+                    key = str(fpath.resolve())
+                    if key in seen_sarif:
+                        continue
+                    seen_sarif.add(key)
+                    sarif_files.append(fpath)
+            sarif_files.sort()
             findings = []
             for sf in sarif_files:
                 try:
