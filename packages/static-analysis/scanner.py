@@ -518,10 +518,16 @@ def run_codeql(repo_path: Path, out_dir: Path, languages):
             stderr_tail = (se or "").strip()
             if len(stderr_tail) > 2000:
                 stderr_tail = "..." + stderr_tail[-2000:]
+            # `RaptorLogger.warning(message, **kwargs)` accepts ONLY
+            # a single message arg (no printf-style varargs like
+            # stdlib `logging.Logger.warning`). Pre-fix the call
+            # passed positional substitution args and raised
+            # `TypeError: warning() takes 2 positional arguments
+            # but 5 were given`. Pre-format via f-string.
+            _stderr_disp = stderr_tail or "<empty>"
             logger.warning(
-                "codeql database create failed for language %s "
-                "(rc=%d). Last stderr: %s",
-                lang, rc, stderr_tail or "<empty>",
+                f"codeql database create failed for language {lang} "
+                f"(rc={rc}). Last stderr: {_stderr_disp}"
             )
             continue
         # Queries — same `--threads=0` for parallel query

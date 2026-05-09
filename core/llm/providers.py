@@ -1137,12 +1137,18 @@ class OpenAICompatibleProvider(LLMProvider):
                 args = json.loads(tc.function.arguments)
             except (TypeError, ValueError) as _arg_exc:
                 _raw = str(getattr(tc.function, "arguments", ""))[:400]
+                _name = getattr(tc.function, "name", "?")
+                _tcid = getattr(tc, "id", "?")
+                # `RaptorLogger.warning(message, **kwargs)` accepts
+                # ONLY a single message arg (no printf-style varargs
+                # like stdlib `logging.Logger.warning`). Pre-fix the
+                # call passed positional substitution args and raised
+                # `TypeError: warning() takes 2 positional arguments
+                # but 6 were given`. Pre-format via f-string instead.
                 logger.warning(
-                    "OpenAI-compat tool-call arguments unparseable for "
-                    "tool=%r (id=%r): %s. Raw: %r",
-                    getattr(tc.function, "name", "?"),
-                    getattr(tc, "id", "?"),
-                    _arg_exc, _raw,
+                    f"OpenAI-compat tool-call arguments unparseable for "
+                    f"tool={_name!r} (id={_tcid!r}): {_arg_exc}. "
+                    f"Raw: {_raw!r}"
                 )
                 args = {}
             out_blocks.append(ToolCall(
