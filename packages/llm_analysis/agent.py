@@ -314,12 +314,30 @@ def convert_validated_to_agent_format(data: dict) -> List[Dict[str, Any]]:
     except ImportError:
         pass
     converted = []
+    # Pre-fix the exclusion sets here had drifted from
+    # core/schema_constants.py:
+    #
+    #   * `f.status in ("ruled_out", "disproven")` — fine.
+    #   * `f.final_status in ("ruled_out", "confirmed_blocked")`
+    #     — MISSED `disproven` (Stage B disqualifier outcome,
+    #     which can land in final_status from upstream
+    #     orchestrator wiring).
+    #
+    # Findings with `final_status="disproven"` then leaked
+    # into the exploit / patch / report consumers as
+    # warnings, even though they had been actively disproven
+    # by Stage B. Operators saw "warning: this disproven
+    # finding..." in reports.
+    #
+    # Add `disproven` to the exclusion set. Symmetric with
+    # the `f.status` check above which already covers it.
+    _SKIP_FINAL_STATUSES = ("ruled_out", "confirmed_blocked", "disproven")
     for raw in data.get("findings", []):
         f = Finding.from_dict(raw)
         # Check both status and final_status for exclusion
         if f.status in ("ruled_out", "disproven"):
             continue
-        if f.final_status in ("ruled_out", "confirmed_blocked"):
+        if f.final_status in _SKIP_FINAL_STATUSES:
             continue
         if f.feasibility.verdict == "unlikely":
             continue
