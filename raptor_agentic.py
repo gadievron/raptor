@@ -373,11 +373,24 @@ Examples:
     parser.add_argument(
         "--deep-validate",
         action="store_true",
-        help="Opt into Tier 2 / Tier 3 of IRIS validation: when Tier 1 is "
-             "inconclusive, ask the LLM to write source+sink predicates and "
-             "retry on compile errors. Costs LLM tokens; without this flag "
-             "Tier 1's free signal is the only validation. Implies dataflow "
-             "validation is enabled (see --no-validate-dataflow to opt out).",
+        help="Force-enable Tier 2 / Tier 3 of IRIS validation for ALL "
+             "findings: when Tier 1 is inconclusive, ask the LLM to write "
+             "source+sink predicates and retry on compile errors. Costs LLM "
+             "tokens. Implies dataflow validation is enabled (see "
+             "--no-validate-dataflow to opt out). Without this flag, Tier 2/3 "
+             "auto-enables per-finding when the LLM emits `path_conditions` "
+             "(usage-driven default — only spends tokens on findings the LLM "
+             "thinks it can SMT-check); pass --no-deep-validate to disable "
+             "even that auto-enable path.",
+    )
+    parser.add_argument(
+        "--no-deep-validate",
+        action="store_true",
+        help="Hard kill-switch: disable Tier 2 / Tier 3 entirely, including "
+             "the default usage-driven auto-enable on findings where the LLM "
+             "emitted `path_conditions`. Use when budget pressure is acute or "
+             "when bisecting whether deep-validate is responsible for a "
+             "verdict change. Takes precedence over --deep-validate.",
     )
     parser.add_argument(
         "--deep-validate-budget",
@@ -1116,6 +1129,7 @@ Examples:
                 accept_weakened_defenses=args.accept_weakened_defenses,
                 dataflow_validation_enabled=not getattr(args, "no_validate_dataflow", False),
                 deep_validate=getattr(args, "deep_validate", False),
+                deep_validate_disabled=getattr(args, "no_deep_validate", False),
                 deep_validate_budget=getattr(args, "deep_validate_budget", 0.60),
             )
         else:

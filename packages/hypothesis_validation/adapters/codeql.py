@@ -231,8 +231,23 @@ class CodeQLAdapter(ToolAdapter):
             from core.config import RaptorConfig
             env = RaptorConfig.get_safe_env()
 
+        # `output=` grants write access to the database directory.
+        # CodeQL writes to `<db>/<lang>/default/cache/` (the IMB
+        # cache: pages/, predicates/, relations/, .lock) during
+        # `database analyze`. With `target=` alone the sandbox
+        # only grants read access — codeql then fails to acquire
+        # `cache/.lock` with a misleading FileNotFoundException
+        # masking the underlying EACCES from the Java NIO layer.
+        # Symptom: "[prebuilt] Running queries. … A fatal error
+        # occurred: Error acquiring the IMB cache lock at path
+        # …/cache/.lock (eventual cause: FileNotFoundException
+        # …/cache/.lock)" on a database that demonstrably exists
+        # on disk with a writable cache subdir.
         runner = (
-            make_sandbox_runner(target=self._database_path)
+            make_sandbox_runner(
+                target=self._database_path,
+                output=self._database_path,
+            )
             if self._sandbox else subprocess.run
         )
 
@@ -363,8 +378,14 @@ class CodeQLAdapter(ToolAdapter):
                 query_file.write_text(rule)
                 qlpack.write_text(_qlpack_yaml(rule))
 
+                # See note in run_prebuilt_query — `output=` is
+                # required so codeql can write to its IMB cache
+                # under `<db>/<lang>/default/cache/`.
                 runner = (
-                    make_sandbox_runner(target=self._database_path)
+                    make_sandbox_runner(
+                        target=self._database_path,
+                        output=self._database_path,
+                    )
                     if self._sandbox else subprocess.run
                 )
 

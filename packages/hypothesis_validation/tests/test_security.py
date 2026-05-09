@@ -455,3 +455,83 @@ class TestCodeQLTimeoutDefault:
         with patch("subprocess.run", side_effect=fake_run):
             a.run("import cpp\nselect 1\n", tmp_path, timeout=900)
         assert captured["timeout"] == 900
+
+
+class TestCodeQLSandboxGrantsCacheWriteAccess:
+    """The CodeQL adapter must grant write access to the database
+    directory so codeql can update its IMB cache during `database
+    analyze`. With target= alone the sandbox grants read-only and
+    codeql fails to acquire `<db>/<lang>/default/cache/.lock` with
+    a misleading FileNotFoundException masking the underlying
+    EACCES.
+    """
+
+    def _spy_sandbox_runner(self):
+        """Build a patched make_sandbox_runner that records its kwargs."""
+        captured = []
+        def spy(*args, **kwargs):
+            captured.append(kwargs)
+            # Return a runner that pretends the codeql call failed
+            # cheaply — the test only cares about the sandbox kwargs.
+            def runner(cmd, **rkwargs):
+                return MagicMock(returncode=2, stdout="", stderr="stub fail")
+            return runner
+        return spy, captured
+
+    def test_run_prebuilt_query_passes_output_for_cache_write(self, tmp_path):
+        db = tmp_path / "db"
+        db.mkdir()
+        query = tmp_path / "q.ql"
+        query.write_text("import cpp\nselect 1\n")
+
+        a = CodeQLAdapter(
+            database_path=db, codeql_bin="/usr/bin/codeql", sandbox=True,
+        )
+        spy, captured = self._spy_sandbox_runner()
+        with patch(
+            "packages.hypothesis_validation.adapters.codeql.make_sandbox_runner",
+            side_effect=spy,
+        ):
+            a.run_prebuilt_query(query, tmp_path)
+
+        # At least one make_sandbox_runner call must have been made
+        # with output= set to the database path. The first call is
+        # for `pack install` (which doesn't strictly need cache
+        # write) but `database analyze` MUST have it — assert the
+        # last call (the actual analyze) passes both kwargs.
+        assert captured, "make_sandbox_runner was never invoked"
+        analyze_call = captured[-1]
+        assert analyze_call.get("target") == db, (
+            f"target= not set to db path; saw {analyze_call.get('target')!r}"
+        )
+        assert analyze_call.get("output") == db, (
+            f"output= not set to db path — codeql cannot write its "
+            f"IMB cache; saw {analyze_call.get('output')!r}"
+        )
+
+    def test_run_passes_output_for_cache_write(self, tmp_path):
+        """Same fix needed in the LLM-generated-query path
+        (CodeQLAdapter.run), which builds a temp pack and calls
+        analyze on it. Same EACCES symptom otherwise."""
+        db = tmp_path / "db"
+        db.mkdir()
+
+        a = CodeQLAdapter(
+            database_path=db, codeql_bin="/usr/bin/codeql", sandbox=True,
+        )
+        spy, captured = self._spy_sandbox_runner()
+        with patch(
+            "packages.hypothesis_validation.adapters.codeql.make_sandbox_runner",
+            side_effect=spy,
+        ):
+            a.run("import cpp\nselect 1\n", tmp_path)
+
+        assert captured, "make_sandbox_runner was never invoked"
+        # The run() path makes one call (covers both pack install
+        # and analyze inside the same TemporaryDirectory context).
+        analyze_call = captured[-1]
+        assert analyze_call.get("target") == db
+        assert analyze_call.get("output") == db, (
+            f"output= not set to db path — codeql cannot write its "
+            f"IMB cache; saw {analyze_call.get('output')!r}"
+        )

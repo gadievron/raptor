@@ -285,6 +285,7 @@ def orchestrate(
     accept_weakened_defenses: bool = False,
     dataflow_validation_enabled: bool = True,
     deep_validate: bool = False,
+    deep_validate_disabled: bool = False,
     deep_validate_budget: float = 0.60,
 ) -> Optional[Dict[str, Any]]:
     """Orchestrate vulnerability analysis via external LLM or Claude Code.
@@ -728,6 +729,7 @@ def orchestrate(
             cross_family_resolver=_resolve_cross_family_checker,
             budget_threshold=deep_validate_budget,
             deep_validate=deep_validate,
+            deep_validate_disabled=deep_validate_disabled,
         )
         if validation_metrics is None:
             logger.info("dataflow validation skipped: mode/db unavailable")

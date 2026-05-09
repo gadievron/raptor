@@ -345,6 +345,7 @@ def validate_dataflow_claims(
     budget_threshold: float = DEFAULT_BUDGET_THRESHOLD,
     progress_callback: Optional[Callable[[str], None]] = None,
     deep_validate: bool = False,
+    deep_validate_disabled: bool = False,
 ) -> Dict[str, Any]:
     """Validate LLM dataflow claims via hypothesis_validation + CodeQL.
 
@@ -396,6 +397,15 @@ def validate_dataflow_claims(
         "n_skipped_no_db_for_language": 0,
         "n_stale_db_warnings": 0,
         "skipped_reason": "",
+        # Usage-driven deep_validate counter — present-with-zero is
+        # meaningfully distinct from absent. If the operator passed
+        # --no-deep-validate we'll see 0 here (and then they can
+        # confirm the gate respected their opt-out); if they passed
+        # --deep-validate we'll see 0 here (auto-gate didn't fire
+        # because the explicit flag took precedence); on a default
+        # run a non-zero count means the LLM's path_conditions
+        # output enabled Tier 2/3 for that many findings.
+        "n_deep_validate_auto_enabled": 0,
     }
 
     # Master kill-switch — bail before doing any work.
@@ -512,10 +522,40 @@ def validate_dataflow_claims(
         if progress_callback:
             progress_callback(f"Validating dataflow for {fid}")
 
+        # Usage-driven deep_validate gate. The operator's choice
+        # forms a tri-state:
+        #   --no-deep-validate    → never (opt-out, hard kill)
+        #   --deep-validate       → always (opt-in, force-on)
+        #   neither (default)     → auto: enable for THIS finding
+        #                            iff the LLM emitted
+        #                            `path_conditions`, since Tier 4
+        #                            SMT only runs after Tier 1+
+        #                            produces something to refine
+        #                            and Tier 2/3 is the LLM-backed
+        #                            path that produces it when
+        #                            Tier 1's prebuilt query is
+        #                            inconclusive. Without this
+        #                            auto-gate, default-flag runs
+        #                            silently make the entire Tier
+        #                            4 + path_conditions investment
+        #                            unreachable.
+        if deep_validate_disabled:
+            effective_deep_validate = False
+        elif deep_validate:
+            effective_deep_validate = True
+        else:
+            nested_dv = (analysis or {}).get("dataflow_validation") or {}
+            effective_deep_validate = bool(
+                nested_dv.get("path_conditions")
+                or (analysis or {}).get("path_conditions")
+            )
+            if effective_deep_validate:
+                metrics["n_deep_validate_auto_enabled"] += 1
+
         try:
             result, tier_used = _validate_one_hypothesis(
                 hypothesis, finding, adapter, llm_client,
-                deep_validate=deep_validate,
+                deep_validate=effective_deep_validate,
             )
         except Exception as e:  # never let a single validation crash the loop
             logger.warning(
@@ -544,16 +584,23 @@ def validate_dataflow_claims(
         # of all-zeros could be either "LLM never populates" or "LLM
         # populates but SMT always returns no_check"; very different
         # remediations.
+        # The setdefault calls live OUTSIDE the cond_present gate
+        # so the counters are always present in the metrics dict
+        # (with value 0 when nothing populated). Without that, an
+        # absent counter is ambiguous between "code path never ran"
+        # and "code path ran, found nothing" — different
+        # remediations. Tier 1/2/3 counters above use the same
+        # always-init-then-conditional-increment pattern.
+        metrics.setdefault("n_path_conditions_populated", 0)
+        metrics.setdefault("path_conditions_by_cwe", {})
         nested_dv = (analysis or {}).get("dataflow_validation") or {}
         cond_present = bool(
             nested_dv.get("path_conditions")
             or (analysis or {}).get("path_conditions")
         )
         if cond_present:
-            metrics.setdefault("n_path_conditions_populated", 0)
             metrics["n_path_conditions_populated"] += 1
             cwe = (finding.get("cwe_id") or "").upper().strip() or "UNKNOWN"
-            metrics.setdefault("path_conditions_by_cwe", {})
             metrics["path_conditions_by_cwe"][cwe] = (
                 metrics["path_conditions_by_cwe"].get(cwe, 0) + 1
             )
@@ -567,11 +614,14 @@ def validate_dataflow_claims(
         # downgrades `confirmed` → `refuted` on SMT alone — when CodeQL
         # and SMT disagree the more conservative CodeQL signal wins
         # (logged as a disagreement metric for offline review).
+        # Same always-init pattern as the path_conditions counters
+        # above: present-with-zero is meaningfully distinct from
+        # absent.
+        metrics.setdefault("n_tier4_smt_refuted", 0)
+        metrics.setdefault("n_tier4_smt_witness", 0)
+        metrics.setdefault("n_tier4_smt_disagree", 0)
         result, smt_outcome = _tier4_smt_refine(result, finding, analysis)
         if smt_outcome and smt_outcome != "no_check":
-            metrics.setdefault("n_tier4_smt_refuted", 0)
-            metrics.setdefault("n_tier4_smt_witness", 0)
-            metrics.setdefault("n_tier4_smt_disagree", 0)
             if smt_outcome == "smt_refuted":
                 metrics["n_tier4_smt_refuted"] += 1
             elif smt_outcome == "smt_witness":
@@ -2046,6 +2096,7 @@ def run_validation_pass(
     progress_callback: Optional[Callable[[str], None]] = None,
     budget_threshold: float = DEFAULT_BUDGET_THRESHOLD,
     deep_validate: bool = False,
+    deep_validate_disabled: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Orchestrator-side hook: discover DB, pick model, run the pass.
 
@@ -2118,6 +2169,7 @@ def run_validation_pass(
         budget_threshold=budget_threshold,
         progress_callback=progress_callback,
         deep_validate=deep_validate,
+        deep_validate_disabled=deep_validate_disabled,
     )
 
 

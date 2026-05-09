@@ -3020,33 +3020,37 @@ class TestPathConditionsTelemetry:
         """Simulate enough of validate_dataflow_claims to exercise the
         per-finding path_conditions counting without needing a full
         CodeQL adapter / hypothesis stack. Returns the metrics dict.
+
+        Mirrors production: counters are ALWAYS initialised so 0 is
+        observable (and meaningfully distinct from absent — "code
+        path didn't run" vs "code path ran, found nothing").
         """
-        # Simplest path: directly construct the metrics dict the
-        # production code builds, then run the same per-finding
-        # accumulator the production loop runs.
-        from packages.llm_analysis import dataflow_validation as mod
         metrics = {}
         for fid, analysis in results_by_id.items():
             finding = {"finding_id": fid, "cwe_id": analysis.get("cwe_id", "")}
+            metrics.setdefault("n_path_conditions_populated", 0)
+            metrics.setdefault("path_conditions_by_cwe", {})
             nested_dv = (analysis or {}).get("dataflow_validation") or {}
             cond_present = bool(
                 nested_dv.get("path_conditions")
                 or (analysis or {}).get("path_conditions")
             )
             if cond_present:
-                metrics.setdefault("n_path_conditions_populated", 0)
                 metrics["n_path_conditions_populated"] += 1
                 cwe = (finding.get("cwe_id") or "").upper().strip() or "UNKNOWN"
-                metrics.setdefault("path_conditions_by_cwe", {})
                 metrics["path_conditions_by_cwe"][cwe] = (
                     metrics["path_conditions_by_cwe"].get(cwe, 0) + 1
                 )
         return metrics
 
-    def test_no_findings_with_conditions_no_telemetry(self):
+    def test_no_findings_with_conditions_zero_count(self):
         m = self._mock_orchestrator_loop({"f1": {"cwe_id": "CWE-79"}})
-        assert "n_path_conditions_populated" not in m
-        assert "path_conditions_by_cwe" not in m
+        # Counter present with value 0 — meaningfully distinct from
+        # absent. An "absent" counter would mean the code path never
+        # ran (operator can't tell the LLM is failing to populate vs
+        # validation never reached the per-finding loop).
+        assert m["n_path_conditions_populated"] == 0
+        assert m["path_conditions_by_cwe"] == {}
 
     def test_top_level_path_conditions_counted(self):
         m = self._mock_orchestrator_loop({
@@ -3072,7 +3076,8 @@ class TestPathConditionsTelemetry:
         m = self._mock_orchestrator_loop({
             "f1": {"cwe_id": "CWE-190", "path_conditions": []},
         })
-        assert "n_path_conditions_populated" not in m
+        assert m["n_path_conditions_populated"] == 0
+        assert m["path_conditions_by_cwe"] == {}
 
     def test_cwe_breakdown_aggregates(self):
         m = self._mock_orchestrator_loop({
@@ -3090,3 +3095,70 @@ class TestPathConditionsTelemetry:
         })
         assert m["n_path_conditions_populated"] == 1
         assert m["path_conditions_by_cwe"] == {"UNKNOWN": 1}
+
+
+class TestUsageDrivenDeepValidate:
+    """When neither --deep-validate nor --no-deep-validate is set,
+    Tier 2/3 auto-enables on the per-finding path_conditions signal.
+    Tri-state precedence: disabled > forced-on > auto."""
+
+    def _decide(self, *, analysis, deep_validate=False, deep_validate_disabled=False):
+        """Mirror the production decision logic."""
+        if deep_validate_disabled:
+            return False
+        if deep_validate:
+            return True
+        nested_dv = (analysis or {}).get("dataflow_validation") or {}
+        return bool(
+            nested_dv.get("path_conditions")
+            or (analysis or {}).get("path_conditions")
+        )
+
+    def test_disabled_overrides_forced_on(self):
+        """--no-deep-validate is the hard kill switch — wins even
+        against --deep-validate (operator's most-recent intent)."""
+        analysis = {"path_conditions": ["x > 1"]}
+        assert self._decide(
+            analysis=analysis,
+            deep_validate=True,
+            deep_validate_disabled=True,
+        ) is False
+
+    def test_forced_on_ignores_path_conditions(self):
+        """--deep-validate enables Tier 2/3 even when the LLM
+        didn't emit path_conditions."""
+        assert self._decide(
+            analysis={"cwe_id": "CWE-79"},
+            deep_validate=True,
+        ) is True
+
+    def test_auto_enables_when_path_conditions_present(self):
+        """The default-flags case: LLM emitted path_conditions →
+        auto-enable Tier 2/3 for THIS finding."""
+        assert self._decide(
+            analysis={"path_conditions": ["x > 1"]},
+        ) is True
+
+    def test_auto_enables_on_nested_path_conditions(self):
+        """Either top-level or nested-under-dataflow_validation
+        triggers auto-enable."""
+        assert self._decide(
+            analysis={
+                "dataflow_validation": {"path_conditions": ["i < n"]},
+            },
+        ) is True
+
+    def test_default_skips_when_no_path_conditions(self):
+        """Default-flags + no path_conditions → Tier 2/3 stays off
+        (the legacy behavior that prompted this work — tokens are
+        only spent when there's a reason)."""
+        assert self._decide(
+            analysis={"cwe_id": "CWE-79"},
+        ) is False
+
+    def test_empty_list_does_not_enable(self):
+        """`path_conditions: []` is "no applicable conditions" not
+        "extracted some" — auto-enable should NOT fire."""
+        assert self._decide(
+            analysis={"path_conditions": []},
+        ) is False
