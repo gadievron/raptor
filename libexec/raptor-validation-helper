@@ -240,6 +240,20 @@ def _apply_stage_file(workdir, stage_letter):
         save_json(findings_path, container)
         print(f"  Merged stage-{stage_letter.lower()}.json: {applied} findings updated")
 
+    # Emit per-function annotations for stages that have a wired
+    # mapping (Stage A produces verdicts, Stage B refines with
+    # hypothesis + proximity). Best-effort — annotation failures
+    # never break the stage merge.
+    try:
+        from packages.exploitability_validation.annotation_emit import (
+            emit_stage_annotations,
+        )
+        n = emit_stage_annotations(Path(workdir), stage_letter)
+        if n > 0:
+            print(f"  Annotations emitted: {n} (per-function review trail)")
+    except Exception:
+        pass
+
     # Delete the stage file. Guard the unlink — pre-fix
     # `stage_path.unlink()` raised `FileNotFoundError` if the
     # file disappeared between the read above and here (rare
