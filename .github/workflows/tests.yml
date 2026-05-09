@@ -82,7 +82,7 @@ jobs:
       prompt_audit: ${{ steps.filter.outputs.prompt_audit }}
       force_full: ${{ steps.force.outputs.force_full }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
 
       - id: force
         env:
@@ -156,15 +156,15 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # was v3
         with:
           enable-cache: true
           cache-dependency-glob: "requirements*.txt"
@@ -179,7 +179,7 @@ jobs:
         run: test -d "$VENV_PATH" || (echo "venv missing at $VENV_PATH" && exit 1)
 
       - name: Upload venv for this run
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # was v7
         with:
           name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}
@@ -207,15 +207,15 @@ jobs:
         group: [1, 2]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Download venv artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # was v7
         with:
           name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}
@@ -278,15 +278,15 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Download venv artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # was v7
         with:
           name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}
@@ -316,15 +316,15 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Download venv artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # was v7
         with:
           name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}
@@ -355,10 +355,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
