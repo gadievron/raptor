@@ -7,7 +7,10 @@ quarantined). Used by agent.py (external LLM path) and orchestrator.py
 for the broader design.
 """
 
-from typing import Any, Dict, Optional
+import logging
+from typing import Any, Dict, Iterable, Optional
+
+logger = logging.getLogger(__name__)
 
 from core.security.prompt_envelope import (
     ModelDefenseProfile,
@@ -112,6 +115,66 @@ def _format_metadata_for_block(metadata: Dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def _build_strategy_block(
+    *,
+    file_path: str,
+    function_name: str,
+    cwe_id: Optional[str],
+    file_includes: Iterable[str],
+    function_calls_made: Iterable[str],
+) -> str:
+    """Render the matching CWE-strategy guidance for the analysis prompt.
+
+    Returns a markdown block to append to the system prompt, or empty
+    string when no strategy fires (the picker still returns ``general``
+    by default; the empty case here covers loader / picker failures
+    only — best-effort).
+
+    Strategy guidance is operator-curated YAML, trusted content. It
+    goes in the system message, not the user envelope.
+    """
+    try:
+        from core.llm.cwe_strategies import (
+            pick_strategies,
+            render_strategies,
+        )
+    except Exception:
+        # Substrate not present (older deployments); skip silently.
+        return ""
+
+    candidate_cwes = []
+    if cwe_id:
+        candidate_cwes.append(cwe_id)
+
+    try:
+        picked = pick_strategies(
+            file_path=file_path or "",
+            function_name=function_name or "",
+            file_includes=tuple(file_includes),
+            function_calls_made=tuple(function_calls_made),
+            candidate_cwes=tuple(candidate_cwes),
+            max_strategies=3,
+        )
+        if not picked:
+            return ""
+        rendered = render_strategies(picked)
+    except Exception as e:
+        # Best-effort — analysis must continue even if strategy
+        # rendering fails for an exotic input.
+        logger.debug(f"strategy block render failed: {e}", exc_info=True)
+        return ""
+
+    return (
+        "## Bug-class lenses for this review\n"
+        "\n"
+        "The following review strategies match this finding's "
+        "context. Apply their key questions and worked examples as "
+        "lenses while reasoning through Stages A–D above.\n"
+        "\n"
+        f"{rendered}"
+    )
+
+
 def build_analysis_prompt_bundle(
     *,
     rule_id: str,
@@ -130,6 +193,10 @@ def build_analysis_prompt_bundle(
     repo_path: Optional[str] = None,
     profile: Optional[ModelDefenseProfile] = None,
     extra_blocks: tuple[UntrustedBlock, ...] = (),
+    cwe_id: Optional[str] = None,
+    function_name: Optional[str] = None,
+    file_includes: Iterable[str] = (),
+    function_calls_made: Iterable[str] = (),
 ) -> PromptBundle:
     """Build the analysis prompt as a PromptBundle (system + user, role-separated).
 
@@ -150,6 +217,21 @@ def build_analysis_prompt_bundle(
         + "\n\n"
         + ANALYSIS_TASK_INSTRUCTIONS
     )
+
+    # Append CWE-specialised review strategies when context allows.
+    # Each strategy contributes its key questions, prompt addendum,
+    # and 1-2 worked CVE exemplars — primes reasoning depth for the
+    # bug class without prescribing a checklist. Empty when the
+    # picker can't find a non-trivial match (e.g. unknown extension).
+    strategy_block = _build_strategy_block(
+        file_path=file_path,
+        function_name=function_name or "",
+        cwe_id=cwe_id,
+        file_includes=tuple(file_includes),
+        function_calls_made=tuple(function_calls_made),
+    )
+    if strategy_block:
+        system += "\n\n" + strategy_block
 
     blocks: list[UntrustedBlock] = []
 
@@ -380,6 +462,7 @@ def build_analysis_prompt_bundle_from_finding(
 ) -> PromptBundle:
     """Bundle-shape equivalent of ``build_analysis_prompt_from_finding``."""
     dataflow = finding.get("dataflow", {})
+    metadata = finding.get("metadata") or {}
     return build_analysis_prompt_bundle(
         rule_id=finding.get("rule_id", "unknown"),
         level=finding.get("level", "warning"),
@@ -393,8 +476,18 @@ def build_analysis_prompt_bundle_from_finding(
         dataflow_source=dataflow.get("source") if dataflow else None,
         dataflow_sink=dataflow.get("sink") if dataflow else None,
         dataflow_steps=dataflow.get("steps") if dataflow else None,
-        metadata=finding.get("metadata"),
+        metadata=metadata,
         repo_path=finding.get("repo_path"),
         profile=profile,
         extra_blocks=extra_blocks,
+        # Strategy picker inputs — pull what we have from finding +
+        # inventory-enriched metadata. Missing fields just lower the
+        # picker's signal; the CWE pin (heavy-weighted) usually
+        # carries on its own when ``cwe_id`` is set.
+        cwe_id=finding.get("cwe_id"),
+        function_name=metadata.get("name") or finding.get("function") or "",
+        file_includes=metadata.get("includes") or (),
+        function_calls_made=(
+            metadata.get("calls") or metadata.get("callees") or ()
+        ),
     )
