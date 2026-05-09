@@ -115,6 +115,46 @@ PROJECT_SAMPLES: List[ProjectSample] = [
         repo_url="https://github.com/rails/rails.git",
         git_ref="v7.1.2", license_spdx="MIT",
     ),
+    # ---- Older-pinned siblings ----------------------------------------
+    # The recent-pin set above produces a corpus dominated by 2024+ CVEs
+    # that haven't accrued exploit signals yet (KEV / EDB / MSF / PoC
+    # all lag CVE disclosure by months-to-years). Validation against
+    # the recent-only corpus on 2026-05-09 found only 7/343 findings
+    # with any exploit signal — a structural ceiling that capped top-20
+    # precision at 7/20 = 0.35 even with optimal weights.
+    #
+    # These older-pin siblings carry well-known, long-disclosed CVEs in
+    # their dep trees (jQuery 1.x family, Rails 5.x, Django 2.2.x,
+    # Spring Boot 2.1, etc.) — the historic CVE pool that exploit
+    # databases have caught up on. Every entry here is an explicit
+    # OLD-version pin to a project we already cover at HEAD; we keep
+    # both so the corpus reflects "what gets scanned in CI today" AND
+    # "what scoring did when the CVEs were exploit-rich".
+    ProjectSample(
+        name="django-2.2", ecosystem="PyPI",
+        repo_url="https://github.com/django/django.git",
+        git_ref="2.2.20", license_spdx="BSD-3-Clause",
+    ),
+    ProjectSample(
+        name="rails-5.2", ecosystem="RubyGems",
+        repo_url="https://github.com/rails/rails.git",
+        git_ref="v5.2.0", license_spdx="MIT",
+    ),
+    ProjectSample(
+        name="spring-boot-2.1", ecosystem="Maven",
+        repo_url="https://github.com/spring-projects/spring-boot.git",
+        git_ref="v2.1.0.RELEASE", license_spdx="Apache-2.0",
+    ),
+    ProjectSample(
+        name="express-3", ecosystem="npm",
+        repo_url="https://github.com/expressjs/express.git",
+        git_ref="3.21.2", license_spdx="MIT",
+    ),
+    ProjectSample(
+        name="lodash-4.17.4", ecosystem="npm",
+        repo_url="https://github.com/lodash/lodash.git",
+        git_ref="4.17.4", license_spdx="MIT",
+    ),
 ]
 
 
