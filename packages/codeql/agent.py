@@ -34,6 +34,38 @@ from packages.codeql.query_runner import QueryRunner, QueryResult
 logger = get_logger()
 
 
+# Operator-friendly language name aliases. Operators reach for the
+# obvious string ("c", "c++", "js", "ts", "c#"); CodeQL's canonical
+# names are different ("cpp" for both C and C++, "javascript",
+# "typescript", "csharp"). Without normalisation, `--languages c`
+# silently falls through every detector branch (build_detector
+# gates on "cpp", _detect_build_params only handles "cpp"/"java")
+# and ends in no-build mode → autobuild.sh exits 1 → "no usable
+# CodeQL DB" with no actionable diagnostic. Normalise once at the
+# entry point so every downstream consumer sees the canonical name.
+_LANGUAGE_ALIASES = {
+    "c": "cpp",
+    "c++": "cpp",
+    "cxx": "cpp",
+    "cc": "cpp",
+    "js": "javascript",
+    "ts": "typescript",
+    "cs": "csharp",
+    "c#": "csharp",
+    "kt": "kotlin",
+    "py": "python",
+}
+
+
+def _normalise_language(name: str) -> str:
+    """Map operator-friendly aliases to CodeQL canonical names.
+
+    Case-insensitive; unknown names pass through unchanged so the
+    downstream "unsupported language" diagnostic still fires.
+    """
+    return _LANGUAGE_ALIASES.get(name.strip().lower(), name.strip().lower())
+
+
 @dataclass
 class CodeQLWorkflowResult:
     """Complete workflow result."""
@@ -191,9 +223,23 @@ class CodeQLAgent:
             logger.info(f"{'=' * 70}")
 
             if languages:
-                logger.info(f"Using specified languages: {', '.join(languages)}")
+                # Normalise operator-friendly aliases (c→cpp, js→
+                # javascript, c#→csharp, …) before they propagate to
+                # build_detector / _detect_build_params, both of
+                # which only know the canonical CodeQL names. Log
+                # the original list so the operator can see what
+                # they typed; downstream messages use the canonical
+                # form.
+                normalised = [_normalise_language(lang) for lang in languages]
+                if normalised != [lang.strip().lower() for lang in languages]:
+                    logger.info(
+                        f"Using specified languages: {', '.join(languages)} "
+                        f"(canonical: {', '.join(normalised)})"
+                    )
+                else:
+                    logger.info(f"Using specified languages: {', '.join(normalised)}")
                 detected = {}
-                for lang in languages:
+                for lang in normalised:
                     # Create minimal LanguageInfo for specified languages
                     detected[lang] = LanguageInfo(
                         language=lang,
@@ -207,6 +253,22 @@ class CodeQLAgent:
                 logger.info("Auto-detecting languages...")
                 detected = self.language_detector.detect_languages(min_files=min_files)
                 detected = self.language_detector.filter_codeql_supported(detected)
+
+                # Small-target retry. The default min_files=3 is a
+                # noise floor for monorepos but a footgun on tiny
+                # targets (single-file fixtures, minimal repros) —
+                # the detector sees the file, classifies it, then
+                # silently filters it out. If the first pass
+                # returns empty, drop the floor to 1 and warn so
+                # the operator knows we widened the criterion.
+                if not detected and min_files > 1:
+                    logger.warning(
+                        f"No languages met min_files={min_files} threshold; "
+                        f"retrying with min_files=1 (small target — single-file "
+                        f"fixtures and minimal repros land here)"
+                    )
+                    detected = self.language_detector.detect_languages(min_files=1)
+                    detected = self.language_detector.filter_codeql_supported(detected)
 
             if not detected:
                 error = "No CodeQL-supported languages detected"
