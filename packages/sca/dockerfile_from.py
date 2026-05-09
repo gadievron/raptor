@@ -203,6 +203,60 @@ def _extract_image_token(args: str) -> Optional[str]:
     return None
 
 
+# Hostnames that are deliberately unresolvable — test-stub registries
+# (used in fixture YAMLs to ensure the parser handles syntax without
+# making real registry calls), example-domain placeholders, and
+# obvious "fill-this-in" hostnames.
+_UNRESOLVABLE_HOSTS = frozenset({
+    "fake.docker.io", "fake.io",
+    "example.com", "example.org",
+    "your.registry.com", "your-registry.com",
+})
+
+
+def _is_unresolvable_image_ref(image: str) -> bool:
+    """True for image refs that cannot be resolved against any
+    real registry — saves the OCI client an HTTP round-trip plus
+    its full retry budget (up to 383s per fetch).
+
+    Covers four categories:
+
+      1. Helm template placeholders: ``{{ .Values.global.hub }}``,
+         ``{{$.Values.image}}`` etc. Common in ``charts/*/values.yaml``
+         and the rendered manifest examples shipped alongside.
+      2. Env-substitution syntax: ``docker.io/istio/base:${BASE_VERSION}``,
+         ``${IMAGE}``. Only resolvable at deploy time after CI
+         substitutes; we have no way to materialise it.
+      3. Test-stub hostnames: ``fake.docker.io/...``,
+         ``example.com/...``. Deliberately unreachable in the
+         fixture data.
+      4. Bare empty / whitespace-only refs.
+
+    Conservative — when in doubt, NOT unresolvable (let the OCI
+    client decide). False negatives produce extra HTTP calls;
+    false positives silently drop legitimate refs.
+    """
+    if not isinstance(image, str):
+        return True
+    s = image.strip()
+    if not s:
+        return True
+    # Helm template placeholder anywhere in the ref. ``{{`` covers
+    # both bare placeholders and refs like
+    # ``{{ .Values.image.repository }}:{{ .Values.image.tag }}``.
+    if "{{" in s or "}}" in s:
+        return True
+    # Env-substitution anywhere — even partial like
+    # ``istio/base:${BASE_VERSION}`` is unresolvable.
+    if "${" in s:
+        return True
+    # Test-stub hostname (host segment ends at first ``/`` or ``:``).
+    host = s.split("/", 1)[0].split(":", 1)[0].lower()
+    if host in _UNRESOLVABLE_HOSTS:
+        return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Image SBOM fetch
 # ---------------------------------------------------------------------------
@@ -806,8 +860,18 @@ def scan_image_sources(
     fetches the SBOM exactly once).
     """
     refs = find_all_image_refs(target)
-    if not refs:
+    # Drop image refs we can't resolve at parse time — Helm template
+    # placeholders, env-substitution syntax, and known-test-stub
+    # hostnames. Pre-filtering here saves the per-image registry
+    # round-trip (and its retry budget — up to 383s per fetch under
+    # the default backoff schedule when a registry returns 5xx/429).
+    # On the istio-1.4 corpus sample this drops scan wall-clock from
+    # ~9 minutes to under 2 (16+ Helm refs were generating 401/429
+    # storms against docker.io).
+    filtered_refs = [r for r in refs if not _is_unresolvable_image_ref(r.image)]
+    if not filtered_refs:
         return []
+    refs = filtered_refs
 
     if client is None:
         from core.http import default_client

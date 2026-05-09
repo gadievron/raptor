@@ -492,3 +492,90 @@ def test_scan_dockerfiles_distroless_yields_no_deps(tmp_path):
     )
     deps = scan_dockerfiles(tmp_path, client=client)
     assert deps == []
+
+
+# ---------------------------------------------------------------------------
+# _is_unresolvable_image_ref — pre-fetch filter (istio-1.4 perf fix)
+# ---------------------------------------------------------------------------
+
+
+def test_unresolvable_image_helm_template():
+    from packages.sca.dockerfile_from import _is_unresolvable_image_ref
+    assert _is_unresolvable_image_ref("{{ .Values.global.hub }}")
+    assert _is_unresolvable_image_ref("{{$.Values.image}}")
+    assert _is_unresolvable_image_ref(
+        "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+    )
+
+
+def test_unresolvable_image_env_substitution():
+    from packages.sca.dockerfile_from import _is_unresolvable_image_ref
+    assert _is_unresolvable_image_ref("${IMAGE}")
+    assert _is_unresolvable_image_ref(
+        "docker.io/istio/base:${BASE_VERSION}"
+    )
+
+
+def test_unresolvable_image_test_stub_hosts():
+    from packages.sca.dockerfile_from import _is_unresolvable_image_ref
+    assert _is_unresolvable_image_ref("fake.docker.io/repo:tag")
+    assert _is_unresolvable_image_ref("example.com/myimage:1.0")
+    assert _is_unresolvable_image_ref("FAKE.DOCKER.IO/x")
+
+
+def test_unresolvable_image_empty_or_whitespace():
+    from packages.sca.dockerfile_from import _is_unresolvable_image_ref
+    assert _is_unresolvable_image_ref("")
+    assert _is_unresolvable_image_ref("   ")
+    assert _is_unresolvable_image_ref(None)  # type: ignore[arg-type]
+
+
+def test_resolvable_image_real_refs():
+    """Real registry refs must NOT be flagged unresolvable."""
+    from packages.sca.dockerfile_from import _is_unresolvable_image_ref
+    for img in [
+        "alpine",
+        "alpine:3.18",
+        "docker.io/library/postgres:16",
+        "gcr.io/distroless/static:latest",
+        "registry.k8s.io/pause:3.9",
+        "ghcr.io/owner/repo:v1.2",
+    ]:
+        assert not _is_unresolvable_image_ref(img), img
+
+
+def test_scan_image_sources_skips_unresolvable_refs(tmp_path):
+    """Helm-template + ${VAR} + test-stub-host refs must NOT reach
+    the OCI client. This is the istio-1.4 perf fix — 16+ Helm
+    placeholders in istio's deployment YAMLs were generating
+    retry-storm 401/429s against docker.io."""
+    (tmp_path / "deploy.yaml").write_text(
+        "apiVersion: apps/v1\n"
+        "kind: Deployment\n"
+        "metadata: {name: x}\n"
+        "spec:\n"
+        "  template:\n"
+        "    spec:\n"
+        "      containers:\n"
+        "        - name: a\n"
+        "          image: '{{ .Values.global.hub }}/x:latest'\n"
+        "        - name: b\n"
+        "          image: docker.io/istio/proxy:${VERSION}\n"
+        "        - name: c\n"
+        "          image: fake.docker.io/test:tag\n"
+    )
+    fetched: list = []
+
+    class _RecordingClient:
+        def fetch_manifest(self, ref, reference=None):
+            fetched.append(ref)
+            raise AssertionError(
+                f"OCI client must not be invoked for {ref!r}"
+            )
+
+    from packages.sca.dockerfile_from import scan_image_sources
+    deps = scan_image_sources(tmp_path, client=_RecordingClient())
+    assert deps == []
+    assert fetched == [], (
+        f"OCI client invoked for filtered refs: {fetched}"
+    )
