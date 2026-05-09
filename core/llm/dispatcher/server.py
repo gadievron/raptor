@@ -397,9 +397,22 @@ def _short(token: str) -> str:
 
 
 _PROVIDER_FROM_PATH_PREFIX = {
-    "/anthropic/": "anthropic",
-    "/openai/":    "openai",
-    "/gemini/":    "gemini",
+    "/anthropic/":    "anthropic",
+    "/openai/":       "openai",
+    "/gemini/":       "gemini",
+    # OpenAI-compatible aggregators + ecosystem providers added in
+    # Phase C-β. Each routes by the same prefix shape; the rule's
+    # ``upstream_base_url`` decides where the request actually goes.
+    "/mistral/":      "mistral",
+    "/groq/":         "groq",
+    "/together/":     "together",
+    "/openrouter/":   "openrouter",
+    "/fireworks/":    "fireworks",
+    "/deepinfra/":    "deepinfra",
+    "/perplexity/":   "perplexity",
+    "/cohere/":       "cohere",
+    "/replicate/":    "replicate",
+    "/azure_openai/": "azure_openai",
 }
 
 
