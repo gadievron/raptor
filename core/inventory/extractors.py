@@ -990,17 +990,46 @@ def _extract_globals_ts(root_node, language: str) -> List[CodeItem]:
         if child.type not in target_types:
             continue
 
-        # Only top-level declarations (not inside functions/classes)
-        name = _global_name(child, language)
-        if name:
-            globals_found.append(CodeItem(
-                name=name,
-                kind=KIND_GLOBAL,
-                line_start=child.start_point[0] + 1,
-                line_end=child.end_point[0] + 1,
-            ))
+        # Only top-level declarations (not inside functions/classes).
+        # Emit ONE CodeItem per spec for languages that allow grouped
+        # declarations. Pre-fix `_global_name` returned a single
+        # name even for `var ( a int; b string; c bool )` — only
+        # `a` made it into the inventory; `b`, `c` were silently
+        # dropped. `_global_names` (plural) yields every name in
+        # the declaration. Falls back to the single-name path for
+        # languages where multi-spec isn't a thing.
+        names = _global_names(child, language)
+        for name in names:
+            if name:
+                globals_found.append(CodeItem(
+                    name=name,
+                    kind=KIND_GLOBAL,
+                    line_start=child.start_point[0] + 1,
+                    line_end=child.end_point[0] + 1,
+                ))
 
     return globals_found
+
+
+def _global_names(node, language: str):
+    """Yield every global name in a declaration node.
+
+    Most languages only declare one global per node — for those, the
+    legacy `_global_name` single-result is fine. Go's `var ( ... )`
+    and `const ( ... )` blocks declare multiple specs in a single
+    syntactic node; this helper yields every spec's name.
+    """
+    if language == "go":
+        for child in node.children:
+            if child.type == "var_spec" or child.type == "const_spec":
+                for sub in child.children:
+                    if sub.type == "identifier":
+                        yield sub.text.decode()
+        return
+    # Other languages: defer to the single-name function.
+    name = _global_name(node, language)
+    if name:
+        yield name
 
 
 def _global_name(node, language: str) -> Optional[str]:
