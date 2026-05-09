@@ -397,7 +397,18 @@ class JavaExtractor:
     Missing without tree-sitter: annotations (@RequestMapping etc).
     """
 
+    # `((?:public|private|protected|static|\s)+)` — `\s` is in the
+    # alternation AND repeated, so a long whitespace run before any
+    # method-shaped tail must be backtracked one space at a time on a
+    # failed match. Combined with the `(?:throws\s+[\w,\s]+)?` tail
+    # also consuming `\s`, a degenerate Java line like
+    # `"public " + " " * 50000 + ";\n"` (no trailing `{`) hits the
+    # backtracking. Cap line length before regex match. Real Java
+    # method headers are well under 8 KB; 16 KB leaves headroom for
+    # generated annotations / generics-heavy signatures while
+    # refusing pathological input.
     PATTERN = r'((?:public|private|protected|static|\s)+)([\w<>\[\]]+)\s+(\w+)\s*\(([^)]*)\)\s*(?:throws\s+[\w,\s]+)?\s*\{'
+    _MAX_JAVA_LINE = 16 * 1024
 
     def extract(self, filepath: str, content: str) -> List[FunctionInfo]:
         functions = []
@@ -408,6 +419,11 @@ class JavaExtractor:
             class_match = re.search(r'class\s+(\w+)', line)
             if class_match:
                 current_class = class_match.group(1)
+
+            # Cap line length before regex match — see PATTERN comment
+            # for the ReDoS rationale.
+            if len(line) > self._MAX_JAVA_LINE:
+                continue
 
             match = re.search(self.PATTERN, line)
             if match:
