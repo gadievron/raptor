@@ -221,8 +221,30 @@ def build_from_findings(findings_path: Path, reads_manifest_path: Path = None,
     read_files = set()
     if reads_manifest_path and reads_manifest_path.exists():
         try:
+            # Hold a shared flock during the read so an in-flight
+            # writer (the PostToolUse hook in plugins/coverage/) can't
+            # interleave a partial line into our buffered iteration.
+            # Pre-fix the reader iterated line-by-line without any
+            # lock — a writer's append occurring between the kernel
+            # buffer-fill and our newline-split would surface as a
+            # torn final line in the iteration. The hook side already
+            # serialises appends via flock LOCK_EX on the same path;
+            # taking LOCK_SH here completes the reader-writer
+            # coordination. fcntl.flock is non-fatal: on platforms
+            # without flock (Windows; raptor doesn't really support
+            # them but the import is best-effort) we fall back to
+            # unlocked read.
+            try:
+                import fcntl as _fcntl
+            except ImportError:
+                _fcntl = None
             with open(reads_manifest_path, "r", encoding="utf-8",
                       errors="replace") as f:
+                if _fcntl is not None:
+                    try:
+                        _fcntl.flock(f, _fcntl.LOCK_SH)
+                    except OSError:
+                        pass
                 bytes_read = 0
                 for line in f:
                     bytes_read += len(line)
@@ -241,6 +263,7 @@ def build_from_findings(findings_path: Path, reads_manifest_path: Path = None,
                     line = line.rstrip("\r\n")
                     if line:
                         read_files.add(line)
+                # The flock releases when the file is closed.
         except OSError:
             pass
 
