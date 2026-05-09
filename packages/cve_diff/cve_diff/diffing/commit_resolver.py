@@ -20,6 +20,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.git import get_safe_git_env
+# Per-invocation `-c` overrides defend against hostile per-repo
+# `.git/config` entries (core.fsmonitor RCE family) that env vars
+# CAN'T suppress. See `core.git.clone.safe_git_command` docstring.
+from core.git.clone import safe_git_command
 
 from cve_diff.core.exceptions import IdenticalCommitsError
 from cve_diff.core.models import CommitSha
@@ -61,7 +65,7 @@ class CommitResolver:
             raise ValueError(f"Not a SHA: {commit!r}")
         try:
             completed = subprocess.run(
-                ["git", "-C", str(repo_path), "rev-parse", clean],
+                safe_git_command("-C", str(repo_path), "rev-parse", clean),
                 capture_output=True,
                 text=True,
                 check=False,
@@ -87,7 +91,7 @@ class CommitResolver:
             raise ValueError(f"Not a SHA: {commit!r}")
         try:
             completed = subprocess.run(
-                ["git", "-C", str(repo_path), "rev-parse", f"{clean}^"],
+                safe_git_command("-C", str(repo_path), "rev-parse", f"{clean}^"),
                 capture_output=True,
                 text=True,
                 check=False,
@@ -110,7 +114,10 @@ class CommitResolver:
     def _is_root_commit(repo_path: Path, sha: str) -> bool:
         try:
             result = subprocess.run(
-                ["git", "-C", str(repo_path), "rev-list", "--max-parents=0", "--all"],
+                safe_git_command(
+                    "-C", str(repo_path),
+                    "rev-list", "--max-parents=0", "--all",
+                ),
                 capture_output=True,
                 text=True,
                 check=False,

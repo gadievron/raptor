@@ -12,6 +12,7 @@ import subprocess
 from pathlib import Path
 
 from core.git import get_safe_git_env
+from core.git.clone import safe_git_command
 
 from cve_diff.core.exceptions import AnalysisError
 from cve_diff.core.models import CommitSha, DiffBundle, FileChange, RepoRef
@@ -137,7 +138,7 @@ def _show_blob(repo: Path, sha: CommitSha, path: str, timeout_s: int,
     we treat that as None, not an error.
     """
     completed = subprocess.run(
-        ["git", "-C", str(repo), "show", f"{sha}:{path}"],
+        safe_git_command("-C", str(repo), "show", f"{sha}:{path}"),
         capture_output=True, timeout=timeout_s, check=False,
         env=get_safe_git_env(),
     )

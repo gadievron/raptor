@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.git import clone_repository, fetch_commit, get_safe_git_env
+from core.git.clone import safe_git_command
 
 from cve_diff.core.exceptions import AcquisitionError
 from cve_diff.core.models import RepoRef
@@ -59,7 +60,10 @@ def _commit_exists(repo_path: Path, sha: str) -> bool:
     # dying disk) hanging the pipeline.
     try:
         completed = subprocess.run(
-            ["git", "-C", str(repo_path), "cat-file", "-e", f"{sha}^{{commit}}"],
+            safe_git_command(
+                "-C", str(repo_path),
+                "cat-file", "-e", f"{sha}^{{commit}}",
+            ),
             capture_output=True,
             check=False,
             timeout=30,
