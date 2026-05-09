@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Callable, Dict, List, Optional
 
 from core.llm.config import ModelConfig
@@ -223,6 +224,9 @@ def _build_tools(sandbox: SandboxedTools) -> List[ToolDef]:
 # ---------------------------------------------------------------------------
 
 
+_CWE_RE = re.compile(r'\bCWE-(\d{1,5})\b', re.IGNORECASE)
+
+
 def _format_user_message(traces: List[Dict[str, Any]]) -> str:
     """Build the initial user message with the trace batch.
 
@@ -230,8 +234,13 @@ def _format_user_message(traces: List[Dict[str, Any]]) -> str:
     injection in trace fields (entry-point names sourced from external
     docs, etc.) doesn't blend with operator instructions. The model is
     told upstream (system prompt) to treat content as data.
+
+    When the traces' CWE ids or function/entry/sink vocabulary maps to
+    a known cwe_strategies bug class, the operator-curated strategy
+    block is appended *after* the closing ``</traces>`` tag so the
+    model treats the lenses as trusted operator guidance.
     """
-    return (
+    base = (
         "Assess each of the following traces for reachability. Use the "
         "available tools to read code, walk call chains, and confirm "
         "or refute each path. Submit one verdict per trace via "
@@ -239,4 +248,66 @@ def _format_user_message(traces: List[Dict[str, Any]]) -> str:
         "<traces>\n"
         f"{json.dumps(traces, indent=2)}\n"
         "</traces>"
+    )
+    strategy_block = _build_strategy_block(traces)
+    if strategy_block:
+        base += "\n\n" + strategy_block
+    return base
+
+
+def _build_strategy_block(traces: List[Dict[str, Any]]) -> str:
+    """Render bug-class lenses for the trace batch, or empty if none.
+
+    Trace dicts have an open schema (``trace_id`` is the only required
+    field; everything else is producer-defined). Rather than hard-code
+    field names like ``cwe`` / ``rule_id`` that may or may not be
+    present, this serialises the whole trace list and:
+
+      * Regex-scans the serialised text for ``CWE-NNN`` ids → fed as
+        ``candidate_cwes`` to the picker (100pt pin per match).
+      * Passes the same serialised text as ``function_name`` so the
+        picker's keyword tokeniser matches function/entry/sink names
+        anywhere in the trace dicts (``mutex_lock`` →
+        ``concurrency``, ``parse`` → ``input_handling``, etc.) even
+        when no CWE id is present.
+
+    Failures (substrate ImportError, JSON serialisation failure on
+    trace dicts containing non-JSON values, picker exception, render
+    exception) return ``""`` — the trace verdict pass continues with
+    the base user message unchanged. We never block the loop on
+    strategy lookup.
+    """
+    try:
+        from core.llm.cwe_strategies import pick_strategies, render_strategies
+    except Exception:
+        return ""
+
+    try:
+        signal_text = json.dumps(traces, default=str)
+    except Exception:
+        return ""
+
+    candidate_cwes = tuple(
+        f"CWE-{m.group(1)}" for m in _CWE_RE.finditer(signal_text)
+    )
+    try:
+        picked = pick_strategies(
+            file_path="",
+            function_name=signal_text,
+            candidate_cwes=candidate_cwes,
+            max_strategies=3,
+        )
+        if not picked:
+            return ""
+        rendered = render_strategies(picked)
+    except Exception:
+        return ""
+
+    return (
+        "## Bug-class lenses for these traces\n\n"
+        "These bug-class strategies are operator-curated and apply to "
+        "the traces above. Use them as decision lenses while assessing "
+        "reachability — each strategy lists the canonical primitives, "
+        "key questions, and CVE exemplars for the bug class.\n\n"
+        + rendered
     )
