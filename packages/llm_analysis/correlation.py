@@ -141,8 +141,23 @@ def _build_clusters(
             continue
         sample_fid = fids[0]
         per_model = matrix[sample_fid]
+        # Pre-fix `list(per_model.values())[0]` was rebuilt EACH
+        # iteration of the generator. For per_model with N models,
+        # `all(... for v in per_model.values())` evaluates the
+        # `list(...)[0]` expression N times, each materialising the
+        # full values list (O(N) per call). The total cost is O(N²).
+        # On CodeQL findings with 5+ analysis models, the inner
+        # cost was tiny but it scaled poorly as RAPTOR added more
+        # multi-model support — and the dead allocation was
+        # noticeable in profiling.
+        #
+        # Hoist the reference once before the all(). dict insertion
+        # order is preserved (Python 3.7+), so `next(iter(...))`
+        # gives the same "first model" choice deterministically.
+        first_value = next(iter(per_model.values()), {})
+        first_is_exploitable = first_value.get("is_exploitable")
         models_agreed = all(
-            v.get("is_exploitable") == list(per_model.values())[0].get("is_exploitable")
+            v.get("is_exploitable") == first_is_exploitable
             for v in per_model.values()
         )
         shared_rules = set()
