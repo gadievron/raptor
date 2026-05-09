@@ -175,7 +175,18 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
             findings = []
             for sf in sarif_files:
                 try:
-                    sarif = json.loads(sf.read_text())
+                    # `encoding="utf-8-sig"` so a BOM-prefixed SARIF
+                    # file (some Windows-edited tool outputs, certain
+                    # MSBuild-emitted SARIFs, the IDE-reformatted
+                    # exports operators sometimes round-trip through)
+                    # parses cleanly. Pre-fix the bare `read_text()`
+                    # used the host locale's preferred encoding;
+                    # cp1252/latin-1 hosts mangled non-ASCII evidence,
+                    # AND a leading BOM landed at char 0 which the
+                    # JSON parser rejected with "Expecting value:
+                    # line 1 column 1 (char 0)" — no breadcrumb that
+                    # the encoding was the actual problem.
+                    sarif = json.loads(sf.read_text(encoding="utf-8-sig"))
                     for run in (sarif.get("runs") or []):
                         for result in (run.get("results") or []):
                             # Defensive locations[] guard. Pre-fix
