@@ -99,7 +99,22 @@ class RootCauseAnalyzer:
                 output_tokens=response.output_tokens,
             )
         except (KeyError, TypeError, ValueError) as exc:
-            raise AnalysisError(f"response missing required field: {exc}. got={data!r}") from exc
+            # Sanitise the LLM-supplied data dict before embedding in
+            # the exception message. The exception text is logged and
+            # surfaced to operators; the LLM controls `data` and a
+            # crafted response can include control bytes (ANSI
+            # escapes, BIDI overrides, NUL) that hijack the
+            # terminal display when the operator pipes the log into
+            # `less` or `tail`. `escape_nonprintable` turns each into
+            # a visible `\xNN` escape.
+            try:
+                from core.security.log_sanitisation import escape_nonprintable
+                _safe_data = escape_nonprintable(repr(data))
+            except Exception:  # noqa: BLE001 — defensive; fall back to bare repr
+                _safe_data = repr(data)
+            raise AnalysisError(
+                f"response missing required field: {exc}. got={_safe_data}"
+            ) from exc
 
     def _render_prompt(self, bundle: DiffBundle) -> str:
         tmpl = _load_template("root_cause.txt")
