@@ -50,18 +50,19 @@ class CostBudgetExceeded(RuntimeError):
 def _provider_for_model(model_id: str, timeout_s: float) -> LLMProvider:
     """Build a provider from a model id string.
 
-    Uses Anthropic when ANTHROPIC_API_KEY is set; falls through to other
-    providers via the standard ``create_provider`` factory.
+    Resolves provider from the model id — so ``--model gpt-5`` actually
+    calls OpenAI, ``--model gemini-2.5-pro`` calls Gemini, etc. Auth
+    layers are: ``RAPTOR_LLM_SOCKET`` (dispatcher route) → provider's
+    env var → Claude Code OAuth fallback for Anthropic models. See
+    :mod:`cve_diff.llm.auth` for the full resolution rules.
     """
-    provider_name = "anthropic"
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        provider_name = "claudecode"
-        api_key = None
+    from .auth import resolve_auth
+
+    decision = resolve_auth(model_id)
     config = ModelConfig(
-        provider=provider_name,
+        provider=decision.provider,
         model_name=model_id,
-        api_key=api_key,
+        api_key=decision.api_key,
         timeout=int(timeout_s),
     )
     return create_provider(config)

@@ -317,14 +317,19 @@ class AgentLoop:
                         pass
 
         # ---- Create the provider ----
+        # Resolves the right provider for the model id (so
+        # ``--model gpt-5`` calls OpenAI, ``--model gemini-2.5-pro``
+        # calls Gemini, etc.) and picks the auth path: dispatcher
+        # route when RAPTOR_LLM_SOCKET is set, else env-direct, else
+        # Claude Code OAuth fallback for Anthropic models. See
+        # :mod:`cve_diff.llm.auth` for the resolution rules.
         try:
-            api_key = os.environ.get("ANTHROPIC_API_KEY")
-            if not api_key:
-                raise RuntimeError("ANTHROPIC_API_KEY not set")
+            from cve_diff.llm.auth import resolve_auth
+            decision = resolve_auth(config.model_id)
             model_config = ModelConfig(
-                provider="anthropic",
+                provider=decision.provider,
                 model_name=config.model_id,
-                api_key=api_key,
+                api_key=decision.api_key,
                 timeout=int(self.timeout_s),
             )
             provider = create_provider(model_config)
@@ -336,8 +341,14 @@ class AgentLoop:
             )
 
         # ---- Build provider-specific kwargs ----
+        # ``anthropic_task_budget_*`` are Anthropic-only beta flags
+        # (Claude's task-budget feature for prompt caching / cost
+        # control). Other providers don't support them; gating on
+        # the resolved provider keeps the kwargs from leaking onto
+        # OpenAI / Gemini / aggregator paths where they'd either be
+        # silently dropped or surface as confusing errors.
         provider_kw: dict[str, Any] = {}
-        if config.enable_task_budgets:
+        if config.enable_task_budgets and decision.provider == "anthropic":
             provider_kw["anthropic_task_budget_beta"] = True
             provider_kw["anthropic_task_budget_tokens"] = config.budget_tokens
 

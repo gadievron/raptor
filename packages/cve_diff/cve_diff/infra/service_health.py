@@ -82,11 +82,40 @@ def _health_model() -> str:
 
 
 def probe_anthropic() -> HealthResult:
-    """Anthropic: 1-token message to prove reachability."""
+    """Anthropic: 1-token message to prove reachability.
+
+    Skips when no auth is available — accepts either ``ANTHROPIC_API_KEY``
+    or the dispatcher route (``RAPTOR_LLM_SOCKET`` set) as a valid
+    auth path, matching the resolution in :mod:`cve_diff.llm.auth`.
+    Other providers (Gemini, OpenAI, ...) are not probed here yet —
+    when an operator runs cve-diff with ``--model gemini-2.5-pro``
+    and no Anthropic auth, the agent loop's resolver picks Gemini
+    cleanly; this health probe is informational, not gating.
+    """
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    via_dispatcher = bool(os.environ.get("RAPTOR_LLM_SOCKET"))
+    if not api_key and not via_dispatcher:
+        # Phrasing keeps the historical "ANTHROPIC_API_KEY not set"
+        # substring so existing test fixtures + scripts grepping for
+        # it still match; the credential-isolation hint is appended
+        # so operators with a dispatcher know the alternative.
+        return HealthResult(
+            "Anthropic API", False, 0,
+            detail=(
+                "ANTHROPIC_API_KEY not set (or run with "
+                "RAPTOR_LLM_SOCKET for credential-isolation dispatcher)"
+            ),
+        )
     if not api_key:
-        return HealthResult("Anthropic API", False, 0,
-                            detail="ANTHROPIC_API_KEY not set")
+        # Dispatcher route — the API call would succeed via
+        # dispatcher-injected headers, but we can't probe upstream
+        # from this layer without setting up an httpx UDS client.
+        # Surface as healthy + dispatcher-noted so operators see
+        # auth is wired up.
+        return HealthResult(
+            "Anthropic API", True, 0,
+            detail="auth via credential-isolation dispatcher",
+        )
     start = time.monotonic()
     body = json.dumps({"model": _health_model(), "max_tokens": 1,
                        "messages": [{"role": "user", "content": "x"}]}).encode()
