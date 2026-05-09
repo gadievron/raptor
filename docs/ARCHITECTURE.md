@@ -69,7 +69,7 @@ raptor/
 ├── core/                           # Shared utilities layer
 │   ├── __init__.py
 │   ├── build/                      # Build-system detection + toolchain probes
-│   ├── config.py                   # RaptorConfig (paths, settings)
+│   ├── config/                     # RaptorConfig (paths, settings)
 │   ├── coverage/                   # Read-coverage tracking + summary
 │   ├── dockerfile/                 # Dockerfile parsing helpers (FROM/ENV)
 │   ├── git/                        # Sandbox-routed clone + URL allowlist
@@ -86,10 +86,10 @@ raptor/
 │   │   └── coverage.py             # checked_by tracking + coverage stats
 │   ├── json/                       # BOM-tolerant JSON utils + cache helpers
 │   ├── llm/                        # LLM substrate (clients, providers, scorecard, tool-use loop)
-│   ├── logging.py                  # Structured logging with JSONL audit trail
+│   ├── logging/                    # Structured logging with JSONL audit trail
 │   ├── oci/                        # OCI image-ref parsing + canonicalisation
 │   ├── orchestration/              # Pipeline orchestration helpers (understand_bridge, agentic_passes)
-│   ├── progress.py                 # Progress tracking utilities
+│   ├── progress/                   # Progress tracking utilities
 │   ├── project/                    # Project workspace mgmt (CLI, merge, clean, export, diff)
 │   ├── reporting/                  # Findings/report formatting (markdown, summary lines)
 │   ├── run/                        # Per-run lifecycle (output dir, suffixes)
@@ -97,7 +97,7 @@ raptor/
 │   ├── sandbox/                    # subprocess isolation (Landlock + seccomp + namespaces)
 │   ├── sarif/
 │   │   └── parser.py               # SARIF 2.1.0 parsing utilities
-│   ├── schema_constants.py         # Shared schema field-name constants
+│   ├── schema_constants/           # Shared schema field-name constants
 │   ├── security/                   # Prompt envelope, secret redaction, env sanitisation, cc_trust
 │   ├── smt_solver/                 # Z3-based path-feasibility (rejection, witness, csem)
 │   └── startup/                    # CLI startup banner + env validation
@@ -237,7 +237,7 @@ Provide minimal shared utilities that all packages need.
 
 ### Components
 
-#### `core/config.py` - RaptorConfig
+#### `core/config/` - RaptorConfig
 **Responsibility**: Centralized configuration management
 
 ```python
@@ -260,7 +260,7 @@ class RaptorConfig:
 - Environment variable support (RAPTOR_ROOT)
 - Graceful fallback to auto-detection
 
-#### `core/logging.py` - Structured Logging
+#### `core/logging/` - Structured Logging
 **Responsibility**: Unified logging with audit trail
 
 ```python
@@ -287,7 +287,7 @@ def get_logger(name: str = "raptor") -> logging.Logger:
 }
 ```
 
-#### `core/progress.py` - Progress Tracking
+#### `core/progress/` - Progress Tracking
 **Responsibility**: Progress bar and status tracking utilities
 
 **Features**:
