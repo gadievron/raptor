@@ -499,6 +499,32 @@ def orchestrate(
         # probed profile and intersect at the end so AnalysisTask
         # uses the common ground all models passed.
         _probed_profiles: list = []
+        # Pre-fix the loop did `if not probe_result.compatible:
+        # _probe_failed = True; break`. The break terminated the
+        # probe walk on the FIRST failure, so any later models in
+        # the list were never probed and never had their probe
+        # result recorded in `defense_telemetry`.
+        #
+        # Two consequences:
+        #
+        #   (1) Telemetry shows N=1 probe failures attributable to
+        #       the first-failed model, even though the SECOND
+        #       and THIRD models might also be incompatible. The
+        #       operator-facing scorecard then misattributes
+        #       reliability across the model fleet.
+        #
+        #   (2) The intersection of compatible profiles
+        #       (`_intersect_profiles(_probed_profiles)` below)
+        #       only sees the models BEFORE the first failure. If
+        #       the eventual decision is "accept weakened
+        #       defences", the intersected profile reflects an
+        #       incomplete picture of the model fleet's
+        #       compatibility.
+        #
+        # Run all probes, record telemetry for every model.
+        # `_probe_failed` flips True if ANY model fails (any-fail
+        # gate, same semantics as before). Only successful probes
+        # contribute to `_probed_profiles`.
         for _probe_model in _models_to_probe:
             _pname = _probe_model.model_name if hasattr(_probe_model, "model_name") else str(_probe_model)
             _pprofile = get_profile_for(_pname)
@@ -508,7 +534,9 @@ def orchestrate(
             defense_telemetry.set_probe_result(_pname, probe_result.compatible)
             if not probe_result.compatible:
                 _probe_failed = True
-                break
+                # Continue probing remaining models so each gets
+                # its own telemetry record.
+                continue
             _probed_profiles.append(_pprofile)
         # Intersect profiles for multi-model — AND every boolean
         # so any model that lacks a defence layer disables it
