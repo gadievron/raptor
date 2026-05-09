@@ -529,8 +529,19 @@ class AutonomousSecurityAgentV2:
                 logger.info("No external LLM available — skipping dataflow validation")
                 return {}
 
-            from core.llm.response_validation import validate_structured_response
+            from core.llm.response_validation import (
+                attempt_quality_retry, validate_structured_response,
+            )
             validated = validate_structured_response(raw_validation, validation_schema)
+            # Single-retry uplift: if the LLM's first response is missing
+            # required fields or had to be coerced, re-prompt with the
+            # specific problems called out. Returns the higher-quality
+            # of the two responses (original if retry didn't beat it).
+            validated = attempt_quality_retry(
+                self.llm, validated, validation_prompt, validation_schema,
+                system_prompt=system_prompt, task_type=TaskType.ANALYSE,
+                threshold=0.5,
+            )
             validation = validated.data
             if validated.quality < 0.5:
                 logger.warning(f"Low-quality dataflow validation (q={validated.quality:.2f}), incomplete: {validated.incomplete}")
@@ -658,8 +669,16 @@ class AutonomousSecurityAgentV2:
                 logger.debug("Prep mode — Phase 4 will handle analysis")
                 return False
 
-            from core.llm.response_validation import validate_structured_response
+            from core.llm.response_validation import (
+                attempt_quality_retry, validate_structured_response,
+            )
             validated = validate_structured_response(raw_analysis, analysis_schema)
+            # See validate_dataflow above for the retry rationale.
+            validated = attempt_quality_retry(
+                self.llm, validated, prompt, analysis_schema,
+                system_prompt=system_prompt, task_type=TaskType.ANALYSE,
+                threshold=0.5,
+            )
             analysis = validated.data
             if validated.quality < 0.5:
                 logger.warning(f"Low-quality LLM response (q={validated.quality:.2f}), incomplete: {validated.incomplete}")
