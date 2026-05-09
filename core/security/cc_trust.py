@@ -215,16 +215,54 @@ def _read_capped(path: Path) -> Optional[bytes]:
 
 
 def _load_json(path: Path) -> Tuple[Optional[dict], bool]:
-    """Return (data, ok). Broad except — any parse failure → fail-closed."""
+    """Return (data, ok). Broad except — any parse failure → fail-closed.
+
+    Pre-fix the bare `except Exception` swallowed everything
+    silently. cc_trust is a SECURITY-critical scanner — when a
+    settings file fails to parse, the operator should see a log
+    line saying "we treated this as unsafe because of <reason>"
+    so they can either fix the file or know the trust check is
+    being bypassed. Without the diagnostic, an operator
+    debugging "why won't /agentic dispatch CC?" had no signal
+    that the underlying cause was a malformed settings JSON.
+
+    Log at debug — fail-closed is the right default and we
+    don't want to spam warnings on every scan, but the
+    diagnostic is reachable via `--verbose` for operators
+    actively debugging.
+    """
     raw = _read_capped(path)
     if raw is None:
         return None, False
     try:
         # utf-8-sig handles a leading BOM transparently.
         data = json.loads(raw.decode("utf-8-sig"))
-    except Exception:
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        # Specific exception classes for the diagnostic.
+        # `Exception` catch-all kept below for unknown classes
+        # (Python version differences, future json variants).
+        import logging
+        logging.getLogger(__name__).debug(
+            "cc_trust._load_json: parse failure on %s — %s: %s",
+            path, type(exc).__name__, exc,
+        )
+        return None, False
+    except Exception as exc:
+        # Catch-all — log so an unexpected exception class
+        # (e.g. MemoryError on a multi-GB file that slipped
+        # past _read_capped) still produces a breadcrumb.
+        import logging
+        logging.getLogger(__name__).debug(
+            "cc_trust._load_json: unexpected failure on %s — %s: %s",
+            path, type(exc).__name__, exc,
+        )
         return None, False
     if not isinstance(data, dict):
+        import logging
+        logging.getLogger(__name__).debug(
+            "cc_trust._load_json: %s parsed but root is %s, not dict",
+            path, type(data).__name__,
+        )
         return None, False
     return data, True
 
