@@ -504,6 +504,25 @@ def run_codeql(repo_path: Path, out_dir: Path, languages):
             timeout=1800,
         )
         if rc != 0:
+            # Pre-fix this branch silently `continue`d on DB-create
+            # failure, leaving the operator with no idea why the
+            # SARIF list was short. The most common DB-create
+            # failures (missing build deps for compiled langs,
+            # source-root containing forbidden chars, codeql wheel
+            # version mismatch) produce diagnostic stderr that is
+            # actionable — but not visible.
+            #
+            # Truncate stderr to keep the log readable; codeql
+            # error output can run thousands of lines on
+            # extraction failures.
+            stderr_tail = (se or "").strip()
+            if len(stderr_tail) > 2000:
+                stderr_tail = "..." + stderr_tail[-2000:]
+            logger.warning(
+                "codeql database create failed for language %s "
+                "(rc=%d). Last stderr: %s",
+                lang, rc, stderr_tail or "<empty>",
+            )
             continue
         # Queries — same `--threads=0` for parallel query
         # execution. Quiet codeql query suites (cpp / java)
