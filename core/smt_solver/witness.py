@@ -86,12 +86,29 @@ def format_witness(
     `Mapping[str, bool]` per-decl signedness map (preferred for
     mixed-type constraint sets). See `_resolve_signedness`.
     """
+    # Collision detection on `name = str(decl)`. Z3 decls with the
+    # same name in different scopes (e.g. a constraint set that
+    # combined two parsed expressions, each with its own `x`) all
+    # stringify to `"x"` — pre-fix the second decl's value silently
+    # OVERWROTE the first in `out[name] = ...`. The model then
+    # appeared to have one variable when it really had two, and
+    # consumers comparing constraints against the witness saw the
+    # wrong value for one of them. Surface the collision via a
+    # disambiguating suffix (`x`, `x__1`, `x__2`, ...) so all values
+    # survive and the operator can see the multiplicity in the
+    # output.
     out: Dict[str, int] = {}
     for decl in model.decls():
         val = model[decl]
         if not z3.is_bv_value(val):
             continue
         name = str(decl)
+        # Disambiguate same-named decls.
+        if name in out:
+            suffix = 1
+            while f"{name}__{suffix}" in out:
+                suffix += 1
+            name = f"{name}__{suffix}"
         out[name] = bv_to_int(
             val.as_long(), val.size(), _resolve_signedness(name, signed),
         )
