@@ -840,7 +840,7 @@ def orchestrate(
         # Snapshot the cost tracker state BEFORE dispatch so we can
         # tell budget-skipped (no spend) from all-errored (spend
         # incurred but every call failed) afterwards.
-        _ct_before = cost_tracker.total_cost_usd if cost_tracker else 0.0
+        _ct_before = cost_tracker.total_cost if cost_tracker else 0.0
         dispatch_task(
             consensus_task, findings, dispatch_fn, role_resolution,
             results_by_id, cost_tracker, max_parallel,
@@ -872,7 +872,7 @@ def orchestrate(
             isinstance(r, dict) and r.get("consensus")
             for r in results_by_id.values()
         ):
-            _ct_after = cost_tracker.total_cost_usd if cost_tracker else 0.0
+            _ct_after = cost_tracker.total_cost if cost_tracker else 0.0
             if _ct_after > _ct_before:
                 consensus_all_errored = True
             else:
