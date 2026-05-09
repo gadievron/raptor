@@ -136,12 +136,27 @@ class RootCauseAnalyzer:
         )
 
 
-_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(?P<body>\{.*?\})\s*```", re.DOTALL)
+# `\{.*?\}` lazy + DOTALL on hostile input: a response containing
+# many `{`/`}` glyphs (a code-sample-heavy LLM reply, an LLM
+# hallucinating a code dump in its prose) forces the regex engine
+# to attempt every brace position. Bound the body capture to a
+# reasonable upper limit — real schema-validated JSON payloads
+# from this analyzer top out at low-KB; 1 MB body cap is a 1000x
+# safety margin. Also pre-cap the input string before the search
+# so an OOM-shaped response can't pin the matcher.
+_JSON_FENCE_RE = re.compile(
+    r"```(?:json)?\s*(?P<body>\{.{0,1048576}?\})\s*```", re.DOTALL
+)
+_JSON_FENCE_INPUT_CAP = 4 * 1024 * 1024
 
 
 def _parse_json_payload(text: str) -> dict:
     """Accept bare JSON or a fenced code block; raise AnalysisError on bad input."""
     text = text.strip()
+    if len(text) > _JSON_FENCE_INPUT_CAP:
+        # Truncate from the END (keep the head; the answer
+        # typically appears near the start of an LLM response).
+        text = text[:_JSON_FENCE_INPUT_CAP]
     m = _JSON_FENCE_RE.search(text)
     if m:
         text = m.group("body")
