@@ -37,8 +37,10 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -65,12 +67,29 @@ DENIALS_FILE = ".sandbox-denials.jsonl"
 # values together against tracer._OBSERVE_FILENAME.
 OBSERVE_FILE = ".sandbox-observe.jsonl"
 
-# Wall-clock cap on `start()`'s wait for `log stream`'s first stdout
-# line. Empirically the banner arrives in 50-200ms; a generous cap keeps
-# the wait bounded if the OS log subsystem is wedged. Generous enough
-# that a healthy `log stream` startup never trips the cap, tight enough
-# that a slow path doesn't block the entire sandbox spawn.
-_FIRST_HEARTBEAT_TIMEOUT_S = 2.0
+# Wall-clock cap on the warm-up gate in `start()`. The gate spawns a
+# synthetic `sandbox-exec` workload and waits for `log stream` to emit
+# the resulting kext deny event — that's the deterministic signal that
+# attachment to the kernel log feed is live. The warm-up exits in
+# 50-200ms on a warm `log` daemon; cold-start (first invocation in a
+# shell) runs longer. 5s is generous enough that healthy systems never
+# trip it, tight enough that a wedged log subsystem doesn't block
+# sandbox spawn indefinitely.
+_WARM_UP_TIMEOUT_S = 5.0
+
+# SBPL profile for the warm-up workload. ``(deny default (with
+# report))`` denies every operation AND emits a kext audit event for
+# each denial. The first thing the kernel does after applying the
+# profile is the loader's image-read for the target binary — that
+# generates a deny event with the warm-up's PID, which is what we
+# wait for. The workload itself never runs (exec is denied), which
+# keeps the warm-up cheap and side-effect-free.
+_WARM_UP_SBPL = "(version 1)(deny default (with report))"
+
+# Path to the system sandbox-exec binary. Resolved via shutil.which at
+# call site so a non-standard PATH (operator override) works, falling
+# back to the canonical /usr/bin location that ships with macOS.
+_SANDBOX_EXEC_FALLBACK = "/usr/bin/sandbox-exec"
 
 
 # Skip-budget delegated to core.sandbox.audit_budget.AuditBudget,
@@ -201,14 +220,23 @@ class LogStreamer:
         self._dirfd: Optional[int] = None
 
     def start(self) -> None:
-        """Spawn `log stream` filtered to sandbox kext events and
-        start the reader thread. Blocks until `log stream` emits its
-        first line (usually the "Filtering the log data..." banner
-        on stdout) or up to ``_FIRST_HEARTBEAT_TIMEOUT_S`` seconds —
-        whichever comes first. Without this wait, the caller would
-        race the subprocess startup and lose events emitted by the
-        sandboxed workload during the ~50-200ms `log stream` needs
-        to attach to the kernel log feed."""
+        """Spawn `log stream` filtered to sandbox kext events, gate
+        on a synthetic warm-up workload to confirm attachment to the
+        kernel log feed, then start the reader thread.
+
+        The warm-up runs ``sandbox-exec`` against a deny-default SBPL
+        profile and waits until ``log stream`` emits a kext record
+        whose PID matches the warm-up child. This is the deterministic
+        signal that the kernel-side filter is live — without it, fast
+        workloads (e.g. ``claude --version`` finishing in tens of ms)
+        can complete before ``log stream`` attaches, producing zero
+        captured records on cold-start.
+
+        On hosts where ``sandbox-exec`` is missing (non-Darwin or
+        stripped installs) or the warm-up times out, falls back to a
+        best-effort proceed: the streamer is started anyway, callers
+        accept that early events may be missed. Logged at debug for
+        operator triage."""
         predicate = (
             f'senderImagePath == "{SANDBOX_KEXT_SENDER}"'
         )
@@ -226,18 +254,19 @@ class LogStreamer:
             # arrive rather than accumulating in a 4K pipe buffer.
             bufsize=1,
         )
-        # Drain the first line synchronously so we know `log stream`
-        # is attached. The banner is the first thing it emits before
-        # any actual records, so this consumes a line that the reader
-        # thread doesn't need to see. Hand the banner-consumed
-        # subprocess to the reader thread; subsequent reads in the
-        # loop will be the genuine sandbox records.
         try:
-            self._await_first_heartbeat()
+            attached = self._warm_up_until_attached()
+            if not attached:
+                logger.debug(
+                    "seatbelt audit: warm-up gate did not see kext events "
+                    "from synthetic workload within %ss; proceeding in "
+                    "best-effort mode (early records from the real "
+                    "workload may be missed)",
+                    _WARM_UP_TIMEOUT_S,
+                )
         except BaseException:
-            # If the heartbeat probe fails (subprocess died, timeout),
-            # tear down the subprocess so the caller doesn't have a
-            # zombie `log stream` running with nobody reading from it.
+            # Warm-up itself raised: tear down `log stream` so caller
+            # doesn't leak a zombie subprocess with nobody reading it.
             try:
                 self._proc.terminate()
             except OSError:
@@ -246,25 +275,110 @@ class LogStreamer:
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
 
-    def _await_first_heartbeat(self) -> None:
-        """Block until the `log stream` subprocess emits its first
-        line OR the heartbeat timeout elapses. Best-effort — we don't
-        fail the streamer if the banner doesn't arrive (some `log`
-        builds emit no banner on stdout, only on stderr which we
-        DEVNULL); we cap the wait so caller isn't blocked indefinitely."""
+    def _warm_up_until_attached(self) -> bool:
+        """Spawn a synthetic ``sandbox-exec`` workload and drain
+        ``log stream`` stdout until we see a kext record from that
+        workload's PID. Returns True when attachment is confirmed,
+        False when the timeout elapsed without a matching record.
+
+        The warm-up exits on its own (the deny-default profile blocks
+        the loader's image read, so ``sandbox-exec`` returns non-zero
+        in <50ms). We never read its output — the kernel emits the
+        kext event regardless, and that's all we need.
+
+        Records consumed during the warm-up gate are intentionally
+        discarded: they belong to the warm-up's own PID or to other
+        unrelated sandboxed processes running on the host, not to
+        the real workload. The reader thread starts fresh after
+        return, so caller-relevant events flow through ``_read_loop``
+        as designed.
+        """
         import selectors as _selectors
+
+        sandbox_exec = (
+            shutil.which("sandbox-exec") or _SANDBOX_EXEC_FALLBACK
+        )
+        if not Path(sandbox_exec).exists():
+            # Non-Darwin host or stripped install — no point spawning
+            # a missing binary. Best-effort fallback applies.
+            return False
+
+        try:
+            warm_up = subprocess.Popen(
+                [
+                    sandbox_exec, "-p", _WARM_UP_SBPL,
+                    "/usr/bin/true",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            return False
+
+        target_pid = warm_up.pid
+
         assert self._proc is not None
         if self._proc.stdout is None:
-            return
+            try:
+                warm_up.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                warm_up.terminate()
+            return False
+
         sel = _selectors.DefaultSelector()
         sel.register(self._proc.stdout, _selectors.EVENT_READ)
+        deadline = time.monotonic() + _WARM_UP_TIMEOUT_S
+        seen = False
         try:
-            events = sel.select(timeout=_FIRST_HEARTBEAT_TIMEOUT_S)
-            if events:
-                # Consume one line; if stdout closed, just return.
-                self._proc.stdout.readline()
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                events = sel.select(timeout=remaining)
+                if not events:
+                    break
+                line = self._proc.stdout.readline()
+                if not line:
+                    # `log stream` died — let caller handle in
+                    # best-effort fallback.
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                msg = entry.get("eventMessage", "")
+                m = _LOG_LINE_RE.search(msg)
+                if not m:
+                    continue
+                # Group 2 is the PID per `_LOG_LINE_RE`.
+                pid_str = m.group(2)
+                try:
+                    if int(pid_str) == target_pid:
+                        seen = True
+                        break
+                except ValueError:
+                    continue
         finally:
             sel.unregister(self._proc.stdout)
+            # Reap the warm-up child. With (deny default) the exec
+            # itself is denied, so sandbox-exec exits ~immediately
+            # with non-zero. Wait briefly; terminate as a safety net.
+            try:
+                warm_up.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                try:
+                    warm_up.terminate()
+                except OSError:
+                    pass
+                try:
+                    warm_up.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    pass
+
+        return seen
 
     def _read_loop(self) -> None:
         """Read ndjson lines from `log stream`, parse, and append
