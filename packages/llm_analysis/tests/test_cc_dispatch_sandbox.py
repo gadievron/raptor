@@ -253,14 +253,20 @@ def test_live_cc_dispatch_no_unexpected_essential_traffic_denials(tmp_path):
 
     # No proxy event denied a request to api.anthropic.com — that
     # would mean our allowlist failed for the LLM endpoint itself.
+    # Exact-host equality (``==``) rather than ``.endswith`` because
+    # proxy_events records the literal CONNECT target verbatim and
+    # CodeQL's py/incomplete-url-substring-sanitization rule
+    # pattern-matches the .endswith() shape as a URL-sanitisation
+    # antipattern even when the input is a hostname field, not a URL.
     events = r.sandbox_info.get("proxy_events") or []
+    target_host = "api.anthropic.com"
     anthropic_denials = [
         e for e in events
-        if e.get("host", "").endswith("api.anthropic.com")
+        if e.get("host") == target_host
         and e.get("result", "").startswith("denied")
     ]
     assert not anthropic_denials, (
-        f"api.anthropic.com was denied — allowlist regression: "
+        f"{target_host} was denied — allowlist regression: "
         f"{anthropic_denials!r}"
     )
 
@@ -268,7 +274,7 @@ def test_live_cc_dispatch_no_unexpected_essential_traffic_denials(tmp_path):
     # the LLM call actually reached the proxy).
     anthropic_allowed = [
         e for e in events
-        if e.get("host", "").endswith("api.anthropic.com")
+        if e.get("host") == target_host
         and e.get("result") == "allowed"
     ]
     assert anthropic_allowed, (
