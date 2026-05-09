@@ -101,8 +101,36 @@ def _new_pool_manager() -> urllib3.PoolManager:
       single connection). 10 lets up to 10 in-flight per host without
       thrashing kernel resources.
     """
+    # Pre-fix `cert_reqs="CERT_REQUIRED"` enabled validation but
+    # didn't pin `ca_certs=`. urllib3 then falls back to the
+    # system bundle (or worse, a stale OS-bundled CA list on
+    # ancient minimal containers). Pin to certifi's bundle so:
+    #
+    #   * Validation always uses the latest Mozilla CA list
+    #     (certifi ships releases tracking root-store changes;
+    #     system bundles can lag months behind on minimal
+    #     containers / appliances).
+    #   * Operators on hosts with NO system CA bundle (Alpine
+    #     minimal images without ca-certificates installed)
+    #     still get TLS validation — pre-fix they got
+    #     "SSL: CERTIFICATE_VERIFY_FAILED" with no system
+    #     trust anchors.
+    #   * Pinning to the certifi-shipped bundle gives us
+    #     audit-able provenance: the cert set is whatever
+    #     `certifi.where()` returns at install time.
+    try:
+        import certifi
+        ca_certs = certifi.where()
+    except ImportError:
+        # certifi not installed (rare — it's a transitive dep
+        # of requests / urllib3-extras typically). Fall back to
+        # urllib3's default behaviour. Operator sees the
+        # CERTIFICATE_VERIFY_FAILED if the system bundle is
+        # missing; that's the right diagnostic.
+        ca_certs = None
     return urllib3.PoolManager(
         retries=False, cert_reqs="CERT_REQUIRED",
+        ca_certs=ca_certs,
         maxsize=_DEFAULT_POOL_MAXSIZE,
     )
 
