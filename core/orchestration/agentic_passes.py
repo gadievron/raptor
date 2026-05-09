@@ -514,11 +514,31 @@ def _start_lifecycle(command: str, target: Path) -> Optional[Path]:
 
     Returns the OUTPUT_DIR path on success, or None if the helper failed
     or its output couldn't be parsed.
+
+    Pre-fix the four lifecycle helpers (start/complete/fail
+    + _build_checklist) called subprocess.run WITHOUT
+    `env=`, inheriting the parent process's full
+    environment. When /agentic runs against an untrusted
+    target — operator points RAPTOR at a freshly cloned
+    OSS repo — the parent env may carry attacker-relevant
+    vars (LD_PRELOAD, PYTHONSTARTUP, BASH_ENV from a
+    poisoned dotfile, GIT_CONFIG_GLOBAL pointing at a
+    malicious config). Inheriting them into the lifecycle
+    subprocesses (which themselves invoke raptor-managed
+    bash + python) widens the trust boundary unnecessarily.
+
+    Use `RaptorConfig.get_safe_env()` (strips the
+    DANGEROUS_ENV_VARS set: LD_PRELOAD/PYTHONSTARTUP/etc.).
+    The lifecycle helpers don't depend on operator env beyond
+    PATH/HOME/USER which `get_safe_env` preserves.
     """
+    from core.config import RaptorConfig
+    safe_env = RaptorConfig.get_safe_env()
     try:
         proc = subprocess.run(
             [str(_LIFECYCLE), "start", command, "--target", str(target)],
             capture_output=True, text=True, timeout=_LIFECYCLE_TIMEOUT_S,
+            env=safe_env,
         )
     except (subprocess.TimeoutExpired, OSError) as e:
         logger.warning("lifecycle start %s failed: %s", command, e)
@@ -536,11 +556,18 @@ def _start_lifecycle(command: str, target: Path) -> Optional[Path]:
 
 
 def _complete_lifecycle(output_dir: Path) -> None:
-    """Mark a lifecycle run as completed. Best-effort; swallows errors."""
+    """Mark a lifecycle run as completed. Best-effort; swallows errors.
+
+    See `_start_lifecycle` for the env=safe_env rationale —
+    same parent-env-inheritance concern.
+    """
+    from core.config import RaptorConfig
+    safe_env = RaptorConfig.get_safe_env()
     try:
         proc = subprocess.run(
             [str(_LIFECYCLE), "complete", str(output_dir)],
             capture_output=True, text=True, timeout=_LIFECYCLE_TIMEOUT_S,
+            env=safe_env,
         )
     except (subprocess.TimeoutExpired, OSError) as e:
         logger.warning("lifecycle complete failed: %s", e)
@@ -551,13 +578,19 @@ def _complete_lifecycle(output_dir: Path) -> None:
 
 
 def _fail_lifecycle(output_dir: Path, message: str) -> None:
-    """Mark a lifecycle run as failed. Best-effort; swallows errors."""
+    """Mark a lifecycle run as failed. Best-effort; swallows errors.
+
+    See `_start_lifecycle` for the env=safe_env rationale.
+    """
     if output_dir is None:
         return
+    from core.config import RaptorConfig
+    safe_env = RaptorConfig.get_safe_env()
     try:
         proc = subprocess.run(
             [str(_LIFECYCLE), "fail", str(output_dir), message],
             capture_output=True, text=True, timeout=_LIFECYCLE_TIMEOUT_S,
+            env=safe_env,
         )
     except (subprocess.TimeoutExpired, OSError) as e:
         logger.warning("lifecycle fail failed: %s", e)
@@ -568,11 +601,17 @@ def _fail_lifecycle(output_dir: Path, message: str) -> None:
 
 
 def _build_checklist(target: Path, output_dir: Path) -> bool:
-    """Run libexec/raptor-build-checklist. Returns True on success."""
+    """Run libexec/raptor-build-checklist. Returns True on success.
+
+    See `_start_lifecycle` for the env=safe_env rationale.
+    """
+    from core.config import RaptorConfig
+    safe_env = RaptorConfig.get_safe_env()
     try:
         proc = subprocess.run(
             [str(_BUILD_CHECKLIST), str(target), str(output_dir)],
             capture_output=True, text=True, timeout=_CHECKLIST_TIMEOUT_S,
+            env=safe_env,
         )
     except (subprocess.TimeoutExpired, OSError) as e:
         logger.warning("build_checklist failed: %s", e)
