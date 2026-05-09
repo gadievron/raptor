@@ -23,9 +23,41 @@ def _check_zip_entries(infolist) -> List[str]:
     warnings: List[str] = []
     for info in infolist:
         name = info.filename
-        if name.startswith("/") or name.startswith("\\"):
+        # Pre-fix the absolute-path + traversal checks tested
+        # `name.startswith("/")` then `".." in name.split("/")`
+        # / `name.split("\\")`. Two leaks:
+        #
+        #   1. WINDOWS DRIVE LETTERS. `C:\Users\...` doesn't
+        #      start with `/` or `\\`, but on Windows `Path()
+        #      .joinpath` against an absolute drive-letter path
+        #      ANCHORS to that drive — so a zip entry named
+        #      `C:\evil\file` extracted under `output_dir`
+        #      lands at `C:\evil\file`, not `output_dir/C/evil/
+        #      file`. The traversal vector is silent on POSIX
+        #      but dangerous on Windows.
+        #
+        #   2. SEPARATOR INCONSISTENCY. The traversal check
+        #      split on `/` AND `\\` independently, so an
+        #      entry like `foo/../bar` was caught (`..` in the
+        #      `/`-split) but the path `foo\..\bar` was caught
+        #      via the `\\`-split. A MIXED-separator entry like
+        #      `foo/..\\bar` slipped through both: the `/`-split
+        #      yielded `["foo", "..\\bar"]` (no bare `..`), and
+        #      the `\\`-split yielded `["foo/..", "bar"]` (no
+        #      bare `..`). Normalise BOTH separators first then
+        #      split once.
+        #
+        # Normalise backslashes to forward slashes for the
+        # checks. Then check absolute-path on the normalised
+        # form, traversal on the normalised split, AND check
+        # for a Windows drive-letter prefix (`C:`, `c:`, etc.).
+        normalised = name.replace("\\", "/")
+        if normalised.startswith("/"):
             warnings.append(f"Absolute path: {name}")
-        if ".." in name.split("/") or ".." in name.split("\\"):
+        # Windows drive letter (e.g. `C:`, `c:`, `Z:`).
+        if len(name) >= 2 and name[0].isalpha() and name[1] == ":":
+            warnings.append(f"Windows-absolute path: {name}")
+        if ".." in normalised.split("/"):
             warnings.append(f"Path traversal: {name}")
         if info.external_attr >> 28 == 0xA:
             warnings.append(f"Symlink: {name}")
