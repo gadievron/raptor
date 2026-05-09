@@ -750,8 +750,30 @@ Examples:
         if args.languages:
             codeql_cmd.extend(["--languages", args.languages])
         if args.build_command:
-            # SECURITY: build_command is shell-evaluated. Must be operator-supplied,
-            # never derived from repo content (malicious Makefiles, etc.)
+            # SECURITY: build_command flows to `codeql database
+            # create --command <cmd>`. CodeQL splits --command on
+            # whitespace WITHOUT shell interpretation (no &&, ||,
+            # ;, | etc.), then either runs the resulting argv
+            # directly OR wraps it in a temp shell script when
+            # the operator's command needs shell semantics
+            # (handled in `database_manager._wrap_in_shell_script`
+            # — see its docstring).
+            #
+            # Pre-fix this comment said "build_command is
+            # shell-evaluated" without context. That's true for
+            # the SHELL-WRAPPED path (database_manager wraps in
+            # bash when `;`/`&&` are present) but NOT for the
+            # default direct-argv path. The misleading absolute
+            # made operators assume any shell-meta in
+            # build_command was always live, which is true for
+            # security purposes (the value MUST be operator-
+            # supplied, never repo-derived) but the runtime
+            # behaviour is more nuanced.
+            #
+            # Net: same security requirement (operator-supplied
+            # only), but the comment now reflects reality:
+            # CodeQL's own splitter is no-shell; only the
+            # explicit shell-script wrap path runs under bash.
             codeql_cmd.extend(["--build-command", args.build_command])
         if args.extended:
             codeql_cmd.append("--extended")
