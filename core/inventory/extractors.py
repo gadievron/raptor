@@ -753,6 +753,27 @@ class TreeSitterExtractor:
             if len(parts) >= 2:
                 name = parts[-1].lstrip("*")
                 ptype = " ".join(parts[:-1]).replace("  ", " ")
+        # Anonymous parameter (e.g. C `void *` with no identifier,
+        # `int(*)(void)` function-pointer typedef, or a forward-
+        # declared function whose param has only a type). Pre-fix
+        # `name` stayed as the empty string returned by the
+        # tree-sitter walk, and downstream callers stored
+        # `name=""` into the inventory's parameters list. The
+        # resulting param record looked like
+        # `{"name": "", "type": "void *"}` — call-graph lookups
+        # then string-matched on `param["name"]` and matched the
+        # empty-string param against any caller's empty-string
+        # arg position, mis-pairing references.
+        #
+        # Use a positional sentinel `_anon` so consumers can tell
+        # "anonymous" apart from "missing field" without a custom
+        # null check at every callsite. Multiple anonymous params
+        # in the same signature each get the same sentinel — that
+        # matches the C semantic (they're indistinguishable
+        # without re-emitting positional indices, which we don't
+        # do here to keep the parameter shape stable).
+        if not name and ptype:
+            name = "_anon"
         return name, ptype
 
     def _extract_return_type(self, node) -> Optional[str]:
