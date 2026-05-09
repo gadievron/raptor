@@ -66,6 +66,7 @@ def save_checklist(output_dir, data):
     In standalone mode, writes directly to output_dir/checklist.json.
     """
     import fcntl
+    import os
     from pathlib import Path
     from core.json import save_json
 
@@ -110,7 +111,23 @@ def save_checklist(output_dir, data):
     lock_path = checklist_path.with_suffix(".lock")
     lock_file = None
     try:
-        lock_file = open(lock_path, "w")
+        # `O_NOFOLLOW` to refuse a pre-existing symlink at lock_path.
+        # Pre-fix `open(lock_path, "w")` would truncate the symlink's
+        # target — an attacker (or a bizarre fixture) that plants
+        # `<dir>/.checklist.lock -> /etc/shadow` would have us truncate
+        # the target on every save_checklist call. We control the
+        # output dir but lock_path lives next to checklist.json which
+        # may sit under an operator-supplied output_dir on a shared
+        # host. ELOOP raises OSError → caught by the outer try/finally
+        # which leaves lock_file=None, so save_json never runs.
+        # Operator-visible behaviour: the save fails loudly with the
+        # OSError instead of silently mutating an unrelated file.
+        flags = (
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+        )
+        fd = os.open(lock_path, flags, 0o600)
+        lock_file = os.fdopen(fd, "w")
         fcntl.flock(lock_file, fcntl.LOCK_EX)
         save_json(checklist_path, data)
     finally:
