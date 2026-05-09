@@ -91,13 +91,31 @@ logger = logging.getLogger(__name__)
 # constructor kwargs but the defaults are deliberately conservative.
 _DEFAULT_IDLE_TIMEOUT = 300.0        # seconds of silence before forced close
 _DEFAULT_TOTAL_TIMEOUT = 3600.0      # absolute cap on a single tunnel
-# Concurrent CONNECT tunnels. 64 was the original conservative default
-# but bursty resolvers (npm install with its parallel HTTP agent +
-# keep-alive lingering) can push past it on transitively-deep manifests,
-# get refused, and stall the scan past timeout. 256 keeps the
-# resource-exhaustion ceiling tight while leaving headroom for the
-# bursts we observed in the SCA stress harness (2026-05-09).
-_DEFAULT_MAX_TUNNELS = 256
+# Concurrent CONNECT tunnels. The history of this knob:
+#
+#   64  — original conservative default. SCA stress harness on
+#         2026-05-09 hit this on bursty resolvers (npm install with
+#         its parallel HTTP agent + keep-alive lingering) → cascade
+#         of refused tunnels + retries → 14% of popular npm
+#         packages timed out at 90s.
+#   256 — first bump (#407). Helped marginally but ``npm install
+#         --maxsockets=8`` STILL bursts to ~280 concurrent tunnels
+#         because npm install via ``HTTPS_PROXY`` ignores
+#         ``--maxsockets`` (the flag caps direct fetches, not
+#         CONNECT-tunneled fetches; verified with both CLI and
+#         ``npm_config_maxsockets`` env var). Direct probe: peak 257
+#         tunnels for ``debug``, peak 298 for ``eslint``.
+#   1024 — current. Sized at ~3-4× the observed peak across the top
+#         100 npm packages so even unusually-deep trees absorb their
+#         burst without refusal. Resource-wise this is still tight
+#         (each tunnel ≈ 2 sockets + ~1 KiB state on the proxy
+#         thread; system FD limit is 524288 by default).
+#
+# Consumer note: caps below ~512 will start refusing CONNECTs from
+# real-world npm install runs against bursty manifests — set the
+# cap via the ``max_tunnels=`` constructor kwarg only when you have
+# concrete evidence of FD exhaustion at the default.
+_DEFAULT_MAX_TUNNELS = 1024
 _DEFAULT_BUFFER_SIZE = 64 * 1024     # relay buffer per direction
 
 # DNS cache TTL. Holds (expires_at, addrinfo_list) per (host, port,
