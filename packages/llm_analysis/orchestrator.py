@@ -71,13 +71,51 @@ class CostTracker:
         with self._lock:
             return self._total_cost / self._max_cost
 
+    # ---- Deprecated budget-cutoff API ----
+    #
+    # These three predicates were the early per-phase cutoff
+    # mechanism, replaced by `should_skip_phase` which lets each
+    # caller specify its OWN cutoff via `task.budget_cutoff`. No
+    # production code calls these methods anymore — only the
+    # legacy tests in `test_orchestrator.py` still hit them.
+    #
+    # Pre-fix the methods sat undocumented in the class, looking
+    # like usable API. New callers reading the class would have
+    # adopted them and silently bypassed the per-task cutoff
+    # configuration (CUTOFF_SKIP_CONSENSUS, CUTOFF_SKIP_EXPLOITS,
+    # CUTOFF_SINGLE_MODEL are HARDCODED constants — non-
+    # configurable, ignoring `--max-cost` percentages).
+    #
+    # Mark them deprecated via a DeprecationWarning so any future
+    # surprise caller surfaces. Keep the implementations intact
+    # for backwards-compat with the existing tests; remove in a
+    # follow-up batch once the tests migrate to should_skip_phase.
+
     def should_skip_consensus(self) -> bool:
+        import warnings
+        warnings.warn(
+            "should_skip_consensus is deprecated; use should_skip_phase "
+            "with task.budget_cutoff instead",
+            DeprecationWarning, stacklevel=2,
+        )
         return self._budget_ratio() >= CUTOFF_SKIP_CONSENSUS
 
     def should_skip_exploits(self) -> bool:
+        import warnings
+        warnings.warn(
+            "should_skip_exploits is deprecated; use should_skip_phase "
+            "with task.budget_cutoff instead",
+            DeprecationWarning, stacklevel=2,
+        )
         return self._budget_ratio() >= CUTOFF_SKIP_EXPLOITS
 
     def should_single_model(self) -> bool:
+        import warnings
+        warnings.warn(
+            "should_single_model is deprecated; use should_skip_phase "
+            "with task.budget_cutoff instead",
+            DeprecationWarning, stacklevel=2,
+        )
         return self._budget_ratio() >= CUTOFF_SINGLE_MODEL
 
     def should_skip_phase(self, n_calls: int, model_name: str,
