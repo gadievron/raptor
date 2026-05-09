@@ -166,3 +166,47 @@ def test_no_tier_breakdown_when_all_zero():
     assert "By tier:" not in section.content
     # No empty downgrade block
     assert "Downgrades:" not in section.content
+
+
+def test_tier4_smt_block_renders_when_outcomes_present():
+    """Tier 4 SMT outcomes (refuted / witness / disagreement) get
+    their own sub-block in the report — additive on top of the
+    Tier 1/2/3 verdict."""
+    mod = _load_agentic_module()
+    section = mod._build_dataflow_validation_report_section(
+        _full_metrics(
+            n_tier4_smt_refuted=2,
+            n_tier4_smt_witness=3,
+            n_tier4_smt_disagree=1,
+        )
+    )
+    body = section.content
+    assert "Tier 4 SMT path-feasibility refinement" in body
+    assert "Refuted (inconclusive → refuted on unsat conditions): 2" in body
+    assert "Witness attached to confirmed" in body
+    assert "3" in body  # witness count
+    assert "SMT-CodeQL disagreement" in body
+
+
+def test_tier4_smt_block_omitted_when_no_outcomes():
+    """When all Tier 4 counts are zero, no Tier 4 block at all —
+    avoids noise on runs where no findings carried path_conditions."""
+    mod = _load_agentic_module()
+    section = mod._build_dataflow_validation_report_section(_full_metrics())
+    body = section.content
+    assert "Tier 4 SMT" not in body
+
+
+def test_tier4_smt_block_partial_outcomes_only_shows_present_ones():
+    """Each Tier 4 outcome line is independently gated — a run with
+    only witnesses (no refutations / disagreements) shows just the
+    witness line."""
+    mod = _load_agentic_module()
+    section = mod._build_dataflow_validation_report_section(
+        _full_metrics(n_tier4_smt_witness=5)
+    )
+    body = section.content
+    assert "Tier 4 SMT" in body
+    assert "Witness attached" in body
+    assert "Refuted" not in body  # the standalone Tier 4 'Refuted' line
+    assert "disagreement" not in body

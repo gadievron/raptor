@@ -866,6 +866,71 @@ class AutonomousSecurityAgentV2:
             logger.debug(f"Tier 1 gate: check raised: {e}")
             return "no_check"
 
+    def _smt_pre_flight(self, vuln: VulnerabilityContext) -> str:
+        """Free SMT path-feasibility check using the LLM-extracted
+        ``path_conditions`` / ``path_profile`` fields on this finding's
+        analysis. Same shape as ``_tier1_pre_flight`` but reads SMT
+        instead of CodeQL.
+
+        Returns one of "refuted" / "confirmed" / "no_check":
+
+          "refuted"   — SMT proved the conditions mutually exclusive;
+                        the dangerous path is unreachable. Caller
+                        should skip downstream LLM cost.
+          "confirmed" — SMT found a satisfying assignment. Path is
+                        reachable; falls through to exploit gen as
+                        before. (Witness model is also recorded in
+                        the analysis dict for downstream PoC seeding
+                        in a future PR.)
+          "no_check"  — no path_conditions on the analysis OR Z3 not
+                        installed OR conditions unparseable. Same
+                        meaning as the IRIS gate's no_check: caller
+                        proceeds without information.
+
+        Never raises — any failure mode returns "no_check" so the
+        exploit pipeline is never broken by SMT issues.
+        """
+        analysis = vuln.analysis or {}
+        # Same field-precedence as Tier 4 (`_tier4_smt_refine` in
+        # dataflow_validation.py): nested deep-validation block wins
+        # over top-level analysis.
+        nested = analysis.get("dataflow_validation") or {}
+        conditions = (
+            nested.get("path_conditions")
+            or analysis.get("path_conditions")
+            or []
+        )
+        if not conditions:
+            return "no_check"
+        profile = (
+            nested.get("path_profile")
+            or analysis.get("path_profile")
+            or "uint64"
+        ).strip().lower()
+
+        try:
+            from packages.exploit_feasibility.smt_path import validate_path
+        except ImportError as e:
+            logger.debug(f"SMT pre-flight: substrate unavailable: {e}")
+            return "no_check"
+
+        try:
+            smt = validate_path(conditions, profile=profile)
+        except Exception as e:
+            logger.debug(f"SMT pre-flight: check raised: {e}")
+            return "no_check"
+
+        if not smt.get("smt_available"):
+            return "no_check"
+
+        feasible = smt.get("feasible")
+        if feasible is False:
+            return "refuted"
+        if feasible is True:
+            return "confirmed"
+        # feasible is None — Z3 timed out / all conditions unparseable.
+        return "no_check"
+
     def generate_exploit(self, vuln: VulnerabilityContext) -> bool:
 
         if not vuln.exploitable:
@@ -889,6 +954,27 @@ class AutonomousSecurityAgentV2:
             vuln.analysis["exploit_skipped_reason"] = (
                 "iris_tier1_refuted: Tier 1 LocalFlowSource query "
                 "found no path; no LLM tokens spent"
+            )
+            return False
+
+        # SMT pre-flight gate — free Z3 check using the same
+        # `path_conditions` field that /agentic --validate-dataflow
+        # Tier 4 reads. Fires only when the per-finding analysis
+        # populated path_conditions (typically CWE-190/125/787/476/191).
+        # Refute on unsat → skip exploit gen for free. Mirrors the IRIS
+        # Tier 1 gate above; same fail-open semantics (any failure
+        # → no_check → fall through).
+        smt_gate = self._smt_pre_flight(vuln)
+        if smt_gate == "refuted":
+            logger.info(
+                f"⊘ Skipping exploit generation: SMT proved path "
+                f"conditions unsatisfiable for {vuln.rule_id} at "
+                f"{vuln.file_path}:{vuln.start_line}"
+            )
+            vuln.analysis = (vuln.analysis or {})
+            vuln.analysis["exploit_skipped_reason"] = (
+                "smt_unsat: path conditions are mutually exclusive; "
+                "the dangerous path is unreachable. No LLM tokens spent."
             )
             return False
 

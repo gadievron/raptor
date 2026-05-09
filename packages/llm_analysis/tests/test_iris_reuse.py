@@ -335,6 +335,140 @@ class TestExploitGenGate:
         mock_gate.assert_not_called()
 
 
+class TestSmtPreFlight:
+    """SMT pre-flight gate runs after IRIS Tier 1 and before LLM
+    exploit generation. Reads `path_conditions` (added in this PR's
+    schema extension) from `vuln.analysis` and refutes when the
+    conditions are unsatisfiable.
+
+    Same fail-open semantics as IRIS: any failure (no conditions,
+    Z3 unavailable, parser rejection) → "no_check" → caller proceeds
+    as if the gate hadn't been there.
+    """
+
+    def _make_vuln_with_conditions(self, conditions, profile="uint64",
+                                    nested=False):
+        v = MagicMock()
+        v.exploitable = True
+        v.rule_id = "py/integer-overflow"
+        v.file_path = "src/x.py"
+        v.start_line = 10
+        v.finding = {
+            "finding_id": "F1", "tool": "semgrep",
+            "rule_id": "raptor.arith.overflow",
+            "file_path": "src/x.py", "start_line": 10, "cwe_id": "CWE-190",
+        }
+        if nested:
+            v.analysis = {"dataflow_validation": {
+                "path_conditions": conditions, "path_profile": profile,
+            }}
+        else:
+            v.analysis = {
+                "path_conditions": conditions, "path_profile": profile,
+            }
+        return v
+
+    def _agent(self, tmp_path):
+        from packages.llm_analysis.agent import AutonomousSecurityAgentV2
+        return AutonomousSecurityAgentV2(
+            repo_path=tmp_path / "repo",
+            out_dir=tmp_path / "out",
+            prep_only=True,
+        )
+
+    def test_unsat_conditions_refuted(self, tmp_path):
+        agent = self._agent(tmp_path)
+        v = self._make_vuln_with_conditions(["x > 100", "x < 5"])
+        assert agent._smt_pre_flight(v) == "refuted"
+
+    def test_sat_conditions_confirmed(self, tmp_path):
+        agent = self._agent(tmp_path)
+        v = self._make_vuln_with_conditions(["x > 10", "x < 100"])
+        assert agent._smt_pre_flight(v) == "confirmed"
+
+    def test_no_conditions_no_check(self, tmp_path):
+        """Findings without path_conditions → no_check (gate doesn't
+        opine, caller proceeds)."""
+        agent = self._agent(tmp_path)
+        v = MagicMock(); v.analysis = {}
+        assert agent._smt_pre_flight(v) == "no_check"
+
+    def test_nested_dataflow_validation_block(self, tmp_path):
+        """path_conditions can live under analysis['dataflow_validation']
+        (deep-validation output) instead of top-level analysis."""
+        agent = self._agent(tmp_path)
+        v = self._make_vuln_with_conditions(["x > 100", "x < 5"], nested=True)
+        assert agent._smt_pre_flight(v) == "refuted"
+
+    def test_unparseable_conditions_no_check(self, tmp_path):
+        """Conditions the SMT parser can't encode → feasible=None →
+        gate returns no_check (don't block, don't endorse)."""
+        agent = self._agent(tmp_path)
+        v = self._make_vuln_with_conditions(["arr[0] == 5"])  # subscript NS
+        assert agent._smt_pre_flight(v) == "no_check"
+
+    def test_bad_profile_no_check(self, tmp_path):
+        """Bad profile name shouldn't crash the exploit pipeline —
+        fall through to no_check."""
+        agent = self._agent(tmp_path)
+        v = self._make_vuln_with_conditions(["x > 1"], profile="bogus")
+        assert agent._smt_pre_flight(v) == "no_check"
+
+    def test_smt_unavailable_no_check(self, tmp_path):
+        """When the SMT substrate isn't importable, no_check (silent
+        fallthrough) — exploit gen continues blind."""
+        from packages.llm_analysis import agent as agent_mod
+        v = self._make_vuln_with_conditions(["x > 1"])
+        with patch.dict("sys.modules",
+                        {"packages.exploit_feasibility.smt_path": None}):
+            agent = self._agent(tmp_path)
+            assert agent._smt_pre_flight(v) == "no_check"
+
+    def test_refuted_skips_exploit_gen_with_smt_marker(self, tmp_path):
+        """End-to-end: SMT-refuted → generate_exploit returns False
+        and records the smt_unsat marker (distinct from iris_tier1_refuted)
+        so downstream telemetry can count which gate fired."""
+        agent = self._agent(tmp_path)
+        v = self._make_vuln_with_conditions(["x > 100", "x < 5"])
+        # IRIS gate must NOT be the one that refutes
+        with patch.object(agent, "_tier1_pre_flight", return_value="no_check"):
+            ok = agent.generate_exploit(v)
+        assert ok is False
+        marker = (v.analysis or {}).get("exploit_skipped_reason") or ""
+        assert "smt_unsat" in marker
+        assert "iris_tier1_refuted" not in marker
+
+    def test_iris_refuted_short_circuits_smt_gate(self, tmp_path):
+        """IRIS gate runs FIRST. If IRIS refutes, SMT gate must not
+        even be consulted (avoids unnecessary work)."""
+        agent = self._agent(tmp_path)
+        v = self._make_vuln_with_conditions(["x > 100", "x < 5"])
+        with patch.object(agent, "_tier1_pre_flight", return_value="refuted"), \
+             patch.object(agent, "_smt_pre_flight") as mock_smt:
+            ok = agent.generate_exploit(v)
+        assert ok is False
+        mock_smt.assert_not_called()
+        marker = (v.analysis or {}).get("exploit_skipped_reason") or ""
+        assert "iris_tier1_refuted" in marker
+
+    def test_sat_conditions_proceed_to_exploit_gen(self, tmp_path):
+        """Confirmed by SMT → falls through to exploit gen as normal."""
+        agent = self._agent(tmp_path)
+        v = self._make_vuln_with_conditions(["x > 10", "x < 100"])
+        with patch.object(agent, "_tier1_pre_flight", return_value="no_check"), \
+             patch("packages.llm_analysis.prompts.exploit.build_exploit_prompt_bundle") as mock_bundle:
+            mock_bundle.return_value = MagicMock(messages=[
+                MagicMock(role="system", content="sys"),
+                MagicMock(role="user", content="user"),
+            ])
+            agent.llm = MagicMock()
+            agent.llm.generate.return_value = None
+            agent.generate_exploit(v)
+        # No skip marker — gate did NOT block
+        marker = (v.analysis or {}).get("exploit_skipped_reason") or ""
+        assert "smt_unsat" not in marker
+
+
 # ----- /analyze (validate_dataflow) Tier 1 gate ------------------------
 
 
