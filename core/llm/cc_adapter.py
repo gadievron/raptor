@@ -112,7 +112,19 @@ def extract_envelope_metadata(envelope: dict, into: dict) -> None:
         # Sort for deterministic output (envelope dict ordering is
         # CC's choice, may vary across CC versions).
         into["analysed_by"] = ",".join(sorted(model_usage.keys()))
-    else:
+    elif "analysed_by" not in into:
+        # Pre-fix this branch unconditionally set
+        # `into["analysed_by"] = "claude-code"`, clobbering any
+        # value the CALLER had already populated (e.g. a wrapper
+        # that knows which CC sub-binary was invoked, or a
+        # multi-model-correlation context that pre-set the
+        # specific model name). The caller's specific
+        # attribution was silently overwritten with the generic
+        # "claude-code" label.
+        #
+        # Only set the generic fallback when the caller has NOT
+        # already provided a value. Honors caller intent when
+        # they have richer attribution context than the envelope.
         into["analysed_by"] = "claude-code"
     usage = envelope.get("usage", {})
     in_tokens = usage.get("input_tokens", 0) or 0
