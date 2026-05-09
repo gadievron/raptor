@@ -710,7 +710,27 @@ def bench(
             futures = {pool.submit(_run_one, cid, str(output_dir), disk_limit_pct, max_file_bytes): cid for cid in cves}
             for fut in as_completed(futures):
                 i += 1
-                r = fut.result()
+                # Catch the future's exception locally. Pre-fix
+                # `fut.result()` re-raised any worker exception
+                # (BrokenProcessPool, OSError on a pickled-result
+                # decode failure, etc.) and aborted the WHOLE
+                # `as_completed` loop — every remaining CVE was
+                # silently dropped from `summary.results`. Convert
+                # the exception into a synthetic-failure
+                # `_CveResult` so the loop continues and the bad
+                # CVE is recorded as a failure with a structured
+                # error class.
+                try:
+                    r = fut.result()
+                except BaseException as worker_exc:
+                    cid = futures[fut]
+                    r = _CveResult(
+                        cve_id=cid,
+                        ok=False,
+                        elapsed_s=0.0,
+                        error=f"worker raised: {type(worker_exc).__name__}: {worker_exc}",
+                        error_class="Other",
+                    )
                 summary.results.append(r)
                 if r.ok:
                     summary.passed += 1
