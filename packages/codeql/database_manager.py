@@ -31,6 +31,11 @@ from core.json import load_json, save_json
 from core.config import RaptorConfig
 from core.hash import sha256_string
 from core.logging import get_logger
+# Per-invocation git overrides for target-repo invocations.
+# See `core.git.clone.safe_git_command` for the threat model
+# (CVE-2024-32002 family: hostile per-repo .git/config).
+from core.git.clone import safe_git_command
+from core.git import get_safe_git_env
 from packages.codeql.build_detector import BuildSystem
 
 logger = get_logger()
@@ -157,14 +162,20 @@ class DatabaseManager:
         """
         repo_path = Path(repo_path).resolve()
 
-        # Try to use git commit hash (fast)
+        # Try to use git commit hash (fast).
+        # `safe_git_command` prepends -c overrides that defend
+        # against hostile per-repo `.git/config` (core.fsmonitor
+        # RCE family). `env=get_safe_git_env()` strips the
+        # ambient process env (HOME pinning, GIT_CONFIG_GLOBAL=
+        # /dev/null). Both apply — defence in depth.
         try:
             result = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
+                safe_git_command("rev-parse", "HEAD"),
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
                 timeout=5,
+                env=get_safe_git_env(),
             )
             if result.returncode == 0:
                 git_hash = result.stdout.strip()
