@@ -471,6 +471,9 @@ from .cli import (
 from .context import run, run_trusted, run_untrusted, run_untrusted_networked, sandbox
 from .landlock import check_landlock_available, _get_landlock_abi
 from .observe import _BLOCKED_PATTERNS, _check_blocked, _interpret_result, _path_within
+from .observe_profile import (
+    OBSERVE_FILENAME, ConnectTarget, ObserveProfile, parse_observe_log,
+)
 from .preexec import _DEFAULT_LIMITS, _load_user_limits, _make_preexec_fn
 from .mount import _build_mount_script
 from .probes import (

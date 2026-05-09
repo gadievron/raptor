@@ -203,6 +203,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             tool_paths: list = None,
             audit: bool = False, audit_verbose: bool = False,
             audit_run_dir: Optional[str] = None,
+            observe: bool = False,
             writable_paths: Optional[list] = None):
     """Context manager for sandboxed subprocess execution.
 
@@ -364,14 +365,38 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         or state._cli_sandbox_profile == "none"
         or profile == "none"
     )
+    # Observe mode is "audit + audit_verbose + write to a separate
+    # JSONL file + extend the trace set with stat-family". Engaging
+    # observe implies audit (TRACE action requires a tracer) and
+    # audit_verbose (we want every traced syscall, not just the ones
+    # outside an enforcement allowlist). Force both upstream so a
+    # caller passing only observe=True gets coherent behaviour.
     audit_mode = (
-        (bool(state._cli_sandbox_audit) or bool(audit))
+        (bool(state._cli_sandbox_audit) or bool(audit) or bool(observe))
         and not _effectively_disabled
     )
     audit_verbose_active = (
-        (bool(state._cli_sandbox_audit_verbose) or bool(audit_verbose))
+        (bool(state._cli_sandbox_audit_verbose)
+            or bool(audit_verbose)
+            or bool(observe))
         and audit_mode
     )
+    # Per-run observe nonce — 128 bits, generated up here so we can
+    # both forward it to the spawn layer (which threads it into the
+    # audit-config tempfile the tracer reads) AND retain it locally
+    # to stamp `result.sandbox_info["observe_nonce"]` after each run
+    # so the operator can pass it to parse_observe_log() for spoof-
+    # resistant parsing. The audit-config tempfile lives in /tmp
+    # outside the sandbox view, so a target binary cannot read the
+    # nonce; the JSONL records the binary CAN read carry the nonce
+    # but the binary can't reuse it without the parser noticing
+    # (parser pins to the per-run nonce, not "any nonce on record").
+    # None when observe is off.
+    if observe and audit_mode:
+        import secrets as _secrets
+        nonlocal_observe_nonce = _secrets.token_hex(16)
+    else:
+        nonlocal_observe_nonce = None
 
     # NOTE on audit + output=None: validation deferred to spawn-time
     # (run_sandboxed) — sandbox() entry just stages config; tests and
@@ -1326,6 +1351,10 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                     audit_mode=nonlocal_audit_mode,
                     audit_run_dir=_audit_run_dir,
                     audit_verbose=audit_verbose_active and nonlocal_audit_mode,
+                    observe_mode=observe and nonlocal_audit_mode,
+                    observe_nonce=(nonlocal_observe_nonce
+                                   if observe and nonlocal_audit_mode
+                                   else None),
                     restrict_reads=restrict_reads,
                     use_egress_proxy=use_egress_proxy,
                     proxy_port=(proxy_instance.port
@@ -1389,6 +1418,10 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                             audit_mode=nonlocal_audit_mode,
                             audit_run_dir=_audit_run_dir,
                             audit_verbose=audit_verbose_active and nonlocal_audit_mode,
+                            observe_mode=observe and nonlocal_audit_mode,
+                            observe_nonce=(nonlocal_observe_nonce
+                                           if observe and nonlocal_audit_mode
+                                           else None),
                             restrict_reads=restrict_reads,
                             # Default True here even though subprocess.run
                             # defaults to False — _spawn's historical
@@ -1566,6 +1599,31 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         # I2-(a) for why this matters.
         result.sandbox_info["mount_ns_active"] = bool(use_mount)
         result.sandbox_info["restrict_reads"] = bool(restrict_reads)
+        # Observe nonce — only present when sandbox(observe=True)
+        # actually engaged audit mode at spawn time; absent under
+        # plain audit and absent when observe was requested but
+        # audit-mode degraded silently (libseccomp unavailable,
+        # mount-ns blocked by host, etc.). Operator pipes this into
+        # parse_observe_log(expected_nonce=...) for spoof-resistant
+        # parsing. None when not engaged so a naive
+        # ``info.get("observe_nonce")`` reader gets a falsy value
+        # that signals "no provenance proof available".
+        #
+        # spawn_eligible is the load-bearing gate: a False value
+        # means we routed to the Landlock-only subprocess path
+        # which has no tracer-fork, so even though we generated a
+        # nonce upstream, no records carry it. Stamping the nonce
+        # would make a confused operator pass it to
+        # parse_observe_log() and get an empty profile back; better
+        # to surface None and let the operator notice their probe
+        # didn't engage. The sandbox-audit-degraded.json marker
+        # explains why.
+        if (nonlocal_observe_nonce is not None
+                and nonlocal_audit_mode
+                and spawn_eligible):
+            result.sandbox_info["observe_nonce"] = nonlocal_observe_nonce
+        else:
+            result.sandbox_info["observe_nonce"] = None
 
         # Attach proxy events (allow + deny + dns_fail + bytes) to
         # sandbox_info. Available to callers as
@@ -1803,6 +1861,7 @@ def run(cmd: List[str], block_network: bool = False, target: str = None,
         tool_paths: list = None,
         audit: bool = False, audit_verbose: bool = False,
         audit_run_dir: Optional[str] = None,
+        observe: bool = False,
         writable_paths: Optional[list] = None,
         **kwargs) -> subprocess.CompletedProcess:
     """Run a single command in a sandbox. Convenience wrapper.
@@ -1826,6 +1885,7 @@ def run(cmd: List[str], block_network: bool = False, target: str = None,
                  tool_paths=tool_paths,
                  audit=audit, audit_verbose=audit_verbose,
                  audit_run_dir=audit_run_dir,
+                 observe=observe,
                  writable_paths=writable_paths) as _run:
         return _run(cmd, **kwargs)
 

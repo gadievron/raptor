@@ -2218,5 +2218,82 @@ class TestThreatModelDocCheckedIn(unittest.TestCase):
             self.assertIn(marker, body)
 
 
+class TestE2EObserveMode(unittest.TestCase):
+    """End-to-end: sandbox(observe=True) produces a real
+    .sandbox-observe.jsonl that parses cleanly into an ObserveProfile
+    with the binary's actual filesystem reads + connect targets.
+
+    Exercises the full pipeline: sandbox kwarg → context resolution →
+    seccomp filter built with observe_mode=True (extends trace set
+    with stat-family) → tracer routes to observe filename → parser
+    reads JSONL → ObserveProfile populated.
+
+    Uses ``/usr/bin/true`` as the probe binary — small, deterministic,
+    universally available; its only filesystem reach is the dynamic-
+    linker chain (ld.so / libc), which is enough to verify the
+    end-to-end signal is real."""
+
+    def setUp(self):
+        if not check_net_available():
+            self.skipTest("User namespaces not available")
+        from core.sandbox.seccomp import check_seccomp_available
+        from core.sandbox.ptrace_probe import check_ptrace_available
+        if not check_seccomp_available():
+            self.skipTest("libseccomp unavailable")
+        if not check_ptrace_available():
+            self.skipTest("ptrace blocked (Yama scope, container cap-drop)")
+
+    def test_observe_run_produces_parseable_profile(self):
+        from core.sandbox.observe_profile import (
+            OBSERVE_FILENAME, parse_observe_log,
+        )
+
+        with TemporaryDirectory() as d:
+            run_dir = Path(d) / "observe-run"
+            run_dir.mkdir()
+
+            result = sandbox_run(
+                ["/usr/bin/true"],
+                target=str(run_dir),
+                output=str(run_dir),
+                observe=True,
+                capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(result.returncode, 0,
+                             f"true should exit 0; stderr={result.stderr!r}")
+
+            observe_log = run_dir / OBSERVE_FILENAME
+            denials_log = run_dir / ".sandbox-denials.jsonl"
+
+            if not observe_log.exists():
+                self.skipTest(
+                    f"observe log not produced at {observe_log} — "
+                    f"likely audit-mode degraded silently. Check "
+                    f"libseccomp/ptrace availability on this host."
+                )
+
+            self.assertFalse(
+                denials_log.exists(),
+                f"observe-mode must not write to denials log; "
+                f"file present at {denials_log}",
+            )
+
+            profile = parse_observe_log(run_dir)
+            # `true` reads its dynamic-linker chain → at least
+            # /lib*/ld-linux-*.so* + libc are openat'd.
+            self.assertGreater(
+                len(profile.paths_read), 0,
+                f"expected at least one path_read; got profile={profile!r}",
+            )
+            # `true` doesn't network — empty connect_targets confirms
+            # the parser's connect-decoding doesn't mis-fire on
+            # open/stat records.
+            self.assertEqual(
+                profile.connect_targets, [],
+                f"unexpected connect targets from /usr/bin/true: "
+                f"{profile.connect_targets!r}",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

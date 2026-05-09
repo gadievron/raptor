@@ -64,6 +64,24 @@ _AUDIT_EXTRA_TRACE_SYSCALLS = (
     "connect",                    # b3: outbound network attempts
 )
 
+# Additional syscalls traced under observe mode ON TOP OF the audit
+# set. Stat-family covers "binary probed for X but didn't open" — a
+# common shape for config-discovery in tools like Claude Code that
+# enumerate candidate config locations. Pure read access, no write
+# intent; never blocked at any layer (Landlock applies to opens not
+# stats), so they're observe-only signal — no use under enforcement
+# audit, where the question is "what got denied".
+#
+# `stat`/`lstat` are x86_64-only — aarch64 userspace uses newfstatat
+# exclusively. libseccomp's seccomp_syscall_resolve_name returns -1
+# for unsupported names on the current arch; the install loop skips
+# negative resolutions so this is harmless.
+_OBSERVE_EXTRA_TRACE_SYSCALLS = (
+    "stat", "lstat",        # legacy x86_64 stat syscalls
+    "newfstatat",            # AT_*-aware variant; aarch64 + modern x86_64
+    "access", "faccessat", "faccessat2",
+)
+
 
 # libseccomp comparison ops (scmp_compare)
 _SCMP_CMP_EQ = 4         # equal to: arg == datum_a
@@ -221,7 +239,8 @@ def check_seccomp_available() -> bool:
 
 
 def _make_seccomp_preexec(profile: str, block_udp: bool = False,
-                          audit_mode: bool = False):
+                          audit_mode: bool = False,
+                          observe_mode: bool = False):
     """Create a preexec_fn that installs the seccomp filter for `profile`.
 
     Runs POST-fork in the child. Same fork-safety rules as Landlock: capture
@@ -245,6 +264,15 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     kernel default action for unhandled TRACE is SIGSYS-kill the
     process. The caller (_spawn.py) is responsible for ensuring tracer
     is attached before any traced syscall fires.
+
+    `observe_mode=True` extends the trace set with stat-family syscalls
+    (stat/lstat/newfstatat/access/faccessat/faccessat2) on top of the
+    audit set. Stat-family events surface "binary probed candidate
+    paths" — useful for profile-extraction probes (e.g., calibrating
+    Claude Code's filesystem reach) where the question is "what does
+    this binary touch", not "what did the sandbox deny". Implies
+    audit_mode (TRACE action, tracer attached); enforcement-shape
+    audits should leave it off.
 
     Returns None if libseccomp is unavailable or the profile
     indicates "no seccomp" — both falsy values (None, "") and the
@@ -290,8 +318,15 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     # become observable via SCMP_ACT_TRACE.
     audit_extra: list = []
     if audit_mode:
-        audit_extra = [(name, _resolve(name))
-                       for name in _AUDIT_EXTRA_TRACE_SYSCALLS]
+        audit_names = list(_AUDIT_EXTRA_TRACE_SYSCALLS)
+        if observe_mode:
+            # Stat-family on top of audit's open/connect. Resolves
+            # to -1 on arches missing a given syscall (e.g. aarch64
+            # has no `stat`/`lstat`); the install loop below skips
+            # negative resolutions so this is a no-op on those
+            # arches rather than an error.
+            audit_names += list(_OBSERVE_EXTRA_TRACE_SYSCALLS)
+        audit_extra = [(name, _resolve(name)) for name in audit_names]
     resolved_blocks = [(name, _resolve(name)) for name in blocked_syscalls]
     # Sockets: filter by argument (family). Same syscall number, multiple rules.
     socket_num = _resolve("socket")

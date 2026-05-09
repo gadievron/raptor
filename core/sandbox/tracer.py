@@ -156,6 +156,41 @@ _NEW_TRACEE_EVENTS = frozenset((
 # both writers append to the same aggregation target.
 _DENIALS_FILENAME = ".sandbox-denials.jsonl"
 
+# Observe-mode JSONL — same record shape, separate file. Used when the
+# tracer is engaged for "what does this binary touch" introspection
+# rather than "what did the sandbox deny". Output is the same JSONL
+# format as denials with `"observe": True` instead of `"audit": True`,
+# parsed by core.sandbox.observe.parse_observe_log into an
+# ObserveProfile (paths_read / paths_written / paths_stat / connect_targets).
+# Kept separate from the denials file so the denial-summary aggregator
+# doesn't misinterpret observe records as enforcement events.
+_OBSERVE_FILENAME = ".sandbox-observe.jsonl"
+
+
+def _resolve_output_filename(observe_mode: bool) -> str:
+    """Pick the JSONL filename for tracer records.
+
+    Single source of truth so the per-record write path and the
+    end-of-run summary stay aligned. observe_mode flips the
+    destination from `.sandbox-denials.jsonl` to `.sandbox-observe.jsonl`.
+    """
+    if observe_mode:
+        return _OBSERVE_FILENAME
+    return _DENIALS_FILENAME
+
+
+def _resolve_record_mode_field(observe_mode: bool) -> str:
+    """Pick the boolean stamp field for records.
+
+    Records under audit mode are stamped `"audit": True`; observe-mode
+    records are stamped `"observe": True`. Lets a record reader tell
+    "I came from the enforcement aggregator" apart from "I came from
+    a profile-extraction probe" without having to consult filename.
+    """
+    if observe_mode:
+        return "observe"
+    return "audit"
+
 
 # ----- Architecture-specific syscall ABI -----
 #
@@ -188,6 +223,15 @@ _X86_64_SYSCALL_NAMES = {
     2: "open",
     257: "openat",
     437: "openat2",          # Linux 5.6+, used by glibc/io_uring
+    # Stat-family syscalls (observe-mode only — claude-style binaries
+    # probe candidate config locations via stat without ever opening,
+    # so observation needs these to surface "binary looked at X").
+    4: "stat",
+    6: "lstat",
+    262: "newfstatat",       # AT_*-aware variant; replaces stat in modern glibc
+    21: "access",
+    269: "faccessat",
+    439: "faccessat2",       # Linux 5.8+, adds AT_EACCESS
     # Network syscall (b3)
     42: "connect",
     # Existing seccomp blocklist (b2)
@@ -220,6 +264,13 @@ _AARCH64_SYSCALL_NAMES = {
     # File-path syscalls (b3)
     56: "openat",
     437: "openat2",          # Linux 5.6+, same number on x86_64+aarch64
+    # Stat-family syscalls (observe-mode only). aarch64 doesn't have
+    # the legacy `stat`/`lstat` syscalls — userspace uses newfstatat
+    # exclusively. faccessat2 was added in 5.8 and shares its number
+    # across both arches.
+    79: "newfstatat",
+    48: "faccessat",
+    439: "faccessat2",
     # Network syscall (b3)
     203: "connect",
     # Existing seccomp blocklist (b2)
@@ -545,6 +596,17 @@ def _path_arg_index(syscall_name: str) -> Optional[int]:
         # encoded, which we don't decode in audit (would-be-blocked
         # determination only needs dirfd + path).
         return 1
+    # Stat-family (observe mode). Path arg position by ABI:
+    #   stat(path, statbuf)              → idx 0
+    #   lstat(path, statbuf)             → idx 0
+    #   access(path, mode)               → idx 0
+    #   newfstatat(dirfd, path, ..., flags) → idx 1
+    #   faccessat(dirfd, path, mode)     → idx 1
+    #   faccessat2(dirfd, path, mode, flags) → idx 1
+    if syscall_name in ("stat", "lstat", "access"):
+        return 0
+    if syscall_name in ("newfstatat", "faccessat", "faccessat2"):
+        return 1
     return None
 
 
@@ -682,6 +744,23 @@ def _decode_sockaddr(pid: int, addr: int,
     libc = _get_libc()
     if libc is None or not hasattr(libc, "process_vm_readv"):
         return None
+    # Pin process_vm_readv's ctypes signature locally — without it
+    # the default (restype=c_int, argtypes=None) truncates the
+    # 64-bit pointer args (iov_base) to 32 bits, causing the call
+    # to either fail or read from a wrong address. The two other
+    # callers (_read_tracee_string, _read_tracee_bytes) set this
+    # too — but execution order across syscalls isn't guaranteed,
+    # so the connect-decode path must do its own setup rather than
+    # rely on a side-effect from a previous traced syscall.
+    libc.process_vm_readv.restype = ctypes.c_ssize_t
+    libc.process_vm_readv.argtypes = [
+        ctypes.c_int,                     # pid
+        ctypes.POINTER(_Iovec),           # local_iov
+        ctypes.c_ulong,                   # liovcnt
+        ctypes.POINTER(_Iovec),           # remote_iov
+        ctypes.c_ulong,                   # riovcnt
+        ctypes.c_ulong,                   # flags
+    ]
     # Cap addrlen to the largest we'll decode — sockaddr_in6 is
     # 28 bytes. Don't trust caller-supplied addrlen above that.
     n_to_read = min(addrlen, 28)
@@ -861,7 +940,11 @@ def _ptrace_detach(pid: int) -> bool:
 
 def _write_record(run_dir: Path, syscall_name: str, syscall_nr: int,
                   args: list, target_pid: int,
-                  path: Optional[str] = None) -> bool:
+                  path: Optional[str] = None,
+                  *,
+                  filename: str = _DENIALS_FILENAME,
+                  mode_field: str = "audit",
+                  nonce: Optional[str] = None) -> bool:
     """Append one denial record to the run's JSONL file.
 
     Returns True on successful write, False otherwise. Open/write/close
@@ -876,6 +959,12 @@ def _write_record(run_dir: Path, syscall_name: str, syscall_nr: int,
     derefs path pointers via process_vm_readv when the syscall has
     one (open/openat); for syscalls without a path argument (or when
     the deref failed), this stays None.
+
+    `filename` / `mode_field`: route records to a different JSONL
+    file (e.g., observe mode → `.sandbox-observe.jsonl`) and stamp
+    them with a different boolean field (`"observe": True`). Defaults
+    preserve audit-mode behaviour. Resolved by the tracer's `trace()`
+    once at startup from `audit_filter["observe_mode"]`.
     """
     # Sanitisation pipeline:
     # 1. escape_nonprintable: paths come from the tracee's address
@@ -927,7 +1016,10 @@ def _write_record(run_dir: Path, syscall_name: str, syscall_nr: int,
         "cmd": cmd,
         "returncode": 0,
         "type": _denial_type(syscall_name),
-        "audit": True,
+        # Mode stamp: "audit" for enforcement-shape records,
+        # "observe" for profile-extraction records. Field name varies
+        # so a reader can tell the two record streams apart.
+        mode_field: True,
         "syscall": syscall_name,
         "syscall_nr": syscall_nr,
         # Always include the traced PID as a separate field —
@@ -948,6 +1040,12 @@ def _write_record(run_dir: Path, syscall_name: str, syscall_nr: int,
     }
     if path is not None:
         record["path"] = path
+    # Per-run provenance nonce — added when the parent provides one
+    # (observe mode). The parser drops records whose nonce doesn't
+    # match the per-run value passed to parse_observe_log, defeating
+    # spoofs by a target binary that wrote into the same JSONL.
+    if nonce is not None:
+        record["nonce"] = nonce
     # Visibility-gap enrichment: some syscalls signal that follow-on
     # operations are invisible to seccomp tracing (notably io_uring,
     # which submits I/O via SQEs in shared memory after this setup
@@ -963,7 +1061,7 @@ def _write_record(run_dir: Path, syscall_name: str, syscall_nr: int,
         # function shadowed `path` with the file path and worked by
         # accident — would confuse a reader and break if record-build
         # ever moved below this line.
-        jsonl_path = run_dir / _DENIALS_FILENAME
+        jsonl_path = run_dir / filename
         jsonl_path.parent.mkdir(parents=True, exist_ok=True)
         # O_NOFOLLOW + O_APPEND match summary.record_denial exactly.
         fd = os.open(
@@ -979,17 +1077,21 @@ def _write_record(run_dir: Path, syscall_name: str, syscall_nr: int,
         return False
 
 
-def _write_record_dict(run_dir: Path, record: dict) -> bool:
+def _write_record_dict(run_dir: Path, record: dict,
+                       *, filename: str = _DENIALS_FILENAME) -> bool:
     """Append a pre-built record dict to the run's JSONL file.
 
     Used for AuditBudget markers and the end-of-run summary —
     structures that don't fit the syscall-shaped _write_record
     signature. Same O_NOFOLLOW + O_APPEND atomicity as
     _write_record and core.sandbox.summary.record_denial.
+
+    `filename`: route to a different JSONL file (observe mode →
+    `.sandbox-observe.jsonl`). Default preserves audit-mode behaviour.
     """
     try:
         line = json.dumps(record, ensure_ascii=True, default=str) + "\n"
-        jsonl_path = run_dir / _DENIALS_FILENAME
+        jsonl_path = run_dir / filename
         jsonl_path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(
             str(jsonl_path),
@@ -1089,6 +1191,26 @@ def trace(target_pid: int, run_dir: Path,
     _signal_ready(sync_fd)
 
     syscall_table = arch_info["syscall_table"]
+    # Output routing: observe-mode records go to `.sandbox-observe.jsonl`
+    # with a `"observe": True` stamp; audit-mode records go to
+    # `.sandbox-denials.jsonl` with `"audit": True`. Resolved once
+    # here from the audit-filter config and threaded through to
+    # per-record writes + the end-of-run summary so both land in the
+    # same file.
+    _observe_mode = bool(
+        audit_filter.get("observe_mode") if audit_filter else False,
+    )
+    _filename = _resolve_output_filename(_observe_mode)
+    _mode_field = _resolve_record_mode_field(_observe_mode)
+    # Per-run provenance nonce — included in every record when the
+    # parent generated one (observe mode); None for audit mode (the
+    # audit JSONL is only written by us, never by tools, so spoofing
+    # isn't a concern there). Read once at startup, threaded down
+    # through _handle_waitpid_event to write_record so each record
+    # carries it.
+    _observe_nonce = (
+        audit_filter.get("observe_nonce") if audit_filter else None
+    )
     # Audit budget — shared with macOS seatbelt LogStreamer via
     # core.sandbox.audit_budget. Token-bucket + per-category +
     # per-PID sub-caps + 1-in-N post-cap sampling; markers and
@@ -1168,12 +1290,21 @@ def trace(target_pid: int, run_dir: Path,
             wpid, status, traced, target_pid, arch_info,
             run_dir, budget,
             audit_filter=audit_filter,
+            output_filename=_filename,
+            mode_field=_mode_field,
+            observe_nonce=_observe_nonce,
         )
 
     # End-of-run summary record so the sandbox-summary aggregator
     # has total/dropped counts even when the run didn't hit any cap.
+    # Stamp the nonce on the summary too so the parser can attribute
+    # it to this run (and reject one spoofed by a target binary that
+    # wrote a fake summary into the JSONL claiming budget_truncated=True).
     try:
-        _write_record_dict(run_dir, budget.summary_record())
+        _summary = budget.summary_record()
+        if _observe_nonce is not None:
+            _summary["nonce"] = _observe_nonce
+        _write_record_dict(run_dir, _summary, filename=_filename)
     except OSError:
         # Best-effort. Don't crash the tracer on a transient FS
         # error during summary append.
@@ -1189,6 +1320,9 @@ def _handle_waitpid_event(
     budget: "audit_budget.AuditBudget",
     *,
     audit_filter: Optional[dict] = None,
+    output_filename: str = _DENIALS_FILENAME,
+    mode_field: str = "audit",
+    observe_nonce: Optional[str] = None,
     # Injection points so tests can substitute synthetic helpers
     # without forking real children. Defaults are the production
     # implementations; tests pass mocks.
@@ -1272,90 +1406,99 @@ def _handle_waitpid_event(
             if path_idx is not None:
                 path = read_tracee_string(wpid, args[path_idx])
 
+            # PATH ENRICHMENT — runs in BOTH verbose and filtered modes.
+            # Pre-fix this work was inside the filtered-only branch, so
+            # observe-mode (verbose=True) records lacked the
+            # absolute-path resolution for openat AND lacked the
+            # decoded sockaddr for connect — observe profiles missed
+            # the data the parser needs to populate paths_read /
+            # connect_targets. Hoisting the data extraction out;
+            # filtering (allowlist / allowed_ports) stays gated on
+            # filter-mode below.
+            abs_path: Optional[str] = None
+            write_intent: bool = False
+            sock: Optional[tuple] = None
+            if name in ("openat", "open", "openat2") and path is not None:
+                # Resolve path argument to an absolute string the
+                # parser can match against context-map records.
+                # openat / openat2 dirfd lives at args[0]; for open()
+                # there is no dirfd, treat as AT_FDCWD.
+                dirfd = (args[0] if name in ("openat", "openat2")
+                         else _AT_FDCWD)
+                # Treat dirfd as signed — kernel passes AT_FDCWD as
+                # -100 which arrives as a very large unsigned in our
+                # regs.
+                if dirfd > 0x7fffffffffffffff:
+                    dirfd = dirfd - (1 << 64)
+                abs_path = resolve_path(wpid, path, dirfd)
+                # Flag location differs by syscall:
+                #   open(path, flags, mode)            → args[1]
+                #   openat(dirfd, path, flags, mode)   → args[2]
+                #   openat2(dirfd, path, &how, size)   → deref args[2]
+                #     `struct open_how` { __u64 flags; __u64 mode;
+                #                        __u64 resolve; }
+                #     so flags = first 8 bytes of *args[2].
+                if name == "openat2":
+                    # Best-effort struct read. If process_vm_readv
+                    # fails (bad pointer, stale memory), default to
+                    # write_intent=True so we don't silently miss
+                    # writes — over-reporting reads is acceptable,
+                    # missing writes is not.
+                    how_bytes = _read_tracee_bytes(wpid, args[2], 8)
+                    if how_bytes is not None and len(how_bytes) == 8:
+                        import struct as _struct
+                        flags = _struct.unpack("<Q", how_bytes)[0]
+                    else:
+                        flags = _O_WRONLY  # safe default
+                else:
+                    flags_idx = 2 if name == "openat" else 1
+                    flags = args[flags_idx]
+                write_intent = _is_write_intent(flags)
+                # Use the absolute path on the record — relative
+                # paths are ambiguous to a parser / operator.
+                path = abs_path
+            elif name == "connect":
+                # Decode sockaddr at args[1], length at args[2]. The
+                # decoded ip:port goes into `path` so the parser's
+                # connect-path regex (ip:port (FAMILY)) populates
+                # ObserveProfile.connect_targets.
+                sock = decode_sockaddr(wpid, args[1], args[2])
+                if sock is not None:
+                    family, port, ip = sock
+                    path = f"{ip}:{port} ({family})"
+
             if audit_filter is not None and not audit_filter.get("verbose"):
                 # Filtered mode: drop events that would have been
                 # ALLOWED under enforcement. The signal then becomes
                 # "what would have been blocked" — the operator's
                 # actual question.
-                if name in ("openat", "open", "openat2"):
-                    # Resolve path argument to absolute, check
-                    # against Landlock-equivalent allowlist.
-                    if path is not None:
-                        # openat / openat2 dirfd lives at args[0];
-                        # for open(), there is no dirfd, treat as
-                        # AT_FDCWD.
-                        dirfd = (args[0] if name in ("openat", "openat2")
-                                 else _AT_FDCWD)
-                        # Treat dirfd as signed — kernel passes
-                        # AT_FDCWD as -100 which arrives as a
-                        # very large unsigned in our regs.
-                        if dirfd > 0x7fffffffffffffff:
-                            dirfd = dirfd - (1 << 64)
-                        abs_path = resolve_path(wpid, path, dirfd)
-                        # Flag location differs by syscall:
-                        #   open(path, flags, mode)            → args[1]
-                        #   openat(dirfd, path, flags, mode)   → args[2]
-                        #   openat2(dirfd, path, &how, size)   → deref args[2]
-                        #     `struct open_how` { __u64 flags; __u64 mode;
-                        #                        __u64 resolve; }
-                        #     so flags = first 8 bytes of *args[2].
-                        if name == "openat2":
-                            # Best-effort struct read. If process_vm_readv
-                            # fails (bad pointer, stale memory), default
-                            # to write_intent=True so we don't silently
-                            # miss writes — over-reporting reads is
-                            # acceptable, missing writes is not.
-                            how_bytes = _read_tracee_bytes(wpid, args[2], 8)
-                            if how_bytes is not None and len(how_bytes) == 8:
-                                import struct as _struct
-                                flags = _struct.unpack("<Q", how_bytes)[0]
-                            else:
-                                flags = _O_WRONLY  # safe default
-                        else:
-                            flags_idx = 2 if name == "openat" else 1
-                            flags = args[flags_idx]
-                        write_intent = _is_write_intent(flags)
-                        # When read_allowlist is None, Landlock is
-                        # in restrict_reads=False mode (allows all
-                        # reads). Reads can never be would-blocked,
-                        # so we drop them unconditionally and only
-                        # filter writes against writable_paths.
-                        if (not write_intent
-                                and audit_filter.get("read_allowlist") is None):
+                if name in ("openat", "open", "openat2") and abs_path is not None:
+                    # When read_allowlist is None, Landlock is in
+                    # restrict_reads=False mode (allows all reads).
+                    # Reads can never be would-blocked, so we drop
+                    # them unconditionally and only filter writes
+                    # against writable_paths.
+                    if (not write_intent
+                            and audit_filter.get("read_allowlist") is None):
+                        should_log = False
+                    else:
+                        # .get with [] default — defensive against
+                        # malformed/partial configs. Empty list →
+                        # _path_in_allowlist always False → record
+                        # kept.
+                        allowlist = (
+                            audit_filter.get("writable_paths") or []
+                            if write_intent
+                            else audit_filter.get("read_allowlist") or []
+                        )
+                        if _path_in_allowlist(abs_path, allowlist):
                             should_log = False
-                        else:
-                            # .get with [] default — defensive
-                            # against malformed/partial configs.
-                            # Empty list → _path_in_allowlist
-                            # always False → record kept.
-                            allowlist = (
-                                audit_filter.get("writable_paths") or []
-                                if write_intent
-                                else audit_filter.get("read_allowlist") or []
-                            )
-                            if _path_in_allowlist(abs_path, allowlist):
-                                should_log = False
-                            else:
-                                # Useful surface form: replace
-                                # `path` with the resolved
-                                # absolute (relative paths in
-                                # the raw record are ambiguous
-                                # to operators).
-                                path = abs_path
-                elif name == "connect":
-                    # Decode sockaddr at args[1], length at args[2].
-                    # If destination port is in the allowed set,
-                    # drop. Otherwise log with decoded ip:port in
-                    # the path field for operator readability.
-                    sock = decode_sockaddr(wpid, args[1], args[2])
-                    if sock is not None:
-                        family, port, ip = sock
-                        allowed_ports = audit_filter.get(
-                            "allowed_tcp_ports", [])
-                        if port in allowed_ports:
-                            should_log = False
-                        else:
-                            path = f"{ip}:{port} ({family})"
+                elif name == "connect" and sock is not None:
+                    family, port, ip = sock
+                    allowed_ports = audit_filter.get(
+                        "allowed_tcp_ports", [])
+                    if port in allowed_ports:
+                        should_log = False
                 # For seccomp blocklist syscalls (ptrace, bpf, etc.)
                 # we don't filter — they're rare and ALWAYS
                 # would-be-blocked under enforcement, so the audit
@@ -1364,10 +1507,14 @@ def _handle_waitpid_event(
             if should_log:
                 decision, marker = budget.evaluate(name, wpid)
                 if marker is not None:
-                    _write_record_dict(run_dir, marker)
+                    _write_record_dict(run_dir, marker,
+                                       filename=output_filename)
                 if decision == audit_budget.KEEP:
                     write_record(run_dir, name, nr, args, wpid,
-                                 path=path)
+                                 path=path,
+                                 filename=output_filename,
+                                 mode_field=mode_field,
+                                 nonce=observe_nonce)
                 # First-time global-cap exhaustion: emit a one-time
                 # stderr line. Restores the operator-visible cue
                 # the legacy tracer printed ("hit per-run record

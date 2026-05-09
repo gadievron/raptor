@@ -1200,8 +1200,13 @@ class TestFilterDispatchSeccomp:
         def fake_read_tracee_string(pid, addr, max_bytes=4096):
             return path_returned
         def fake_get_event_msg(pid): return None
-        def fake_write_record(run_dir, name, n, args, target_pid, path=None):
-            recorded.append({"name": name, "path": path})
+        def fake_write_record(run_dir, name, n, args, target_pid, path=None,
+                              *, filename=None, mode_field=None,
+                              nonce=None):
+            recorded.append({"name": name, "path": path,
+                             "filename": filename,
+                             "mode_field": mode_field,
+                             "nonce": nonce})
             return True
         def fake_resolve_path(pid, path, dirfd):
             # Pretend resolution succeeded with the input path.
