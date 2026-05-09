@@ -55,17 +55,46 @@ def _make_finding(finding_id, rule_id, file_path, start_line):
 
 
 def _make_cc_result(finding_id, exploitable=True, score=0.85):
-    """Create a valid CC sub-agent result dict."""
+    """Create a valid CC sub-agent result dict.
+
+    Fills every field weighted by ``core.llm.response_validation``'s
+    _FINDING_RESULT_WEIGHTS / _ANALYSIS_WEIGHTS tables so the
+    response's quality score lands above the 0.5 dispatch threshold.
+    Missing high-weight fields here previously trimmed the score to
+    ~0.48 → cc_dispatch flagged the response low-quality and
+    overrode is_exploitable to False, breaking the orchestrator's
+    exploitable-count assertion.
+    """
     return {
         "finding_id": finding_id,
         "is_true_positive": True,
         "is_exploitable": exploitable,
         "exploitability_score": score,
+        "confidence": "high" if exploitable else "low",
         "severity_assessment": "high" if exploitable else "low",
+        "ruling": "exploitable" if exploitable else "not_exploitable",
         "reasoning": "Test reasoning",
         "attack_scenario": "Test scenario" if exploitable else None,
         "exploit_code": "# exploit" if exploitable else None,
         "patch_code": "# patch",
+        "cvss_vector": (
+            "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+            if exploitable else None
+        ),
+        "cvss_score_estimate": 9.8 if exploitable else None,
+        "vuln_type": "sql_injection" if exploitable else None,
+        "cwe_id": "CWE-89" if exploitable else None,
+        "dataflow_summary": (
+            "input → query" if exploitable else None
+        ),
+        "remediation": "use parameterised queries" if exploitable else None,
+        "false_positive_reason": None if exploitable else "test fixture",
+        "impact": "data exfiltration" if exploitable else None,
+        "prerequisites": (
+            ["authenticated user"] if exploitable else None
+        ),
+        "tool": "test",
+        "rule_id": "test/rule",
     }
 
 
