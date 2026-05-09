@@ -62,7 +62,13 @@ class NpmResolver:
         try:
             proc = _run(
                 ["npm", "install", "--dry-run", "--package-lock-only",
-                  "--ignore-scripts", "--no-audit", "--no-fund"],
+                  "--ignore-scripts", "--no-audit", "--no-fund",
+                  # Cap per-origin sockets well under the sandbox egress
+                  # proxy's tunnel limit (core/sandbox/proxy.py). npm's
+                  # default + keep-alive lingering + retries can otherwise
+                  # blow past the cap, get connections refused, and stall
+                  # the scan past timeout.
+                  "--maxsockets=8"],
                 cwd=project_dir,
                 timeout=timeout,
                 proxy_hosts=self.proxy_hosts,
