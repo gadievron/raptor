@@ -320,8 +320,11 @@ def _datamark(content: str) -> str:
     return re.sub(r'\s', lambda m: m.group(0) + _DATAMARK_SENTINEL, content)
 
 
+_MARKDOWN_HEADING_RE = re.compile(r'(?m)^(#+)')
+
+
 def neutralize_tag_forgery(content: str) -> str:
-    """Escape sequences in untrusted content that could forge envelope structure.
+    """Escape sequences in untrusted content that could forge prompt structure.
 
     Public utility for any prompt-envelope defence — both build_prompt's
     internal pipeline and any caller building its own envelope (e.g. the
@@ -329,15 +332,30 @@ def neutralize_tag_forgery(content: str) -> str:
     untrusted content through this helper before interpolating it into
     a prompt.
 
-    After newline-preservation was added, an attacker can place a fake
-    closing tag on its own line — visually identical to the real one from
-    the model's perspective.  The nonce makes real boundaries unguessable,
-    but models pattern-match visually rather than parsing XML.
+    Two structural forgery vectors are neutralised:
 
-    This replaces the leading ``<`` of any sequence matching our envelope
-    tag vocabulary (``</untrusted-``, ``<slot``, ``<document_content>``,
-    etc.) with ``&lt;``.  The replacement is narrow enough to leave normal
-    source-code comparisons (``a < b``) untouched.
+    1. **Envelope-tag forgery.**  After newline-preservation was added,
+       an attacker can place a fake closing tag on its own line — visually
+       identical to the real one from the model's perspective.  The nonce
+       makes real boundaries unguessable, but models pattern-match visually
+       rather than parsing XML.  The leading ``<`` of any sequence matching
+       our envelope tag vocabulary (``</untrusted-``, ``<slot``,
+       ``<document_content>``, etc.) is replaced with ``&lt;``.  Bracket-
+       and line-marker variants are similarly broken without removing the
+       semantic content.
+
+    2. **Markdown-heading forgery.**  Trusted prompt regions use
+       ``## Section`` headings to scope content (e.g. ``## Strategy:``,
+       ``## Bug-class lenses``).  An attacker who controls a field that
+       echoes into the trusted region — like ``finding["file_path"] =
+       "src/foo.py\\n## INJECTED"`` — can forge a heading the model
+       parses as a peer of the real ones.  Each line-start ``#`` run is
+       prefixed with ``\\`` so visual heading recognition fails while the
+       semantic content (Python ``# comment``, shebang ``#!/...``, C
+       ``#include`` etc.) remains readable.
+
+    The replacement is narrow enough to leave normal source-code
+    comparisons (``a < b``) and inline ``#`` characters untouched.
     """
     def _escape_match(m: re.Match) -> str:
         s = m.group(0)
@@ -363,7 +381,9 @@ def neutralize_tag_forgery(content: str) -> str:
             return f'{head}_​{tail}'
         return s
 
-    return _ENVELOPE_TAG_RE.sub(_escape_match, content)
+    content = _ENVELOPE_TAG_RE.sub(_escape_match, content)
+    content = _MARKDOWN_HEADING_RE.sub(r'\\\1', content)
+    return content
 
 
 # Back-compat alias — keep the underscore name working in case other

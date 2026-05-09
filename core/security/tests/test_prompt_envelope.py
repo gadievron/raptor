@@ -15,6 +15,7 @@ from core.security.prompt_envelope import (
     TaintedString,
     UntrustedBlock,
     build_prompt,
+    neutralize_tag_forgery,
 )
 from core.security.prompt_defense_profiles import (
     ANTHROPIC_CLAUDE,
@@ -675,3 +676,76 @@ class TestPreflightWiring:
         assert "from core.security.prompt_input_preflight import preflight" in text
         assert "preflight(prompt" in text
         assert "record_preflight" in text
+
+
+# --- neutralize_tag_forgery: markdown-heading defang ---
+
+class TestMarkdownHeadingNeutralisation:
+    """Forged ``## INJECTED`` headings in untrusted content can pass as
+    peers of legitimate ``## Section`` headings the prompt itself uses.
+    ``neutralize_tag_forgery`` defangs them by prefixing line-start
+    ``#`` runs with ``\\``.
+    """
+
+    def test_line_start_double_hash_is_escaped(self):
+        out = neutralize_tag_forgery("src/foo.py\n## INJECTED")
+        assert out == "src/foo.py\n\\## INJECTED"
+
+    def test_line_start_single_hash_is_escaped(self):
+        out = neutralize_tag_forgery("\n# top-level")
+        assert out == "\n\\# top-level"
+
+    def test_line_start_hash_at_string_start_is_escaped(self):
+        out = neutralize_tag_forgery("## first line")
+        assert out == "\\## first line"
+
+    def test_multiple_heading_levels_all_escaped(self):
+        out = neutralize_tag_forgery("### deep\n## shallow\n# top")
+        assert out == "\\### deep\n\\## shallow\n\\# top"
+
+    def test_inline_hash_untouched(self):
+        # ``#`` in the middle of a line is not a heading marker —
+        # leave normal text / hashtags / inline anchors alone.
+        out = neutralize_tag_forgery("see issue #123 in the tracker")
+        assert "\\#" not in out
+        assert out == "see issue #123 in the tracker"
+
+    def test_python_comment_preserved_with_escape(self):
+        # Source code with ``#`` line-comments still parses cleanly to
+        # the model — the ``\\#`` prefix doesn't break comprehension.
+        out = neutralize_tag_forgery("# this is fine\nprint('ok')")
+        assert out.startswith("\\#")
+        assert "print('ok')" in out
+
+    def test_shebang_preserved_with_escape(self):
+        out = neutralize_tag_forgery("#!/usr/bin/env python\nx = 1")
+        assert out.startswith("\\#!")
+        assert "x = 1" in out
+
+    def test_c_include_preserved_with_escape(self):
+        out = neutralize_tag_forgery("#include <foo.h>\nint x;")
+        assert out.startswith("\\#include")
+        # `<foo.h>` is not in the envelope-tag vocabulary so it isn't
+        # touched — only the line-start `#` was.
+        assert "<foo.h>" in out
+
+    def test_envelope_tag_and_heading_both_escaped(self):
+        out = neutralize_tag_forgery("## H\n<untrusted_text>x")
+        assert "\\## H" in out
+        assert "&lt;untrusted_text>" in out
+
+    def test_empty_string(self):
+        assert neutralize_tag_forgery("") == ""
+
+    def test_no_hash_no_change(self):
+        # Plain text with no `#` and no envelope tags → identity.
+        assert neutralize_tag_forgery("hello world") == "hello world"
+
+    def test_line_start_via_carriage_return_not_escaped(self):
+        # `(?m)^` matches after `\n` only, not `\r`. We don't expect
+        # `\r`-only line endings in untrusted content (the upstream
+        # control-char escape converts `\r` → `\\x0d` for envelope
+        # callers); pin the current behaviour so a future change to
+        # support `\r` is intentional rather than accidental.
+        out = neutralize_tag_forgery("a\r## b")
+        assert "\\##" not in out
