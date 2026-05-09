@@ -116,8 +116,37 @@ def write_flow_files(
     all 5 stage headers must always render.
     """
     try:
-        flow_path = output_dir / f"{cve_id}.flow.jsonl"
-        md_path = output_dir / f"{cve_id}.flow.md"
+        # Sanitise cve_id locally before interpolating into the
+        # filename. cve_id is validated upstream by the cli/main
+        # entry point (`_CVE_ID_RE.fullmatch`), but `write_flow_files`
+        # is reachable from other entry points (bench, raw library
+        # use) where the validator may not have run. Defending here
+        # is cheap (single regex sub) and prevents:
+        #
+        #   * Path traversal: `cve_id="../../etc/passwd"` →
+        #     `output_dir / "../../etc/passwd.flow.jsonl"` would
+        #     write the trace outside the output directory.
+        #   * Filename corruption: `cve_id="CVE-2024-1234\n"`
+        #     ending up in `cve-2024-1234\n.flow.jsonl` confuses
+        #     downstream parsers.
+        #
+        # Match the same `[A-Za-z0-9._-]` whitelist that the
+        # cve_id validator enforces; replace anything outside with
+        # `_`. Empty / whitespace → "unknown" so downstream
+        # consumers still see a parseable filename.
+        import re
+        _safe_cve = re.sub(r"[^A-Za-z0-9._-]", "_", str(cve_id).strip()) or "unknown"
+        if _safe_cve != cve_id:
+            # Best-effort log; reachable only when caller bypassed
+            # the upstream validator. Keep going with the safe
+            # form so the trace still lands.
+            import logging
+            logging.getLogger(__name__).warning(
+                "write_flow_files: cve_id contained unsafe chars, "
+                "sanitised %r → %r", cve_id, _safe_cve,
+            )
+        flow_path = output_dir / f"{_safe_cve}.flow.jsonl"
+        md_path = output_dir / f"{_safe_cve}.flow.md"
         lines: list[str] = []
         for i, pair in enumerate(tool_calls_with_args or ()):
             if not isinstance(pair, (list, tuple)) or len(pair) != 2:
