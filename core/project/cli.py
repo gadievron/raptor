@@ -738,15 +738,25 @@ def _print_status(project):
             else:
                 status_str = status
             print(f"  {d.name:<{name_col}s}  {cmd:12s}  {findings_str:24s}  {status_str}")
-        # Disk usage — skip symlinks to avoid following outside the project
+        # Disk usage — use os.walk(followlinks=False) so we stay inside
+        # the run dir even if a stray symlink points outside (or back into
+        # the run, creating a loop). Path.rglob follows symlinked dirs on
+        # Python <3.13, so a symlink loop would hang status indefinitely.
         total_size = 0
         for d in runs:
-            for f in d.rglob("*"):
-                if f.is_file() and not f.is_symlink():
+            for root, _dirs, files in os.walk(d, followlinks=False):
+                for fname in files:
+                    fpath = os.path.join(root, fname)
                     try:
-                        total_size += f.stat().st_size
+                        st = os.lstat(fpath)
                     except OSError:
-                        pass
+                        continue
+                    # Skip symlinks (S_IFLNK) — count only real files.
+                    import stat as _stat
+                    if _stat.S_ISLNK(st.st_mode):
+                        continue
+                    if _stat.S_ISREG(st.st_mode):
+                        total_size += st.st_size
         if total_size >= 1024 * 1024:
             print(f"\nDisk usage: {total_size / 1024 / 1024:.1f}MB")
         elif total_size >= 1024:
