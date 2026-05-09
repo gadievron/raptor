@@ -483,101 +483,18 @@ def check_active_project() -> str | None:
 
 # ---------------------------------------------------------------------------
 # Environment setup
+#
+# `setup_env_file()` was removed: the live code path is
+# `libexec/raptor-session-init:write_env_file` which is what the
+# SessionStart hook actually invokes. The duplicate Python helper here
+# was never wired into anything outside its own tests, and the two
+# implementations had drifted (the libexec script overwrites the env
+# file unconditionally; the Python helper appended via O_NOFOLLOW). The
+# divergence was a hazard — if a future caller wired `setup_env_file`
+# into startup, we'd silently get two contradicting env files written
+# in the same session. Keeping one source of truth (the libexec
+# script) avoids that.
 # ---------------------------------------------------------------------------
-
-def setup_env_file():
-    """Add bin/ to PATH via CLAUDE_ENV_FILE.
-
-    Covers direct `claude` launches where bin/raptor didn't set PATH.
-    Harmless duplicate if it did.
-    """
-    env_file = os.environ.get("CLAUDE_ENV_FILE")
-    if not env_file:
-        return
-    repo_root = str(REPO_ROOT)
-    bin_dir = str(REPO_ROOT / "bin")
-    try:
-        existing = Path(env_file).read_text() if Path(env_file).exists() else ""
-        additions = []
-        # Substring dedup is fragile. Pre-fix:
-        #   if bin_dir not in existing  → false positive when
-        #     existing contains a path with bin_dir as a
-        #     PREFIX (e.g. operator-set
-        #     `PATH="$PATH:/home/raptor/bin/oldraptor"`,
-        #     bin_dir is `/home/raptor/bin`, substring match
-        #     fires).
-        #   if "RAPTOR_DIR" not in existing → false positive
-        #     against `_RAPTOR_DIR_OLD`, `RAPTOR_DIR_OVERRIDE`,
-        #     `# RAPTOR_DIR comment` (substring matches
-        #     anywhere). The export then silently didn't
-        #     happen and downstream `os.environ["RAPTOR_DIR"]`
-        #     readers (per the project rule) crashed at first
-        #     import.
-        # Use line-level checks instead: only treat the export
-        # as already-present if it appears as the LHS of an
-        # `export VAR=` line (or `VAR=` without export).
-        existing_lines = existing.splitlines()
-        def _has_export(var: str) -> bool:
-            for ln in existing_lines:
-                stripped = ln.strip()
-                if stripped.startswith(f"export {var}=") or stripped.startswith(f"{var}="):
-                    return True
-            return False
-        if not _has_export("PATH") or bin_dir not in existing:
-            # PATH is special — the export line typically appends
-            # ($PATH:newdir), so we keep the substring check
-            # for bin_dir specifically (cluster row's
-            # narrower concern is RAPTOR_DIR substring match,
-            # not PATH).
-            if bin_dir not in existing:
-                additions.append(f'export PATH="$PATH:{bin_dir}"')
-        if not _has_export("RAPTOR_DIR"):
-            additions.append(f'export RAPTOR_DIR="{repo_root}"')
-        if additions:
-            # Open with O_NOFOLLOW so an attacker (or hostile
-            # CLAUDE_ENV_FILE value) pointing at a symlink to
-            # `~/.bashrc`, `~/.bash_profile`, or any other shell
-            # rc file CAN'T cause us to append `export PATH=...`
-            # / `export RAPTOR_DIR=...` lines into the operator's
-            # actual shell init. The CLAUDE_ENV_FILE contract is
-            # "Claude's per-session env stub" — never a symlink to
-            # operator config.
-            #
-            # Pre-fix `open(env_file, "a")` followed symlinks by
-            # default. A malicious launcher (or a poisoned CI
-            # environment that set CLAUDE_ENV_FILE=$HOME/.bashrc
-            # before invoking RAPTOR) would have had RAPTOR
-            # silently append exports into the operator's shell
-            # init, persisting the path injection across all
-            # future shells.
-            #
-            # ELOOP / ENOTSUP / OSError → fall through to the
-            # outer except OSError, which already swallows the
-            # error. Operator-visible behaviour: the env_file
-            # update silently no-ops when the path is a symlink
-            # — preferable to silently mutating ~/.bashrc.
-            try:
-                # O_CREAT so first-time setup creates the env_file.
-                # O_NOFOLLOW refuses to follow a symlink AT the
-                # final path component when the file already
-                # exists; for new file creation O_NOFOLLOW is
-                # silently no-op (no symlink to follow). 0o600
-                # mode for new files (CLAUDE_ENV_FILE may carry
-                # PATH entries operator wouldn't share publicly).
-                fd = os.open(
-                    env_file,
-                    os.O_WRONLY | os.O_APPEND | os.O_CREAT
-                    | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
-                    0o600,
-                )
-            except OSError:
-                # Symlink, bad perms, or path now missing —
-                # leave env_file alone.
-                return
-            with os.fdopen(fd, "a") as f:
-                f.write("\n".join(additions) + "\n")
-    except OSError:
-        pass
 
 
 # ---------------------------------------------------------------------------
