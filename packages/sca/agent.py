@@ -106,7 +106,7 @@ def _find_sca_agent() -> Optional[Path]:
     if env_path:
         p = Path(env_path).resolve()
         if not p.is_file():
-            logger.warning("RAPTOR_SCA_AGENT=%s does not exist — ignoring", env_path)
+            logger.warning(f"RAPTOR_SCA_AGENT={env_path} does not exist — ignoring")
         else:
             try:
                 text = p.read_text(encoding="utf-8")

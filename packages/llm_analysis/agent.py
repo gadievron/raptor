@@ -832,7 +832,7 @@ class AutonomousSecurityAgentV2:
                 )
                 self._codeql_dbs = discover_codeql_databases(self.out_dir) or {}
             except Exception as e:
-                logger.debug("Tier 1 gate: DB discovery failed: %s", e)
+                logger.debug(f"Tier 1 gate: DB discovery failed: {e}")
                 self._codeql_dbs = {}
         if not self._codeql_dbs:
             return "no_check"
@@ -844,7 +844,7 @@ class AutonomousSecurityAgentV2:
                                        target_path=self.repo_path)
         except Exception as e:
             # The gate must never break the pipeline. Log and proceed.
-            logger.debug("Tier 1 gate: check raised: %s", e)
+            logger.debug(f"Tier 1 gate: check raised: {e}")
             return "no_check"
 
     def generate_exploit(self, vuln: VulnerabilityContext) -> bool:
