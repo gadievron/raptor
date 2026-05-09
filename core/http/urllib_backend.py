@@ -332,12 +332,25 @@ class UrllibClient:
         own retry loop if needed.
 
         Caller must fully consume the iterator OR call ``.close()`` on
-        it to release the connection back to the pool. A common
-        pattern::
+        it to release the connection back to the pool.
+
+        A common pattern (NOTE the explicit ``max_bytes``)::
 
             with open(dest, "wb") as f:
-                for chunk in client.stream_bytes(url):
+                for chunk in client.stream_bytes(url, max_bytes=100 * 1024 * 1024):
                     f.write(chunk)
+
+        Always pass an explicit ``max_bytes`` ceiling. Pre-fix
+        the example here omitted ``max_bytes``, leading
+        callers to hit the method's default and write
+        attacker-served content straight to disk. Even a
+        modest 1 GB serve from a hostile mirror can fill a
+        constrained ``/tmp`` partition before the operator
+        notices. ``max_bytes`` enforces the cap by raising
+        :class:`SizeLimitExceeded` mid-stream — your
+        ``with open(...)`` block then sees the partial-write
+        file, which the caller should ``os.unlink`` in the
+        except handler.
         """
         if retries != 0:
             raise ValueError(
