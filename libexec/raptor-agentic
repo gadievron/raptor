@@ -41,6 +41,22 @@ done
 unset _symhops
 RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
 
+# Defensive: confirm we're really inside a RAPTOR install before exec'ing
+# python3 on what might be a missing path. Fails loudly if symlink-walk
+# resolved to somewhere unexpected.
+#
+# Order: this check runs BEFORE sourcing _dangerous_env_strip.sh below
+# so a broken-install path produces the explanatory "cannot find
+# raptor.py" message rather than bash's confusing
+# "No such file or directory" on the source line. The strip script
+# lives next to raptor.py, so if raptor.py is missing the strip script
+# is also missing, and the test harness expects the friendlier error.
+if [ ! -f "$RAPTOR_DIR/raptor.py" ]; then
+    echo "raptor-agentic: cannot find raptor.py under $RAPTOR_DIR" >&2
+    echo "raptor-agentic: (resolved from $SCRIPT)" >&2
+    exit 1
+fi
+
 # Strip env vars that could inject code into the Python process.
 # Same single-source-of-truth as bin/raptor and bin/cve-diff. Pre-fix
 # this wrapper relied on the parent (bin/raptor) having already stripped
@@ -49,14 +65,5 @@ RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
 # strip entirely. Apply it here too so the trusted-direct path has the
 # same env-hygiene floor as the bin/raptor → libexec/ path.
 . "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"
-
-# Defensive: confirm we're really inside a RAPTOR install before exec'ing
-# python3 on what might be a missing path. Fails loudly if symlink-walk
-# resolved to somewhere unexpected.
-if [ ! -f "$RAPTOR_DIR/raptor.py" ]; then
-    echo "raptor-agentic: cannot find raptor.py under $RAPTOR_DIR" >&2
-    echo "raptor-agentic: (resolved from $SCRIPT)" >&2
-    exit 1
-fi
 
 exec python3 "$RAPTOR_DIR/raptor.py" agentic "$@"

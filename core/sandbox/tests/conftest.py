@@ -62,6 +62,14 @@ def _sandbox_state_guard():
         # sysctl=1 box where it should be False).
         "_mount_ns_available_cache",
         "_libseccomp_cache", "_user_limits_cache",
+        # `_user_limits_cache_decided_at` carries the wall-clock
+        # at which the negative-cache decision was made (see
+        # core/sandbox/preexec.py:_FAIL_TTL_S). Snapshotted alongside
+        # the cache itself so a test that pokes the cache also rolls
+        # the timestamp back — otherwise the next test sees a
+        # cached `{}` whose timestamp is in the future relative to
+        # the test's assumed "fresh process" baseline.
+        "_user_limits_cache_decided_at",
         "_ptrace_available_cache",
         # macOS sandbox-exec smoke-test result. Tests that mock
         # check_seatbelt_available() without snapshotting would
