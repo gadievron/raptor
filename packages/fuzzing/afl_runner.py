@@ -694,6 +694,19 @@ class AFLRunner:
             if test_input:
                 readable_paths.append(str(Path(test_input).parent))
 
+            # Bound afl-showmap wallclock. Pre-fix the call had no
+            # `timeout=` — afl-showmap runs the (attacker-controlled)
+            # target binary with a single corpus entry to extract
+            # coverage; a target with an infinite loop, a sleep, or
+            # any non-terminating control flow on the chosen input
+            # would hang the analyser indefinitely. afl-showmap's
+            # own `-t` flag bounds the per-execution timeout, but a
+            # subprocess-level safety net catches the wedge case
+            # where the target ignores SIGALRM (e.g. a binary that
+            # blocks signals or installs a custom handler that
+            # masks the timeout). 5 minutes is generous: typical
+            # showmap runs are sub-second; even instrumentation-
+            # heavy binaries finish in well under a minute.
             result = _sandbox_run(
                 showmap_cmd,
                 block_network=True,
@@ -705,6 +718,7 @@ class AFLRunner:
                 stdin=stdin_input,
                 cwd=str(self.output_dir),
                 env=env,
+                timeout=300,
             )
 
             # Parse output for coverage info
