@@ -65,9 +65,28 @@ logger = logging.getLogger(__name__)
 # gitlab.com plus the CDN hosts they redirect to on clone (LFS, object
 # storage). Add a host here only when the URL allowlist in
 # ``validate.py`` also allows it — the two lists must stay coupled.
+#
+# Pre-fix this list missed two CDN hosts that GitHub / GitLab
+# redirect to during clone-time content fetches:
+#
+#   raw.githubusercontent.com:    raw blob downloads (LFS objects,
+#                                  release tarballs, attachment
+#                                  fetches the smudge filter
+#                                  triggers).
+#   media.githubusercontent.com:  binary release artefacts (some
+#                                  release-download flows that LFS-
+#                                  configured repos hit during
+#                                  checkout).
+#
+# Without these, clones of LFS-using repos failed with `unable to
+# access 'https://raw.githubusercontent.com/...'` errors mid-checkout
+# — operator saw "git clone failed" with no signal that the proxy
+# allowlist was the missing piece. Add them so the egress proxy
+# accepts the redirected hosts.
 _PROXY_HOSTS = (
     "github.com", "gitlab.com",
     "codeload.github.com", "objects.githubusercontent.com",
+    "raw.githubusercontent.com", "media.githubusercontent.com",
 )
 
 
