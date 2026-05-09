@@ -538,7 +538,31 @@ class Pipeline:
             )
 
     def _assert_disk(self, path: Path) -> None:
-        target = path.parent if (isinstance(path, Path) and path.exists()) else "/"
+        # Pre-fix the fallback was `"/"` — checked filesystem
+        # usage on the ROOT mountpoint when `path` didn't exist
+        # yet. That's wrong on multi-mount setups: the operator
+        # often runs RAPTOR with output under `/home/.../out`
+        # mounted on a separate volume from `/`. The disk-budget
+        # check then asserted on the WRONG filesystem (`/`'s
+        # 60% used) while the actual write target's filesystem
+        # (`/home`'s 95% used, about to fill up) sailed through.
+        # Operators saw "disk OK" right before "disk full" errors.
+        #
+        # Walk up the path's parents to find the closest
+        # ANCESTOR that DOES exist — that's on the same
+        # filesystem the path will live on once created. Falls
+        # back to `/` only when no parent exists (path was
+        # something pathological like an empty string).
+        if isinstance(path, Path):
+            target = None
+            for ancestor in [path] + list(path.parents):
+                if ancestor.exists():
+                    target = ancestor.parent if ancestor.is_file() else ancestor
+                    break
+            if target is None:
+                target = "/"
+        else:
+            target = "/"
         disk_budget.assert_ok(target, self.disk_limit_pct)
 
 
