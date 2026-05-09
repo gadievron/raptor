@@ -279,11 +279,17 @@ class CExtractor:
     # before running the matcher so a stray minified file or a
     # generated source dump (single-line concatenated declarations)
     # can't hang inventory.
-    ANSI_PATTERN = r'^(?:[\w\s\*]+)\s+(\w+)\s*\([^;]*\)\s*\{'
-    ANSI_SPLIT_PATTERN = r'^(?:[\w\s\*]+)\s+(\w+)\s*\([^;{]*\)\s*$'
+    # Compile with `re.ASCII` so the `\w` captures match only ASCII
+    # word chars. C identifiers are ASCII per the language spec; without
+    # the flag, Python's `\w` admits Unicode word characters that would
+    # be captured as the function name and surfaced into the inventory
+    # under a homoglyph that visually matches a real ASCII identifier
+    # — confusing greps and downstream cross-references.
+    ANSI_PATTERN = r'(?a)^(?:[\w\s\*]+)\s+(\w+)\s*\([^;]*\)\s*\{'
+    ANSI_SPLIT_PATTERN = r'(?a)^(?:[\w\s\*]+)\s+(\w+)\s*\([^;{]*\)\s*$'
     _MAX_C_LINE = 16 * 1024
-    KNR_FUNCNAME = r'^(\w+)\s*\([\w\s,]*\)\s*$'
-    FUNCNAME_OPEN_PAREN = r'^(\w+)\s*\([^)]*$'
+    KNR_FUNCNAME = r'(?a)^(\w+)\s*\([\w\s,]*\)\s*$'
+    FUNCNAME_OPEN_PAREN = r'(?a)^(\w+)\s*\([^)]*$'
 
     C_TYPE_HINTS = frozenset({
         'void', 'int', 'char', 'short', 'long', 'float', 'double',
