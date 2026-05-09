@@ -28,11 +28,47 @@ set -euo pipefail
 
 umask 077
 
-# Find active project
+# Find active project. Pre-fix the LINK_TARGET from
+# `readlink` was used unvalidated:
+#
+#   LINK_TARGET=$(readlink "$ACTIVE_LINK")
+#   PROJECT_FILE="$HOME/.raptor/projects/$LINK_TARGET"
+#
+# `.active` is operator-controlled but should always
+# point at a SIBLING entry under `~/.raptor/projects/`.
+# If something flipped it (intentional misuse, hostile
+# /tmp/race, or a stray rebuild that pointed it
+# elsewhere), `LINK_TARGET` could be:
+#
+#   * `../../etc/passwd` → `PROJECT_FILE` resolves to
+#     `~/.raptor/projects/../../etc/passwd` →
+#     `/etc/passwd`. The next jq/python parse would
+#     then read /etc/passwd as JSON and probably fail,
+#     but the failure would be confusing and the read
+#     itself happens.
+#   * `../foo/bar.json` — escapes `~/.raptor/projects/`
+#     into other directories under `~/.raptor/`.
+#   * Absolute path — same as above.
+#
+# Reject `LINK_TARGET` that contains `/` or `..`. Real
+# project entries are bare basenames (`my-target`,
+# `assessment-2026-05`, etc.), never path components.
 ACTIVE_LINK="$HOME/.raptor/projects/.active"
 [ ! -L "$ACTIVE_LINK" ] && exit 0
 
 LINK_TARGET=$(readlink "$ACTIVE_LINK")
+case "$LINK_TARGET" in
+    */*|"") exit 0 ;;       # path component or empty — refuse
+    .|..)  exit 0 ;;        # parent / self — refuse
+    .*)    exit 0 ;;        # leading dot reserved for hook state files (.active etc.)
+esac
+# `..` substring guard catches `..foo`, `foo..`, `foo..bar`
+# even though those are legal filenames — the false-positive
+# cost (an operator naming a project literally `foo..bar`)
+# is acceptable next to "no traversal smuggled through".
+case "$LINK_TARGET" in
+    *..*) exit 0 ;;
+esac
 PROJECT_FILE="$HOME/.raptor/projects/$LINK_TARGET"
 [ ! -f "$PROJECT_FILE" ] && exit 0
 
