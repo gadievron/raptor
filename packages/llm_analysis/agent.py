@@ -347,10 +347,16 @@ def convert_validated_to_agent_format(data: dict) -> List[Dict[str, Any]]:
 
 class AutonomousSecurityAgentV2:
     def __init__(self, repo_path: Path, out_dir: Path, llm_config: Optional[LLMConfig] = None,
-                 prep_only: bool = False):
+                 prep_only: bool = False,
+                 synthesise_checkers: bool = True):
         self.repo_path = repo_path
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
+        # KNighter follow-up: synthesise a checker rule for every
+        # confirmed exploitable finding and emit suspicious annotations
+        # for variants found across the codebase. Default on; opt out
+        # via ``--no-checker-synthesis`` for cost-sensitive runs.
+        self.synthesise_checkers = synthesise_checkers
 
         # Detect LLM availability and choose provider
         availability = detect_llm_availability()
@@ -1144,6 +1150,7 @@ class AutonomousSecurityAgentV2:
         dataflow_validated = 0
         false_positives_found = 0
         annotations_emitted = 0
+        variant_annotations = 0
         idx = 0  # Initialize idx to prevent UnboundLocalError when unique_findings is empty
 
         is_prep = isinstance(self.llm, ClaudeCodeProvider)
@@ -1212,6 +1219,33 @@ class AutonomousSecurityAgentV2:
                         # 3. Generate patch using LLM (only for exploitable)
                         if self.generate_patch(vuln):
                             patches_generated += 1
+
+                        # 4. KNighter follow-up: synthesise a checker
+                        # rule for the confirmed pattern, run across
+                        # the codebase, emit suspicious annotations
+                        # for variant matches. One bug → N candidate
+                        # variants. Best-effort — failures don't break
+                        # the analysis loop.
+                        if (
+                            emit_annotations
+                            and getattr(self, "synthesise_checkers", True)
+                        ):
+                            try:
+                                from packages.llm_analysis.checker_followup import (
+                                    emit_variant_annotations_for_finding,
+                                )
+                                n_variants = emit_variant_annotations_for_finding(
+                                    vuln,
+                                    out_dir=self.out_dir,
+                                    checklist=checklist,
+                                    repo_root=self.repo_path,
+                                    llm_client=self.llm,
+                                )
+                                variant_annotations += n_variants
+                            except Exception:
+                                logger.debug(
+                                    "checker followup error", exc_info=True,
+                                )
                     else:
                         logger.debug(f"⊘ Skipping patch generation (not exploitable)")
 
@@ -1249,6 +1283,7 @@ class AutonomousSecurityAgentV2:
             "dataflow_validated": dataflow_validated,
             "false_positives_caught": false_positives_found,
             "annotations_emitted": annotations_emitted,
+            "variant_annotations": variant_annotations,
             "execution_time": execution_time,
             "llm_stats": llm_stats,
             "results": results,
@@ -1286,6 +1321,11 @@ class AutonomousSecurityAgentV2:
                 logger.info(
                     f"✓ Annotations emitted: {annotations_emitted} "
                     f"(in {self.out_dir / 'annotations'})"
+                )
+            if variant_annotations > 0:
+                logger.info(
+                    f"✓ Checker-synthesised variants: {variant_annotations} "
+                    f"(suspicious annotations from KNighter follow-up)"
                 )
             logger.info(f"")
             if dataflow_validated > 0:
@@ -1353,6 +1393,15 @@ def main() -> None:
         help="Skip per-finding annotation emission and the "
              "annotation-derived coverage record",
     )
+    ap.add_argument(
+        "--no-checker-synthesis",
+        action="store_true",
+        help="Skip the KNighter follow-up: don't synthesise a "
+             "checker rule per confirmed finding, don't emit "
+             "variant annotations. Use to cut LLM cost on confirmed "
+             "exploitable findings — at the price of losing variant "
+             "discovery.",
+    )
     ap.add_argument("--prep-only", action="store_true",
                     help="Skip LLM analysis; produce structured findings for external orchestration")
     ap.add_argument("--max-parallel", type=int, default=3, help="Max parallel dispatch threads")
@@ -1400,7 +1449,11 @@ def main() -> None:
 
     # When role flags are present, force prep-only then hand off to orchestrator
     prep_only = args.prep_only or _has_role_flags
-    agent = AutonomousSecurityAgentV2(repo_path, out_dir, prep_only=prep_only)
+    agent = AutonomousSecurityAgentV2(
+        repo_path, out_dir,
+        prep_only=prep_only,
+        synthesise_checkers=not args.no_checker_synthesis,
+    )
 
     # Load checklist for metadata lookup
     checklist = None
