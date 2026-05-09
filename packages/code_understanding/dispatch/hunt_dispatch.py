@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Callable, Dict, List, Optional
 
 from core.llm.config import ModelConfig
@@ -270,17 +271,75 @@ def _build_tools(sandbox: SandboxedTools) -> List[ToolDef]:
 # ---------------------------------------------------------------------------
 
 
+_CWE_RE = re.compile(r'\bCWE-(\d{1,5})\b', re.IGNORECASE)
+
+
 def _format_user_message(pattern: str) -> str:
     """Build the initial user message with the pattern description.
 
     Pattern is wrapped in clear delimiters so prompt-injection attempts
     in the pattern text don't blend with the operator's instructions.
+
+    When the pattern's CWE id or vocabulary maps to a known cwe_strategies
+    bug class, the operator-curated strategy block is appended *after*
+    the closing ``</pattern>`` tag so the model treats the lenses as
+    trusted operator guidance, not part of the data zone.
     """
-    return (
+    base = (
         "Hunt the target codebase for variants of the following pattern. "
         "Use the available tools to enumerate the codebase, then call "
         "submit_variants with the full list.\n\n"
         "<pattern>\n"
         f"{pattern}\n"
         "</pattern>"
+    )
+    strategy_block = _build_hunt_strategy_block(pattern)
+    if strategy_block:
+        base += "\n\n" + strategy_block
+    return base
+
+
+def _build_hunt_strategy_block(pattern: str) -> str:
+    """Render bug-class lenses for the hunt pattern, or empty if none.
+
+    Pattern signals fed to ``pick_strategies``:
+      * Any ``CWE-NNN`` id literally present in the pattern → ``candidate_cwes``
+        (100-point pin per match in the picker).
+      * The pattern text itself is passed as ``function_name`` so the
+        picker's keyword tokeniser can match natural-language descriptions
+        like ``use after free`` → ``memory_management`` or ``path traversal``
+        → ``input_handling``.
+
+    Failures (substrate ImportError, picker exception, render exception)
+    return ``""`` — the hunt continues with the base user message
+    unchanged. We never block the loop on strategy lookup.
+    """
+    try:
+        from core.llm.cwe_strategies import pick_strategies, render_strategies
+    except Exception:
+        return ""
+
+    candidate_cwes = tuple(
+        f"CWE-{m.group(1)}" for m in _CWE_RE.finditer(pattern)
+    )
+    try:
+        picked = pick_strategies(
+            file_path="",
+            function_name=pattern,
+            candidate_cwes=candidate_cwes,
+            max_strategies=3,
+        )
+        if not picked:
+            return ""
+        rendered = render_strategies(picked)
+    except Exception:
+        return ""
+
+    return (
+        "## Bug-class lenses for this hunt\n\n"
+        "These bug-class strategies are operator-curated and apply to "
+        "the pattern above. Use them as decision lenses while enumerating "
+        "variants — each strategy lists the canonical primitives, key "
+        "questions, and CVE exemplars for the bug class.\n\n"
+        + rendered
     )
