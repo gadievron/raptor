@@ -561,6 +561,17 @@ def parse_requirements(p, _seen=None):
 
 def parse_package_json(p):
     try:
+        # Distinguish missing-file from parse-error. Pre-fix
+        # `load_json` returns None for BOTH "file doesn't exist" and
+        # "file exists but malformed" — the caller saw the same
+        # `'failed to parse JSON'` error string in either case, with
+        # no breadcrumb pointing at "the file isn't there at all"
+        # (which usually means a stale path in the caller's
+        # discovery output, not a parse problem).
+        from pathlib import Path as _Path
+        _p = _Path(p)
+        if not _p.exists():
+            return {'error': f'package.json not found at {p}'}
         obj = load_json(p)
         if obj is None:
             return {'error': 'failed to parse JSON'}
