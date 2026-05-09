@@ -99,9 +99,25 @@ def _clean_dest(dest: Path) -> None:
     if dest.exists() and not dest.is_dir():
         raise ValueError(f"_clean_dest refusing non-directory: {dest!r}")
     if dest.exists() and any(dest.iterdir()):
+        # Use absolute path + sanitised env. Pre-fix the bare `rm`
+        # was resolved via PATH — a hostile PATH entry (a CI
+        # environment with `.` early in PATH, an operator-poisoned
+        # ~/.bashrc) could shadow `/usr/bin/rm` with an attacker
+        # binary that the destructive operation then ran.
+        # `shutil.which("rm")` resolves once at module use-time
+        # (not import — keeps the cost off the import critical
+        # path); fallback to `/usr/bin/rm` keeps the operation
+        # working on hosts where shutil.which trips on a weird
+        # PATH config. `env=` to a stripped environment so the
+        # subprocess can't pick up LD_PRELOAD / LD_LIBRARY_PATH /
+        # other code-injection vectors via the parent's env.
+        import shutil
+        rm_bin = shutil.which("rm") or "/usr/bin/rm"
+        from core.config import RaptorConfig
         subprocess.run(
-            ["rm", "-rf", str(dest)],
+            [rm_bin, "-rf", str(dest)],
             capture_output=True, check=False, timeout=60,
+            env=RaptorConfig.get_safe_env(),
         )
 
 
