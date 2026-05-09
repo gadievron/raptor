@@ -105,17 +105,25 @@ _DEFAULT_TOTAL_TIMEOUT = 3600.0      # absolute cap on a single tunnel
 #         CONNECT-tunneled fetches; verified with both CLI and
 #         ``npm_config_maxsockets`` env var). Direct probe: peak 257
 #         tunnels for ``debug``, peak 298 for ``eslint``.
-#   1024 — current. Sized at ~3-4× the observed peak across the top
-#         100 npm packages so even unusually-deep trees absorb their
-#         burst without refusal. Resource-wise this is still tight
-#         (each tunnel ≈ 2 sockets + ~1 KiB state on the proxy
-#         thread; system FD limit is 524288 by default).
+#   1024 — interim (#411). Looked safe at first; later sampling at
+#         finer resolution showed peaks up to 792 for ``debug`` and
+#         655 for ``eslint`` (earlier 250ms-tick samples missed the
+#         instantaneous spikes), so 1024 was only ~1.3× the real
+#         burst, not the ~3× the prior comment claimed.
+#   4096 — current. Sized at ~5× the observed peak so the per-run
+#         burst variance (network jitter + proxy event-loop
+#         scheduling can inflate a peak 2× run-to-run) does not
+#         brush the cap. Resource-wise this is still cheap (each
+#         tunnel ≈ 2 sockets + ~1 KiB proxy-thread state; system
+#         FD limit is 524288 by default — a runaway client would
+#         need to drive ~250× the cap before exhausting the
+#         process FD ceiling).
 #
-# Consumer note: caps below ~512 will start refusing CONNECTs from
-# real-world npm install runs against bursty manifests — set the
-# cap via the ``max_tunnels=`` constructor kwarg only when you have
-# concrete evidence of FD exhaustion at the default.
-_DEFAULT_MAX_TUNNELS = 1024
+# Consumer note: caps below ~2048 will eventually refuse CONNECTs
+# from real-world npm install runs against bursty manifests — set
+# the cap via the ``max_tunnels=`` constructor kwarg only when you
+# have concrete evidence of FD exhaustion at the default.
+_DEFAULT_MAX_TUNNELS = 4096
 _DEFAULT_BUFFER_SIZE = 64 * 1024     # relay buffer per direction
 
 # DNS cache TTL. Holds (expires_at, addrinfo_list) per (host, port,
