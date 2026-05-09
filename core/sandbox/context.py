@@ -1264,7 +1264,30 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         # line ~620 ("case 2: CLI flag + internal helper without
         # output"). Firing the degradation warning for those calls is
         # noise.
+        # Probe whether the Landlock-only audit helper can engage on
+        # this host. When True, the spawn dispatch will route through
+        # ``_landlock_audit.run_landlock_audit`` instead of bare
+        # ``subprocess.run``, restoring observe signal. Suppress the
+        # degrade marker / warning in that case — audit IS engaging,
+        # just via a different mechanism. Probed eagerly here so the
+        # marker decision and the eventual dispatch agree on whether
+        # this run is "audit-degraded" or not.
+        _landlock_audit_eligible = False
         if nonlocal_audit_mode and not spawn_eligible:
+            try:
+                from .ptrace_probe import (
+                    check_ptrace_available as _la_pre_ptp,
+                )
+                from .seccomp import (
+                    check_seccomp_available as _la_pre_sca,
+                )
+                _landlock_audit_eligible = bool(
+                    _la_pre_sca() and _la_pre_ptp() and seccomp_profile
+                )
+            except ImportError:
+                _landlock_audit_eligible = False
+        if (nonlocal_audit_mode and not spawn_eligible
+                and not _landlock_audit_eligible):
             # Distinguish the actual root cause. PR #265 added two new
             # failure paths (B fallback, cache hit) — those provide
             # their own _b_fallback_reason; otherwise fall through to
@@ -1578,7 +1601,114 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                         _spawn_err,
                     )
             if not used_spawn:
-                result = subprocess.run(full_cmd, **kwargs)
+                # Audit/observe in Landlock-only mode: the bare
+                # subprocess.run path has no tracer-fork machinery,
+                # so audit silently degraded pre-PR. _landlock_audit
+                # restores observe signal here by forking a tracer
+                # subprocess in parallel with the target child.
+                # Engaged only when the operator asked for audit
+                # AND we have the prerequisites (libseccomp + ptrace);
+                # any failure path falls back cleanly to the bare
+                # subprocess.run below. mount-ns absent is acceptable
+                # — Landlock + seccomp + ptrace are sufficient for
+                # observe semantics; the THREAT_MODEL.md
+                # Landlock-only-mode warning still applies.
+                _audit_landlock_engaged = False
+                if nonlocal_audit_mode:
+                    try:
+                        from .ptrace_probe import (
+                            check_ptrace_available as _la_ptrace_check,
+                        )
+                        from .seccomp import (
+                            check_seccomp_available as _la_seccomp_check,
+                            _make_seccomp_preexec as _la_make_seccomp,
+                        )
+                        from .landlock import (
+                            _make_landlock_preexec as _la_make_landlock,
+                        )
+                        from . import _landlock_audit as _la
+                        if (_la_seccomp_check()
+                                and _la_ptrace_check()):
+                            # Build the rlimit-only preexec (no
+                            # Landlock — we install it separately
+                            # post-sync), the Landlock preexec, and
+                            # the seccomp preexec with audit_mode=True.
+                            _rlimit_only = _make_preexec_fn(
+                                effective_limits,
+                                writable_paths=None,
+                                readable_paths=None,
+                                allowed_tcp_ports=None,
+                            )
+                            _wp = list(writable_paths or [])
+                            if "/tmp" not in _wp:
+                                _wp.append("/tmp")
+                            _ll_preexec = _la_make_landlock(
+                                _wp,
+                                list(allowed_tcp_ports)
+                                    if allowed_tcp_ports else None,
+                                readable_paths=(
+                                    list(effective_read_paths)
+                                    if effective_read_paths else None
+                                ),
+                            )
+                            _sc_preexec = _la_make_seccomp(
+                                seccomp_profile,
+                                block_udp=seccomp_block_udp,
+                                audit_mode=True,
+                                observe_mode=bool(observe and nonlocal_audit_mode),
+                            ) if seccomp_profile else None
+                            _audit_run_dir_la = (
+                                audit_run_dir or output
+                            )
+                            try:
+                                result = _la.run_landlock_audit(
+                                    full_cmd,
+                                    audit_run_dir=str(_audit_run_dir_la),
+                                    audit_verbose=audit_verbose_active,
+                                    observe_mode=bool(observe and nonlocal_audit_mode),
+                                    observe_nonce=(
+                                        nonlocal_observe_nonce
+                                        if observe and nonlocal_audit_mode
+                                        else None
+                                    ),
+                                    writable_paths=writable_paths or [],
+                                    readable_paths=effective_read_paths or [],
+                                    allowed_tcp_ports=(
+                                        list(allowed_tcp_ports)
+                                        if allowed_tcp_ports else None
+                                    ),
+                                    target=target, output=output,
+                                    restrict_reads=restrict_reads,
+                                    landlock_preexec=_ll_preexec,
+                                    seccomp_preexec=_sc_preexec,
+                                    rlimit_preexec=_rlimit_only,
+                                    env=kwargs.get("env"),
+                                    cwd=kwargs.get("cwd"),
+                                    timeout=kwargs.get("timeout"),
+                                    capture_output=kwargs.get(
+                                        "capture_output", False),
+                                    text=kwargs.get("text", False),
+                                    stdin=kwargs.get("stdin"),
+                                    start_new_session=kwargs.get(
+                                        "start_new_session", True),
+                                )
+                                _audit_landlock_engaged = True
+                            except (RuntimeError, OSError) as _la_err:
+                                # Tracer fork failed — fall through
+                                # to plain subprocess.run. Operator
+                                # gets the existing degrade marker.
+                                logger.warning(
+                                    "Sandbox: Landlock-only audit "
+                                    "tracer failed (%s); falling back "
+                                    "to non-audit subprocess.run",
+                                    _la_err,
+                                )
+                    except ImportError:
+                        # Sandbox helpers missing — let the bare
+                        # path run.
+                        pass
+                if not _audit_landlock_engaged:
+                    result = subprocess.run(full_cmd, **kwargs)
         finally:
             events = (
                 proxy_instance.unregister_sandbox(proxy_token)
@@ -1618,9 +1748,16 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         # to surface None and let the operator notice their probe
         # didn't engage. The sandbox-audit-degraded.json marker
         # explains why.
+        # Either the spawn-path engaged the tracer (mount-ns spawn
+        # OR macOS seatbelt) OR the Landlock-only audit helper did.
+        # Stamp the nonce in either case so the operator can pass
+        # it to parse_observe_log() for spoof-resistant parsing.
+        _audit_engaged_anywhere = (
+            spawn_eligible or _audit_landlock_engaged
+        )
         if (nonlocal_observe_nonce is not None
                 and nonlocal_audit_mode
-                and spawn_eligible):
+                and _audit_engaged_anywhere):
             result.sandbox_info["observe_nonce"] = nonlocal_observe_nonce
         else:
             result.sandbox_info["observe_nonce"] = None

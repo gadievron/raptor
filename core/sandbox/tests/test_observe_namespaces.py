@@ -63,49 +63,42 @@ def _prereqs_met() -> tuple[bool, str]:
 class TestObserveUnderLandlockOnly(unittest.TestCase):
     """When mount-ns isn't available (Ubuntu 24.04+ default with
     ``apparmor_restrict_unprivileged_userns=1``), the sandbox falls
-    back to a Landlock-only ``subprocess.run`` path that does NOT
-    fork a tracer. Observe currently CANNOT engage in that path
-    because the tracer-fork machinery is wired through
-    ``_spawn.run_sandboxed`` (the mount-ns spawn entry).
+    back to a Landlock-only path. Observe IS supported there via
+    ``core.sandbox._landlock_audit.run_landlock_audit``, which
+    forks a tracer subprocess in parallel with the target without
+    needing a namespace setup.
 
-    This is a documented limitation — observe degrades gracefully
-    rather than failing loudly. The well-defined contract:
+    This test forces mount-ns "unavailable" via mocks so the
+    Landlock-only audit path engages on hosts where mount-ns is
+    actually present. The contract:
 
       * the spawned command still runs and returns its real exit code;
-      * a ``sandbox-audit-degraded.json`` marker lands in the run dir
-        explaining why audit didn't engage and how to fix;
-      * ``result.sandbox_info["observe_nonce"]`` is None to signal
-        "no provenance proof — observe didn't engage";
-      * no ``.sandbox-observe.jsonl`` is produced.
-
-    Full closure (extending the Landlock-only path with tracer-fork
-    support so cc_profile calibration works on Ubuntu 24.04+) is a
-    separate architectural follow-up; tracked outside this PR.
-
-    This test pins the documented degrade contract so a regression
-    that turned the silent degrade into a crash, or that re-enabled
-    observe under Landlock-only without testing it end-to-end, gets
-    caught."""
+      * ``result.sandbox_info["observe_nonce"]`` is populated;
+      * ``.sandbox-observe.jsonl`` is produced with observe records;
+      * NO ``sandbox-audit-degraded.json`` marker (audit IS engaging,
+        just via the Landlock-only path).
+    """
 
     def setUp(self):
         ok, reason = _prereqs_met()
         if not ok:
             self.skipTest(reason)
 
-    def test_observe_degrades_gracefully_when_mount_ns_unavailable(self):
+    def test_observe_engages_via_landlock_only_when_mount_ns_unavailable(self):
         from unittest.mock import patch
-        import json
         from core.sandbox import run as sandbox_run
-        from core.sandbox.observe_profile import OBSERVE_FILENAME
+        from core.sandbox.observe_profile import (
+            OBSERVE_FILENAME, parse_observe_log,
+        )
 
         with TemporaryDirectory() as d:
             run_dir = Path(d) / "observe-no-mount-ns"
             run_dir.mkdir()
 
             # Force the Landlock-only path — even if the test host
-            # has mount-ns available. We mock ``check_mount_available``
-            # too so the audit-degrade reason resolves to "mount-ns
-            # blocked by host" (the realistic Ubuntu 24.04+ case).
+            # has mount-ns available. We mock both probes (the
+            # spawn-side and context-side checks) so eligibility
+            # resolves the Ubuntu 24.04+ way.
             with patch("core.sandbox._spawn.mount_ns_available",
                        return_value=False), \
                  patch("core.sandbox.context.check_mount_available",
@@ -117,39 +110,45 @@ class TestObserveUnderLandlockOnly(unittest.TestCase):
                     capture_output=True, text=True, timeout=10,
                 )
 
-            # Contract 1: the spawned command exits cleanly.
+            # Contract 1: spawn succeeds.
             self.assertEqual(
                 result.returncode, 0,
-                f"true should exit 0 even when audit can't engage; "
+                f"true should exit 0; "
                 f"stderr={result.stderr!r}",
             )
 
-            # Contract 2: observe_nonce is None (audit didn't engage,
-            # so no provenance secret to surface).
-            self.assertIsNone(
-                result.sandbox_info.get("observe_nonce"),
-                "observe_nonce must be None when audit didn't engage",
+            # Contract 2: observe_nonce is populated — Landlock-only
+            # audit DID engage.
+            nonce = result.sandbox_info.get("observe_nonce")
+            self.assertIsNotNone(
+                nonce,
+                "observe_nonce must be populated when Landlock-only "
+                "audit engages",
             )
+            self.assertEqual(len(nonce), 32, "nonce is 128-bit hex")
 
-            # Contract 3: no observe log produced.
-            self.assertFalse(
-                (run_dir / OBSERVE_FILENAME).exists(),
-                "no JSONL should be written when observe degraded",
-            )
-
-            # Contract 4: a sandbox-audit-degraded.json marker
-            # explains the degrade. Operators inspecting an output
-            # dir can distinguish this from "audit ran, found
-            # nothing".
-            marker = run_dir / "sandbox-audit-degraded.json"
+            # Contract 3: observe log produced and parseable.
+            observe_log = run_dir / OBSERVE_FILENAME
             self.assertTrue(
-                marker.exists(),
-                f"degrade marker missing at {marker} — operator "
-                f"loses visibility into why audit didn't run",
+                observe_log.exists(),
+                f"observe log missing at {observe_log}",
             )
-            content = json.loads(marker.read_text())
-            self.assertIn("reason", content)
-            self.assertIn("mount-ns", content["reason"])
+            profile = parse_observe_log(
+                run_dir, expected_nonce=nonce,
+            )
+            self.assertGreater(
+                len(profile.paths_read) + len(profile.paths_stat),
+                0,
+                f"expected paths recorded; got profile={profile!r}",
+            )
+
+            # Contract 4: NO degrade marker (audit IS engaging).
+            marker = run_dir / "sandbox-audit-degraded.json"
+            self.assertFalse(
+                marker.exists(),
+                "Landlock-only audit engaged — no degrade marker "
+                "should land",
+            )
 
 
 # ---------------------------------------------------------------------------
