@@ -234,7 +234,7 @@ _ALLOWLIST: Tuple[AllowlistEntry, ...] = (
     ),
     # ----- packages/llm_analysis/agent.py -----
     AllowlistEntry(
-        file="packages/llm_analysis/agent.py", line=953,
+        file="packages/llm_analysis/agent.py", line=967,
         attr="rule_id",
         audit_note=(
             "patch_content_formatted is markdown saved to disk for "
@@ -243,22 +243,22 @@ _ALLOWLIST: Tuple[AllowlistEntry, ...] = (
         ),
     ),
     AllowlistEntry(
-        file="packages/llm_analysis/agent.py", line=955,
+        file="packages/llm_analysis/agent.py", line=969,
         attr="file_path",
         audit_note="markdown for disk (operator review file), not LLM prompt",
     ),
     AllowlistEntry(
-        file="packages/llm_analysis/agent.py", line=956,
+        file="packages/llm_analysis/agent.py", line=970,
         attr="start_line",
         audit_note="markdown for disk, not LLM prompt",
     ),
     AllowlistEntry(
-        file="packages/llm_analysis/agent.py", line=956,
+        file="packages/llm_analysis/agent.py", line=970,
         attr="end_line",
         audit_note="markdown for disk, not LLM prompt",
     ),
     AllowlistEntry(
-        file="packages/llm_analysis/agent.py", line=957,
+        file="packages/llm_analysis/agent.py", line=971,
         attr="level",
         audit_note="markdown for disk, not LLM prompt",
     ),
