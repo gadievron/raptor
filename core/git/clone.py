@@ -77,6 +77,67 @@ def get_safe_git_env() -> Dict[str, str]:
     return RaptorConfig.get_git_env()
 
 
+# Per-invocation `-c key=value` overrides for git commands operating
+# on TARGET REPOSITORIES (i.e. cloned-from-untrusted-source). These
+# are layered ON TOP of the env-strip via get_safe_git_env() because
+# env vars cannot suppress per-repo config inside `target/.git/config`
+# — git reads that unconditionally, and a hostile target can ship a
+# `.git/config` containing:
+#
+#   [core]
+#       fsmonitor = /tmp/attacker-script.sh
+#
+# which then runs the attacker script every time git inspects the
+# index (status, diff, log, rev-parse, etc.). CVE-2024-32002 family.
+#
+# `git -c core.fsmonitor=` (empty value) DISABLES the fsmonitor
+# regardless of any per-repo config. Other entries close known RCE
+# vectors:
+#
+#   - core.editor=true: prevents git from launching an attacker-
+#     specified editor on `git commit --amend` or rebase.
+#   - core.pager=cat: prevents pager-shell-out for paged output.
+#   - core.askPass=true: belt-and-braces with GIT_ASKPASS env.
+#   - core.sshCommand=ssh: prevents per-repo SSH command override.
+#   - protocol.file.allow=user: refuses file:// URLs as remotes.
+#   - protocol.ext.allow=never: refuses ext:: protocol shells.
+#
+# Use `safe_git_command(*args)` below instead of building bare
+# `["git", ...]` lists when operating on a target repo.
+_SAFE_GIT_OVERRIDES = (
+    "-c", "core.fsmonitor=",
+    "-c", "core.editor=true",
+    "-c", "core.pager=cat",
+    "-c", "core.askPass=true",
+    "-c", "core.sshCommand=ssh",
+    "-c", "protocol.file.allow=user",
+    "-c", "protocol.ext.allow=never",
+)
+
+
+def safe_git_command(*args: str) -> list:
+    """Return a git argv list with per-invocation safety overrides
+    layered between ``git`` and the caller's args.
+
+    Use for git commands that operate on a TARGET REPOSITORY
+    (cloned from untrusted source). Internal-only repos
+    (RAPTOR's own .git, test fixtures) don't need this — bare
+    ``["git", ...]`` is fine for them.
+
+    Example::
+
+        # Pre-fix:
+        subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"])
+
+        # Post-fix:
+        subprocess.run(safe_git_command("-C", str(repo), "rev-parse", "HEAD"))
+
+    The result is a list (not a tuple) so callers can extend it
+    in-place if needed.
+    """
+    return ["git", *_SAFE_GIT_OVERRIDES, *args]
+
+
 def _validate_writable_path(p: Path, *, role: str) -> None:
     """Refuse caller-supplied paths that would unsafely widen the
     sandbox's writable scope.
