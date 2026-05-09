@@ -393,6 +393,112 @@ def _emit_trace_steps(
 
 
 # ---------------------------------------------------------------------------
+# variants.json: per-variant annotations from /understand --hunt
+# ---------------------------------------------------------------------------
+
+
+# Map hunt's taint_status / status fields to our annotation status enum.
+# Confirmed-tainted / not_disproven variants are findings worth chasing.
+# Unlikely-tainted / false_positive are still flagged so the operator
+# sees them — "suspicious" rather than dropped silently.
+_TAINT_TO_STATUS = {
+    "confirmed_tainted": "finding",
+    "likely_tainted": "finding",
+    "unlikely_tainted": "suspicious",
+    "false_positive": "suspicious",
+}
+_STATUS_TO_STATUS = {
+    "not_disproven": "finding",
+    "poc_success": "finding",
+    "disproven": "suspicious",
+    "false_positive": "suspicious",
+}
+
+
+def _variant_annotation_status(variant: Dict[str, Any]) -> str:
+    """Decide the annotation status for a hunt variant.
+
+    Prefers ``taint_status`` (hunt's primary signal) over ``status``
+    (the validation-flow lifecycle field, often absent on raw hunt
+    output). Defaults to ``suspicious`` so a variant the LLM emitted
+    without status fields is still surfaced for operator review.
+    """
+    taint = variant.get("taint_status")
+    if isinstance(taint, str) and taint in _TAINT_TO_STATUS:
+        return _TAINT_TO_STATUS[taint]
+    status = variant.get("status")
+    if isinstance(status, str) and status in _STATUS_TO_STATUS:
+        return _STATUS_TO_STATUS[status]
+    return "suspicious"
+
+
+def _emit_variants(
+    variants_data: Dict[str, Any],
+    base_dir: Path, checklist: Dict[str, Any], repo_root: Path,
+    counts: SynthCounts,
+) -> None:
+    for variant in _safe_list_of_dicts(variants_data, "variants"):
+        file_path = variant.get("file")
+        line = variant.get("line")
+        func = _resolve(checklist, file_path, line, repo_root)
+        if not func or not func.get("name"):
+            counts.skipped_no_function += 1
+            continue
+        body_lines: List[str] = []
+        if variant.get("vuln_type"):
+            body_lines.append(f"Variant ({variant['vuln_type']})")
+        if variant.get("matched_code"):
+            body_lines.append(
+                f"Matched code: `{variant['matched_code']}`"
+            )
+        proof = variant.get("proof")
+        if isinstance(proof, dict):
+            if proof.get("vulnerable_code"):
+                body_lines.append(
+                    f"Vulnerable code: `{proof['vulnerable_code']}`"
+                )
+            if proof.get("source"):
+                body_lines.append(f"Source: {proof['source']}")
+            if proof.get("sink"):
+                body_lines.append(f"Sink: {proof['sink']}")
+        elif variant.get("taint_source"):
+            body_lines.append(f"Taint source: {variant['taint_source']}")
+        eps = variant.get("entry_points") or []
+        if isinstance(eps, list) and eps:
+            body_lines.append(
+                f"Entry points: {', '.join(str(e) for e in eps)}"
+            )
+        if variant.get("auth_required") is not None:
+            body_lines.append(f"Auth required: {variant['auth_required']}")
+        if variant.get("notes"):
+            body_lines.append(f"Notes: {variant['notes']}")
+        metadata = {
+            "source": "llm",
+            "status": _variant_annotation_status(variant),
+        }
+        if variant.get("id"):
+            metadata["variant_id"] = _safe_meta(variant["id"])
+        if variant.get("vuln_type"):
+            metadata["vuln_type"] = _safe_meta(variant["vuln_type"])
+        if variant.get("confidence"):
+            metadata["confidence"] = _safe_meta(variant["confidence"])
+        if variant.get("taint_status"):
+            metadata["taint_status"] = _safe_meta(variant["taint_status"])
+        if variant.get("root_cause_group"):
+            metadata["root_cause_group"] = _safe_meta(
+                variant["root_cause_group"],
+            )
+        if variant.get("priority") is not None:
+            metadata["priority"] = _safe_meta(variant["priority"])
+        metadata.update(_hash_metadata(repo_root, file_path, func))
+        ann = Annotation(
+            file=file_path, function=func["name"],
+            body="\n\n".join(body_lines), metadata=metadata,
+        )
+        _write(base_dir, ann, counts, "variant")
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -430,6 +536,12 @@ def synthesise_from_understand_output(
         _emit_sinks(cmap, base_dir, checklist, repo_root, counts)
         _emit_trust_boundaries(cmap, base_dir, checklist, repo_root, counts)
         _emit_unchecked_flows(cmap, base_dir, checklist, repo_root, counts)
+
+    variants_data = _load_json(output_dir / "variants.json")
+    if variants_data:
+        _emit_variants(
+            variants_data, base_dir, checklist, repo_root, counts,
+        )
 
     for trace_path in sorted(output_dir.glob("flow-trace-*.json")):
         trace = _load_json(trace_path)

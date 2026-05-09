@@ -388,3 +388,207 @@ class TestStructuralSurprises:
         counts = synthesise_from_understand_output(out)
         assert counts.errors == 0
         assert counts.emitted == 0
+
+
+# ---------------------------------------------------------------------------
+# Hunt variants — hostile / surprising input shapes
+# ---------------------------------------------------------------------------
+
+
+def _write_variants(out: Path, variants: list) -> None:
+    (out / "variants.json").write_text(json.dumps({"variants": variants}))
+
+
+class TestHuntVariantsHostile:
+    """Hostile / surprising variant content. ``_emit_variants`` must
+    not crash, must not corrupt on-disk annotation format, and must
+    bound resource use."""
+
+    def test_500_variant_stress(self, fixture):
+        """Wide variant batch — picker / writer must scale linearly
+        without blowing up. All 500 collide on the same (file,
+        function), so last-writer-wins; pin counts.sources tracks
+        all attempts."""
+        repo, out = fixture
+        _write_variants(out, [{
+            "id": f"VAR-{i:03d}",
+            "file": "src/app.py", "function": "login", "line": 1,
+            "taint_status": "confirmed_tainted",
+        } for i in range(500)])
+        counts = synthesise_from_understand_output(out)
+        assert counts.errors == 0
+        assert counts.sources.get("variant", 0) == 500
+
+    def test_unicode_in_path_and_function_skipped_cleanly(self, fixture):
+        """File path / function name with non-ASCII letters. The
+        inventory has no matching entry → variant skipped to
+        ``skipped_no_function``, no crash from non-ASCII handling."""
+        repo, out = fixture
+        _write_variants(out, [{
+            "id": "VAR-Ω",
+            "file": "src/応用.py",
+            "function": "處理",
+            "line": 1,
+            "taint_status": "confirmed_tainted",
+        }])
+        counts = synthesise_from_understand_output(out)
+        assert counts.errors == 0
+        assert counts.skipped_no_function >= 1
+
+    def test_control_bytes_in_body_fields(self, fixture):
+        """NUL / bell / ESC inside body-bound fields (matched_code,
+        notes, taint_source). Body is markdown — unlike metadata it
+        isn't ``_safe_meta``-sanitised, but the underlying annotation
+        substrate must not crash on these characters."""
+        repo, out = fixture
+        _write_variants(out, [{
+            "id": "VAR-CTRL",
+            "file": "src/app.py", "function": "login", "line": 1,
+            "taint_status": "confirmed_tainted",
+            "matched_code": "func(\x00x\x07y\x1bz)",
+            "notes": "trailing\x00null",
+            "taint_source": "src/x.py:1\x00with control",
+        }])
+        counts = synthesise_from_understand_output(out)
+        # Either the annotation substrate accepts and round-trips
+        # the body, OR rejects it with a counted error. Either is
+        # acceptable; what's NOT acceptable is an uncaught exception.
+        assert counts.errors + counts.sources.get("variant", 0) >= 1
+
+    def test_proof_field_as_string_not_dict(self, fixture):
+        """Producer emits ``proof`` as a plain string instead of the
+        documented dict. ``_emit_variants`` falls back to taint_source
+        as the body source — variant still annotated."""
+        repo, out = fixture
+        _write_variants(out, [{
+            "id": "VAR-PSTR",
+            "file": "src/app.py", "function": "login", "line": 1,
+            "taint_status": "confirmed_tainted",
+            "proof": "raw prose proof, not a dict",
+            "taint_source": "src/router.py:5",
+        }])
+        counts = synthesise_from_understand_output(out)
+        assert counts.errors == 0
+        assert counts.sources.get("variant", 0) == 1
+        ann = read_annotation(
+            out / "annotations", "src/app.py", "login",
+        )
+        assert ann is not None
+        # Fallback to taint_source picked up.
+        assert "Taint source: src/router.py:5" in ann.body
+
+    def test_proof_field_as_list_not_dict(self, fixture):
+        """``proof: ["item1", "item2"]`` — handler does
+        ``isinstance(proof, dict)``, so a list silently falls
+        through. Pin the contract."""
+        repo, out = fixture
+        _write_variants(out, [{
+            "id": "VAR-PLIST",
+            "file": "src/app.py", "function": "login", "line": 1,
+            "taint_status": "confirmed_tainted",
+            "proof": ["a", "b", "c"],
+        }])
+        counts = synthesise_from_understand_output(out)
+        assert counts.errors == 0
+        assert counts.sources.get("variant", 0) == 1
+
+    def test_deeply_nested_proof_dict(self, fixture):
+        """20-level-deep ``proof`` dict — handler only reads three
+        documented keys (vulnerable_code / source / sink) so depth
+        is irrelevant; pin no recursion / no crash."""
+        repo, out = fixture
+        deep = {"vulnerable_code": "x"}
+        for _ in range(20):
+            deep = {"wrap": deep}
+        _write_variants(out, [{
+            "id": "VAR-DEEP",
+            "file": "src/app.py", "function": "login", "line": 1,
+            "taint_status": "confirmed_tainted",
+            "proof": deep,
+        }])
+        counts = synthesise_from_understand_output(out)
+        assert counts.errors == 0
+        assert counts.sources.get("variant", 0) == 1
+
+    def test_empty_body_variant_still_emits(self, fixture):
+        """All body-building fields missing → empty body. Annotation
+        substrate accepts empty bodies (status carried in metadata
+        alone), so this should still emit one annotation."""
+        repo, out = fixture
+        _write_variants(out, [{
+            "id": "VAR-EMPTY",
+            "file": "src/app.py", "function": "login", "line": 1,
+            "taint_status": "confirmed_tainted",
+            # No matched_code / proof / taint_source / notes.
+        }])
+        counts = synthesise_from_understand_output(out)
+        assert counts.errors == 0
+        assert counts.sources.get("variant", 0) == 1
+        ann = read_annotation(
+            out / "annotations", "src/app.py", "login",
+        )
+        assert ann is not None
+        assert ann.body == ""
+        assert ann.metadata["status"] == "finding"
+
+    def test_path_traversal_in_variant_file_field(self, fixture):
+        """``file: "../../etc/passwd"`` — would-be path traversal.
+        Inventory lookup returns no match → variant skipped to
+        ``skipped_no_function``. The annotation substrate's path-
+        traversal defence is the second line; pin that we don't
+        even reach it because the inventory miss filters first."""
+        repo, out = fixture
+        _write_variants(out, [{
+            "id": "VAR-TRAV",
+            "file": "../../etc/passwd",
+            "function": "anything",
+            "line": 1,
+            "taint_status": "confirmed_tainted",
+        }])
+        counts = synthesise_from_understand_output(out)
+        assert counts.errors == 0
+        assert counts.skipped_no_function >= 1
+        # No annotation file written under the base dir.
+        assert not any(
+            (out / "annotations").rglob("*.md")
+        )
+
+    def test_html_comment_close_in_vuln_type_metadata(self, fixture):
+        """``vuln_type`` lands in metadata; ``_safe_meta`` must
+        defang ``-->`` so the on-disk frontmatter
+        ``<!-- meta: vuln_type=... -->`` doesn't terminate early."""
+        repo, out = fixture
+        _write_variants(out, [{
+            "id": "VAR-HTML",
+            "file": "src/app.py", "function": "login", "line": 1,
+            "taint_status": "confirmed_tainted",
+            "vuln_type": "x-->y",
+        }])
+        counts = synthesise_from_understand_output(out)
+        assert counts.errors == 0
+        ann = read_annotation(
+            out / "annotations", "src/app.py", "login",
+        )
+        assert ann is not None
+        assert "-->" not in ann.metadata["vuln_type"]
+
+    def test_newlines_in_metadata_field_sanitised(self, fixture):
+        """``confidence`` / ``priority`` with newline → metadata
+        substrate would reject; ``_safe_meta`` strips them so the
+        write succeeds."""
+        repo, out = fixture
+        _write_variants(out, [{
+            "id": "VAR-NL",
+            "file": "src/app.py", "function": "login", "line": 1,
+            "taint_status": "confirmed_tainted",
+            "confidence": "high\nrating",
+            "priority": "1\n2",
+        }])
+        counts = synthesise_from_understand_output(out)
+        assert counts.errors == 0
+        ann = read_annotation(
+            out / "annotations", "src/app.py", "login",
+        )
+        assert ann is not None
+        assert "\n" not in ann.metadata["confidence"]
+        assert "\n" not in ann.metadata["priority"]
