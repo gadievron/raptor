@@ -381,16 +381,25 @@ class QueryRunner:
                     # cover the common transient failure modes.
                     import time as _time
                     dl = None
+                    from packages.codeql.codeql_proxy_hosts import (
+                        proxy_hosts_for_codeql,
+                    )
                     for attempt in range(3):
                         dl = sandbox_run(
                             [self.codeql_cli, "pack", "download", pack_name],
                             use_egress_proxy=True,
-                            proxy_hosts=[
-                                "ghcr.io",            # CodeQL packs hosted here
-                                "codeload.github.com",
-                                "objects.githubusercontent.com",
-                                "pkg-containers.githubusercontent.com",
-                            ],
+                            # Hostname allowlist auto-discovered from
+                            # the calibrated profile when present
+                            # (catches enterprise GHE redirect to
+                            # `ghe.<corp>.example`-style hosts);
+                            # falls back to the documented vanilla
+                            # GitHub Container Registry set otherwise.
+                            # Operator override at
+                            # ~/.config/raptor/codeql-proxy-hosts.json
+                            # short-circuits both.
+                            proxy_hosts=proxy_hosts_for_codeql(
+                                self.codeql_cli,
+                            ),
                             caller_label="codeql-pack-download",
                             target=str(codeql_cache),
                             output=str(codeql_cache),
