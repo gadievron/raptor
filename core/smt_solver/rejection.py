@@ -94,6 +94,21 @@ class RejectionKind(str, Enum):
     construct outside the decidable bitvector fragment)."""
 
 
+# RejectionKinds that no encoder emits any more but that we've kept in
+# the enum for back-compat with downstream consumers that match on the
+# string value. Constructing a `Rejection(kind=...)` with one of these
+# is almost certainly a mistake — a freshly-written encoder rule that
+# accidentally targets a stale category, or a refactor that moved
+# semantics from PARENS_NOT_SUPPORTED → UNBALANCED_PARENS but missed a
+# call site. Emit a DeprecationWarning at construction time so the
+# misuse surfaces in tests / dev runs without breaking external
+# consumers that only consume the string value via API output.
+_DEPRECATED_KINDS = frozenset({
+    RejectionKind.PARENS_NOT_SUPPORTED,
+    RejectionKind.MIXED_PRECEDENCE,
+})
+
+
 @dataclass(frozen=True)
 class Rejection:
     """Why a single constraint/condition couldn't participate in SMT analysis.
@@ -108,6 +123,19 @@ class Rejection:
     kind: RejectionKind
     detail: str = ""
     hint: str = ""
+
+    def __post_init__(self) -> None:
+        if self.kind in _DEPRECATED_KINDS:
+            import warnings
+            warnings.warn(
+                f"Rejection(kind={self.kind.name}) is deprecated; "
+                f"the parser no longer emits this category. "
+                f"Use UNBALANCED_PARENS (for unbalanced groups) or "
+                f"omit the rejection entirely (for precedence-mixed "
+                f"expressions, which the parser now accepts).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
 
 # ---------------------------------------------------------------------------
