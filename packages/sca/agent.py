@@ -125,6 +125,18 @@ def _find_sca_agent() -> Optional[Path]:
                     env_path,
                 )
 
+    # Cap the marker-check read at 256 KB. Pre-fix `read_text()`
+    # loaded the WHOLE candidate file before the marker check —
+    # if RAPTOR_SCA_AGENT or the auto-discovery picked up a
+    # giant file by mistake (a vendored binary mislabeled as
+    # `agent.py`, an inadvertent log paste), we'd buffer the
+    # whole thing into memory just to confirm "no, this isn't
+    # the right file." The marker we're looking for
+    # (`from packages.sca import SCA_ALLOWED_HOSTS`) is at the
+    # top of any legitimate agent — 256 KB is two orders of
+    # magnitude beyond any realistic Python module's first-block
+    # imports.
+    _MAX_MARKER_BYTES = 256 * 1024
     for candidate in _SCA_AGENT_CANDIDATES:
         resolved = candidate.resolve()
         if resolved.is_file() and resolved.name == "agent.py":
@@ -132,7 +144,9 @@ def _find_sca_agent() -> Optional[Path]:
             # packages.sca.api, not core.json.  Check for the
             # SCA_ALLOWED_HOSTS import to distinguish it from this file.
             try:
-                text = resolved.read_text(encoding="utf-8")
+                with open(resolved, "r", encoding="utf-8",
+                          errors="replace") as fh:
+                    text = fh.read(_MAX_MARKER_BYTES)
                 if _looks_like_real_sca_agent(text, resolved):
                     return resolved
             except OSError:
