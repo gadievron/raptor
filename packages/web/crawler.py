@@ -371,12 +371,33 @@ class WebCrawler:
 
     def _extract_api_endpoints_from_js(self, js_code: str) -> None:
         """Extract API endpoints from JavaScript code."""
-        # Look for common patterns
+        # Cap the JS-code size before per-pattern findall. Pre-fix
+        # `re.findall` ran 4 times over the FULL js_code body; for
+        # a multi-MB minified bundle (modern frontend SPAs ship
+        # 5-20 MB single-file bundles in dev mode) the per-pattern
+        # scan accumulated to multi-second wallclock per page.
+        # Worse, the per-pattern alternation `[^"\']+` is greedy
+        # and unbounded — a hostile JS payload with no closing
+        # quote forces backtracking proportional to the bundle
+        # size. 4 MB cap leaves headroom for legitimate
+        # production bundles while bounding the worst case.
+        _MAX_JS_BYTES = 4 * 1024 * 1024
+        if len(js_code) > _MAX_JS_BYTES:
+            logger.debug(
+                f"JS body ({len(js_code)} chars) exceeds API-endpoint-scan "
+                f"cap ({_MAX_JS_BYTES}); truncating"
+            )
+            js_code = js_code[:_MAX_JS_BYTES]
+
+        # Look for common patterns. Each `[^"\']+` is bounded above
+        # via the {1,4096} cap — a single URL longer than 4 KB is
+        # almost certainly a base64 blob misclassified as a URL,
+        # not a real endpoint.
         patterns = [
-            r'fetch\(["\']([^"\']+)["\']',
-            r'axios\.(?:get|post|put|delete)\(["\']([^"\']+)["\']',
-            r'\.ajax\(\{[^}]*url:\s*["\']([^"\']+)["\']',
-            r'["\'](?:api|endpoint)["\']:\s*["\']([^"\']+)["\']',
+            r'fetch\(["\']([^"\']{1,4096})["\']',
+            r'axios\.(?:get|post|put|delete)\(["\']([^"\']{1,4096})["\']',
+            r'\.ajax\(\{[^}]{0,4096}url:\s*["\']([^"\']{1,4096})["\']',
+            r'["\'](?:api|endpoint)["\']:\s*["\']([^"\']{1,4096})["\']',
         ]
 
         for pattern in patterns:
