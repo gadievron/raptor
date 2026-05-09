@@ -2280,6 +2280,17 @@ class ClaudeCodeLLMProvider(LLMProvider):
         )
         cmd = build_cc_command(cc_config)
 
+        # Pass safe env to the cc subprocess. Pre-fix
+        # `subprocess.run(cmd, ...)` inherited the parent's
+        # full environment, including HTTPS_PROXY, BASH_ENV,
+        # PYTHONSTARTUP, and any other variable a poisoned
+        # operator dotfile might set. Use RaptorConfig.get_
+        # safe_env() to strip DANGEROUS_ENV_VARS + proxy
+        # vars so cc runs with a clean baseline. See
+        # the long-form rationale at the first cc subprocess.
+        from core.config import RaptorConfig as _RaptorConfig
+        _cc_env = _RaptorConfig.get_safe_env()
+
         start = _time.time()
         try:
             proc = subprocess.run(
@@ -2288,6 +2299,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
                 text=True,
                 capture_output=True,
                 timeout=self._timeout_s,
+                env=_cc_env,
             )
         except subprocess.TimeoutExpired as e:
             raise RuntimeError(
@@ -2359,6 +2371,17 @@ class ClaudeCodeLLMProvider(LLMProvider):
         )
         cmd = build_cc_command(cc_config)
 
+        # Pass safe env to the cc subprocess. Pre-fix
+        # `subprocess.run(cmd, ...)` inherited the parent's
+        # full environment, including HTTPS_PROXY, BASH_ENV,
+        # PYTHONSTARTUP, and any other variable a poisoned
+        # operator dotfile might set. Use RaptorConfig.get_
+        # safe_env() to strip DANGEROUS_ENV_VARS + proxy
+        # vars so cc runs with a clean baseline. See
+        # the long-form rationale at the first cc subprocess.
+        from core.config import RaptorConfig as _RaptorConfig
+        _cc_env = _RaptorConfig.get_safe_env()
+
         start = _time.time()
         try:
             proc = subprocess.run(
@@ -2367,6 +2390,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
                 text=True,
                 capture_output=True,
                 timeout=self._timeout_s,
+                env=_cc_env,
             )
         except subprocess.TimeoutExpired as e:
             raise RuntimeError(
