@@ -2863,3 +2863,145 @@ class TestSourceRuleLabelHostile:
         assert "</untrusted_finding_context>" not in h.context
         # Legitimate prefix still present.
         assert "rule-X" in h.context
+
+
+class TestTier4SmtRefine:
+    """Tier 4 SMT path-feasibility refinement on Tier 1/2/3 verdicts.
+
+    Conservative refinement: may convert ``inconclusive`` → ``refuted``
+    on unsat conditions, attaches witness model to ``confirmed`` on
+    sat. Never downgrades ``confirmed`` → ``refuted`` on SMT alone
+    (CodeQL's signal wins on disagreement, with a warning logged).
+    """
+
+    def _result(self, verdict):
+        from packages.hypothesis_validation.result import ValidationResult
+        return ValidationResult(
+            verdict=verdict, evidence=[], iterations=1,
+            reasoning=f"[prebuilt] CodeQL produced {verdict}",
+        )
+
+    def test_no_path_conditions_no_check(self):
+        from packages.llm_analysis.dataflow_validation import _tier4_smt_refine
+        r, outcome = _tier4_smt_refine(
+            self._result("confirmed"), {"finding_id": "f"}, {},
+        )
+        assert outcome == "no_check"
+        assert r.verdict == "confirmed"
+
+    def test_inconclusive_plus_unsat_promotes_to_refuted(self):
+        from packages.llm_analysis.dataflow_validation import _tier4_smt_refine
+        analysis = {
+            "path_conditions": ["x > 100", "x < 5"],
+            "path_profile": "uint64",
+        }
+        r, outcome = _tier4_smt_refine(
+            self._result("inconclusive"), {"finding_id": "f"}, analysis,
+        )
+        assert outcome == "smt_refuted"
+        assert r.verdict == "refuted"
+        # SMT evidence appended to the trail.
+        assert any(ev.tool == "smt" for ev in r.evidence)
+
+    def test_confirmed_plus_unsat_keeps_confirmed_with_disagreement_log(self):
+        from packages.llm_analysis.dataflow_validation import _tier4_smt_refine
+        analysis = {
+            "path_conditions": ["x > 100", "x < 5"],
+            "path_profile": "uint64",
+        }
+        r, outcome = _tier4_smt_refine(
+            self._result("confirmed"), {"finding_id": "f"}, analysis,
+        )
+        assert outcome == "smt_disagree"
+        # Conservative: CodeQL wins; verdict unchanged.
+        assert r.verdict == "confirmed"
+        # Disagreement still recorded in evidence trail for offline review.
+        assert any(ev.tool == "smt" for ev in r.evidence)
+
+    def test_confirmed_plus_sat_attaches_witness(self):
+        from packages.llm_analysis.dataflow_validation import _tier4_smt_refine
+        analysis = {
+            "path_conditions": ["x > 10", "x < 100"],
+            "path_profile": "uint64",
+        }
+        r, outcome = _tier4_smt_refine(
+            self._result("confirmed"), {"finding_id": "f"}, analysis,
+        )
+        assert outcome == "smt_witness"
+        assert r.verdict == "confirmed"
+        # Witness model lands as a new Evidence record.
+        smt_ev = [ev for ev in r.evidence if ev.tool == "smt"]
+        assert len(smt_ev) == 1
+        assert "witness" in (smt_ev[0].summary or "").lower()
+
+    def test_inconclusive_plus_sat_no_change(self):
+        """SMT-sat alone shouldn't UPGRADE inconclusive — CodeQL never
+        confirmed it. Stay inconclusive."""
+        from packages.llm_analysis.dataflow_validation import _tier4_smt_refine
+        analysis = {
+            "path_conditions": ["x > 10", "x < 100"],
+            "path_profile": "uint64",
+        }
+        r, outcome = _tier4_smt_refine(
+            self._result("inconclusive"), {"finding_id": "f"}, analysis,
+        )
+        assert outcome == "smt_no_change"
+        assert r.verdict == "inconclusive"
+
+    def test_nested_dataflow_validation_path_conditions(self):
+        """Conditions can live under analysis['dataflow_validation']
+        (deep-validation output) instead of top-level analysis."""
+        from packages.llm_analysis.dataflow_validation import _tier4_smt_refine
+        analysis = {
+            "dataflow_validation": {
+                "path_conditions": ["y > 0", "y < 10"],
+                "path_profile": "uint32",
+            },
+        }
+        r, outcome = _tier4_smt_refine(
+            self._result("confirmed"), {"finding_id": "f"}, analysis,
+        )
+        assert outcome == "smt_witness"
+
+    def test_bad_profile_falls_through_as_smt_error(self):
+        """Malformed profile name shouldn't crash the tier loop."""
+        from packages.llm_analysis.dataflow_validation import _tier4_smt_refine
+        analysis = {
+            "path_conditions": ["x > 1"],
+            "path_profile": "not_a_real_profile",
+        }
+        r, outcome = _tier4_smt_refine(
+            self._result("confirmed"), {"finding_id": "f"}, analysis,
+        )
+        assert outcome == "smt_error"
+        # Verdict unchanged on error.
+        assert r.verdict == "confirmed"
+
+    def test_smt_unavailable_falls_through(self):
+        """When validate_path's substrate isn't importable, fall through
+        to smt_unavailable — verdict unchanged."""
+        from packages.llm_analysis import dataflow_validation as mod
+        from unittest.mock import patch
+        analysis = {"path_conditions": ["x > 1"]}
+        with patch.dict("sys.modules", {"packages.exploit_feasibility.smt_path": None}):
+            r, outcome = mod._tier4_smt_refine(
+                self._result("confirmed"), {"finding_id": "f"}, analysis,
+            )
+        assert outcome == "smt_unavailable"
+        assert r.verdict == "confirmed"
+
+    def test_unparseable_conditions_no_change(self):
+        """Conditions the parser can't encode → smt.feasible is None →
+        verdict unchanged (no_change)."""
+        from packages.llm_analysis.dataflow_validation import _tier4_smt_refine
+        analysis = {
+            "path_conditions": ["arr[0] == 5"],  # subscript not supported
+            "path_profile": "uint64",
+        }
+        r, outcome = _tier4_smt_refine(
+            self._result("confirmed"), {"finding_id": "f"}, analysis,
+        )
+        # Either smt_no_change (if Z3 decided) or smt_unavailable / no_check;
+        # what matters is the verdict isn't changed.
+        assert r.verdict == "confirmed"
+        assert outcome in ("smt_no_change", "smt_unavailable", "no_check")

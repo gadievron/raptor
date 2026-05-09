@@ -460,6 +460,12 @@ class TestValidateDataflowSchema:
             "cvss_estimate": 7.5,
             "false_positive": False,
             "false_positive_reason": "",
+            # SMT path-feasibility fields (added in PR #?). Optional and
+            # nullable; XSS is not a memory-corruption CWE so the LLM
+            # leaves them null. Including them here proves a "perfect"
+            # response with explicit nulls still scores 1.0.
+            "path_conditions": None,
+            "path_profile": None,
         }
         result = validate_structured_response(raw, DATAFLOW_VALIDATION_SCHEMA)
         assert result.quality == 1.0

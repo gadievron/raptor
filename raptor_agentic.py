@@ -1367,6 +1367,9 @@ Examples:
         n_tier1 = dv.get("n_tier1_prebuilt", 0)
         n_tier2 = dv.get("n_tier2_template", 0)
         n_tier3 = dv.get("n_tier3_retry", 0)
+        n_smt_refuted = dv.get("n_tier4_smt_refuted", 0)
+        n_smt_witness = dv.get("n_tier4_smt_witness", 0)
+        n_smt_disagree = dv.get("n_tier4_smt_disagree", 0)
         n_recommended = dv.get("n_recommended_downgrades", 0)
         n_hard = dv.get("n_applied_downgrades", 0)
         n_soft = dv.get("n_soft_downgrades", 0)
@@ -1376,7 +1379,9 @@ Examples:
               + (f" (+{n_cache_hits} cache hit{'s' if n_cache_hits != 1 else ''})"
                  if n_cache_hits else ""))
         # Tier breakdown: Tier 1 is free CodeQL; Tier 2/3 burn LLM
-        # tokens. Worth showing the split so operators can tell whether
+        # tokens; Tier 4 is free SMT (Z3 only) refining Tier 1/2/3
+        # verdicts when the LLM extracted path_conditions. Worth
+        # showing the split so operators can tell whether
         # --deep-validate is paying off.
         tier_parts = []
         if n_tier1:
@@ -1387,6 +1392,19 @@ Examples:
             tier_parts.append(f"{n_tier3} Tier 3 (LLM retry)")
         if tier_parts:
             print(f"     by tier: {', '.join(tier_parts)}")
+        # Tier 4 (SMT) sub-line — separate because outcomes are
+        # additive on top of Tier 1/2/3 (a finding's verdict may be
+        # confirmed-by-Tier-1 AND witness-attached-by-Tier-4) so
+        # mixing them into the per-tier counts would double-count.
+        smt_parts = []
+        if n_smt_refuted:
+            smt_parts.append(f"{n_smt_refuted} refuted")
+        if n_smt_witness:
+            smt_parts.append(f"{n_smt_witness} witness")
+        if n_smt_disagree:
+            smt_parts.append(f"{n_smt_disagree} disagreement")
+        if smt_parts:
+            print(f"     Tier 4 SMT: {', '.join(smt_parts)}")
         # Downgrade outcome: distinguish "recommended" from "applied"
         # (the latter is post-reconciliation with consensus/judge).
         # Soft downgrades = recommendation overruled by consensus/judge.
@@ -1750,6 +1768,9 @@ def _build_dataflow_validation_report_section(dv):
     n_tier1 = dv.get("n_tier1_prebuilt", 0)
     n_tier2 = dv.get("n_tier2_template", 0)
     n_tier3 = dv.get("n_tier3_retry", 0)
+    n_smt_refuted = dv.get("n_tier4_smt_refuted", 0)
+    n_smt_witness = dv.get("n_tier4_smt_witness", 0)
+    n_smt_disagree = dv.get("n_tier4_smt_disagree", 0)
     n_recommended = dv.get("n_recommended_downgrades", 0)
     n_hard = dv.get("n_applied_downgrades", 0)
     n_soft = dv.get("n_soft_downgrades", 0)
@@ -1773,6 +1794,28 @@ def _build_dataflow_validation_report_section(dv):
             lines.append(f"- Tier 2 (LLM-customised predicates): {n_tier2}")
         if n_tier3:
             lines.append(f"- Tier 3 (LLM compile-error retry): {n_tier3}")
+    if n_smt_refuted or n_smt_witness or n_smt_disagree:
+        lines.append("")
+        lines.append("**Tier 4 SMT path-feasibility refinement:**")
+        # Tier 4 outcomes are additive on top of the Tier 1/2/3
+        # verdict. Listed separately because a single finding can
+        # have a confirmed-by-Tier-1 verdict AND a witness-attached-
+        # by-Tier-4 outcome — they aren't exclusive.
+        if n_smt_refuted:
+            lines.append(
+                f"- Refuted (inconclusive → refuted on unsat conditions): "
+                f"{n_smt_refuted}"
+            )
+        if n_smt_witness:
+            lines.append(
+                f"- Witness attached to confirmed (concrete attacker-input "
+                f"values, usable as PoC seed): {n_smt_witness}"
+            )
+        if n_smt_disagree:
+            lines.append(
+                f"- SMT-CodeQL disagreement (kept CodeQL signal — see "
+                f"warning logs): {n_smt_disagree}"
+            )
     if n_recommended:
         lines.append("")
         lines.append("**Downgrades:**")

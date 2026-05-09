@@ -536,6 +536,27 @@ def validate_dataflow_claims(
         elif tier_used == "retry":
             metrics["n_tier3_retry"] += 1
 
+        # ----- Tier 4: SMT path-feasibility refinement -----
+        # Reads `path_conditions` + `path_profile` from the LLM analysis
+        # (added in this PR's schema extension). Conservative refinement:
+        # may upgrade `inconclusive` → `refuted` when SMT proves the
+        # conditions are unsatisfiable, and may attach a witness model
+        # to `confirmed` for downstream consumers (/exploit). NEVER
+        # downgrades `confirmed` → `refuted` on SMT alone — when CodeQL
+        # and SMT disagree the more conservative CodeQL signal wins
+        # (logged as a disagreement metric for offline review).
+        result, smt_outcome = _tier4_smt_refine(result, finding, analysis)
+        if smt_outcome and smt_outcome != "no_check":
+            metrics.setdefault("n_tier4_smt_refuted", 0)
+            metrics.setdefault("n_tier4_smt_witness", 0)
+            metrics.setdefault("n_tier4_smt_disagree", 0)
+            if smt_outcome == "smt_refuted":
+                metrics["n_tier4_smt_refuted"] += 1
+            elif smt_outcome == "smt_witness":
+                metrics["n_tier4_smt_witness"] += 1
+            elif smt_outcome == "smt_disagree":
+                metrics["n_tier4_smt_disagree"] += 1
+
         cache[cache_key] = result
         metrics["n_validated"] += 1
         _attach_result(analysis, result)
@@ -1091,6 +1112,151 @@ def _is_compile_error(error_text: str) -> bool:
     if not error_text:
         return False
     return any(marker in error_text for marker in _COMPILE_ERROR_MARKERS)
+
+
+def _tier4_smt_refine(
+    result: "ValidationResult",
+    finding: Dict,
+    analysis: Dict,
+) -> "tuple[ValidationResult, str]":
+    """Tier 4: SMT path-feasibility refinement on a Tier 1/2/3 result.
+
+    Reads the LLM's `path_conditions` and `path_profile` (added in
+    PR-G+ schema extension) from either:
+      * `analysis['dataflow_validation']` (deep-validation output), or
+      * `analysis` (top-level analysis output).
+
+    Conservative refinement rules:
+      * `inconclusive` + SMT proves unsat → `refuted` (with unsat-core
+        as evidence)
+      * `confirmed` + SMT proves sat → keep `confirmed`, attach witness
+        model as additional evidence (downstream /exploit uses this as
+        a PoC seed)
+      * `confirmed` + SMT proves unsat → DISAGREEMENT — keep `confirmed`
+        (CodeQL-found path is the conservative signal), log + count as
+        disagreement metric for offline review
+      * Anything else → no change
+
+    Returns (possibly-refined ValidationResult, outcome label).
+    Outcome label is one of: "no_check", "smt_unavailable", "smt_error",
+    "smt_no_change", "smt_refuted", "smt_witness", "smt_disagree".
+
+    Never raises — failure modes (Z3 missing, conditions unparseable,
+    parser exception) all fall through to "no_check" / "smt_unavailable"
+    / "smt_error" so production callers stay unaffected.
+    """
+    dataflow_validation = (analysis or {}).get("dataflow_validation") or {}
+    conditions = (
+        dataflow_validation.get("path_conditions")
+        or (analysis or {}).get("path_conditions")
+        or []
+    )
+    if not conditions:
+        return result, "no_check"
+    profile_name = (
+        dataflow_validation.get("path_profile")
+        or (analysis or {}).get("path_profile")
+        or "uint64"
+    ).strip().lower()
+
+    try:
+        from packages.exploit_feasibility.smt_path import validate_path
+    except ImportError as e:
+        logger.debug("Tier 4 SMT: substrate unavailable: %s", e)
+        return result, "smt_unavailable"
+
+    try:
+        smt = validate_path(conditions, profile=profile_name)
+    except (ValueError, TypeError) as e:
+        # Bad profile name / malformed condition — treat as no signal
+        # rather than crashing the whole tier loop.
+        logger.debug("Tier 4 SMT: input rejected: %s", e)
+        return result, "smt_error"
+    except Exception as e:
+        logger.debug("Tier 4 SMT: check raised: %s", e)
+        return result, "smt_error"
+
+    if not smt.get("smt_available"):
+        return result, "smt_unavailable"
+
+    # Build a one-line evidence record describing the SMT outcome.
+    # Goes onto the existing ValidationResult.evidence list so the
+    # report renderer + /exploit downstream can see why the verdict
+    # was refined.
+    def _smt_evidence(label: str, summary: str) -> Evidence:
+        return Evidence(
+            tool="smt",
+            rule="path-feasibility",
+            summary=summary,
+            matches=[],
+            success=True,
+            error=None,
+        )
+
+    feasible = smt.get("feasible")
+    unsat_list = smt.get("unsatisfied") or []
+    model = smt.get("model") or {}
+
+    # Decision matrix.
+    if feasible is False:
+        unsat = ", ".join(unsat_list) or "(no specific core)"
+        if result.verdict == "inconclusive":
+            ev = _smt_evidence(
+                "refuted",
+                f"SMT proved path conditions unsatisfiable; conflict: {unsat}",
+            )
+            refined = ValidationResult(
+                verdict="refuted",
+                evidence=list(result.evidence) + [ev],
+                iterations=result.iterations,
+                reasoning=(
+                    (result.reasoning or "") +
+                    "\n[smt] inconclusive → refuted: unsat path conditions"
+                ),
+            )
+            return refined, "smt_refuted"
+        if result.verdict == "confirmed":
+            # SMT-CodeQL disagreement. Keep CodeQL's signal (conservative)
+            # but record the divergence.
+            logger.warning(
+                "Tier 4 SMT-CodeQL disagreement on %s: CodeQL confirmed but "
+                "SMT proves path conditions unsat (conflict: %s). Keeping "
+                "CodeQL verdict.",
+                finding.get("finding_id") or finding.get("file_path"),
+                unsat,
+            )
+            ev = _smt_evidence(
+                "disagreement",
+                f"SMT-CodeQL disagreement: SMT unsat (conflict: {unsat})",
+            )
+            refined = ValidationResult(
+                verdict=result.verdict,
+                evidence=list(result.evidence) + [ev],
+                iterations=result.iterations,
+                reasoning=result.reasoning,
+            )
+            return refined, "smt_disagree"
+
+    if feasible is True and result.verdict == "confirmed":
+        model_str = ", ".join(f"{k}={v}" for k, v in model.items())
+        ev = _smt_evidence(
+            "witness",
+            f"SMT witness for path conditions: {model_str or '(no model)'}",
+        )
+        refined = ValidationResult(
+            verdict=result.verdict,
+            evidence=list(result.evidence) + [ev],
+            iterations=result.iterations,
+            reasoning=(
+                (result.reasoning or "") +
+                f"\n[smt] confirmed + witness: {model_str}"
+            ),
+        )
+        return refined, "smt_witness"
+
+    # feasible is None (Z3 unavailable / conditions unparseable)
+    # or no actionable change. Leave the verdict alone.
+    return result, "smt_no_change"
 
 
 def _wrap_result(
