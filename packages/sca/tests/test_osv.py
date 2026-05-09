@@ -499,3 +499,74 @@ def test_osssfuzz_fallback_dedupes_with_primary_ids(
     # the dedup at pass 2 would collapse the duplicate ID.
     assert len(results[0].advisories) == 1
     assert results[0].advisories[0].osv_id == "OSV-DUP"
+
+
+# ---------------------------------------------------------------------------
+# Multi-ecosystem batch — non-OSV ecosystems must not poison the batch
+# ---------------------------------------------------------------------------
+
+
+def test_query_batch_filters_unsupported_ecosystems(tmp_path: Path) -> None:
+    """OSV's /querybatch returns HTTP 400 "Invalid ecosystem" if ANY
+    query in the batch carries an ecosystem OSV doesn't index. With
+    no filtering, one such dep silently returns empty for every
+    legitimate dep in the same batch — the actual production bug
+    that hid 120+ PyPI vulns on saleor's multi-manifest scan
+    (.gitmodules + Debian + PyPI + npm in one tree).
+
+    Filter pre-batch so only OSV-queryable ecosystems hit the API,
+    and unsupported ecosystems get an empty cached entry without
+    poisoning the rest.
+    """
+    deps = [
+        _dep("django", ecosystem="PyPI", version="3.0.6"),
+        # ``Debian`` is what Dockerfile-FROM scanning surfaces for
+        # apt-installed binaries; OSV doesn't index it. Picked over
+        # ``GitHub`` so the OSS-Fuzz fallback (which retries
+        # GitHub-eco deps with a candidate-name) doesn't fire and
+        # confuse the post-count assertion below.
+        _dep("openssl-libs", ecosystem="Debian", version="1.1.1"),
+        _dep("lodash", ecosystem="npm", version="4.17.20"),
+    ]
+    http = FakeHttp(
+        # Only PyPI + npm should reach the batch — 2 slots, not 3.
+        batch_results=[["GHSA-real-pypi"], ["GHSA-real-npm"]],
+        vuln_records={
+            "GHSA-real-pypi": {
+                "id": "GHSA-real-pypi", "summary": "django bug",
+                "affected": [{"package": {"name": "django",
+                                            "ecosystem": "PyPI"},
+                              "ranges": []}],
+            },
+            "GHSA-real-npm": {
+                "id": "GHSA-real-npm", "summary": "lodash bug",
+                "affected": [{"package": {"name": "lodash",
+                                            "ecosystem": "npm"},
+                              "ranges": []}],
+            },
+        },
+    )
+    client = OsvClient(http, JsonCache(root=tmp_path))
+    results = client.query_batch(deps)
+
+    by_key = {r.dep_key: r for r in results}
+    # PyPI + npm got their advisories.
+    assert (by_key["PyPI:django@3.0.6"].advisories[0].osv_id
+            == "GHSA-real-pypi")
+    assert (by_key["npm:lodash@4.17.20"].advisories[0].osv_id
+            == "GHSA-real-npm")
+    # Debian-eco dep recorded but with empty advisory list.
+    assert by_key["Debian:openssl-libs@1.1.1"].advisories == []
+
+    # The /querybatch HTTP call must have included exactly 2
+    # queries — the Debian one was filtered out before the post.
+    assert len(http.posts) == 1
+    posted_body = http.posts[0][1]
+    posted_queries = posted_body["queries"]
+    assert len(posted_queries) == 2, (
+        f"Debian-eco dep must not have reached /querybatch — body "
+        f"contained {len(posted_queries)} queries: "
+        f"{[q['package']['ecosystem'] for q in posted_queries]}"
+    )
+    posted_ecosystems = {q["package"]["ecosystem"] for q in posted_queries}
+    assert "Debian" not in posted_ecosystems

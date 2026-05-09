@@ -155,7 +155,31 @@ class OsvClient:
                 uncached.append(dep)
 
         if uncached and not self._offline:
-            for chunk in _chunked(uncached, _BATCH_CHUNK_SIZE):
+            # OSV's ``/querybatch`` rejects the WHOLE batch (HTTP 400
+            # "Invalid ecosystem") if any single query carries an
+            # ecosystem OSV doesn't index. Most multi-manifest scans
+            # surface deps from ecosystems OSV doesn't have an index
+            # for (``GitHub`` from .gitmodules / FetchContent rows,
+            # ``Debian`` from apt-cached Dockerfile installs, etc.) —
+            # without filtering, ONE such dep makes the entire batch
+            # return empty, and every legitimate PyPI / npm / Maven
+            # dep silently misses every advisory. Pre-filter against
+            # the known list so unsupported deps fall through to the
+            # OSS-Fuzz fallback (pass 1.5) and the offline-DB path
+            # without poisoning the primary batch.
+            from .ecosystems import KNOWN_ECOSYSTEMS
+            _OSV_QUERYABLE = {
+                e for e in KNOWN_ECOSYSTEMS
+                # OSS-Fuzz is queried only via the dedicated fallback
+                # path (different candidate-name mapping), not the
+                # primary batch.
+                if e != "OSS-Fuzz"
+            }
+            queryable = [d for d in uncached
+                         if d.ecosystem in _OSV_QUERYABLE]
+            non_queryable = [d for d in uncached
+                             if d.ecosystem not in _OSV_QUERYABLE]
+            for chunk in _chunked(queryable, _BATCH_CHUNK_SIZE):
                 queries = [
                     {
                         "package": {"name": d.name, "ecosystem": d.ecosystem},
@@ -170,6 +194,18 @@ class OsvClient:
                         ttl_seconds=self._query_ttl,
                     )
                     dep_to_ids[dep.key()] = ids
+            # Empty-ID rows for non-queryable ecosystems so the OSS-Fuzz
+            # fallback (next pass) sees them as "primary returned
+            # nothing" and engages the retry path. Without this, those
+            # deps would be missing from `dep_to_ids` and the fallback
+            # logic that walks unique_keys would still hit them — but
+            # cache them with empty so a re-run doesn't hammer.
+            for d in non_queryable:
+                self._cache.put(
+                    self._query_key(d), [],
+                    ttl_seconds=self._query_ttl,
+                )
+                dep_to_ids[d.key()] = []
 
         # Pass 1.5: OSS-Fuzz fallback for C/C++ deps. OSV's
         # ``vcpkg`` and ``ConanCenter`` ecosystems are sparse;
