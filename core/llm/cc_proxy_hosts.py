@@ -90,6 +90,67 @@ def _default_readable_paths() -> list[str]:
     ]
 
 
+# Opt-in env var: when set to "1" AND an Anthropic API key is
+# available, calibration uses a real ``claude -p`` probe that
+# networks. The default ``--version`` probe captures filesystem
+# reach but produces empty proxy_hosts — operators who want the
+# calibrated proxy_hosts to actually populate (and catch new
+# Anthropic endpoints / Bedrock regions / Foundry deployments
+# the static fallback doesn't know about) flip this on.
+#
+# Why opt-in: ``claude -p`` consumes tokens. Even at the
+# ``--max-budget-usd 0.01`` cap below, an operator running RAPTOR
+# in CI without expecting API charges shouldn't be billed silently.
+# The cache amortises the cost — once-per-(binary-sha + env-sig)
+# is typically once per Claude Code self-update cycle (weeks).
+_NETWORK_PROBE_OPT_IN_ENV = "RAPTOR_CC_CALIBRATE_NETWORK_PROBE"
+
+
+def _network_probe_enabled() -> bool:
+    """True when the operator opted in to the network-engaging
+    probe AND an Anthropic API key is set.
+
+    Without an API key the network probe would just hit the proxy
+    once and fail auth — the proxy_hosts capture still works
+    (the kext logs the CONNECT regardless), but the operator
+    might not realise they need the key to keep tokens flowing.
+    Falling back to ``--version`` in that case avoids the
+    surprise.
+    """
+    if os.environ.get(_NETWORK_PROBE_OPT_IN_ENV) != "1":
+        return False
+    # Either ANTHROPIC_API_KEY (direct) or the alternative-provider
+    # vars suffice — Bedrock / Vertex / Foundry have their own auth
+    # paths and ``claude -p`` reaches them when configured.
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return True
+    if os.environ.get("CLAUDE_CODE_USE_BEDROCK"):
+        return True
+    if os.environ.get("CLAUDE_CODE_USE_VERTEX"):
+        return True
+    if os.environ.get("CLAUDE_CODE_USE_FOUNDRY"):
+        return True
+    return False
+
+
+def _cc_probe_args() -> tuple[str, ...]:
+    """Argv for the calibration probe. Network-engaging variant
+    when opted in; ``--version`` otherwise.
+
+    The network probe argv:
+      * ``-p "READY"`` — minimal prompt; our controlled string so
+        no prompt-injection vector (see THREAT_MODEL.md).
+      * ``--max-budget-usd 0.01`` — hard cap. A broken/looping
+        probe can't drain the operator's account.
+      * ``--max-turns 1`` — single tool-use round; rules out
+        runaway agentic loops.
+    """
+    if _network_probe_enabled():
+        return ("-p", "READY", "--max-budget-usd", "0.01",
+                "--max-turns", "1")
+    return ("--version",)
+
+
 def _load_override_config() -> Optional[list[str]]:
     """Load the operator's override list, or None if not configured.
 
@@ -227,11 +288,30 @@ def _calibrated_profile(claude_bin: Optional[str] = None):
         return None
 
     try:
+        # Probe args + cache-key env are derived together so the
+        # cached profile invalidates cleanly when the operator
+        # toggles the network-probe opt-in. Without including the
+        # opt-in env var in the cache key, a profile calibrated
+        # under ``--version`` (empty proxy_hosts) would be served
+        # to a caller that just enabled network probing — and the
+        # caller would never see the discovered hosts.
+        probe_args = _cc_probe_args()
+        env_keys = _PROVIDER_ENV_KEYS + (_NETWORK_PROBE_OPT_IN_ENV,)
+        # Network probe wall-time empirically: ~110s on Claude Code
+        # 2.1.138 with cold cache (auth + model-list + actual prompt
+        # + streaming response + MCP setup + telemetry). 150s gives
+        # headroom without unbounded hang risk; the AuditBudget cap
+        # bounds record volume independently. The probe runs ONCE
+        # per (binary-sha + env-sig) and the result is cached, so the
+        # one-time cost amortises across every cc_dispatch call until
+        # the binary self-updates.
+        # ``--version`` probe finishes in <1s; 20s is generous.
+        timeout = 150 if _network_probe_enabled() else 20
         profile = load_or_calibrate(
             claude_bin,
-            probe_args=("--version",),
-            env_keys=_PROVIDER_ENV_KEYS,
-            timeout=20,
+            probe_args=probe_args,
+            env_keys=env_keys,
+            timeout=timeout,
         )
     except (FileNotFoundError, RuntimeError, OSError) as exc:
         # Probe failed: ptrace blocked (Yama scope 3),
@@ -322,7 +402,33 @@ def proxy_hosts_for_cc_dispatch(
         # proxy with a clear "host not in allowlist" log, which is
         # better diagnostics than silently allowing a different host.
 
-    return ["api.anthropic.com"]
+    return list(_DEFAULT_ANTHROPIC_HOSTS)
+
+
+# Static fallback for the standard Anthropic API path. Empirically
+# derived from a real ``claude -p READY`` calibration probe against
+# Claude Code 2.1.138 (see RAPTOR_CC_CALIBRATE_NETWORK_PROBE):
+#   - api.anthropic.com         — load-bearing LLM endpoint
+#   - mcp-proxy.anthropic.com   — MCP server proxy; gracefully
+#                                  degrades when blocked but
+#                                  functionality is lost
+#   - downloads.claude.ai       — Claude Code self-update +
+#                                  model-asset download
+#
+# ``http-intake.logs.us5.datadoghq.com`` is intentionally absent —
+# Datadog telemetry is denied by RAPTOR policy. The proxy logs the
+# CONNECT and Claude Code degrades gracefully without telemetry.
+#
+# Pre-2026-05-09 this list was just ``["api.anthropic.com"]``;
+# Claude Code's reach has grown over versions and the calibration
+# probe surfaced the gap. Operators who want the auto-discovered
+# allowlist (catches future endpoint additions before they break
+# in production) flip ``RAPTOR_CC_CALIBRATE_NETWORK_PROBE=1``.
+_DEFAULT_ANTHROPIC_HOSTS: tuple[str, ...] = (
+    "api.anthropic.com",
+    "mcp-proxy.anthropic.com",
+    "downloads.claude.ai",
+)
 
 
 def readable_paths_for_cc_dispatch(

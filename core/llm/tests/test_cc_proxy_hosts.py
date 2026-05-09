@@ -114,8 +114,34 @@ def _fake_profile(*, paths_read=None, paths_stat=None,
 
 class TestDefault:
 
-    def test_returns_anthropic_only(self, isolated_env, no_override_config, no_calibrate):
-        assert proxy_hosts_for_cc_dispatch() == ["api.anthropic.com"]
+    def test_returns_documented_anthropic_set(
+        self, isolated_env, no_override_config, no_calibrate,
+    ):
+        # Empirically-derived from a real `claude -p READY`
+        # calibration probe (see RAPTOR_CC_CALIBRATE_NETWORK_PROBE).
+        # Pre-2026-05-09 this was just `api.anthropic.com`; Claude
+        # Code 2.1.138 reach grew to include MCP proxy +
+        # downloads.claude.ai (auto-update / model assets).
+        # Datadog telemetry stays absent by RAPTOR policy.
+        hosts = proxy_hosts_for_cc_dispatch()
+        assert _hostname_in(hosts, "api.anthropic.com")
+        assert _hostname_in(hosts, "mcp-proxy.anthropic.com")
+        assert _hostname_in(hosts, "downloads.claude.ai")
+        assert not _hostname_in(
+            hosts, "http-intake.logs.us5.datadoghq.com"
+        ), "Datadog telemetry must remain denied by default"
+
+    def test_returns_a_fresh_list(
+        self, isolated_env, no_override_config, no_calibrate,
+    ):
+        # Caller-side mutation must not leak back into the
+        # module-level tuple. Mirrors the codeql consumer's
+        # equivalent test.
+        hosts = proxy_hosts_for_cc_dispatch()
+        hosts.append("attacker.example")
+        assert not _hostname_in(
+            proxy_hosts_for_cc_dispatch(), "attacker.example",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +242,11 @@ class TestFoundry:
         Foundry connection with a clear log so the operator notices."""
         isolated_env.setenv("CLAUDE_CODE_USE_FOUNDRY", "1")
         hosts = proxy_hosts_for_cc_dispatch()
-        assert hosts == ["api.anthropic.com"]
+        # Default set includes api.anthropic.com (load-bearing) plus
+        # MCP proxy + downloads — the pre-2026-05-09 single-host
+        # default is now a 3-host set. This test pins "fell through
+        # to default" by checking the load-bearing host is present.
+        assert _hostname_in(hosts, "api.anthropic.com")
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +303,7 @@ class TestOverrideConfig:
         config_path = tmp_path / "cc-dispatch-proxy-hosts.json"
         config_path.write_text(json.dumps({"proxy_hosts": []}))
         monkeypatch.setattr(mod, "_OVERRIDE_CONFIG_PATH", config_path)
-        assert proxy_hosts_for_cc_dispatch() == ["api.anthropic.com"]
+        assert _hostname_in(proxy_hosts_for_cc_dispatch(), "api.anthropic.com")
 
     def test_malformed_override_falls_back_to_default(
         self, isolated_env, monkeypatch, tmp_path, no_calibrate,
@@ -281,7 +311,7 @@ class TestOverrideConfig:
         config_path = tmp_path / "cc-dispatch-proxy-hosts.json"
         config_path.write_text("not valid json{{")
         monkeypatch.setattr(mod, "_OVERRIDE_CONFIG_PATH", config_path)
-        assert proxy_hosts_for_cc_dispatch() == ["api.anthropic.com"]
+        assert _hostname_in(proxy_hosts_for_cc_dispatch(), "api.anthropic.com")
 
     def test_missing_override_uses_provider_logic(
         self, isolated_env, no_override_config, no_calibrate,
@@ -328,7 +358,7 @@ class TestCalibratedProxyHosts:
         self, isolated_env, no_override_config, monkeypatch,
     ):
         monkeypatch.setattr(mod, "_calibrated_profile", lambda claude_bin=None: None)
-        assert proxy_hosts_for_cc_dispatch() == ["api.anthropic.com"]
+        assert _hostname_in(proxy_hosts_for_cc_dispatch(), "api.anthropic.com")
 
     def test_override_beats_calibrated(
         self, isolated_env, monkeypatch, tmp_path,
@@ -466,4 +496,188 @@ class TestCalibratedProfileFailureModes:
         assert spawn_count[0] == 1, (
             f"memoisation broken: load_or_calibrate called "
             f"{spawn_count[0]} times for one binary path"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Network-engaging probe (opt-in)
+# ---------------------------------------------------------------------------
+
+
+class TestNetworkProbeOptIn:
+    """The opt-in network probe lets the calibrated proxy_hosts
+    actually populate (default ``--version`` probe doesn't network).
+    Gated on env var + auth so an operator who set neither doesn't
+    silently incur API charges."""
+
+    def test_default_uses_version_probe(self, monkeypatch):
+        # Strip both the opt-in flag and every auth env so the
+        # gate definitively returns False.
+        for var in (mod._NETWORK_PROBE_OPT_IN_ENV, "ANTHROPIC_API_KEY",
+                    "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+                    "CLAUDE_CODE_USE_FOUNDRY"):
+            monkeypatch.delenv(var, raising=False)
+        assert mod._cc_probe_args() == ("--version",)
+        assert mod._network_probe_enabled() is False
+
+    def test_opt_in_without_auth_falls_back(self, monkeypatch):
+        # Opt-in flag set but no auth env — the network probe
+        # would fail auth at the API call. Fall back to --version.
+        for var in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_USE_BEDROCK",
+                    "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv(mod._NETWORK_PROBE_OPT_IN_ENV, "1")
+        assert mod._network_probe_enabled() is False
+        assert mod._cc_probe_args() == ("--version",)
+
+    def test_opt_in_with_anthropic_key_uses_network_probe(
+        self, monkeypatch,
+    ):
+        for var in ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+                    "CLAUDE_CODE_USE_FOUNDRY"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv(mod._NETWORK_PROBE_OPT_IN_ENV, "1")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
+        assert mod._network_probe_enabled() is True
+        argv = mod._cc_probe_args()
+        # Tight cap on cost + turn count: a broken/looping probe
+        # can't drain the operator's account.
+        assert "-p" in argv
+        assert "--max-budget-usd" in argv
+        budget_idx = argv.index("--max-budget-usd")
+        assert argv[budget_idx + 1] == "0.01", (
+            "budget cap drift — was meant to be $0.01 ceiling"
+        )
+        assert "--max-turns" in argv
+        turns_idx = argv.index("--max-turns")
+        assert argv[turns_idx + 1] == "1"
+        # Prompt is OUR string (no prompt-injection vector).
+        prompt_idx = argv.index("-p")
+        assert argv[prompt_idx + 1] == "READY"
+
+    def test_opt_in_with_provider_env_uses_network_probe(
+        self, monkeypatch,
+    ):
+        # Bedrock / Vertex / Foundry have their own auth paths;
+        # any of them suffices to enable the network probe.
+        for var in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_USE_VERTEX",
+                    "CLAUDE_CODE_USE_FOUNDRY"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv(mod._NETWORK_PROBE_OPT_IN_ENV, "1")
+        monkeypatch.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+        assert mod._network_probe_enabled() is True
+
+    def test_opt_in_value_other_than_1_treated_as_off(
+        self, monkeypatch,
+    ):
+        # Only "1" enables. "0", "true", "yes", empty all disable —
+        # avoids the "is `RAPTOR_CC_CALIBRATE_NETWORK_PROBE=` set
+        # to disable?" foot-gun where the operator unsets via
+        # ``KEY=`` but the var is still in env with empty value.
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
+        for value in ("0", "true", "yes", "", "True", "YES"):
+            monkeypatch.setenv(mod._NETWORK_PROBE_OPT_IN_ENV, value)
+            assert mod._network_probe_enabled() is False, (
+                f"value {value!r} unexpectedly enabled the probe"
+            )
+
+
+class TestNetworkProbeCacheInvalidation:
+    """Toggling the opt-in flag must invalidate the cached profile.
+    A profile calibrated under ``--version`` has empty proxy_hosts;
+    serving it to a caller who just opted in to the network probe
+    would mean the caller never sees the discovered hosts."""
+
+    def test_cache_key_includes_opt_in_env_var(self, monkeypatch):
+        # Capture what env_keys load_or_calibrate sees.
+        captured_env_keys = []
+
+        def fake_load(*args, env_keys=(), **kwargs):
+            captured_env_keys.append(tuple(env_keys))
+            return _fake_profile(proxy_hosts=["api.example.com"])
+
+        monkeypatch.setattr(mod, "_resolve_claude_bin",
+                            lambda: "/fake/claude")
+        import core.sandbox.calibrate as _cal
+        monkeypatch.setattr(_cal, "load_or_calibrate", fake_load)
+
+        mod._calibrated_profile()
+
+        assert len(captured_env_keys) == 1
+        env_keys = captured_env_keys[0]
+        assert mod._NETWORK_PROBE_OPT_IN_ENV in env_keys, (
+            f"opt-in env var must be in cache key so toggling "
+            f"the flag invalidates cleanly. Got env_keys={env_keys!r}"
+        )
+
+    def test_probe_args_match_opt_in_state(self, monkeypatch):
+        # Capture probe_args under both modes.
+        captured_probe_args = []
+
+        def fake_load(*args, probe_args=(), **kwargs):
+            captured_probe_args.append(tuple(probe_args))
+            return _fake_profile()
+
+        monkeypatch.setattr(mod, "_resolve_claude_bin",
+                            lambda: "/fake/claude")
+        import core.sandbox.calibrate as _cal
+        monkeypatch.setattr(_cal, "load_or_calibrate", fake_load)
+
+        # Off state.
+        for var in (mod._NETWORK_PROBE_OPT_IN_ENV, "ANTHROPIC_API_KEY",
+                    "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+                    "CLAUDE_CODE_USE_FOUNDRY"):
+            monkeypatch.delenv(var, raising=False)
+        mod._reset_calibrate_cache_for_tests()
+        mod._calibrated_profile()
+
+        # On state.
+        monkeypatch.setenv(mod._NETWORK_PROBE_OPT_IN_ENV, "1")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake")
+        mod._reset_calibrate_cache_for_tests()
+        mod._calibrated_profile()
+
+        assert captured_probe_args[0] == ("--version",)
+        assert captured_probe_args[1][:2] == ("-p", "READY"), (
+            f"opted-in probe should start with -p READY; got "
+            f"{captured_probe_args[1]!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# build_detector.py uses cc_proxy_hosts (migration pin)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDetectorMigration:
+    """build_detector.py:1080 (the codeql build-detect Claude
+    invocation) MUST route through proxy_hosts_for_cc_dispatch.
+    If a contributor reverts to a hardcoded host list, this test
+    catches it."""
+
+    def test_build_detector_imports_proxy_hosts_for_cc_dispatch(self):
+        import inspect
+        from packages.codeql import build_detector
+        src = inspect.getsource(build_detector)
+        assert "proxy_hosts_for_cc_dispatch" in src, (
+            "packages/codeql/build_detector.py must route the "
+            "claude-build-detect proxy_hosts through "
+            "core.llm.cc_proxy_hosts so calibrate-aware policy "
+            "applies (Bedrock/Vertex/Foundry support, override "
+            "config, etc.)"
+        )
+
+    def test_build_detector_no_longer_hardcodes_anthropic_host(self):
+        import inspect
+        from packages.codeql import build_detector
+        src = inspect.getsource(build_detector)
+        # The pre-migration literal. If this returns, the call
+        # site reverted to hardcoded. Allow the string in
+        # comments / cc_proxy_hosts itself (single source of
+        # truth) but not as a `proxy_hosts=[...]` literal.
+        signature = 'proxy_hosts=["api.anthropic.com"]'
+        assert signature not in src, (
+            "build_detector.py contains the pre-migration "
+            "hardcoded proxy_hosts literal — call site should use "
+            "proxy_hosts_for_cc_dispatch(claude_bin) instead"
         )

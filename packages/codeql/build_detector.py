@@ -1073,11 +1073,20 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
                 capture_json_envelope=False,
             )
             repo_path = str(self.repo_path)
+            # Route hostname allowlist through cc_proxy_hosts so this
+            # site picks up the same calibrate-aware policy as
+            # cc_dispatch's main entry point — operator override,
+            # calibrated SandboxProfile, then provider-aware fallback.
+            # Pre-migration this hardcoded ``api.anthropic.com``,
+            # which silently broke Bedrock / Vertex / Azure /
+            # custom-endpoint setups. The downstream client is
+            # ``claude`` either way, so the policy is identical.
+            from core.llm.cc_proxy_hosts import proxy_hosts_for_cc_dispatch
             result = _sandbox_run(
                 build_cc_command(config),
                 target=repo_path, output=repo_path,
                 use_egress_proxy=True,
-                proxy_hosts=["api.anthropic.com"],
+                proxy_hosts=proxy_hosts_for_cc_dispatch(claude_bin),
                 caller_label="codeql-build-detect",
                 input=prompt, capture_output=True, text=True, timeout=180,
             )

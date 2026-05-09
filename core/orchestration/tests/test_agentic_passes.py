@@ -365,7 +365,16 @@ class UnderstandPrepassTests(unittest.TestCase):
             kw = sandbox_calls[0]
             # Helper internally sets use_egress_proxy=True; the caller
             # passes only the per-site config.
-            self.assertEqual(kw.get("proxy_hosts"), ["api.anthropic.com"])
+            # Default proxy_hosts grew from a single-host list to
+            # the empirical-default set (api.anthropic.com +
+            # mcp-proxy.anthropic.com + downloads.claude.ai).
+            # Pin presence rather than full equality so future
+            # additions don't break this assertion if they're
+            # justified.
+            hosts = kw.get("proxy_hosts")
+            self.assertIn("api.anthropic.com", hosts)
+            self.assertIn("mcp-proxy.anthropic.com", hosts)
+            self.assertIn("downloads.claude.ai", hosts)
             self.assertEqual(kw.get("caller_label"), "agentic-understand")
             # readable_paths must include ~/.claude (Claude Code OAuth)
             # and RAPTOR_DIR (for libexec scripts the LLM invokes).
@@ -594,7 +603,16 @@ class ValidatePostpassTests(unittest.TestCase):
             kw = sandbox_calls[0]
             # Helper internally sets use_egress_proxy=True; caller passes
             # only the per-site config.
-            self.assertEqual(kw.get("proxy_hosts"), ["api.anthropic.com"])
+            # Default proxy_hosts grew from a single-host list to
+            # the empirical-default set (api.anthropic.com +
+            # mcp-proxy.anthropic.com + downloads.claude.ai).
+            # Pin presence rather than full equality so future
+            # additions don't break this assertion if they're
+            # justified.
+            hosts = kw.get("proxy_hosts")
+            self.assertIn("api.anthropic.com", hosts)
+            self.assertIn("mcp-proxy.anthropic.com", hosts)
+            self.assertIn("downloads.claude.ai", hosts)
             self.assertEqual(kw.get("caller_label"), "agentic-validate")
             # readable_paths must include ~/.claude + RAPTOR_DIR + the
             # prior phases' agentic_out_dir (validate reads back what

@@ -79,10 +79,14 @@ def test_invoke_cc_simple_uses_run_untrusted_networked(captured_helper_kwargs, t
     assert len(captured_helper_kwargs) == 1
 
 
-def test_invoke_cc_simple_passes_minimal_proxy_allowlist(captured_helper_kwargs, tmp_path):
-    """proxy_hosts is exactly ``["api.anthropic.com"]`` — the audit
-    finding from the binary + source review. If a future change adds
-    another host without justification, this fires."""
+def test_invoke_cc_simple_passes_documented_proxy_allowlist(
+    captured_helper_kwargs, tmp_path,
+):
+    """proxy_hosts comes from the empirical-default set
+    (api.anthropic.com + mcp-proxy.anthropic.com +
+    downloads.claude.ai). Datadog telemetry stays denied. If a
+    future change adds an unrelated host without justification,
+    this fires."""
     from packages.llm_analysis.cc_dispatch import invoke_cc_simple
 
     out_dir = tmp_path / "out"
@@ -97,7 +101,13 @@ def test_invoke_cc_simple_passes_minimal_proxy_allowlist(captured_helper_kwargs,
     )
 
     kwargs = captured_helper_kwargs[0]["kwargs"]
-    assert kwargs["proxy_hosts"] == ["api.anthropic.com"]
+    hosts = kwargs["proxy_hosts"]
+    assert any(h == "api.anthropic.com" for h in hosts)
+    assert any(h == "mcp-proxy.anthropic.com" for h in hosts)
+    assert any(h == "downloads.claude.ai" for h in hosts)
+    assert not any(
+        h == "http-intake.logs.us5.datadoghq.com" for h in hosts
+    ), "Datadog telemetry must remain denied"
 
 
 def test_invoke_cc_simple_includes_claude_paths_in_readable(
@@ -229,20 +239,23 @@ def test_live_cc_dispatch_no_unexpected_essential_traffic_denials(tmp_path):
         budget_usd="0.50",
         timeout_s=60,
     )
-    home = Path.home()
+    # Route both lists through the cc_proxy_hosts helpers so this
+    # test exercises the same policy real production cc_dispatch
+    # calls do. Hardcoding a single-host list here would make the
+    # live test fail on Claude Code versions that need additional
+    # endpoints (e.g. 2.1.138's mcp-proxy.anthropic.com).
+    from core.llm.cc_proxy_hosts import (
+        proxy_hosts_for_cc_dispatch,
+        readable_paths_for_cc_dispatch,
+    )
     r = run_untrusted_networked(
         build_cc_command(cfg),
         input="reply with the single word READY",
         capture_output=True, text=True,
         timeout=60,
         target=str(tmp_path), output=str(out_dir),
-        readable_paths=[
-            str(home / ".local" / "bin"),
-            str(home / ".local" / "share" / "claude"),
-            str(home / ".claude"),
-            str(home / ".claude.json"),
-        ],
-        proxy_hosts=["api.anthropic.com"],
+        readable_paths=readable_paths_for_cc_dispatch(),
+        proxy_hosts=proxy_hosts_for_cc_dispatch(),
         caller_label="cc-dispatch-test",
     )
 
@@ -320,7 +333,13 @@ def test_live_cc_dispatch_sentinel_home_file_not_leaked(tmp_path):
             budget_usd="0.50",
             timeout_s=60,
         )
-        home = Path.home()
+        # Same rationale as above — route through the helpers so
+        # the live test stays in sync with production policy
+        # whatever Claude Code version is installed.
+        from core.llm.cc_proxy_hosts import (
+            proxy_hosts_for_cc_dispatch,
+            readable_paths_for_cc_dispatch,
+        )
         r = run_untrusted_networked(
             build_cc_command(cfg),
             # Ask the LLM to do exactly the bad thing. With
@@ -333,13 +352,8 @@ def test_live_cc_dispatch_sentinel_home_file_not_leaked(tmp_path):
             capture_output=True, text=True,
             timeout=60,
             target=str(tmp_path), output=str(out_dir),
-            readable_paths=[
-                str(home / ".local" / "bin"),
-                str(home / ".local" / "share" / "claude"),
-                str(home / ".claude"),
-                str(home / ".claude.json"),
-            ],
-            proxy_hosts=["api.anthropic.com"],
+            readable_paths=readable_paths_for_cc_dispatch(),
+            proxy_hosts=proxy_hosts_for_cc_dispatch(),
             caller_label="cc-dispatch-sentinel-test",
         )
 
