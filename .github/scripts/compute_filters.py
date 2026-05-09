@@ -167,6 +167,22 @@ FILTERS: dict[str, list[str]] = {
         "requirements*.txt",
         ".github/workflows/tests.yml",
     ],
+    "orchestration": [
+        "core/orchestration/**",
+        "core/config.py",
+        "core/hash/**",
+        "core/inventory/**",
+        "core/json/**",
+        "core/llm/**",
+        "core/run/**",
+        "core/sandbox/**",
+        "core/schema_constants.py",
+        "core/security/**",
+        "packages/codeql/**",
+        "packages/exploitability_validation/**",
+        "requirements*.txt",
+        ".github/workflows/tests.yml",
+    ],
     # CodeQL per-language scoping. Each matrix entry in codeql.yml
     # gates on the corresponding filter, so a python-only PR skips the
     # c-cpp and actions matrix entries (and vice versa).
