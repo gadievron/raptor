@@ -811,32 +811,24 @@ class TestEmptyArtefactNoOps:
 # ---------------------------------------------------------------------------
 
 
-class TestStageBOnRefutedFindingRegressionPin:
-    """If Stage B's annotation emit walks a findings.json that still
-    contains an IRIS-refuted finding (top-level ``status`` flipped to
-    ``disproven`` but no ``stage_b_summary`` added), Stage B's status
-    mapping regresses the IRIS clean annotation back to ``suspicious``
-    because it falls through to ``stage_a_summary.status`` — which is
-    still ``not_disproven`` because the IRIS gate only updates the
-    top-level field.
+class TestStageBSkipsDisprovenFinding:
+    """Stage B's emit short-circuits on findings whose top-level
+    ``status`` is ``"disproven"``. Without the skip, Stage B walks
+    these findings, finds no ``stage_b_summary`` (because Stage B's
+    LLM skill never processes refuted findings — they're filtered out
+    of its pipeline), falls back to ``stage_a_summary.status`` (still
+    ``"not_disproven"`` since the IRIS gate only flips top-level
+    status), and regresses the IRIS clean annotation back to
+    ``suspicious``.
 
-    The realistic /validate orchestrator side-steps this by removing
-    refuted findings from the list Stage B's pipeline processes — but
-    that's an orchestrator-level invariant the substrate doesn't
-    enforce.
-
-    This test pins the current buggy substrate behaviour. If the fix
-    lands (e.g., ``_emit_one`` Stage B branch skipping findings with
-    ``status="disproven"``, or the IRIS gate also flipping
-    ``stage_a_summary.status``), this test will fail and the docstring
-    should be updated accordingly.
-
-    TODO(follow-up): tighten Stage B's ``_emit_one`` to short-circuit
-    on ``finding["status"] == "disproven"``, removing the orchestrator's
-    responsibility here.
+    This test pins the substrate-level fix landed alongside it: the
+    operator's IRIS verdict survives a subsequent Stage B emit pass
+    even if findings.json still contains the refuted entry.
     """
 
-    def test_stage_b_emit_regresses_iris_clean_for_refuted_finding(self, project, emits):
+    def test_stage_b_emit_preserves_iris_clean_for_refuted_finding(
+        self, project, emits,
+    ):
         repo, run = project
 
         finding = _basic_finding(
@@ -860,14 +852,13 @@ class TestStageBOnRefutedFindingRegressionPin:
         finding["status"] = "disproven"
         _write_findings(run, [finding])
 
-        # Stage B emit walks all findings — REGRESSES the IRIS clean
-        # to suspicious.
-        emits.stage_annotations(run, "B")
+        # Stage B emit walks the disproven finding and SKIPS it —
+        # the IRIS clean annotation is preserved.
+        n_b = emits.stage_annotations(run, "B")
+        assert n_b == 0
         ann_after_b = read_annotation(
             run / "annotations", "src/db/query.py", "run_query",
         )
-        # Pin current (buggy) behaviour. Update this when the fix
-        # lands — see class docstring.
-        assert ann_after_b.metadata["status"] == "suspicious"
-        assert ann_after_b.metadata["stage"] == "B"
-        assert "iris_verdict" not in ann_after_b.metadata
+        assert ann_after_b.metadata["status"] == "clean"
+        assert ann_after_b.metadata["stage"] == "IRIS_TIER1"
+        assert ann_after_b.metadata["iris_verdict"] == "refuted"

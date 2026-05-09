@@ -483,3 +483,66 @@ def quality_retry_prompt(original_prompt: str, incomplete: List[str],
         f"{fix_section}\n\n"
         f"Please fix these fields and return the complete JSON again."
     )
+
+
+def attempt_quality_retry(
+    llm: Any,
+    validated: "ValidatedResponse",
+    prompt: str,
+    schema: Dict[str, Any],
+    *,
+    system_prompt: Optional[str] = None,
+    task_type: Any = None,
+    threshold: float = 0.5,
+) -> "ValidatedResponse":
+    """If `validated.quality` is below `threshold`, build a corrective
+    retry prompt and call the LLM once more. Return whichever response
+    is higher quality.
+
+    Single-retry only — multi-pass compounds cost without strong
+    evidence it improves quality further.
+
+    No-ops when:
+      * quality is already at/above threshold
+      * `validated` has no `incomplete` / `coerced` fields to retry on
+        (the threshold was tripped by something else — no actionable
+        corrective prompt to build)
+      * the LLM call raises or returns None (logged at debug)
+
+    The helper is generic over the LLM interface — it expects a
+    ``generate_structured(prompt=..., schema=..., system_prompt=...,
+    task_type=...)`` method returning ``(raw, response)``. Both
+    ``self.llm`` (LLMClient) and the dispatch path satisfy this.
+    """
+    if validated.quality >= threshold:
+        return validated
+    if not validated.incomplete and not validated.coerced:
+        return validated
+
+    retry_prompt = quality_retry_prompt(
+        prompt, validated.incomplete, validated.coerced,
+    )
+
+    kwargs: Dict[str, Any] = {"prompt": retry_prompt, "schema": schema}
+    if system_prompt is not None:
+        kwargs["system_prompt"] = system_prompt
+    if task_type is not None:
+        kwargs["task_type"] = task_type
+
+    try:
+        raw_retry, _ = llm.generate_structured(**kwargs)
+    except Exception as e:
+        # Retry must never break the caller. Fall back to the original
+        # validated response and let the caller log the low-quality
+        # warning the same way it would have without retry.
+        import logging
+        logging.getLogger(__name__).debug(
+            "quality_retry: generate_structured raised: %s", e,
+        )
+        return validated
+
+    if raw_retry is None:
+        return validated
+
+    validated_retry = validate_structured_response(raw_retry, schema)
+    return validated_retry if validated_retry.quality > validated.quality else validated

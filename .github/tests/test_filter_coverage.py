@@ -41,6 +41,7 @@ SUBSYSTEMS: list[tuple[str, str]] = [
     ("cve_diff", "packages/cve_diff"),
     ("fuzzing", "packages/fuzzing"),
     ("sage", "core/sage"),
+    ("orchestration", "core/orchestration"),
 ]
 
 

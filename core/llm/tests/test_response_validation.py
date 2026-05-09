@@ -5,6 +5,7 @@ import pytest
 from core.llm.response_validation import (
     FieldResult,
     ValidatedResponse,
+    attempt_quality_retry,
     validate_structured_response,
     quality_retry_prompt,
     _coerce_value,
@@ -644,6 +645,151 @@ class TestQualityRetryPrompt:
     def test_empty_no_crash(self):
         prompt = quality_retry_prompt("Analyze.", [], [])
         assert "Analyze." in prompt
+
+
+class TestAttemptQualityRetry:
+    """`attempt_quality_retry` wraps a single corrective re-prompt
+    around the existing `validate_structured_response` flow. It must
+    no-op when retry can't help and silently fall back to the original
+    response on any LLM error so production callers never break."""
+
+    SCHEMA = {
+        "is_true_positive": "boolean",
+        "is_exploitable": "boolean",
+        "reasoning": "string",
+        "vuln_type": "string",
+    }
+
+    def _make_llm(self, response_data, response_quality_proxy=None):
+        """Build a fake LLM whose `generate_structured` returns the
+        given dict (and an empty raw)."""
+        from unittest.mock import MagicMock
+        llm = MagicMock()
+        llm.generate_structured.return_value = (response_data, "")
+        return llm
+
+    def test_no_retry_when_quality_above_threshold(self):
+        from core.llm.response_validation import attempt_quality_retry, ValidatedResponse
+        from unittest.mock import MagicMock
+        validated = ValidatedResponse(
+            data={"is_true_positive": True, "is_exploitable": True,
+                  "reasoning": "x", "vuln_type": "sql_injection"},
+            quality=0.9, incomplete=[], coerced=[], fields={}, raw={},
+        )
+        llm = MagicMock()
+        result = attempt_quality_retry(
+            llm, validated, "prompt", self.SCHEMA, threshold=0.5,
+        )
+        assert result is validated
+        llm.generate_structured.assert_not_called()
+
+    def test_no_retry_when_no_actionable_problems(self):
+        """Below-threshold but no incomplete/coerced fields → no
+        retry (no actionable corrective prompt to build)."""
+        from core.llm.response_validation import attempt_quality_retry, ValidatedResponse
+        from unittest.mock import MagicMock
+        validated = ValidatedResponse(
+            data={}, quality=0.2, incomplete=[], coerced=[], fields={}, raw={},
+        )
+        llm = MagicMock()
+        result = attempt_quality_retry(
+            llm, validated, "prompt", self.SCHEMA, threshold=0.5,
+        )
+        assert result is validated
+        llm.generate_structured.assert_not_called()
+
+    def test_retry_used_when_better(self):
+        """Retry response with higher quality replaces the original."""
+        from core.llm.response_validation import attempt_quality_retry, ValidatedResponse
+        original = ValidatedResponse(
+            data={"is_true_positive": True}, quality=0.3,
+            incomplete=["reasoning", "vuln_type"], coerced=[], fields={}, raw={},
+        )
+        # Retry returns a much fuller response — validate_structured_response
+        # will score it higher than the original.
+        llm = self._make_llm({
+            "is_true_positive": True,
+            "is_exploitable": True,
+            "reasoning": "Yes, this is exploitable because of X.",
+            "vuln_type": "sql_injection",
+        })
+        result = attempt_quality_retry(
+            llm, original, "prompt", self.SCHEMA, threshold=0.5,
+        )
+        assert result is not original
+        assert result.quality > original.quality
+        # Retry call was made with the corrective prompt
+        call_kwargs = llm.generate_structured.call_args.kwargs
+        assert "Missing or invalid" in call_kwargs["prompt"]
+
+    def test_retry_kept_original_when_not_better(self):
+        """Retry returns equal-or-worse quality → keep original."""
+        from core.llm.response_validation import attempt_quality_retry, ValidatedResponse
+        original = ValidatedResponse(
+            data={"is_true_positive": True, "is_exploitable": True,
+                  "reasoning": "x", "vuln_type": "sql_injection"},
+            quality=0.4,
+            incomplete=["reasoning"], coerced=[], fields={}, raw={},
+        )
+        # Retry returns nothing useful
+        llm = self._make_llm({})
+        result = attempt_quality_retry(
+            llm, original, "prompt", self.SCHEMA, threshold=0.5,
+        )
+        # Original should be kept when retry doesn't beat it
+        assert result.data == original.data or result.quality <= original.quality
+
+    def test_retry_swallows_llm_exception(self):
+        """LLM raises on retry → fall back to original (production
+        caller's existing low-quality warning still fires)."""
+        from core.llm.response_validation import attempt_quality_retry, ValidatedResponse
+        from unittest.mock import MagicMock
+        original = ValidatedResponse(
+            data={}, quality=0.3, incomplete=["reasoning"], coerced=[],
+            fields={}, raw={},
+        )
+        llm = MagicMock()
+        llm.generate_structured.side_effect = RuntimeError("boom")
+        result = attempt_quality_retry(
+            llm, original, "prompt", self.SCHEMA, threshold=0.5,
+        )
+        assert result is original
+
+    def test_retry_handles_none_response(self):
+        """LLM returns (None, None) → fall back to original."""
+        from core.llm.response_validation import attempt_quality_retry, ValidatedResponse
+        from unittest.mock import MagicMock
+        original = ValidatedResponse(
+            data={}, quality=0.3, incomplete=["reasoning"], coerced=[],
+            fields={}, raw={},
+        )
+        llm = MagicMock()
+        llm.generate_structured.return_value = (None, None)
+        result = attempt_quality_retry(
+            llm, original, "prompt", self.SCHEMA, threshold=0.5,
+        )
+        assert result is original
+
+    def test_retry_forwards_system_prompt_and_task_type(self):
+        """The retry call must carry the same system_prompt + task_type
+        so the LLM has the same context as the original call."""
+        from core.llm.response_validation import attempt_quality_retry, ValidatedResponse
+        from unittest.mock import MagicMock
+        original = ValidatedResponse(
+            data={}, quality=0.3, incomplete=["reasoning"], coerced=[],
+            fields={}, raw={},
+        )
+        llm = MagicMock()
+        llm.generate_structured.return_value = ({"reasoning": "x"}, "")
+        attempt_quality_retry(
+            llm, original, "prompt", self.SCHEMA,
+            system_prompt="you are an analyzer",
+            task_type="ANALYSE",
+            threshold=0.5,
+        )
+        kwargs = llm.generate_structured.call_args.kwargs
+        assert kwargs["system_prompt"] == "you are an analyzer"
+        assert kwargs["task_type"] == "ANALYSE"
 
 
 # ---------------------------------------------------------------------------

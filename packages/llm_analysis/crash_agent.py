@@ -393,8 +393,21 @@ class CrashAnalysisAgent:
             # to score completeness; this site bypassed it,
             # consuming partially-empty / malformed analyses
             # straight into crash_context. Add the same gate.
-            from core.llm.response_validation import validate_structured_response
+            from core.llm.response_validation import (
+                attempt_quality_retry, validate_structured_response,
+            )
             validated = validate_structured_response(analysis, analysis_schema)
+            # Single-retry uplift before consuming. Threshold 0.3 (not
+            # 0.5 like the other call sites) because crash analyses
+            # frequently legitimately omit fields the schema asks for
+            # (e.g. memory_write=False crashes have no exploitation
+            # primitives) and over-eager retry on those would just
+            # burn tokens without improving signal.
+            validated = attempt_quality_retry(
+                self.llm, validated, prompt, analysis_schema,
+                system_prompt=system_prompt, task_type=TaskType.ANALYSE,
+                threshold=0.3,
+            )
             analysis = validated.data
             if validated.quality < 0.3:
                 logger.warning(
