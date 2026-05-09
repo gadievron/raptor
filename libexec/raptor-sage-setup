@@ -346,7 +346,15 @@ install_sage() {
     check_sdk
     merge_mcp_entry
     enable_sage_env
-    docker compose -f "$COMPOSE_FILE" up -d
+    # `--remove-orphans` so containers from a PREVIOUS
+    # compose config (e.g. the operator updated
+    # docker-compose.sage.yml between runs and the old config's
+    # containers are still running) get cleaned up too. Same
+    # rationale as `down --remove-orphans` below: stale
+    # containers from a prior config hold port bindings and
+    # confuse the install with "port already allocated"
+    # errors. Pre-fix bare `up -d` left orphans intact.
+    docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
     wait_health
     python3 "$RAPTOR_DIR/core/sage/scripts/seed_sage_knowledge.py" --sage-url "$SAGE_URL"
     python3 "$RAPTOR_DIR/core/sage/scripts/register_agents.py" --sage-url "$SAGE_URL"
