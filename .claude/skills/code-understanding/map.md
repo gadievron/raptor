@@ -216,6 +216,76 @@ libexec/raptor-coverage-summary "$WORKDIR" --mark src/routes/query.py:handle_que
 
 This updates the coverage record so `/project coverage` reflects what was examined.
 
+**[MAP-7] Runtime Probe (optional)**
+
+When the target ships an executable binary alongside the source —
+e.g. a CLI tool, a built service, or a packaged scanner — you can
+corroborate the static map with a runtime observation. The probe
+runs the binary under `sandbox(observe=True)` and records every
+path it reads/writes/stat's plus every connect target it attempts;
+the resulting profile is merged into `context-map.json` under a
+`runtime_observation` key with correlations against your entry
+points and sinks.
+
+This is **opt-in** because:
+- many /understand targets don't have a runnable binary;
+- probing executes the binary, which the operator must consent to;
+- the observation is one execution path — entry points the binary
+  didn't reach in this run aren't refuted, just unconfirmed.
+
+Run the probe via the CLI shim and merge the JSON output:
+
+```bash
+raptor-sandbox-observe --json --out "$WORKDIR/probe" -- \
+    /path/to/binary [args...] > "$WORKDIR/probe.json"
+
+python3 -c "
+import json
+from pathlib import Path
+from core.sandbox.observe_profile import (
+    ConnectTarget, ObserveProfile,
+)
+from core.sandbox.observe_context_merge import (
+    merge_observation_into_context_map,
+)
+
+w = Path('$WORKDIR')
+ctx = json.loads((w / 'context-map.json').read_text())
+probe = json.loads((w / 'probe.json').read_text())
+profile = ObserveProfile(
+    paths_read=probe['paths_read'],
+    paths_written=probe['paths_written'],
+    paths_stat=probe['paths_stat'],
+    connect_targets=[
+        ConnectTarget(**t) for t in probe['connect_targets']
+    ],
+)
+merged = merge_observation_into_context_map(
+    ctx, profile,
+    binary='/path/to/binary',
+    command=['/path/to/binary'] + ['<args>'],
+)
+(w / 'context-map.json').write_text(json.dumps(merged, indent=2))
+"
+```
+
+After merge, `context-map.json` has a new `runtime_observation`
+section with:
+- the full path/connect record;
+- `correlations.entry_points_runtime_confirmed`: IDs of entry
+  points whose source file the binary actually opened;
+- `correlations.sinks_runtime_confirmed`: IDs of sinks whose
+  source file the binary opened for write;
+- `correlations.external_reach`: list of ip:port the binary
+  attempted (often complements egress proxy log).
+
+When you display the MAP summary to the user, surface a runtime
+section if `runtime_observation` is present:
+
+> Runtime probe: N paths read, N writes, N connects.
+> Confirmed entry points: EP-001, EP-007.
+> Confirmed sink writes: SINK-002.
+
 ## Output
 
 OUTPUT: `$WORKDIR/context-map.json`

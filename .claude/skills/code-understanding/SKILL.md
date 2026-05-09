@@ -104,6 +104,18 @@ Output schemas are aligned with the validation pipeline's formats (`attack-surfa
 
 See stage-specific files for detailed instructions.
 
+### Optional: runtime probe (Map only)
+
+If the target has a runnable binary, MAP-7 in `map.md` describes how
+to corroborate the static map with a `sandbox(observe=True)` probe.
+The runtime observation lands under a `runtime_observation` key in
+`context-map.json` with correlations against entry points and sinks
+— an entry point whose file the binary actually reads is
+"runtime-confirmed" rather than only structurally identified.
+
+Skip when the target is library/source-only or when the operator
+has no consent to execute the binary.
+
 ---
 
 ## Notice

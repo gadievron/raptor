@@ -105,10 +105,14 @@ def fake_helpers():
         # Return a fake new-child PID; tests can assert it lands in `traced`.
         return 99999
 
-    def fake_write_record(run_dir, name, nr, args, target_pid, path=None):
+    def fake_write_record(run_dir, name, nr, args, target_pid, path=None,
+                          *, filename=None, mode_field=None,
+                          nonce=None):
         calls["write_record"].append({
             "name": name, "nr": nr, "args": list(args),
             "target_pid": target_pid, "path": path,
+            "filename": filename, "mode_field": mode_field,
+            "nonce": nonce,
         })
         return True
 

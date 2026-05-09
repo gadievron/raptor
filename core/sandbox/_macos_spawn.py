@@ -158,6 +158,8 @@ def run_sandboxed(cmd: List[str], *,
                   audit_mode: bool = False,
                   audit_run_dir: Optional[str] = None,
                   audit_verbose: bool = False,
+                  observe_mode: bool = False,
+                  observe_nonce: Optional[str] = None,
                   restrict_reads: bool = False,
                   start_new_session: bool = True,
                   use_egress_proxy: bool = False,
@@ -171,6 +173,18 @@ def run_sandboxed(cmd: List[str], *,
     contract for ``audit_mode`` / ``audit_run_dir`` (caller writes
     .sandbox-denials.jsonl into audit_run_dir; we route the kernel
     sandbox log into that file via seatbelt_audit's log streamer).
+
+    observe_mode: when True (with audit_mode=True), the seatbelt
+    log streamer routes records to ``.sandbox-observe.jsonl``
+    (instead of ``.sandbox-denials.jsonl``) and stamps each record
+    with ``"observe": True`` (instead of ``"audit": True``). Mirror
+    of the Linux tracer behaviour — profile-extraction probes
+    (sandbox(observe=True)) get a separate JSONL file the
+    denial-summary aggregator does not consume. On macOS, observe
+    signal comes from the same SBPL ``(allow X (with report))``
+    rules as audit_verbose; observe_mode therefore implies
+    audit_verbose at the SBPL layer (engaged by the upstream
+    sandbox() context).
 
     audit_verbose: when True (with audit_mode=True), engages the
     extended SBPL audit category set in seatbelt.build_profile.
@@ -308,6 +322,8 @@ def run_sandboxed(cmd: List[str], *,
         try:
             audit_streamer = seatbelt_audit.start_log_streamer(
                 Path(audit_run_dir),
+                observe_mode=bool(observe_mode),
+                observe_nonce=observe_nonce,
             )
         except Exception:
             logger.debug("seatbelt audit log streamer failed to start",
