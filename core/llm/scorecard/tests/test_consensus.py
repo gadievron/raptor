@@ -379,3 +379,49 @@ class TestIsolationFromGate:
         after = _stat(scorecard, "agentic:py/x", "flash",
                       EventType.CHEAP_SHORT_CIRCUIT)
         assert before == after  # cheap-tier counter unchanged
+
+
+class TestProducerErrorVisibility:
+    """Pin that producer failures emit at WARNING, not DEBUG.
+
+    Operators rarely run with DEBUG enabled in production. A
+    regressed producer logging at DEBUG was effectively silent.
+    Promoted family-wide so failures surface in default logs.
+    Captured in the ``project_semantic_entropy`` memory under v1.3.
+    """
+
+    def test_per_event_failure_logs_at_warning(
+        self, scorecard, caplog, monkeypatch,
+    ):
+        # Force record_event to raise so we exercise the except path.
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated record_event failure")
+        monkeypatch.setattr(scorecard, "record_event", _boom)
+
+        matrix = {"f1": {
+            "pro":   {"is_exploitable": True},
+            "opus":  {"is_exploitable": True},
+            "flash": {"is_exploitable": False},
+        }}
+        confidence = {"f1": "disputed"}
+        results = {"f1": {"rule_id": "py/x"}}
+
+        import logging
+        with caplog.at_level(logging.WARNING,
+                             logger="core.llm.scorecard.consensus"):
+            record_consensus_outcomes(
+                scorecard,
+                correlation=_correlation(
+                    matrix=matrix, confidence=confidence),
+                results_by_id=results,
+            )
+
+        warnings = [
+            r for r in caplog.records
+            if r.levelname == "WARNING"
+            and "record_consensus_outcomes" in r.getMessage()
+        ]
+        assert warnings, (
+            "expected WARNING log on per-event failure; got "
+            f"{[(r.levelname, r.getMessage()) for r in caplog.records]}"
+        )

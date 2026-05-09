@@ -171,7 +171,8 @@ def record_reasoning_divergence(
                 )
                 n_recorded += 1
             except Exception as e:                       # noqa: BLE001
-                logger.debug(
+                # WARNING (not DEBUG): see consensus.py for rationale.
+                logger.warning(
                     "record_reasoning_divergence: failed to record "
                     "%s/%s on %s: %s",
                     model, decision_class, fid, e,
