@@ -52,7 +52,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterator, List, Literal, Optional, Tuple
+from typing import Dict, Iterator, List, Literal, Optional, Set, Tuple
 
 from core.json import load_json, save_json
 from core.logging import get_logger
@@ -73,6 +73,32 @@ DEFAULT_MISS_RATE_CEILING = 0.05
 # and more reasoning text on disk (privacy concern). 5 is plenty
 # for the operator to scan a representative spread of failures.
 MAX_DISAGREEMENT_SAMPLES = 5
+
+
+# ---- auto-GC retention ---------------------------------------------------
+# The scorecard JSON grows as new (model, decision_class) pairs accumulate.
+# Per-cell content is bounded (samples capped at MAX_DISAGREEMENT_SAMPLES),
+# but cell count is not — operators that scan many distinct rule_ids over
+# many model upgrades collect dead-weight cells indefinitely. Without auto-
+# GC, the file grows linearly with operator history.
+#
+# Manual retention already exists via ``scorecard reset --older-than-days``;
+# this layer fires the same logic automatically at most once per interval
+# under the existing flock so concurrent processes don't all GC at once.
+
+# Retention horizon — cells whose last_seen_at is older than this are
+# dropped. 90 days is long enough that quarterly model upgrades and
+# seasonal scan patterns don't lose data; operators wanting tighter or
+# looser retention pass ``auto_gc_after_days`` to ``ModelScorecard``.
+# Pass ``None`` (or 0) to disable auto-GC entirely (manual reset still
+# works).
+DEFAULT_AUTO_GC_AFTER_DAYS = 90
+
+# Don't run the cell-walk more than once per this many seconds — operator
+# workloads often have many writes in a burst, and re-walking thousands of
+# cells each time is wasted effort. 24h is granular enough that a stale
+# cell at the cutoff stays at most one extra day.
+_AUTO_GC_INTERVAL_SECONDS = 86400
 
 
 class EventType:
@@ -245,6 +271,9 @@ class ModelScorecard:
         retain_samples: bool = True,
         miss_rate_ceiling: float = DEFAULT_MISS_RATE_CEILING,
         shadow_rate: float = 0.0,
+        auto_gc_after_days: Optional[int] = DEFAULT_AUTO_GC_AFTER_DAYS,
+        auto_gc_interval_seconds: float = _AUTO_GC_INTERVAL_SECONDS,
+        keep_models: Optional[Set[str]] = None,
         rng=None,
     ):
         """``shadow_rate`` is the probability (0-1) that a call to a
@@ -268,6 +297,20 @@ class ModelScorecard:
         self.retain_samples = retain_samples
         self.miss_rate_ceiling = miss_rate_ceiling
         self.shadow_rate = shadow_rate
+        self.auto_gc_after_days = auto_gc_after_days
+        self.auto_gc_interval_seconds = auto_gc_interval_seconds
+        # Cells whose ``model`` is in ``keep_models`` are protected
+        # from auto-GC regardless of last_seen_at age. Intent: an
+        # operator who configures a model in models.json but takes
+        # a quarter off shouldn't lose Wilson-bound calibration
+        # data when they return. ``LLMClient`` populates this from
+        # the operator's primary + fallback model names; CLI /
+        # tests that don't pass it get unprotected behaviour
+        # (manual ``reset --model X`` still works to retire a
+        # specific model). Frozen ``set`` for cheap lookups.
+        self.keep_models: Set[str] = (
+            set(keep_models) if keep_models else set()
+        )
         self._rng = rng if rng is not None else random.random
 
     # ----- public API -----
@@ -632,6 +675,11 @@ class ModelScorecard:
         def __exit__(self, exc_type, exc, tb):
             try:
                 if exc_type is None and self.write:
+                    # Run auto-GC inside the write lock so concurrent
+                    # processes serialise and at most one walks per
+                    # configured interval. See
+                    # ``ModelScorecard._maybe_auto_gc``.
+                    self.scorecard._maybe_auto_gc(self.data)
                     # Atomic write via save_json (tempfile + rename).
                     # We're under flock on the sibling ``.lock``
                     # file, which stays stable across this rename;
@@ -649,6 +697,106 @@ class ModelScorecard:
 
     def _with_lock(self, *, write: bool = True) -> "_LockCtx":
         return ModelScorecard._LockCtx(self, write=write)
+
+    # ----- auto-GC -----
+
+    def _maybe_auto_gc(self, data: Dict) -> None:
+        """Drop stale cells if retention has elapsed since the last
+        sweep. Caller MUST hold the write lock.
+
+        Behaviour:
+
+        * No-op when ``self.auto_gc_after_days`` is ``None`` or
+          ``<= 0`` (operator opted out).
+        * Reads ``data["last_gc_at"]`` to gate the cell-walk on the
+          configured interval — at most one process per interval
+          actually walks. Concurrent processes serialise on the
+          flock and see the updated ``last_gc_at`` on their next
+          turn, so they no-op.
+        * Cell-walk drops every ``(model, decision_class)`` cell
+          whose ``last_seen_at`` predates the retention cutoff,
+          UNLESS its ``model`` is in :attr:`keep_models` — those
+          are operator-active models we don't want to silently
+          purge while the operator is on holiday.
+        * Logs a summary line at INFO when any cells were dropped:
+          per-model count + total events purged. Operators wanting
+          historical data pipe logs (the JSON intentionally keeps
+          no archive — see ``project_semantic_entropy`` memory).
+        """
+        days = self.auto_gc_after_days
+        if days is None or days <= 0:
+            return
+
+        now = time.time()
+        last_gc_iso = data.get("last_gc_at") or ""
+        if last_gc_iso:
+            try:
+                last_gc_ts = datetime.fromisoformat(
+                    last_gc_iso,
+                ).timestamp()
+            except ValueError:
+                # Hand-edited / corrupt — treat as never-run.
+                last_gc_ts = 0.0
+        else:
+            last_gc_ts = 0.0
+        if now - last_gc_ts < self.auto_gc_interval_seconds:
+            return
+
+        cutoff_ts = now - days * 86400
+        cutoff_iso = datetime.fromtimestamp(
+            cutoff_ts, tz=timezone.utc,
+        ).replace(microsecond=0).isoformat()
+
+        # Per-model summary for the log line. Only models whose cells
+        # actually got dropped end up in the dict — protected models
+        # never appear here even if they would otherwise have been
+        # GC candidates.
+        per_model_counts: Dict[str, int] = {}
+        events_correct = 0
+        events_incorrect = 0
+        models = data.get("models") or {}
+        for m_key in list(models.keys()):
+            if m_key in self.keep_models:
+                # Operator-active model — preserve all its cells.
+                continue
+            by_dc = models[m_key]
+            for dc_key in list(by_dc.keys()):
+                cell = by_dc[dc_key]
+                seen = cell.get("last_seen_at", "")
+                if seen and seen < cutoff_iso:
+                    # Tally before deletion so the log line is
+                    # informative without a separate scan.
+                    for et_counts in (cell.get("events") or {}).values():
+                        events_correct += int(
+                            et_counts.get("correct", 0))
+                        events_incorrect += int(
+                            et_counts.get("incorrect", 0))
+                    del by_dc[dc_key]
+                    per_model_counts[m_key] = (
+                        per_model_counts.get(m_key, 0) + 1)
+            if not by_dc:
+                del models[m_key]
+
+        data["last_gc_at"] = datetime.fromtimestamp(
+            now, tz=timezone.utc,
+        ).replace(microsecond=0).isoformat()
+
+        total_dropped = sum(per_model_counts.values())
+        if total_dropped:
+            per_model_str = ", ".join(
+                f"{m}: {n}" for m, n in sorted(per_model_counts.items())
+            )
+            # RaptorLogger takes a single pre-formatted message string,
+            # not %-style positional args. Build the message here so
+            # the log line stays one greppable line.
+            logger.info(
+                f"scorecard auto-GC: dropped {total_dropped} cells "
+                f"across {len(per_model_counts)} deprecated model(s) "
+                f"({per_model_str}); totals: "
+                f"{events_correct + events_incorrect} events purged "
+                f"({events_correct} correct, {events_incorrect} "
+                "incorrect)"
+            )
 
 
 __all__ = [

@@ -418,10 +418,25 @@ class LLMClient:
             return None
         if self._scorecard is None:
             from .scorecard import ModelScorecard
+            # Operator's currently-configured models. Auto-GC
+            # preserves cells for these regardless of last_seen_at
+            # age — an operator who steps away for a quarter and
+            # comes back shouldn't lose Wilson-bound calibration
+            # data on models still listed in their config. Only
+            # cells for *deprecated* models age out. Includes
+            # primary + every fallback so multi-tier configs are
+            # fully covered.
+            keep_models: set[str] = set()
+            if self.config.primary_model is not None:
+                keep_models.add(self.config.primary_model.model_name)
+            for fb in (self.config.fallback_models or []):
+                if fb is not None:
+                    keep_models.add(fb.model_name)
             self._scorecard = ModelScorecard(
                 self.config.scorecard_path,
                 retain_samples=self.config.scorecard_retain_samples,
                 shadow_rate=self.config.scorecard_shadow_rate,
+                keep_models=keep_models or None,
             )
         return self._scorecard
 

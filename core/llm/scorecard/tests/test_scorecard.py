@@ -545,3 +545,313 @@ def test_shadow_rate_invalid_value_rejected(tmp_path):
         ModelScorecard(tmp_path / "sc.json", shadow_rate=5.0)
     with pytest.raises(ValueError, match="shadow_rate"):
         ModelScorecard(tmp_path / "sc.json", shadow_rate=-0.1)
+
+
+# ---------------------------------------------------------------------------
+# Auto-GC retention
+# ---------------------------------------------------------------------------
+
+
+def _backdate_cell(sc, model: str, decision_class: str,
+                   *, days_ago: int) -> None:
+    """Helper: rewrite a cell's last_seen_at to be ``days_ago`` days
+    in the past. Lets tests stage stale data without having to wait
+    or stub time.time() for the read path. Acquires the same write
+    lock the public API uses, so the rewrite is consistent with the
+    persistence layer.
+
+    Note: this helper's own write counts as a GC trigger when the
+    scorecard's auto_gc_interval_seconds is 0. To stage MULTIPLE
+    stale cells before letting GC run, call ``_arm_gc(sc)`` after
+    all backdates and then perform a single write — that ensures
+    GC sees the full set in one pass rather than firing per call.
+    """
+    from datetime import datetime, timezone
+    import time
+    target = datetime.fromtimestamp(
+        time.time() - days_ago * 86400, tz=timezone.utc,
+    ).replace(microsecond=0).isoformat()
+    with sc._with_lock() as data:
+        data["models"][model][decision_class]["last_seen_at"] = target
+
+
+def _arm_gc(sc) -> None:
+    """Helper: clear ``last_gc_at`` so the next write triggers an
+    auto-GC pass. Use after staging multiple stale cells via
+    ``_backdate_cell`` to fire GC in one batch rather than per-cell."""
+    with sc._with_lock() as data:
+        data.pop("last_gc_at", None)
+
+
+class TestAutoGc:
+    def test_disabled_when_auto_gc_after_days_none(self, tmp_path):
+        # Default would be 90 days; pass None to opt out.
+        sc = ModelScorecard(
+            tmp_path / "sc.json", shadow_rate=0.0,
+            auto_gc_after_days=None,
+        )
+        sc.record_event(
+            "x:y", "m", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+        _backdate_cell(sc, "m", "x:y", days_ago=400)
+        # Trigger another write; opt-out means no GC happens.
+        sc.record_event(
+            "x:y", "m2", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+        assert sc.get_stat("x:y", "m") is not None
+
+    def test_disabled_when_auto_gc_after_days_zero(self, tmp_path):
+        sc = ModelScorecard(
+            tmp_path / "sc.json", shadow_rate=0.0,
+            auto_gc_after_days=0,
+        )
+        sc.record_event(
+            "x:y", "m", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+        _backdate_cell(sc, "m", "x:y", days_ago=400)
+        sc.record_event(
+            "x:y", "m2", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+        assert sc.get_stat("x:y", "m") is not None
+
+    def test_drops_stale_cell(self, tmp_path):
+        sc = ModelScorecard(
+            tmp_path / "sc.json", shadow_rate=0.0,
+            auto_gc_after_days=90,
+            auto_gc_interval_seconds=0.0,
+        )
+        sc.record_event(
+            "x:y", "old-model", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+        _backdate_cell(sc, "old-model", "x:y", days_ago=120)
+        # Next write triggers GC; ``old-model`` is past the cutoff
+        # and not in keep_models, so its cell should be dropped.
+        sc.record_event(
+            "x:y", "fresh", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+        assert sc.get_stat("x:y", "old-model") is None
+        assert sc.get_stat("x:y", "fresh") is not None
+
+    def test_preserves_fresh_cell(self, tmp_path):
+        sc = ModelScorecard(
+            tmp_path / "sc.json", shadow_rate=0.0,
+            auto_gc_after_days=90,
+            auto_gc_interval_seconds=0.0,
+        )
+        sc.record_event(
+            "x:y", "recent", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+        _backdate_cell(sc, "recent", "x:y", days_ago=30)  # well within
+        sc.record_event(
+            "x:y", "another", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+        # Fresh-ish cell survives — it's only 30d old.
+        assert sc.get_stat("x:y", "recent") is not None
+
+    def test_keep_models_protects_stale_cell(self, tmp_path):
+        # Operator configured ``in-use`` 4 months ago but is back
+        # scanning today. The cell would otherwise be GC'd; the
+        # ``keep_models`` set protects it.
+        sc = ModelScorecard(
+            tmp_path / "sc.json", shadow_rate=0.0,
+            auto_gc_after_days=90,
+            auto_gc_interval_seconds=0.0,
+            keep_models={"in-use"},
+        )
+        sc.record_event(
+            "x:y", "in-use", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+        _backdate_cell(sc, "in-use", "x:y", days_ago=120)
+        sc.record_event(
+            "x:y", "fresh", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+        # Stale but protected — survives. The Wilson-bound calibration
+        # data the operator built up over previous quarters is intact.
+        assert sc.get_stat("x:y", "in-use") is not None
+
+    def test_keep_models_does_not_protect_unrelated_models(self, tmp_path):
+        # Listing one model in keep_models doesn't rescue cells for
+        # other deprecated models.
+        sc = ModelScorecard(
+            tmp_path / "sc.json", shadow_rate=0.0,
+            auto_gc_after_days=90,
+            auto_gc_interval_seconds=0.0,
+            keep_models={"in-use"},
+        )
+        sc.record_event(
+            "x:y", "deprecated", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+        _backdate_cell(sc, "deprecated", "x:y", days_ago=120)
+        sc.record_event(
+            "x:y", "in-use", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+        assert sc.get_stat("x:y", "deprecated") is None
+
+    def test_interval_gates_walk(self, tmp_path):
+        # Run 1 with interval=0 → GC fires.
+        # Run 2 with default interval (24h) immediately after → no walk.
+        sc = ModelScorecard(
+            tmp_path / "sc.json", shadow_rate=0.0,
+            auto_gc_after_days=90,
+            auto_gc_interval_seconds=0.0,
+        )
+        sc.record_event(
+            "x:y", "old", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+        _backdate_cell(sc, "old", "x:y", days_ago=120)
+        sc.record_event(  # triggers first GC; old dropped
+            "x:y", "fresh", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+        assert sc.get_stat("x:y", "old") is None
+
+        # New scorecard handle on the same file with the production
+        # interval. Stage another stale cell. GC must NOT fire because
+        # last_gc_at was just stamped.
+        sc2 = ModelScorecard(
+            tmp_path / "sc.json", shadow_rate=0.0,
+            auto_gc_after_days=90,
+        )  # default 24h interval
+        sc2.record_event(
+            "x:y", "old2", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+        # Backdate WITHOUT clearing last_gc_at this time so the
+        # interval gate is the thing under test.
+        from datetime import datetime, timezone
+        import time
+        with sc2._with_lock() as data:
+            old_iso = datetime.fromtimestamp(
+                time.time() - 200 * 86400, tz=timezone.utc,
+            ).replace(microsecond=0).isoformat()
+            data["models"]["old2"]["x:y"]["last_seen_at"] = old_iso
+
+        sc2.record_event(
+            "x:y", "fresh2", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+        # Should still be present — interval gate suppressed the walk.
+        assert sc2.get_stat("x:y", "old2") is not None
+
+    def test_logs_summary_on_drop(self, tmp_path, caplog):
+        # Stage two stale cells under auto_gc_after_days=None so
+        # the seeding writes don't fire GC themselves. Then
+        # construct a fresh handle with the production retention
+        # to trigger the single GC pass we care about logging.
+        seed = ModelScorecard(
+            tmp_path / "sc.json", shadow_rate=0.0,
+            auto_gc_after_days=None,
+        )
+        seed.record_event(
+            "x:y", "deprecated-a", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+        seed.record_event(
+            "x:y", "deprecated-b", EventType.CHEAP_SHORT_CIRCUIT, "incorrect",
+        )
+        _backdate_cell(seed, "deprecated-a", "x:y", days_ago=200)
+        _backdate_cell(seed, "deprecated-b", "x:y", days_ago=200)
+
+        sc = ModelScorecard(
+            tmp_path / "sc.json", shadow_rate=0.0,
+            auto_gc_after_days=90,
+            auto_gc_interval_seconds=0.0,
+        )
+
+        # RaptorLogger uses a "raptor" logger with propagate=False,
+        # so caplog (which hooks root by default) doesn't see its
+        # records. Attach a captor handler directly to the "raptor"
+        # logger for the duration of the test.
+        import logging
+        captured: list[logging.LogRecord] = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record):  # noqa: D401
+                captured.append(record)
+
+        raptor_logger = logging.getLogger("raptor")
+        captor = _Capture(level=logging.INFO)
+        raptor_logger.addHandler(captor)
+        try:
+            sc.record_event(
+                "x:y", "fresh", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+            )
+        finally:
+            raptor_logger.removeHandler(captor)
+
+        # Summary line carries the per-model breakdown + outcome
+        # tallies. Operators wanting historical data grep this line.
+        summary = next(
+            (r.getMessage() for r in captured
+             if "auto-GC" in r.getMessage()), None,
+        )
+        assert summary is not None, [r.getMessage() for r in captured]
+        assert "deprecated-a: 1" in summary
+        assert "deprecated-b: 1" in summary
+        # Outcomes summed across both deprecated cells: 1 correct + 1 incorrect.
+        assert "1 correct" in summary
+        assert "1 incorrect" in summary
+
+    def test_no_log_when_nothing_dropped(self, tmp_path):
+        # Interval has elapsed but no cells are stale → walk runs
+        # silently (no INFO line). Operators don't get spammed when
+        # the scorecard is healthy.
+        sc = ModelScorecard(
+            tmp_path / "sc.json", shadow_rate=0.0,
+            auto_gc_after_days=90,
+            auto_gc_interval_seconds=0.0,
+        )
+        sc.record_event(
+            "x:y", "fresh", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+
+        # Same handler-attachment dance as test_logs_summary_on_drop
+        # — caplog can't see records on the propagate=False raptor
+        # logger.
+        import logging
+        captured: list[logging.LogRecord] = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record):  # noqa: D401
+                captured.append(record)
+
+        raptor_logger = logging.getLogger("raptor")
+        captor = _Capture(level=logging.INFO)
+        raptor_logger.addHandler(captor)
+        try:
+            sc.record_event(
+                "x:y", "fresh-2", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+            )
+        finally:
+            raptor_logger.removeHandler(captor)
+        assert not any(
+            "auto-GC" in r.getMessage() for r in captured
+        )
+
+    def test_removes_empty_model_dict(self, tmp_path):
+        # When all of a model's cells are GC'd, the model entry
+        # itself goes too — keeps the JSON tidy.
+        sc = ModelScorecard(
+            tmp_path / "sc.json", shadow_rate=0.0,
+            auto_gc_after_days=90,
+            auto_gc_interval_seconds=0.0,
+        )
+        sc.record_event(
+            "x:y", "deprecated", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+        _backdate_cell(sc, "deprecated", "x:y", days_ago=200)
+        sc.record_event(
+            "x:y", "fresh", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+        with sc._with_lock(write=False) as data:
+            assert "deprecated" not in (data.get("models") or {})
+
+    def test_last_gc_at_persists(self, tmp_path):
+        sc = ModelScorecard(
+            tmp_path / "sc.json", shadow_rate=0.0,
+            auto_gc_after_days=90,
+            auto_gc_interval_seconds=0.0,
+        )
+        sc.record_event(
+            "x:y", "m", EventType.CHEAP_SHORT_CIRCUIT, "correct",
+        )
+        with sc._with_lock(write=False) as data:
+            assert data.get("last_gc_at"), (
+                "last_gc_at must be stamped after first auto-GC pass"
+            )
