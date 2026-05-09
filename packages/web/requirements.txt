@@ -1,5 +1,7 @@
 # Requirements specific to the `packages/web` module
 # These are installed by consumers of the web package or can be
 # installed in the devcontainer to enable web scanning/browser automation.
-beautifulsoup4>=4.12.0
-playwright>=1.40.0
+# Exact pins per the project's "no loose deps" policy — see
+# requirements.txt for the rationale.
+beautifulsoup4==4.14.3
+playwright==1.58.0

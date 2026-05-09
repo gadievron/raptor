@@ -4,10 +4,10 @@
 -r requirements.txt
 
 # Linting
-ruff>=0.1.0
+ruff==0.15.12
 
 # Type checking
-mypy>=1.0.0
+mypy==2.0.0
 
 # Testing
 # pytest pinned exactly: the root pytest.ini uses ``--import-mode=importlib``
