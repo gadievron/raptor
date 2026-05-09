@@ -1,4 +1,4 @@
-"""IRIS-style dataflow validation for /agentic Semgrep findings.
+"""IRIS-style dataflow validation for /agentic findings.
 
 Pattern (from IRIS, ICLR 2025): Semgrep flags a finding; the LLM analysis
 step claims a dataflow path ("input flows from source to sink"); we
@@ -211,27 +211,33 @@ def _eligible_for_validation(finding: Dict, analysis: Dict) -> bool:
     Eligibility is conservative — we only validate when we're confident
     the claim is testable and where the existing evidence is weakest:
 
-      - Finding source must be Semgrep. CodeQL findings already carry
-        dataflow evidence in their SARIF; running another query is
-        redundant.
       - Analysis must have produced a non-empty dataflow_summary. The
         summary is the LLM's claim; without it there's nothing to test.
       - Finding must NOT already have CodeQL dataflow evidence. The
-        `has_dataflow` flag is set when CodeQL produced a path for this
-        finding; if it's set, the claim is already grounded.
+        ``has_dataflow`` flag is set when CodeQL produced a path for
+        this finding; if it's set, the claim is already grounded and
+        re-running an IRIS query against the same DB is waste. This
+        check is the natural skip for ``@kind path-problem`` CodeQL
+        findings (which carry dataflow); ``@kind problem`` CodeQL
+        findings (purely syntactic, no SARIF dataflow) DO go through
+        IRIS validation when the LLM's analysis produced a dataflow
+        claim, because the LLM's claim is independent of the SARIF.
       - Analysis must not be in error state. Validating a failed
         analysis wastes budget.
       - Analysis must currently claim exploitable. There's nothing to
         downgrade if it doesn't, so skip and save the LLM cost.
+
+    Tool source is not checked. The IRIS pattern is "test the LLM's
+    dataflow claim against CodeQL"; what scanner produced the original
+    finding is irrelevant once the LLM has a claim. Earlier revisions
+    gated on ``tool == "semgrep"`` to skip CodeQL findings, but the
+    ``has_dataflow`` check covers that more precisely (some CodeQL
+    rules emit no dataflow; some non-CodeQL findings with LLM-claimed
+    dataflow benefit from validation).
     """
     if "error" in analysis:
         return False
     if not analysis.get("is_exploitable"):
-        return False
-    # Tool field varies: "semgrep", "Semgrep OSS", "semgrep_pro", etc.
-    # We only need to recognise it's a Semgrep finding, not the exact spelling.
-    tool = (finding.get("tool") or "").lower()
-    if "semgrep" not in tool:
         return False
     if finding.get("has_dataflow"):
         return False
@@ -247,10 +253,10 @@ def _eligible_for_validation(finding: Dict, analysis: Dict) -> bool:
 # hypothesis_validation runner's generic prompts useful without forking
 # them for this specific task.
 _VALIDATION_TASK_GUIDANCE = """\
-TASK: You are validating a Semgrep finding's dataflow claim against a
-pre-built CodeQL database. The Semgrep rule pattern-matched on a single
-location; the LLM analysis claimed an inter-procedural dataflow path
-exists from a source to that location.
+TASK: You are validating a security finding's dataflow claim against a
+pre-built CodeQL database. The upstream scanner pattern-matched on a
+single location; the LLM analysis claimed an inter-procedural dataflow
+path exists from a source to that location.
 
 Your job is to write a CodeQL query that tests whether that path is
 actually reachable in the codebase, not to find all possible
@@ -605,9 +611,9 @@ def _build_strategy_block(
 
 
 def _build_hypothesis(finding: Dict, analysis: Dict, repo_path: Path):
-    """Construct a Hypothesis from a Semgrep finding + LLM analysis.
+    """Construct a Hypothesis from a finding + LLM analysis.
 
-    Target-derived content (Semgrep `message`, LLM `reasoning`,
+    Target-derived content (scanner `message`, LLM `reasoning`,
     `dataflow_summary`) is wrapped in untrusted-block tags within the
     Hypothesis.context so the validation LLM sees them as data, not
     instructions. An adversarial source file with "Ignore previous
@@ -637,7 +643,15 @@ def _build_hypothesis(finding: Dict, analysis: Dict, repo_path: Path):
         )
     rule_id = finding.get("rule_id") or ""
     if rule_id:
-        trusted_parts.append(f"Semgrep rule: {_sanitize_for_prompt(rule_id)}")
+        # Surface the upstream tool name alongside the rule id so the
+        # validator LLM has provenance — useful when the rule id alone
+        # is ambiguous between scanners (e.g. ``cpp/use-after-free`` is
+        # CodeQL's; a Semgrep rule could share the same id format).
+        tool = finding.get("tool") or "unknown"
+        trusted_parts.append(
+            f"Source rule ({_sanitize_for_prompt(str(tool))}): "
+            f"{_sanitize_for_prompt(rule_id)}"
+        )
 
     # CWE-specialised strategy lenses. The IRIS pack name encodes the
     # CWE (e.g. ``Security/CWE-022/PathTraversalLocal.ql``) so we
@@ -658,7 +672,7 @@ def _build_hypothesis(finding: Dict, analysis: Dict, repo_path: Path):
     message = finding.get("message") or ""
     if message:
         untrusted_inner.append(
-            "Semgrep message: " + _sanitize_for_prompt(message)
+            "Scanner message: " + _sanitize_for_prompt(message)
         )
     reasoning = analysis.get("reasoning") or ""
     if reasoning:
@@ -715,7 +729,12 @@ def tier1_check_finding(
     target_path: Optional[Path] = None,
 ) -> str:
     """Free Tier 1 dataflow check for a single finding — no LLM,
-    no Hypothesis context, no orchestration.
+    no Hypothesis context, no orchestration. Instrumented wrapper
+    around the inner check; logs verdict + elapsed seconds at INFO
+    so per-finding latency is visible without changing the inner
+    logic. Operators chasing performance can ``logging.getLogger
+    ('packages.llm_analysis.dataflow_validation').setLevel('INFO')``
+    to surface the timing line.
 
     Used by consumers that want a cheap pre-flight check before
     spending real money on downstream analysis (e.g. `/exploit`
@@ -757,6 +776,33 @@ def tier1_check_finding(
         target_path: Repo root for evidence audit-trail. Defaults to
             the database path when not supplied.
     """
+    import time
+    started = time.perf_counter()
+    verdict = _tier1_check_finding_inner(
+        finding, codeql_dbs, target_path=target_path,
+    )
+    elapsed = time.perf_counter() - started
+    # INFO-level so ops can see latency without DEBUG noise. Includes
+    # the (lang, cwe) pair the inner function resolved so an aggregate
+    # log analyser can group by them.
+    lang = _finding_language(finding) or "?"
+    cwe = (finding.get("cwe_id") or "").upper().strip() or "?"
+    logger.info(
+        "tier1_check_finding: lang=%s cwe=%s verdict=%s elapsed=%.2fs",
+        lang, cwe, verdict, elapsed,
+    )
+    return verdict
+
+
+def _tier1_check_finding_inner(
+    finding: Dict,
+    codeql_dbs: Dict[str, Path],
+    *,
+    target_path: Optional[Path] = None,
+) -> str:
+    """Inner implementation of ``tier1_check_finding`` — split out so
+    the public wrapper can time + log around all return paths without
+    instrumenting each one individually."""
     # Master kill-switch — operators can disable Tier 1 globally via
     # `RaptorConfig.IRIS_TIER1_ENABLED = False` (or the per-consumer
     # CLI flags that flip this). All four consumers route through
