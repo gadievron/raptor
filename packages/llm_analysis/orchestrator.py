@@ -709,6 +709,27 @@ def orchestrate(
         dispatch_fn, role_resolution, results_by_id, cost_tracker, max_parallel,
     )
 
+    # Snapshot original primary verdicts BEFORE the consensus
+    # stage runs. ConsensusTask.finalize() mutates
+    # `primary["is_exploitable"]` with the panel-conservative
+    # max, overwriting the primary's reasoning verdict in place.
+    # JudgeTask later reads `primary["is_exploitable"]` to know
+    # what the primary said — but by then it sees the
+    # consensus-overridden value, NOT the primary's actual
+    # reasoning. So judge's "do you agree with primary?" prompt
+    # asks about a verdict primary may not actually hold.
+    #
+    # Pre-fix this snapshot was taken AFTER consensus, BEFORE
+    # judge — capturing the post-consensus value, which defeated
+    # the snapshot's purpose. Take it here, before BOTH stages,
+    # so judge can compare against the actual primary verdict.
+    primary_verdicts_pre_consensus: Dict[str, bool] = {}
+    for fid, r in results_by_id.items():
+        if isinstance(r, dict) and "error" not in r:
+            primary_verdicts_pre_consensus[fid] = bool(
+                r.get("is_exploitable", False)
+            )
+
     # Consensus (if configured)
     consensus_models = role_resolution.get("consensus_models", [])
     consensus_budget_skipped = False
@@ -760,13 +781,17 @@ def orchestrate(
     # Judge review (if configured) — sees primary reasoning, critiques it
     judge_models = role_resolution.get("judge_models", [])
     if judge_models:
-        # Snapshot primary verdicts BEFORE JudgeTask runs — its
-        # finalize() overwrites ``primary["is_exploitable"]`` with
-        # the panel-majority verdict. The JUDGE_REVIEW producer
-        # below needs the original to know which way primary voted.
-        primary_verdicts_before_judge: Dict[str, bool] = {}
+        # Use the pre-consensus snapshot so JUDGE_REVIEW producer
+        # sees the actual primary verdict, not the consensus-
+        # overridden one. Falls back to the post-consensus state
+        # for findings that didn't exist pre-consensus (shouldn't
+        # happen in normal flow, but defensive).
+        primary_verdicts_before_judge: Dict[str, bool] = dict(
+            primary_verdicts_pre_consensus
+        )
         for fid, r in results_by_id.items():
-            if isinstance(r, dict) and "error" not in r:
+            if (fid not in primary_verdicts_before_judge
+                    and isinstance(r, dict) and "error" not in r):
                 primary_verdicts_before_judge[fid] = bool(
                     r.get("is_exploitable", False)
                 )
