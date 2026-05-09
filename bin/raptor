@@ -180,6 +180,18 @@ while [[ $# -gt 0 ]]; do
             TRUST_REPO_ARG="--trust"
             shift
             ;;
+        -h|--help|help)
+            # The early help check at the top of this script only
+            # tests `${1:-}` — so `raptor <target> -h` (help requested
+            # AFTER a positional target) never reached the early
+            # branch, fell through `-*)` here, and got forwarded to
+            # Claude Code as a flag, which then complained about
+            # "unrecognised --help" and exited. Operators expected
+            # `raptor <anything> -h` to work like every other CLI.
+            # Fall back to re-execing self with just `-h` so the
+            # early branch fires and prints our help text.
+            exec "$0" -h
+            ;;
         -*)
             CLAUDE_ARGS+=("$1")
             shift
