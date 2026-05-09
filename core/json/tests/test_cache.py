@@ -241,3 +241,83 @@ def test_non_json_serialisable_value_does_not_leak_tempfile(tmp_path: Path) -> N
     assert leftovers == [], f"tempfile leak: {leftovers}"
     # And the cache returns None on subsequent get (write was rejected).
     assert cache.get("k", ttl_seconds=60) is None
+
+
+# ---------------------------------------------------------------------------
+# In-process memo
+# ---------------------------------------------------------------------------
+
+
+def test_memo_serves_repeat_get_without_disk_read(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Second get on the same key should be served from the memo
+    without re-parsing the JSON file."""
+    cache = JsonCache(root=tmp_path)
+    cache.put("k", {"big": "value"}, ttl_seconds=60)
+
+    # Spy on the parse path: count calls to _read_envelope.
+    original = JsonCache._read_envelope
+    calls = {"n": 0}
+    def counting(path):
+        calls["n"] += 1
+        return original(path)
+    # ``monkeypatch`` cleanly restores the staticmethod wrapper on
+    # teardown — direct `JsonCache._read_envelope = original` would
+    # leave the class attribute as a plain function, breaking later
+    # tests that call the method via the class binding.
+    monkeypatch.setattr(JsonCache, "_read_envelope", staticmethod(counting))
+    for _ in range(10):
+        assert cache.get("k", ttl_seconds=60) == {"big": "value"}
+    # 10 get()s, only 1 read.
+    assert calls["n"] == 1, f"expected 1 disk read, got {calls['n']}"
+
+
+def test_memo_invalidated_on_external_disk_rewrite(tmp_path: Path) -> None:
+    """If the disk file is rewritten externally (different mtime),
+    the next get must re-read rather than serve a stale memo entry.
+    Pins the test that exposed the original memo correctness bug."""
+    cache = JsonCache(root=tmp_path)
+    cache.put("k", "old", ttl_seconds=60)
+    assert cache.get("k", ttl_seconds=60) == "old"
+    # Wait long enough that the next mtime is detectably different.
+    p = tmp_path / "k.json"
+    import os as _os
+    raw = json.loads(p.read_text())
+    raw["value"] = "new"
+    # Rewrite + bump mtime (st_mtime usually has 1ns resolution
+    # on Linux; force-bump explicitly to be safe across filesystems).
+    p.write_text(json.dumps(raw))
+    new_mtime = p.stat().st_mtime + 5.0
+    _os.utime(p, (new_mtime, new_mtime))
+    assert cache.get("k", ttl_seconds=60) == "new"
+
+
+def test_memo_invalidated_on_put(tmp_path: Path) -> None:
+    """put under the same key must replace the memo entry."""
+    cache = JsonCache(root=tmp_path)
+    cache.put("k", "v1", ttl_seconds=60)
+    assert cache.get("k", ttl_seconds=60) == "v1"
+    cache.put("k", "v2", ttl_seconds=60)
+    assert cache.get("k", ttl_seconds=60) == "v2"
+
+
+def test_memo_invalidated_on_invalidate(tmp_path: Path) -> None:
+    cache = JsonCache(root=tmp_path)
+    cache.put("k", "v", ttl_seconds=60)
+    assert cache.get("k", ttl_seconds=60) == "v"
+    cache.invalidate("k")
+    assert cache.get("k", ttl_seconds=60) is None
+
+
+def test_memo_negative_cached_miss_is_recomputed_after_put(
+    tmp_path: Path,
+) -> None:
+    """Repeated misses on a never-written key shouldn't trigger
+    repeat disk stat — but a subsequent put on that key must be
+    seen by the next get."""
+    cache = JsonCache(root=tmp_path)
+    assert cache.get("k", ttl_seconds=60) is None
+    assert cache.get("k", ttl_seconds=60) is None
+    cache.put("k", "v", ttl_seconds=60)
+    assert cache.get("k", ttl_seconds=60) == "v"

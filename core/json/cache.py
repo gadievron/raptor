@@ -138,6 +138,21 @@ class JsonCache:
         self._counter_lock = threading.Lock()
         self.hits = 0
         self.misses = 0
+        # Per-instance in-process memo. Disk-cache hot paths (OSV
+        # per-query, KEV containment, registry metadata, supply-chain
+        # tracker lookups) call ``try_get`` with the same key many
+        # times within a single scan — pre-memo the SCA pipeline
+        # spent ~5s of a 20s saleor warm scan re-opening + re-parsing
+        # the same JSON files for the same keys. The memo is bounded
+        # by the working set (typically a few thousand entries per
+        # scan); we don't LRU-evict because scans are short-lived
+        # and the memo is reclaimed when the cache instance is GC'd.
+        # ``put`` and ``invalidate`` write through to keep the memo
+        # consistent with disk for callers who put + immediately get.
+        # ``MISSING`` is also memoised so a cold-cache miss isn't
+        # re-checked on disk repeatedly.
+        self._memo_lock = threading.Lock()
+        self._memo: dict = {}
         try:
             self._root.mkdir(parents=True, exist_ok=True)
         except OSError as e:
@@ -239,18 +254,49 @@ class JsonCache:
             with self._counter_lock:
                 self.misses += 1
             return MISSING
+        # In-process memo — disk-hot keys (OSV per-query, registry
+        # metadata, supply-chain tracker lookups) get hit many times
+        # in one scan; pre-memo each repeat paid disk + JSON parse.
+        # We memoise the parsed envelope keyed on the disk file's
+        # mtime so external rewrites (test fixtures, concurrent
+        # processes) still get re-read instead of returning a stale
+        # in-memory copy. Stat is much cheaper than read + JSON parse,
+        # so the memo still wins net even with the per-hit stat.
         path = self._path_for(key)
-        if not path.exists():
-            with self._counter_lock:
-                self.misses += 1
-            return MISSING
         try:
-            envelope = self._read_envelope(path)
-        except (OSError, ValueError, KeyError) as e:
-            logger.debug("core.json.cache: corrupt entry %s: %s", path, e)
+            file_mtime = path.stat().st_mtime
+        except OSError:
+            file_mtime = None
+        if file_mtime is None:
+            with self._memo_lock:
+                self._memo[key] = MISSING
             with self._counter_lock:
                 self.misses += 1
             return MISSING
+        with self._memo_lock:
+            cached_pair = self._memo.get(key)
+        envelope: Optional[CacheEnvelope] = None
+        if (isinstance(cached_pair, tuple) and len(cached_pair) == 2
+                and cached_pair[1] == file_mtime):
+            envelope = cached_pair[0]
+        elif cached_pair is MISSING:
+            # Negative-cached miss is rechecked because the file may
+            # have appeared between the previous miss and this call —
+            # disk stat already proved presence above, so fall through
+            # to the read path.
+            pass
+        if envelope is None:
+            try:
+                envelope = self._read_envelope(path)
+            except (OSError, ValueError, KeyError) as e:
+                logger.debug("core.json.cache: corrupt entry %s: %s", path, e)
+                with self._memo_lock:
+                    self._memo[key] = MISSING
+                with self._counter_lock:
+                    self.misses += 1
+                return MISSING
+            with self._memo_lock:
+                self._memo[key] = (envelope, file_mtime)
         # Caller may downgrade TTL relative to what was stored. Honour
         # the *minimum* TTL.
         #
@@ -299,6 +345,12 @@ class JsonCache:
             ttl_seconds=ttl_seconds,
             value=value,
         )
+        # Drop any memo entry under this key so a concurrent reader
+        # doesn't return a stale envelope before the disk write
+        # completes. The next ``try_get`` after the rename will
+        # repopulate the memo via the stat + read path.
+        with self._memo_lock:
+            self._memo.pop(key, None)
         # Tempfile suffix MUST include the thread id, not just pid:
         # two threads in the same process writing the same key would
         # otherwise share a tmp path, and ``open("w")`` truncates on
@@ -329,6 +381,8 @@ class JsonCache:
         """Remove an entry. Safe to call on missing keys."""
         if not self._writable or self._root is None:
             return
+        with self._memo_lock:
+            self._memo.pop(key, None)
         path = self._path_for(key)
         try:
             path.unlink(missing_ok=True)
