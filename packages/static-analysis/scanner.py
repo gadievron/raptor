@@ -282,14 +282,30 @@ def run_single_semgrep(
         # Engage Landlock via target + output. Writes pinned to out_dir
         # and /tmp. Reads Landlock-default-wide (semgrep is a
         # RAPTOR-chosen trusted tool, not attacker-controlled code).
-        # Network: route via the egress proxy with semgrep.dev on the
-        # allowlist — UDP blocked, hostname-allowlisted, resolved-IP-
-        # screened by the proxy's is_global check.
+        # Network: route via the egress proxy with the resolved
+        # allowlist — UDP blocked, hostname-allowlisted,
+        # resolved-IP-screened by the proxy's is_global check.
+        # Allowlist pulled from ._proxy_hosts (override → calibrate
+        # → static default) so operators on Semgrep self-hosted /
+        # corporate registry mirrors can override without source
+        # edits. See packages/static-analysis/_proxy_hosts.py.
+        #
+        # ``static-analysis`` is hyphenated → not importable as a
+        # Python package; scanner.py runs as ``__main__`` via
+        # subprocess. Load the helper via importlib at call time
+        # to match the existing convention (see tests under
+        # packages/static-analysis/tests/ for the same pattern).
+        import importlib.util as _importlib_util
+        _ph_path = Path(__file__).parent / "_proxy_hosts.py"
+        _ph_spec = _importlib_util.spec_from_file_location(
+            "static_analysis_proxy_hosts", _ph_path,
+        )
+        _ph = _importlib_util.module_from_spec(_ph_spec)
+        _ph_spec.loader.exec_module(_ph)
         rc, so, se = run(
             cmd, timeout=effective_timeout, env=clean_env,
             target=str(repo_path), output=str(out_dir),
-            proxy_hosts=["semgrep.dev", "registry.semgrep.dev",
-                         "semgrep.app", "api.semgrep.dev"],
+            proxy_hosts=_ph.proxy_hosts_for_semgrep(),
             caller_label="scanner-semgrep",
         )
 
