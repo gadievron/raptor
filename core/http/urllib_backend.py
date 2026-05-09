@@ -29,6 +29,7 @@ allowlisted egress, use :class:`core.http.egress_backend.EgressClient`.
 from __future__ import annotations
 
 import gzip
+import io
 import json
 import logging
 import time
@@ -698,8 +699,39 @@ class UrllibClient:
             # bodies, and we'd rather hand the caller raw data than
             # corrupt a payload that wasn't actually gzip.
             if raw.startswith(b"\x1f\x8b"):
+                # Pre-fix `gzip.decompress(raw)` had no output cap.
+                # A decompression bomb (gzip ratio >>1000:1, e.g.
+                # 100KB compressed → 10GB decompressed) consumed
+                # the parent process's full RAM before
+                # decompression finished. The size cap on the
+                # response above (`max_bytes`) bounded the
+                # COMPRESSED bytes but not the decompressed
+                # output.
+                #
+                # Use streaming decompression with a per-call
+                # cap matching `max_bytes` (or 50MB if not set
+                # — pathological-but-bounded ceiling for the
+                # rare un-capped path). Abort and keep the raw
+                # compressed bytes on cap-overflow rather than
+                # raising — the existing fallback semantics
+                # are "if decode fails, hand the caller the
+                # raw bytes".
+                _decomp_cap = max_bytes if max_bytes is not None and max_bytes > 0 else 50 * 1024 * 1024
                 try:
-                    raw = gzip.decompress(raw)
+                    decompressor = gzip.GzipFile(fileobj=io.BytesIO(raw), mode='rb')
+                    out = bytearray()
+                    while True:
+                        block = decompressor.read(64 * 1024)
+                        if not block:
+                            break
+                        out.extend(block)
+                        if len(out) > _decomp_cap:
+                            # Decompression bomb. Keep raw,
+                            # don't materialise the bomb output.
+                            out = None
+                            break
+                    if out is not None:
+                        raw = bytes(out)
                 except (OSError, EOFError):
                     pass
 
