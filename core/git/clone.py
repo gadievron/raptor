@@ -83,11 +83,13 @@ logger = logging.getLogger(__name__)
 # — operator saw "git clone failed" with no signal that the proxy
 # allowlist was the missing piece. Add them so the egress proxy
 # accepts the redirected hosts.
-_PROXY_HOSTS = (
-    "github.com", "gitlab.com",
-    "codeload.github.com", "objects.githubusercontent.com",
-    "raw.githubusercontent.com", "media.githubusercontent.com",
-)
+from ._proxy_hosts import proxy_hosts_for_git as _proxy_hosts_for_git
+# Backwards-compat re-export — historical callers + tests reference
+# ``core.git.clone._PROXY_HOSTS`` directly. Kept as the static-default
+# tuple (no operator override applied) so existing semantics hold;
+# new call sites should use ``_proxy_hosts_for_git()`` to pick up the
+# operator override config.
+from ._proxy_hosts import _DEFAULT_GIT_HOSTS as _PROXY_HOSTS
 
 
 def get_safe_git_env() -> Dict[str, str]:
@@ -290,7 +292,7 @@ def clone_repository(
         output=str(target.parent),
         env=get_safe_git_env(),
         use_egress_proxy=True,
-        proxy_hosts=list(_PROXY_HOSTS),
+        proxy_hosts=_proxy_hosts_for_git(),
         timeout=RaptorConfig.GIT_CLONE_TIMEOUT,
         capture_output=True,
         text=True,
@@ -361,7 +363,7 @@ def fetch_commit(
 
     repo_dir.mkdir(parents=True, exist_ok=True)
     env = get_safe_git_env()
-    proxy_hosts = list(_PROXY_HOSTS)
+    proxy_hosts = _proxy_hosts_for_git()
     timeout = RaptorConfig.GIT_CLONE_TIMEOUT
 
     # ``output`` is the sandbox's writable allowlist. Use ``repo_dir.parent``
