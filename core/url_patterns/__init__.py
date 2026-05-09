@@ -42,8 +42,30 @@ SHA_DISPLAY_LEN: int = 12
 
 
 def normalize_slug(slug: str) -> str:
-    """Lower-case, strip ``.git`` suffix, strip whitespace."""
+    """Lower-case, strip ``.git`` suffix, strip whitespace.
+
+    Pre-fix didn't strip TRAILING PUNCTUATION (`)`, `]`, `>`,
+    `,`, `.`, `;`). The capture regex `[^/]+/[^/#?\\s]+`
+    excludes only `/`, `#`, `?`, whitespace — so a URL
+    appearing in prose like:
+
+        (see https://github.com/foo/bar)
+        cite: https://github.com/foo/bar.
+        list: https://github.com/foo/bar; https://...
+
+    extracts `foo/bar)`, `foo/bar.`, `foo/bar;` respectively.
+    Downstream consumers (cve_diff oracle, scorecard slug
+    keys) then key on the puncutated form and miss matches
+    against canonical `foo/bar`.
+
+    Strip trailing punctuation chars that are never legal in
+    a github slug.
+    """
     slug = slug.strip()
+    # Strip trailing punctuation iteratively (multiple chars
+    # may have been captured: e.g. `slug.,`).
+    while slug and slug[-1] in ")]>,.;":
+        slug = slug[:-1]
     if slug.endswith(".git"):
         slug = slug[:-4]
     return slug.lower()
