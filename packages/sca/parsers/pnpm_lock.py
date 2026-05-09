@@ -36,9 +36,11 @@ ECOSYSTEM = "npm"
 
 try:
     import yaml as _yaml                  # type: ignore[import-untyped]
+    from .._yaml_fast import safe_load as _safe_load
     _AVAILABLE = True
 except ImportError:                       # pragma: no cover — env-dependent
     _yaml = None                          # type: ignore[assignment]
+    _safe_load = None                     # type: ignore[assignment]
     _AVAILABLE = False
     logger.warning(
         "sca.parsers.pnpm_lock: 'PyYAML' not installed — pnpm-lock.yaml "
@@ -58,7 +60,7 @@ def parse(path: Path) -> List[Dependency]:
         logger.warning("sca.parsers.pnpm_lock: read failed for %s: %s", path, e)
         return []
     try:
-        data = _yaml.safe_load(text)
+        data = _safe_load(text)           # type: ignore[misc]
     except _yaml.YAMLError as e:          # type: ignore[union-attr]
         logger.warning(
             "sca.parsers.pnpm_lock: YAML parse failed for %s: %s", path, e

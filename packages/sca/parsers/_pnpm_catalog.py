@@ -121,6 +121,7 @@ def _parse_catalogs(path: Path) -> Dict[str, Dict[str, str]]:
 
     try:
         import yaml  # type: ignore[import-untyped]
+        from .._yaml_fast import safe_load
     except ImportError:
         logger.debug(
             "sca.parsers._pnpm_catalog: PyYAML not installed; "
@@ -129,7 +130,7 @@ def _parse_catalogs(path: Path) -> Dict[str, Dict[str, str]]:
         return {}
 
     try:
-        data = yaml.safe_load(text)
+        data = safe_load(text)
     except yaml.YAMLError as e:
         logger.warning(
             "sca.parsers._pnpm_catalog: parse failed for %s: %s",

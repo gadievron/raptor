@@ -132,6 +132,7 @@ def load_policy(target: Path) -> LicensePolicy:
         return DEFAULT_POLICY
     try:
         import yaml
+        from packages.sca._yaml_fast import safe_load
     except ImportError:
         logger.warning(
             "sca.license: PyYAML not installed — skipping operator "
@@ -140,7 +141,7 @@ def load_policy(target: Path) -> LicensePolicy:
         return DEFAULT_POLICY
     try:
         text = path.read_text(encoding="utf-8")
-        data = yaml.safe_load(text) or {}
+        data = safe_load(text) or {}
     except (OSError, yaml.YAMLError) as e:
         logger.warning(
             "sca.license: failed to read %s (%s) — using default",
@@ -372,68 +373,67 @@ def enrich_licenses(
         logger.debug("sca.license: registry clients unavailable: %s", e)
         return 0
 
-    pypi: Optional[PyPIClient] = None
-    npm: Optional[NpmClient] = None
-    enriched = 0
-    for d in deps:
-        if d.declared_license:
-            continue
+    # Pre-construct the per-ecosystem registry clients so all worker
+    # threads share one set (no double-construction races; the
+    # clients are stateless wrappers around http+cache).
+    pypi = PyPIClient(http=http, cache=cache)
+    npm = NpmClient(http=http, cache=cache)
+
+    work = [d for d in deps if not d.declared_license]
+    if not work:
+        return 0
+
+    def _enrich_one(d: Dependency) -> bool:
         try:
             if d.ecosystem == "PyPI":
-                if pypi is None:
-                    pypi = PyPIClient(http=http, cache=cache)
                 meta = pypi.get_metadata(d.name)
                 spdx = _spdx_from_pypi(meta)
-                if spdx:
-                    d.declared_license = spdx
-                    enriched += 1
             elif d.ecosystem == "npm":
-                if npm is None:
-                    npm = NpmClient(http=http, cache=cache)
                 meta = npm.get_metadata(d.name)
                 spdx = _spdx_from_npm(meta, d.version)
-                if spdx:
-                    d.declared_license = spdx
-                    enriched += 1
             elif d.ecosystem == "Cargo":
                 spdx = _fetch_crates_license(d.name, http=http, cache=cache)
-                if spdx:
-                    d.declared_license = spdx
-                    enriched += 1
             elif d.ecosystem == "Maven" and d.version:
                 spdx = _fetch_maven_license(
                     d.name, d.version, http=http, cache=cache,
                 )
-                if spdx:
-                    d.declared_license = spdx
-                    enriched += 1
             elif d.ecosystem == "RubyGems":
                 spdx = _fetch_rubygems_license(
                     d.name, http=http, cache=cache,
                 )
-                if spdx:
-                    d.declared_license = spdx
-                    enriched += 1
             elif d.ecosystem == "NuGet" and d.version:
                 spdx = _fetch_nuget_license(
                     d.name, d.version, http=http, cache=cache,
                 )
-                if spdx:
-                    d.declared_license = spdx
-                    enriched += 1
             elif d.ecosystem == "Packagist":
                 spdx = _fetch_packagist_license(
                     d.name, d.version, http=http, cache=cache,
                 )
-                if spdx:
-                    d.declared_license = spdx
-                    enriched += 1
+            else:
+                return False
         except Exception as e:                          # noqa: BLE001
             logger.debug(
                 "sca.license: enrichment failed for %s:%s (%s)",
                 d.ecosystem, d.name, e,
             )
-    return enriched
+            return False
+        if spdx:
+            d.declared_license = spdx
+            return True
+        return False
+
+    # Parallelise — every fetch is HTTP-bound and independent. Same
+    # 8-worker shape as registry_metadata.scan_deps. Skip the pool
+    # for tiny inputs so the executor's spin-up doesn't cost more
+    # than the sequential walk.
+    if len(work) <= 4:
+        return sum(1 for d in work if _enrich_one(d))
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(
+        max_workers=8, thread_name_prefix="sca-license-enrich",
+    ) as pool:
+        results = list(pool.map(_enrich_one, work))
+    return sum(1 for r in results if r)
 
 
 # ---------------------------------------------------------------------------

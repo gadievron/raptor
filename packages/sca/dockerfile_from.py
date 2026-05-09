@@ -590,6 +590,7 @@ def find_compose_image_refs(target: Path) -> List[ImageRefSource]:
     out: List[ImageRefSource] = []
     try:
         import yaml
+        from ._yaml_fast import safe_load
     except ImportError:
         return out
     from .parsers.compose import _is_compose_file
@@ -605,7 +606,7 @@ def find_compose_image_refs(target: Path) -> List[ImageRefSource]:
                 continue
             try:
                 text = p.read_text(encoding="utf-8", errors="replace")
-                data = yaml.safe_load(text)
+                data = safe_load(text)
             except (OSError, yaml.YAMLError):
                 continue
             if not isinstance(data, dict):
@@ -633,6 +634,7 @@ def find_gitlab_ci_image_refs(target: Path) -> List[ImageRefSource]:
     out: List[ImageRefSource] = []
     try:
         import yaml
+        from ._yaml_fast import safe_load
     except ImportError:
         return out
     from .discovery import EXCLUDED_DIR_NAMES
@@ -647,7 +649,7 @@ def find_gitlab_ci_image_refs(target: Path) -> List[ImageRefSource]:
             p = Path(root) / f
             try:
                 text = p.read_text(encoding="utf-8", errors="replace")
-                data = yaml.safe_load(text)
+                data = safe_load(text)
             except (OSError, yaml.YAMLError):
                 continue
             if not isinstance(data, dict):
@@ -703,6 +705,7 @@ def find_kubernetes_image_refs(target: Path) -> List[ImageRefSource]:
     out: List[ImageRefSource] = []
     try:
         import yaml
+        from ._yaml_fast import safe_load_all
     except ImportError:
         return out
     from .parsers.kubernetes import _is_k8s_manifest, _WORKLOAD_KINDS
@@ -718,7 +721,7 @@ def find_kubernetes_image_refs(target: Path) -> List[ImageRefSource]:
                 continue
             try:
                 text = p.read_text(encoding="utf-8", errors="replace")
-                docs = list(yaml.safe_load_all(text))
+                docs = list(safe_load_all(text))
             except (OSError, yaml.YAMLError):
                 continue
             for doc in docs:
@@ -812,25 +815,44 @@ def scan_image_sources(
 
     deps: List[Dependency] = []
     digest_cache: Dict[str, ImageSbom] = {}
-    seen_images: Dict[str, ImageSbom] = {}
+    seen_images: Dict[str, Optional[ImageSbom]] = {}
 
+    # Fetch SBOMs for unique images in parallel — each call is an
+    # OCI registry HTTP round-trip (~300-400ms). Sequential walk
+    # of even 4 unique images costs >1.2s; pool brings it to one
+    # round-trip. The dedup pass below ensures one fetch per image
+    # regardless of how many refs point at it.
+    unique_images = []
+    seen: set = set()
     for ref in refs:
-        sbom = seen_images.get(ref.image)
-        if sbom is None:
-            sbom = fetch_image_sbom(
-                ref.image,
-                client=client,
+        if ref.image in seen:
+            continue
+        seen.add(ref.image)
+        unique_images.append(ref.image)
+    if unique_images:
+        from concurrent.futures import ThreadPoolExecutor
+        def _fetch_one(image: str):
+            return image, fetch_image_sbom(
+                image, client=client,
                 platform_os=platform_os,
                 platform_arch=platform_arch,
                 digest_cache=digest_cache,
                 disk_cache=cache,
             )
-            if sbom is None:
-                # Mark as known-bad so we don't re-attempt within
-                # this run.
-                seen_images[ref.image] = None      # type: ignore[assignment]
-            else:
-                seen_images[ref.image] = sbom
+        # Cap at 8 — most repos have far fewer unique images, and
+        # bigger pools just queue more work onto the egress proxy.
+        max_workers = min(8, max(1, len(unique_images)))
+        with ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix="sca-oci-sbom",
+        ) as pool:
+            for image, sbom in pool.map(_fetch_one, unique_images):
+                # ``None`` is recorded so the per-ref loop below
+                # treats the fetch as known-bad without retrying.
+                seen_images[image] = sbom
+
+    for ref in refs:
+        sbom = seen_images.get(ref.image)
         if sbom is None or not sbom.packages:
             continue
         deps.extend(packages_to_dependencies(

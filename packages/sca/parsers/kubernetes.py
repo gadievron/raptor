@@ -75,6 +75,7 @@ def parse(path: Path) -> List[Dependency]:
         return []
     try:
         import yaml                 # type: ignore[import-untyped]
+        from .._yaml_fast import safe_load_all
     except ImportError:
         logger.debug(
             "sca.parsers.kubernetes: PyYAML not installed; skipping %s",
@@ -83,7 +84,7 @@ def parse(path: Path) -> List[Dependency]:
         return []
     try:
         # Multi-document YAML — common for ``manifests/`` bundles.
-        documents = list(yaml.safe_load_all(text))
+        documents = list(safe_load_all(text))
     except yaml.YAMLError as e:
         logger.warning(
             "sca.parsers.kubernetes: YAML parse failed for %s: %s",

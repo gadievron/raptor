@@ -55,9 +55,11 @@ _SUPPORTED_VERSIONS = {1}
 
 try:
     import yaml as _yaml                  # type: ignore[import-untyped]
+    from ._yaml_fast import safe_load as _safe_load
     _HAS_YAML = True
 except ImportError:                       # pragma: no cover — env-dependent
     _yaml = None                          # type: ignore[assignment]
+    _safe_load = None                     # type: ignore[assignment]
     _HAS_YAML = False
     logger.warning(
         "sca.suppressions: 'PyYAML' not installed — suppression files "
@@ -117,7 +119,7 @@ def load(path: Path) -> List[SuppressionEntry]:
         return []
     try:
         text = path.read_text(encoding="utf-8")
-        data = _yaml.safe_load(text)
+        data = _safe_load(text)                # type: ignore[misc]
     except (OSError, _yaml.YAMLError) as e:    # type: ignore[union-attr]
         logger.warning("sca.suppressions: failed to read %s: %s", path, e)
         return []

@@ -64,6 +64,7 @@ def parse(path: Path) -> List[Dependency]:
         return []
     try:
         import yaml                 # type: ignore[import-untyped]
+        from .._yaml_fast import safe_load
     except ImportError:
         logger.debug(
             "sca.parsers.helm_chart: PyYAML not installed; skipping %s",
@@ -71,7 +72,7 @@ def parse(path: Path) -> List[Dependency]:
         )
         return []
     try:
-        data = yaml.safe_load(text)
+        data = safe_load(text)
     except yaml.YAMLError as e:
         logger.warning(
             "sca.parsers.helm_chart: YAML parse failed for %s: %s",

@@ -40,9 +40,11 @@ ECOSYSTEM = "npm"
 
 try:
     import yaml as _yaml                  # type: ignore[import-untyped]
+    from .._yaml_fast import safe_load as _safe_load
     _HAS_YAML = True
 except ImportError:                       # pragma: no cover — env-dependent
     _yaml = None                          # type: ignore[assignment]
+    _safe_load = None                     # type: ignore[assignment]
     _HAS_YAML = False
     logger.warning(
         "sca.parsers.yarn_lock: 'PyYAML' not installed — Yarn Berry "
@@ -86,7 +88,7 @@ def _looks_like_berry(text: str) -> bool:
     # call it Berry. Otherwise default to classic.
     if _HAS_YAML:
         try:
-            data = _yaml.safe_load(text)  # type: ignore[union-attr]
+            data = _safe_load(text)       # type: ignore[misc]
             if isinstance(data, dict) and "__metadata" in data:
                 return True
         except Exception:                 # noqa: BLE001 — best-effort sniff
@@ -190,7 +192,7 @@ def _from_classic_block(
 
 def _parse_berry(text: str, path: Path) -> List[Dependency]:
     try:
-        data = _yaml.safe_load(text)      # type: ignore[union-attr]
+        data = _safe_load(text)           # type: ignore[misc]
     except _yaml.YAMLError as e:          # type: ignore[union-attr]
         logger.warning(
             "sca.parsers.yarn_lock: Berry YAML parse failed for %s: %s",
