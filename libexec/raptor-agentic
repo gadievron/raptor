@@ -33,6 +33,15 @@ while [ -L "$SCRIPT" ]; do
 done
 RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
 
+# Strip env vars that could inject code into the Python process.
+# Same single-source-of-truth as bin/raptor and bin/cve-diff. Pre-fix
+# this wrapper relied on the parent (bin/raptor) having already stripped
+# — which is true for the default invocation path, but power users who
+# set `_RAPTOR_TRUSTED=1` and call the wrapper directly bypassed the
+# strip entirely. Apply it here too so the trusted-direct path has the
+# same env-hygiene floor as the bin/raptor → libexec/ path.
+. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"
+
 # Defensive: confirm we're really inside a RAPTOR install before exec'ing
 # python3 on what might be a missing path. Fails loudly if symlink-walk
 # resolved to somewhere unexpected.
