@@ -98,16 +98,25 @@ def evaluate_probe_response(raw_response: str, nonce: str) -> ProbeResult:
     text = raw_response.strip()
 
     # Strip markdown code fences — many models wrap JSON in ```json ... ```
+    # Prefer the LAST fenced JSON block. Pre-fix this picked the FIRST
+    # fence whose contents parsed — which let an adversarial response
+    # ("```{}```\n\n... actual_envelope_with_nonce ...") have the
+    # empty placeholder picked while the real envelope (with the
+    # leak-detection signal) was ignored. Same defence pattern as
+    # `core/llm/cc_adapter.strip_json_fences`. Walk all fence pairs
+    # and keep the last JSON-parseable candidate.
     if "```" in text:
+        last_candidate = None
         for part in text.split("```")[1::2]:
             lines = part.strip().split("\n", 1)
             candidate = lines[1].strip() if len(lines) > 1 else lines[0].strip()
             try:
-                parsed = json.loads(candidate)
-                text = candidate
-                break
+                json.loads(candidate)
+                last_candidate = candidate
             except (json.JSONDecodeError, TypeError):
                 continue
+        if last_candidate is not None:
+            text = last_candidate
 
     try:
         parsed = json.loads(text)
