@@ -408,3 +408,170 @@ def test_e2e_real_calibration_against_python3_binary(tmp_path,
         # MUST be empty — this is the load-bearing invariant the
         # resolver's three-layer fallthrough depends on.
         assert list(cached.proxy_hosts) == []
+
+
+# ---------------------------------------------------------------------
+# Secondary resolvers (bundler / composer / gradle / maven / nuget /
+# pnpm / poetry / yarn) — same shape, different registries.
+# ---------------------------------------------------------------------
+
+
+# (helper, expected default, override key, bin name) for the 8 secondary
+# resolvers. Pinned so a future host-list change has to update the test
+# explicitly — guards against silent allowlist drift.
+_SECONDARY = [
+    ("proxy_hosts_for_bundler",
+     ["rubygems.org", "index.rubygems.org"],
+     "bundler", "bundle"),
+    ("proxy_hosts_for_composer",
+     ["repo.packagist.org", "packagist.org"],
+     "composer", "composer"),
+    ("proxy_hosts_for_gradle",
+     ["repo.maven.apache.org", "repo1.maven.org",
+      "plugins.gradle.org", "services.gradle.org"],
+     "gradle", "gradle"),
+    ("proxy_hosts_for_maven",
+     ["repo.maven.apache.org", "repo1.maven.org"],
+     "maven", "mvn"),
+    ("proxy_hosts_for_nuget",
+     ["api.nuget.org", "nuget.org"],
+     "nuget", "dotnet"),
+    ("proxy_hosts_for_pnpm",
+     ["registry.npmjs.org"],
+     "pnpm", "pnpm"),
+    ("proxy_hosts_for_poetry",
+     ["pypi.org", "files.pythonhosted.org"],
+     "poetry", "poetry"),
+    ("proxy_hosts_for_yarn",
+     ["registry.yarnpkg.com", "registry.npmjs.org"],
+     "yarn", "yarn"),
+]
+
+
+@pytest.mark.parametrize(
+    "fn_name,expected_default,override_key,_bin", _SECONDARY,
+)
+def test_secondary_default_when_no_override_no_calibration(
+    fn_name, expected_default, override_key, _bin,
+):
+    """Each secondary helper returns its documented static default
+    when (a) no override config exists and (b) no binary is on PATH."""
+    fn = getattr(_proxy_hosts, fn_name)
+    with mock.patch.object(_proxy_hosts, "_resolve_bin",
+                           return_value=None):
+        assert fn() == expected_default
+
+
+@pytest.mark.parametrize(
+    "fn_name,_expected_default,override_key,_bin", _SECONDARY,
+)
+def test_secondary_override_takes_precedence(
+    override_config, fn_name, _expected_default, override_key, _bin,
+):
+    """Override config under the per-tool key beats default."""
+    override_config({override_key: ["mirror.corp.example.com"]})
+    fn = getattr(_proxy_hosts, fn_name)
+    assert fn() == ["mirror.corp.example.com"]
+
+
+@pytest.mark.parametrize(
+    "fn_name,_expected_default,_override_key,_bin", _SECONDARY,
+)
+def test_secondary_calibrated_proxy_hosts_used_when_populated(
+    fn_name, _expected_default, _override_key, _bin,
+):
+    """Calibrated profile with non-empty proxy_hosts (operator ran a
+    network-engaging probe) wins over the static default. Mirrors
+    the cc_dispatch / pip behaviour."""
+    fake = mock.Mock()
+    fake.proxy_hosts = ["snapshot.example.com"]
+    fn = getattr(_proxy_hosts, fn_name)
+    with mock.patch.object(_proxy_hosts, "_resolve_bin",
+                           return_value="/fake/bin"), \
+         mock.patch.object(_proxy_hosts, "_calibrated_profile",
+                           return_value=fake):
+        assert fn() == ["snapshot.example.com"]
+
+
+# Per-tool env_keys disambiguate the calibrate cache; pinning them
+# guards against accidental key drift that would silently merge two
+# distinct configurations into one cache entry.
+_SECONDARY_ENV_KEYS = [
+    ("proxy_hosts_for_bundler", "BUNDLE_GEMFILE"),
+    ("proxy_hosts_for_composer", "COMPOSER_HOME"),
+    ("proxy_hosts_for_gradle", "GRADLE_USER_HOME"),
+    ("proxy_hosts_for_maven", "MAVEN_OPTS"),
+    ("proxy_hosts_for_nuget", "NUGET_PACKAGES"),
+    ("proxy_hosts_for_pnpm", "NPM_CONFIG_REGISTRY"),
+    ("proxy_hosts_for_poetry", "POETRY_REPOSITORIES_PRIMARY_URL"),
+    ("proxy_hosts_for_yarn", "YARN_REGISTRY"),
+]
+
+
+@pytest.mark.parametrize("fn_name,expected_key", _SECONDARY_ENV_KEYS)
+def test_secondary_calibration_includes_documented_env_key(
+    fn_name, expected_key,
+):
+    """Each secondary helper's calibrate cache key includes the
+    documented env-var discriminator. Pinned so a future env_keys
+    edit doesn't silently broaden the cache scope."""
+    captured = {}
+
+    def _capture_load(bin_path, **kwargs):
+        captured.update(kwargs)
+        fake = mock.Mock()
+        fake.proxy_hosts = []
+        return fake
+
+    fn = getattr(_proxy_hosts, fn_name)
+    with mock.patch.object(_proxy_hosts, "_resolve_bin",
+                           return_value="/fake/bin"), \
+         mock.patch(
+            "core.sandbox.calibrate.load_or_calibrate",
+            side_effect=_capture_load,
+         ):
+        fn()
+
+    assert "env_keys" in captured
+    assert expected_key in tuple(captured["env_keys"])
+
+
+# Resolver-class wiring — ensure each secondary resolver's @property
+# routes through the helper.
+_RESOLVER_WIRING = [
+    ("packages.sca.resolvers.bundler", "BundlerResolver",
+     "proxy_hosts_for_bundler"),
+    ("packages.sca.resolvers.composer", "ComposerResolver",
+     "proxy_hosts_for_composer"),
+    ("packages.sca.resolvers.gradle", "GradleResolver",
+     "proxy_hosts_for_gradle"),
+    ("packages.sca.resolvers.maven", "MavenResolver",
+     "proxy_hosts_for_maven"),
+    ("packages.sca.resolvers.nuget", "NugetResolver",
+     "proxy_hosts_for_nuget"),
+    ("packages.sca.resolvers.pnpm", "PnpmResolver",
+     "proxy_hosts_for_pnpm"),
+    ("packages.sca.resolvers.poetry", "PoetryResolver",
+     "proxy_hosts_for_poetry"),
+    ("packages.sca.resolvers.yarn", "YarnResolver",
+     "proxy_hosts_for_yarn"),
+]
+
+
+@pytest.mark.parametrize("module_path,cls_name,helper_name",
+                         _RESOLVER_WIRING)
+def test_secondary_resolver_property_calls_helper(
+    module_path, cls_name, helper_name,
+):
+    """Each secondary resolver's ``proxy_hosts`` property routes
+    through the per-tool helper. Patches the helper to a sentinel
+    return; if the wiring's wrong, the assertion catches it."""
+    import importlib
+    module = importlib.import_module(module_path)
+    cls = getattr(module, cls_name)
+    sentinel = ["sentinel.example.com"]
+    with mock.patch(
+        f"packages.sca.resolvers._proxy_hosts.{helper_name}",
+        return_value=sentinel,
+    ):
+        assert cls().proxy_hosts == sentinel

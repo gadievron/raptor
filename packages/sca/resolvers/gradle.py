@@ -50,12 +50,18 @@ class GradleResolver:
     # projects pin to JFrog or a corporate mirror — those will
     # surface as proxy refusals (the right failure mode) rather
     # than a silent registry switcheroo.
-    proxy_hosts = (
-        "repo.maven.apache.org",
-        "repo1.maven.org",
-        "plugins.gradle.org",
-        "services.gradle.org",
-    )
+    @property
+    def proxy_hosts(self) -> list:
+        """Egress-proxy hostname allowlist for gradle.
+        Override (`"gradle"` key) → calibrate (`gradle --version`,
+        cache-keyed on `GRADLE_USER_HOME`) → static default (Maven
+        Central + Gradle Plugin Portal hosts).
+
+        Operators on a JFrog / corporate Maven mirror should
+        populate the override; the static default's surface fails
+        loud at the proxy rather than rerouting silently."""
+        from ._proxy_hosts import proxy_hosts_for_gradle
+        return proxy_hosts_for_gradle()
 
     def is_available(self) -> bool:
         # Either a system Gradle or the project's wrapper. We probe

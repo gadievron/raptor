@@ -44,10 +44,15 @@ class BundlerResolver:
     # bumping the .gemspec content into Gemfile.lock or via the
     # 24h TTL.
     MANIFEST_FILES = ("Gemfile", "Gemfile.lock")
-    proxy_hosts = (
-        "rubygems.org",
-        "index.rubygems.org",
-    )
+    @property
+    def proxy_hosts(self) -> list:
+        """Egress-proxy hostname allowlist for the bundler subprocess.
+        Override (`~/.config/raptor/sca-proxy-hosts.json` `"bundler"`
+        key) → calibrate (`bundle --version`, cache-keyed on
+        `BUNDLE_MIRROR_OF`/`BUNDLE_GEMFILE`) → static default
+        (`rubygems.org` + `index.rubygems.org`)."""
+        from ._proxy_hosts import proxy_hosts_for_bundler
+        return proxy_hosts_for_bundler()
 
     def is_available(self) -> bool:
         return _check_tool(["bundle", "--version"])

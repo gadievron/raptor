@@ -31,10 +31,14 @@ class ComposerResolver:
 
     ecosystem = "Packagist"
     MANIFEST_FILES = ("composer.json", "composer.lock")
-    proxy_hosts = (
-        "repo.packagist.org",
-        "packagist.org",
-    )
+    @property
+    def proxy_hosts(self) -> list:
+        """Egress-proxy hostname allowlist for composer.
+        Override (`"composer"` key) → calibrate (`composer
+        --version`, cache-keyed on `COMPOSER`/`COMPOSER_HOME`) →
+        static default (`repo.packagist.org` + `packagist.org`)."""
+        from ._proxy_hosts import proxy_hosts_for_composer
+        return proxy_hosts_for_composer()
 
     def is_available(self) -> bool:
         return _check_tool(["composer", "--version"])

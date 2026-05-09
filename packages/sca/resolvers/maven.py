@@ -41,10 +41,14 @@ class MavenResolver:
     # Projects using corporate mirrors will surface as proxy
     # refusals — the right signal that the operator's repo
     # config wants explicit allowlist review.
-    proxy_hosts = (
-        "repo.maven.apache.org",
-        "repo1.maven.org",
-    )
+    @property
+    def proxy_hosts(self) -> list:
+        """Egress-proxy hostname allowlist for maven.
+        Override (`"maven"` key) → calibrate (`mvn --version`,
+        cache-keyed on `MAVEN_OPTS`/`M2_HOME`) → static default
+        (Maven Central + modern alias)."""
+        from ._proxy_hosts import proxy_hosts_for_maven
+        return proxy_hosts_for_maven()
 
     def is_available(self) -> bool:
         # Either system Maven or the project's wrapper.

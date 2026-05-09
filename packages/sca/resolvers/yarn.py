@@ -36,10 +36,20 @@ class YarnResolver:
 
     ecosystem = "npm"
     MANIFEST_FILES = ("package.json", "yarn.lock")
-    # Yarn's default registry. Berry can switch via .yarnrc.yml; if a
-    # project does that the cascade will surface as a proxy refusal,
-    # which is the right failure mode (reveals an unallowed source).
-    proxy_hosts = ("registry.yarnpkg.com", "registry.npmjs.org")
+    @property
+    def proxy_hosts(self) -> list:
+        """Egress-proxy hostname allowlist for yarn.
+        Override (`"yarn"` key) → calibrate (`yarn --version`,
+        cache-keyed on `YARN_REGISTRY` (yarn 1) +
+        `YARN_NPM_REGISTRY_SERVER` (yarn 2+)) → static default
+        (`registry.yarnpkg.com` + `registry.npmjs.org`).
+
+        Berry projects switching the registry via `.yarnrc.yml`
+        without an env override will hit a proxy refusal at
+        cascade time — the right failure mode (reveals an
+        unallowed source)."""
+        from ._proxy_hosts import proxy_hosts_for_yarn
+        return proxy_hosts_for_yarn()
 
     def is_available(self) -> bool:
         return _check_tool(["yarn", "--version"])

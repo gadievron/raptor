@@ -42,10 +42,14 @@ class NugetResolver:
     # ``packages.lock.json`` lock IS a fixed name and dominates the
     # resolution-input shape.
     MANIFEST_FILES = ("packages.lock.json",)
-    proxy_hosts = (
-        "api.nuget.org",
-        "nuget.org",
-    )
+    @property
+    def proxy_hosts(self) -> list:
+        """Egress-proxy hostname allowlist for nuget.
+        Override (`"nuget"` key) → calibrate (`dotnet --version`,
+        cache-keyed on `NUGET_PACKAGES`) → static default
+        (`api.nuget.org` + `nuget.org`)."""
+        from ._proxy_hosts import proxy_hosts_for_nuget
+        return proxy_hosts_for_nuget()
 
     def is_available(self) -> bool:
         return _check_tool(["dotnet", "--version"])

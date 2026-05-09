@@ -76,6 +76,41 @@ _DEFAULT_GOMOD_HOSTS: Tuple[str, ...] = (
     "sum.golang.org",
 )
 
+# Secondary resolvers — same shape, different registries.
+_DEFAULT_BUNDLER_HOSTS: Tuple[str, ...] = (
+    "rubygems.org",
+    "index.rubygems.org",
+)
+_DEFAULT_COMPOSER_HOSTS: Tuple[str, ...] = (
+    "repo.packagist.org",
+    "packagist.org",
+)
+_DEFAULT_GRADLE_HOSTS: Tuple[str, ...] = (
+    "repo.maven.apache.org",
+    "repo1.maven.org",
+    "plugins.gradle.org",
+    "services.gradle.org",
+)
+_DEFAULT_MAVEN_HOSTS: Tuple[str, ...] = (
+    "repo.maven.apache.org",
+    "repo1.maven.org",
+)
+_DEFAULT_NUGET_HOSTS: Tuple[str, ...] = (
+    "api.nuget.org",
+    "nuget.org",
+)
+_DEFAULT_PNPM_HOSTS: Tuple[str, ...] = (
+    "registry.npmjs.org",
+)
+_DEFAULT_POETRY_HOSTS: Tuple[str, ...] = (
+    "pypi.org",
+    "files.pythonhosted.org",
+)
+_DEFAULT_YARN_HOSTS: Tuple[str, ...] = (
+    "registry.yarnpkg.com",
+    "registry.npmjs.org",
+)
+
 
 # Per-tool env-key sets for calibrate cache disambiguation. A binary
 # used with two registry configs gets two distinct cache entries; the
@@ -96,6 +131,45 @@ _GOMOD_ENV_KEYS: Tuple[str, ...] = (
     "GOPROXY",
     "GOSUMDB",
     "GOPRIVATE",
+)
+
+# Secondary-resolver env keys. Most JVM / Ruby / PHP / .NET tools
+# carry their registry config in repo files (Gemfile, composer.json,
+# settings.xml, NuGet.config) rather than env vars; the env keys
+# below are the *user-overridable* knobs that can shift the
+# registry without editing the repo. A binary used with two
+# different env values gets two cache entries.
+_BUNDLER_ENV_KEYS: Tuple[str, ...] = (
+    "BUNDLE_MIRROR_OF",   # e.g. ``bundle config mirror.https://...``
+    "BUNDLE_GEMFILE",     # selects which Gemfile (and thus source URL)
+)
+_COMPOSER_ENV_KEYS: Tuple[str, ...] = (
+    "COMPOSER",           # selects composer.json path
+    "COMPOSER_HOME",      # config dir (auth.json with custom repos)
+)
+_GRADLE_ENV_KEYS: Tuple[str, ...] = (
+    "GRADLE_USER_HOME",   # init.gradle / repos config lives here
+)
+_MAVEN_ENV_KEYS: Tuple[str, ...] = (
+    "MAVEN_OPTS",         # may inject -Dmaven.repo.remote=...
+    "M2_HOME",
+)
+_NUGET_ENV_KEYS: Tuple[str, ...] = (
+    "NUGET_PACKAGES",
+    "DOTNET_NUGET_SIGNATURE_VERIFICATION",
+)
+_PNPM_ENV_KEYS: Tuple[str, ...] = (
+    # pnpm reads npm_config_* like npm; same discriminators.
+    "NPM_CONFIG_REGISTRY",
+    "npm_config_registry",
+)
+_POETRY_ENV_KEYS: Tuple[str, ...] = (
+    "POETRY_REPOSITORIES_PRIMARY_URL",
+    "PIP_INDEX_URL",  # poetry honours pip's index when configured
+)
+_YARN_ENV_KEYS: Tuple[str, ...] = (
+    "YARN_REGISTRY",       # yarn 1
+    "YARN_NPM_REGISTRY_SERVER",  # yarn 2+
 )
 
 
@@ -268,6 +342,83 @@ def proxy_hosts_for_gomod() -> list:
     """
     return _resolve(
         "gomod", "go", _GOMOD_ENV_KEYS, _DEFAULT_GOMOD_HOSTS,
+    )
+
+
+def proxy_hosts_for_bundler() -> list:
+    """Egress-proxy hostname allowlist for the Ruby bundler resolver."""
+    return _resolve(
+        "bundler", "bundle", _BUNDLER_ENV_KEYS, _DEFAULT_BUNDLER_HOSTS,
+    )
+
+
+def proxy_hosts_for_composer() -> list:
+    """Egress-proxy hostname allowlist for the PHP composer resolver."""
+    return _resolve(
+        "composer", "composer",
+        _COMPOSER_ENV_KEYS, _DEFAULT_COMPOSER_HOSTS,
+    )
+
+
+def proxy_hosts_for_gradle() -> list:
+    """Egress-proxy hostname allowlist for the Gradle resolver.
+
+    Gradle reaches both Maven Central and the Gradle Plugin Portal —
+    the static default carries both. Operators on a corporate Maven
+    mirror should populate the override; calibration fingerprints
+    the system ``gradle`` binary (project wrappers spawn it via
+    ``gradlew`` which RAPTOR resolves separately at the call site).
+    """
+    return _resolve(
+        "gradle", "gradle", _GRADLE_ENV_KEYS, _DEFAULT_GRADLE_HOSTS,
+    )
+
+
+def proxy_hosts_for_maven() -> list:
+    """Egress-proxy hostname allowlist for the Maven resolver."""
+    return _resolve(
+        "maven", "mvn", _MAVEN_ENV_KEYS, _DEFAULT_MAVEN_HOSTS,
+    )
+
+
+def proxy_hosts_for_nuget() -> list:
+    """Egress-proxy hostname allowlist for the NuGet (.NET) resolver.
+
+    Calibration fingerprints the ``dotnet`` binary (the resolver's
+    availability check uses ``dotnet --version``); ``NuGet.config``
+    custom sources are operator-overridable but live in the repo so
+    they don't disambiguate the cache.
+    """
+    return _resolve(
+        "nuget", "dotnet", _NUGET_ENV_KEYS, _DEFAULT_NUGET_HOSTS,
+    )
+
+
+def proxy_hosts_for_pnpm() -> list:
+    """Egress-proxy hostname allowlist for the pnpm resolver."""
+    return _resolve(
+        "pnpm", "pnpm", _PNPM_ENV_KEYS, _DEFAULT_PNPM_HOSTS,
+    )
+
+
+def proxy_hosts_for_poetry() -> list:
+    """Egress-proxy hostname allowlist for the Poetry resolver."""
+    return _resolve(
+        "poetry", "poetry", _POETRY_ENV_KEYS, _DEFAULT_POETRY_HOSTS,
+    )
+
+
+def proxy_hosts_for_yarn() -> list:
+    """Egress-proxy hostname allowlist for the Yarn resolver.
+
+    Yarn 1 and Yarn 2+ have different env-key conventions
+    (``YARN_REGISTRY`` vs ``YARN_NPM_REGISTRY_SERVER``); both are in
+    the cache key so a binary used in both modes still discriminates
+    correctly. The static default also includes ``registry.npmjs.org``
+    because Yarn falls back to the npm registry for many packages.
+    """
+    return _resolve(
+        "yarn", "yarn", _YARN_ENV_KEYS, _DEFAULT_YARN_HOSTS,
     )
 
 

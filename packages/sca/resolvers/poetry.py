@@ -28,7 +28,15 @@ class PoetryResolver:
 
     ecosystem = "PyPI"
     MANIFEST_FILES = ("pyproject.toml", "poetry.lock")
-    proxy_hosts = ("pypi.org", "files.pythonhosted.org")
+    @property
+    def proxy_hosts(self) -> list:
+        """Egress-proxy hostname allowlist for poetry.
+        Override (`"poetry"` key) → calibrate (`poetry --version`,
+        cache-keyed on `POETRY_REPOSITORIES_PRIMARY_URL` /
+        `PIP_INDEX_URL`) → static default (`pypi.org` +
+        `files.pythonhosted.org`)."""
+        from ._proxy_hosts import proxy_hosts_for_poetry
+        return proxy_hosts_for_poetry()
 
     def is_available(self) -> bool:
         return _check_tool(["poetry", "--version"])

@@ -28,7 +28,14 @@ class PnpmResolver:
 
     ecosystem = "npm"
     MANIFEST_FILES = ("package.json", "pnpm-lock.yaml")
-    proxy_hosts = ("registry.npmjs.org",)
+    @property
+    def proxy_hosts(self) -> list:
+        """Egress-proxy hostname allowlist for pnpm.
+        Override (`"pnpm"` key) → calibrate (`pnpm --version`,
+        cache-keyed on `NPM_CONFIG_REGISTRY`) → static default
+        (`registry.npmjs.org`)."""
+        from ._proxy_hosts import proxy_hosts_for_pnpm
+        return proxy_hosts_for_pnpm()
 
     def is_available(self) -> bool:
         return _check_tool(["pnpm", "--version"])
