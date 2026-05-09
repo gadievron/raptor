@@ -57,13 +57,23 @@ def _make_finding(finding_id, rule_id, file_path, start_line):
 def _make_cc_result(finding_id, exploitable=True, score=0.85):
     """Create a valid CC sub-agent result dict.
 
-    Fills every field weighted by ``core.llm.response_validation``'s
-    _FINDING_RESULT_WEIGHTS / _ANALYSIS_WEIGHTS tables so the
-    response's quality score lands above the 0.5 dispatch threshold.
-    Missing high-weight fields here previously trimmed the score to
-    ~0.48 → cc_dispatch flagged the response low-quality and
-    overrode is_exploitable to False, breaking the orchestrator's
-    exploitable-count assertion.
+    Two correctness contracts the validator + cc_dispatch enforce:
+
+    1. Every field weighted in ``core.llm.response_validation``'s
+       _FINDING_RESULT_WEIGHTS table needs a value (None is fine for
+       nullable fields). Missing high-weight fields drop the
+       quality score below 0.5 → cc_dispatch logs a low-quality
+       warning and may override is_exploitable.
+
+    2. Self-consistency: ``false_positive_reason`` MUST be None
+       when ``is_true_positive=True`` (a true positive is by
+       definition NOT a false positive). The validator at
+       packages.llm_analysis.validation flags otherwise.
+
+    This fixture sets is_true_positive=True regardless of
+    exploitability — a finding can be a true positive AND
+    not-exploitable (the bug is real but unreachable) — so
+    false_positive_reason stays None throughout.
     """
     return {
         "finding_id": finding_id,
@@ -88,7 +98,10 @@ def _make_cc_result(finding_id, exploitable=True, score=0.85):
             "input → query" if exploitable else None
         ),
         "remediation": "use parameterised queries" if exploitable else None,
-        "false_positive_reason": None if exploitable else "test fixture",
+        # ``is_true_positive=True`` above means this finding is NOT
+        # a false positive, so the reason field MUST be None — see
+        # contract (2) in the docstring.
+        "false_positive_reason": None,
         "impact": "data exfiltration" if exploitable else None,
         "prerequisites": (
             ["authenticated user"] if exploitable else None
@@ -99,7 +112,50 @@ def _make_cc_result(finding_id, exploitable=True, score=0.85):
 
 
 def _mock_subprocess_ok(results_by_call):
-    """Create a subprocess.run mock that returns results in order."""
+    """Create a subprocess.run mock that returns the right result
+    for each finding.
+
+    ``results_by_call`` may be either:
+
+    * a dict ``{finding_id: result_json}`` — preferred for parallel
+      dispatch, matched against the prompt the test passes via
+      ``input=`` kwarg;
+    * a list — legacy positional behaviour, returned in call order.
+
+    Parallel orchestration dispatches findings in non-deterministic
+    order; positional matching returns the WRONG result for the
+    wrong finding_id, the orchestrator then retries to correct, and
+    the retry mock returns clamped-to-last results which compounds
+    the mismatch. Dict-keyed matching is order-independent.
+    """
+    if isinstance(results_by_call, dict):
+        def mock_run_by_marker(cmd, **kwargs):
+            # Each dict key is a substring (e.g. file path) the
+            # caller picked because it appears in the prompt for
+            # exactly one finding. The build_analysis_prompt_bundle
+            # builder embeds rule_id / file_path / line info in the
+            # prompt, but NOT the synthetic ``finding_id`` the test
+            # uses for its own bookkeeping — match on something the
+            # prompt actually carries.
+            result = MagicMock()
+            result.returncode = 0
+            prompt = kwargs.get("input", "") or ""
+            chosen = None
+            for marker, payload in results_by_call.items():
+                if marker in prompt:
+                    chosen = payload
+                    break
+            if chosen is None:
+                # No marker matched — return the first entry so the
+                # orchestrator's retry logic still sees something
+                # parseable rather than crashing on empty stdout.
+                chosen = next(iter(results_by_call.values()))
+            result.stdout = chosen
+            result.stderr = ""
+            return result
+
+        return mock_run_by_marker
+
     call_count = [0]
 
     def mock_run(cmd, **kwargs):
@@ -196,10 +252,18 @@ class TestOrchestrate:
         report_path = tmp_path / "report.json"
         report_path.write_text(json.dumps(report))
 
-        cc_results = [
-            json.dumps(_make_cc_result("f-001", exploitable=True)),
-            json.dumps(_make_cc_result("f-002", exploitable=False, score=0.1)),
-        ]
+        # Dict-keyed mock so parallel dispatch returns the right
+        # result for each finding regardless of completion order.
+        # Keys must be substrings the analysis prompt embeds — the
+        # builder uses rule_id / file_path / line, NOT the synthetic
+        # finding_id this test assigns. ``db.py`` / ``template.js``
+        # are distinctive enough to identify each finding's prompt.
+        cc_results = {
+            "db.py": json.dumps(_make_cc_result("f-001", exploitable=True)),
+            "template.js": json.dumps(
+                _make_cc_result("f-002", exploitable=False, score=0.1)
+            ),
+        }
 
         with patch.dict(os.environ, {}, clear=True), \
              patch("packages.llm_analysis.orchestrator.shutil.which", return_value="/usr/bin/claude"), \
