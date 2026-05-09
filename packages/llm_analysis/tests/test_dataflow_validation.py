@@ -1541,11 +1541,14 @@ class TestBuildHypothesis:
         a = {"dataflow_summary": "claim", "reasoning": "x" * 10_000}
         h = _build_hypothesis(f, a, tmp_path)
         assert "…" in h.context
-        # Bounded: guidance block (now larger after CodeQL import-path
-        # specifics, ~2.5K chars) + 800-char reasoning excerpt + tags +
-        # trusted bits. 5000 is a comfortable upper bound that still
-        # catches an unbounded reasoning leak.
-        assert len(h.context) < 5000
+        # Bounded: guidance block (~2.5K) + CWE-strategy block
+        # (general always fires, ~1.2K when no specialised match) +
+        # 800-char reasoning excerpt + tags + trusted bits. 8000 is
+        # a comfortable upper bound that still catches an unbounded
+        # reasoning leak. (Bound bumped from 5000 when strategy
+        # lenses were wired into the validator prompt — strategy
+        # content is operator-curated trusted YAML.)
+        assert len(h.context) < 8000
 
     def test_truncates_long_dataflow_summary(self, tmp_path):
         f = {"file_path": "x", "start_line": 1}

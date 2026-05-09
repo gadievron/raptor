@@ -548,6 +548,62 @@ def validate_dataflow_claims(
 # Internals -------------------------------------------------------------------
 
 
+def _build_strategy_block(
+    *,
+    cwe: str,
+    file_path: str,
+    function: str,
+    finding: Dict,
+) -> str:
+    """Render CWE-strategy guidance for the IRIS validator prompt.
+
+    Returns a markdown block to append to ``trusted_parts``, or
+    empty string when the substrate is unavailable / picker raises.
+    Strategies are operator-curated trusted YAML, suitable for the
+    trusted (system-prompt-equivalent) part of the Hypothesis
+    context.
+
+    Best-effort: any error returns an empty string. The validator
+    runs unchanged on failure.
+    """
+    try:
+        from core.llm.cwe_strategies import (
+            pick_strategies, render_strategies,
+        )
+    except Exception:
+        return ""
+
+    candidate_cwes = [cwe] if cwe else []
+    # Inventory metadata may carry callees / includes — best-effort.
+    meta = finding.get("metadata") or {}
+    function_calls = meta.get("calls") or meta.get("callees") or ()
+    file_includes = meta.get("includes") or ()
+    try:
+        picked = pick_strategies(
+            file_path=file_path or "",
+            function_name=function or "",
+            file_includes=tuple(file_includes),
+            function_calls_made=tuple(function_calls),
+            candidate_cwes=tuple(candidate_cwes),
+            max_strategies=3,
+        )
+        if not picked:
+            return ""
+        rendered = render_strategies(picked)
+    except Exception:
+        return ""
+    return (
+        "## Bug-class lenses for this validation\n"
+        "\n"
+        "Apply the following strategy lenses' key questions and "
+        "worked CVE exemplars while reasoning about whether the "
+        "dataflow claim holds. The exemplars prime reasoning "
+        "depth — they are not patterns to match against.\n"
+        "\n"
+        f"{rendered}"
+    )
+
+
 def _build_hypothesis(finding: Dict, analysis: Dict, repo_path: Path):
     """Construct a Hypothesis from a Semgrep finding + LLM analysis.
 
@@ -582,6 +638,19 @@ def _build_hypothesis(finding: Dict, analysis: Dict, repo_path: Path):
     rule_id = finding.get("rule_id") or ""
     if rule_id:
         trusted_parts.append(f"Semgrep rule: {_sanitize_for_prompt(rule_id)}")
+
+    # CWE-specialised strategy lenses. The IRIS pack name encodes the
+    # CWE (e.g. ``Security/CWE-022/PathTraversalLocal.ql``) so we
+    # always have a strong signal here. Strategies prime reasoning
+    # depth for the bug class — particularly valuable for niche CWEs
+    # (CWE-022 path traversal, CWE-094 code injection, CWE-502
+    # deserialisation) where the validator has less training-data
+    # exposure than for SQL injection / XSS.
+    strategy_block = _build_strategy_block(
+        cwe=cwe, file_path=file_path, function=function, finding=finding,
+    )
+    if strategy_block:
+        trusted_parts.append(strategy_block)
 
     # Target-derived bits (LLM-rendered or directly from target source)
     # go inside an untrusted-block envelope.
