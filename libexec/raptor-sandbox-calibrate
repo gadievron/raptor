@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""Probe a binary under sandbox(observe=True) and cache its
+filesystem + network reach for downstream allowlist consumers.
+
+Operator surface:
+
+  raptor-sandbox-calibrate --bin /usr/local/bin/claude
+  raptor-sandbox-calibrate --bin /usr/local/bin/claude --json
+  raptor-sandbox-calibrate --bin /usr/local/bin/claude --show
+  raptor-sandbox-calibrate --bin /usr/local/bin/claude --force
+  raptor-sandbox-calibrate --bin /usr/local/bin/claude --clear
+  raptor-sandbox-calibrate --clear-all
+
+Implemented as a shim over core.sandbox.calibrate_cli._cli_main
+rather than `python -m core.sandbox.calibrate_cli` to avoid the
+runpy double-import warning that fires when core/sandbox/__init__.py
+transitively imports the module before runpy executes it as
+__main__.
+"""
+import os
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.sandbox.calibrate_cli import _cli_main  # noqa: E402
+
+if __name__ == "__main__":
+    raise SystemExit(_cli_main())
