@@ -54,10 +54,25 @@ class DistroFetcher:
     cache_dir: Path = field(default_factory=lambda: DEFAULT_CACHE_DIR)
     _mem: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
     _disk: JsonCache | None = field(default=None, repr=False)
+    # `_mem_lock` serialises access to the in-memory cache. Pre-fix
+    # the `if key in self._mem ... self._mem[key] = result` sequence
+    # had a TOCTOU window: two parallel fetch_all callers (the bench
+    # runner uses ProcessPoolExecutor for cves but the per-CVE
+    # fetch_all spawns its own ThreadPoolExecutor for the 3 distros,
+    # and a shared DistroFetcher across operator-driven repeats can
+    # see two threads land on the same key at the same time) each
+    # passed the `not in` check, each fetched independently, each
+    # wrote to `self._mem[key]`. Result: wasted upstream traffic
+    # AND, on dict resize, a non-atomic write that crashed in
+    # CPython >=3.12's hardened dict implementation.
+    _mem_lock: Any = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.cache_enabled and self._disk is None:
             self._disk = JsonCache(self.cache_dir)
+        if self._mem_lock is None:
+            import threading
+            self._mem_lock = threading.Lock()
 
     def fetch_all(self, cve_id: str) -> dict[str, dict[str, Any]]:
         """Fan out to 3 distros in parallel, return per-distro results."""
@@ -73,12 +88,21 @@ class DistroFetcher:
 
     def _cached(self, distro: str, cve_id: str, fetcher) -> dict[str, Any]:
         key = (distro, cve_id)
-        if key in self._mem:
-            return self._mem[key]
+        # Fast-path read under lock. We don't hold the lock across the
+        # network fetch — that would serialise the parallel-distro
+        # fan-out for nothing. Two parallel callers MAY duplicate the
+        # fetch in the worst case, but only one of their writes
+        # survives (last-writer-wins) and `_mem` mutation is now
+        # atomic. The duplication is acceptable cost for not
+        # serialising the network round-trips.
+        with self._mem_lock:
+            if key in self._mem:
+                return self._mem[key]
         if self.cache_enabled and self._disk is not None:
             hit = self._disk.get(f"{distro}/{cve_id}", ttl_seconds=_CACHE_TTL)
             if isinstance(hit, dict):
-                self._mem[key] = hit
+                with self._mem_lock:
+                    self._mem[key] = hit
                 return hit
         result = fetcher(cve_id)
         err = result.get("error", "")
@@ -89,7 +113,8 @@ class DistroFetcher:
         if cacheable:
             if self.cache_enabled and self._disk is not None:
                 self._disk.put(f"{distro}/{cve_id}", result, ttl_seconds=_CACHE_TTL)
-        self._mem[key] = result
+        with self._mem_lock:
+            self._mem[key] = result
         return result
 
 
