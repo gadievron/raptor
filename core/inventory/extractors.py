@@ -986,7 +986,32 @@ def _extract_globals_ts(root_node, language: str) -> List[CodeItem]:
 
     target_types = global_types.get(language, ())
 
-    for child in root_node.children:
+    # Java field_declarations live INSIDE class_body, not at the root.
+    # Pre-fix iterating `root_node.children` and matching against
+    # `field_declaration` returned ZERO Java fields — every Java
+    # source's class fields were silently absent from the inventory.
+    # Walk into class/interface bodies to find them. Other languages
+    # (C/C++/Go/Python/JS/TS) declare globals at file scope, so the
+    # default direct-children walk is correct for them.
+    if language == "java":
+        scan_nodes = []
+        for top in root_node.children:
+            if top.type in ("class_declaration", "interface_declaration",
+                             "enum_declaration", "record_declaration"):
+                # Find the body node and walk its children for fields.
+                body = next(
+                    (c for c in top.children if c.type in ("class_body", "interface_body",
+                                                            "enum_body", "record_body")),
+                    None,
+                )
+                if body is not None:
+                    scan_nodes.extend(body.children)
+            else:
+                scan_nodes.append(top)
+    else:
+        scan_nodes = root_node.children
+
+    for child in scan_nodes:
         if child.type not in target_types:
             continue
 
