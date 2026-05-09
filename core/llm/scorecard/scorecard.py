@@ -86,6 +86,14 @@ class EventType:
     JUDGE_REVIEW = "judge_review"
     TOOL_EVIDENCE = "tool_evidence"
     OPERATOR_FEEDBACK = "operator_feedback"
+    # Sister of MULTI_MODEL_CONSENSUS for the agreed-verdict case:
+    # panel landed on the same is_exploitable answer but their
+    # reasoning text diverged beyond a configured threshold. The
+    # outlier model — the one whose reasoning sits farthest from
+    # the rest — gets ``incorrect``; non-outliers get ``correct``.
+    # Threshold + outlier identification live in
+    # :mod:`core.llm.semantic_entropy`.
+    REASONING_DIVERGENCE = "reasoning_divergence"
 
 
 ALL_EVENT_TYPES: Tuple[str, ...] = (
@@ -94,6 +102,7 @@ ALL_EVENT_TYPES: Tuple[str, ...] = (
     EventType.JUDGE_REVIEW,
     EventType.TOOL_EVIDENCE,
     EventType.OPERATOR_FEEDBACK,
+    EventType.REASONING_DIVERGENCE,
 )
 
 

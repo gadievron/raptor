@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
 from .scorecard import (
+    ALL_EVENT_TYPES,
     EventType,
     ModelScorecard,
     Policy,
@@ -75,18 +76,32 @@ def _format_policy(policy: str, n: int, sample_size_floor: int = 10) -> str:
     return f"learning (n<{sample_size_floor})"
 
 
-def _wilson_ub_pct(stats: DecisionClassStats) -> Optional[float]:
-    """Wilson 95% upper bound on cheap_short_circuit miss-rate as a
-    percentage. None when n=0 (no observations)."""
-    correct = stats.events[EventType.CHEAP_SHORT_CIRCUIT].correct
-    incorrect = stats.events[EventType.CHEAP_SHORT_CIRCUIT].incorrect
+def _wilson_ub_pct(
+    stats: DecisionClassStats,
+    event_type: str = EventType.CHEAP_SHORT_CIRCUIT,
+) -> Optional[float]:
+    """Wilson 95% upper bound on the chosen event slot's
+    incorrect-rate as a percentage. None when n=0 (no observations).
+
+    For ``CHEAP_SHORT_CIRCUIT`` (default) this is the miss-rate
+    bound the auto-policy gate consults. For other event types
+    (``MULTI_MODEL_CONSENSUS``, ``JUDGE_REVIEW``, ``TOOL_EVIDENCE``,
+    ``OPERATOR_FEEDBACK``, ``REASONING_DIVERGENCE``) it's the
+    research-question equivalent: of all recordings on that slot,
+    how often did this model land on the ``incorrect`` side?
+    """
+    correct = stats.events[event_type].correct
+    incorrect = stats.events[event_type].incorrect
     if correct + incorrect == 0:
         return None
     return _wilson_upper_bound(correct, incorrect) * 100
 
 
-def _format_wilson(stats: DecisionClassStats) -> str:
-    pct = _wilson_ub_pct(stats)
+def _format_wilson(
+    stats: DecisionClassStats,
+    event_type: str = EventType.CHEAP_SHORT_CIRCUIT,
+) -> str:
+    pct = _wilson_ub_pct(stats, event_type)
     if pct is None:
         return "-"
     return f"{pct:5.1f}"
@@ -95,8 +110,18 @@ def _format_wilson(stats: DecisionClassStats) -> str:
 def _calls_saved(stats: DecisionClassStats) -> int:
     """Number of full-tier calls avoided by this cell — the count of
     confident-FP outcomes that were correct. Each such outcome
-    represents a full ANALYSE we didn't have to run."""
+    represents a full ANALYSE we didn't have to run.
+
+    Cheap-tier-specific. For other event types use
+    :func:`_event_correct_count`.
+    """
     return stats.events[EventType.CHEAP_SHORT_CIRCUIT].correct
+
+
+def _event_correct_count(stats: DecisionClassStats, event_type: str) -> int:
+    """Number of ``correct`` outcomes recorded against the chosen
+    event slot. Generic equivalent of :func:`_calls_saved`."""
+    return stats.events[event_type].correct
 
 
 def _humanise_age(iso_ts: str, *, now: Optional[_dt.datetime] = None) -> str:
@@ -187,14 +212,23 @@ def _filter_stats(
 
 def _sort_stats(
     stats: List[DecisionClassStats], *, sort_key: str,
+    event_type: str = EventType.CHEAP_SHORT_CIRCUIT,
 ) -> List[DecisionClassStats]:
     """Apply CLI sort. Default is decision_class then model."""
     if sort_key == "savings":
-        return sorted(stats, key=_calls_saved, reverse=True)
+        return sorted(
+            stats,
+            key=lambda s: _event_correct_count(s, event_type),
+            reverse=True,
+        )
     if sort_key == "miss-rate":
         return sorted(
             stats,
-            key=lambda s: _wilson_ub_pct(s) if _wilson_ub_pct(s) is not None else -1,
+            key=lambda s: (
+                _wilson_ub_pct(s, event_type)
+                if _wilson_ub_pct(s, event_type) is not None
+                else -1
+            ),
             reverse=True,
         )
     return sorted(stats, key=lambda s: (s.decision_class, s.model))
@@ -205,29 +239,42 @@ def _sort_stats(
 # ---------------------------------------------------------------------------
 
 
-def _render_table(stats: List[DecisionClassStats]) -> str:
+def _render_table(
+    stats: List[DecisionClassStats],
+    event_type: str = EventType.CHEAP_SHORT_CIRCUIT,
+) -> str:
     """Markdown table of cell summary lines. Columns are chosen for
-    "what is this model good at?" research questions."""
+    "what is this model good at?" research questions.
+
+    ``event_type`` selects which event-slot the n / wilson / correct
+    columns reflect. Default ``CHEAP_SHORT_CIRCUIT`` preserves the
+    historic auto-policy view. The ``policy`` column always reflects
+    the cheap-tier auto-policy gate regardless — that's the only
+    event slot a policy is derived from.
+    """
     if not stats:
         return "_(no scorecard data)_"
-    # Compute n once per cell.
+    is_cheap = event_type == EventType.CHEAP_SHORT_CIRCUIT
+    correct_col = "calls_saved" if is_cheap else "correct"
     rows = []
     for s in stats:
-        ev = s.events[EventType.CHEAP_SHORT_CIRCUIT]
+        ev = s.events[event_type]
         n = ev.correct + ev.incorrect
         policy = _policy_for_stats(s)
         rows.append((
             s.decision_class,
             s.model,
             n,
-            _format_wilson(s),
-            _format_policy(policy, n),
-            _calls_saved(s),
+            _format_wilson(s, event_type),
+            _format_policy(policy, s.events[
+                EventType.CHEAP_SHORT_CIRCUIT].correct + s.events[
+                EventType.CHEAP_SHORT_CIRCUIT].incorrect),
+            _event_correct_count(s, event_type),
             _humanise_age(s.last_seen_at),
         ))
     headers = (
         "decision_class", "model", "n", "wilson_ub%",
-        "policy", "calls_saved", "last_seen",
+        "policy", correct_col, "last_seen",
     )
     widths = [
         max(len(headers[i]), max((len(str(r[i])) for r in rows), default=0))
@@ -350,8 +397,9 @@ def cmd_list(args: argparse.Namespace) -> int:
         sort_key = "savings"
     elif args.by_miss_rate:
         sort_key = "miss-rate"
-    stats = _sort_stats(stats, sort_key=sort_key)
-    print(_render_table(stats))
+    event_type = getattr(args, "event_type", EventType.CHEAP_SHORT_CIRCUIT)
+    stats = _sort_stats(stats, sort_key=sort_key, event_type=event_type)
+    print(_render_table(stats, event_type=event_type))
     return 0
 
 
@@ -586,11 +634,20 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_list.add_argument(
         "--by-savings", action="store_true",
-        help="sort by full-tier calls saved (descending)",
+        help=(
+            "sort by full-tier calls saved (descending). For "
+            "non-cheap event slots (--event-type), sorts by the "
+            "``correct`` count in that slot — the flag name keeps "
+            "its cheap-tier semantics for backwards compatibility."
+        ),
     )
     p_list.add_argument(
         "--by-miss-rate", action="store_true",
-        help="sort by Wilson upper-95%% miss-rate (descending)",
+        help=(
+            "sort by Wilson upper-95%% miss-rate (descending). For "
+            "non-cheap event slots, sorts by the wilson upper bound "
+            "on that slot's incorrect-rate."
+        ),
     )
     p_list.add_argument(
         "--untrusted", action="store_true",
@@ -610,6 +667,19 @@ def _build_parser() -> argparse.ArgumentParser:
     p_list.add_argument(
         "--since", type=str, default=None,
         help="only cells last seen within this window (e.g. 7d, 12h)",
+    )
+    p_list.add_argument(
+        "--event-type", type=str, default=EventType.CHEAP_SHORT_CIRCUIT,
+        choices=list(ALL_EVENT_TYPES),
+        help=(
+            "reframe n / wilson_ub%% / correct columns around the "
+            "chosen event slot. Default 'cheap_short_circuit' "
+            "preserves the auto-policy view; pass "
+            "'reasoning_divergence' / 'multi_model_consensus' / "
+            "'judge_review' / 'tool_evidence' / 'operator_feedback' "
+            "to read the research-question slots. The 'policy' "
+            "column is always cheap-derived."
+        ),
     )
     p_list.set_defaults(handler=cmd_list)
 

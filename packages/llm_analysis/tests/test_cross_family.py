@@ -219,6 +219,105 @@ class TestCrossFamilyCheckTaskAdjudication:
         assert prior["F-001"]["is_exploitable"] is True
         assert prior["F-001"].get("cross_family_disputed") is True
 
+    def test_reasoning_distance_attached_for_long_reasonings(self):
+        """When primary and checker reasonings are both substantial,
+        the cross-family check captures their pairwise Jaccard
+        distance. High distance with verdict-agree is a tell for
+        prompt-injection or systematic family bias — observational
+        metadata in v1, no gate consumes it yet."""
+        primary_reasoning = (
+            "User input flows from request.GET['q'] into cgi_query() "
+            "without sanitisation. The sink at cgi.c:142 concatenates "
+            "the query string directly into the SQL statement. "
+            "Classic SQL injection with attacker-controlled input."
+        )
+        checker_reasoning = (
+            "Tainted data from request.GET reaches cgi_query in cgi.c "
+            "line 142. String concatenation builds the SQL with no "
+            "parameterisation, so the attacker controls the query."
+        )
+        prior = {"F-001": _result("F-001", exploitable=True, quality=0.5)}
+        prior["F-001"]["reasoning"] = primary_reasoning
+        checker_results = [{
+            "finding_id": "F-001",
+            "is_exploitable": True,
+            "ruling": "validated",
+            "reasoning": checker_reasoning,
+            "analysed_by": "claude-haiku-4-5-20251001",
+        }]
+        task = CrossFamilyCheckTask(ANTHROPIC_CHECKER, results_by_id=prior)
+        task.finalize(checker_results, prior)
+        check = prior["F-001"]["cross_family_check"]
+        assert "reasoning_distance" in check
+        d = check["reasoning_distance"]
+        assert isinstance(d, float)
+        assert 0.0 <= d <= 1.0
+
+    def test_reasoning_distance_higher_for_divergent_reasonings(self):
+        # Aligned (both SQL injection in same sink) vs divergent
+        # (SQL injection vs path traversal). Pin that the distance
+        # is meaningfully higher for the divergent pair.
+        sql_a = (
+            "SQL injection at cgi_query in cgi.c:142. Request.GET['q'] "
+            "reaches the sink unsanitised, attacker controls SQL."
+        )
+        sql_b = (
+            "Tainted request.GET reaches cgi_query in cgi.c line 142. "
+            "String concatenation builds SQL without parameterisation."
+        )
+        path_traversal = (
+            "Path traversal in upload_file at upload.c:88. The "
+            "filename from multipart form data is joined with the "
+            "storage path without normalisation."
+        )
+
+        def _check(primary_text: str, checker_text: str) -> float:
+            prior = {"F": _result("F", exploitable=True, quality=0.5)}
+            prior["F"]["reasoning"] = primary_text
+            results = [{
+                "finding_id": "F", "is_exploitable": True,
+                "ruling": "validated", "reasoning": checker_text,
+                "analysed_by": "claude-haiku-4-5-20251001",
+            }]
+            CrossFamilyCheckTask(
+                ANTHROPIC_CHECKER, results_by_id=prior,
+            ).finalize(results, prior)
+            return prior["F"]["cross_family_check"]["reasoning_distance"]
+
+        aligned = _check(sql_a, sql_b)
+        divergent = _check(sql_a, path_traversal)
+        assert divergent > aligned + 0.10
+
+    def test_aggregator_prompt_mentions_reasoning_divergence(self):
+        """Aggregator system prompt must reference the
+        ``reasoning_divergence`` field for the per-finding metric to
+        actually be load-bearing in synthesis. The metric flowing
+        through the JSON payload is necessary but not sufficient —
+        without prompt guidance the model has no reason to weight it.
+        Source-level sentinel against accidental prompt reverts."""
+        from packages.llm_analysis.tasks import AggregationTask
+        prompt = AggregationTask._SYSTEM_TEXT
+        # Two non-trivial substrings from the new guidance — one
+        # alone could match a benign coincidence; both together pin
+        # the actual instruction.
+        assert "reasoning_divergence" in prompt
+        assert "mean_pairwise_distance" in prompt
+
+    def test_reasoning_distance_skipped_for_short_reasonings(self):
+        # The default _result fixture uses 14-char reasoning text —
+        # below the math layer's 50-char floor. Distance is unmeasurable
+        # and the field is omitted (consistent with semantic_entropy's
+        # "no signal" contract).
+        prior = {"F-001": _result("F-001", exploitable=True, quality=0.5)}
+        checker_results = [{
+            "finding_id": "F-001", "is_exploitable": True,
+            "ruling": "validated", "reasoning": "short text",
+            "analysed_by": "claude-haiku-4-5-20251001",
+        }]
+        task = CrossFamilyCheckTask(ANTHROPIC_CHECKER, results_by_id=prior)
+        task.finalize(checker_results, prior)
+        assert "reasoning_distance" not in prior["F-001"]["cross_family_check"]
+
     def test_nonce_trigger_recorded(self):
         prior = {"F-001": _result("F-001", quality=0.5, nonce_leaked=True)}
         checker_results = [

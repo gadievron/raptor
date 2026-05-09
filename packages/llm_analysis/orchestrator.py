@@ -912,6 +912,19 @@ def orchestrate(
         for fid, signal in correlation.get("confidence_signals", {}).items():
             if fid in results_by_id:
                 results_by_id[fid]["multi_model_confidence"] = signal
+        # Per-finding reasoning-divergence metric, surfaced into the
+        # operator report alongside multi_model_confidence. Computed
+        # for every agreed finding (high / high-negative) where the
+        # panel has enough usable reasoning text. The threshold that
+        # gates the scorecard event is independent and applied inside
+        # the producer below — operators see the raw metric here so
+        # they can judge sub-threshold cases by eye.
+        _attach_reasoning_divergence(
+            results_by_id=results_by_id,
+            multi_results=_multi_results,
+            confidence_signals=correlation.get(
+                "confidence_signals") or {},
+        )
         corr_summary = correlation.get("summary", {})
         n_corr = corr_summary.get("total_correlated", 0)
         n_agreed = corr_summary.get("agreed", 0)
@@ -948,6 +961,24 @@ def orchestrate(
                     # Never let scorecard wiring abort orchestration.
                     logger.debug(
                         "consensus producer failed: %s", e,
+                    )
+                # Sister producer covering the agreed-verdict case
+                # the consensus producer skips: panel agreed on
+                # is_exploitable but reasoning text diverged. See
+                # core.llm.scorecard.reasoning_divergence.
+                from core.llm.scorecard.reasoning_divergence import (
+                    record_reasoning_divergence,
+                )
+                try:
+                    record_reasoning_divergence(
+                        sc,
+                        correlation=correlation,
+                        results_by_id=results_by_id,
+                        per_finding_results=_multi_results,
+                    )
+                except Exception as e:                  # noqa: BLE001
+                    logger.debug(
+                        "reasoning_divergence producer failed: %s", e,
                     )
 
     # Final LLM aggregation over independent analysis outputs. This is distinct
@@ -1194,6 +1225,58 @@ def orchestrate(
     return merged
 
 
+def _attach_reasoning_divergence(
+    *,
+    results_by_id: Dict[str, Dict],
+    multi_results: Optional[Dict[str, List[Dict]]],
+    confidence_signals: Dict[str, str],
+) -> None:
+    """Attach per-finding ``reasoning_divergence`` metric onto the
+    primary result records.
+
+    Walks every ``high`` / ``high-negative`` finding in
+    ``confidence_signals``, pulls each model's reasoning out of
+    ``multi_results``, computes Jaccard-based divergence over the
+    panel via :mod:`core.llm.semantic_entropy`, and stuffs the
+    result into ``results_by_id[fid]["reasoning_divergence"]`` so it
+    flows through the orchestrated-report serialiser.
+
+    Mutates ``results_by_id`` in place. No-op when ``multi_results``
+    is empty / ``None`` (single-model run; nothing to compute over).
+    Findings whose panel is too small / reasoning too short to
+    measure are silently skipped — the math layer returns ``None``,
+    callers must treat the absence of the field as "no signal", not
+    "no divergence".
+
+    Extracted from inline orchestrate() body so it can be unit-tested
+    against synthetic correlation + multi_results inputs without
+    standing up the full LLM-dispatch surface. See
+    ``tests/test_orchestrator_reasoning_divergence.py``.
+    """
+    if not multi_results:
+        return
+    from core.llm.semantic_entropy import divergence
+    for fid, signal in confidence_signals.items():
+        if signal not in ("high", "high-negative"):
+            continue
+        records = multi_results.get(fid) or []
+        reasonings: Dict[str, str] = {}
+        for r in records:
+            name = str(r.get("analysed_by") or r.get("model") or "")
+            text = r.get("reasoning") or ""
+            if name and text:
+                reasonings[name] = str(text)
+        metric = divergence(reasonings)
+        if metric is None or fid not in results_by_id:
+            continue
+        results_by_id[fid]["reasoning_divergence"] = {
+            "mean_pairwise_distance": metric["mean_pairwise_distance"],
+            "max_pairwise_distance": metric["max_pairwise_distance"],
+            "outlier_model": metric["outlier_model"],
+            "n_models": metric["n_models"],
+        }
+
+
 def _intersect_profiles(profiles: list) -> Any:
     """Return a defence profile compatible with every input profile.
 
@@ -1363,6 +1446,7 @@ def _build_aggregation_payload(
                 "confidence": result.get("confidence"),
             },
             "multi_model_confidence": result.get("multi_model_confidence"),
+            "reasoning_divergence": result.get("reasoning_divergence"),
             "analyses": compact_analyses,
         })
 

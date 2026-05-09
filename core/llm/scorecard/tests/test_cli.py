@@ -83,6 +83,7 @@ def _make_args(**kwargs):
         decision_class=None, model=None, as_=None,
         older_than_days=None, all=False,
         outcome=None, note=None,
+        event_type=EventType.CHEAP_SHORT_CIRCUIT,
     )
     base.update(kwargs)
     return SimpleNamespace(**base)
@@ -109,6 +110,95 @@ def test_list_default_shows_all_cells(seeded_scorecard):
     assert "codeql:py/sql-injection" in out
     assert "codeql:cpp/uncontrolled-format" in out
     assert "codeql:js/path-injection" in out
+
+
+def test_list_default_event_type_renders_calls_saved_column(seeded_scorecard):
+    """Default behaviour is unchanged: column header is
+    ``calls_saved`` because the event slot is the cheap-tier."""
+    rc, out, _ = _capture(
+        cli_mod.cmd_list, _make_args(path=seeded_scorecard),
+    )
+    assert rc == 0
+    assert "calls_saved" in out
+    # Generic name only appears under non-cheap event types.
+    assert "| correct " not in out
+
+
+def test_list_event_type_renames_correct_column(seeded_scorecard):
+    """Selecting a non-cheap event slot relabels the column to
+    ``correct`` (panel-counter semantics, not call-savings)."""
+    rc, out, _ = _capture(
+        cli_mod.cmd_list,
+        _make_args(
+            path=seeded_scorecard,
+            event_type=EventType.REASONING_DIVERGENCE,
+        ),
+    )
+    assert rc == 0
+    assert "correct" in out
+    assert "calls_saved" not in out
+
+
+def test_list_event_type_reflects_chosen_slot_counts(seeded_scorecard, tmp_path):
+    """``n`` and ``correct`` columns track the chosen event slot.
+
+    Seed the scorecard with REASONING_DIVERGENCE events on a fresh
+    cell, then assert those numbers surface only when
+    ``--event-type reasoning_divergence`` is selected — and the
+    cheap-tier view stays at zero on this cell.
+    """
+    sc = ModelScorecard(seeded_scorecard)
+    dc = "agentic:py/test-rule"
+    for _ in range(7):
+        sc.record_event(
+            dc, "gemini-2.5-pro",
+            EventType.REASONING_DIVERGENCE, "correct",
+        )
+    for _ in range(3):
+        sc.record_event(
+            dc, "gemini-2.5-pro",
+            EventType.REASONING_DIVERGENCE, "incorrect",
+        )
+    # Default cheap-tier view: cell is brand new on the cheap slot,
+    # so n should be 0 for it.
+    rc, out_cheap, _ = _capture(
+        cli_mod.cmd_list,
+        _make_args(path=seeded_scorecard, consumer="agentic"),
+    )
+    assert rc == 0
+    cheap_row = next(
+        (l for l in out_cheap.splitlines()
+         if dc in l and "gemini-2.5-pro" in l),
+        None,
+    )
+    assert cheap_row is not None, out_cheap
+    # Non-cheap view: 10 total events, 7 correct.
+    rc, out_div, _ = _capture(
+        cli_mod.cmd_list,
+        _make_args(
+            path=seeded_scorecard, consumer="agentic",
+            event_type=EventType.REASONING_DIVERGENCE,
+        ),
+    )
+    assert rc == 0
+    div_row = next(
+        (l for l in out_div.splitlines()
+         if dc in l and "gemini-2.5-pro" in l),
+        None,
+    )
+    assert div_row is not None, out_div
+    # n column = 10 ; correct column = 7 should appear in the row.
+    cells = [c.strip() for c in div_row.split("|")]
+    assert "10" in cells
+    assert "7" in cells
+
+
+def test_list_invalid_event_type_rejected_at_argparse(seeded_scorecard):
+    """argparse choices=ALL_EVENT_TYPES rejects unknown values
+    before they reach the handler."""
+    parser = cli_mod._build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["list", "--event-type", "bogus_slot"])
 
 
 def test_list_by_savings_sorts_descending(seeded_scorecard):

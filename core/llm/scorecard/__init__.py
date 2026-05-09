@@ -1,7 +1,7 @@
 """Model scorecard — per-model reliability tracking across decision classes.
 
 The scorecard records how often each (model, decision_class) cell has
-been **overruled by an authoritative signal**. Five event-type signals
+been **overruled by an authoritative signal**. Six event-type signals
 are recognised:
 
   * ``cheap_short_circuit`` — cheap-tier model said "clear FP";
@@ -16,6 +16,12 @@ are recognised:
   * ``operator_feedback`` — operator marked the finding's outcome
     (``exploitable`` / ``disproven`` / etc.) and the marking
     contradicted this model's verdict.
+  * ``reasoning_divergence`` — sister of ``multi_model_consensus``
+    for the agreed-verdict case: panel landed on the same answer
+    but the outlier model's reasoning text sits farthest from the
+    rest of the panel by token-set Jaccard distance. Outlier gets
+    ``incorrect``; non-outliers get ``correct``. Observability-only
+    in v1: no policy gate consumes this signal yet.
 
 Only ``cheap_short_circuit`` has a producer wired in the first
 shipping PR; the other four event types live in the schema as
