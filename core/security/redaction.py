@@ -173,7 +173,17 @@ def redact_secrets(value: object, *, reveal_secrets: bool = False) -> str:
         return text
 
     # Redact URLs first so query-string context is preserved without leaking values.
-    text = re.sub(r"https?://[^\s'\"<>]+", _redact_url, text)
+    # URL token cap: PATH_MAX is 4096; HTTP/2 Authority + Path
+    # rarely exceeds 8 KB before proxies start rejecting. A
+    # 100 KB single URL is essentially never legitimate; cap at
+    # 8 KB so a pathological log line containing a megabyte-long
+    # quoted "URL" doesn't pin the regex engine on this scan.
+    # Pre-fix the unbounded `[^\s'"<>]+` would happily consume
+    # any length of non-whitespace, and `re.sub` has no cap on
+    # match length — operator-supplied logs containing such a
+    # string took O(n) per redact_secrets() call, multiplied
+    # across every record processed by reporters.
+    text = re.sub(r"https?://[^\s'\"<>]{1,8192}", _redact_url, text)
 
     # Redact common authorization header schemes from logs and finding metadata.
     text = re.sub(
@@ -218,5 +228,15 @@ def redact_url_secrets_only(value: object, *, reveal_secrets: bool = False) -> s
     text = str(value)
     if reveal_secrets:
         return text
-    text = re.sub(r"https?://[^\s'\"<>]+", _redact_url, text)
+    # URL token cap: PATH_MAX is 4096; HTTP/2 Authority + Path
+    # rarely exceeds 8 KB before proxies start rejecting. A
+    # 100 KB single URL is essentially never legitimate; cap at
+    # 8 KB so a pathological log line containing a megabyte-long
+    # quoted "URL" doesn't pin the regex engine on this scan.
+    # Pre-fix the unbounded `[^\s'"<>]+` would happily consume
+    # any length of non-whitespace, and `re.sub` has no cap on
+    # match length — operator-supplied logs containing such a
+    # string took O(n) per redact_secrets() call, multiplied
+    # across every record processed by reporters.
+    text = re.sub(r"https?://[^\s'\"<>]{1,8192}", _redact_url, text)
     return text
