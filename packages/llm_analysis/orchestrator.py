@@ -229,12 +229,18 @@ def build_llm_config_from_flags(
         except Exception:
             pass
 
-    # Consensus is redundant with 3+ analysis models
+    # Consensus auto-defaults are redundant with 3+ analysis models
+    # — the analysis models already provide independent opinions.
+    # Strip any auto-loaded consensus model from LLMConfig defaults
+    # (models.json / env-var picks). The operator's EXPLICIT
+    # --consensus flag is honored separately by the role-flag loop
+    # below; an explicit flag means the operator wants that specific
+    # model regardless of analysis-model count.
     n_analysis = len(models)
-    if n_analysis >= 3 and consensus:
-        print(f"\n  Note: --consensus skipped — {n_analysis} analysis models "
-              f"already provide independent opinions")
-        consensus = None
+    if n_analysis >= 3 and llm_config and llm_config.fallback_models:
+        llm_config.fallback_models = [
+            m for m in llm_config.fallback_models if m.role != "consensus"
+        ]
 
     role_flags = [
         ("consensus", consensus),
@@ -246,9 +252,19 @@ def build_llm_config_from_flags(
         print("\n  Warning: --consensus/--judge/--aggregate require a primary analysis model")
         print("  Use --model MODEL, configure models.json, or set an API key env var")
     if llm_config and has_role_flags:
+        # Explicit operator role-flag overrides any auto-loaded model
+        # for the same role. Without this strip, models.json /
+        # provider-env defaults stack alongside the operator's
+        # explicit pick (e.g. operator says `--consensus
+        # claude-sonnet-4-6` but the auto-loader has already pinned
+        # claude-haiku-4-5 as consensus → 2 consensus models in
+        # fallback, neither cleanly attributable to operator intent).
         for role, model_name in role_flags:
             if not model_name:
                 continue
+            llm_config.fallback_models = [
+                m for m in llm_config.fallback_models if m.role != role
+            ]
             mc = _resolve_model(model_name, role)
             if mc:
                 llm_config.fallback_models.append(mc)

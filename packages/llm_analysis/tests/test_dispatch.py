@@ -1125,7 +1125,34 @@ class TestBuildLLMConfigFromFlags:
         assert analysis_models[0].model_name == "gpt-5"
 
     @patch.dict("os.environ", {"GEMINI_API_KEY": "k1", "OPENAI_API_KEY": "k2", "ANTHROPIC_API_KEY": "k3"})
-    def test_three_models_skips_consensus(self, capsys):
+    def test_three_models_strips_auto_consensus(self):
+        """With 3+ analysis models and NO explicit --consensus flag,
+        any auto-loaded consensus model from LLMConfig defaults is
+        stripped — the analysis trio already provides independent
+        opinions, so the auto-default is pure cost.
+        """
+        from packages.llm_analysis.orchestrator import build_llm_config_from_flags
+        result = build_llm_config_from_flags(
+            models=["gemini-2.5-pro", "gpt-5", "claude-opus-4-6"],
+            auto_detect=False,
+        )
+        assert result is not None
+        consensus_models = [m for m in result.fallback_models if m.role == "consensus"]
+        assert len(consensus_models) == 0
+
+    @patch.dict("os.environ", {"GEMINI_API_KEY": "k1", "OPENAI_API_KEY": "k2", "ANTHROPIC_API_KEY": "k3", "MISTRAL_API_KEY": "k4"})
+    def test_three_models_with_explicit_consensus_is_honored(self):
+        """With 3+ analysis models AND an explicit --consensus, honor
+        the operator's choice. The consensus role has different prompt
+        semantics than analysis (review-this-verdict vs analyse-this-
+        finding) and the explicit flag is the operator's signal that
+        they want that specific second-opinion shape — distinct from
+        having three first-pass analyses.
+
+        Pre-fix behaviour silently dropped the explicit flag with a
+        "skipped" note; this test pins the new behaviour where the
+        explicit flag wins.
+        """
         from packages.llm_analysis.orchestrator import build_llm_config_from_flags
         result = build_llm_config_from_flags(
             models=["gemini-2.5-pro", "gpt-5", "claude-opus-4-6"],
@@ -1134,9 +1161,8 @@ class TestBuildLLMConfigFromFlags:
         )
         assert result is not None
         consensus_models = [m for m in result.fallback_models if m.role == "consensus"]
-        assert len(consensus_models) == 0
-        captured = capsys.readouterr()
-        assert "skipped" in captured.out.lower()
+        assert len(consensus_models) == 1
+        assert consensus_models[0].model_name == "mistral-large-latest"
 
 
 # -----------------------------------------------------------------------
