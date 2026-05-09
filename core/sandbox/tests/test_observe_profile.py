@@ -516,10 +516,18 @@ class TestPublicObserveKwarg:
 
         # Force spawn-eligible path with mount-ns "available" so
         # _spawn.run_sandboxed gets called (rather than the
-        # Landlock-only subprocess fallback).
+        # Landlock-only subprocess fallback). Two gates need
+        # patching: ``context.check_mount_available`` controls
+        # ``use_mount`` upstream of the spawn dispatch; the
+        # ``_spawn.mount_ns_available`` re-check is the second
+        # gate inside _spawn itself. Hosts where the OS blocks
+        # unprivileged user-ns (Ubuntu 24.04+ default) return
+        # False from both, so the test must override both.
         with patch("core.sandbox._spawn.run_sandboxed",
                    side_effect=fake_run_sandboxed) as spy, \
              patch("core.sandbox._spawn.mount_ns_available",
+                   return_value=True), \
+             patch("core.sandbox.context.check_mount_available",
                    return_value=True):
             with ctx_mod.sandbox(target=str(Path("/tmp")),
                                  output=str(Path("/tmp")),
@@ -555,6 +563,8 @@ class TestPublicObserveKwarg:
         with patch("core.sandbox._spawn.run_sandboxed",
                    side_effect=fake_run_sandboxed), \
              patch("core.sandbox._spawn.mount_ns_available",
+                   return_value=True), \
+             patch("core.sandbox.context.check_mount_available",
                    return_value=True):
             with ctx_mod.sandbox(target=str(Path("/tmp")),
                                  output=str(Path("/tmp"))) as run:

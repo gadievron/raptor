@@ -338,12 +338,24 @@ class TestE2EShim:
         if not shim.exists():
             pytest.skip(f"shim not present at {shim}")
 
-        # Skip if observe-mode prerequisites aren't met on this host.
+        # Skip if observe-mode prerequisites aren't met on this
+        # host. Mount-ns is the load-bearing one for Linux observe
+        # — without it the spawn falls back to the Landlock-only
+        # subprocess path which has no tracer-fork machinery, so
+        # observe degrades silently and the shim exits 70.
+        # GitHub-Actions Ubuntu 24.04+ runners ship with
+        # ``kernel.apparmor_restrict_unprivileged_userns=1`` set,
+        # which trips this skip — extending observe into the
+        # Landlock-only path is a separate (architectural) follow-up.
         from core.sandbox.seccomp import check_seccomp_available
         from core.sandbox.ptrace_probe import check_ptrace_available
-        from core.sandbox.probes import check_net_available
+        from core.sandbox.probes import (
+            check_net_available, check_mount_available,
+        )
         if not check_net_available():
             pytest.skip("user namespaces unavailable")
+        if not check_mount_available():
+            pytest.skip("mount-ns unavailable (apparmor_restrict_unprivileged_userns=1)")
         if not check_seccomp_available():
             pytest.skip("libseccomp unavailable")
         if not check_ptrace_available():
@@ -369,10 +381,14 @@ class TestE2EShim:
 
         from core.sandbox.seccomp import check_seccomp_available
         from core.sandbox.ptrace_probe import check_ptrace_available
-        from core.sandbox.probes import check_net_available
-        if not (check_net_available() and check_seccomp_available()
+        from core.sandbox.probes import (
+            check_net_available, check_mount_available,
+        )
+        if not (check_net_available()
+                and check_mount_available()
+                and check_seccomp_available()
                 and check_ptrace_available()):
-            pytest.skip("observe-mode prerequisites unavailable")
+            pytest.skip("observe-mode prerequisites unavailable (mount-ns / libseccomp / ptrace)")
 
         env = {**os.environ, "_RAPTOR_TRUSTED": "1"}
         result = subprocess.run(
