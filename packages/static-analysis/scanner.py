@@ -314,9 +314,19 @@ def run_single_semgrep(
             logger.warning(f"Semgrep scan '{name}' produced empty output")
             so = '{"runs": []}'
 
-        sarif.write_text(so)
-        stderr_log.write_text(se or "")
-        exit_file.write_text(str(rc))
+        # Explicit `encoding="utf-8"` on all three writes. Pre-fix
+        # bare `write_text(...)` used `locale.getpreferredencoding()`
+        # which returns cp1252/latin-1 on some hosts. Semgrep's SARIF
+        # output is UTF-8 by spec; writing it back in cp1252 would
+        # mojibake non-ASCII rule descriptions and snippet text. The
+        # downstream SARIF parser then either failed schema validation
+        # OR silently fed mojibake into LLM analysis prompts.
+        # `errors="replace"` belt-and-braces against a stray non-UTF-8
+        # byte sequence in the semgrep stdout (shouldn't happen but
+        # we don't want a single bad byte to crash the write).
+        sarif.write_text(so, encoding="utf-8", errors="replace")
+        stderr_log.write_text(se or "", encoding="utf-8", errors="replace")
+        exit_file.write_text(str(rc), encoding="utf-8")
 
         # Validate SARIF — tri-state result:
         #   True  → full schema validation passed
@@ -342,10 +352,13 @@ def run_single_semgrep(
 
     except Exception as e:
         logger.error(f"Semgrep scan '{name}' failed: {e}")
-        # Write empty SARIF on error
-        sarif.write_text('{"runs": []}')
-        stderr_log.write_text(str(e))
-        exit_file.write_text("-1")
+        # Write empty SARIF on error. Same encoding posture as the
+        # success path above — explicit UTF-8 so the downstream
+        # parser sees a consistent byte shape regardless of host
+        # locale.
+        sarif.write_text('{"runs": []}', encoding="utf-8")
+        stderr_log.write_text(str(e), encoding="utf-8", errors="replace")
+        exit_file.write_text("-1", encoding="utf-8")
         return str(sarif), False
 
 
