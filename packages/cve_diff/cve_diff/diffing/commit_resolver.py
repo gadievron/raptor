@@ -53,10 +53,39 @@ class CommitResolver:
     def validate_different(self, before: str | None, after: str | None) -> None:
         if before is None or after is None:
             return
-        if before.lower() == after.lower():
+        # Pre-fix the equality check was a flat lower-case match.
+        # That MISSED the mixed short/long-SHA case: a 7-char
+        # short SHA `abc1234` and a 40-char full SHA
+        # `abc1234abcdef0123456789abcdef0123456789a` resolve to
+        # the SAME commit but compared as distinct strings.
+        # Symptom: cve-diff treated `abc1234..abc1234abcdef...`
+        # as a valid two-commit diff, then `git diff` (which DOES
+        # resolve both to the same commit) returned an empty
+        # diff. The pipeline downstream raised AnalysisError on
+        # the empty bundle — operators saw "diff invariant
+        # rejected" rather than the underlying "you gave me
+        # essentially the same commit twice".
+        #
+        # Add a prefix-match check: if the shorter is a prefix of
+        # the longer (case-insensitive), treat as equivalent.
+        # Both must be valid SHA shapes for the check (digits +
+        # hex letters only) — protects against false-positive
+        # matches on non-SHA tags / branch names that happen to
+        # share a prefix.
+        before_l = before.lower()
+        after_l = after.lower()
+        if before_l == after_l:
             raise IdenticalCommitsError(
                 f"commit_before ({before}) equals commit_after ({after}) — cannot diff."
             )
+        # Mixed short/long SHA prefix-match check.
+        if (self.is_valid_sha_format(before) and self.is_valid_sha_format(after)):
+            short, long_ = (before_l, after_l) if len(before_l) <= len(after_l) else (after_l, before_l)
+            if len(short) >= 7 and long_.startswith(short):
+                raise IdenticalCommitsError(
+                    f"commit_before ({before}) is a prefix of commit_after ({after}) "
+                    f"— same commit, cannot diff."
+                )
 
     def expand(self, repo_path: Path, commit: str) -> CommitSha:
         """Resolve abbreviated SHAs via `git rev-parse` in a local clone."""
