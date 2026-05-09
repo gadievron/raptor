@@ -68,12 +68,22 @@ def lookup_function(checklist: Dict[str, Any], file_path: str, line: int,
 
     norm_path = normalise_path(file_path, repo_root)
 
+    # Track best_fuzzy ACROSS all matching file_entries. Pre-fix the
+    # `return best_fuzzy` was inside the per-entry loop, so the
+    # function bailed after the FIRST file_entry whose path matched
+    # — even if that entry only contained fuzzy candidates and a
+    # later entry (same path, e.g. inventory malformed by a duplicate
+    # extractor pass, or a follow-on entry intentionally splitting
+    # generated-vs-handwritten functions for the same file) had an
+    # EXACT match. The exact-match path still returns immediately
+    # (correct — we found what we want); the fuzzy fallback now
+    # considers every entry's items before deciding.
+    best_fuzzy = None
     for file_entry in checklist.get("files", []):
         entry_path = normalise_path(file_entry.get("path", ""), repo_root)
         if entry_path != norm_path:
             continue
 
-        best_fuzzy = None
         for func in file_entry.get("items", file_entry.get("functions", [])):
             func_start = func.get("line_start", 0)
             func_end = func.get("line_end")
@@ -90,6 +100,4 @@ def lookup_function(checklist: Dict[str, Any], file_path: str, line: int,
                 if best_fuzzy is None or func_start > best_fuzzy.get("line_start", 0):
                     best_fuzzy = func
 
-        return best_fuzzy
-
-    return None
+    return best_fuzzy
