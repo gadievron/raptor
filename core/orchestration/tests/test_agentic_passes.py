@@ -61,7 +61,7 @@ def _patch_passes(dispatcher):
 
     with patch("core.orchestration.agentic_passes.subprocess.run",
                side_effect=_subprocess_side_effect), \
-         patch("core.orchestration.agentic_passes.sandbox_run",
+         patch("core.orchestration.agentic_passes.run_untrusted_networked",
                side_effect=_sandbox_side_effect):
         yield combined
 
@@ -354,7 +354,7 @@ class UnderstandPrepassTests(unittest.TestCase):
 
             with patch("core.orchestration.agentic_passes.subprocess.run",
                        side_effect=dispatcher), \
-                 patch("core.orchestration.agentic_passes.sandbox_run",
+                 patch("core.orchestration.agentic_passes.run_untrusted_networked",
                        side_effect=_sandbox_capture):
                 run_understand_prepass(
                     target=tmp, agentic_out_dir=tmp,
@@ -363,9 +363,17 @@ class UnderstandPrepassTests(unittest.TestCase):
 
             self.assertEqual(len(sandbox_calls), 1)
             kw = sandbox_calls[0]
-            self.assertTrue(kw.get("use_egress_proxy"))
+            # Helper internally sets use_egress_proxy=True; the caller
+            # passes only the per-site config.
             self.assertEqual(kw.get("proxy_hosts"), ["api.anthropic.com"])
             self.assertEqual(kw.get("caller_label"), "agentic-understand")
+            # readable_paths must include ~/.claude (Claude Code OAuth)
+            # and RAPTOR_DIR (for libexec scripts the LLM invokes).
+            paths = kw.get("readable_paths") or []
+            self.assertTrue(any(p.endswith("/.claude") for p in paths),
+                            f"missing ~/.claude in readable_paths: {paths!r}")
+            self.assertTrue(any("raptor" in p.lower() for p in paths),
+                            f"missing RAPTOR_DIR in readable_paths: {paths!r}")
 
     def test_happy_path_enriches_agentic_checklist(self):
         # End-to-end: pre-pass writes context-map.json into the understand
@@ -575,7 +583,7 @@ class ValidatePostpassTests(unittest.TestCase):
 
             with patch("core.orchestration.agentic_passes.subprocess.run",
                        side_effect=dispatcher), \
-                 patch("core.orchestration.agentic_passes.sandbox_run",
+                 patch("core.orchestration.agentic_passes.run_untrusted_networked",
                        side_effect=_sandbox_capture):
                 run_validate_postpass(
                     target=tmp, agentic_out_dir=tmp, analysis_report=report,
@@ -584,9 +592,18 @@ class ValidatePostpassTests(unittest.TestCase):
 
             self.assertEqual(len(sandbox_calls), 1)
             kw = sandbox_calls[0]
-            self.assertTrue(kw.get("use_egress_proxy"))
+            # Helper internally sets use_egress_proxy=True; caller passes
+            # only the per-site config.
             self.assertEqual(kw.get("proxy_hosts"), ["api.anthropic.com"])
             self.assertEqual(kw.get("caller_label"), "agentic-validate")
+            # readable_paths must include ~/.claude + RAPTOR_DIR + the
+            # prior phases' agentic_out_dir (validate reads back what
+            # earlier stages wrote).
+            paths = kw.get("readable_paths") or []
+            self.assertTrue(any(p.endswith("/.claude") for p in paths),
+                            f"missing ~/.claude in readable_paths: {paths!r}")
+            self.assertTrue(any("raptor" in p.lower() for p in paths),
+                            f"missing RAPTOR_DIR in readable_paths: {paths!r}")
 
     def test_skips_when_lifecycle_start_fails(self):
         with TemporaryDirectory() as tmp:

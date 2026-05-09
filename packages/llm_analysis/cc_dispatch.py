@@ -64,12 +64,35 @@ def invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir,
     cmd = build_cc_command(config)
 
     try:
-        from core.sandbox import run as sandbox_run
-        proc = sandbox_run(cmd, input=prompt, capture_output=True, text=True,
-                           timeout=timeout, target=str(repo_path), output=str(out_dir),
-                           use_egress_proxy=True,
-                           proxy_hosts=["api.anthropic.com"],
-                           caller_label="claude-sub-agent")
+        from core.sandbox import run_untrusted_networked
+        from core.llm.cc_proxy_hosts import (
+            proxy_hosts_for_cc_dispatch,
+            readable_paths_for_cc_dispatch,
+        )
+        # Sandboxed Claude Code dispatch with restrict_reads=True so the
+        # sub-agent can't read host secrets ($HOME, /proc/<host_pid>/) on
+        # Landlock-only hosts (Ubuntu 24.04+ default with
+        # ``apparmor_restrict_unprivileged_userns=1`` blocks mount-ns).
+        # See core/security/THREAT_MODEL.md (I2-(a)) for the threat model.
+        # readable_paths and proxy_hosts both flow through
+        # cc_proxy_hosts which prefers a calibrated SandboxProfile
+        # for the resolved Claude Code binary + provider env when
+        # available, falling back to the documented install layout
+        # / hardcoded provider-aware list otherwise. Operator can
+        # also override proxy_hosts via
+        # ~/.config/raptor/cc-dispatch-proxy-hosts.json. Non-essential
+        # traffic (mcp-proxy, datadog, growthbook) is denied by the
+        # proxy — Claude Code degrades gracefully. Deliberately NOT
+        # setting CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC /
+        # ENABLE_CLAUDEAI_MCP_SERVERS env vars: undocumented Claude
+        # Code internals; the egress proxy allowlist is OUR policy.
+        proc = run_untrusted_networked(
+            cmd, input=prompt, capture_output=True, text=True,
+            timeout=timeout, target=str(repo_path), output=str(out_dir),
+            readable_paths=readable_paths_for_cc_dispatch(claude_bin),
+            proxy_hosts=proxy_hosts_for_cc_dispatch(claude_bin),
+            caller_label="claude-sub-agent",
+        )
     except subprocess.TimeoutExpired:
         return DispatchResult(result={"error": f"timeout after {timeout}s"})
     except (FileNotFoundError, PermissionError) as e:

@@ -116,7 +116,7 @@ def test_agentic_launcher_writes_pointer_into_validate_dir(tmp_path):
     # the flow stays real. Patch ``shutil.which`` so claude
     # appears to exist.
     from core.orchestration import agentic_passes
-    with patch("core.orchestration.agentic_passes.sandbox_run",
+    with patch("core.orchestration.agentic_passes.run_untrusted_networked",
                side_effect=_capture_dispatch), \
          patch("core.orchestration.agentic_passes.shutil.which",
                return_value="/usr/bin/fake-claude"), \

@@ -122,7 +122,7 @@ class PrepassIntegrationTests(unittest.TestCase):
             with env_patch, \
                  patch("core.orchestration.agentic_passes.subprocess.run",
                        side_effect=sub_disp), \
-                 patch("core.orchestration.agentic_passes.sandbox_run",
+                 patch("core.orchestration.agentic_passes.run_untrusted_networked",
                        side_effect=sbx_disp):
                 result = run_understand_prepass(
                     target=target, agentic_out_dir=agentic_out,
@@ -193,7 +193,7 @@ class PrepassIntegrationTests(unittest.TestCase):
             with env_patch, \
                  patch("core.orchestration.agentic_passes.subprocess.run",
                        side_effect=sub_disp), \
-                 patch("core.orchestration.agentic_passes.sandbox_run",
+                 patch("core.orchestration.agentic_passes.run_untrusted_networked",
                        side_effect=sbx_disp):
                 prepass = run_understand_prepass(
                     target=target, agentic_out_dir=agentic_out,
@@ -257,7 +257,7 @@ class PrepassIntegrationTests(unittest.TestCase):
             with env_patch, \
                  patch("core.orchestration.agentic_passes.subprocess.run",
                        side_effect=sub_disp), \
-                 patch("core.orchestration.agentic_passes.sandbox_run",
+                 patch("core.orchestration.agentic_passes.run_untrusted_networked",
                        side_effect=sbx_disp):
                 result = run_understand_prepass(
                     target=target, agentic_out_dir=agentic_out,
@@ -315,7 +315,7 @@ class PostpassIntegrationTests(unittest.TestCase):
             with env_patch, \
                  patch("core.orchestration.agentic_passes.subprocess.run",
                        side_effect=sub_disp1), \
-                 patch("core.orchestration.agentic_passes.sandbox_run",
+                 patch("core.orchestration.agentic_passes.run_untrusted_networked",
                        side_effect=sbx_disp1):
                 prepass = run_understand_prepass(
                     target=target, agentic_out_dir=agentic_out,
@@ -335,7 +335,7 @@ class PostpassIntegrationTests(unittest.TestCase):
             with env_patch, \
                  patch("core.orchestration.agentic_passes.subprocess.run",
                        side_effect=sub_disp2), \
-                 patch("core.orchestration.agentic_passes.sandbox_run",
+                 patch("core.orchestration.agentic_passes.run_untrusted_networked",
                        side_effect=sbx_disp2):
                 postpass = run_validate_postpass(
                     target=target, agentic_out_dir=agentic_out,

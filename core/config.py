@@ -291,6 +291,20 @@ class RaptorConfig:
         # spawns its own libexec scripts (raptor-pid1-shim,
         # raptor-run-sandboxed) using this env.
         "_RAPTOR_TRUSTED", "CLAUDECODE",
+        # RAPTOR runtime config that downstream subprocesses must
+        # honour for the operator's intent to take effect:
+        #   RAPTOR_OUT_DIR  output dir override (without this in the
+        #                    allowlist, libexec/raptor-run-lifecycle
+        #                    re-resolves out dir without the override
+        #                    and writes to BASE_OUT_DIR — operator's
+        #                    setting is silently lost across the
+        #                    subprocess boundary).
+        #   RAPTOR_DIR      installation root; libexec scripts derive
+        #                    paths from it.
+        # Both are validated by get_out_dir() (refuses system paths)
+        # so an attacker setting them gains nothing beyond what they
+        # already had with same-UID write access to ~/raptor-out.
+        "RAPTOR_OUT_DIR", "RAPTOR_DIR",
     })
 
     # Name prefixes — any variable whose name starts with one of these is

@@ -45,7 +45,13 @@ from pathlib import Path
 from typing import Optional
 
 from core.json import load_json, save_json
-from core.sandbox import run as sandbox_run
+from core.sandbox import run_untrusted_networked
+from core.llm.cc_proxy_hosts import (
+    readable_paths_for_cc_dispatch as _readable_paths_for_cc_dispatch,
+)
+from core.llm.cc_proxy_hosts import (
+    proxy_hosts_for_cc_dispatch as _proxy_hosts_for_cc_dispatch,
+)
 from core.schema_constants import CONFIDENCE_LEVELS
 from core.security.log_sanitisation import escape_nonprintable
 
@@ -202,13 +208,23 @@ def _run_understand_prepass_unsafe(
                 timeout_s=_PREPASS_TIMEOUT_S,
                 capture_json_envelope=False,
             )
-            proc = sandbox_run(
+            # Sandboxed Claude Code dispatch with restrict_reads=True.
+            # See cc_dispatch.py for rationale; this site adds
+            # str(_RAPTOR_DIR) on top of the calibrated/default
+            # readable_paths so the LLM-directed Bash tool can invoke
+            # libexec/raptor-normalize-context-map (MAP-5) and
+            # libexec/raptor-coverage-summary --mark (MAP-6) — those
+            # scripts live under RAPTOR_DIR. target+understand_dir
+            # auto-allowlisted via target=/output= positional args.
+            proc = run_untrusted_networked(
                 build_cc_command(prepass_config),
                 input=prompt, text=True,
                 timeout=_PREPASS_TIMEOUT_S,
                 target=str(target), output=str(understand_dir),
-                use_egress_proxy=True,
-                proxy_hosts=["api.anthropic.com"],
+                readable_paths=(
+                    [str(_RAPTOR_DIR)] + _readable_paths_for_cc_dispatch(claude_bin)
+                ),
+                proxy_hosts=_proxy_hosts_for_cc_dispatch(claude_bin),
                 caller_label="agentic-understand",
             )
         except subprocess.TimeoutExpired:
@@ -451,13 +467,26 @@ def _run_validate_postpass_unsafe(
                 timeout_s=_POSTPASS_TIMEOUT_S,
                 capture_json_envelope=False,
             )
-            proc = sandbox_run(
+            # Same restrict_reads=True posture as /understand prepass —
+            # see that site for rationale. /validate's tool list is
+            # broader (Bash for sandbox prep, SMT, feasibility helpers),
+            # all of which run from RAPTOR_DIR/libexec; agentic_out_dir
+            # holds the prior phases' artefacts the LLM reads back.
+            # restrict_reads still applies — those paths are in
+            # readable_paths; $HOME secrets stay denied. Calibrated
+            # paths (when available) carry the per-binary install
+            # layout; site-specific extras (RAPTOR_DIR, agentic_out_dir)
+            # are prepended.
+            proc = run_untrusted_networked(
                 build_cc_command(postpass_config),
                 input=prompt, text=True,
                 timeout=_POSTPASS_TIMEOUT_S,
                 target=str(target), output=str(validate_dir),
-                use_egress_proxy=True,
-                proxy_hosts=["api.anthropic.com"],
+                readable_paths=(
+                    [str(_RAPTOR_DIR), str(agentic_out_dir)]
+                    + _readable_paths_for_cc_dispatch(claude_bin)
+                ),
+                proxy_hosts=_proxy_hosts_for_cc_dispatch(claude_bin),
                 caller_label="agentic-validate",
             )
         except subprocess.TimeoutExpired:
