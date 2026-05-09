@@ -580,8 +580,24 @@ def ls_remote(
     # An ephemeral temp dir gives the sandbox a writable scratch
     # area that's discarded as soon as we leave the with-block.
     with tempfile.TemporaryDirectory(prefix="raptor-ls-remote-") as td:
+        # Pre-fix the log line emitted the raw URL. Operators
+        # passing tokens via URL userinfo (`https://oauth2:
+        # token@github.com/owner/repo.git`) leaked the token to
+        # any log destination — RAPTOR's own log files,
+        # forwarded log aggregators, and any operator who
+        # `tail`d a long-running scan. The userinfo check
+        # earlier in this function rejects URL tokens at
+        # validation time, so this log line never sees them in
+        # the canonical happy path — but defence-in-depth: a
+        # future caller could land here without the validator
+        # check (test fixtures, refactor that loosens the
+        # gate). Run through redact_secrets() so any
+        # credentials in URL form are masked before the log
+        # write.
+        from core.security.redaction import redact_secrets
         logger.info("git ls-remote: %s (allowlist=%s)",
-                     url, ",".join(sorted(allowed_lower)))
+                     redact_secrets(url),
+                     ",".join(sorted(allowed_lower)))
         proc = run_untrusted(
             ["git", "ls-remote", "--heads", "--tags", url],
             target=td,
