@@ -70,8 +70,11 @@ class RaptorConfig:
     }
 
     # Path Configuration
-    # core/config.py -> repo root
-    REPO_ROOT = Path(__file__).resolve().parents[1]
+    # core/config/__init__.py -> repo root (two parents up: ``__init__.py``
+    # → ``config/`` → ``core/`` → repo root). Was ``parents[1]`` when
+    # this lived as the flat ``core/config.py``; the package conversion
+    # added one directory level.
+    REPO_ROOT = Path(__file__).resolve().parents[2]
     ENGINE_DIR = REPO_ROOT / "engine"
     MCP_DIR = REPO_ROOT / "mcp"
     AGENTS_DIR = MCP_DIR / "agents"
