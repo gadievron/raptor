@@ -586,6 +586,15 @@ class AutonomousSecurityAgentV2:
 
         analysis_schema = build_analysis_schema(has_dataflow=vuln.has_dataflow)
 
+        # Surface the function's inventory metadata to the strategy
+        # picker so it can match on function-name keywords and any
+        # known callees. ``vuln.metadata`` is populated upstream from
+        # the inventory checklist when available.
+        meta = vuln.metadata or {}
+        function_name = meta.get("name") or ""
+        file_includes = meta.get("includes") or ()
+        function_calls_made = meta.get("calls") or meta.get("callees") or ()
+
         bundle = build_analysis_prompt_bundle(
             rule_id=vuln.rule_id,
             level=vuln.level,
@@ -599,7 +608,12 @@ class AutonomousSecurityAgentV2:
             dataflow_source=vuln.dataflow_source,
             dataflow_sink=vuln.dataflow_sink,
             dataflow_steps=vuln.dataflow_steps,
+            metadata=meta,
             repo_path=str(vuln.repo_path),
+            cwe_id=vuln.cwe_id,
+            function_name=function_name,
+            file_includes=file_includes,
+            function_calls_made=function_calls_made,
         )
         prompt = next(m.content for m in bundle.messages if m.role == "user")
         system_prompt = next(m.content for m in bundle.messages if m.role == "system")
