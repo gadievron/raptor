@@ -169,12 +169,32 @@ class WebCrawler:
         )
 
         try:
-            # Fetch page
-            parsed_url = urlparse(url)
-            path = parsed_url.path + (
-                f"?{parsed_url.query}" if parsed_url.query else ""
-            )
-            response = self.client.get(path)
+            # Fetch page. Pre-fix the crawler stripped the URL to
+            # path+query only:
+            #
+            #   parsed_url = urlparse(url)
+            #   path = parsed_url.path + (?{query} if query else "")
+            #   response = self.client.get(path)
+            #
+            # That LOST the original host/scheme. WebClient._build_url
+            # then `urljoin(base_url + '/', path)` re-anchored every
+            # discovered URL onto base_url's host. Concrete failure
+            # mode: a discovered link
+            # `https://api.example.com/v1/users` (a sub-host the
+            # operator wanted in scope, e.g. assets.example.com or
+            # api.example.com under the same TARGET) was crawled as
+            # `<base_url>/v1/users` — wrong host, hits the wrong
+            # service, gets a 404 or worse cross-host data, and the
+            # actual sub-host endpoint is NEVER fetched even though
+            # the crawler thinks it covered it.
+            #
+            # Pass the full URL. `WebClient._build_url(url)` does
+            # `urljoin(base_url+'/', url)` which preserves the
+            # scheme/host when `url` is already absolute, then
+            # `_is_in_scope(url)` rejects out-of-origin URLs with
+            # ValueError — the crawl-scope check still fires, AND
+            # the correct host is hit when the URL is in-scope.
+            response = self.client.get(url)
 
             if response.status_code != 200:
                 logger.debug(
