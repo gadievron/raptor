@@ -72,7 +72,17 @@ def normalize_slug(slug: str) -> str:
 
 
 def extract_github_slug(url: str) -> str | None:
-    """Return the canonical ``owner/repo`` slug from any GitHub URL, or None."""
+    """Return the canonical ``owner/repo`` slug from any GitHub URL, or None.
+
+    Uses `re.search` (not `re.match`) by design — advisory text often
+    embeds GitHub URLs in prose ("see fix at https://github.com/...",
+    "Mitigated by https://github.com/...") and callers depend on
+    extracting the slug from that prose. See
+    `tests/unit/test_url_re.py::test_extract_slug_finds_embedded_url`
+    for the regression coverage. Pre-fix this docstring didn't name
+    the contract, so a future maintainer might tighten to `re.match`
+    and silently break advisory ingestion.
+    """
     m = GITHUB_REPO_URL_RE.search(url or "")
     if not m:
         return None
