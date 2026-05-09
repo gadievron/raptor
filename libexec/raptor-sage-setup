@@ -272,7 +272,16 @@ enable_sage_env() {
     mkdir -p "$(dirname "$SETTINGS_LOCAL")"
     local fragment='{"env":{"SAGE_ENABLED":"true"}}'
     local tmp
-    tmp=$(mktemp); _RAPTOR_TMP_FILES+=("$tmp")
+    # `mktemp -p "$(dirname "$SETTINGS_LOCAL")"` so the tmp file lives
+    # on the SAME filesystem as the destination. Pre-fix bare `mktemp`
+    # defaulted to `/tmp` (or whatever `$TMPDIR` resolved to), which
+    # on hardened systems is a tmpfs separate from the home filesystem
+    # — `mv` then degraded to copy+unlink which is non-atomic, AND
+    # `/tmp`'s default permissions vary across distros (1777 on most,
+    # but containers and CI runners sometimes set 755 with operator
+    # adjacency). Same-fs mktemp keeps mv atomic and inherits the
+    # parent dir's permissions.
+    tmp=$(mktemp -p "$(dirname "$SETTINGS_LOCAL")" .tmp.settings.XXXXXX); _RAPTOR_TMP_FILES+=("$tmp")
     trap 'rm -f "$tmp"; umask "$_saved_umask"' RETURN
     if [ ! -f "$SETTINGS_LOCAL" ]; then
         echo "$fragment" | jq . > "$SETTINGS_LOCAL"
@@ -293,7 +302,8 @@ enable_sage_env() {
 disable_sage_env() {
     [ -f "$SETTINGS_LOCAL" ] || return 0
     local tmp
-    tmp=$(mktemp); _RAPTOR_TMP_FILES+=("$tmp")
+    # Same-fs mktemp — see enable_sage_env above for the rationale.
+    tmp=$(mktemp -p "$(dirname "$SETTINGS_LOCAL")" .tmp.settings.XXXXXX); _RAPTOR_TMP_FILES+=("$tmp")
     trap 'rm -f "$tmp"' RETURN
     # Remove env.SAGE_ENABLED; if env becomes empty, drop env entirely.
     # Pre-fix the top-level "is the whole settings object now empty?"
