@@ -37,7 +37,28 @@ from .config import BVProfile
 
 
 class RejectionKind(str, Enum):
-    """Why the parser refused to encode a constraint."""
+    """Why the parser refused to encode a constraint.
+
+    `str+Enum` mixin: instances ARE strings, so ``str(rk)`` and
+    JSON serialisation work without a custom encoder. Trade-off:
+    after a JSON round-trip
+    (``json.dumps(rk)`` -> ``"lex_empty"`` -> ``json.loads`` ->
+    plain ``str``), the loaded value is a bare string, not the
+    enum member. Comparisons must use ``==`` (which works because
+    ``str.__eq__`` compares values), NOT ``is`` (which compares
+    object identity and the post-JSON value is a freshly-allocated
+    str). Callers that match against `RejectionKind` values across
+    serialisation boundaries should:
+
+      * use ``rk == RejectionKind.LEX_EMPTY`` (correct), OR
+      * coerce on load via ``RejectionKind(s)`` to get the canonical
+        member back.
+
+    Pre-fix the docstring didn't name this contract — a maintainer
+    writing ``rk is RejectionKind.LEX_EMPTY`` post-deserialisation
+    would silently get False on every comparison and the code path
+    would never fire.
+    """
 
     LEX_EMPTY = "lex_empty"
     """Tokeniser produced no tokens — input was empty or pure whitespace."""
