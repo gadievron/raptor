@@ -33,6 +33,14 @@ import compute_filters  # noqa: E402
 SUBSYSTEMS: list[tuple[str, str]] = [
     ("sandbox", "core/sandbox"),
     ("exploit_feasibility", "packages/exploit_feasibility"),
+    # Heavy-subdir tiers carved out of the broad ``python`` fast tier.
+    # When test_filter_coverage fails for one of these, add the missing
+    # import path to the corresponding filter in compute_filters.FILTERS.
+    ("codeql", "packages/codeql"),
+    ("llm_analysis", "packages/llm_analysis"),
+    ("cve_diff", "packages/cve_diff"),
+    ("fuzzing", "packages/fuzzing"),
+    ("sage", "core/sage"),
 ]
 
 

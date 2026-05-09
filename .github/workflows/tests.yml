@@ -80,6 +80,12 @@ jobs:
       sandbox: ${{ steps.filter.outputs.sandbox }}
       exploit_feasibility: ${{ steps.filter.outputs.exploit_feasibility }}
       prompt_audit: ${{ steps.filter.outputs.prompt_audit }}
+      ci_lint: ${{ steps.filter.outputs.ci_lint }}
+      codeql: ${{ steps.filter.outputs.codeql }}
+      llm_analysis: ${{ steps.filter.outputs.llm_analysis }}
+      cve_diff: ${{ steps.filter.outputs.cve_diff }}
+      fuzzing: ${{ steps.filter.outputs.fuzzing }}
+      sage: ${{ steps.filter.outputs.sage }}
       force_full: ${{ steps.force.outputs.force_full }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
@@ -204,7 +210,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [1, 2]
+        # 4-way split: ~2x parallelism uplift over the 2-way split for
+        # the same per-runner setup cost (venv download + compileall).
+        # Sweet spot before per-runner overhead dominates the wall-clock
+        # win — a 5th group would mostly buy queueing + setup, not test
+        # parallelism.
+        group: [1, 2, 3, 4]
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
@@ -223,20 +234,46 @@ jobs:
       - name: Restore venv permissions
         run: chmod +x $VENV_PATH/bin/*
 
+      - name: Cache Python bytecode
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # was v4.3.0
+        with:
+          # __pycache__ contents are deterministic per (Python version,
+          # source contents). Caching by source-tree hash recovers the
+          # ~10–30s `compileall` adds per runner. Cache miss is a no-op
+          # — `compileall` regenerates from scratch.
+          path: |
+            core/**/__pycache__
+            packages/**/__pycache__
+            libexec/tests/**/__pycache__
+          key: pycache-${{ env.PYTHON_VERSION }}-${{ hashFiles('core/**/*.py', 'packages/**/*.py', 'libexec/tests/**/*.py') }}
+          restore-keys: |
+            pycache-${{ env.PYTHON_VERSION }}-
+
       - name: Compile Python sources
         run: |
           source $VENV_PATH/bin/activate
           python -m compileall -q core packages libexec/tests *.py
 
-      - name: Run unit tests (fast tier, group ${{ matrix.group }} of 2)
+      - name: Run unit tests (fast tier, group ${{ matrix.group }} of 4)
         run: |
           source $VENV_PATH/bin/activate
           # The prompt-envelope audit runs in its own narrowly-scoped
           # job (python-prompt-audit) so it doesn't fire on unrelated
           # Python changes. Exclude it here to avoid duplicate runs.
-          pytest -n auto --splits 2 --group ${{ matrix.group }} core packages \
+          # The .github/tests filter-coverage suite has its own job so
+          # we don't pull it into the fast tier either.
+          # Heavy subsystems carved into their own gated jobs are
+          # ignored here too — see the dedicated `python-unit-tests-*`
+          # jobs further down.
+          pytest -n auto --splits 4 --group ${{ matrix.group }} core packages \
             --ignore=core/sandbox/tests \
             --ignore=packages/exploit_feasibility/tests \
+            --ignore=packages/codeql/tests \
+            --ignore=packages/llm_analysis/tests \
+            --ignore=packages/cve_diff/tests \
+            --ignore=packages/fuzzing/tests \
+            --ignore=packages/oss_forensics/tests \
+            --ignore=core/sage/tests \
             --ignore=core/security/tests/test_prompt_envelope_audit.py
 
       - name: Run libexec wrapper tests (group 1 only)
@@ -257,14 +294,10 @@ jobs:
           # as libexec/tests above.
           pytest test/test_cli_smoke.py -n auto
 
-      - name: Run CI lint tests (group 1 only)
-        if: matrix.group == 1
-        run: |
-          source $VENV_PATH/bin/activate
-          # Validates path-filter globs in compute_filters.py cover the
-          # actual import dependencies of subsystem-scoped test jobs.
-          # Same collision-avoidance reasoning as libexec/tests above.
-          pytest .github/tests
+      # Note: the path-filter coverage tests at `.github/tests/` used to
+      # run in this job (group 1 only). They now have their own
+      # dedicated job (`ci-lint-tests`) gated on `.github/**` changes
+      # so a code-only PR doesn't pay for them.
 
   # Sandbox tier: ~251 heavyweight tests doing real namespace/mount/seccomp
   # work. Gated on sandbox-related path changes only.
@@ -370,4 +403,168 @@ jobs:
           # `python -m pytest` so `from core.security...` resolves
           # without needing the repo on PYTHONPATH.
           python -m pytest core/security/tests/test_prompt_envelope_audit.py -q
+
+  # CI lint / filter-coverage tests. Validates that compute_filters.py's
+  # globs cover the actual import dependencies of subsystem-scoped jobs.
+  # No project deps required — only pytest.
+  ci-lint-tests:
+    needs: [pre_check, changes]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.ci_lint == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run CI filter-coverage tests
+        run: pytest .github/tests
+
+  # Heavy-subdir Python tiers — each gated on its own filter so a PR
+  # touching only one package skips the others. Filters live in
+  # compute_filters.FILTERS and are validated by ci-lint-tests above.
+  python-unit-tests-codeql:
+    needs: [pre_check, changes, deps]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.codeql == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Download venv artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # was v7
+        with:
+          name: venv-${{ github.run_id }}
+          path: ${{ env.VENV_PATH }}
+      - name: Restore venv permissions
+        run: chmod +x $VENV_PATH/bin/*
+      - name: Run codeql tests
+        run: |
+          source $VENV_PATH/bin/activate
+          python -m pytest packages/codeql/tests -n auto
+
+  python-unit-tests-llm-analysis:
+    needs: [pre_check, changes, deps]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.llm_analysis == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Download venv artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # was v7
+        with:
+          name: venv-${{ github.run_id }}
+          path: ${{ env.VENV_PATH }}
+      - name: Restore venv permissions
+        run: chmod +x $VENV_PATH/bin/*
+      - name: Run llm_analysis tests
+        run: |
+          source $VENV_PATH/bin/activate
+          python -m pytest packages/llm_analysis/tests -n auto
+
+  python-unit-tests-cve-diff:
+    needs: [pre_check, changes, deps]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.cve_diff == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Download venv artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # was v7
+        with:
+          name: venv-${{ github.run_id }}
+          path: ${{ env.VENV_PATH }}
+      - name: Restore venv permissions
+        run: chmod +x $VENV_PATH/bin/*
+      - name: Run cve_diff tests
+        run: |
+          source $VENV_PATH/bin/activate
+          python -m pytest packages/cve_diff/tests -n auto
+
+  python-unit-tests-fuzzing:
+    needs: [pre_check, changes, deps]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.fuzzing == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Download venv artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # was v7
+        with:
+          name: venv-${{ github.run_id }}
+          path: ${{ env.VENV_PATH }}
+      - name: Restore venv permissions
+        run: chmod +x $VENV_PATH/bin/*
+      - name: Run fuzzing tests
+        run: |
+          source $VENV_PATH/bin/activate
+          python -m pytest packages/fuzzing/tests -n auto
+
+  python-unit-tests-sage:
+    needs: [pre_check, changes, deps]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.sage == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Download venv artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # was v7
+        with:
+          name: venv-${{ github.run_id }}
+          path: ${{ env.VENV_PATH }}
+      - name: Restore venv permissions
+        run: chmod +x $VENV_PATH/bin/*
+      - name: Run sage tests
+        run: |
+          source $VENV_PATH/bin/activate
+          python -m pytest core/sage/tests -n auto
 
