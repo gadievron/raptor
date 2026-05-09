@@ -270,22 +270,34 @@ _VENDOR_DIR_NAMES = frozenset({
 
 def find_dependency_files(root: Path) -> List[Path]:
     candidates = []
-    for pat in ['pom.xml', 'build.gradle', 'package.json',
-                'requirements.txt', 'pyproject.toml']:
-        for p in root.rglob(pat):
-            # Skip if any path component is a vendor / cache dir.
-            # Pre-fix `rglob` walked into node_modules and friends,
-            # picking up every transitive dep's package.json,
-            # multiplying the SCA report by orders of magnitude
-            # (a typical npm project has 1000+ nested
-            # package.json files, each producing duplicate /
-            # not-actionable advisories).
-            try:
-                rel_parts = p.relative_to(root).parts
-            except ValueError:
-                rel_parts = p.parts
-            if any(part in _VENDOR_DIR_NAMES for part in rel_parts[:-1]):
+    target_names = frozenset(['pom.xml', 'build.gradle', 'package.json',
+                              'requirements.txt', 'pyproject.toml'])
+    # `os.walk(followlinks=False)` with in-loop pruning of vendor /
+    # cache dirs. Pre-fix `root.rglob(pat)` for each pattern walked
+    # the WHOLE tree (including node_modules / .git / .venv /
+    # etc.) before the post-walk filter at the bottom skipped them
+    # — wasted I/O on a typical npm project's 100k+ files. Worse,
+    # `rglob` follows symlinks under Python <3.13: a symlink loop
+    # in the target tree would walk forever, and a symlink to
+    # /etc would walk that too.
+    #
+    # Pruning `dirnames` in-place at walk time skips entire
+    # subtrees rather than enumerating-then-filtering. Same
+    # pattern as core/inventory/builder.py uses for the same
+    # reason.
+    import os as _os
+    for dirpath, dirnames, filenames in _os.walk(
+        str(root), followlinks=False
+    ):
+        # Prune vendor / cache dirs in-place. The list-slice
+        # assignment is the documented os.walk pattern: the
+        # walker reads dirnames after the yield to decide where
+        # to descend.
+        dirnames[:] = [d for d in dirnames if d not in _VENDOR_DIR_NAMES]
+        for fname in filenames:
+            if fname not in target_names:
                 continue
+            p = Path(dirpath) / fname
             # Reject symlinks (file or any parent dir). `rglob`
             # follows symlinks by default on Python < 3.13 — a
             # symlink under the target repo pointing OUT to e.g.
