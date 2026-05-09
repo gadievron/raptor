@@ -180,7 +180,21 @@ def main() -> int:
             v = _verify_one(cve_id, picked_slug, picked_sha)
             verdicts_by_status.setdefault(status, []).append(v)
             verdicts_flat.append((status, v))
-            fh.write(json.dumps({"bench_status": status, **v.to_dict()}) + "\n")
+            # `default=str` so non-JSON-native types in `v.to_dict()`
+            # (Verdict enum members, datetime fields, Path objects)
+            # serialise as their string form instead of crashing the
+            # whole oracle loop with `TypeError: Object of type X is
+            # not JSON serializable`. Pre-fix a single enum value
+            # (Verdict.MATCH etc.) in the verdict dict killed the
+            # entire JSONL emission for the rest of the run — every
+            # subsequent CVE's verdict was lost mid-batch.
+            fh.write(
+                json.dumps(
+                    {"bench_status": status, **v.to_dict()},
+                    default=str,
+                )
+                + "\n"
+            )
             fh.flush()  # checkpoint — see comment above
             if i % 20 == 0:
                 print(f"  … {i}/{len(results)}", file=sys.stderr)
