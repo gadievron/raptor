@@ -1067,6 +1067,26 @@ class DatabaseManager:
 
                     if created_at < cutoff:
                         db_path = Path(data["database_path"])
+                        # Containment guard: db_path comes from the
+                        # JSON metadata file. Pre-fix `shutil.rmtree
+                        # (db_path)` blindly trusted that path. A
+                        # tampered or copy-pasted metadata file
+                        # naming `database_path: "/etc"` would have
+                        # had cleanup obliterate /etc.
+                        # Restrict to paths INSIDE self.db_root so
+                        # only databases this manager could have
+                        # created are eligible for deletion.
+                        try:
+                            db_resolved = db_path.resolve(strict=False)
+                            db_root_resolved = self.db_root.resolve(strict=False)
+                            db_resolved.relative_to(db_root_resolved)
+                        except (ValueError, OSError):
+                            logger.warning(
+                                "cleanup_old_databases: refusing to delete "
+                                "%r — outside db_root %r",
+                                db_path, self.db_root,
+                            )
+                            continue
                         if db_path.exists():
                             if not dry_run:
                                 shutil.rmtree(db_path)
