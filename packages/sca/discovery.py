@@ -111,9 +111,10 @@ MANIFEST_FILENAMES = {
     "go.mod": "Go",
     "go.sum": "Go",
 
-    # Ruby
+    # Ruby — bare ``Gemfile`` here; ``Gemfile.lock*`` variants
+    # (incl. ManageIQ's ``Gemfile.lock.release``, migration-time
+    # ``Gemfile.lock.next``) are routed via ``_is_gemfile_lock_variant``.
     "Gemfile": "RubyGems",
-    "Gemfile.lock": "RubyGems",
 
     # .NET
     # *.csproj/*.fsproj/*.vbproj are pattern-matched; see _walk()
@@ -196,6 +197,16 @@ def _is_requirements_variant(name: str) -> bool:
     return name.startswith("requirements") and name.endswith(".txt")
 
 
+# Gemfile.lock variants — ManageIQ ships ``Gemfile.lock.release``
+# (gitignored dev lock, release-time copy committed to the tag);
+# some Rails monoliths use ``Gemfile.lock.next`` during gem upgrades.
+# Identical byte-for-byte format. ``Gemfile.modules`` (a DSL fragment,
+# NOT a lockfile — used by OpenProject) is excluded by the ``.lock``
+# substring check.
+def _is_gemfile_lock_variant(name: str) -> bool:
+    return name.startswith("Gemfile.lock")
+
+
 # Inline-install source shapes — Dockerfile, devcontainer.json, shell
 # scripts, GHA workflows. These aren't manifests in the traditional sense;
 # they're files that *contain* install commands. The parser dispatcher
@@ -265,7 +276,8 @@ def find_manifests(
         eco = _classify(path)
         if eco is None:
             continue
-        is_lock = path.name in LOCKFILE_NAMES
+        is_lock = (path.name in LOCKFILE_NAMES
+                   or _is_gemfile_lock_variant(path.name))
         found.append(Manifest(
             path=path,
             ecosystem=eco,
@@ -389,6 +401,9 @@ def _classify(path: Path) -> Optional[str]:
     # requirements*.txt convention
     if _is_requirements_variant(name):
         return "PyPI"
+    # Gemfile.lock + release-time variants (Gemfile.lock.release / .next)
+    if _is_gemfile_lock_variant(name):
+        return "RubyGems"
     # Inline-install sources (Dockerfile / devcontainer / shell / GHA).
     # The actual ecosystem of each emitted dep is set by the parser,
     # since one file can mix pip and apt installs.

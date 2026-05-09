@@ -186,3 +186,83 @@ def test_dispatch_via_discovery(tmp_path: Path) -> None:
     assert gf.ecosystem == "RubyGems"
     deps = dispatch(gf)
     assert deps and deps[0].name == "rails"
+
+
+# ---------------------------------------------------------------------------
+# Gemfile.lock variants — release-time / migration lockfiles
+# ---------------------------------------------------------------------------
+
+_VARIANT_LOCK_BODY = """\
+GEM
+  remote: https://rubygems.org/
+  specs:
+    activerecord (7.1.2)
+    activesupport (7.1.2)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  activerecord
+"""
+
+
+def test_lockfile_release_variant_parses(tmp_path: Path) -> None:
+    """ManageIQ ships ``Gemfile.lock.release`` instead of ``Gemfile.lock``."""
+    p = _write(tmp_path, _VARIANT_LOCK_BODY, "Gemfile.lock.release")
+    deps = parse_lockfile(p)
+    by_name = {d.name: d for d in deps}
+    assert "activerecord" in by_name
+    assert by_name["activerecord"].version == "7.1.2"
+    assert by_name["activerecord"].is_lockfile is True
+
+
+def test_lockfile_next_variant_parses(tmp_path: Path) -> None:
+    """Some Rails monoliths use ``Gemfile.lock.next`` during gem migrations."""
+    p = _write(tmp_path, _VARIANT_LOCK_BODY, "Gemfile.lock.next")
+    deps = parse_lockfile(p)
+    assert {d.name for d in deps} == {"activerecord", "activesupport"}
+
+
+def test_discovery_routes_lockfile_variant(tmp_path: Path) -> None:
+    """End-to-end: discovery classifies Gemfile.lock.release + dispatcher
+    finds the right parser via predicate."""
+    from packages.sca.discovery import find_manifests
+    from packages.sca.parsers import parse_manifest as dispatch
+
+    repo = tmp_path / "miq-like"
+    repo.mkdir()
+    (repo / "Gemfile").write_text(
+        "gem 'activerecord'\n", encoding="utf-8")
+    (repo / "Gemfile.lock.release").write_text(
+        _VARIANT_LOCK_BODY, encoding="utf-8")
+
+    manifests = find_manifests(repo)
+    lock = next(m for m in manifests
+                if m.path.name == "Gemfile.lock.release")
+    assert lock.ecosystem == "RubyGems"
+    assert lock.is_lockfile is True
+    deps = dispatch(lock)
+    assert {d.name for d in deps} == {"activerecord", "activesupport"}
+
+
+def test_discovery_does_not_route_gemfile_modules(tmp_path: Path) -> None:
+    """``Gemfile.modules`` (OpenProject DSL fragment, NOT a lockfile)
+    must not be misclassified as a RubyGems lockfile."""
+    from packages.sca.discovery import find_manifests
+
+    repo = tmp_path / "op-like"
+    repo.mkdir()
+    (repo / "Gemfile.modules").write_text(
+        "# DSL fragment, not a lockfile\n", encoding="utf-8")
+
+    manifests = find_manifests(repo)
+    # Either skipped entirely, or classified as something other than a
+    # RubyGems lockfile (current behaviour: not classified at all).
+    misclassified = [
+        m for m in manifests
+        if m.path.name == "Gemfile.modules"
+        and m.ecosystem == "RubyGems"
+        and m.is_lockfile
+    ]
+    assert misclassified == []

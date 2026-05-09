@@ -1,7 +1,13 @@
 """RubyGems parser.
 
-Handles ``Gemfile`` (Bundler manifest, a Ruby DSL) and ``Gemfile.lock``
+Handles ``Gemfile`` (Bundler manifest, a Ruby DSL) and ``Gemfile.lock*``
 (Bundler resolved-version output, a custom plain-text format).
+
+The lockfile matcher is a *prefix* (``Gemfile.lock``) so it covers
+release-time variants such as ``Gemfile.lock.release`` (ManageIQ) or
+``Gemfile.lock.next`` (gem-version migrations) — same byte-for-byte
+format, just renamed by convention. Pure ``Gemfile.modules`` (a DSL
+fragment, not a lockfile) is excluded by the ``.lock`` substring.
 
 The Gemfile is a Ruby script — fully Turing-complete — so we
 deliberately don't execute it. We regex-parse the most common forms:
@@ -99,7 +105,13 @@ def parse_manifest(path: Path) -> List[Dependency]:
     return out
 
 
-@register(filenames=["Gemfile.lock"])
+def _is_gemfile_lockfile(path: Path) -> bool:
+    """True for ``Gemfile.lock`` and release-time variants like
+    ``Gemfile.lock.release`` (ManageIQ) / ``Gemfile.lock.next``."""
+    return path.name.startswith("Gemfile.lock")
+
+
+@register(predicate=_is_gemfile_lockfile)
 def parse_lockfile(path: Path) -> List[Dependency]:
     """Parse a ``Gemfile.lock`` GEM section and emit one Dependency per
     resolved gem.
