@@ -321,6 +321,14 @@ def _sanitise_findings(
             "reachability": sca.get("reachability"),
             "raptor_risk_estimate": sca.get("raptor_risk_estimate"),
             "risk_components": sca.get("risk_components"),
+            # Without this, refit could not see EDB / MSF / GitHub-PoC
+            # signal on archived findings — only ``in_kev`` (the
+            # binary CISA flag) was preserved, even though the live
+            # pipeline populated the full ExploitEvidence block on
+            # every finding before the archive step. Re-tuning runs
+            # against this archive could only see ~half the exploit
+            # signal that production scans actually saw.
+            "exploit_evidence": sca.get("exploit_evidence"),
         })
     return out
 

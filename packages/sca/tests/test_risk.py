@@ -56,6 +56,7 @@ def _finding(
     exposure: float = 0.5,
     depth: int = 0,
     vmc: str = "high",
+    exploit_evidence: "Optional[object]" = None,
 ) -> VulnFinding:
     d = dep if dep is not None else _dep()
     return VulnFinding(
@@ -74,6 +75,7 @@ def _finding(
         severity="high",
         exposure_factor=exposure,
         transitive_depth=depth,
+        exploit_evidence=exploit_evidence,
     )
 
 
@@ -461,3 +463,100 @@ class TestCalibrationStatusFromValidation:
         # the cached verdict.
         _, comps2 = compute_risk_estimate(f, f.dependency)
         assert comps2["calibration_status"] == "validated_v1"
+
+
+# ---------------------------------------------------------------------------
+# Exploit-evidence boost — independent of in_kev
+# ---------------------------------------------------------------------------
+
+
+def _ee(
+    *, kev: bool = False, edb: int = 0, msf: int = 0, poc: int = 0,
+):
+    """Construct an ExploitEvidence with the given signal counts."""
+    from packages.sca.models import ExploitEvidence
+    return ExploitEvidence(
+        kev_listed=kev,
+        edb_ids=list(range(edb)),
+        msf_modules=[f"exploit/m{i}" for i in range(msf)],
+        github_poc_urls=[f"https://github.com/x/p{i}" for i in range(poc)],
+    )
+
+
+def test_exploit_evidence_no_signal_no_boost():
+    """ExploitEvidence with all-empty signals → no multiplier change."""
+    no_ee = _finding(cvss=5.0, in_kev=False, epss=0.1,
+                      exploit_evidence=_ee())
+    s_no, c_no = compute_risk_estimate(no_ee, no_ee.dependency)
+    none = _finding(cvss=5.0, in_kev=False, epss=0.1, exploit_evidence=None)
+    s_none, c_none = compute_risk_estimate(none, none.dependency)
+    assert s_no == s_none, (
+        "empty exploit_evidence should be identical to None — same score"
+    )
+    assert c_no["exploit_evidence_multiplier"] == 1.0
+
+
+def test_exploit_evidence_edb_boosts_non_kev_finding():
+    """A non-KEV finding with an Exploit-DB entry scores ABOVE an
+    otherwise-identical finding without exploit evidence — closing
+    the calibration gap where 4 of 7 exploited CVEs ranked at
+    99/174/175/192 because they weren't KEV-listed."""
+    plain = _finding(cvss=5.0, in_kev=False, epss=0.1, exploit_evidence=None)
+    with_edb = _finding(cvss=5.0, in_kev=False, epss=0.1,
+                         exploit_evidence=_ee(edb=1))
+    s_plain, c_plain = compute_risk_estimate(plain, plain.dependency)
+    s_edb, c_edb = compute_risk_estimate(with_edb, with_edb.dependency)
+    assert s_edb > s_plain, (
+        f"EDB-listed finding should score higher than plain — "
+        f"plain={s_plain:.2f} vs edb={s_edb:.2f}"
+    )
+    assert c_edb["exploit_evidence_multiplier"] > 1.0
+
+
+def test_exploit_evidence_msf_or_poc_alone_also_boosts():
+    """Each of the three sources (EDB, MSF, GitHub PoC) is sufficient
+    on its own to trigger the boost — no source combo is required."""
+    base = _finding(cvss=5.0, in_kev=False, epss=0.1, exploit_evidence=None)
+    s_base, _ = compute_risk_estimate(base, base.dependency)
+    for ee in (_ee(msf=1), _ee(poc=1)):
+        f = _finding(cvss=5.0, in_kev=False, epss=0.1, exploit_evidence=ee)
+        s, _ = compute_risk_estimate(f, f.dependency)
+        assert s > s_base, (
+            f"signal {ee} alone should boost score above base "
+            f"({s:.2f} <= {s_base:.2f})"
+        )
+
+
+def test_exploit_evidence_does_not_double_count_with_kev():
+    """KEV-listed findings already get a boost; the exploit-evidence
+    branch must NOT compound on top — it's gated by ``not in_kev``.
+    Two findings, both with KEV+EDB, should score the same as KEV
+    alone (the EDB signal isn't double-counted on a CVE we already
+    know is KEV)."""
+    kev_only = _finding(cvss=7.5, in_kev=True, epss=0.5,
+                         exploit_evidence=None)
+    kev_plus_edb = _finding(cvss=7.5, in_kev=True, epss=0.5,
+                             exploit_evidence=_ee(kev=True, edb=5))
+    s_a, _ = compute_risk_estimate(kev_only, kev_only.dependency)
+    s_b, _ = compute_risk_estimate(kev_plus_edb, kev_plus_edb.dependency)
+    assert s_a == s_b, (
+        f"KEV+EDB should equal KEV alone "
+        f"({s_a:.2f} vs {s_b:.2f}) — exploit-evidence must not "
+        f"double-count when already credited via KEV"
+    )
+
+
+def test_exploit_evidence_floor_lifts_low_cvss_finding():
+    """An EDB-listed CVE with low CVSS gets lifted by the floor —
+    matches the design where 'working exploit exists in the wild'
+    outranks a theoretical-but-low-CVSS finding without one."""
+    low_no_ee = _finding(cvss=2.0, in_kev=False, epss=0.1,
+                          exploit_evidence=None)
+    low_with_ee = _finding(cvss=2.0, in_kev=False, epss=0.1,
+                            exploit_evidence=_ee(edb=1))
+    s_no, _ = compute_risk_estimate(low_no_ee, low_no_ee.dependency)
+    s_yes, _ = compute_risk_estimate(low_with_ee, low_with_ee.dependency)
+    assert s_yes > s_no * 2, (
+        f"floor should ~triple a low-CVSS score when exploit evidence "
+        f"is present (no_ee={s_no:.2f}, with_ee={s_yes:.2f})"
+    )

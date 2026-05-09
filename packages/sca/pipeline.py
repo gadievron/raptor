@@ -457,10 +457,26 @@ def run_sca(
     # ``in_kev`` flag with concrete references operators can
     # follow up on. Best-effort: a missing corpus dir leaves
     # findings with empty ``ExploitEvidence``.
+    #
+    # IMPORTANT ordering: findings are scored in step 7 BEFORE
+    # this annotation runs, so the score sees exploit_evidence=None
+    # and skips the EDB/MSF/PoC branch in compute_risk_estimate.
+    # We re-compute raptor_risk_estimate for any finding whose
+    # newly-attached evidence WOULD change the score (non-KEV
+    # finding with at least one signal — KEV-listed findings
+    # already got their boost in step 7 and are unchanged).
     try:
         from .exploit_evidence import annotate_findings as _annotate
         evidence_count = _annotate(vuln_findings)
         if evidence_count:
+            from .risk import compute_risk_estimate as _score
+            for f in vuln_findings:
+                if (f.exploit_evidence is not None
+                        and f.exploit_evidence.has_any
+                        and not f.in_kev):
+                    f.raptor_risk_estimate, f.risk_components = _score(
+                        f, f.dependency,
+                    )
             logger.info(
                 "sca.pipeline: exploit-evidence corpus matched %d "
                 "finding(s)", evidence_count,

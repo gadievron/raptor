@@ -48,6 +48,20 @@ _CVSS_MISSING_DEFAULT = 5.0
 _KEV_FLOOR = 80.0
 _KEV_MULTIPLIER = 1.20
 
+# Exploit-evidence (Exploit-DB / Metasploit / GitHub PoC). KEV's the
+# strongest "actively exploited in the wild" signal, but it covers
+# only ~1500 CVEs. EDB / MSF / PoC each independently testify that a
+# working exploit exists for the CVE — a vuln with a public Metasploit
+# module is materially more dangerous than one whose exploitability
+# is only theoretical, even if it's not in KEV. The 2026-05-09
+# calibration validation found 4 of 7 exploited CVEs ranked at 99,
+# 174, 175, 192/343 because none were KEV-listed despite all being
+# in EDB. Floor is below KEV's so KEV-listed still wins on tied CVSS;
+# multiplier is smaller for the same reason — EDB/MSF/PoC are weaker
+# signals than active CISA-tracked exploitation.
+_EXPLOIT_EVIDENCE_FLOOR = 60.0
+_EXPLOIT_EVIDENCE_MULTIPLIER = 1.10
+
 # EPSS — exploit probability in the wild. Even a 0% EPSS leaves 30%
 # weight (a vuln with no observed exploitation isn't impossible to
 # exploit; the floor reflects "unknown is not zero").
@@ -103,6 +117,8 @@ def compute_risk_estimate(
     cvss_missing = o.get("_CVSS_MISSING_DEFAULT", _CVSS_MISSING_DEFAULT)
     kev_floor = o.get("_KEV_FLOOR", _KEV_FLOOR)
     kev_mult = o.get("_KEV_MULTIPLIER", _KEV_MULTIPLIER)
+    ee_floor = o.get("_EXPLOIT_EVIDENCE_FLOOR", _EXPLOIT_EVIDENCE_FLOOR)
+    ee_mult = o.get("_EXPLOIT_EVIDENCE_MULTIPLIER", _EXPLOIT_EVIDENCE_MULTIPLIER)
     epss_floor = o.get("_EPSS_FLOOR_MULTIPLIER", _EPSS_FLOOR_MULTIPLIER)
     epss_range = o.get("_EPSS_RANGE_MULTIPLIER", _EPSS_RANGE_MULTIPLIER)
     epss_missing = o.get("_EPSS_MISSING_DEFAULT", _EPSS_MISSING_DEFAULT)
@@ -132,6 +148,26 @@ def compute_risk_estimate(
         components["kev_multiplier"] = kev_mult
     else:
         components["kev_multiplier"] = 1.0
+
+    # 2-bis. Exploit evidence (EDB / MSF / GitHub PoC). Independent of
+    # in_kev: a CVE can have a public Metasploit module without being
+    # in CISA's KEV, and that's still a "working exploit exists"
+    # signal we want to surface. KEV-listed findings ALSO get this
+    # bonus on top — multipliers compose, matching the design where
+    # each independent signal nudges the score upward. The floor is
+    # only applied when KEV's floor wasn't (KEV strictly dominates;
+    # we don't want a non-KEV PoC to push above an actually-exploited
+    # KEV vuln on tied CVSS).
+    has_evidence = (
+        finding.exploit_evidence is not None
+        and finding.exploit_evidence.has_any
+        and not finding.in_kev   # not already counted
+    )
+    if has_evidence:
+        base = max(base, ee_floor) * ee_mult
+        components["exploit_evidence_multiplier"] = ee_mult
+    else:
+        components["exploit_evidence_multiplier"] = 1.0
 
     # 3. EPSS: 0..1 probability mapped onto a 0.30..1.00 multiplier.
     epss = finding.epss if finding.epss is not None else epss_missing
@@ -204,6 +240,8 @@ def compute_risk_estimate(
 TUNABLE_CONSTANTS = (
     "_KEV_FLOOR",
     "_KEV_MULTIPLIER",
+    "_EXPLOIT_EVIDENCE_FLOOR",
+    "_EXPLOIT_EVIDENCE_MULTIPLIER",
     "_EPSS_FLOOR_MULTIPLIER",
     "_EPSS_RANGE_MULTIPLIER",
     "_REACH_NOT_REACHABLE_MAX_REDUCTION",

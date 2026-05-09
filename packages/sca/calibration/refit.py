@@ -537,6 +537,26 @@ def _compute_with_overrides(
         or {"level": "high", "reason": ""},
     )
 
+    # ExploitEvidence reconstruction. Without this, refit can't
+    # exercise the EDB / MSF / GitHub-PoC weight branch — every
+    # archived finding would re-score as ``has_evidence=False`` and
+    # the new ``_EXPLOIT_EVIDENCE_*`` constants would have no effect
+    # on the grid search. The archive carries the rendered shape
+    # ({"kev_listed": .., "edb_ids": [...], ...}); we accept None
+    # (older archives written before the field was preserved) as
+    # an empty-evidence shim.
+    from packages.sca.models import ExploitEvidence
+    ee_raw = finding.get("exploit_evidence") or {}
+    if isinstance(ee_raw, dict):
+        ee = ExploitEvidence(
+            kev_listed=bool(ee_raw.get("kev_listed", False)),
+            edb_ids=list(ee_raw.get("edb_ids") or []),
+            msf_modules=list(ee_raw.get("msf_modules") or []),
+            github_poc_urls=list(ee_raw.get("github_poc_urls") or []),
+        )
+    else:
+        ee = None
+
     vf = VulnFinding(
         finding_id=finding.get("finding_id", "?"),
         dependency=dep,
@@ -551,6 +571,7 @@ def _compute_with_overrides(
         severity=finding.get("severity", "low"),
         exposure_factor=float(finding.get("exposure_factor", 0.0)),
         transitive_depth=int(finding.get("transitive_depth", 0)),
+        exploit_evidence=ee,
     )
     return compute_risk_estimate(vf, dep, overrides=overrides)
 
