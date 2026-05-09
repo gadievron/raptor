@@ -501,7 +501,20 @@ class BuildDetector:
     # Note: -I/ (root include) is technically allowed — file permissions are
     # the protection. CodeQL's --source-root prevents system headers from
     # being indexed as project code.
-    _SAFE_FLAG_TOKEN = re.compile(r'^-?[A-Za-z0-9._/+=-]+$')
+    # Pre-fix this used `^...$`. Python regex `$` matches end-of-
+    # string OR just-before-a-trailing-newline, so a flag token
+    # `-DEVIL=$(rm -rf $HOME)\n` passed validation: the trailing
+    # `\n` was eaten by `$`. The safe-flag token then flowed into
+    # the build script as `-DEVIL=$(rm -rf $HOME)` (the newline
+    # got stripped) — and even more dangerously, in some
+    # contexts the embedded `\n` carried through to subprocess
+    # arg lists, where the next process's argv parser saw two
+    # arguments: the flag plus whatever followed the newline.
+    #
+    # Use `\A...\Z` for unambiguous string-boundary anchors:
+    # `\Z` doesn't accept the trailing newline, so the
+    # injection-shaped flag is correctly rejected.
+    _SAFE_FLAG_TOKEN = re.compile(r'\A-?[A-Za-z0-9._/+=-]+\Z')
 
     def _validate_flags(self, flags: list) -> list:
         """Validate and normalise compiler flags.
