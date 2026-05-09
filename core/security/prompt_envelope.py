@@ -176,7 +176,15 @@ _AUTOFETCH_MARKUP_RE = re.compile(
     r'|<style\b[^>]*>'
     r'|@import\s+url\([^)]*\)'
     r'|\[[^\]]+\]:\s*(?:https?|data|javascript|vbscript|file|ftp):[^\s]+'
-    r'|data:[a-zA-Z0-9+./;-]+,[^\s)]*',
+    # Bound the data: URI tail. Pre-fix `[a-zA-Z0-9+./;-]+` (mediatype)
+    # plus `[^\s)]*` (payload) was unbounded — a 10 MB base64-encoded
+    # blob inside a single `data:` URI would force the regex engine to
+    # consume the whole thing before the autofetch defang stripped it
+    # (and the result was a multi-MB string operation in the strip).
+    # Real autofetch defang only cares that the URI EXISTS and gets
+    # neutered; capping the mediatype at 256 chars and the payload at
+    # 64 KB still recognises every realistic case.
+    r'|data:[a-zA-Z0-9+./;-]{1,256},[^\s)]{0,65536}',
     re.IGNORECASE | re.DOTALL,
 )
 
