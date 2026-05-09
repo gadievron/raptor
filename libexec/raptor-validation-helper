@@ -987,6 +987,18 @@ def prepare_F(workdir, target=None):
         print(f"  CVSS scoring error: {e}")
 
     # --- Verdict mapping consistency ---
+    # This guards against future code paths between the verdict-mapping
+    # loop above and this point that mutate `final_status` out from
+    # under the verdict. Today the only intervening code is the
+    # carry-forward loop and CVSS scoring, neither of which touches
+    # final_status for verdict-mapped findings — so MISMATCH won't fire
+    # against the current code path. That's the point: it's an
+    # assertion that catches drift the moment a maintainer adds new
+    # status mutation between the two anchors. Keep it. Pre-fix the
+    # check sat at the bottom of the function unannotated and read as
+    # dead code — a maintainer cleaning up dead checks could have
+    # deleted it without noticing it was load-bearing for the next
+    # change.
     for finding in data.get("findings", []):
         verdict = finding.get("feasibility", {}).get("verdict", "")
         if verdict and verdict in VERDICT_MAP:
