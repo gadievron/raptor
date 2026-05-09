@@ -649,9 +649,23 @@ class DataflowVisualizer:
 
         lines.append("```")
         lines.append("")
-        lines.append(f"**Rule:** `{dataflow.rule_id}`")
+        # Sanitise rule_id and message before embedding in markdown.
+        # CodeQL rule IDs are normally `[a-z0-9/-]+` but the field
+        # type doesn't pin that, and `dataflow.message` is freeform
+        # text that often comes from LLM-extracted analysis or
+        # CodeQL's own warning text. Embedding either directly into
+        # markdown lets a hostile target's source repo contribute
+        # markup (`**bold**`, `![](evil)` autofetch, ANSI / BIDI
+        # control bytes that flip apparent direction) into the
+        # rendered report. `sanitise_string` defangs autofetch
+        # markup + escape_nonprintable; cap at 1 KB so a runaway
+        # message field doesn't bloat the markdown.
+        from core.security.prompt_output_sanitise import sanitise_string
+        safe_rule = sanitise_string(str(dataflow.rule_id), max_chars=256)
+        safe_msg = sanitise_string(str(dataflow.message), max_chars=1024)
+        lines.append(f"**Rule:** `{safe_rule}`")
         lines.append("")
-        lines.append(f"**Message:** {dataflow.message}")
+        lines.append(f"**Message:** {safe_msg}")
 
         if dataflow.sanitizers:
             lines.append("")
