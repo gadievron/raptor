@@ -62,8 +62,29 @@ fi
 [ -z "$PROJECT_DIR" ] && exit 0
 [ ! -d "$PROJECT_DIR" ] && exit 0
 
-# Find the most recent running run
+# Find the most recent running run. Pre-fix the loop walked
+# `$PROJECT_DIR/*/` in BASH GLOB ORDER (lexicographic) and broke
+# at the first dir with status==running:
+#
+#   for d in "$PROJECT_DIR"/*/; do
+#       … if STATUS == running: RUN_DIR=$d; break
+#   done
+#
+# Two simultaneously-active runs (operator launches /scan in one
+# shell, /codeql in another, both write status=running into their
+# own .raptor-run.json) would have the LEX-FIRST dir win. Reads
+# done by Claude Code while /codeql was the actual active run
+# would be silently attributed to the /scan dir (or vice versa) —
+# the wrong manifest grew, and /scan's coverage report at the end
+# included paths it never actually touched. Hard to debug because
+# both runs LOOKED fine; only the per-run coverage attribution
+# was crossed.
+#
+# Pick the running dir with the newest .raptor-run.json mtime
+# (most recently transitioned to running, hence the actual active
+# run). Use stat's portable two-arm form (BSD vs GNU stat).
 RUN_DIR=""
+NEWEST_MTIME=0
 for d in "$PROJECT_DIR"/*/; do
     [ -f "${d}.raptor-run.json" ] || continue
     if [ "$HAVE_JQ" = "1" ]; then
@@ -83,7 +104,14 @@ for d in "$PROJECT_DIR"/*/; do
         # `sys.argv[1]` passes the value as DATA, not code.
         STATUS=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1])).get('status',''))" "${d}.raptor-run.json" 2>/dev/null)
     fi
-    [ "$STATUS" = "running" ] && RUN_DIR="$d" && break
+    [ "$STATUS" = "running" ] || continue
+    # Get mtime in epoch seconds; try GNU stat first, fall back to BSD.
+    MTIME=$(stat -c %Y "${d}.raptor-run.json" 2>/dev/null || stat -f %m "${d}.raptor-run.json" 2>/dev/null)
+    [ -z "$MTIME" ] && MTIME=0
+    if [ "$MTIME" -gt "$NEWEST_MTIME" ] 2>/dev/null; then
+        NEWEST_MTIME=$MTIME
+        RUN_DIR=$d
+    fi
 done
 [ -z "$RUN_DIR" ] && exit 0
 
