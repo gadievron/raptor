@@ -689,9 +689,36 @@ def _matches(c: dict, bundle: DiffBundle) -> bool:
     chs = (c.get("consensus_sha") or "").lower()[:12]
     if not cs or not chs:
         return False
-    # Pipeline's chosen slug is in repo_ref.repository_url (as github URL).
-    repo = bundle.repo_ref.repository_url.lower()
-    if cs not in repo:
+    # Pre-fix `cs not in repo` was a SUBSTRING match of the
+    # consensus slug against the repository URL. Two false-
+    # positive shapes:
+    #
+    #   cs="foo/bar"    matches "https://github.com/EVILfoo/bar-extra"
+    #                   (`foo/bar` is a substring of
+    #                   `EVILfoo/bar-extra`)
+    #
+    #   cs="y/z"        matches "https://github.com/x-y/z-w"
+    #                   (cross-component substring)
+    #
+    # Symptom: consensus check incorrectly reported "✓ matches"
+    # for a repo whose slug HAPPENED to share a substring with
+    # the consensus slug. Misleads operators into trusting a
+    # consensus that didn't actually agree.
+    #
+    # Parse the repo URL path and compare exact slug equality.
+    # `bundle.repo_ref.repository_url` is canonicalised earlier
+    # in the pipeline (https://host/owner/repo[.git]).
+    from urllib.parse import urlparse
+    try:
+        path = urlparse(bundle.repo_ref.repository_url).path
+    except Exception:
+        return False
+    # Strip leading `/` and trailing `.git`/`/` so the path is
+    # the bare `owner/repo` slug.
+    repo_slug = path.lstrip("/").rstrip("/").lower()
+    if repo_slug.endswith(".git"):
+        repo_slug = repo_slug[:-4]
+    if cs != repo_slug:
         return False
     return bundle.commit_after.lower().startswith(chs)
 
