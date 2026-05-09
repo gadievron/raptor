@@ -17,10 +17,14 @@ prompt-builder requires adding the file to that list, which forces an
 explicit security review at file-add time.
 
 Allowlist (:data:`_ALLOWLIST`) carries explicit pre-approved
-``(file, line, attr)`` triples — each entry must include an
-``audit_note`` string explaining why the interpolation is safe (trusted
-source, surrounding envelope, etc.). Without the note the rule rejects
-the entry; this prevents silent grandfathering.
+``(file, func_name, attr, expr_text)`` quadruples — each entry must
+include an ``audit_note`` string explaining why the interpolation is
+safe (trusted source, surrounding envelope, etc.). Without the note
+the rule rejects the entry; this prevents silent grandfathering. Key
+is content-based so the allowlist survives unrelated edits to the
+file (e.g. lines added before the interpolation); a deliberate
+change to the call site itself stops matching and re-fires the
+audit, which is the desired behaviour.
 
 Threat model: an attacker who can publish a package, file a hostile
 GitHub issue, supply CVE metadata, or commit attacker text in a
@@ -117,10 +121,24 @@ class Violation:
 @dataclass(frozen=True)
 class AllowlistEntry:
     """A pre-approved interpolation. Each entry MUST carry an
-    ``audit_note`` explaining why this specific call site is safe."""
+    ``audit_note`` explaining why this specific call site is safe.
+
+    Key shape: ``(file, func_name, attr, expr_text)`` — content-based,
+    deliberately NOT line-based. A line-keyed allowlist breaks every
+    time anything earlier in the file gains or loses a line; a
+    content-keyed allowlist survives those churn events and only
+    re-fires when the actual interpolation site changes (which is
+    when re-audit IS the right outcome).
+
+    ``expr_text`` is the literal text of the interpolation as the
+    AST round-trips it (``ast.unparse``), e.g. ``"{vuln.rule_id}"``
+    or ``"{finding.message}"``. Truncated at 80 chars matching the
+    Violation's ``expr_text``.
+    """
     file: str
-    line: int
+    func_name: str
     attr: str
+    expr_text: str
     audit_note: str
 
 
@@ -128,139 +146,191 @@ class AllowlistEntry:
 # a one-line explanation of why this specific call site is safe
 # despite firing the heuristic. New entries require the same
 # audit-note discipline so reviewers can sanity-check the rationale.
+#
+# Maintenance: when a real call site changes (e.g. operator wraps it
+# in ``neutralize_tag_forgery``), the entry stops matching. Run
+# ``python -m core.security.prompt_envelope_audit --update`` to
+# regenerate the literal — operator reviews the diff (which surfaces
+# any TODO entries for genuinely-new violations) and commits.
 _ALLOWLIST: Tuple[AllowlistEntry, ...] = (
     # ----- packages/codeql/autonomous_analyzer.py -----
     AllowlistEntry(
-        file="packages/codeql/autonomous_analyzer.py", line=607,
-        attr="rule_id",
+        file='packages/codeql/autonomous_analyzer.py',
+        func_name='AutonomousCodeQLAnalyzer.analyze_vulnerability',
+        attr='rule_id',
+        expr_text='{finding.rule_id}',
         audit_note=(
-            "f-string builds the scorecard cell name "
-            "(``codeql:<rule_id>``) for the prefilter producer — "
-            "the value is consumed by ModelScorecard.record_event, "
-            "not interpolated into an LLM prompt"
+            'f-string builds the scorecard cell name '
+            '(``codeql:<rule_id>``) for the prefilter producer — the '
+            'value is consumed by ModelScorecard.record_event, not '
+            'interpolated into an LLM prompt'
         ),
     ),
     AllowlistEntry(
-        file="packages/codeql/autonomous_analyzer.py", line=672,
-        attr="reasoning",
+        file='packages/codeql/autonomous_analyzer.py',
+        func_name='AutonomousCodeQLAnalyzer.analyze_vulnerability',
+        attr='reasoning',
+        expr_text='{dataflow_validation.reasoning}',
         audit_note=(
-            "f-string output flows into ``UntrustedBlock(content=...)`` "
-            "via the dataflow_text variable; ``_content_for_envelope`` "
-            "applies neutralize_tag_forgery at envelope render time"
+            'f-string output flows into ``UntrustedBlock(content=...)`` '
+            'via the dataflow_text variable; ``_content_for_envelope`` '
+            'applies neutralize_tag_forgery at envelope render time'
         ),
     ),
     AllowlistEntry(
-        file="packages/codeql/autonomous_analyzer.py", line=964,
-        attr="rule_id",
-        audit_note="filename construction (DataflowVisualizer finding_id), not LLM prompt",
+        file='packages/codeql/autonomous_analyzer.py',
+        func_name='AutonomousCodeQLAnalyzer.analyze_finding_autonomous',
+        attr='rule_id',
+        expr_text='{finding.rule_id}',
+        audit_note='filename construction (DataflowVisualizer finding_id), not LLM prompt',
     ),
     AllowlistEntry(
-        file="packages/codeql/autonomous_analyzer.py", line=964,
-        attr="start_line",
-        audit_note="filename construction (DataflowVisualizer finding_id), not LLM prompt",
+        file='packages/codeql/autonomous_analyzer.py',
+        func_name='AutonomousCodeQLAnalyzer.analyze_finding_autonomous',
+        attr='start_line',
+        expr_text='{finding.start_line}',
+        audit_note='filename construction (DataflowVisualizer finding_id), not LLM prompt',
     ),
     AllowlistEntry(
-        file="packages/codeql/autonomous_analyzer.py", line=1048,
-        attr="rule_id",
-        audit_note="ID passed to validator.validate_exploit (subprocess invocation), not LLM",
+        file='packages/codeql/autonomous_analyzer.py',
+        func_name='AutonomousCodeQLAnalyzer.analyze_finding_autonomous',
+        attr='rule_id',
+        expr_text='{finding.rule_id}',
+        audit_note=(
+            'ID passed to validator.validate_exploit (subprocess '
+            'invocation), not LLM'
+        ),
     ),
     AllowlistEntry(
-        file="packages/codeql/autonomous_analyzer.py", line=1048,
-        attr="start_line",
-        audit_note="ID passed to validator.validate_exploit (subprocess invocation), not LLM",
+        file='packages/codeql/autonomous_analyzer.py',
+        func_name='AutonomousCodeQLAnalyzer.analyze_finding_autonomous',
+        attr='start_line',
+        expr_text='{finding.start_line}',
+        audit_note=(
+            'ID passed to validator.validate_exploit (subprocess '
+            'invocation), not LLM'
+        ),
     ),
     AllowlistEntry(
-        file="packages/codeql/autonomous_analyzer.py", line=1066,
-        attr="rule_id",
-        audit_note="filename for analysis JSON output (out_dir / ...), not LLM prompt",
+        file='packages/codeql/autonomous_analyzer.py',
+        func_name='AutonomousCodeQLAnalyzer.analyze_finding_autonomous',
+        attr='rule_id',
+        expr_text='{finding.rule_id}',
+        audit_note='filename for analysis JSON output (out_dir / ...), not LLM prompt',
     ),
     AllowlistEntry(
-        file="packages/codeql/autonomous_analyzer.py", line=1066,
-        attr="start_line",
-        audit_note="filename for analysis JSON output (out_dir / ...), not LLM prompt",
+        file='packages/codeql/autonomous_analyzer.py',
+        func_name='AutonomousCodeQLAnalyzer.analyze_finding_autonomous',
+        attr='start_line',
+        expr_text='{finding.start_line}',
+        audit_note='filename for analysis JSON output (out_dir / ...), not LLM prompt',
     ),
     AllowlistEntry(
-        file="packages/codeql/autonomous_analyzer.py", line=1103,
-        attr="rule_id",
-        audit_note="filename / artifact identifier, not LLM prompt",
+        file='packages/codeql/autonomous_analyzer.py',
+        func_name='AutonomousCodeQLAnalyzer.analyze_finding_autonomous',
+        attr='rule_id',
+        expr_text='{finding.rule_id}',
+        audit_note='filename / artifact identifier, not LLM prompt',
     ),
     AllowlistEntry(
-        file="packages/codeql/autonomous_analyzer.py", line=1103,
-        attr="start_line",
-        audit_note="filename / artifact identifier, not LLM prompt",
+        file='packages/codeql/autonomous_analyzer.py',
+        func_name='AutonomousCodeQLAnalyzer.analyze_finding_autonomous',
+        attr='start_line',
+        expr_text='{finding.start_line}',
+        audit_note='filename / artifact identifier, not LLM prompt',
     ),
     # ----- packages/codeql/dataflow_validator.py -----
     AllowlistEntry(
-        file="packages/codeql/dataflow_validator.py", line=575,
-        attr="reasoning",
+        file='packages/codeql/dataflow_validator.py',
+        func_name='DataflowValidator.validate_dataflow_path',
+        attr='reasoning',
+        expr_text='{smt_result.reasoning}',
         audit_note=(
-            "f-string builds DataflowValidation.reasoning return "
-            "field (operator-displayed in reports). The source "
-            "smt_result.reasoning is RAPTOR-internal SMT output, "
-            "not attacker-controlled"
+            'f-string builds DataflowValidation.reasoning return field '
+            '(operator-displayed in reports). The source '
+            'smt_result.reasoning is RAPTOR-internal SMT output, not '
+            'attacker-controlled'
         ),
     ),
     AllowlistEntry(
-        file="packages/codeql/dataflow_validator.py", line=593,
-        attr="rule_id",
-        audit_note="builds scorecard cell name (codeql:<rule_id>), not LLM prompt",
+        file='packages/codeql/dataflow_validator.py',
+        func_name='DataflowValidator.validate_dataflow_path',
+        attr='rule_id',
+        expr_text='{dataflow.rule_id}',
+        audit_note='builds scorecard cell name (codeql:<rule_id>), not LLM prompt',
     ),
     AllowlistEntry(
-        file="packages/codeql/dataflow_validator.py", line=619,
-        attr="reasoning",
+        file='packages/codeql/dataflow_validator.py',
+        func_name='DataflowValidator.validate_dataflow_path',
+        attr='reasoning',
+        expr_text='{smt_result.reasoning}',
         audit_note=(
-            "DataflowValidation.reasoning return field; smt_result "
-            "source is RAPTOR-internal"
+            'DataflowValidation.reasoning return field; smt_result '
+            'source is RAPTOR-internal'
         ),
     ),
     # ----- packages/hypothesis_validation/runner.py -----
     AllowlistEntry(
-        file="packages/hypothesis_validation/runner.py", line=385,
-        attr="summary",
+        file='packages/hypothesis_validation/runner.py',
+        func_name='_evaluate',
+        attr='summary',
+        expr_text='{evidence.summary}',
         audit_note=(
-            "exception-path return value (verdict, reasoning) for "
-            "operator display; reasoning is not directly fed back "
-            "into an LLM prompt by callers"
+            'exception-path return value (verdict, reasoning) for '
+            'operator display; reasoning is not directly fed back into '
+            'an LLM prompt by callers'
         ),
     ),
     AllowlistEntry(
-        file="packages/hypothesis_validation/runner.py", line=402,
-        attr="summary",
+        file='packages/hypothesis_validation/runner.py',
+        func_name='_evaluate',
+        attr='summary',
+        expr_text='{evidence.summary}',
         audit_note=(
-            "exception-path return value (verdict, reasoning) for "
-            "operator display; reasoning is not directly fed back "
-            "into an LLM prompt by callers"
+            'exception-path return value (verdict, reasoning) for '
+            'operator display; reasoning is not directly fed back into '
+            'an LLM prompt by callers'
         ),
     ),
     # ----- packages/llm_analysis/agent.py -----
     AllowlistEntry(
-        file="packages/llm_analysis/agent.py", line=1010,
-        attr="rule_id",
+        file='packages/llm_analysis/agent.py',
+        func_name='AutonomousSecurityAgentV2.generate_patch',
+        attr='rule_id',
+        expr_text='{vuln.rule_id}',
         audit_note=(
-            "patch_content_formatted is markdown saved to disk for "
-            "operator review (.../patches/<id>_patch.md), not an "
-            "LLM prompt"
+            'patch_content_formatted is markdown saved to disk for '
+            'operator review (.../patches/<id>_patch.md), not an LLM '
+            'prompt'
         ),
     ),
     AllowlistEntry(
-        file="packages/llm_analysis/agent.py", line=1012,
-        attr="file_path",
-        audit_note="markdown for disk (operator review file), not LLM prompt",
+        file='packages/llm_analysis/agent.py',
+        func_name='AutonomousSecurityAgentV2.generate_patch',
+        attr='file_path',
+        expr_text='{vuln.file_path}',
+        audit_note='markdown for disk (operator review file), not LLM prompt',
     ),
     AllowlistEntry(
-        file="packages/llm_analysis/agent.py", line=1013,
-        attr="start_line",
-        audit_note="markdown for disk, not LLM prompt",
+        file='packages/llm_analysis/agent.py',
+        func_name='AutonomousSecurityAgentV2.generate_patch',
+        attr='start_line',
+        expr_text='{vuln.start_line}',
+        audit_note='markdown for disk, not LLM prompt',
     ),
     AllowlistEntry(
-        file="packages/llm_analysis/agent.py", line=1013,
-        attr="end_line",
-        audit_note="markdown for disk, not LLM prompt",
+        file='packages/llm_analysis/agent.py',
+        func_name='AutonomousSecurityAgentV2.generate_patch',
+        attr='end_line',
+        expr_text='{vuln.end_line}',
+        audit_note='markdown for disk, not LLM prompt',
     ),
     AllowlistEntry(
-        file="packages/llm_analysis/agent.py", line=1014,
-        attr="level",
-        audit_note="markdown for disk, not LLM prompt",
+        file='packages/llm_analysis/agent.py',
+        func_name='AutonomousSecurityAgentV2.generate_patch',
+        attr='level',
+        expr_text='{vuln.level}',
+        audit_note='markdown for disk, not LLM prompt',
     ),
 )
 
@@ -300,12 +370,25 @@ def audit_file(path: Path) -> List[Violation]:
     def _attr_name(node: ast.AST) -> Optional[str]:
         """Return the attribute name if ``node`` is an Attribute
         access (e.g. ``finding.message`` → ``"message"``). Walks
-        through Subscript and Call to surface the meaningful name."""
+        through Subscript, NamedExpr (walrus), and a few wrapper
+        nodes to surface the meaningful name.
+
+        Walrus is unwrapped so ``f"{(x := finding.message)}"``
+        registers as an interpolation of ``message`` — pre-walrus,
+        the audit returned None for the NamedExpr and missed the
+        attribute access entirely.
+        """
         cur = node
         while True:
             if isinstance(cur, ast.Attribute):
                 return cur.attr
             if isinstance(cur, ast.Subscript):
+                cur = cur.value
+                continue
+            if isinstance(cur, ast.NamedExpr):
+                # Walrus: ``(x := expr)``. The interpolated value IS
+                # ``expr`` (the assignment leaves it as the expression's
+                # result), so unwrap and look at the assigned value.
                 cur = cur.value
                 continue
             return None
@@ -394,13 +477,23 @@ def audit_file(path: Path) -> List[Violation]:
 
     class _Walker(ast.NodeVisitor):
         def __init__(self) -> None:
-            self._fn_stack: List[str] = []
+            # Track both class and function frames so func_name on the
+            # emitted Violation is qualified by enclosing class(es).
+            # Without the class qualifier, two methods named
+            # ``build_prompt`` in different classes within the same
+            # audited file would emit identical func_name and the
+            # content-keyed allowlist would collapse them — masking a
+            # legitimate per-class audit decision. Frames are
+            # ``(kind, name)`` so the ``_qualified_func_name`` builder
+            # can reconstruct dotted paths like
+            # ``AnalysisTask.build_prompt``.
+            self._fn_stack: List[Tuple[str, str]] = []  # (kind, name)
             self._parent_stack: List[ast.AST] = []
 
-        def _enter_fn(self, name: str) -> None:
-            self._fn_stack.append(name)
+        def _enter(self, kind: str, name: str) -> None:
+            self._fn_stack.append((kind, name))
 
-        def _leave_fn(self) -> None:
+        def _leave(self) -> None:
             if self._fn_stack:
                 self._fn_stack.pop()
 
@@ -411,28 +504,55 @@ def audit_file(path: Path) -> List[Violation]:
             finally:
                 self._parent_stack.pop()
 
-        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-            self._enter_fn(node.name)
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            self._enter("class", node.name)
             self.generic_visit(node)
-            self._leave_fn()
+            self._leave()
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self._enter("function", node.name)
+            self.generic_visit(node)
+            self._leave()
 
         def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-            self._enter_fn(node.name)
+            self._enter("function", node.name)
             self.generic_visit(node)
-            self._leave_fn()
+            self._leave()
+
+        def visit_Lambda(self, node: ast.Lambda) -> None:
+            # ``ast.Lambda`` is a separate node type from FunctionDef, so
+            # the existing FunctionDef visitor doesn't push a frame for
+            # lambdas. Without a frame, an interpolation inside a lambda
+            # bound to a class attribute would emit func_name as the
+            # enclosing class — making per-lambda audit decisions
+            # collide. Push ``<lambda>`` so the dotted path becomes e.g.
+            # ``A.<lambda>`` and per-lambda allowlist entries stay
+            # distinct from per-method ones.
+            self._enter("function", "<lambda>")
+            self.generic_visit(node)
+            self._leave()
+
+        def _qualified_func_name(self) -> str:
+            """Build a dotted path from the active class+function stack.
+            Module-level interpolations get ``<module>``; standalone
+            functions emit just the function name; methods emit
+            ``ClassName.method`` (or ``Outer.Inner.method`` for nested).
+            """
+            if not self._fn_stack:
+                return "<module>"
+            return ".".join(name for _kind, name in self._fn_stack)
 
         def _emit(self, node: ast.AST, attr: str) -> None:
             try:
                 src = ast.unparse(node)
             except (AttributeError, ValueError):
                 src = f"<{attr}>"
-            fn_name = self._fn_stack[-1] if self._fn_stack else "<module>"
             violations.append(Violation(
                 file=rel,
                 line=node.lineno,
                 attr=attr,
                 expr_text=src[:80],
-                func_name=fn_name,
+                func_name=self._qualified_func_name(),
             ))
 
         def visit_FormattedValue(self, node: ast.FormattedValue) -> None:
@@ -489,6 +609,52 @@ def audit_file(path: Path) -> List[Violation]:
                             self._emit(kw.value, attr)
             self.generic_visit(node)
 
+        def visit_BinOp(self, node: ast.BinOp) -> None:
+            """Catch old-style %-formatting:
+
+              * ``"prefix %s" % finding.attr``     — single value
+              * ``"%s %s" % (a.attr, b.attr)``     — tuple of values
+              * ``"%(k)s" % {"k": finding.attr}``  — dict of values
+
+            Same threat as `.format()` and f-strings: untrusted-attr
+            text lands in a string that downstream code may feed to an
+            LLM. Plain `+` concatenation is NOT caught here — that has
+            a high FP rate without dataflow and is documented as a
+            known limitation. %-formatting is narrow enough (must be a
+            string-literal left side) that we can flag it cleanly.
+            """
+            if not isinstance(node.op, ast.Mod):
+                self.generic_visit(node)
+                return
+            # Only fire when the left side is a string literal — the
+            # `%` operator is also numeric modulo, and a numeric
+            # ``x % y`` shouldn't be flagged.
+            left = node.left
+            is_string = (
+                (isinstance(left, ast.Constant) and isinstance(left.value, str))
+                or isinstance(left, ast.JoinedStr)  # f-string with %
+            )
+            if not is_string:
+                self.generic_visit(node)
+                return
+            # Right side: extract candidate value nodes.
+            right = node.right
+            candidates: List[ast.AST] = []
+            if isinstance(right, ast.Tuple):
+                candidates.extend(right.elts)
+            elif isinstance(right, ast.Dict):
+                candidates.extend(v for v in right.values if v is not None)
+            else:
+                candidates.append(right)
+            for cand in candidates:
+                attr = _attr_name(cand)
+                if (attr in _UNTRUSTED_ATTRS
+                        and not _is_sanitised(cand)
+                        and not _is_in_non_llm_call(self._parent_stack)
+                        and not _is_in_envelope_constructor(self._parent_stack)):
+                    self._emit(cand, attr)
+            self.generic_visit(node)
+
     _Walker().visit(tree)
     return violations
 
@@ -509,10 +675,13 @@ def filter_allowlisted(
     allowlist: Tuple[AllowlistEntry, ...] = _ALLOWLIST,
 ) -> List[Violation]:
     """Drop violations that match an allowlist entry. Match key:
-    ``(file, line, attr)`` triple. Pre-approved entries with an
-    ``audit_note`` describing why they're safe."""
-    keys = {(e.file, e.line, e.attr) for e in allowlist}
-    return [v for v in violations if (v.file, v.line, v.attr) not in keys]
+    ``(file, func_name, attr, expr_text)`` quadruple — content-based,
+    not line-based, so unrelated edits don't trigger re-audit."""
+    keys = {(e.file, e.func_name, e.attr, e.expr_text) for e in allowlist}
+    return [
+        v for v in violations
+        if (v.file, v.func_name, v.attr, v.expr_text) not in keys
+    ]
 
 
 def render_violations(violations: Iterable[Violation]) -> str:
@@ -531,11 +700,201 @@ def render_violations(violations: Iterable[Violation]) -> str:
     return "\n".join(lines)
 
 
+def render_allowlist(
+    violations: Iterable[Violation],
+    allowlist: Tuple[AllowlistEntry, ...] = _ALLOWLIST,
+) -> str:
+    """Re-emit the ``_ALLOWLIST`` literal as a Python source fragment.
+
+    Strategy: **purely additive**. Existing entries are carried
+    over verbatim (preserving each entry's specific audit_note even
+    when several entries share the same content key — multiple call
+    sites in one function with the same f-string can have legitimately
+    different rationales). Violations that don't match ANY existing
+    entry by content key are appended as new entries with a
+    ``TODO: audit_note required`` placeholder; the audit then rejects
+    these until the operator fills in a real note.
+
+    Stale entries (allowlist entries whose content key no longer
+    appears in the audit) are dropped — that's the actual cleanup
+    benefit of running ``--update`` after a deliberate refactor.
+
+    Used by the ``--update`` CLI mode below.
+    """
+    import textwrap as _tw
+    # Set of keys present in the current code.
+    live_keys = {(v.file, v.func_name, v.attr, v.expr_text) for v in violations}
+    # Set of keys already covered by an allowlist entry.
+    covered_keys = {(e.file, e.func_name, e.attr, e.expr_text) for e in allowlist}
+
+    def _emit_entry(file: str, func_name: str, attr: str,
+                    expr_text: str, note: str, lines: List[str]) -> None:
+        lines.append("    AllowlistEntry(")
+        lines.append(f"        file={file!r},")
+        lines.append(f"        func_name={func_name!r},")
+        lines.append(f"        attr={attr!r},")
+        lines.append(f"        expr_text={expr_text!r},")
+        if len(note) < 70:
+            lines.append(f"        audit_note={note!r},")
+        else:
+            wrapped = _tw.wrap(note, width=58)
+            lines.append("        audit_note=(")
+            for i, line in enumerate(wrapped):
+                suffix = "" if i == len(wrapped) - 1 else " "
+                lines.append(f"            {(line + suffix)!r}")
+            lines.append("        ),")
+        lines.append("    ),")
+
+    # Bucket existing entries by file (preserves authoring order).
+    existing_by_file: dict[str, List[AllowlistEntry]] = {}
+    for e in allowlist:
+        # Drop entries whose call site no longer exists in current
+        # code — that's the cleanup half of `--update`.
+        if (e.file, e.func_name, e.attr, e.expr_text) not in live_keys:
+            continue
+        existing_by_file.setdefault(e.file, []).append(e)
+
+    # Bucket genuinely-new violations by file (deduped by content key).
+    new_by_file: dict[str, List[Violation]] = {}
+    seen_new: set = set()
+    for v in violations:
+        key = (v.file, v.func_name, v.attr, v.expr_text)
+        if key in covered_keys or key in seen_new:
+            continue
+        seen_new.add(key)
+        new_by_file.setdefault(v.file, []).append(v)
+
+    out: List[str] = ["_ALLOWLIST: Tuple[AllowlistEntry, ...] = ("]
+    files = sorted(set(existing_by_file) | set(new_by_file))
+    for file in files:
+        out.append(f"    # ----- {file} -----")
+        for e in existing_by_file.get(file, []):
+            _emit_entry(e.file, e.func_name, e.attr, e.expr_text,
+                        e.audit_note, out)
+        for v in new_by_file.get(file, []):
+            _emit_entry(v.file, v.func_name, v.attr, v.expr_text,
+                        "TODO: audit_note required — explain why this site is safe",
+                        out)
+    out.append(")")
+    return "\n".join(out)
+
+
+def _update_allowlist_in_source(source_path: Path) -> int:
+    """In-place rewrite of the ``_ALLOWLIST`` literal in
+    ``source_path``, preserving everything before/after it. Returns
+    the number of violations the new allowlist covers.
+
+    The rewrite locates the ``_ALLOWLIST: Tuple`` line and the
+    matching closing ``)`` at column 0, replacing the slice between
+    them. That's sufficient because the literal is always formatted
+    with the closing paren on its own column-0 line.
+
+    Atomic write: produces the new content in a sibling tempfile and
+    then ``os.replace`` swaps it into place. Without this an
+    interrupted ``--update`` (Ctrl-C, OOM kill, sandbox preempt) could
+    leave the audit module half-written on disk and break every
+    subsequent import — including the audit's own test, blocking
+    recovery via the same CLI.
+    """
+    import os
+    import tempfile
+    text = source_path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        if line.startswith("_ALLOWLIST: Tuple"):
+            start = i
+            break
+    if start is None:
+        raise RuntimeError("could not locate `_ALLOWLIST: Tuple` in source")
+    end = None
+    for j in range(start + 1, len(lines)):
+        if lines[j] == ")":
+            end = j
+            break
+    if end is None:
+        raise RuntimeError("could not locate closing `)` of _ALLOWLIST")
+
+    violations = audit_repo()
+    new_block = render_allowlist(violations).splitlines()
+    out_lines = lines[:start] + new_block + lines[end + 1 :]
+    new_text = "\n".join(out_lines) + "\n"
+
+    # Atomic write: write to a sibling tempfile, then os.replace.
+    # NamedTemporaryFile with delete=False so we can keep the path
+    # alive past the ``with`` block; cleanup-on-error handled below.
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=source_path.name + ".",
+        suffix=".tmp",
+        dir=source_path.parent,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(new_text)
+        os.replace(tmp_path, source_path)
+    except Exception:
+        # If anything went wrong before the replace, drop the partial
+        # tempfile so it doesn't litter the source tree.
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    return len(violations)
+
+
+def _main(argv: Optional[List[str]] = None) -> int:
+    """``python -m core.security.prompt_envelope_audit [--update]``
+
+    Without ``--update``: prints the current violation set + which
+    entries the allowlist already covers vs which are unmatched.
+    Useful for a quick "what would CI see right now?" check.
+
+    With ``--update``: regenerates the ``_ALLOWLIST`` literal in this
+    module's own source. Operator reviews the diff (any new violations
+    appear with a ``TODO: audit_note`` placeholder that the audit
+    rejects until filled in) and commits.
+    """
+    import argparse
+    parser = argparse.ArgumentParser(
+        prog="prompt_envelope_audit",
+        description="Run / regenerate the prompt-envelope audit allowlist.",
+    )
+    parser.add_argument(
+        "--update", action="store_true",
+        help="Regenerate the _ALLOWLIST literal in-place from current "
+             "code (carries existing audit_notes forward, marks new "
+             "entries with a TODO).",
+    )
+    args = parser.parse_args(argv)
+
+    if args.update:
+        n = _update_allowlist_in_source(Path(__file__))
+        print(f"Updated _ALLOWLIST: {n} entries written.")
+        return 0
+    violations = audit_repo()
+    remaining = filter_allowlisted(violations)
+    print(f"Audited {len(_PROMPT_CONSTRUCTION_FILES)} files; "
+          f"found {len(violations)} interpolations, "
+          f"{len(violations) - len(remaining)} allowlisted, "
+          f"{len(remaining)} unmatched.")
+    if remaining:
+        print(render_violations(remaining))
+        return 1
+    return 0
+
+
 __all__ = [
     "Violation",
     "AllowlistEntry",
     "audit_file",
     "audit_repo",
     "filter_allowlisted",
+    "render_allowlist",
     "render_violations",
 ]
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(_main())
