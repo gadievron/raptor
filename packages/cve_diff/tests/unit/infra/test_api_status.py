@@ -104,9 +104,9 @@ def test_api_key_status_present_and_missing(monkeypatch) -> None:
 def test_llm_auth_status_reflects_central_env_var_list(monkeypatch) -> None:
     """``llm_auth_status`` reads the LLM-provider env-var list from
     ``RaptorConfig.LLM_API_KEY_VARS`` (single source of truth) — no
-    cve-diff-local enumeration. Setting any provider's env var shows
-    up; setting RAPTOR_LLM_SOCKET also surfaces."""
-    # Clear all LLM provider env vars to start from a known state.
+    cve-diff-local enumeration. Result is a *count* of configured
+    vars, not their names — see ``llm_auth_status`` docstring for
+    the CodeQL-false-positive rationale."""
     from core.config import RaptorConfig
     for var in RaptorConfig.LLM_API_KEY_VARS:
         monkeypatch.delenv(var, raising=False)
@@ -114,9 +114,8 @@ def test_llm_auth_status_reflects_central_env_var_list(monkeypatch) -> None:
 
     monkeypatch.setenv("GEMINI_API_KEY", "g")
     monkeypatch.setenv("MISTRAL_API_KEY", "m")
-    _, configured, via_dispatcher = api_status.llm_auth_status()
-    assert "GEMINI_API_KEY" in configured
-    assert "MISTRAL_API_KEY" in configured
+    _, n_configured, via_dispatcher = api_status.llm_auth_status()
+    assert n_configured == 2
     assert via_dispatcher is False
 
     monkeypatch.setenv("RAPTOR_LLM_SOCKET", "/tmp/fake.sock")
@@ -124,10 +123,31 @@ def test_llm_auth_status_reflects_central_env_var_list(monkeypatch) -> None:
     assert via_dispatcher is True
 
 
+def test_banner_does_not_leak_provider_env_var_names(monkeypatch) -> None:
+    """The banner must not name specific LLM-provider env vars.
+    CodeQL flags ``LLM_API_KEY_VARS`` strings flowing into print
+    as a clear-text-credential leak (false positive — the strings
+    are env-var *names*, not values), and the count-only design is
+    cheaper than arguing with the heuristic. Pin so a future
+    "helpful" PR doesn't put them back into the output."""
+    from core.config import RaptorConfig
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
+    banner = api_status.render_startup_banner()
+    # No provider env-var name appears verbatim:
+    for var in RaptorConfig.LLM_API_KEY_VARS:
+        assert var not in banner, (
+            f"banner leaks provider env-var name {var!r} — "
+            f"CodeQL will flag this as clear-text credential "
+            f"logging. Use the count-only output."
+        )
+
+
 def test_startup_banner_shows_set_and_missing(monkeypatch) -> None:
-    """LLM auth is now rendered in its own ``LLM auth:`` section
-    rather than inline in ``API keys:``. Anthropic-via-env shows up
-    as a configured provider env var; GitHub/NVD render as before."""
+    """LLM auth is rendered in its own ``LLM auth:`` section as a
+    count of configured providers (see ``llm_auth_status``).
+    GitHub/NVD render with their full names as before."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("NVD_API_KEY", raising=False)
@@ -135,9 +155,10 @@ def test_startup_banner_shows_set_and_missing(monkeypatch) -> None:
 
     banner = api_status.render_startup_banner()
     assert "API keys:" in banner
-    # Anthropic is now in the LLM-auth section (env-var name).
+    # LLM auth section present with a count, no specific env var
+    # name (CodeQL-false-positive defuse):
     assert "LLM auth:" in banner
-    assert "ANTHROPIC_API_KEY" in banner
+    assert "1 LLM provider env var" in banner
     # NVD is optional → "—" tag, not "✗"
     assert "✗ GitHub" in banner
     assert "— NVD" in banner or "NVD       (NVD_API_KEY) NOT set" in banner

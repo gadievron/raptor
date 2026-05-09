@@ -102,23 +102,32 @@ def api_key_status() -> list[tuple[ApiKeySpec, bool]]:
     return [(s, bool(os.environ.get(s.env_var))) for s in _KEYS]
 
 
-def llm_auth_status() -> tuple[bool, list[str], bool]:
+def llm_auth_status() -> tuple[bool, int, bool]:
     """Resolve the LLM-auth picture for startup-banner rendering.
 
-    Returns ``(any_auth, configured_env_vars, via_dispatcher)``.
-    ``configured_env_vars`` is the subset of
-    ``RaptorConfig.LLM_API_KEY_VARS`` that's currently set in env.
-    ``via_dispatcher`` reflects ``RAPTOR_LLM_SOCKET``.
+    Returns ``(any_auth, num_configured, via_dispatcher)``. We
+    deliberately project the configured-env-var list down to a
+    *count* before this function returns — the env-var names
+    themselves never flow into the rendering pipeline. CodeQL's
+    ``py/clear-text-logging-sensitive-data`` heuristic flags any
+    string from a list named ``LLM_API_KEY_VARS`` reaching a
+    print-call as a credential-leak suspicion, even when the
+    strings are env-var *names* rather than values. Returning a
+    count is the cheapest way to break the dataflow taint without
+    re-introducing a cve-diff-local enumeration of provider env
+    vars (the central :data:`core.config.RaptorConfig.LLM_API_KEY_VARS`
+    stays the only source of truth).
     """
     via_dispatcher = bool(os.environ.get("RAPTOR_LLM_SOCKET"))
-    configured = [v for v in _llm_provider_env_vars()
-                  if os.environ.get(v)]
+    num_configured = sum(
+        1 for v in _llm_provider_env_vars() if os.environ.get(v)
+    )
     # Claude Code OAuth fallback always authenticates Anthropic
     # models when the binary is on PATH; we treat that as
     # operator-facing "always available" rather than probing PATH
     # at startup.
-    any_auth = via_dispatcher or bool(configured) or True  # CC fallback
-    return any_auth, configured, via_dispatcher
+    any_auth = via_dispatcher or num_configured > 0 or True  # CC fallback
+    return any_auth, num_configured, via_dispatcher
 
 
 def render_startup_banner() -> str:
@@ -140,11 +149,15 @@ def render_startup_banner() -> str:
                 f"— {spec.when_missing}"
             )
 
-    # LLM auth — model-agnostic; show every configured env var plus
-    # the dispatcher route. Operator with no provider key + no
+    # LLM auth — model-agnostic; show count of configured env vars
+    # + the dispatcher route. Operator with no provider key + no
     # dispatcher still has the Claude Code OAuth fallback for
     # Anthropic models, so the worst-case is "limited to claude-*".
-    _, configured_vars, via_dispatcher = llm_auth_status()
+    # Operators wanting to know which specific provider env vars
+    # are set can run ``env | grep _API_KEY`` — we deliberately
+    # don't enumerate names here (see ``llm_auth_status`` docstring
+    # for the CodeQL false-positive rationale).
+    _, n_configured, via_dispatcher = llm_auth_status()
     lines.append("LLM auth:")
     if via_dispatcher:
         lines.append(
@@ -152,11 +165,11 @@ def render_startup_banner() -> str:
             "(RAPTOR_LLM_SOCKET set — provider keys handled by "
             "dispatcher, not in worker env)"
         )
-    if configured_vars:
+    if n_configured > 0:
         lines.append(
-            f"  ✓ provider env vars set: {', '.join(configured_vars)}"
+            f"  ✓ {n_configured} LLM provider env var(s) set"
         )
-    if not via_dispatcher and not configured_vars:
+    if not via_dispatcher and n_configured == 0:
         lines.append(
             "  — no LLM provider env var and no dispatcher; cve-diff "
             "will fall back to Claude Code OAuth for Anthropic models. "
