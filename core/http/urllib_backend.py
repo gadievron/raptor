@@ -148,7 +148,25 @@ class UrllibClient:
         ``is not None`` check catches the empty-string variant returned
         by urlsplit for adversarial forms like ``http://@evil.com/``.
         """
-        parsed = _urlparse.urlsplit(url)
+        # Pre-fix `_urlparse.urlsplit(url)` raised ValueError
+        # directly for malformed inputs:
+        #
+        #   * IPv6 with bad brackets: `http://[invalid::ipv6/`
+        #   * URL containing NUL byte: `http://a\x00b/`
+        #   * URL with port out of range: `http://h:99999/`
+        #     (`int(port)` raises ValueError downstream).
+        #
+        # Callers expect _validate_url to raise HttpError ONLY,
+        # so they can catch a single exception class. The leaked
+        # ValueError bypassed caller error-handling and surfaced
+        # as an opaque traceback. Wrap urlsplit so the
+        # contract holds.
+        try:
+            parsed = _urlparse.urlsplit(url)
+        except ValueError as exc:
+            raise HttpError(
+                f"Refused malformed URL: {exc}"
+            ) from exc
         if parsed.scheme not in self._ALLOWED_SCHEMES:
             permitted = "/".join(self._ALLOWED_SCHEMES)
             raise HttpError(
