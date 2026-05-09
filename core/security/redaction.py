@@ -183,7 +183,13 @@ def redact_secrets(value: object, *, reveal_secrets: bool = False) -> str:
     # match length — operator-supplied logs containing such a
     # string took O(n) per redact_secrets() call, multiplied
     # across every record processed by reporters.
-    text = re.sub(r"https?://[^\s'\"<>]{1,8192}", _redact_url, text)
+    # `()` added to exclusions so URLs in prose (`see https://example.com/`
+    # at end of sentence, or `(https://example.com/?token=abc)`)
+    # don't have the trailing punctuation captured as URL chars
+    # — `_redact_url`'s urlsplit then includes the `)` in the
+    # path/query and the redacted output preserves the malformed
+    # tail visible in logs.
+    text = re.sub(r"https?://[^\s'\"<>()]{1,8192}", _redact_url, text)
 
     # Redact common authorization header schemes from logs and finding metadata.
     text = re.sub(
@@ -238,5 +244,11 @@ def redact_url_secrets_only(value: object, *, reveal_secrets: bool = False) -> s
     # match length — operator-supplied logs containing such a
     # string took O(n) per redact_secrets() call, multiplied
     # across every record processed by reporters.
-    text = re.sub(r"https?://[^\s'\"<>]{1,8192}", _redact_url, text)
+    # `()` added to exclusions so URLs in prose (`see https://example.com/`
+    # at end of sentence, or `(https://example.com/?token=abc)`)
+    # don't have the trailing punctuation captured as URL chars
+    # — `_redact_url`'s urlsplit then includes the `)` in the
+    # path/query and the redacted output preserves the malformed
+    # tail visible in logs.
+    text = re.sub(r"https?://[^\s'\"<>()]{1,8192}", _redact_url, text)
     return text
