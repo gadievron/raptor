@@ -650,7 +650,29 @@ def bench(
     summary_path = output_dir / "summary.json"
 
     def _flush() -> None:
-        summary_path.write_text(json.dumps(asdict(summary), indent=2) + "\n")
+        # Atomic write. Pre-fix `summary_path.write_text(...)` was
+        # non-atomic — `_flush` is called after every CVE in a long
+        # bench run (a 100-CVE bench takes 30+ minutes), and the
+        # operator routinely reads `summary.json` mid-run to track
+        # progress. A reader catching the file mid-write got partial
+        # JSON and JSONDecode-crashed. Worse, a process kill
+        # mid-write left summary.json corrupted at end-of-run, with
+        # no easy recovery (the per-CVE results are scattered across
+        # `_run_one` outputs). Temp+rename keeps every observable
+        # state of summary.json complete.
+        import os as _os
+        tmp = summary_path.with_name(
+            f"{summary_path.name}.tmp.{_os.getpid()}"
+        )
+        try:
+            tmp.write_text(json.dumps(asdict(summary), indent=2) + "\n")
+            _os.replace(str(tmp), str(summary_path))
+        except BaseException:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
     if workers <= 1:
         for i, cve_id in enumerate(cves, 1):
