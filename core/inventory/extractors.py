@@ -226,12 +226,22 @@ class JavaScriptExtractor:
         r'^\s+(?:async\s+)?(\w+)\s*\([^)]*\)\s*\{',
         r'(\w+)\s*:\s*(?:async\s+)?(?:function\s*)?\([^)]*\)\s*(?:=>)?\s*\{',
     ]
+    # Several patterns repeat `\s*` between optional tokens. On a long
+    # whitespace-only run that fails the structural part, the engine
+    # backtracks each `\s*` separately. Cap line length before applying
+    # any of the JS patterns. Real JS is rarely linted to >120 chars;
+    # 16 KB allows minified single-line modules through up to a
+    # reasonable bound while refusing pathological input (a single
+    # 100 MB minified bundle would otherwise sit in this loop).
+    _MAX_JS_LINE = 16 * 1024
 
     def extract(self, filepath: str, content: str) -> List[FunctionInfo]:
         functions = []
         seen = set()
 
         for i, line in enumerate(content.split('\n'), 1):
+            if len(line) > self._MAX_JS_LINE:
+                continue
             for pattern in self.PATTERNS:
                 match = re.search(pattern, line)
                 if match:
