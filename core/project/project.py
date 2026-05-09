@@ -183,7 +183,19 @@ class ProjectManager:
     # Project names must match: alphanumeric, hyphens, dots (not leading).
     # This prevents shell metacharacters, control characters, spaces, and
     # path separators from ever appearing in filenames or directory names.
-    _NAME_PATTERN = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*$')
+    #
+    # `\A` / `\Z` instead of `^` / `$`. Pre-fix `^...$` plus `re.match`
+    # would have accepted `"validproject\n"` (or any project name with
+    # a trailing newline) — Python's `$` matches just before a trailing
+    # newline. The newline-suffixed name then flows into the
+    # `<projects_dir>/<name>.json` filename, where the literal newline
+    # in the path produces an unreadable file (most filesystems accept
+    # newlines in names but downstream tools — shell glob, ls,
+    # operator's grep — break on them). The `re.fullmatch` semantics
+    # below would also fix this, but anchoring on `\A`/`\Z` keeps the
+    # pre-existing `re.match` call site working and makes the strict
+    # boundary visible in the pattern itself.
+    _NAME_PATTERN = re.compile(r'\A[a-zA-Z0-9][a-zA-Z0-9._-]*\Z')
 
     @classmethod
     def _validate_name(cls, name: str) -> None:
