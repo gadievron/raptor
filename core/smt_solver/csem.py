@@ -187,12 +187,30 @@ def ssub_overflows(a: Any, b: Any) -> Any:
 
 
 def umul_overflows(a: Any, b: Any) -> Any:
-    """Unsigned multiplication wraps around."""
+    """Unsigned multiplication wraps around.
+
+    Asymmetry vs `smul_overflows`: unsigned has no negative range,
+    so there's no `BVMulNoUnderflow` complement to add. `BVMulNoOverflow`
+    with `signed=False` is the only condition that defines wrap.
+    Pre-fix the lack of comment made the asymmetry look like a bug
+    (signed has TWO clauses, unsigned has ONE — was the unsigned
+    side missing a check?). It isn't: there's no smaller-than-zero
+    region to underflow into for unsigned arithmetic.
+    """
     return z3.Not(z3.BVMulNoOverflow(a, b, signed=False))
 
 
 def smul_overflows(a: Any, b: Any) -> Any:
-    """Signed multiplication overflows in either direction."""
+    """Signed multiplication overflows in either direction.
+
+    Two clauses (Or):
+      - `BVMulNoOverflow(signed=True)` covers positive overflow
+        (result wraps off the high end into negative).
+      - `BVMulNoUnderflow` covers the dual: result wraps off the
+        low end into positive.
+    See `umul_overflows` for why the unsigned variant has only
+    one clause.
+    """
     return z3.Or(
         z3.Not(z3.BVMulNoOverflow(a, b, signed=True)),
         z3.Not(z3.BVMulNoUnderflow(a, b)),
