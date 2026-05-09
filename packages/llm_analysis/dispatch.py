@@ -417,9 +417,24 @@ def dispatch_task(
                 # usage, breaking telemetry, cost-per-token
                 # diagnostics, and the model-economy reports the
                 # operator UI surfaces.
-                if item_cost > 0:
-                    model_name = processed.get("analysed_by", "unknown")
-                    item_tokens = getattr(dispatch_result, "tokens", 0) or 0
+                # Pre-fix the gate was `if item_cost > 0:`,
+                # which dropped CC zero-cost responses entirely
+                # — neither the cost (0, fine) NOR the TOKEN
+                # COUNT got recorded. CC subprocess invocations
+                # (`claude -p`) are billed at the parent layer
+                # but produce real token usage that the
+                # downstream model-economy report needs to
+                # surface.
+                #
+                # Run the gate as `cost > 0 OR tokens > 0`:
+                # zero-cost responses with token usage still
+                # contribute to token telemetry, while
+                # truly-empty responses (no cost, no tokens —
+                # error envelopes, immediate refusals) skip
+                # cleanly.
+                model_name = processed.get("analysed_by", "unknown")
+                item_tokens = getattr(dispatch_result, "tokens", 0) or 0
+                if item_cost > 0 or item_tokens > 0:
                     cost_tracker.add_cost(model_name, item_cost, tokens=item_tokens)
 
                 # Progress line
