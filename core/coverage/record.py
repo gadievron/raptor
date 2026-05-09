@@ -200,15 +200,47 @@ def build_from_findings(findings_path: Path, reads_manifest_path: Path = None,
             functions.append({"file": file_path, "function": func})
             finding_files.add(file_path)
 
-    # Files examined (from reads manifest)
+    # Files examined (from reads manifest).
+    #
+    # Pre-fix `read_text().splitlines()` materialised the entire
+    # manifest into memory in two passes — once as a single
+    # string, then split into a list of lines. For a long-running
+    # /agentic session that read tens of thousands of files, the
+    # manifest can grow to multi-MB; in adversarial cases (a
+    # PostToolUse hook fires on every Read, an LLM in a tight
+    # loop reads thousands of small files), the manifest can
+    # reach hundreds of MB. The double-buffering then took
+    # 2x peak RSS just for the read.
+    #
+    # Cap the read at 64 MB. Legitimate /agentic runs produce
+    # manifests under 5 MB even on large monorepos; 64 MB is a
+    # generous ceiling. Stream line-by-line so the manifest
+    # isn't fully buffered. On read failure (OSError), the cap
+    # is irrelevant — we just skip.
+    _MANIFEST_CAP = 64 * 1024 * 1024
     read_files = set()
     if reads_manifest_path and reads_manifest_path.exists():
         try:
-            # Same rstrip-only rationale as the helper above.
-            for line in reads_manifest_path.read_text().splitlines():
-                line = line.rstrip("\r\n")
-                if line:
-                    read_files.add(line)
+            with open(reads_manifest_path, "r", encoding="utf-8",
+                      errors="replace") as f:
+                bytes_read = 0
+                for line in f:
+                    bytes_read += len(line)
+                    if bytes_read > _MANIFEST_CAP:
+                        # Cap hit — log and stop. The remaining
+                        # entries don't make it into the
+                        # coverage record. Better partial than
+                        # OOM.
+                        import logging
+                        logging.getLogger(__name__).warning(
+                            "coverage manifest %s exceeded %d-byte cap; "
+                            "truncating coverage record (read %d files)",
+                            reads_manifest_path, _MANIFEST_CAP, len(read_files),
+                        )
+                        break
+                    line = line.rstrip("\r\n")
+                    if line:
+                        read_files.add(line)
         except OSError:
             pass
 
