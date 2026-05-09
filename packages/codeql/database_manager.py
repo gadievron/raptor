@@ -755,6 +755,27 @@ class DatabaseManager:
                 did_promote = False
                 used_cached = False
                 try:
+                    # Pre-flight existence check. `os.rename` on Linux
+                    # silently SUCCEEDS when the target is an empty
+                    # directory — it replaces the empty dir without
+                    # raising ENOTEMPTY. A sibling that created
+                    # `canonical_path` as a placeholder (e.g. via
+                    # `mkdir`-as-lock pattern in some other tool, or a
+                    # half-initialised promote-in-progress state) would
+                    # have its empty dir silently overwritten by our
+                    # staging — the lost-race branch never fires and we
+                    # don't validate the sibling's intent. Raise
+                    # FileExistsError manually so the existing
+                    # ENOTEMPTY/EEXIST handler treats this case the
+                    # same as a populated-target collision.
+                    if canonical_path.exists():
+                        raise FileExistsError(
+                            errno.EEXIST,
+                            "canonical_path exists pre-rename "
+                            "(possibly empty placeholder); routing "
+                            "through lost-race handler",
+                            str(canonical_path),
+                        )
                     os.rename(staging_path, canonical_path)
                     logger.info(f"✓ Database promoted to canonical: {canonical_path}")
                     did_promote = True
