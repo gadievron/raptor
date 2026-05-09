@@ -683,7 +683,15 @@ class DatabaseManager:
                 build_script = Path(script_name)
                 try:
                     build_script.write_text(f"#!/bin/bash\n{build_cmd}\n")
-                    build_script.chmod(build_script.stat().st_mode | stat.S_IEXEC)
+                    # 0o500 (read+execute, no write) for parity with
+                    # `build_detector.py:871`'s synthesised-script mode
+                    # — TOCTOU mitigation: a separate process can't
+                    # modify the script between our write and CodeQL's
+                    # exec. Pre-fix the chmod was
+                    # `st_mode | S_IEXEC` which kept the write bit
+                    # from mkstemp's 0o600 default, leaving the script
+                    # writable for the lifetime of the build invocation.
+                    build_script.chmod(0o500)
                 except BaseException:
                     build_script.unlink(missing_ok=True)
                     build_script = None
