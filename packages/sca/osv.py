@@ -81,6 +81,18 @@ _DEFAULT_VULN_TTL = 24 * 3600
 # OSV severity types we care about, in preference order.
 _CVSS_TYPES = ("CVSS_V3", "CVSS_V31")
 
+# OSV ecosystem identifiers diverge from RAPTOR's internal names in
+# one place: Rust. OSV uses ``crates.io`` (the registry domain) and
+# rejects ``Cargo`` with HTTP 400 "Invalid ecosystem", silently zeroing
+# every Rust dep's CVE lookup. Internal naming stays ``Cargo`` (matches
+# ``Cargo.lock`` / PURL type ``cargo`` / rust-lang/cargo upstream); we
+# translate at the OSV query boundary only.
+_OSV_ECOSYSTEM_OVERRIDES = {"Cargo": "crates.io"}
+
+
+def _to_osv_ecosystem(ecosystem: str) -> str:
+    return _OSV_ECOSYSTEM_OVERRIDES.get(ecosystem, ecosystem)
+
 
 @dataclass(frozen=True)
 class OsvResult:
@@ -182,7 +194,10 @@ class OsvClient:
             for chunk in _chunked(queryable, _BATCH_CHUNK_SIZE):
                 queries = [
                     {
-                        "package": {"name": d.name, "ecosystem": d.ecosystem},
+                        "package": {
+                            "name": d.name,
+                            "ecosystem": _to_osv_ecosystem(d.ecosystem),
+                        },
                         "version": d.version,
                     }
                     for d in chunk

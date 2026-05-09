@@ -570,3 +570,51 @@ def test_query_batch_filters_unsupported_ecosystems(tmp_path: Path) -> None:
     )
     posted_ecosystems = {q["package"]["ecosystem"] for q in posted_queries}
     assert "Debian" not in posted_ecosystems
+
+
+def test_query_batch_translates_cargo_to_crates_io(tmp_path: Path) -> None:
+    """OSV uses ``crates.io`` as the Rust ecosystem identifier and
+    rejects ``Cargo`` with HTTP 400 "Invalid ecosystem" — silently
+    zeroing every Cargo dep's advisory lookup. RAPTOR's internal
+    naming stays ``Cargo`` (matches Cargo.lock / PURL type / rust-lang
+    upstream); the OSV client must translate at the query boundary.
+    """
+    deps = [
+        _dep("time", ecosystem="Cargo", version="0.2.20"),
+        _dep("django", ecosystem="PyPI", version="3.0.6"),
+    ]
+    http = FakeHttp(
+        batch_results=[["GHSA-cargo-time"], ["GHSA-pypi-django"]],
+        vuln_records={
+            "GHSA-cargo-time": {
+                "id": "GHSA-cargo-time", "summary": "time segfault",
+                "affected": [{"package": {"name": "time",
+                                            "ecosystem": "crates.io"},
+                              "ranges": []}],
+            },
+            "GHSA-pypi-django": {
+                "id": "GHSA-pypi-django", "summary": "django bug",
+                "affected": [{"package": {"name": "django",
+                                            "ecosystem": "PyPI"},
+                              "ranges": []}],
+            },
+        },
+    )
+    client = OsvClient(http, JsonCache(root=tmp_path))
+    results = client.query_batch(deps)
+
+    by_key = {r.dep_key: r for r in results}
+    # Cargo dep keyed internally with ``Cargo:`` prefix — unchanged.
+    assert (by_key["Cargo:time@0.2.20"].advisories[0].osv_id
+            == "GHSA-cargo-time")
+
+    # The wire-level ecosystem must be ``crates.io`` (OSV-canonical).
+    posted_body = http.posts[0][1]
+    posted_ecosystems = {
+        q["package"]["ecosystem"] for q in posted_body["queries"]
+    }
+    assert "crates.io" in posted_ecosystems
+    assert "Cargo" not in posted_ecosystems, (
+        f"Cargo must be translated to crates.io before reaching "
+        f"OSV; got {posted_ecosystems}"
+    )
