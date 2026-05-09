@@ -93,7 +93,8 @@ def record_tool_evidence_outcome(
         )
         return True
     except Exception as e:                              # noqa: BLE001
-        logger.debug(
+        # WARNING (not DEBUG): see consensus.py for rationale.
+        logger.warning(
             "record_tool_evidence_outcome: %s/%s failed: %s",
             model, decision_class, e,
         )
@@ -138,7 +139,13 @@ def record_tool_evidence_outcomes(
                 decision_class_prefix=decision_class_prefix,
             )
         except Exception as e:                          # noqa: BLE001
-            logger.debug("record_tool_evidence_outcomes: bad record %r: %s", rec, e)
+            # WARNING: a malformed record is a real signal — caller
+            # gave us shape we can't process. See consensus.py for
+            # the broader rationale on the family-wide promotion.
+            logger.warning(
+                "record_tool_evidence_outcomes: bad record %r: %s",
+                rec, e,
+            )
             continue
         if ok:
             n += 1

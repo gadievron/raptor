@@ -901,7 +901,10 @@ def orchestrate(
                         primary_verdicts_before_judge=primary_verdicts_before_judge,
                     )
                 except Exception as e:                  # noqa: BLE001
-                    logger.debug("judge producer failed: %s", e)
+                    # WARNING (not DEBUG): family-wide convention.
+                    # See core/llm/scorecard/consensus.py for the
+                    # rationale on operator-visible producer failures.
+                    logger.warning("judge producer failed: %s", e)
 
     # Multi-model correlation (pure Python, no LLM)
     correlation = None
@@ -958,8 +961,10 @@ def orchestrate(
                         per_finding_results=_multi_results,
                     )
                 except Exception as e:                  # noqa: BLE001
-                    # Never let scorecard wiring abort orchestration.
-                    logger.debug(
+                    # Never let scorecard wiring abort orchestration —
+                    # but log at WARNING so operators see regressions
+                    # without needing DEBUG enabled.
+                    logger.warning(
                         "consensus producer failed: %s", e,
                     )
                 # Sister producer covering the agreed-verdict case
@@ -977,7 +982,8 @@ def orchestrate(
                         per_finding_results=_multi_results,
                     )
                 except Exception as e:                  # noqa: BLE001
-                    logger.debug(
+                    # WARNING (not DEBUG): see consensus producer above.
+                    logger.warning(
                         "reasoning_divergence producer failed: %s", e,
                     )
 

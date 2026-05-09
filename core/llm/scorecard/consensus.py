@@ -179,7 +179,16 @@ def record_consensus_outcomes(
                 )
                 n_recorded += 1
             except Exception as e:                       # noqa: BLE001
-                logger.debug(
+                # WARNING (not DEBUG): operators rarely run with
+                # DEBUG enabled in production, so a regressed
+                # producer would have been invisible. Per-event
+                # failures here are real signal — the scorecard
+                # write path failed for an attributable
+                # (model, decision_class, finding) cell. If this
+                # logs frequently in practice, the underlying issue
+                # (lock contention, disk full, schema corruption)
+                # warrants attention regardless of log volume.
+                logger.warning(
                     "record_consensus_outcomes: failed to record %s/%s "
                     "on %s: %s",
                     model, decision_class, fid, e,

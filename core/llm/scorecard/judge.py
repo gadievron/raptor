@@ -157,7 +157,8 @@ def _record_one(
             sample=sample,
         )
     except Exception as e:                              # noqa: BLE001
-        logger.debug(
+        # WARNING (not DEBUG): see consensus.py for rationale.
+        logger.warning(
             "record_judge_outcomes: failed to record %s/%s: %s",
             model, decision_class, e,
         )
