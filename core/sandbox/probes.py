@@ -259,9 +259,21 @@ def check_seatbelt_available() -> bool:
         # returns in <50ms; anything longer means a real problem.
         profile = "(version 1)\n(allow default)\n"
         try:
+            # `env=` to a stripped environment so the smoke-test
+            # subprocess can't pick up DYLD_INSERT_LIBRARIES /
+            # DYLD_LIBRARY_PATH (the macOS equivalents of LD_PRELOAD)
+            # from the parent. Pre-fix the bare subprocess inherited
+            # the parent's full env — a poisoned operator shell could
+            # have the smoke-test load attacker code via dyld at
+            # startup, AND the result of the smoke test (which
+            # determines whether subsequent subprocesses get
+            # sandboxed) could be skewed by the attacker controlling
+            # what `/usr/bin/true` actually does.
+            from core.config import RaptorConfig
             r = subprocess.run(
                 [sandbox_exec, "-p", profile, "/usr/bin/true"],
                 capture_output=True, timeout=5,
+                env=RaptorConfig.get_safe_env(),
             )
             ok = (r.returncode == 0)
         except (subprocess.TimeoutExpired, OSError):
