@@ -45,7 +45,17 @@ _ptrace_available_cache = None
 # available() in probes.py. Linux hosts always cache False.
 _seatbelt_available_cache = None
 # User-supplied rlimit overrides from ~/.config/raptor/sandbox.json.
+# `_user_limits_cache_decided_at` carries the wall-clock when the
+# cache was last populated FROM THE FAILURE PATH (parse error,
+# missing file, non-regular file). Pre-fix that path stored `{}` and
+# never re-read — operators correcting a malformed sandbox.json had
+# to restart every RAPTOR process to pick up the fix. `_FAIL_TTL_S`
+# bounds the negative cache so a corrected file is honoured within a
+# reasonable window. Successful loads keep no TTL; the assumption is
+# that the operator who edits the config will accept restarting (or
+# clearing the cache via tests / `state._user_limits_cache = None`).
 _user_limits_cache = None
+_user_limits_cache_decided_at = 0.0
 # Resolved absolute paths to sandbox-setup binaries. We use absolute paths
 # to prevent PATH hijacking — a polluted PATH (e.g., a malicious .envrc
 # that direnv activated, or `.` in the user's PATH) could otherwise

@@ -51,10 +51,20 @@ _DEFAULT_LIMITS = {
 _CONFIG_PATH = Path.home() / ".config/raptor/sandbox.json"
 
 
+# How long the "no/invalid config → empty limits" decision is cached
+# before we re-probe the config file. Operators correcting a typo'd
+# sandbox.json shouldn't have to restart every RAPTOR process; 60s is
+# long enough to amortise the parse cost across a busy run, short
+# enough that a fix takes effect within one human iteration.
+_FAIL_TTL_S = 60.0
+
+
 def _load_user_limits() -> dict:
     """Load user-configured resource limits from ~/.config/raptor/sandbox.json.
 
-    Result is cached for the session — the config file is only read once.
+    Successful loads cache for the session. Failure (no file, parse
+    error, non-regular file) caches for ``_FAIL_TTL_S`` seconds so a
+    corrected file is honoured without needing a process restart.
 
     Example config:
     {
@@ -65,12 +75,22 @@ def _load_user_limits() -> dict:
 
     Missing keys use defaults. Invalid file logs a WARNING and falls back.
     """
+    import time
     with state._cache_lock:
-        if state._user_limits_cache is not None:
+        # Cached SUCCESS: return immediately. No TTL — we trust the
+        # operator who edited the config to clear the cache (or
+        # restart) if they want to retry.
+        if state._user_limits_cache:
+            return state._user_limits_cache
+        # Cached FAILURE (empty dict): re-probe after _FAIL_TTL_S.
+        if (state._user_limits_cache is not None
+            and (time.time() - state._user_limits_cache_decided_at)
+                <= _FAIL_TTL_S):
             return state._user_limits_cache
 
         if not _CONFIG_PATH.exists():
             state._user_limits_cache = {}
+            state._user_limits_cache_decided_at = time.time()
             return state._user_limits_cache
         try:
             # `is_file()` check before read_text. Pre-fix
@@ -84,6 +104,7 @@ def _load_user_limits() -> dict:
             # at startup. Treat non-regular files as missing.
             if not _CONFIG_PATH.is_file():
                 state._user_limits_cache = {}
+                state._user_limits_cache_decided_at = time.time()
                 return state._user_limits_cache
             # UnicodeDecodeError is possible if config isn't valid UTF-8 —
             # catching it alongside JSON/OS errors keeps module import safe
@@ -119,6 +140,7 @@ def _load_user_limits() -> dict:
                 f"— using default limits."
             )
         state._user_limits_cache = {}
+        state._user_limits_cache_decided_at = time.time()
         return state._user_limits_cache
 
 
