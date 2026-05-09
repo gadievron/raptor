@@ -118,8 +118,20 @@ def _count_hunks_per_file(diff_text: str) -> dict[str, int]:
     current: str | None = None
     for line in diff_text.splitlines():
         if line.startswith("diff --git "):
-            # `diff --git a/<before> b/<after>`
-            parts = line.split(" b/", 1)
+            # `diff --git a/<before> b/<after>`. Split on the LAST
+            # " b/" not the first. Pre-fix `line.split(" b/", 1)`
+            # returned the leftmost split, so a before-path that
+            # contained the literal substring " b/" — rare but legal
+            # for paths like `src/a b/foo.c` (filenames with spaces
+            # ARE valid; git diff quotes them but the unquoted form
+            # appears in some patch sources, and even quoted
+            # `"a/foo b/bar.c"` ends up tokenised by split-on-bytes
+            # the same way) — mis-parsed `current` to a path
+            # fragment that didn't match `git diff --name-only`'s
+            # report. Hunk counts then attached to the wrong key
+            # downstream. `rsplit` picks the rightmost " b/" which
+            # IS the boundary between before and after segments.
+            parts = line.rsplit(" b/", 1)
             current = parts[1] if len(parts) == 2 else None
             if current is not None:
                 counts.setdefault(current, 0)
