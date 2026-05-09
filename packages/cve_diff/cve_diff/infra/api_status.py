@@ -44,11 +44,6 @@ class ApiKeySpec:
 
 _KEYS: tuple[ApiKeySpec, ...] = (
     ApiKeySpec(
-        name="Anthropic",
-        env_var="ANTHROPIC_API_KEY",
-        when_missing="agent runs will fail at first LLM call",
-    ),
-    ApiKeySpec(
         name="GitHub",
         env_var="GITHUB_TOKEN",
         when_missing="GitHub API limited to 60 req/h (vs 5000/h authed) — bench will hit 429s",
@@ -60,6 +55,25 @@ _KEYS: tuple[ApiKeySpec, ...] = (
         optional=True,
     ),
 )
+
+
+# LLM-auth status is rendered separately because cve-diff is now
+# model-agnostic. We read the canonical env-var list from
+# ``core.config.RaptorConfig.LLM_API_KEY_VARS`` so adding a new
+# provider upstream automatically shows up in cve-diff's banner.
+def _llm_provider_env_vars() -> tuple[str, ...]:
+    """Pull the LLM-provider env-var list from the central config.
+
+    Lazy/import-at-call-time so we don't fail to load
+    ``api_status`` when ``core.config`` happens to be importable
+    only in certain test scaffolds. On any failure, fall through
+    to an empty list (banner just shows "no env vars configured").
+    """
+    try:
+        from core.config import RaptorConfig
+        return tuple(RaptorConfig.LLM_API_KEY_VARS)
+    except Exception:
+        return ()
 
 
 def record_rate_limit(service: str, status: int) -> None:
@@ -88,19 +102,67 @@ def api_key_status() -> list[tuple[ApiKeySpec, bool]]:
     return [(s, bool(os.environ.get(s.env_var))) for s in _KEYS]
 
 
+def llm_auth_status() -> tuple[bool, list[str], bool]:
+    """Resolve the LLM-auth picture for startup-banner rendering.
+
+    Returns ``(any_auth, configured_env_vars, via_dispatcher)``.
+    ``configured_env_vars`` is the subset of
+    ``RaptorConfig.LLM_API_KEY_VARS`` that's currently set in env.
+    ``via_dispatcher`` reflects ``RAPTOR_LLM_SOCKET``.
+    """
+    via_dispatcher = bool(os.environ.get("RAPTOR_LLM_SOCKET"))
+    configured = [v for v in _llm_provider_env_vars()
+                  if os.environ.get(v)]
+    # Claude Code OAuth fallback always authenticates Anthropic
+    # models when the binary is on PATH; we treat that as
+    # operator-facing "always available" rather than probing PATH
+    # at startup.
+    any_auth = via_dispatcher or bool(configured) or True  # CC fallback
+    return any_auth, configured, via_dispatcher
+
+
 def render_startup_banner() -> str:
     """Multi-line banner for the start of a `run` or `bench`.
 
-    Lists each API key as set / missing with a hint when missing. Always
-    rendered (this addresses the user's "always, as part of the system"
-    request — the cost is a few lines of stderr at startup)."""
+    Lists each API key as set / missing with a hint when missing.
+    LLM auth is reported separately because cve-diff is model-
+    agnostic: any of the supported providers (or the credential-
+    isolation dispatcher, or Claude Code OAuth) is a valid auth
+    path. Always rendered."""
     lines = ["API keys:"]
     for spec, present in api_key_status():
         if present:
             lines.append(f"  ✓ {spec.name:<10} ({spec.env_var}) set")
         else:
             tag = "—" if spec.optional else "✗"
-            lines.append(f"  {tag} {spec.name:<10} ({spec.env_var}) NOT set — {spec.when_missing}")
+            lines.append(
+                f"  {tag} {spec.name:<10} ({spec.env_var}) NOT set "
+                f"— {spec.when_missing}"
+            )
+
+    # LLM auth — model-agnostic; show every configured env var plus
+    # the dispatcher route. Operator with no provider key + no
+    # dispatcher still has the Claude Code OAuth fallback for
+    # Anthropic models, so the worst-case is "limited to claude-*".
+    _, configured_vars, via_dispatcher = llm_auth_status()
+    lines.append("LLM auth:")
+    if via_dispatcher:
+        lines.append(
+            "  ✓ credential-isolation dispatcher "
+            "(RAPTOR_LLM_SOCKET set — provider keys handled by "
+            "dispatcher, not in worker env)"
+        )
+    if configured_vars:
+        lines.append(
+            f"  ✓ provider env vars set: {', '.join(configured_vars)}"
+        )
+    if not via_dispatcher and not configured_vars:
+        lines.append(
+            "  — no LLM provider env var and no dispatcher; cve-diff "
+            "will fall back to Claude Code OAuth for Anthropic models. "
+            "Set ANTHROPIC_API_KEY (cheapest), GEMINI_API_KEY, or any "
+            "supported provider key to use --model with that family."
+        )
     return "\n".join(lines)
 
 

@@ -86,24 +86,58 @@ def test_reset_clears_events() -> None:
 
 
 def test_api_key_status_present_and_missing(monkeypatch) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    """Non-LLM API keys (GitHub, NVD) are still tracked here.
+    LLM-provider env vars moved out of ``api_key_status`` after
+    cve-diff went model-agnostic — they're rendered by
+    ``llm_auth_status`` which iterates over the central
+    ``RaptorConfig.LLM_API_KEY_VARS`` list."""
     monkeypatch.setenv("GITHUB_TOKEN", "t")
     monkeypatch.delenv("NVD_API_KEY", raising=False)
 
     keys = {spec.name: present for spec, present in api_status.api_key_status()}
-    assert keys["Anthropic"] is True
     assert keys["GitHub"] is True
     assert keys["NVD"] is False
+    # Anthropic / OpenAI / etc. are no longer tracked here:
+    assert "Anthropic" not in keys
+
+
+def test_llm_auth_status_reflects_central_env_var_list(monkeypatch) -> None:
+    """``llm_auth_status`` reads the LLM-provider env-var list from
+    ``RaptorConfig.LLM_API_KEY_VARS`` (single source of truth) — no
+    cve-diff-local enumeration. Setting any provider's env var shows
+    up; setting RAPTOR_LLM_SOCKET also surfaces."""
+    # Clear all LLM provider env vars to start from a known state.
+    from core.config import RaptorConfig
+    for var in RaptorConfig.LLM_API_KEY_VARS:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
+
+    monkeypatch.setenv("GEMINI_API_KEY", "g")
+    monkeypatch.setenv("MISTRAL_API_KEY", "m")
+    _, configured, via_dispatcher = api_status.llm_auth_status()
+    assert "GEMINI_API_KEY" in configured
+    assert "MISTRAL_API_KEY" in configured
+    assert via_dispatcher is False
+
+    monkeypatch.setenv("RAPTOR_LLM_SOCKET", "/tmp/fake.sock")
+    _, _, via_dispatcher = api_status.llm_auth_status()
+    assert via_dispatcher is True
 
 
 def test_startup_banner_shows_set_and_missing(monkeypatch) -> None:
+    """LLM auth is now rendered in its own ``LLM auth:`` section
+    rather than inline in ``API keys:``. Anthropic-via-env shows up
+    as a configured provider env var; GitHub/NVD render as before."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("NVD_API_KEY", raising=False)
+    monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
 
     banner = api_status.render_startup_banner()
     assert "API keys:" in banner
-    assert "Anthropic" in banner and "set" in banner
+    # Anthropic is now in the LLM-auth section (env-var name).
+    assert "LLM auth:" in banner
+    assert "ANTHROPIC_API_KEY" in banner
     # NVD is optional → "—" tag, not "✗"
     assert "✗ GitHub" in banner
     assert "— NVD" in banner or "NVD       (NVD_API_KEY) NOT set" in banner

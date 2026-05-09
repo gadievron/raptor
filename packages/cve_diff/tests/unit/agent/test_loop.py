@@ -143,10 +143,28 @@ def _submit_call(
 # ---------- tests -----------
 
 def test_client_init_failure_surrenders(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When provider construction raises (e.g. SDK rejects the
+    config, dispatcher unreachable, etc.) the agent surrenders
+    with reason="client_init_failed" rather than crashing.
+
+    Previously this test simply dropped ``ANTHROPIC_API_KEY``, but
+    after cve-diff went model-agnostic the resolver falls through
+    to Claude Code OAuth for Anthropic models — which doesn't
+    surrender at init, it tries to spawn ``claude``. We now mock
+    ``create_provider`` to raise, which exercises the surrender
+    code path directly without depending on env shape."""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
+    monkeypatch.setattr(
+        "cve_diff.agent.loop.create_provider",
+        lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError("simulated SDK init failure"),
+        ),
+    )
     result = AgentLoop().run(_cfg(), AgentContext(cve_id="CVE-X"))
     assert isinstance(result, AgentSurrender)
     assert result.reason == "client_init_failed"
+    assert "simulated SDK init failure" in result.detail
 
 
 def test_immediate_submit_rescued(monkeypatch: pytest.MonkeyPatch) -> None:
