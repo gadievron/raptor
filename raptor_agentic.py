@@ -1405,6 +1405,23 @@ Examples:
             smt_parts.append(f"{n_smt_disagree} disagreement")
         if smt_parts:
             print(f"     Tier 4 SMT: {', '.join(smt_parts)}")
+        # path_conditions population telemetry — answers "is the LLM
+        # actually emitting the SMT-checkable conditions the schema
+        # asks for?" Without this signal, a Tier 4 of all-zeros is
+        # ambiguous between "LLM never populates" and "LLM populates
+        # but everything resolves to no_check". Surface only when
+        # there's a non-zero count to report.
+        n_pc_pop = dv.get("n_path_conditions_populated", 0)
+        if n_pc_pop:
+            cwe_breakdown = dv.get("path_conditions_by_cwe", {})
+            if cwe_breakdown:
+                cwe_str = ", ".join(
+                    f"{c}={n}" for c, n in
+                    sorted(cwe_breakdown.items(), key=lambda kv: -kv[1])
+                )
+                print(f"     path_conditions populated: {n_pc_pop} ({cwe_str})")
+            else:
+                print(f"     path_conditions populated: {n_pc_pop}")
         # Downgrade outcome: distinguish "recommended" from "applied"
         # (the latter is post-reconciliation with consensus/judge).
         # Soft downgrades = recommendation overruled by consensus/judge.
@@ -1816,6 +1833,24 @@ def _build_dataflow_validation_report_section(dv):
                 f"- SMT-CodeQL disagreement (kept CodeQL signal — see "
                 f"warning logs): {n_smt_disagree}"
             )
+    # path_conditions population telemetry — answers "is the LLM
+    # actually emitting the SMT-checkable conditions the schema
+    # asks for?" Without this, all-zero Tier 4 counts are ambiguous
+    # between "LLM never populates" and "LLM populates but every
+    # case resolves to no_check" — different remediations.
+    n_pc_pop = dv.get("n_path_conditions_populated", 0)
+    if n_pc_pop:
+        lines.append("")
+        lines.append("**Schema population — `path_conditions`:**")
+        lines.append(
+            f"- Findings with non-empty `path_conditions`: {n_pc_pop} "
+            f"of {n_validated} validated"
+        )
+        cwe_breakdown = dv.get("path_conditions_by_cwe") or {}
+        if cwe_breakdown:
+            lines.append("- By CWE:")
+            for cwe, count in sorted(cwe_breakdown.items(), key=lambda kv: -kv[1]):
+                lines.append(f"  - {cwe}: {count}")
     if n_recommended:
         lines.append("")
         lines.append("**Downgrades:**")

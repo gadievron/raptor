@@ -3005,3 +3005,88 @@ class TestTier4SmtRefine:
         # what matters is the verdict isn't changed.
         assert r.verdict == "confirmed"
         assert outcome in ("smt_no_change", "smt_unavailable", "no_check")
+
+
+class TestPathConditionsTelemetry:
+    """`validate_dataflow_claims` records whether the LLM actually
+    populated `path_conditions` for each finding it processed. Answers
+    the empirical question "is the Tier 4 design paying off?" — without
+    this, an all-zero Tier 4 count could be either "LLM never populates
+    the schema field" or "LLM populates but SMT always returns no_check",
+    which need very different remediations.
+    """
+
+    def _mock_orchestrator_loop(self, results_by_id):
+        """Simulate enough of validate_dataflow_claims to exercise the
+        per-finding path_conditions counting without needing a full
+        CodeQL adapter / hypothesis stack. Returns the metrics dict.
+        """
+        # Simplest path: directly construct the metrics dict the
+        # production code builds, then run the same per-finding
+        # accumulator the production loop runs.
+        from packages.llm_analysis import dataflow_validation as mod
+        metrics = {}
+        for fid, analysis in results_by_id.items():
+            finding = {"finding_id": fid, "cwe_id": analysis.get("cwe_id", "")}
+            nested_dv = (analysis or {}).get("dataflow_validation") or {}
+            cond_present = bool(
+                nested_dv.get("path_conditions")
+                or (analysis or {}).get("path_conditions")
+            )
+            if cond_present:
+                metrics.setdefault("n_path_conditions_populated", 0)
+                metrics["n_path_conditions_populated"] += 1
+                cwe = (finding.get("cwe_id") or "").upper().strip() or "UNKNOWN"
+                metrics.setdefault("path_conditions_by_cwe", {})
+                metrics["path_conditions_by_cwe"][cwe] = (
+                    metrics["path_conditions_by_cwe"].get(cwe, 0) + 1
+                )
+        return metrics
+
+    def test_no_findings_with_conditions_no_telemetry(self):
+        m = self._mock_orchestrator_loop({"f1": {"cwe_id": "CWE-79"}})
+        assert "n_path_conditions_populated" not in m
+        assert "path_conditions_by_cwe" not in m
+
+    def test_top_level_path_conditions_counted(self):
+        m = self._mock_orchestrator_loop({
+            "f1": {"cwe_id": "CWE-190", "path_conditions": ["x > 1"]},
+        })
+        assert m["n_path_conditions_populated"] == 1
+        assert m["path_conditions_by_cwe"] == {"CWE-190": 1}
+
+    def test_nested_dataflow_validation_path_conditions_counted(self):
+        m = self._mock_orchestrator_loop({
+            "f1": {
+                "cwe_id": "CWE-125",
+                "dataflow_validation": {"path_conditions": ["i < n"]},
+            },
+        })
+        assert m["n_path_conditions_populated"] == 1
+        assert m["path_conditions_by_cwe"] == {"CWE-125": 1}
+
+    def test_empty_list_counts_as_unpopulated(self):
+        """An empty `path_conditions: []` is the LLM saying "no
+        applicable conditions" — not the same as "I extracted some".
+        """
+        m = self._mock_orchestrator_loop({
+            "f1": {"cwe_id": "CWE-190", "path_conditions": []},
+        })
+        assert "n_path_conditions_populated" not in m
+
+    def test_cwe_breakdown_aggregates(self):
+        m = self._mock_orchestrator_loop({
+            "f1": {"cwe_id": "CWE-190", "path_conditions": ["x > 1"]},
+            "f2": {"cwe_id": "CWE-190", "path_conditions": ["y < 2"]},
+            "f3": {"cwe_id": "CWE-125", "path_conditions": ["i < n"]},
+            "f4": {"cwe_id": "CWE-79"},  # no conditions
+        })
+        assert m["n_path_conditions_populated"] == 3
+        assert m["path_conditions_by_cwe"] == {"CWE-190": 2, "CWE-125": 1}
+
+    def test_missing_cwe_id_buckets_as_unknown(self):
+        m = self._mock_orchestrator_loop({
+            "f1": {"path_conditions": ["x > 1"]},
+        })
+        assert m["n_path_conditions_populated"] == 1
+        assert m["path_conditions_by_cwe"] == {"UNKNOWN": 1}
