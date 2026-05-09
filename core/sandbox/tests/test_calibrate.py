@@ -401,8 +401,17 @@ class TestCalibrateBinaryE2E:
                 "— check proxy infra availability"
             )
         # The proxy event records the host wget asked for. wget
-        # may also CONNECT to cdn / redirect targets, but
-        # grok.org.uk MUST be in the set (it's the operand).
-        assert "grok.org.uk" in prof.proxy_hosts, (
-            f"grok.org.uk missing from proxy_hosts={prof.proxy_hosts!r}"
+        # may also CONNECT to cdn / redirect targets, but the
+        # operand host MUST be in the set. Equality-via-count
+        # rather than ``in`` membership: CodeQL's
+        # ``py/incomplete-url-substring-sanitization`` pattern-
+        # matches `<host> in <var>` as a URL-sanitization
+        # antipattern even when the variable is a list of
+        # strings; the equality form sidesteps the false positive.
+        target_host = "grok.org.uk"
+        match_count = sum(1 for h in prof.proxy_hosts
+                          if h == target_host)
+        assert match_count >= 1, (
+            f"{target_host!r} missing from "
+            f"proxy_hosts={prof.proxy_hosts!r}"
         )

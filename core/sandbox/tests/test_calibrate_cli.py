@@ -104,7 +104,18 @@ class TestShow:
         assert rc == 0
         assert "binary:" in captured.out
         assert "/lib/libc.so" in captured.out
-        assert "api.example.com" in captured.out
+        # Line-anchored regex match for the proxy-host line:
+        # CodeQL's ``py/incomplete-url-substring-sanitization``
+        # rule pattern-matches `<host> in <var>` even when
+        # ``<var>`` is human-readable test output. Anchoring with
+        # leading whitespace + EOL sidesteps the false positive
+        # AND tightens the assertion (we know the format the
+        # human renderer produces).
+        import re as _re
+        assert _re.search(r"^\s+api\.example\.com\s*$",
+                          captured.out, _re.MULTILINE), (
+            f"proxy-host line missing from output: {captured.out}"
+        )
         assert "source:" in captured.out and "cache" in captured.out
 
     def test_show_json_emits_parseable_json(
@@ -192,7 +203,13 @@ class TestSpawnPath:
         captured = capsys.readouterr()
         assert rc == 0
         assert "/etc/hosts" in captured.out
-        assert "proxy.example.com" in captured.out
+        # Line-anchored: see test_show_human_renders_summary for
+        # rationale (CodeQL false-positive avoidance).
+        import re as _re
+        assert _re.search(r"^\s+proxy\.example\.com\s*$",
+                          captured.out, _re.MULTILINE), (
+            f"proxy-host line missing from output: {captured.out}"
+        )
         assert "fresh probe" in captured.out
 
     def test_force_reruns_even_when_cached(
