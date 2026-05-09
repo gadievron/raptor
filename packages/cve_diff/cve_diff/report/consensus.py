@@ -177,14 +177,38 @@ def run_consensus(cve_id: str) -> ConsensusReport:
         _nvd_patch_tagged(cve_id),
     )
 
-    # Aggregate by (canonical_slug, sha[:12]). Methods that didn't find
+    # Aggregate by (canonical_slug, sha[:7]). Methods that didn't find
     # anything contribute nothing; agreement requires both votes.
+    #
+    # Pre-fix the key was `(slug, sha[:SHA_DISPLAY_LEN=12])`. Two
+    # methods agreeing on the same commit but emitting DIFFERENT
+    # SHA lengths (one publishes a 7-char short, the other publishes
+    # the full 40-char SHA) keyed differently:
+    #
+    #   short_method:  ("slug", "abc1234")   ← only 7 chars in key
+    #   long_method:   ("slug", "abc1234abcd") ← 12 chars in key
+    #
+    # — distinct keys, no aggregation, consensus reported as 1 vote
+    # for each instead of 2 votes for the same commit.
+    #
+    # Real failure: NVD often publishes 7-char short SHAs in
+    # references; OSV publishes full 40-char SHAs in
+    # ranges[*].events.fixed. Two valid methods agreeing on the
+    # right fix were registered as DISAGREEING because their key
+    # representations differed.
+    #
+    # Use `sha[:7]` as the canonical key (git's minimum
+    # unambiguous prefix). 7 chars × 16 hex = 268M unique buckets,
+    # collision probability for a single repo's commit history is
+    # negligible. `full_sha` still tracks the longest seen so the
+    # rendered consensus uses the most-precise SHA.
+    _KEY_LEN = 7
     counts: Counter[tuple[str, str]] = Counter()
     full_sha: dict[tuple[str, str], str] = {}
     for m in methods:
         if not m.found or not m.slug or not m.sha:
             continue
-        key = (m.slug.lower(), m.sha[:SHA_DISPLAY_LEN].lower())
+        key = (m.slug.lower(), m.sha[:_KEY_LEN].lower())
         counts[key] += 1
         # Keep the longest SHA we've seen (different methods may publish
         # different abbreviation lengths).
