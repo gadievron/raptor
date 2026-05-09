@@ -47,6 +47,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Optional, Tuple
 from urllib.parse import urlparse
@@ -313,12 +314,14 @@ def _calibrated_profile(claude_bin: Optional[str] = None):
             env_keys=env_keys,
             timeout=timeout,
         )
-    except (FileNotFoundError, RuntimeError, OSError) as exc:
+    except (FileNotFoundError, RuntimeError, OSError,
+            subprocess.TimeoutExpired) as exc:
         # Probe failed: ptrace blocked (Yama scope 3),
-        # libseccomp absent on minimal containers, or the
-        # binary was deleted between which() and probe. Log at
-        # debug — calibration is opt-in / advisory, the static
-        # fallback stays in place.
+        # libseccomp absent on minimal containers, the binary was
+        # deleted between which() and probe, or the probe exceeded
+        # its per-mode timeout (20s for `--version`, 150s for
+        # `claude -p READY`). Log at debug — calibration is opt-in
+        # / advisory, the static fallback stays in place.
         logger.debug(
             "cc_proxy_hosts: calibration of %s failed (%s); "
             "falling back to static policy",

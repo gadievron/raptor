@@ -477,6 +477,22 @@ class TestCalibratedProfileFailureModes:
         monkeypatch.setattr(_cal, "load_or_calibrate", boom)
         assert mod._calibrated_profile() is None
 
+    def test_calibrate_timeout_returns_none(self, monkeypatch):
+        # subprocess.TimeoutExpired from a sandboxed `claude --version`
+        # (or a network probe exceeding 150s) must not propagate to
+        # cc_dispatch — fall through to the static default like every
+        # other failure mode.
+        import subprocess as _subprocess
+        monkeypatch.setattr(mod, "_resolve_claude_bin",
+                            lambda: "/fake/claude")
+        import core.sandbox.calibrate as _cal
+        def boom(*args, **kwargs):
+            raise _subprocess.TimeoutExpired(
+                ["/fake/claude", "--version"], 20,
+            )
+        monkeypatch.setattr(_cal, "load_or_calibrate", boom)
+        assert mod._calibrated_profile() is None
+
     def test_memoised_per_binary(self, monkeypatch):
         """A second call for the same resolved binary path doesn't
         re-spawn the calibrator — the per-process memo serves the
