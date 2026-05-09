@@ -22,7 +22,8 @@ import json
 import re
 import subprocess
 from dataclasses import dataclass
-from typing import Any, Callable
+from pathlib import Path
+from typing import Any, Callable, Optional
 from urllib.parse import quote
 
 from core.http import HttpError
@@ -53,7 +54,7 @@ _USER_AGENT = "cve-diff-agent/0.1"
 # RFC 1918 / link-local IPs (the proxy denies these regardless), any
 # host with userinfo in the URL (rejected at the URL-shape check
 # inside ``core.git.ls_remote``).
-_AGENT_FORGE_HOSTS: frozenset[str] = frozenset({
+_DEFAULT_FORGE_HOSTS: frozenset[str] = frozenset({
     # Major commercial forges (GitHub itself goes through
     # ``infra.github_client`` separately; api.github.com is included
     # here for any direct-API call that bypasses the helper).
@@ -91,17 +92,82 @@ _AGENT_FORGE_HOSTS: frozenset[str] = frozenset({
     "opendev.org",              # OpenStack
 })
 
+# Backwards-compat alias — historical imports referenced
+# ``_AGENT_FORGE_HOSTS`` directly. New code should call
+# ``forge_hosts()`` to pick up the operator override layer; this
+# alias remains so external imports don't break.
+_AGENT_FORGE_HOSTS: frozenset[str] = _DEFAULT_FORGE_HOSTS
+
+
+# Operator override config — JSON file with a flat ``{"hosts": [...]}``
+# list. Required for shops that need to reach a self-hosted GitLab
+# / Gitea / Forgejo / corporate-forge instance not in the default
+# set. The override REPLACES the default — operators on a closed
+# forge typically want to ban public ones (CVE-research output stays
+# inside the org).
+_OVERRIDE_CONFIG_PATH = (
+    Path.home() / ".config" / "raptor" / "cve-diff-forge-hosts.json"
+)
+
+
+def _load_forge_override() -> "Optional[list[str]]":
+    """Return operator override list, or None when no override is
+    configured. Tolerant: malformed JSON, non-UTF-8 bytes, or
+    unexpected schema all degrade silently to None — production
+    failure mode is loud at the proxy (forge fetch fails with "host
+    not in allowlist"), not silent at startup."""
+    if not _OVERRIDE_CONFIG_PATH.exists():
+        return None
+    try:
+        data = json.loads(
+            _OVERRIDE_CONFIG_PATH.read_text(encoding="utf-8"),
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    hosts = data.get("hosts")
+    if not isinstance(hosts, list):
+        return None
+    seen: set = set()
+    result: list = []
+    for h in hosts:
+        if isinstance(h, str) and h and h not in seen:
+            seen.add(h)
+            result.append(h)
+    return result or None
+
+
+def forge_hosts() -> "frozenset[str]":
+    """Resolved hostname allowlist for cve-diff agent forge calls.
+
+    Two-layer resolution: operator override → static default. No
+    calibrate layer because forge reach is URL-derived per call
+    (a CVE patch URL determines which forge is reached), not
+    binary-scoped. Returns a frozenset to match the existing
+    ``_AGENT_FORGE_HOSTS`` shape — ``EgressClient`` accepts either
+    a frozenset or a list, and downstream callers (``ls_remote``)
+    expect an iterable of hosts."""
+    override = _load_forge_override()
+    if override is not None:
+        return frozenset(override)
+    return _DEFAULT_FORGE_HOSTS
+
 
 @functools.lru_cache(maxsize=1)
 def _forge_client() -> EgressClient:
     """Process-wide ``EgressClient`` for non-GitHub forge HTTP calls.
 
-    Cached so we reuse one urllib3 connection pool. Hostname allowlist
-    enforced at the proxy via ``_AGENT_FORGE_HOSTS``; private-IP block
-    enforced unconditionally. New forges that need to be reachable
-    must be added to ``_AGENT_FORGE_HOSTS`` first.
+    Cached so we reuse one urllib3 connection pool. Hostname
+    allowlist resolved via ``forge_hosts()`` (override → default);
+    private-IP block enforced unconditionally. New forges that need
+    to be reachable should go through the operator override config
+    (``~/.config/raptor/cve-diff-forge-hosts.json``) — adding to
+    ``_DEFAULT_FORGE_HOSTS`` requires a code change for upstream
+    inclusion.
     """
-    return EgressClient(allowed_hosts=_AGENT_FORGE_HOSTS, user_agent=_USER_AGENT)
+    return EgressClient(allowed_hosts=forge_hosts(),
+                        user_agent=_USER_AGENT)
 
 
 @functools.lru_cache(maxsize=1)
@@ -389,7 +455,7 @@ def _git_ls_remote_impl(url: str) -> str:
     """
     from core.git import ls_remote
     try:
-        refs = ls_remote(url, proxy_hosts=_AGENT_FORGE_HOSTS, timeout=20)
+        refs = ls_remote(url, proxy_hosts=forge_hosts(), timeout=20)
     except ValueError as exc:
         # URL fails the urlparse / allowlist / scheme checks. Surface
         # the helper's message verbatim — it's already operator-friendly

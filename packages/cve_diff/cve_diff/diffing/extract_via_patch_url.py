@@ -51,8 +51,9 @@ def _client() -> "EgressClient":
     at CONNECT.
     """
     from core.http.egress_backend import EgressClient
-    from cve_diff.agent.tools import _AGENT_FORGE_HOSTS
-    return EgressClient(allowed_hosts=_AGENT_FORGE_HOSTS, user_agent=_USER_AGENT)
+    from cve_diff.agent.tools import forge_hosts
+    return EgressClient(allowed_hosts=forge_hosts(),
+                        user_agent=_USER_AGENT)
 
 
 def _patch_url_for(ref: RepoRef) -> str | None:
