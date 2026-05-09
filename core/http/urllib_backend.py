@@ -794,6 +794,22 @@ class UrllibClient:
             # validator in that case rather than crashing
             # urlparse).
             if isinstance(final_url, str) and final_url != url:
+                # urllib3's ``geturl()`` may return a relative path
+                # (no scheme + no host) for the original
+                # response when the server's response shape includes
+                # a ``Location:`` header even on a non-redirect 200
+                # response — observed in the wild against
+                # ``https://api.osv.dev/v1/querybatch`` which returns
+                # ``Location: /v1/querybatch`` alongside its 200.
+                # Pre-fix the validator rejected the relative URL
+                # ("no scheme") and the entire successful response
+                # was discarded as a "refused redirect", silently
+                # turning every successful querybatch call into an
+                # empty-result error. Resolve relative paths against
+                # the original request URL before validating.
+                from urllib.parse import urlparse, urljoin
+                if not urlparse(final_url).scheme:
+                    final_url = urljoin(url, final_url)
                 try:
                     self._validate_url(final_url)
                 except HttpError as exc:

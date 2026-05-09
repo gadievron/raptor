@@ -745,6 +745,31 @@ class TestFollowRedirects:
         assert resp.status == 302
         assert resp.headers["location"] == "https://other.example/"
 
+    def test_geturl_returns_relative_path_does_not_refuse_response(self):
+        """urllib3's ``geturl()`` may return a relative path even on
+        a successful (200, no redirect) response — observed against
+        ``https://api.osv.dev/v1/querybatch`` which returns
+        ``Location: /v1/querybatch`` alongside its 200, prompting
+        urllib3 to record the relative path as the "final" URL.
+
+        Pre-fix the post-success URL revalidation refused the
+        relative path ("scheme '': only http/https permitted") and
+        the entire successful response was raised as a "refused
+        redirect" — silently turning every successful querybatch
+        call into an empty-result error. Reachable only against
+        servers that emit ``Location:`` on 200 responses, but
+        that's a real wire-format pattern.
+
+        Resolution: relative paths get joined against the original
+        URL before validation."""
+        client, _ = _client_with_mock_pool(
+            _stub_response(b'{"ok": true}', final_url="/v1/querybatch"),
+        )
+        # Should NOT raise — the response is valid; geturl's
+        # relative path resolves to the same canonical URL.
+        result = client.get_json("https://api.osv.dev/v1/querybatch")
+        assert result == {"ok": True}
+
 
 # ---------------------------------------------------------------------------
 # Factory
