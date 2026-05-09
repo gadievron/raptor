@@ -689,8 +689,28 @@ def bench(
     non_source = summary.passed - source_hits
     pass_n, refusal_n, issue_n = _outcome_buckets(summary)
     _flush()
-    (output_dir / "summary.html").write_text(_render_html(summary))
-    (output_dir / "bench_report.md").write_text(_render_bench_markdown(summary))
+    # Atomic write via tmp+rename. Pre-fix `write_text` on the
+    # final filenames left a half-written summary visible to
+    # concurrent readers (the CI harness that polls
+    # `summary.json` to grab pass-rates the moment a bench
+    # finishes had a window where `json.load` failed mid-write
+    # with "Expecting value"). For .html and .md the consequence
+    # is an operator opening the file mid-bench and seeing
+    # truncated content.
+    #
+    # Same-directory tmp+rename so the rename is atomic on the
+    # same filesystem (cross-fs would fall back to copy+unlink).
+    def _atomic_write(path: Path, content: str) -> None:
+        tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
+        try:
+            tmp.write_text(content)
+            tmp.replace(path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+    import os
+    _atomic_write(output_dir / "summary.html", _render_html(summary))
+    _atomic_write(output_dir / "bench_report.md", _render_bench_markdown(summary))
     _persist_summary(output_dir / "summary.json", sample)
     typer.echo("")
     typer.echo(f"=== {summary.passed}/{summary.total} passed ({pct:.1f}%) ===")
