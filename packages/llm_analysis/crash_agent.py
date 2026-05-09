@@ -235,7 +235,23 @@ def _build_crash_exploit_bundle(crash_context: CrashContext) -> PromptBundle:
         ))
 
     try:
-        input_bytes = crash_context.input_file.read_bytes()
+        # Cap the crash-input read at 64 KB. Pre-fix
+        # `read_bytes()` had no upper bound — a crash file from
+        # a malformed-archive parser (the kind that crashes ON
+        # multi-MB inputs) was loaded entirely into memory just
+        # to encode as hex (2x expansion) AND ASCII (1x more).
+        # 100 MB crash → 300 MB of UntrustedBlock payload going
+        # into the LLM prompt window, which then either:
+        #   * Hits the model's context limit and fails the
+        #     dispatch with no useful output.
+        #   * Costs operator $$$ to send all those tokens for
+        #     analysis the model can't usefully act on.
+        # 64 KB is enough to characterise the crash-input shape
+        # (header bytes, magic, charset class) without
+        # bloating the prompt or RAM.
+        _CRASH_INPUT_CAP = 64 * 1024
+        with open(crash_context.input_file, "rb") as _cif:
+            input_bytes = _cif.read(_CRASH_INPUT_CAP)
         blocks.append(UntrustedBlock(
             content=input_bytes.hex(),
             kind="crash-input-hex",
