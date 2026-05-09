@@ -37,6 +37,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -130,7 +131,12 @@ def _calibrated_profile(codeql_bin: Optional[str] = None):
             env_keys=_CODEQL_ENV_KEYS,
             timeout=20,
         )
-    except (FileNotFoundError, RuntimeError, OSError) as exc:
+    except (FileNotFoundError, RuntimeError, OSError,
+            subprocess.TimeoutExpired) as exc:
+        # TimeoutExpired: a sandboxed `codeql --version` exceeding
+        # 20s (rare but observable on cold systems / large CodeQL
+        # bundles) shouldn't break the resolver — fall through to
+        # the static default like every other failure mode.
         logger.debug(
             "codeql_proxy_hosts: calibration of %s failed (%s); "
             "falling back to static policy",

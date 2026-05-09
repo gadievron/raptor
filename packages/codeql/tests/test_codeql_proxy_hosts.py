@@ -342,6 +342,25 @@ class TestCalibratedProfileFailureModes:
         monkeypatch.setattr(_cal, "load_or_calibrate", boom)
         assert mod._calibrated_profile() is None
 
+    def test_calibrate_timeout_returns_none(self, monkeypatch):
+        # subprocess.TimeoutExpired = sandboxed `codeql --version`
+        # exceeded the 20s probe cap (rare but observable on cold
+        # systems / large CodeQL bundles). Must not propagate to
+        # query_runner — fall through to the static default.
+        import subprocess as _subprocess
+        monkeypatch.setattr(
+            mod, "_resolve_codeql_bin", lambda: "/fake/codeql",
+        )
+        import core.sandbox.calibrate as _cal
+
+        def boom(*args, **kwargs):
+            raise _subprocess.TimeoutExpired(
+                ["/fake/codeql", "--version"], 20,
+            )
+
+        monkeypatch.setattr(_cal, "load_or_calibrate", boom)
+        assert mod._calibrated_profile() is None
+
     def test_memoised_per_binary(self, monkeypatch):
         """A second call for the same resolved binary path doesn't
         re-spawn the calibrator — the per-process memo serves the
