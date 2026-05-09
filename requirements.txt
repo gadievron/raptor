@@ -5,7 +5,7 @@
 # policy — minor / patch upgrades come via dedicated PRs so any
 # breakage is bisectable. See requirements-dev.txt for the parallel
 # pinning rationale on pytest et al.
-requests==2.32.5
+requests==2.33.0
 # core.http.urllib_backend uses urllib3 directly for connection pooling
 # and to avoid the no_proxy bypass that stdlib urllib.request.ProxyHandler
 # silently performs. Already a transitive dep of `requests` but pinned
