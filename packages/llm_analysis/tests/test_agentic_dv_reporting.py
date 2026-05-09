@@ -210,3 +210,45 @@ def test_tier4_smt_block_partial_outcomes_only_shows_present_ones():
     assert "Witness attached" in body
     assert "Refuted" not in body  # the standalone Tier 4 'Refuted' line
     assert "disagreement" not in body
+
+
+def test_path_conditions_telemetry_block_renders():
+    """`n_path_conditions_populated` + `path_conditions_by_cwe` get
+    their own sub-block so operators can see whether the LLM actually
+    populated the SMT-checkable schema field this run."""
+    mod = _load_agentic_module()
+    section = mod._build_dataflow_validation_report_section(
+        _full_metrics(
+            n_path_conditions_populated=5,
+            path_conditions_by_cwe={"CWE-190": 3, "CWE-125": 2},
+        )
+    )
+    body = section.content
+    assert "Schema population" in body
+    assert "path_conditions" in body
+    assert "5 of" in body  # `Findings with non-empty path_conditions: 5 of N`
+    assert "CWE-190: 3" in body
+    assert "CWE-125: 2" in body
+
+
+def test_path_conditions_telemetry_block_omitted_when_zero():
+    """No path_conditions_populated → no sub-block. Avoids noise on
+    runs where no findings carried the schema field."""
+    mod = _load_agentic_module()
+    section = mod._build_dataflow_validation_report_section(_full_metrics())
+    assert "Schema population" not in section.content
+    assert "path_conditions" not in section.content
+
+
+def test_path_conditions_telemetry_block_without_cwe_breakdown():
+    """When the per-CWE breakdown is absent (e.g. metric stub doesn't
+    populate it), still surface the headline count."""
+    mod = _load_agentic_module()
+    section = mod._build_dataflow_validation_report_section(
+        _full_metrics(n_path_conditions_populated=2)
+    )
+    body = section.content
+    assert "Schema population" in body
+    assert "2 of" in body
+    # No "By CWE:" header when the breakdown dict is empty/absent
+    assert "By CWE:" not in body

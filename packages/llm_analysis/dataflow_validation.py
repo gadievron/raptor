@@ -536,6 +536,28 @@ def validate_dataflow_claims(
         elif tier_used == "retry":
             metrics["n_tier3_retry"] += 1
 
+        # ----- Telemetry: did the LLM populate path_conditions? -----
+        # The Tier 4 design (PR #442) depends on the LLM emitting
+        # `path_conditions` when the CWE warrants. Track presence per
+        # finding (and break down by CWE) so the operator can see if
+        # the schema-extension is paying off — without this, a Tier 4
+        # of all-zeros could be either "LLM never populates" or "LLM
+        # populates but SMT always returns no_check"; very different
+        # remediations.
+        nested_dv = (analysis or {}).get("dataflow_validation") or {}
+        cond_present = bool(
+            nested_dv.get("path_conditions")
+            or (analysis or {}).get("path_conditions")
+        )
+        if cond_present:
+            metrics.setdefault("n_path_conditions_populated", 0)
+            metrics["n_path_conditions_populated"] += 1
+            cwe = (finding.get("cwe_id") or "").upper().strip() or "UNKNOWN"
+            metrics.setdefault("path_conditions_by_cwe", {})
+            metrics["path_conditions_by_cwe"][cwe] = (
+                metrics["path_conditions_by_cwe"].get(cwe, 0) + 1
+            )
+
         # ----- Tier 4: SMT path-feasibility refinement -----
         # Reads `path_conditions` + `path_profile` from the LLM analysis
         # (added in this PR's schema extension). Conservative refinement:
