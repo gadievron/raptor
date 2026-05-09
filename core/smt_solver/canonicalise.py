@@ -94,7 +94,7 @@ _REWRITES: Tuple[Tuple[re.Pattern[str], str], ...] = (
     (re.compile(r'\bup\s+to\b',                               re.IGNORECASE), ' <= '),
 )
 
-_WHITESPACE_RUN = re.compile(r'\s+')
+_WHITESPACE_RUN = re.compile(r'[ \t]+')
 
 
 def canonicalise(text: str) -> str:
@@ -102,6 +102,25 @@ def canonicalise(text: str) -> str:
 
     Idempotent: input that's already symbolic passes through unchanged
     (modulo whitespace collapse).
+
+    Pre-fix the trailing whitespace collapse used `r'\\s+'` which
+    matches NEWLINES + tabs + spaces. Multi-line condition
+    inputs — `_substitute_calls(_canonicalise(text), ...)` is
+    called with whatever the caller hands it, including
+    LLM-emitted JSON arrays where the parser has joined
+    multiple distinct conditions with newlines — got their
+    structural newlines collapsed into single spaces, merging
+    independent conditions into one parser-confused glob:
+
+        cond1: ``a > 0\\nb > 0`` (two conditions)
+        post-canonicalise: ``a > 0 b > 0`` (parser sees one
+        malformed condition with two operands).
+
+    Restrict the collapse to `[ \\t]+` (spaces + tabs only) so
+    newlines survive as logical separators. The downstream
+    parsers tokenise per-line, so preserving the newline keeps
+    the multi-condition structure intact. Internal multi-space
+    runs from rewrite expansion still collapse fine.
     """
     out = text
     for pat, repl in _REWRITES:
