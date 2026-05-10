@@ -32,6 +32,7 @@ import gzip
 import io
 import json
 import logging
+import re
 import threading
 import time
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -786,16 +787,39 @@ class UrllibClient:
                 # Distinguish "proxy denied CONNECT" (permanent, our
                 # chokepoint refused the host as off-allowlist) from
                 # "proxy unreachable" (transient). urllib3 surfaces
-                # both as ProxyError with a message; we string-match
-                # for the 403/Forbidden marker the in-process proxy
-                # emits at core/sandbox/proxy.py for off-allowlist
-                # hosts. Permanent errors must NOT loop through the
-                # backoff schedule (minutes of wasted sleep); raise now.
-                # Lower-case the haystack so a future urllib3 release
-                # changing the message casing doesn't silently turn
-                # "off-allowlist" into a transient-retry storm.
+                # both as ProxyError with a message; we have to
+                # pattern-match the message because ProxyError
+                # doesn't expose the upstream status code structurally.
+                #
+                # Pre-fix the test was `"403" in msg or "forbidden"
+                # in msg`. Two false-positive shapes:
+                #   * Proxy unreachable error containing "403" in
+                #     the URL fragment of the connect target
+                #     (`https://example.com/v1/403/something`) —
+                #     misclassified as permanent, retry skipped.
+                #   * Proxy connectivity message naming the status
+                #     code in prose: `"upstream returned 403 (after
+                #     N retries)"` for a server that legitimately
+                #     emitted 403 NOT from the chokepoint allowlist
+                #     enforcement — also misclassified.
+                #
+                # Tighten by anchoring to a status-code pattern:
+                # `403`/`Forbidden` must appear next to a plausible
+                # HTTP-status context word, not just as a bare
+                # substring. The chokepoint message at
+                # core/sandbox/proxy.py emits
+                # "Tunnel connection failed: 403 Forbidden" — both
+                # the status word and a leading ":" or status
+                # context are present, so tighten to require BOTH.
                 msg = str(e).lower()
-                if "403" in msg or "forbidden" in msg:
+                _has_403_status = bool(
+                    re.search(r'(?:status|http|tunnel|response)[^\n]{0,40}\b403\b',
+                              msg)
+                )
+                _has_forbidden_status = bool(
+                    re.search(r'\b403\s+forbidden\b', msg)
+                )
+                if _has_403_status or _has_forbidden_status:
                     host = _urlparse.urlsplit(url).hostname or "?"
                     raise HttpError(
                         f"Egress proxy refused {host!r}: host not on the "
