@@ -1794,6 +1794,17 @@ def main() -> None:
         print(f"Exploitable: {report['exploitable']}")
         print(f"Exploits generated: {report['exploits_generated']} (LLM-generated)")
         print(f"Patches generated: {report['patches_generated']} (LLM-generated)")
+        # IRIS Tier 1/2/3/4 + path_conditions telemetry — same
+        # surfacing /agentic uses (raptor_agentic.py). Renders only
+        # when validation actually ran on at least one finding;
+        # silent on prep-only / no-CodeQL-DB runs. Indent at zero
+        # because /analyze's report uses flat lines (no leading
+        # whitespace), unlike /agentic which uses "   " for the
+        # nested-under-summary cadence.
+        from core.reporting.dataflow_summary import render_dataflow_validation_lines
+        dv = (report or {}).get("dataflow_validation") or {}
+        for line in render_dataflow_validation_lines(dv, indent=""):
+            print(line)
         print(f"LLM cost: ${report['llm_stats']['total_cost']:.4f}")
         print(f"Output: {out_dir}")
         print("=" * 70)
