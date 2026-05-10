@@ -1106,9 +1106,32 @@ class UrllibClient:
                 url=final_url,
             )
         finally:
-            # Return the connection to the pool. Without this, repeated
-            # requests would each open a fresh connection — exactly the
-            # cost we're switching to urllib3 to avoid.
+            # Drain THEN release. Pre-fix the finally only called
+            # `resp.release_conn()`. release_conn returns the
+            # connection to the pool WITHOUT draining any
+            # remaining body bytes from the socket buffer. The
+            # next request that picks up the connection then saw
+            # the leftover bytes prepended to its OWN response —
+            # parser confusion, wrong status codes, occasional
+            # data leaks across requests sharing the pool.
+            #
+            # Two failure paths that left bytes in the buffer:
+            #   * 4xx snippet branch reads only 512 bytes but a
+            #     larger error body has more in flight.
+            #   * SizeLimitExceeded raises mid-stream with the
+            #     remainder of the body still on the socket.
+            #
+            # `drain_conn()` reads remaining bytes (up to a small
+            # cap inside urllib3, ~64KB by default) so the socket
+            # buffer is empty when release_conn returns the conn
+            # to the pool. If drain itself fails we fall through
+            # to release — better to leak a single connection
+            # than to crash the cleanup path.
+            try:
+                if hasattr(resp, "drain_conn"):
+                    resp.drain_conn()
+            except Exception:
+                pass
             resp.release_conn()
 
     @staticmethod
