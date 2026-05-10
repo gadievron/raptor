@@ -255,7 +255,27 @@ def _get_or_start_dispatcher():
         # Failure to start the dispatcher must not break the run —
         # fall through to the env-direct path. The credential leak
         # channel stays open in this case but is no worse than today.
+        # Surface the failure on stderr (in addition to the logger
+        # warning) so operators see it regardless of log-level
+        # config. After Phase C activation strips API keys from
+        # ``get_llm_env``, this fallback's "no worse than today"
+        # guarantee no longer holds — the fallback path will produce
+        # workers without auth, and the symptom will be a confusing
+        # "first LLM call fails" 30 seconds later. Step 1 of the
+        # phased Phase C rollout: make this failure mode loud at the
+        # moment it happens, before activation depends on it.
         import logging
+        import sys as _sys
+        msg = (
+            f"raptor.py: credential-isolation dispatcher failed to "
+            f"start ({type(exc).__name__}: {exc}). Falling back to "
+            f"env-direct credential propagation. Once Phase C "
+            f"activation lands, this fallback will produce workers "
+            f"without LLM auth — fix the dispatcher startup failure "
+            f"or expect script-level auth errors."
+        )
+        _sys.stderr.write(msg + "\n")
+        _sys.stderr.flush()
         logging.getLogger(__name__).warning(
             "credential-isolation dispatcher failed to start, falling back "
             "to env-direct: %s", exc,
