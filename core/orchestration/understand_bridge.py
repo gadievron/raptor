@@ -1093,10 +1093,36 @@ def _filter_context_map(context_map: Dict[str, Any], stale_files: Set[str]) -> i
 
     flows = context_map.get("unchecked_flows", [])
     if isinstance(flows, list):
+        # Pre-fix the filter assumed `entry_point` / `sink` were
+        # always single strings — `f.get("entry_point") in kept_ep_ids`
+        # silently produced False when /understand emitted a flow
+        # with a list of IDs (multi-source fan-in or multi-sink
+        # fan-out, both legitimate per the context-map schema).
+        # That drop reported the flow as "stale-filtered" when in
+        # fact every referenced ID survived; downstream consumers
+        # then lost a flow that should have been kept.
+        #
+        # Also `f.get(...)` raised AttributeError if a non-dict
+        # element snuck into `flows`. Guard for that too.
+        def _flow_ids(f, key, kept):
+            v = f.get(key)
+            if v is None:
+                return False  # missing field — stale-by-default
+            if isinstance(v, list):
+                # Empty list = no IDs to validate; treat as
+                # missing (stale-drop). Non-empty: every ID must
+                # survive.
+                if not v:
+                    return False
+                return all(item in kept for item in v)
+            # Scalar (typical case): str / int / etc.
+            return v in kept
+
         clean = [
             f for f in flows
-            if f.get("entry_point") in kept_ep_ids
-            and f.get("sink") in kept_sink_ids
+            if isinstance(f, dict)
+            and _flow_ids(f, "entry_point", kept_ep_ids)
+            and _flow_ids(f, "sink", kept_sink_ids)
         ]
         removed += len(flows) - len(clean)
         context_map["unchecked_flows"] = clean
