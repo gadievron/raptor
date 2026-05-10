@@ -51,6 +51,17 @@ def sha256_tree(
         max_file_size = RaptorConfig.MAX_FILE_SIZE_FOR_HASH
     if chunk_size is None:
         chunk_size = RaptorConfig.HASH_CHUNK_SIZE
+    # Pre-fix `chunk_size=1` (or any tiny value) was accepted
+    # verbatim — a buggy caller passing 1 would byte-by-byte
+    # read every file, turning a sub-second tree-hash into a
+    # 1000x-slower I/O syscall storm. The slowdown was hard to
+    # diagnose because the hash output was identical, only
+    # wallclock changed. Floor at 4 KiB (the historical default
+    # bottom; smaller than typical filesystem block size and any
+    # real performance benefit ends well above this). Caller can
+    # still tune larger; the floor only catches obvious
+    # pathological inputs.
+    chunk_size = max(int(chunk_size), 4096)
 
     h = hashlib.sha256()
     skipped = []
@@ -178,6 +189,11 @@ def sha256_tree(
     return h.hexdigest()
 
 
+def _chunk_floor(chunk_size: int) -> int:
+    """Floor chunk_size at 4 KiB — see sha256_tree comment for rationale."""
+    return max(int(chunk_size), 4096)
+
+
 def sha256_file(path: Path, chunk_size: Optional[int] = None) -> str:
     """Hash a single file, streaming in chunks (no full-file load).
 
@@ -186,6 +202,7 @@ def sha256_file(path: Path, chunk_size: Optional[int] = None) -> str:
     """
     if chunk_size is None:
         chunk_size = RaptorConfig.HASH_CHUNK_SIZE
+    chunk_size = _chunk_floor(chunk_size)
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(chunk_size), b""):
