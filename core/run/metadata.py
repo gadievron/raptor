@@ -320,10 +320,42 @@ def _setup_checklist_symlink(run_dir: Path) -> None:
         _promote_checklist(project_dir)
 
     # Create relative symlink: run_dir/checklist.json → ../checklist.json
+    #
+    # TOCTOU window note: between the existence check above and the
+    # symlink_to call below, a parallel start_run() (same project,
+    # same wall-clock instant) can race in and create EITHER a real
+    # file or a symlink at this path. `symlink_to` then raises
+    # FileExistsError, caught by the except below.
+    #
+    # Pre-fix `except OSError: pass` swallowed that silently. Two
+    # downstream consequences:
+    #   * Operator debugging "why is my run dir missing the
+    #     checklist symlink" had no log signal — they had to read
+    #     the source to find this branch.
+    #   * EACCES, ENOSPC, EROFS (real failure modes that aren't
+    #     a race) were also silently swallowed, masking real
+    #     project-state corruption.
+    #
+    # Log at debug for the race case (FileExistsError), warning for
+    # real OS failures so operators can grep for them.
     try:
         checklist_in_run.symlink_to("../checklist.json")
-    except OSError:
-        pass  # Silently skip if symlink creation fails
+    except FileExistsError:
+        # Lost the race — the other process's checklist (real or
+        # symlinked) is now in place. Either is correct end state;
+        # debug-log so the race is visible if anyone looks.
+        from core.logging import get_logger
+        get_logger(__name__).debug(
+            "checklist symlink already created by parallel start_run "
+            "in %s — leaving it in place", run_dir,
+        )
+    except OSError as exc:
+        from core.logging import get_logger
+        get_logger(__name__).warning(
+            "checklist symlink creation failed in %s (%s) — "
+            "downstream consumers will see no checklist for this run",
+            run_dir, exc,
+        )
 
 
 def _promote_checklist(project_dir: Path) -> None:
