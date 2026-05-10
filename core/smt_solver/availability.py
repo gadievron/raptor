@@ -8,8 +8,6 @@ installed, the ``z3`` module attribute exported from here is ``None`` and
 from __future__ import annotations
 from core.logging import get_logger
 
-import os
-
 try:
     import z3  # type: ignore
     _Z3_AVAILABLE = True
