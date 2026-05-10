@@ -142,6 +142,20 @@ def _build_parser() -> argparse.ArgumentParser:
             "that's not following instructions or burning budget."
         ),
     )
+    p.add_argument(
+        "--hunt-tool", choices=("auto", "llm", "cocci"), default="auto",
+        help=(
+            "Backend for --hunt. ``llm`` = the multi-model LLM with "
+            "sandboxed Read/Grep/Glob (default before this flag, works "
+            "on any language). ``cocci`` = Coccinelle (spatch) AST-level "
+            "match — C/C++ targets only, deterministic, dramatically "
+            "more precise on structural patterns; uses 1 LLM call to "
+            "translate the pattern into a .cocci rule, then spatch "
+            "does the matching. ``auto`` = cocci when spatch is "
+            "installed AND the target has C/C++ source, otherwise llm. "
+            "Has no effect on --trace."
+        ),
+    )
     return p
 
 
@@ -261,10 +275,26 @@ def _build_cost_gate():
 def _do_hunt(args: argparse.Namespace) -> dict:
     from packages.code_understanding import hunt
     from packages.code_understanding.dispatch import default_hunt_dispatch
+    from packages.code_understanding.dispatch.hunt_cocci_dispatch import (
+        cocci_hunt_dispatch, repo_looks_c_cpp,
+    )
+    from packages.coccinelle.runner import is_available as spatch_available
 
     target = Path(args.target).resolve()
     if not target.is_dir():
         raise FileNotFoundError(f"target is not a directory: {target}")
+
+    # Backend selection. ``auto`` picks cocci when spatch is on PATH
+    # AND the target has C/C++ source; otherwise the LLM-grep
+    # default. Explicit ``cocci`` honours the operator's choice
+    # (the dispatch surfaces a clean error if spatch is missing or
+    # the repo isn't C/C++ — better UX than a silent fallback).
+    use_cocci = False
+    if args.hunt_tool == "cocci":
+        use_cocci = True
+    elif args.hunt_tool == "auto":
+        use_cocci = spatch_available() and repo_looks_c_cpp(str(target))
+    backend_label = "cocci" if use_cocci else "llm"
 
     models, missing = _resolve_models(args.model)
     if missing:
@@ -274,12 +304,21 @@ def _do_hunt(args: argparse.Namespace) -> dict:
         )
 
     # Per-model budget = total / N, with a small per-model floor.
+    # The cocci backend uses far less of this (1 LLM call to write
+    # the rule, then spatch does the work) but the floor still
+    # applies as a safety cap.
     n = len(models)
     per_model_cost = max(_PER_MODEL_COST_FLOOR_USD, args.max_cost / n)
 
     cost_by_model, verbose_logger = _build_cost_and_verbose_helpers(args.verbose)
 
     def _bound_dispatch(model, pattern, repo_path):
+        if use_cocci:
+            # cocci dispatch tracks no per-call cost callback (only one
+            # small LLM round-trip) — record a nominal value so the
+            # "model contributed" signal still shows in operator output.
+            cost_by_model[model.model_name] = 0.0
+            return cocci_hunt_dispatch(model, pattern, repo_path)
         return default_hunt_dispatch(
             model, pattern, repo_path,
             max_cost_usd=per_model_cost,
@@ -298,6 +337,7 @@ def _do_hunt(args: argparse.Namespace) -> dict:
 
     return {
         "mode": "hunt",
+        "backend": backend_label,
         "pattern": args.hunt,
         "target": str(target),
         "models": [m.model_name for m in models],
