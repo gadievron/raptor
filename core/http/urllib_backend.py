@@ -650,6 +650,18 @@ class UrllibClient:
                     )
                 yield chunk
         finally:
+            # Same drain-then-release pattern as `_fetch_once`: a
+            # SizeLimitExceeded / TimeoutError raised mid-stream
+            # leaves bytes in the socket buffer. Releasing without
+            # draining poisons the pool — the next request that
+            # picks up the connection sees the leftover bytes
+            # prepended to its OWN response. Drain (urllib3 caps
+            # internally at ~64KB), then release.
+            try:
+                if hasattr(resp, "drain_conn"):
+                    resp.drain_conn()
+            except Exception:
+                pass
             # Released whether the generator was fully consumed,
             # garbage-collected mid-stream, or .close()-d explicitly.
             resp.release_conn()
