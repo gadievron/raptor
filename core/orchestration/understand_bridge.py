@@ -319,7 +319,20 @@ def _search_understand_dirs(
     )
 
     results = []
-    for d in parent_dir.iterdir():
+    try:
+        children = list(parent_dir.iterdir())
+    except OSError as exc:
+        # parent_dir itself unreadable (PermissionError, ENOTDIR
+        # mid-call from a racing remount). Pre-fix the loop just
+        # crashed; now log so the operator sees why discovery
+        # returned nothing instead of guessing "no understand runs".
+        logger.warning(
+            "understand_bridge: cannot list %s (%s) — discovery skipped",
+            parent_dir, exc,
+        )
+        return []
+
+    for d in children:
         try:
             if not (d.is_dir()
                     and d != exclude
@@ -327,8 +340,22 @@ def _search_understand_dirs(
                     and infer_command_type(d) == "understand"
                     and (d / "context-map.json").exists()):
                 continue
+        except PermissionError as exc:
+            # Pre-fix `except OSError: continue` swallowed
+            # PermissionError silently. A user with a misconfigured
+            # ACL on a single understand run dir would see the
+            # whole bridge skip that run with no diagnostic — they
+            # then re-ran /validate repeatedly and got the same
+            # silent failure. Log permission errors specifically
+            # (they're config-fixable) while staying silent on
+            # broken-symlink class OSErrors.
+            logger.debug(
+                "understand_bridge: permission denied probing %s (%s) — skipped",
+                d.name, exc,
+            )
+            continue
         except OSError:
-            continue  # broken symlinks, permission errors
+            continue  # broken symlinks, transient races
 
         if target_resolved:
             from core.json import load_json
@@ -341,7 +368,16 @@ def _search_understand_dirs(
 
         results.append(d)
 
-    results.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+    # Same vanished-mid-rank race as _rank_candidates — guard stat()
+    # so a deleted dir doesn't kill the whole sort. Sort key 0 puts
+    # vanished dirs at the bottom; they'll still be in `results` but
+    # the caller's _rank_candidates layer guards subsequent stats.
+    def _safe_mtime(d: Path) -> float:
+        try:
+            return d.stat().st_mtime
+        except OSError:
+            return 0.0
+    results.sort(key=_safe_mtime, reverse=True)
     return results
 
 
