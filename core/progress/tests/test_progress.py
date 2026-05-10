@@ -6,7 +6,11 @@ import sys
 import unittest
 from unittest import mock
 
-from core.progress import HackerProgress, _stderr_supports_unicode
+from core.progress import (
+    HackerProgress,
+    HackerProgressBar,
+    _stderr_supports_unicode,
+)
 
 
 class CalculateETATest(unittest.TestCase):
@@ -72,6 +76,171 @@ class UnicodeProbeTest(unittest.TestCase):
         fake = mock.MagicMock(spec=[])  # No `encoding`.
         with mock.patch.object(sys, "stderr", fake):
             self.assertFalse(_stderr_supports_unicode())
+
+
+class _FakeTTY(io.StringIO):
+    """StringIO that claims to be a TTY for HackerProgressBar's
+    auto-disable detection."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+class HackerProgressBarTTYDetectionTest(unittest.TestCase):
+    def test_oneline_mode_when_stream_is_not_tty(self) -> None:
+        """Plain ``io.StringIO`` reports ``isatty()==False`` —
+        bar auto-selects ``oneline`` mode, emitting one line per
+        stage with no ANSI clear."""
+        buf = io.StringIO()
+        with HackerProgressBar(target="x", stream=buf) as bar:
+            bar.stage("discovery")
+            bar.tick()
+            bar.done(summary="3 manifests")
+        out = buf.getvalue()
+        self.assertNotIn("\x1b[", out)
+        self.assertIn("discovery", out)
+        self.assertIn("3 manifests", out)
+
+    def test_redraw_mode_when_stream_is_tty(self) -> None:
+        """TTY-shaped stream → bar enables redraw; ticks emit
+        ANSI clear sequences."""
+        buf = _FakeTTY()
+        with HackerProgressBar(target="x", stream=buf) as bar:
+            bar.stage("osv", total=10)
+            for i in range(11):
+                bar.tick(done=i)
+            bar.done(summary="0 vuln")
+        out = buf.getvalue()
+        self.assertIn("\x1b[", out)
+        self.assertIn("osv", out)
+
+
+class HackerProgressBarSilentModeTest(unittest.TestCase):
+    """``disabled=True`` (operator opt-out via ``--no-progress``)
+    must produce zero output. Distinct from non-TTY oneline mode
+    which still emits per-stage records suitable for CI logs."""
+
+    def test_disabled_true_emits_nothing(self) -> None:
+        buf = io.StringIO()
+        with HackerProgressBar(target="repo", disabled=True,
+                                stream=buf) as bar:
+            bar.stage("discovery")
+            bar.tick()
+            bar.flash("KEV", "CVE-2021-44228")
+            bar.done(summary="120 deps")
+            bar.stage("osv", total=10)
+            bar.tick(done=5)
+            bar.done(summary="14 vuln")
+            bar.end(summary="all good")
+        # Silent mode: not a single byte hits the stream.
+        self.assertEqual(buf.getvalue(), "")
+
+    def test_disabled_true_suppresses_target_header(self) -> None:
+        """Even the ``sca > <target>`` prelude is suppressed when
+        the operator explicitly opts out."""
+        buf = io.StringIO()
+        bar = HackerProgressBar(target="repo", disabled=True,
+                                  stream=buf)
+        del bar
+        self.assertEqual(buf.getvalue(), "")
+
+
+class HackerProgressBarStageLifecycleTest(unittest.TestCase):
+    """Lifecycle behaviours — exercise the oneline (non-TTY auto)
+    path because it's deterministic to read back from a buffer."""
+
+    def test_oneline_emits_one_line_per_stage(self) -> None:
+        buf = io.StringIO()  # not a TTY → auto-selects oneline
+        with HackerProgressBar(target="repo", stream=buf) as bar:
+            bar.stage("discovery")
+            bar.done(summary="120 deps")
+            bar.stage("osv")
+            bar.done(summary="14 vuln")
+            bar.end(summary="all good")
+        lines = [l for l in buf.getvalue().splitlines() if l.strip()]
+        # Header + discovery + osv + done footer = 4 lines.
+        self.assertEqual(len(lines), 4)
+        self.assertIn("sca", lines[0])
+        self.assertIn("repo", lines[0])
+        self.assertIn("discovery", lines[1])
+        self.assertIn("120 deps", lines[1])
+        self.assertIn("osv", lines[2])
+        self.assertIn("14 vuln", lines[2])
+        self.assertIn("done", lines[3])
+        self.assertIn("all good", lines[3])
+
+    def test_stage_switch_finalises_prior_stage(self) -> None:
+        """Calling ``stage()`` twice without ``done()`` finalises
+        the previous one — operator never gets two stages
+        appearing simultaneously."""
+        buf = io.StringIO()
+        with HackerProgressBar(target=None, stream=buf) as bar:
+            bar.stage("discovery")
+            bar.stage("cascade")  # Implicit finalise of discovery.
+            bar.done(summary="ok")
+        out = buf.getvalue()
+        self.assertIn("discovery", out)
+        self.assertIn("cascade", out)
+
+    def test_exit_finalises_in_flight_stage(self) -> None:
+        """Context-manager exit cleans up an unfinished stage."""
+        buf = io.StringIO()
+        with HackerProgressBar(stream=buf) as bar:
+            bar.stage("reach")
+            bar.tick()
+            # No done() call — exit must still emit the line.
+        self.assertIn("reach", buf.getvalue())
+
+    def test_exit_with_exception_marks_stage_interrupted(self) -> None:
+        """If the body raises, the in-flight stage's final line
+        carries ``interrupted`` so the operator sees where it
+        died."""
+        buf = io.StringIO()
+        try:
+            with HackerProgressBar(stream=buf) as bar:
+                bar.stage("osv")
+                raise RuntimeError("boom")
+        except RuntimeError:
+            pass
+        self.assertIn("interrupted", buf.getvalue())
+
+
+class HackerProgressBarFlashTest(unittest.TestCase):
+    def test_flash_emitted_in_tty_mode(self) -> None:
+        buf = _FakeTTY()
+        with HackerProgressBar(disabled=False, stream=buf) as bar:
+            bar.stage("osv", total=100)
+            bar.tick(done=10)
+            bar.flash("KEV", "CVE-2021-44228 log4j-core@2.14.1")
+            bar.tick(done=20)
+            bar.done(summary="14 vuln")
+        out = buf.getvalue()
+        self.assertIn("KEV", out)
+        self.assertIn("CVE-2021-44228", out)
+
+    def test_flash_suppressed_in_oneline_mode(self) -> None:
+        """Non-TTY oneline mode suppresses flashes — they'd
+        interleave oddly with the per-stage one-line output and
+        ANSI-less CI logs already get the KEV count from the
+        stage detail."""
+        buf = io.StringIO()  # non-TTY → oneline
+        with HackerProgressBar(stream=buf) as bar:
+            bar.stage("osv")
+            bar.flash("KEV", "CVE-2021-44228")
+            bar.done(summary="ok")
+        self.assertNotIn("CVE-2021-44228", buf.getvalue())
+
+
+class HackerProgressBarTickThrottlingTest(unittest.TestCase):
+    def test_tick_advances_internal_counter_even_when_silent(self) -> None:
+        """Silent / oneline modes still count ticks for done()'s
+        summary, just don't render mid-stage."""
+        buf = io.StringIO()
+        with HackerProgressBar(disabled=True, stream=buf) as bar:
+            bar.stage("x", total=5)
+            for _ in range(3):
+                bar.tick()
+            self.assertEqual(bar._stage_done, 3)
 
 
 if __name__ == "__main__":
