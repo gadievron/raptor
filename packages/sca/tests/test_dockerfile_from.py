@@ -295,6 +295,42 @@ def test_fetch_returns_none_on_manifest_error():
     assert sbom is None
 
 
+def test_fetch_negative_caches_failed_lookups(tmp_path: Path):
+    """Once a manifest fetch fails, subsequent fetches for the same
+    image ref must short-circuit on the disk cache rather than
+    repeating the full auth-dance + retry budget. Saves ~15-20s per
+    deleted-tag Dockerfile FROM (e.g. spring-boot-2.1's openjdk
+    early-access tags purged from Docker Hub) on every re-scan."""
+    from core.json.cache import JsonCache
+    cache = JsonCache(root=tmp_path)
+    client = MagicMock()
+    client.fetch_manifest.side_effect = RuntimeError("404 not found")
+
+    # First call: actually invokes the client, fails.
+    sbom1 = fetch_image_sbom(
+        "openjdk:11-ea-28-jdk", client=client, disk_cache=cache,
+    )
+    assert sbom1 is None
+    assert client.fetch_manifest.call_count == 1
+
+    # Second call: must hit the negative cache and NOT re-invoke
+    # the client.
+    sbom2 = fetch_image_sbom(
+        "openjdk:11-ea-28-jdk", client=client, disk_cache=cache,
+    )
+    assert sbom2 is None
+    assert client.fetch_manifest.call_count == 1, (
+        "negative cache must short-circuit the client call"
+    )
+
+    # A DIFFERENT image ref (one that hasn't failed) must still
+    # invoke the client — the negative cache is keyed per-ref.
+    fetch_image_sbom(
+        "alpine:3.18", client=client, disk_cache=cache,
+    )
+    assert client.fetch_manifest.call_count == 2
+
+
 def test_fetch_returns_none_on_unknown_media_type():
     """A manifest with an unrecognised media type — bail rather
     than guess."""

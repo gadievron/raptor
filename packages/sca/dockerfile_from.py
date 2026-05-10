@@ -341,6 +341,22 @@ def fetch_image_sbom(
         )
         return None
 
+    # Negative-cache short-circuit. ``image`` refs that previously
+    # 404'd or otherwise failed cleanly get a marker in the disk
+    # cache with a 1-hour TTL. Re-scanning a Dockerfile with stale
+    # FROM tags (e.g. spring-boot-2.1's ``openjdk:11-ea-28-jdk``,
+    # an early-access build long since purged from Docker Hub)
+    # would otherwise burn ~15-20s per ref every run on the
+    # auth-dance-then-404 path. Disk-backed because the fail state
+    # is stable across operator re-runs against unchanged
+    # Dockerfiles.
+    _NEGATIVE_KEY_PREFIX = "negative-fetch:"
+    _NEGATIVE_TTL = 3600  # 1 hour
+    negative_key = _NEGATIVE_KEY_PREFIX + image
+    if disk_cache is not None:
+        if disk_cache.get(negative_key, ttl_seconds=_NEGATIVE_TTL):
+            return None
+
     try:
         manifest_resp = client.fetch_manifest(ref)
     except Exception as e:                          # noqa: BLE001
@@ -355,6 +371,13 @@ def fetch_image_sbom(
             "sca.dockerfile_from: failed to fetch manifest for %s: %s",
             image, e,
         )
+        # Persist a negative marker so re-scans don't repeat the
+        # full auth+retry dance on the same broken ref.
+        if disk_cache is not None:
+            disk_cache.put(
+                negative_key, {"failed": True},
+                ttl_seconds=_NEGATIVE_TTL,
+            )
         return None
 
     # Drill through image-index → per-platform manifest if needed.
