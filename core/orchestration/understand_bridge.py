@@ -1226,11 +1226,27 @@ def _trace_references_stale(trace: Dict[str, Any], stale_files: Set[str]) -> boo
         f = step.get("file", "")
         if f and f in stale_files:
             return True
-        # Embedded in action/result strings — extract filenames via regex
+        # Embedded in action/result strings — extract filenames via regex.
+        # Pre-fix the pattern was `[\w./+-]+\.\w+(?=:\d)` without
+        # bounds and without `re.ASCII`. Two issues:
+        #   * Unbounded greedy `+` quantifiers — pathological action /
+        #     result strings (operator pasted a base64 blob, an LLM
+        #     emitted a 100K-char identifier-shaped run, malformed
+        #     JSON serialiser concatenated huge run) burned CPU
+        #     scanning the regex engine for a "filename ending in
+        #     .ext: digit". Same ReDoS shape that the sister callsite
+        #     at understand_bridge.py:1034 was already hardened
+        #     against in batch RX66 (file-token findall).
+        #   * Unicode-default `\w` admits Cyrillic / CJK / Devanagari
+        #     "filenames" that never match the ASCII canonical form
+        #     in `stale_files`, so the staleness check silently
+        #     missed real matches when the upstream encoded glyphs.
+        # Apply the same bounds (`{1,1024}` for the path body,
+        # `{1,32}` for the extension) + `re.ASCII` for parity.
         for field in ("action", "result"):
             val = step.get(field, "")
             if val:
-                for match in re.findall(r'[\w./+-]+\.\w+(?=:\d)', val):
+                for match in re.findall(r'[\w./+-]{1,1024}\.\w{1,32}(?=:\d)', val, flags=re.ASCII):
                     if match in stale_files:
                         return True
     return False
