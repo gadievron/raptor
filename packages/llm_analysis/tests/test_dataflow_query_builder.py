@@ -606,6 +606,74 @@ class TestBuildTemplateQuery:
         assert q is not None
         assert "import cpp" in q
 
+    def test_cpp_template_aliases_flowsources_to_avoid_dataflow_ambiguity(self):
+        """The cpp template MUST alias FlowSources to FS — otherwise its
+        transitive `semmle.code.cpp.ir.dataflow.DataFlow` collides with
+        the explicit `semmle.code.cpp.dataflow.new.DataFlow` (both
+        export module `DataFlow`) and codeql refuses to compile with
+        'module DataFlow is ambiguous between: DataFlow::DataFlow,
+        DataFlow::DataFlow'. Real failure observed on a /agentic run
+        2026-05-10 against /tmp/smt-tier4-test; fix matches canonical
+        pattern in shipped CWE-120 query."""
+        q = build_template_query(
+            language="cpp",
+            source_predicate_body="x",
+            sink_predicate_body="y",
+        )
+        assert q is not None
+        # The alias MUST be present — without it Tier 2/3 compile
+        # fails on every cpp finding.
+        assert "FlowSources as FS" in q, (
+            "cpp template lost its `FlowSources as FS` alias — "
+            "compile will fail with 'module DataFlow is ambiguous'"
+        )
+        # The redundant explicit DataFlow import should be absent —
+        # TaintTracking pulls it in. Keeping both worked fine
+        # historically (same module), but the canonical CWE-120 query
+        # omits it for cleanliness; assert here so a future drive-by
+        # re-add doesn't go unnoticed.
+        assert "import semmle.code.cpp.dataflow.new.DataFlow\n" not in q, (
+            "cpp template re-added the redundant explicit DataFlow "
+            "import; TaintTracking already pulls it in transitively"
+        )
+
+    def test_cpp_prompt_instructs_FS_prefix(self):
+        """Companion to the template change: the LLM prompt for cpp
+        predicates must mention the `FS::` prefix so the LLM doesn't
+        emit an unqualified `n instanceof FlowSource` that won't
+        resolve."""
+        # Inspect the prompt-building helper directly — this is the
+        # source of truth for what the LLM sees. Pass a dummy hypothesis
+        # and check the cpp branch fires.
+        from packages.llm_analysis.dataflow_validation import (
+            _ask_llm_for_predicates,
+        )
+        from packages.hypothesis_validation.hypothesis import Hypothesis
+        from pathlib import Path
+        from unittest.mock import MagicMock, patch
+
+        h = Hypothesis(
+            claim="dummy",
+            target=Path("/x.c"),
+        )
+        captured = {}
+
+        def fake_generate_structured(prompt, schema, system_prompt, task_type):
+            captured["prompt"] = prompt
+            return None  # short-circuit; we only care about the prompt
+
+        client = MagicMock()
+        client.generate_structured.side_effect = fake_generate_structured
+        _ask_llm_for_predicates(h, client, "cpp")
+        prompt = captured.get("prompt", "")
+        # The cpp-specific instruction MUST appear so the LLM uses the
+        # `FS::` prefix when referencing FlowSources types.
+        assert "FS::" in prompt, (
+            f"cpp prompt missing FS:: prefix instruction; LLM may emit "
+            f"unqualified FlowSource references that won't compile. "
+            f"Prompt: {prompt[:500]}"
+        )
+
     def test_unsupported_language_returns_none(self):
         q = build_template_query(
             language="cobol",
