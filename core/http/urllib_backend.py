@@ -32,8 +32,9 @@ import gzip
 import io
 import json
 import logging
+import threading
 import time
-from typing import Any, Dict, Iterator, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 from urllib import parse as _urlparse
 
 import urllib3
@@ -136,6 +137,119 @@ def _new_pool_manager() -> urllib3.PoolManager:
     )
 
 
+class _HostCircuitBreaker:
+    """Per-(host, port) rate-limit circuit breaker.
+
+    After ``threshold`` 429/5xx events from the same host within
+    ``window`` seconds, the circuit opens — subsequent requests
+    for that host fail-fast for ``cooldown`` seconds instead of
+    retrying through the full backoff schedule (1+2+5+15+60+300 =
+    383s per request).
+
+    Why this exists: anonymous Docker Hub pulls hit a hard rate
+    limit (100 / 6h per IP) that no amount of in-process backoff
+    can recover from. With 8 worker threads each retrying every
+    rate-limited fetch through the full schedule, a multi-image
+    project (istio: 87 unique image refs) can spend 5-7 minutes
+    burning sleep cycles for fetches that are guaranteed to fail.
+    The circuit breaker bounds that to ``cooldown`` seconds total
+    instead of ``unique_failed_fetches × 383s``.
+
+    Successful responses to the host clear both the failure
+    history and the open-state, so a host that recovers (e.g.
+    rate-limit window resets) is immediately tried again.
+
+    Thread-safe: SCA's OCI fetcher uses an 8-worker ThreadPool
+    against a shared HttpClient, so concurrent record_failure /
+    is_open calls from different threads must serialise.
+    """
+
+    def __init__(
+        self, *,
+        threshold: int = 2,
+        window: float = 60.0,
+        cooldown: float = 120.0,
+    ) -> None:
+        self._threshold = threshold
+        self._window = window
+        self._cooldown = cooldown
+        self._failures: Dict[Tuple[str, int], List[float]] = {}
+        self._open_until: Dict[Tuple[str, int], float] = {}
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _key(host: str, port: int) -> Tuple[str, int]:
+        return (host.lower(), port)
+
+    def is_open(self, host: str, port: int) -> Tuple[bool, float]:
+        """Return ``(is_open, seconds_remaining)``. When ``is_open``
+        is True the caller should raise without making the request."""
+        key = self._key(host, port)
+        with self._lock:
+            now = time.monotonic()
+            until = self._open_until.get(key, 0.0)
+            if now < until:
+                return True, until - now
+            # Cooldown elapsed — drop the open-state record so a
+            # successful retry fully resets to closed.
+            if until:
+                self._open_until.pop(key, None)
+            return False, 0.0
+
+    def record_failure(self, host: str, port: int) -> bool:
+        """Record a 429/5xx for the host. Returns True iff the
+        circuit transitioned to open as a result of this call.
+
+        Returning the transition lets the caller emit a single
+        log line rather than one per blocked attempt downstream.
+        """
+        key = self._key(host, port)
+        with self._lock:
+            now = time.monotonic()
+            failures = self._failures.setdefault(key, [])
+            failures[:] = [t for t in failures if now - t < self._window]
+            failures.append(now)
+            if len(failures) >= self._threshold:
+                was_open = (now < self._open_until.get(key, 0.0))
+                self._open_until[key] = now + self._cooldown
+                return not was_open
+            return False
+
+    def record_success(self, host: str, port: int) -> None:
+        """Reset state for the host on a 2xx response."""
+        key = self._key(host, port)
+        with self._lock:
+            self._failures.pop(key, None)
+            self._open_until.pop(key, None)
+
+
+# Module-level singleton circuit breaker — shared across all
+# UrllibClient (and subclass) instances created without an explicit
+# breaker. Lazy-initialised so module import doesn't pay the cost
+# when nobody constructs a default client. Tests that need state
+# isolation pass a fresh ``_HostCircuitBreaker()`` via the
+# ``circuit_breaker`` kwarg.
+_DEFAULT_CIRCUIT_BREAKER: Optional["_HostCircuitBreaker"] = None
+_DEFAULT_CIRCUIT_BREAKER_LOCK = threading.Lock()
+
+
+def _default_circuit_breaker() -> "_HostCircuitBreaker":
+    global _DEFAULT_CIRCUIT_BREAKER
+    if _DEFAULT_CIRCUIT_BREAKER is None:
+        with _DEFAULT_CIRCUIT_BREAKER_LOCK:
+            if _DEFAULT_CIRCUIT_BREAKER is None:
+                _DEFAULT_CIRCUIT_BREAKER = _HostCircuitBreaker()
+    return _DEFAULT_CIRCUIT_BREAKER
+
+
+def reset_default_circuit_breaker() -> None:
+    """Reset module-level breaker state — for tests + long-running
+    daemons that want a clean slate without restarting the process."""
+    global _DEFAULT_CIRCUIT_BREAKER
+    with _DEFAULT_CIRCUIT_BREAKER_LOCK:
+        _DEFAULT_CIRCUIT_BREAKER = None
+
+
 class UrllibClient:
     """urllib3-backed HttpClient (was stdlib urllib pre-pooling refactor).
 
@@ -157,11 +271,26 @@ class UrllibClient:
         self,
         user_agent: str = DEFAULT_USER_AGENT,
         _http: Optional[urllib3.PoolManager] = None,
+        *,
+        circuit_breaker: Optional[_HostCircuitBreaker] = None,
     ) -> None:
         self._ua = user_agent
         # Subclass / test hook. Lazy default avoids spinning up a pool
         # manager (and its certifi load) when the client is never used.
         self._http = _http or _new_pool_manager()
+        # Per-host rate-limit circuit breaker. Defaults to a module-
+        # level singleton so state persists ACROSS HttpClient
+        # instances within one process — important for sweep-style
+        # callers (calibration corpus collect, stress test) that
+        # construct a fresh client per sample. Without sharing,
+        # docker.io's rate-limit window stays exhausted (it's
+        # IP-scoped on their side) while each per-sample breaker
+        # has to re-trip from scratch, burning ~90s of retry budget
+        # per sample. Tests pass a fresh breaker explicitly via the
+        # kwarg to keep state isolated.
+        if circuit_breaker is None:
+            circuit_breaker = _default_circuit_breaker()
+        self._circuit_breaker = circuit_breaker
 
     def _validate_url(self, url: str) -> _urlparse.SplitResult:
         """Reject URLs that don't match (allowed-scheme)://host/...
@@ -514,6 +643,28 @@ class UrllibClient:
         # truncated; a max() guards against negative values.
         max_attempts = max(1, min(retries + 1, len(_BACKOFF_SECONDS)))
         schedule = _BACKOFF_SECONDS[:max_attempts]
+
+        # Per-host circuit-breaker fast-fail. If we recently saw enough
+        # 429/5xx from this host to open the circuit, skip the request
+        # entirely — saves the full backoff schedule (~383s) on a host
+        # that's already known-bad-this-window. Most common case: Docker
+        # Hub anonymous-pull rate limit during a multi-image scan.
+        parsed_for_cb = _urlparse.urlsplit(url)
+        cb_host = (parsed_for_cb.hostname or "").lower()
+        cb_port = parsed_for_cb.port or (
+            443 if parsed_for_cb.scheme == "https" else 80
+        )
+        is_open, seconds_left = self._circuit_breaker.is_open(
+            cb_host, cb_port,
+        )
+        if is_open:
+            raise HttpError(
+                f"Circuit open for {cb_host}:{cb_port} "
+                f"(cooldown {seconds_left:.0f}s remaining); "
+                f"recent 429/5xx history. Skipping request to avoid "
+                f"retry-storm: {_safe_url_for_log(url)}",
+            )
+
         last_exc: Optional[Exception] = None
         for attempt, delay in enumerate(schedule):
             if time.monotonic() >= deadline:
@@ -530,12 +681,18 @@ class UrllibClient:
             # would burn the trailing 300s slot for no reason.
             is_last_attempt = attempt + 1 == len(schedule)
             try:
-                return self._fetch_once(
+                response = self._fetch_once(
                     url, method=method, timeout=timeout, max_bytes=max_bytes,
                     body=body, headers=headers,
                     follow_redirects=follow_redirects,
                     raise_on_status=raise_on_status,
                 )
+                # Successful response (or a 4xx-with-raise_on_status=False
+                # that we want to surface). Reset the host's circuit
+                # breaker — a successful fetch means the rate-limit
+                # window reset, the registry came back, etc.
+                self._circuit_breaker.record_success(cb_host, cb_port)
+                return response
             except HttpError as e:
                 # Retry only on transient status codes (429, 5xx).
                 # Everything else — non-retryable 4xx, SizeLimitExceeded
@@ -544,6 +701,18 @@ class UrllibClient:
                     e.status == 429
                     or (e.status is not None and 500 <= e.status < 600)
                 )
+                if is_transient:
+                    transitioned = self._circuit_breaker.record_failure(
+                        cb_host, cb_port,
+                    )
+                    if transitioned:
+                        logger.warning(
+                            "core.http: opening circuit breaker for "
+                            "%s:%d (recent 429/5xx threshold reached); "
+                            "subsequent requests will fail-fast for the "
+                            "cooldown window",
+                            cb_host, cb_port,
+                        )
                 if not is_transient:
                     raise
                 last_exc = e
