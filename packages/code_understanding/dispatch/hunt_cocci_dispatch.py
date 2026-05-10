@@ -162,54 +162,6 @@ def _strip_fences(text: str) -> str:
     return text.strip()
 
 
-_POS_DECL_RE = re.compile(r"position\s+(\w+)\s*;")
-_RULE_HEAD_RE = re.compile(r"@(\w+)@")
-
-
-def _inject_reporter_harness(rule_text: str) -> str:
-    """Append a ``script:python`` block that emits one ``COCCIRESULT:``
-    JSON line per matched position. Mirrors what
-    ``packages.coccinelle.runner._inject_harness`` does — but pre-
-    inject here so the runner's broken stdin-rule codepath
-    (``--sp-file -`` not supported by some spatch builds) is
-    avoided. The runner sees a rule that already has
-    ``script:python``, leaves it alone, and runs from the file path.
-
-    If the rule already has a script block (e.g. operator-authored
-    or LLM that ignored the system-prompt rules), pass it through
-    unchanged. Same applies if there's no ``position`` metavariable
-    declared — without one, the harness can't bind anything to
-    report.
-    """
-    if "script:python" in rule_text or "script:ocaml" in rule_text:
-        return rule_text
-    pos_match = _POS_DECL_RE.search(rule_text)
-    if not pos_match:
-        return rule_text
-    rule_names = _RULE_HEAD_RE.findall(rule_text)
-    if not rule_names:
-        return rule_text
-    pos_var = pos_match.group(1)
-    rule_id = rule_names[0]
-    # Output goes to stderr so the runner's _parse_results can find
-    # it (the runner reads both stdout and stderr).
-    harness = (
-        f"\n\n@script:python@\n"
-        f"{pos_var} << {rule_id}.{pos_var};\n"
-        f"@@\n"
-        f"\n"
-        f"import json, sys\n"
-        f"for _p in {pos_var}:\n"
-        f'    _m = {{"file": _p.file, "line": int(_p.line), '
-        f'"col": int(_p.column), '
-        f'"line_end": int(_p.line_end), '
-        f'"col_end": int(_p.column_end), '
-        f'"rule": "understand-hunt-cocci"}}\n'
-        f'    sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\\n")\n'
-    )
-    return rule_text + harness
-
-
 def translate_pattern_to_cocci_rule(
     pattern: str,
     *,
@@ -369,16 +321,10 @@ def cocci_hunt_dispatch(
             "tool (CodeQL / IRIS) for taint-shaped patterns"
         )}]
 
-    # Step 2: pre-inject a reporting harness so the rule emits
-    # ``COCCIRESULT:`` JSON on each match (the format
-    # ``packages.coccinelle.runner._parse_results`` reads). The
-    # runner has its own auto-injection codepath but it routes
-    # through ``spatch --sp-file -`` (stdin), which fails with
-    # ``Sys_error("-: No such file or directory")`` on the spatch
-    # version we use today. Pre-injecting here keeps the runner
-    # on its file-path codepath. Follow-up: fix the auto-injection
-    # path in the runner.
-    rule_text = _inject_reporter_harness(rule_text)
+    # Step 2: write the rule to a temp file and hand it to spatch.
+    # The runner's harness auto-injection writes the harnessed
+    # text to its own tempfile when needed (fixed by the
+    # runner-fix PR).
 
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".cocci", delete=False,
