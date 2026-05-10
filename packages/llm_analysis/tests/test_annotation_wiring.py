@@ -50,17 +50,34 @@ class TestProcessFindingsCallsTheMethod:
         assert "self._emit_finding_annotation(vuln, checklist)" in text
 
     def test_call_is_inside_analyze_vulnerability_branch(self):
-        """The call must be inside the ``if analyze_vulnerability``
-        block (post-analysis) — otherwise it fires on every iteration
-        regardless of whether analysis happened."""
+        """The post-LLM emit must be inside the
+        ``if analyze_vulnerability`` block (post-analysis) —
+        otherwise it fires on every iteration regardless of whether
+        analysis happened.
+
+        ``process_findings`` may also emit from a deterministic
+        pre-flight skip path (D-1 fixture-detection — finding sits
+        in test code with no production caller, LLM analysis
+        skipped to save tokens). That earlier emit is conditional
+        on ``fixture_skipped_this`` and lives inside its own
+        ``continue`` block, so it doesn't fire on every iteration.
+
+        Pin: there's a post-LLM emit immediately after the
+        ``analyze_vulnerability`` conditional (within ~500 chars).
+        """
         text = AGENT_PY.read_text(encoding="utf-8")
-        # Find the analyze_vulnerability check and the emit call.
         ana_idx = text.index("if self.analyze_vulnerability(vuln):")
-        emit_idx = text.index("self._emit_finding_annotation(vuln, checklist)")
-        # Emit must come after the conditional (within the block).
-        assert emit_idx > ana_idx
-        # And reasonably close — within ~500 chars (same indent block).
-        assert emit_idx - ana_idx < 500
+        # Find an emit call AFTER the analyze_vulnerability block.
+        # rindex to skip the pre-flight emit; index after ana_idx
+        # would be cleaner but rindex hardens against multiple
+        # post-LLM emit sites if any future refactor adds one.
+        post_text = text[ana_idx:]
+        emit_offset = post_text.index(
+            "self._emit_finding_annotation(vuln, checklist)"
+        )
+        # Emit within ~500 chars of the conditional (same indent
+        # block).
+        assert 0 < emit_offset < 500
 
 
 # ---------------------------------------------------------------------------

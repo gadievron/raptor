@@ -1300,6 +1300,13 @@ class AutonomousSecurityAgentV2:
         false_positives_found = 0
         annotations_emitted = 0
         variant_annotations = 0
+        # D-1 fixture-detection pre-flight metrics. Counts of
+        # findings the pre-flight saw and how it ruled. Surfaced
+        # in the autonomous report so operators can see whether
+        # the pre-flight is firing usefully and how many LLM
+        # tokens it saved.
+        fixture_prep_outcomes = {"true": 0, "false": 0, "candidate": 0}
+        fixture_skipped_llm_calls = 0
         idx = 0  # Initialize idx to prevent UnboundLocalError when unique_findings is empty
 
         is_prep = isinstance(self.llm, ClaudeCodeProvider)
@@ -1343,6 +1350,96 @@ class AutonomousSecurityAgentV2:
                         finding["metadata"] = metadata
 
                 vuln = VulnerabilityContext(finding, self.repo_path)
+
+                # 0. Pre-flight: D-1 fixture-detection. When the
+                # finding sits in test code AND the function isn't
+                # reachable from any production entry point, the
+                # LLM verdict is essentially deterministic — skip
+                # the LLM call to save tokens and emit a clean
+                # annotation directly. Only the high-confidence
+                # ``true`` case skips; ``candidate`` (path matches
+                # but reachability uncertain) still runs the LLM
+                # so it can verify. ``manual_override`` operator
+                # flag bypasses pre-flight entirely.
+                #
+                # See core/inventory/fixture_detection for the
+                # path + reachability gate logic; mirrors the
+                # /validate Stage D [D-1] integration.
+                fixture_skipped_this = False
+                if checklist and not finding.get("manual_override"):
+                    try:
+                        from core.inventory.fixture_detection import (
+                            detect_fixture,
+                        )
+                        verdict = detect_fixture(
+                            file_path=(
+                                finding.get("file_path")
+                                or finding.get("file") or ""
+                            ),
+                            function=(
+                                finding.get("function")
+                                or (finding.get("metadata") or {}).get(
+                                    "function_name", ""
+                                )
+                            ),
+                            inventory=checklist,
+                        )
+                        finding["likely_test_harness"] = (
+                            verdict.likely_test_harness
+                        )
+                        finding["harness_evidence"] = [
+                            e.to_dict() for e in verdict.evidence
+                        ]
+                        fixture_prep_outcomes[
+                            verdict.likely_test_harness
+                        ] = (
+                            fixture_prep_outcomes.get(
+                                verdict.likely_test_harness, 0,
+                            ) + 1
+                        )
+                        if verdict.likely_test_harness == "true":
+                            # Synthesise a deterministic clean
+                            # analysis. _derive_status (in
+                            # annotation_emit) maps
+                            # is_true_positive=False to status=
+                            # clean automatically; the
+                            # ``fixture_demotion`` tag flags the
+                            # reason for the operator's review.
+                            vuln.analysis = {
+                                "is_true_positive": False,
+                                "is_exploitable": False,
+                                "reasoning": (
+                                    "Test-harness circularity: the "
+                                    "finding's enclosing function is "
+                                    "in test-fixture code and not "
+                                    "reachable from any production "
+                                    "entry point. See harness_evidence "
+                                    "for the path-pattern match and "
+                                    "reachability check that confirmed "
+                                    "this. To override, set "
+                                    "``manual_override: true`` on the "
+                                    "finding and re-run."
+                                ),
+                                "fixture_demotion": True,
+                                "harness_evidence": (
+                                    finding["harness_evidence"]
+                                ),
+                            }
+                            fixture_skipped_this = True
+                    except Exception as e:  # noqa: BLE001
+                        logger.debug(
+                            "fixture pre-flight failed on %s: %s",
+                            finding.get("finding_id") or finding.get("id"),
+                            e,
+                        )
+
+                if fixture_skipped_this:
+                    analyzed += 1
+                    fixture_skipped_llm_calls += 1
+                    if emit_annotations:
+                        if self._emit_finding_annotation(vuln, checklist):
+                            annotations_emitted += 1
+                    continue  # skip LLM analyze + exploit + patch
 
                 # 1. Autonomous analysis (LLM-powered, or prep-only)
                 if self.analyze_vulnerability(vuln):
@@ -1433,6 +1530,10 @@ class AutonomousSecurityAgentV2:
             "false_positives_caught": false_positives_found,
             "annotations_emitted": annotations_emitted,
             "variant_annotations": variant_annotations,
+            "fixture_detection_metrics": {
+                "prep_outcomes": fixture_prep_outcomes,
+                "skipped_llm_calls": fixture_skipped_llm_calls,
+            },
             "execution_time": execution_time,
             "llm_stats": llm_stats,
             "results": results,
@@ -1475,6 +1576,13 @@ class AutonomousSecurityAgentV2:
                 logger.info(
                     f"✓ Checker-synthesised variants: {variant_annotations} "
                     f"(suspicious annotations from KNighter follow-up)"
+                )
+            if fixture_skipped_llm_calls > 0:
+                logger.info(
+                    f"✓ Fixture-detection (D-1): "
+                    f"{fixture_skipped_llm_calls} LLM call(s) skipped "
+                    f"(test-harness circularity); prep outcomes "
+                    f"{fixture_prep_outcomes}"
                 )
             logger.info(f"")
             if dataflow_validated > 0:
