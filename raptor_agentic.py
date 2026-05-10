@@ -1366,94 +1366,16 @@ Examples:
         print(f"   Exploits generated: {exploits_count}")
     if patches_count > 0:
         print(f"   Patches generated: {patches_count}")
-    # IRIS Tier 1 / 2 / 3 dataflow validation surfacing. The full
-    # metrics block lives at orchestration_result["dataflow_validation"]
-    # (n_eligible, n_validated, n_tier1_prebuilt, n_tier2_template,
-    # n_tier3_retry, n_recommended_downgrades, n_applied_downgrades,
-    # n_soft_downgrades, n_skipped_no_db_for_language, …). Surface a
-    # short structured summary so operators see what IRIS did without
-    # needing to dig into orchestrated_report.json. Suppressed when
-    # validation didn't run (no CodeQL DB, --no-validate-dataflow).
+    # IRIS Tier 1 / 2 / 3 / 4 + path_conditions telemetry surfacing.
+    # Helper lives in core/reporting/dataflow_summary.py so /analyze
+    # (packages/llm_analysis/agent.py) can render the same block —
+    # operators running /analyze standalone after /scan would
+    # otherwise miss whether IRIS validated findings, populated
+    # path_conditions, or fired SMT.
+    from core.reporting.dataflow_summary import render_dataflow_validation_lines
     dv = (orchestration_result or {}).get("dataflow_validation") or {}
-    n_validated = dv.get("n_validated", 0)
-    n_cache_hits = dv.get("n_cache_hits", 0)
-    if dv and (n_validated or n_cache_hits):
-        n_tier1 = dv.get("n_tier1_prebuilt", 0)
-        n_tier2 = dv.get("n_tier2_template", 0)
-        n_tier3 = dv.get("n_tier3_retry", 0)
-        n_smt_refuted = dv.get("n_tier4_smt_refuted", 0)
-        n_smt_witness = dv.get("n_tier4_smt_witness", 0)
-        n_smt_disagree = dv.get("n_tier4_smt_disagree", 0)
-        n_recommended = dv.get("n_recommended_downgrades", 0)
-        n_hard = dv.get("n_applied_downgrades", 0)
-        n_soft = dv.get("n_soft_downgrades", 0)
-        # Header line matches the existing summary cadence
-        # ("Exploits generated: N", "Patches generated: N", …).
-        print(f"   Dataflow validated: {n_validated}"
-              + (f" (+{n_cache_hits} cache hit{'s' if n_cache_hits != 1 else ''})"
-                 if n_cache_hits else ""))
-        # Tier breakdown: Tier 1 is free CodeQL; Tier 2/3 burn LLM
-        # tokens; Tier 4 is free SMT (Z3 only) refining Tier 1/2/3
-        # verdicts when the LLM extracted path_conditions. Worth
-        # showing the split so operators can tell whether
-        # --deep-validate is paying off.
-        tier_parts = []
-        if n_tier1:
-            tier_parts.append(f"{n_tier1} Tier 1 (free)")
-        if n_tier2:
-            tier_parts.append(f"{n_tier2} Tier 2 (LLM)")
-        if n_tier3:
-            tier_parts.append(f"{n_tier3} Tier 3 (LLM retry)")
-        if tier_parts:
-            print(f"     by tier: {', '.join(tier_parts)}")
-        # Tier 4 (SMT) sub-line — separate because outcomes are
-        # additive on top of Tier 1/2/3 (a finding's verdict may be
-        # confirmed-by-Tier-1 AND witness-attached-by-Tier-4) so
-        # mixing them into the per-tier counts would double-count.
-        smt_parts = []
-        if n_smt_refuted:
-            smt_parts.append(f"{n_smt_refuted} refuted")
-        if n_smt_witness:
-            smt_parts.append(f"{n_smt_witness} witness")
-        if n_smt_disagree:
-            smt_parts.append(f"{n_smt_disagree} disagreement")
-        if smt_parts:
-            print(f"     Tier 4 SMT: {', '.join(smt_parts)}")
-        # path_conditions population telemetry — answers "is the LLM
-        # actually emitting the SMT-checkable conditions the schema
-        # asks for?" Without this signal, a Tier 4 of all-zeros is
-        # ambiguous between "LLM never populates" and "LLM populates
-        # but everything resolves to no_check". Surface only when
-        # there's a non-zero count to report.
-        n_pc_pop = dv.get("n_path_conditions_populated", 0)
-        if n_pc_pop:
-            cwe_breakdown = dv.get("path_conditions_by_cwe", {})
-            if cwe_breakdown:
-                cwe_str = ", ".join(
-                    f"{c}={n}" for c, n in
-                    sorted(cwe_breakdown.items(), key=lambda kv: -kv[1])
-                )
-                print(f"     path_conditions populated: {n_pc_pop} ({cwe_str})")
-            else:
-                print(f"     path_conditions populated: {n_pc_pop}")
-        # Downgrade outcome: distinguish "recommended" from "applied"
-        # (the latter is post-reconciliation with consensus/judge).
-        # Soft downgrades = recommendation overruled by consensus/judge.
-        if n_recommended:
-            outcome = []
-            outcome.append(f"{n_recommended} flagged")
-            if n_hard or n_soft:
-                bits = []
-                if n_hard:
-                    bits.append(f"{n_hard} hard")
-                if n_soft:
-                    bits.append(f"{n_soft} soft (consensus override)")
-                outcome.append(f"applied: {', '.join(bits)}")
-            print(f"     downgrades: {' · '.join(outcome)}")
-    elif dv.get("skipped_reason"):
-        # Validation was attempted but skipped — surface the reason so
-        # operators know IRIS noticed but couldn't help.
-        print(f"   Dataflow validation skipped: {dv['skipped_reason']}")
+    for line in render_dataflow_validation_lines(dv, indent="   "):
+        print(line)
     aggregation = orchestration_result.get("aggregation", {}) if orchestration_result else {}
     if aggregation:
         summary = str(aggregation.get("summary") or "").strip()
