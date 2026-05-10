@@ -1,0 +1,27 @@
+# Phase 0 toolchain manifest — captured 2026-05-10
+# Bench host: Apple Silicon Mac (arm64), CPU only.
+
+rustc 1.95.0 (59807616e 2026-04-14)
+cargo 1.95.0 (f2d3ce0bd 2026-03-21)
+cargo-prove sp1 (d454975 2026-04-11T01:51:47.829463000Z)   # SP1 v6.1.0
+rustup toolchain "succinct" (rustc 1.93.0-dev) — auto-installed by sp1up
+
+Homebrew LLVM 22.1.4   (keg-only at /opt/homebrew/opt/llvm/bin)
+age 1.3.1
+go 1.26.3              # required by sp1-recursion-gnark-ffi for Groth16 wrap
+
+# Smoke test result (SP1 fibonacci-program, n=20, --prove on CPU):
+#   wall-clock     68.83 s
+#   peak RSS       2.45 GB
+#   zkVM cycles    9,618
+#   CPU time       214 s user + 23 s sys (multi-core saturation)
+#   verifier       sub-second, in-process
+#   proof type     core (NOT Groth16-wrapped; that adds ~minutes on CPU)
+#
+# Implication: target programs of 100k–1M cycles should land in the
+# ~10–30 min budget on this hardware. RSS scales with cycle count and is
+# the more likely Phase-0 bottleneck on a 16 GB laptop.
+#
+# CI note: same install on ubuntu-latest needs `apt install golang` plus
+# the rustup + sp1up curl-pipe. brew is mac-only; CI uses `apt install
+# llvm`. age via apt or `cargo install age` if missing.
