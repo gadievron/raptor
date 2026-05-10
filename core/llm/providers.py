@@ -324,7 +324,26 @@ class LLMProvider(ABC):
             result_dict = validated.model_dump()
             return result_dict, json.dumps(result_dict, indent=2)
         except Exception as e:
-            logger.error(f"Structured fallback failed (JSON parse or validation): {e}")
+            # Pre-fix the logger interpolated `e` directly into the
+            # log line. For `pydantic.ValidationError` (the typical
+            # failure here), the exception message embeds the
+            # offending input value — which IS the LLM's raw
+            # content. That content can carry prompt-injection
+            # markers, ANSI escape sequences, BIDI overrides, or
+            # control bytes that — when the log line renders to an
+            # operator's TTY or a downstream log aggregator — let
+            # an attacker forge log entries / smuggle terminal
+            # repaints / bypass audit displays.
+            #
+            # Defang the rendered exception text via
+            # `escape_nonprintable` before logging. The exception
+            # itself is still re-raised unchanged so caller error
+            # handling sees the same type and propagated message.
+            from core.security.prompt_output_sanitise import escape_nonprintable
+            logger.error(
+                "Structured fallback failed (JSON parse or validation): %s",
+                escape_nonprintable(str(e))[:1024],
+            )
             raise
 
     # ------------------------------------------------------------------
