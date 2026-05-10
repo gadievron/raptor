@@ -41,7 +41,7 @@ fn pick_clang() -> String {
 
 fn main() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let target_c = manifest_dir.join("../../targets/01-stack-bof.c");
+    let target_c = manifest_dir.join("../targets/01-stack-bof.c");
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
     let obj_path = out_dir.join("01-stack-bof.o");
     let archive_path = out_dir.join("libzkpox_target_01.a");

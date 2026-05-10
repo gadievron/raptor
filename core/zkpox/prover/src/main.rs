@@ -1,29 +1,46 @@
-//! Phase 0 host driver: load a witness, run the SP1 guest in execute or
-//! prove mode against target #1, and emit a JSON record with the verdicts
-//! of *both* the `crash_only` and `oob_write` gadgets (one prove run
-//! yields both — see harness/guest/src/main.rs).
+//! `zkpox-prove` — native CLI that loads a witness, runs the SP1 guest
+//! in execute or prove mode against target #1, and emits a JSON record
+//! with both the `crash_only` and `oob_write` gadgets' verdicts (one
+//! invocation yields both — see core/zkpox/guest/src/main.rs).
 //!
 //! Usage:
-//!   prove-bof --witness ../witnesses/01-crash.bin --execute
-//!   prove-bof --witness ../witnesses/01-crash.bin --prove
-//!   prove-bof --witness ../witnesses/01-canarymatch-overflow1-fn.bin --execute
-//!     # → crash_only=false (gadget blind spot), oob_write=true (closes it)
+//!   zkpox-prove --witness <FILE> --execute
+//!   zkpox-prove --witness <FILE> --prove [--wrap=core|groth16]
+//!
+//! Wrap modes:
+//!   core    (default) — raw STARK proof, ~2.65 MB. Verifier-friendly
+//!                       in-process; impractical to ship in a CBOR bundle.
+//!   groth16          — STARK + Groth16 wrap, ~256 B. Suitable for the
+//!                       disclosure bundle. Adds ~5–10 min on the first
+//!                       invocation (downloads SP1's ~few-GB Groth16
+//!                       circuit artifacts) and ~1–3 min per proof on
+//!                       CPU thereafter.
 
 use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use serde::Serialize;
 use sp1_sdk::{
     blocking::{ProveRequest, Prover, ProverClient},
     include_elf, Elf, ProvingKey, SP1Stdin,
 };
 
-const GUEST_ELF: Elf = include_elf!("zkpox-phase0-guest");
+const GUEST_ELF: Elf = include_elf!("zkpox-guest");
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum, Serialize)]
+#[serde(rename_all = "lowercase")]
+#[clap(rename_all = "lowercase")]
+enum Wrap {
+    /// Raw STARK proof (~2.65 MB). Default; fastest end-to-end.
+    Core,
+    /// STARK + Groth16 wrap (~256 B). Disclosure-bundle ready.
+    Groth16,
+}
 
 #[derive(Parser, Debug)]
-#[command(about = "Phase 0 SP1 driver for target #1 (stack BOF)")]
+#[command(about = "zkpox-prove — SP1 driver for stack-BOF target")]
 struct Args {
     #[arg(long, value_name = "FILE")]
     witness: PathBuf,
@@ -33,6 +50,15 @@ struct Args {
 
     #[arg(long, conflicts_with = "execute")]
     prove: bool,
+
+    /// Proof wrap (only meaningful with --prove).
+    #[arg(long, value_enum, default_value_t = Wrap::Core)]
+    wrap: Wrap,
+
+    /// Path to write the proof artifact. If unset, the proof is
+    /// generated, measured, then dropped (no on-disk artifact).
+    #[arg(long, value_name = "FILE")]
+    proof_out: Option<PathBuf>,
 
     /// Path to dump the bench JSON record. Defaults to stdout.
     #[arg(long, value_name = "FILE")]
@@ -57,6 +83,9 @@ struct BenchRecord<'a> {
     witness: String,
     witness_bytes: u64,
     mode: &'a str,
+    /// "core" or "groth16" when mode == "prove"; absent when mode == "execute".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wrap: Option<Wrap>,
     verdicts: Verdicts,
     cycles: Option<u64>,
     wall_secs: f64,
@@ -109,6 +138,7 @@ fn main() -> Result<()> {
             witness: args.witness.display().to_string(),
             witness_bytes,
             mode: "execute",
+            wrap: None,
             verdicts,
             cycles: Some(report.total_instruction_count()),
             wall_secs: wall,
@@ -119,25 +149,33 @@ fn main() -> Result<()> {
         let pk = client.setup(GUEST_ELF).expect("failed to setup guest ELF");
 
         let start = Instant::now();
-        let proof = client
-            .prove(&pk, stdin)
-            .run()
-            .map_err(|e| anyhow!("prove failed: {e}"))?;
+        let proof = match args.wrap {
+            Wrap::Core => client.prove(&pk, stdin).run(),
+            Wrap::Groth16 => client.prove(&pk, stdin).groth16().run(),
+        }
+        .map_err(|e| anyhow!("prove ({:?}) failed: {e}", args.wrap))?;
         let wall = start.elapsed().as_secs_f64();
 
         let mut public_values = proof.public_values.clone();
         let verdicts = read_verdicts(&mut public_values);
 
-        // SP1's SP1ProofWithPublicValues::save uses bincode internally.
-        let proof_path = std::env::temp_dir().join(format!(
-            "zkpox-phase0-{}.proof",
-            std::process::id()
-        ));
+        // Persist the proof so we can measure size. If --proof-out was
+        // given, keep it; otherwise write to a temp path and unlink.
+        let (proof_path, persistent) = match &args.proof_out {
+            Some(p) => (p.clone(), true),
+            None => (
+                std::env::temp_dir()
+                    .join(format!("zkpox-{}.proof", std::process::id())),
+                false,
+            ),
+        };
         let proof_bytes = match proof.save(&proof_path) {
             Ok(()) => std::fs::metadata(&proof_path).ok().map(|m| m.len() as usize),
             Err(_) => None,
         };
-        let _ = std::fs::remove_file(&proof_path);
+        if !persistent {
+            let _ = std::fs::remove_file(&proof_path);
+        }
 
         let verified = client.verify(&proof, pk.verifying_key(), None).is_ok();
 
@@ -146,6 +184,7 @@ fn main() -> Result<()> {
             witness: args.witness.display().to_string(),
             witness_bytes,
             mode: "prove",
+            wrap: Some(args.wrap),
             verdicts,
             cycles: None,
             wall_secs: wall,
