@@ -147,6 +147,15 @@ class PathSMTResult:
     same set in :class:`Rejection` form, naming *why* each was dropped
     (parser failure kind, solver timeout, ...) so consumers can retry,
     rephrase, or surface diagnostics.
+
+    ``anon_var_map`` records the mapping from each ``_anon_N``
+    placeholder allocated by ``_substitute_calls`` to the original
+    function-call subexpression it replaced (e.g.
+    ``{"_anon_0": "strlen(argv[1])"}``).  Downstream consumers
+    (``/exploit``'s witness PoC seed, report renderers) use this to
+    render meaningful labels — without it the witness model shows
+    only the opaque ``_anon_N`` names and the LLM can't connect the
+    concrete value back to anything actionable.
     """
     feasible: Optional[bool]
     satisfied: List[str]
@@ -156,6 +165,7 @@ class PathSMTResult:
     smt_available: bool
     reasoning: str
     unknown_reasons: List[Rejection] = field(default_factory=list)
+    anon_var_map: Dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -436,6 +446,7 @@ def make_anon_call_var(vars_: Dict[str, Any], *, profile: BVProfile) -> Any:
 
 def _substitute_calls(
     text: str, vars_: Dict[str, Any], *, profile: BVProfile,
+    anon_map: Optional[Dict[str, str]] = None,
 ) -> str:
     """Replace balanced ``<ident>(...)`` subterms with fresh free variables.
 
@@ -453,6 +464,15 @@ def _substitute_calls(
 
     Unbalanced parens (``strlen(x``) are left in place; the caller's
     parens-check still rejects them.
+
+    When ``anon_map`` is supplied, each new ``_anon_N`` allocated
+    here is recorded with the original substring it replaced
+    (``anon_map["_anon_0"] = "strlen(argv[1])"``).  Threaded through
+    ``_parse_condition`` and ``_classify_text_condition`` from
+    ``check_path_feasibility`` so the final ``PathSMTResult`` can
+    surface meaningful labels for the witness model.  None / omitted
+    preserves backwards compatibility — callers that don't care
+    (verb path, tests pre-dating this) still work unchanged.
     """
     counter = _next_anon_index(vars_)
     out: List[str] = []
@@ -473,6 +493,8 @@ def _substitute_calls(
                 placeholder = f'_anon_{counter}'
                 counter += 1
                 vars_[placeholder] = _mk_var(placeholder, profile.width)
+                if anon_map is not None:
+                    anon_map[placeholder] = text[i:j]
                 out.append(placeholder)
                 i = j
                 continue
@@ -485,6 +507,7 @@ def _substitute_calls(
 
 def _parse_condition(
     text: str, vars_: Dict[str, Any], *, profile: BVProfile,
+    anon_map: Optional[Dict[str, str]] = None,
 ) -> Union[Any, Rejection]:
     """Parse a single condition string into a Z3 boolean expression.
 
@@ -508,7 +531,9 @@ def _parse_condition(
     ``text`` (the original) is preserved for rejection messages so
     callers can match failures back to their input.
     """
-    t = _substitute_calls(_canonicalise(text), vars_, profile=profile)
+    t = _substitute_calls(
+        _canonicalise(text), vars_, profile=profile, anon_map=anon_map,
+    )
 
     # Early paren-balance scan.  ``_parse_expr`` would catch most imbalances
     # itself, but only conditions whose top-level matches the relational or
@@ -604,6 +629,7 @@ def _classify_text_condition(
     solver: Any,
     *,
     profile: BVProfile,
+    anon_map: Optional[Dict[str, str]] = None,
 ) -> Tuple[Optional[str], Optional[Tuple[str, Any]], Optional[Rejection]]:
     """Parse one text condition and classify it.
 
@@ -616,7 +642,7 @@ def _classify_text_condition(
     :func:`check_verb_feasibility` share the same parse-and-classify
     semantics.
     """
-    expr = _parse_condition(cond.text, vars_, profile=profile)
+    expr = _parse_condition(cond.text, vars_, profile=profile, anon_map=anon_map)
     if isinstance(expr, Rejection):
         _get_logger().debug(
             f"smt_path_validator: rejected {cond.text!r} ({expr.kind.value}: {expr.detail})"
@@ -647,6 +673,7 @@ def _solve_pending(
     unknown_reasons: List[Rejection],
     *,
     profile: BVProfile,
+    anon_map: Optional[Dict[str, str]] = None,
 ) -> PathSMTResult:
     """Run the solver over pending predicates and produce a verdict.
 
@@ -657,6 +684,10 @@ def _solve_pending(
     result.
     """
     mode = profile.describe()
+
+    # Default to empty dict so the field is always present on the
+    # PathSMTResult — downstream consumers never need to None-check.
+    _anon_map = anon_map or {}
 
     if not pending:
         if unknown:
@@ -669,6 +700,7 @@ def _solve_pending(
                     f"indeterminate ({mode}): {len(satisfied)} trivially satisfied, "
                     f"{len(unknown)} unparseable — LLM analysis required"
                 ),
+                anon_var_map=_anon_map,
             )
         return PathSMTResult(
             feasible=True,
@@ -676,6 +708,7 @@ def _solve_pending(
             unknown_reasons=[],
             model={}, smt_available=True,
             reasoning=f"all {len(satisfied)} condition(s) trivially satisfied ({mode})",
+            anon_var_map=_anon_map,
         )
 
     label_map = _track(solver, pending)
@@ -693,6 +726,7 @@ def _solve_pending(
                 + (f"; {len(satisfied)} trivially satisfied" if satisfied else "")
                 + (f"; {len(unknown)} unparsed" if unknown else "")
             ),
+            anon_var_map=_anon_map,
         )
 
     if result == z3.unsat:
@@ -707,6 +741,7 @@ def _solve_pending(
             unknown_reasons=unknown_reasons,
             model={}, smt_available=True,
             reasoning=reasoning,
+            anon_var_map=_anon_map,
         )
 
     # z3.unknown — timeout or outside decidable fragment.
@@ -732,6 +767,7 @@ def _solve_pending(
         unknown_reasons=unknown_reasons + pending_reasons,
         model={}, smt_available=True,
         reasoning=f"Z3 returned unknown ({mode}) — {detail}",
+        anon_var_map=_anon_map,
     )
 
 
@@ -875,6 +911,13 @@ def check_path_feasibility(
 
     vars_: Dict[str, Any] = {}
     solver = _new_solver()
+    # Per-check anon-var mapping. Populated by `_substitute_calls`
+    # as it allocates `_anon_N` placeholders for function-call
+    # subterms; threaded into the PathSMTResult so downstream
+    # consumers (witness PoC seed renderer) can show meaningful
+    # labels like `_anon_0 (= strlen(argv[1])) = 32` instead of
+    # bare `_anon_0 = 32`.
+    anon_map: Dict[str, str] = {}
 
     satisfied: List[str] = []
     unknown: List[str] = []
@@ -883,7 +926,7 @@ def check_path_feasibility(
 
     for cond in conditions:
         sat_display, pending_pair, rejection = _classify_text_condition(
-            cond, vars_, solver, profile=profile,
+            cond, vars_, solver, profile=profile, anon_map=anon_map,
         )
         if sat_display is not None:
             satisfied.append(sat_display)
@@ -895,5 +938,6 @@ def check_path_feasibility(
             pending.append(pending_pair)
 
     return _solve_pending(
-        pending, solver, satisfied, unknown, unknown_reasons, profile=profile,
+        pending, solver, satisfied, unknown, unknown_reasons,
+        profile=profile, anon_map=anon_map,
     )

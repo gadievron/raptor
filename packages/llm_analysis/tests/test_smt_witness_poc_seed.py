@@ -91,6 +91,64 @@ class TestFormatSmtWitness:
         out = _format_smt_witness({"model": {"name": "evil"}})
         assert "name = evil" in out
 
+    def test_anon_var_decoded_when_mapping_present(self):
+        """When anon_var_map records the substitution, the rendered
+        line shows BOTH the placeholder and the original expression
+        so the LLM can connect the value to a real input."""
+        out = _format_smt_witness({
+            "model": {"_anon_0": 32},
+            "path_conditions": ["strlen(argv[1]) >= 16"],
+            "path_profile": "uint64",
+            "anon_var_map": {"_anon_0": "strlen(argv[1])"},
+        })
+        # Decoded form must appear — without it, gemini sees `_anon_0
+        # = 32` and re-derives values from path_conditions instead of
+        # using the witness (observed pre-fix on /tmp/smt-witness-test
+        # 2026-05-10 — 0 occurrences of `32` in the generated PoC).
+        assert "_anon_0 (= strlen(argv[1])) = 32" in out
+
+    def test_anon_var_falls_back_to_bare_name_without_mapping(self):
+        """No mapping (anon_var_map missing or empty) — fall back to
+        the bare placeholder. Backwards-compatible with witnesses
+        produced before the parser annotation landed; also the case
+        for verb-path witnesses (smt_verbs.py allocates _anon_N too
+        but doesn't track an expression for it)."""
+        out = _format_smt_witness({
+            "model": {"_anon_0": 32},
+            "path_conditions": ["strlen(argv[1]) >= 16"],
+        })
+        assert "_anon_0 = 32" in out
+        assert "(= strlen" not in out  # no decoration
+
+    def test_named_local_unaffected_by_decoder(self):
+        """Variables with non-`_anon_` names are unchanged — the
+        decoder only kicks in for opaque placeholders."""
+        out = _format_smt_witness({
+            "model": {"count": 268435457},
+            "path_conditions": ["count > 0x10000000"],
+            "anon_var_map": {},  # explicitly empty
+        })
+        assert "count = 268435457" in out
+        assert "(= " not in out  # no spurious decoration
+
+    def test_partial_anon_mapping(self):
+        """Some _anon_N decoded, others not (e.g. parser captured one
+        but the second function-call hit a code path that didn't
+        record). Each is decoded independently."""
+        out = _format_smt_witness({
+            "model": {"_anon_0": 32, "_anon_1": 7},
+            "path_conditions": [
+                "strlen(argv[1]) >= 16",
+                "atoi(argv[2]) > 5",
+            ],
+            "anon_var_map": {"_anon_0": "strlen(argv[1])"},
+        })
+        assert "_anon_0 (= strlen(argv[1])) = 32" in out
+        assert "_anon_1 = 7" in out
+        # _anon_1 not decorated since it's not in the map
+        lines = [l for l in out.split("\n") if "_anon_1" in l]
+        assert all("(= " not in l for l in lines)
+
 
 # -- build_exploit_prompt_bundle integration -------------------------------
 
@@ -257,3 +315,76 @@ class TestTier4AttachesSmtWitness:
 
         assert outcome == "no_check"
         assert "smt_witness" not in analysis
+
+    def test_witness_includes_anon_var_map(self):
+        """The mapping recorded by the SMT parser flows through the
+        validate_path wrapper, _tier4_smt_refine, and lands on the
+        analysis dict's smt_witness field. End-to-end propagation
+        check — without it the renderer's anon-var decoding has
+        nothing to consume."""
+        from packages.llm_analysis.dataflow_validation import _tier4_smt_refine
+        from packages.hypothesis_validation.result import ValidationResult
+
+        analysis = {
+            "path_conditions": ["strlen(argv[1]) >= 16"],
+            "path_profile": "uint64",
+        }
+        finding = {"finding_id": "f1"}
+        confirmed = ValidationResult(verdict="confirmed", evidence=[], iterations=1)
+
+        with patch(
+            "packages.exploit_feasibility.smt_path.validate_path"
+        ) as mock_validate:
+            mock_validate.return_value = {
+                "feasible": True,
+                "smt_available": True,
+                "model": {"_anon_0": 32},
+                "reasoning": "satisfiable",
+                "satisfied": [],
+                "unsatisfied": [],
+                "unknown": [],
+                "unknown_reasons": [],
+                "anon_var_map": {"_anon_0": "strlen(argv[1])"},
+            }
+            _, outcome = _tier4_smt_refine(confirmed, finding, analysis)
+
+        assert outcome == "smt_witness"
+        sw = analysis["smt_witness"]
+        assert sw["anon_var_map"] == {"_anon_0": "strlen(argv[1])"}
+
+
+class TestSmtPathValidatorAnonMap:
+    """The bottom of the propagation chain: the parser must populate
+    PathSMTResult.anon_var_map for function-call substitutions. Tests
+    here pin the parser-side behaviour so the mapping is correct
+    when it bubbles up to /exploit."""
+
+    def _check(self, condition_text):
+        from packages.codeql.smt_path_validator import (
+            check_path_feasibility, PathCondition,
+        )
+        from core.smt_solver.config import BV_C_UINT64
+        return check_path_feasibility(
+            [PathCondition(text=condition_text, step_index=0)],
+            profile=BV_C_UINT64,
+        )
+
+    def test_function_call_substitution_recorded(self):
+        r = self._check("strlen(argv[1]) >= 16")
+        assert r.feasible is True
+        assert r.anon_var_map == {"_anon_0": "strlen(argv[1])"}
+
+    def test_named_local_no_substitution(self):
+        r = self._check("count > 268435456")
+        assert r.feasible is True
+        assert r.anon_var_map == {}
+
+    def test_two_distinct_calls_get_separate_anons(self):
+        """Two textually-identical calls should each get their own
+        placeholder (calls aren't assumed pure) — and both should
+        be recorded separately."""
+        r = self._check("strlen(input) > strlen(other)")
+        # _anon_0 → strlen(input), _anon_1 → strlen(other)
+        assert len(r.anon_var_map) == 2
+        assert r.anon_var_map["_anon_0"] == "strlen(input)"
+        assert r.anon_var_map["_anon_1"] == "strlen(other)"
