@@ -224,12 +224,27 @@ def _rank_candidates(
 
 
 def _extract_hashes(checklist: Dict[str, Any]) -> Dict[str, str]:
-    """Build {relative_path: sha256} from a checklist."""
-    return {
-        f["path"]: f["sha256"]
-        for f in checklist.get("files", [])
-        if f.get("sha256")
-    }
+    """Build {relative_path: sha256} from a checklist.
+
+    Pre-fix the comprehension subscripted ``f["path"]`` directly,
+    which raised KeyError if a checklist entry had ``sha256`` but
+    no ``path`` key (older /understand outputs that recorded
+    hash-only entries for synthesised pseudo-files, hand-edited
+    checklists, partial writes from a killed Stage 0). One missing
+    key took down the whole bridge stage. Use ``.get`` and skip
+    entries without both fields, plus an isinstance guard so a
+    non-dict entry (corrupt list element) doesn't AttributeError on
+    `.get`.
+    """
+    out: Dict[str, str] = {}
+    for f in checklist.get("files", []):
+        if not isinstance(f, dict):
+            continue
+        path = f.get("path")
+        sha = f.get("sha256")
+        if isinstance(path, str) and isinstance(sha, str) and path and sha:
+            out[path] = sha
+    return out
 
 
 def _find_stale_files(
