@@ -558,9 +558,19 @@ def _parse_condition(
             f"{depth} unmatched '(' at end of input",
         )
 
-    # Bitmask: lhs & mask (==|!=) val
+    # Bitmask: lhs & mask (==|!=) val.
+    #
+    # Pre-fix the LHS was `(.+?)` — a lazy unbounded quantifier
+    # over ANY character, including `&`. On a non-bitmask input
+    # the regex engine had to expand `.+?` greedily one character
+    # at a time, hunting for a `&` separator that never arrived;
+    # for an N-character input that's O(N) failed-match cost per
+    # invocation. Same ReDoS shape that `_parse_atom` was already
+    # hardened against by switching to `[^&]+?` (negated class so
+    # the lazy quantifier short-circuits at the first `&`).
+    # Apply the same fix here for parity.
     m = re.fullmatch(
-        r'(.+?)\s*&\s*(0x[0-9a-f]+|\d+)\s*(==|!=)\s*(0x[0-9a-f]+|\d+)',
+        r'([^&]+?)\s*&\s*(0x[0-9a-f]+|\d+)\s*(==|!=)\s*(0x[0-9a-f]+|\d+)',
         t, re.IGNORECASE,
     )
     if m:
