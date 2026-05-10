@@ -1569,6 +1569,30 @@ def main() -> None:
     model_group.add_argument("--aggregate", metavar="MODEL",
                              help="Final synthesis model for multi-model results")
 
+    # IRIS Tier 2/3 deep-validate gate. Mirrors raptor_agentic.py.
+    # Without these flags /analyze can never reach Tier 4 SMT
+    # refinement on findings the orchestrator passed through —
+    # the auto-enable on path_conditions is the only path most
+    # operators take, so we want it here too.
+    ap.add_argument(
+        "--deep-validate",
+        action="store_true",
+        help="Force-enable Tier 2 / Tier 3 of IRIS validation for ALL "
+             "findings: when Tier 1 is inconclusive, ask the LLM to write "
+             "source+sink predicates and retry on compile errors. Costs "
+             "LLM tokens. Without this flag, Tier 2/3 auto-enables per-"
+             "finding when the LLM emits `path_conditions` (usage-driven "
+             "default); pass --no-deep-validate to disable even that auto-"
+             "enable path.",
+    )
+    ap.add_argument(
+        "--no-deep-validate",
+        action="store_true",
+        help="Hard kill-switch: disable Tier 2 / Tier 3 entirely, including "
+             "the default usage-driven auto-enable. Takes precedence over "
+             "--deep-validate.",
+    )
+
     args = ap.parse_args()
 
     if not args.sarif and not args.findings:
@@ -1646,6 +1670,8 @@ def main() -> None:
                     max_parallel=args.max_parallel,
                     max_findings=args.max_findings,
                     llm_config=llm_config,
+                    deep_validate=getattr(args, "deep_validate", False),
+                    deep_validate_disabled=getattr(args, "no_deep_validate", False),
                 )
                 if result:
                     return

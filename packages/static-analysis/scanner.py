@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -577,28 +578,52 @@ def run_codeql(
         cmd.extend(["--build-command", build_command])
 
     logger.info(f"Delegating CodeQL stage to {agent_script.name}")
+    # subprocess.run + timeout SIGKILLs the immediate child only,
+    # leaving the agent's codeql grandchildren as orphans holding
+    # cache locks + gigabytes of memory until they finish. This
+    # path is NOT sandboxed (the agent does its own sandboxing of
+    # the codeql calls), so namespace teardown isn't doing the
+    # cleanup for us. Use Popen with start_new_session so the
+    # agent becomes its own process group leader, then killpg on
+    # timeout to flatten the whole tree. Sandboxed call sites
+    # (adapters/codeql.py via make_sandbox_runner) don't need
+    # this — their immediate child IS the namespace, and killing
+    # the namespace kills everything inside.
+    proc = None
     try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=3600,
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, start_new_session=True,
         )
-    except subprocess.TimeoutExpired:
-        logger.warning("codeql agent timed out after 3600s; skipping")
-        return []
+        try:
+            stdout, stderr = proc.communicate(timeout=3600)
+            returncode = proc.returncode
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+            logger.warning("codeql agent timed out after 3600s; skipping")
+            return []
     except OSError as e:
         logger.warning(f"failed to invoke codeql agent: {e}")
         return []
 
-    if proc.returncode != 0:
+    if returncode != 0:
         # Surface the agent's stderr tail so the operator can see
         # WHY the run failed — language detection miscount, build
         # synthesis failure, trust-check rejection. Same truncation
         # rationale as before — codeql error output can run
         # thousands of lines.
-        stderr_tail = (proc.stderr or proc.stdout or "").strip()
+        stderr_tail = (stderr or stdout or "").strip()
         if len(stderr_tail) > 2000:
             stderr_tail = "..." + stderr_tail[-2000:]
         logger.warning(
-            f"codeql agent exited rc={proc.returncode}. "
+            f"codeql agent exited rc={returncode}. "
             f"Last stderr: {stderr_tail or '<empty>'}"
         )
         # Don't return early — the agent may have produced partial

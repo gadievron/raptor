@@ -26,6 +26,40 @@ ANALYSIS_SCHEMA = {
     "dataflow_summary": "string - concise source->sanitizer->sink chain",
     "remediation": "string - what to fix and how",
     "false_positive_reason": "string or null - reason when ruling is false_positive",
+    # SMT path-feasibility hooks. Lives in ANALYSIS_SCHEMA (not
+    # DATAFLOW_SCHEMA_FIELDS) because the conditions are LOCAL to
+    # the dangerous statement for memory-corruption CWEs — the LLM
+    # can extract them from a `count * sizeof(record)` expression
+    # without needing CodeQL dataflow context. Pre-fix these were
+    # gated behind has_dataflow=True, which created a circular
+    # bootstrap: the auto-deep-validate gate needs path_conditions,
+    # but path_conditions only got asked for when CodeQL had
+    # already given a dataflow. Now always in scope; null is the
+    # correct value for non-applicable CWEs.
+    "path_conditions": (
+        "list of strings or null - SMT-checkable branch conditions on the "
+        "dangerous path. Each entry is a single predicate the parser "
+        "accepts: e.g. 'count > 0x10000000', 'alloc_size == count * 16', "
+        "'index >= buffer_size', 'ptr == NULL'. "
+        "REQUIRED for memory-corruption CWEs (their analysis is not "
+        "complete without it): CWE-119/120/121/122 (buffer overflow — "
+        "supply the size-vs-bound predicate), CWE-125/787 (out-of-bounds "
+        "read/write — supply the index-vs-bound predicate, e.g. 'idx >= "
+        "buffer_size'), CWE-190 (integer overflow — supply the wraparound "
+        "predicate, e.g. 'count * size > UINT32_MAX'), CWE-191 (integer "
+        "underflow), CWE-476 (null deref — supply 'ptr == NULL'). For ANY "
+        "OTHER CWE (XSS, SQLi, command injection, auth bypass, etc.), the "
+        "correct value is null. Downstream Z3 refutes findings whose "
+        "conditions are unsatisfiable and seeds /exploit PoCs from witness "
+        "models — populating this field on the listed CWEs measurably "
+        "improves verdict precision."
+    ),
+    "path_profile": (
+        "string or null - bitvector profile for SMT encoding. One of: "
+        "'uint64' (default — sizes/offsets/counts), 'uint32' (CWE-190 "
+        "wraparound), 'int32' / 'int64' (signed integer paths). REQUIRED "
+        "when path_conditions is non-empty; null otherwise."
+    ),
 }
 
 # Additional fields when dataflow is available
@@ -34,27 +68,8 @@ DATAFLOW_SCHEMA_FIELDS = {
     "sanitizers_effective": "boolean - are sanitizers in the path effective?",
     "sanitizer_bypass_technique": "string - how to bypass sanitizers, or empty if effective",
     "dataflow_exploitable": "boolean - is the complete dataflow path exploitable?",
-    # SMT path-feasibility hooks (populated only for memory-corruption /
-    # arithmetic / bounds CWEs: 190, 125, 787, 476, 191). When present
-    # the orchestrator's Tier 4 gate uses Z3 to refute findings whose
-    # path conditions are unsatisfiable and to attach a witness model
-    # to confirmed findings (used downstream by /exploit as a PoC seed).
-    # Empty / missing → Tier 4 no-ops; nothing requires these fields.
-    "path_conditions": (
-        "list of strings or null - SMT-checkable branch conditions on the "
-        "dangerous path. Each entry is a single predicate the parser "
-        "accepts: e.g. 'count > 0x10000000', 'alloc_size == count * 16', "
-        "'index >= buffer_size', 'ptr == NULL'. Populate ONLY for memory-"
-        "corruption / arithmetic / bounds / null-deref CWEs (190, 125, 787, "
-        "476, 191); use null or empty list otherwise — the field is "
-        "optional and absence does not dock response quality."
-    ),
-    "path_profile": (
-        "string or null - bitvector profile for SMT encoding. One of: "
-        "'uint64' (default — sizes/offsets/counts), 'uint32' (CWE-190 "
-        "wraparound), 'int32' / 'int64' (signed integer paths). Only "
-        "meaningful when path_conditions is non-empty; null otherwise."
-    ),
+    # path_conditions / path_profile moved to ANALYSIS_SCHEMA above
+    # so they're always in scope (not gated on has_dataflow=True).
 }
 
 # Schema for deep dataflow validation — used by agent.py's validate_dataflow
@@ -83,14 +98,19 @@ DATAFLOW_VALIDATION_SCHEMA = {
     # produced them.
     "path_conditions": (
         "list of strings or null - SMT-checkable branch conditions on the "
-        "dangerous path. Populate for memory-corruption / arithmetic / "
-        "bounds / null-deref CWEs (190, 125, 787, 476, 191); null or "
-        "empty list otherwise — optional, absence does not dock quality."
+        "dangerous path. REQUIRED for CWE-190 (integer overflow — supply "
+        "wraparound predicate), CWE-125/787 (out-of-bounds — supply index-"
+        "vs-bound predicate), CWE-476 (null deref — supply 'ptr == NULL'), "
+        "CWE-191 (underflow). For ANY OTHER CWE, the correct value is null. "
+        "Examples: 'count > 0x10000000', 'alloc_size == count * 16', "
+        "'idx >= buffer_size', 'ptr == NULL'. Z3 uses these to refute "
+        "infeasible findings and to seed /exploit PoCs from witness models."
     ),
     "path_profile": (
-        "string or null - bitvector profile: uint64 (default), uint32 "
-        "(wraparound), int32, int64. Only meaningful with non-empty "
-        "path_conditions; null otherwise."
+        "string or null - bitvector profile: 'uint64' (default — sizes/"
+        "offsets/counts), 'uint32' (CWE-190 wraparound), 'int32' / 'int64' "
+        "(signed paths). REQUIRED when path_conditions is non-empty; null "
+        "otherwise."
     ),
 }
 

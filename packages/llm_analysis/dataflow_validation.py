@@ -600,7 +600,17 @@ def validate_dataflow_claims(
         )
         if cond_present:
             metrics["n_path_conditions_populated"] += 1
-            cwe = (finding.get("cwe_id") or "").upper().strip() or "UNKNOWN"
+            # Prefer the LLM analysis result's cwe_id over the
+            # SARIF-derived finding's. The finding object often
+            # lacks cwe_id at the top level — Semgrep findings in
+            # particular only carry rule_id; the analysis call is
+            # what classifies the CWE. Without this fallback the
+            # by-cwe breakdown buckets everything under "UNKNOWN"
+            # which defeats the breakdown's purpose.
+            cwe = (
+                (finding.get("cwe_id") or "").strip()
+                or (analysis or {}).get("cwe_id", "").strip()
+            ).upper() or "UNKNOWN"
             metrics["path_conditions_by_cwe"][cwe] = (
                 metrics["path_conditions_by_cwe"].get(cwe, 0) + 1
             )

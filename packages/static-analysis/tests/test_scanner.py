@@ -29,6 +29,18 @@ run_codeql = _scanner_mod.run_codeql
 # operator-supplied flags through to the agent's argv.
 # ---------------------------------------------------------------------------
 
+def _fake_popen(returncode=0, stdout="", stderr="", communicate_side_effect=None):
+    """Build a MagicMock that quacks like subprocess.Popen."""
+    fake = MagicMock()
+    fake.pid = 12345
+    fake.returncode = returncode
+    if communicate_side_effect is not None:
+        fake.communicate.side_effect = communicate_side_effect
+    else:
+        fake.communicate.return_value = (stdout, stderr)
+    return fake
+
+
 class TestRunCodeqlDelegation:
 
     def test_returns_empty_when_codeql_not_installed(self, tmp_path):
@@ -43,10 +55,8 @@ class TestRunCodeqlDelegation:
         if the agent never wrote one)."""
         out_dir = tmp_path / "codeql_out"
         with patch("shutil.which", return_value="/usr/bin/codeql"), \
-             patch.object(_scanner_mod.subprocess, "run") as mock_proc:
-            mock_proc.return_value = MagicMock(
-                returncode=1, stdout="", stderr="agent failed",
-            )
+             patch.object(_scanner_mod.subprocess, "Popen") as mock_proc:
+            mock_proc.return_value = _fake_popen(returncode=1, stderr="agent failed")
             run_codeql(tmp_path, out_dir, ["python"])
         assert out_dir.exists()
 
@@ -55,11 +65,11 @@ class TestRunCodeqlDelegation:
         packages/codeql/agent.py with --repo and --out."""
         out_dir = tmp_path / "out"
         with patch("shutil.which", return_value="/usr/bin/codeql"), \
-             patch.object(_scanner_mod.subprocess, "run") as mock_proc:
-            mock_proc.return_value = MagicMock(returncode=0, stdout="", stderr="")
+             patch.object(_scanner_mod.subprocess, "Popen") as mock_proc:
+            mock_proc.return_value = _fake_popen()
             run_codeql(tmp_path, out_dir, languages=None)
 
-        assert mock_proc.called, "subprocess.run was not called"
+        assert mock_proc.called, "subprocess.Popen was not called"
         cmd = mock_proc.call_args.args[0]
         assert cmd[0] == sys.executable
         # Agent script path component.
@@ -69,11 +79,28 @@ class TestRunCodeqlDelegation:
         assert "--repo" in cmd and str(tmp_path) in cmd
         assert "--out" in cmd and str(out_dir) in cmd
 
+    def test_popen_uses_new_session_for_orphan_cleanup(self, tmp_path):
+        """Without start_new_session=True, SIGKILL on the agent
+        leaves codeql grandchildren as orphans holding cache locks
+        + memory until they finish. The unification PR's bare
+        subprocess.run had this bug; the Popen migration fixes it.
+        """
+        with patch("shutil.which", return_value="/usr/bin/codeql"), \
+             patch.object(_scanner_mod.subprocess, "Popen") as mock_proc:
+            mock_proc.return_value = _fake_popen()
+            run_codeql(tmp_path, tmp_path / "out", languages=None)
+
+        kwargs = mock_proc.call_args.kwargs
+        assert kwargs.get("start_new_session") is True, (
+            f"Popen must be invoked with start_new_session=True for "
+            f"orphan-process cleanup; saw {kwargs}"
+        )
+
     def test_languages_forwarded_as_csv(self, tmp_path):
         """An explicit language list flows through as --languages a,b."""
         with patch("shutil.which", return_value="/usr/bin/codeql"), \
-             patch.object(_scanner_mod.subprocess, "run") as mock_proc:
-            mock_proc.return_value = MagicMock(returncode=0, stdout="", stderr="")
+             patch.object(_scanner_mod.subprocess, "Popen") as mock_proc:
+            mock_proc.return_value = _fake_popen()
             run_codeql(tmp_path, tmp_path / "out", languages=["cpp", "java"])
 
         cmd = mock_proc.call_args.args[0]
@@ -87,8 +114,8 @@ class TestRunCodeqlDelegation:
         skips empty languages, vs the pre-unification 'always make
         cpp/java/python/go DBs' behaviour."""
         with patch("shutil.which", return_value="/usr/bin/codeql"), \
-             patch.object(_scanner_mod.subprocess, "run") as mock_proc:
-            mock_proc.return_value = MagicMock(returncode=0, stdout="", stderr="")
+             patch.object(_scanner_mod.subprocess, "Popen") as mock_proc:
+            mock_proc.return_value = _fake_popen()
             run_codeql(tmp_path, tmp_path / "out", languages=None)
 
         cmd = mock_proc.call_args.args[0]
@@ -98,8 +125,8 @@ class TestRunCodeqlDelegation:
         """build_command flows through as --build-command for the
         agent's CodeQL DB creation."""
         with patch("shutil.which", return_value="/usr/bin/codeql"), \
-             patch.object(_scanner_mod.subprocess, "run") as mock_proc:
-            mock_proc.return_value = MagicMock(returncode=0, stdout="", stderr="")
+             patch.object(_scanner_mod.subprocess, "Popen") as mock_proc:
+            mock_proc.return_value = _fake_popen()
             run_codeql(
                 tmp_path, tmp_path / "out",
                 languages=["cpp"], build_command="make -j4",
@@ -122,8 +149,8 @@ class TestRunCodeqlDelegation:
         (out_dir / "scan_metrics.json").write_text("{}")
 
         with patch("shutil.which", return_value="/usr/bin/codeql"), \
-             patch.object(_scanner_mod.subprocess, "run") as mock_proc:
-            mock_proc.return_value = MagicMock(returncode=0, stdout="", stderr="")
+             patch.object(_scanner_mod.subprocess, "Popen") as mock_proc:
+            mock_proc.return_value = _fake_popen()
             result = run_codeql(tmp_path, out_dir, languages=None)
 
         assert sorted(result) == sorted([
@@ -140,29 +167,68 @@ class TestRunCodeqlDelegation:
         (out_dir / "codeql_python.sarif").write_text("{}")
 
         with patch("shutil.which", return_value="/usr/bin/codeql"), \
-             patch.object(_scanner_mod.subprocess, "run") as mock_proc:
-            mock_proc.return_value = MagicMock(
-                returncode=1, stdout="", stderr="cpp build failed",
+             patch.object(_scanner_mod.subprocess, "Popen") as mock_proc:
+            mock_proc.return_value = _fake_popen(
+                returncode=1, stderr="cpp build failed",
             )
             result = run_codeql(tmp_path, out_dir, languages=["python", "cpp"])
 
         assert result == [str(out_dir / "codeql_python.sarif")]
 
-    def test_subprocess_timeout_returns_empty(self, tmp_path):
-        """Agent timeout: log and return empty rather than raise.
-        Matches the no-raise contract scanner.py expects from
-        every stage."""
+    def test_subprocess_timeout_killpgs_and_returns_empty(self, tmp_path):
+        """Agent timeout: SIGKILL the entire process group (so
+        codeql grandchildren die with the agent) and return empty
+        rather than raise. Matches the no-raise contract scanner
+        expects from every stage AND prevents orphan codeql holding
+        cache locks."""
         import subprocess
+        fake = _fake_popen(
+            communicate_side_effect=subprocess.TimeoutExpired(
+                cmd="codeql", timeout=3600,
+            ),
+        )
         with patch("shutil.which", return_value="/usr/bin/codeql"), \
-             patch.object(_scanner_mod.subprocess, "run") as mock_proc:
-            mock_proc.side_effect = subprocess.TimeoutExpired(cmd="codeql", timeout=3600)
+             patch.object(_scanner_mod.subprocess, "Popen") as mock_popen, \
+             patch.object(_scanner_mod.os, "killpg") as mock_killpg, \
+             patch.object(_scanner_mod.os, "getpgid", return_value=12345):
+            mock_popen.return_value = fake
+            result = run_codeql(tmp_path, tmp_path / "out", languages=None)
+
+        assert result == []
+        # killpg must have been called with the agent's PGID +
+        # SIGKILL — anything less leaves codeql running.
+        assert mock_killpg.called, (
+            "killpg not invoked on TimeoutExpired — codeql will orphan"
+        )
+        args = mock_killpg.call_args.args
+        assert args[0] == 12345
+        assert args[1] == _scanner_mod.signal.SIGKILL
+
+    def test_killpg_swallows_processlookup_when_child_already_died(self, tmp_path):
+        """If the agent died on its own between communicate() and
+        our killpg, ProcessLookupError must not propagate as an
+        uncaught exception."""
+        import subprocess
+        fake = _fake_popen(
+            communicate_side_effect=subprocess.TimeoutExpired(
+                cmd="codeql", timeout=3600,
+            ),
+        )
+        with patch("shutil.which", return_value="/usr/bin/codeql"), \
+             patch.object(_scanner_mod.subprocess, "Popen") as mock_popen, \
+             patch.object(_scanner_mod.os, "killpg",
+                          side_effect=ProcessLookupError()), \
+             patch.object(_scanner_mod.os, "getpgid", return_value=12345):
+            mock_popen.return_value = fake
+            # Should not raise; should still return [].
             result = run_codeql(tmp_path, tmp_path / "out", languages=None)
         assert result == []
 
     def test_subprocess_oserror_returns_empty(self, tmp_path):
+        """Popen itself failing to spawn (ENOEXEC etc.) is caught."""
         with patch("shutil.which", return_value="/usr/bin/codeql"), \
-             patch.object(_scanner_mod.subprocess, "run") as mock_proc:
-            mock_proc.side_effect = OSError("ENOEXEC")
+             patch.object(_scanner_mod.subprocess, "Popen",
+                          side_effect=OSError("ENOEXEC")):
             result = run_codeql(tmp_path, tmp_path / "out", languages=None)
         assert result == []
 
