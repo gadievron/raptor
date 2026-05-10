@@ -661,10 +661,73 @@ def prepare_C(workdir, target=None):
         else:
             finding["checklist_verified"] = True
 
+    # --- Cocci structural pre-check (C/C++ targets) ---
+    # Mechanical structural facts: function-exists, function-has-callers.
+    # Stage C reasoning consults these as evidence; finding status is
+    # NEVER overwritten here. Skips silently on non-C/C++ targets,
+    # missing spatch, or absent prereqs rules dir — no operator noise
+    # when prerequisites aren't met.
+    _run_cocci_prereqs(workdir, findings_data, target=target)
+
     _save_findings(workdir, findings_data)
     failed = sum(1 for f in findings_data["findings"] if f.get("checklist_verified") is False)
     print(f"Inventory check: {failed} failed, {len(findings_data['findings']) - failed} passed")
     _print_schema_hint("C")
+
+
+def _run_cocci_prereqs(workdir, findings_data, target=None):
+    """Stage C structural pre-check via Coccinelle.
+
+    Runs the shipped function-inventory rule across the target ONCE
+    and annotates each finding with ``cocci_prereqs``. The Stage C
+    LLM consults these mechanical facts as evidence — they do not
+    decide finding status.
+
+    Skip cases (silent):
+      * target arg missing or path not a directory
+      * spatch absent / target has no C/C++ source / shipped rules
+        dir missing — handled by ``gather_prereqs`` itself
+    """
+    if not target:
+        return
+    target_path = Path(target)
+    if not target_path.is_dir():
+        return
+    try:
+        from packages.coccinelle.prereqs import (
+            evaluate_finding as _cocci_evaluate,
+            gather_prereqs as _cocci_gather,
+        )
+    except ImportError:
+        # packages/coccinelle absent (minimal install) — nothing to do.
+        return
+
+    facts = _cocci_gather(target_path)
+    if facts.is_skipped:
+        # The skip reason is informational; surface at debug volume
+        # only — operators expect silence when prerequisites aren't met.
+        return
+
+    flagged = 0
+    for finding in findings_data.get("findings", []):
+        if finding.get("status") == "disproven":
+            continue
+        result = _cocci_evaluate(finding, facts)
+        finding["cocci_prereqs"] = result
+        # Surface only the orphan-static-helper case at INFO volume.
+        # function_exists=False on libc symbols is normal noise; we
+        # don't want to print it for every finding referencing strlen.
+        if (result.get("applicable")
+                and result["checks"].get("function_exists") is True
+                and result["checks"].get("function_has_callers") is False):
+            flagged += 1
+            print(
+                f"  C-cocci WARN: {finding['id']} — function "
+                f"{result['details'].get('function')!r} has no callers "
+                f"in tree (orphan-static-helper or dead code)"
+            )
+    total = len(findings_data.get("findings", []))
+    print(f"Cocci structural pre-check: {flagged} orphan-fn warnings across {total} findings")
 
 
 # ---------------------------------------------------------------------------
