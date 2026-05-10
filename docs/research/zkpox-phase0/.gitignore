@@ -1,0 +1,16 @@
+# Cargo build artifacts (~1.9 GB; reproducible from source)
+harness/target/
+
+# Native sanity-check binary (rebuilt by the README's `clang ... -o 01-stack-bof`)
+targets/01-stack-bof
+targets/*.o
+
+# Empty placeholder directories from the original scaffold that were
+# never populated — kept as TODO markers for Phase 1.
+harness/gadgets/
+
+# Local tlock/age scratch outputs if anyone runs the round-trip with
+# explicit --output paths
+envelope/*.bundle
+envelope/*.cbor
+envelope/*.bin
