@@ -346,8 +346,20 @@ def _promote_checklist(project_dir: Path) -> None:
         except OSError:
             return 0.0
 
+    # Sort key: (mtime, name) so identical mtimes break deterministically
+    # by directory name. Pre-fix the sort was on `_safe_mtime` alone;
+    # filesystems with second-resolution timestamps (or two start_run()
+    # calls in the same wall-clock second under unique_run_suffix's
+    # 4-digit ns tail) produced ties whose ordering then depended on
+    # `iterdir()`'s undefined traversal order. The "newest" checklist
+    # promoted to the project level then varied across re-promotion
+    # passes for the SAME on-disk state — operators saw checked_by
+    # state mysteriously disappear / reappear because a different
+    # checklist became "newest" each time. Run-dir names embed a
+    # PID + monotonic-ns tail (see core/run/output.unique_run_suffix),
+    # so name-tie-break gives a chronologically meaningful disambiguation.
     checklists = []
-    for d in sorted(children, key=_safe_mtime, reverse=True):
+    for d in sorted(children, key=lambda d: (_safe_mtime(d), d.name), reverse=True):
         try:
             if not d.is_dir() or d.name.startswith((".", "_")):
                 continue
