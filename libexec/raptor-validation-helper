@@ -708,14 +708,47 @@ def prepare_D(workdir, target=None):
                  if f.get("sanity_check", {}).get("passed") is False)
     print(f"Sanity check: {passed} passed, {failed} failed")
 
-    # --- Test/mock path filter ---
+    # --- Test/mock path filter (D-1) ---
+    # ``test_code_flag`` is the legacy path-only signal — fast,
+    # back-compat, but over-demotes when a real bug lives in test-
+    # adjacent code that production also reaches. The richer
+    # ``likely_test_harness`` (added 2026-05-10, see
+    # core/inventory/fixture_detection) layers a reachability
+    # gate on top, telling the LLM whether the path-flagged
+    # function is actually reachable from a production entry
+    # point. D-1's skill section reads the richer signal first;
+    # the simpler flag is kept for skills that haven't been
+    # updated.
+    inventory_path = Path(workdir) / "checklist.json"
+    inventory = load_json(inventory_path) if inventory_path.is_file() else None
+    try:
+        from core.inventory.fixture_detection import detect_fixture
+    except ImportError:
+        detect_fixture = None  # type: ignore[assignment]
+
     for finding in data.get("findings", []):
         if finding.get("status") == "disproven":
             continue
         fpath = finding.get("file", "")
         finding["test_code_flag"] = any(re.search(p, fpath) for p in TEST_PATTERNS)
+
+        if detect_fixture is not None:
+            verdict = detect_fixture(
+                file_path=fpath,
+                function=finding.get("function", ""),
+                inventory=inventory,
+            )
+            finding["likely_test_harness"] = verdict.likely_test_harness
+            finding["harness_evidence"] = [
+                e.to_dict() for e in verdict.evidence
+            ]
+
         if finding["test_code_flag"]:
-            print(f"  D0 FLAG: {finding['id']} in test/mock path: {fpath}")
+            label = finding.get("likely_test_harness", "?")
+            print(
+                f"  D-1 FLAG: {finding['id']} test path "
+                f"(likely_test_harness={label}): {fpath}"
+            )
 
     # --- Evidence card assembly ---
     for finding in data.get("findings", []):
