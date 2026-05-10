@@ -743,7 +743,18 @@ def main():
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     safe_run_mkdir(out_dir)
     save_json(out_dir / 'sca.json', out)
-    print(json.dumps({'status': 'ok', 'files_found': len(out['files'])}))
+    # Status summary goes to STDERR. Pre-fix the JSON status was
+    # printed to stdout AND the full results landed in
+    # `<out_dir>/sca.json`. Mixed protocol — a caller that
+    # parsed stdout expecting the full results saw only the
+    # summary; a caller redirecting stdout to a file got a status
+    # JSON instead of the rich output. Move to stderr so the
+    # stdout channel is silent and the file is the single source
+    # of truth for results. Status remains visible to operators
+    # tailing the agent output and to wrapping scripts that
+    # capture stderr separately.
+    print(json.dumps({'status': 'ok', 'files_found': len(out['files'])}),
+          file=sys.stderr)
 
 
 if __name__ == '__main__':
