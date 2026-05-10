@@ -81,8 +81,36 @@ def _find_claude_ancestor() -> Optional[int]:
 
 
 def _read_ppid(pid: int) -> int:
-    """Read PPID from /proc/<pid>/stat (Linux-only)."""
-    stat = Path(f"/proc/{pid}/stat").read_text()
+    """Read PPID from /proc/<pid>/stat (Linux-only).
+
+    Race-aware error wrapping. Pre-fix `read_text()` raised
+    `FileNotFoundError` if the target process exited between the
+    caller's check (`os.kill(pid, 0)`) and the read; the unhandled
+    exception bubbled out of the ancestor walk in `_get_session_pid`
+    and aborted whatever lifecycle code was probing the parent
+    chain. The walk is best-effort — if a PID disappears mid-walk,
+    raise `ProcessLookupError` (the same exception class
+    `os.kill(pid, 0)` raises) so callers handle "ancestor died" via
+    one well-known exception type.
+    """
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError as exc:
+        raise ProcessLookupError(
+            f"_read_ppid: /proc/{pid}/stat vanished — process exited"
+        ) from exc
+    except PermissionError:
+        # /proc is normally world-readable for `stat`, but a kernel
+        # built with hidepid=2 / a pid namespace boundary can hide
+        # the file. Treat as "unknown" via PermissionError pass-through.
+        raise
+    except OSError as exc:
+        # Other I/O failure (rare — /proc unmounted, ENFILE). Map
+        # to ProcessLookupError so the walker has one error class
+        # to handle for "we can't determine the parent".
+        raise ProcessLookupError(
+            f"_read_ppid: /proc/{pid}/stat unreadable: {exc}"
+        ) from exc
     # Format: pid (comm) state ppid ...
     # comm can contain spaces/parens, so find the last ')' first
     close_paren = stat.rfind(")")
