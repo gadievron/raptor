@@ -172,6 +172,11 @@ def _rank_candidates(
         candidates.sort(key=lambda d: (d.stat().st_mtime_ns, d.name), reverse=True)
         return candidates[0], set()
 
+    # Shared cache: hash each disk path at most once across all
+    # candidate runs. The disk doesn't change between candidates in
+    # a single ranking call, so re-hashing the same content M times
+    # was pure waste. See `_find_stale_files` docstring.
+    disk_hash_cache: Dict[str, Optional[str]] = {}
     scored = []
     for d in candidates:
         u_checklist = load_json(d / "checklist.json")
@@ -180,7 +185,7 @@ def _rank_candidates(
             scored.append((1, d.stat().st_mtime_ns, d, set()))
             continue
         u_hashes = _extract_hashes(u_checklist)
-        stale = _find_stale_files(u_hashes, target_path)
+        stale = _find_stale_files(u_hashes, target_path, disk_hash_cache)
         # fresh = 0 stale files → sort key 0 (best)
         scored.append((len(stale), d.stat().st_mtime_ns, d, stale))
 
@@ -212,12 +217,24 @@ def _extract_hashes(checklist: Dict[str, Any]) -> Dict[str, str]:
 def _find_stale_files(
     understand_hashes: Dict[str, str],
     target_path: str,
+    disk_hash_cache: Optional[Dict[str, Optional[str]]] = None,
 ) -> Set[str]:
     """Return relative paths whose on-disk SHA-256 differs from the understand checklist.
 
     Hashes the actual files under target_path rather than comparing against
     another checklist. This is immune to the project-mode symlink problem
     where both runs share one checklist.json file.
+
+    `disk_hash_cache` (optional) is a caller-supplied dict that
+    memoises ``rel_path -> on-disk sha256 (or None if missing)``.
+    Pre-fix the function hashed each path independently for every
+    invocation. Callers like ``_rank_candidates`` invoke this once
+    per candidate run dir — for M candidates and N target files
+    that's M*N hashes of identical on-disk content (the disk
+    doesn't change between candidates in a single _rank_candidates
+    call). With four candidates against a 50k-file target the
+    redundant SHA-256 work multiplied wallclock by ~4x. Passing a
+    shared dict collapses repeats to one hash per disk path.
     """
     from core.hash import sha256_file
 
@@ -225,11 +242,18 @@ def _find_stale_files(
     stale: Set[str] = set()
     for rel_path, u_hash in understand_hashes.items():
         full_path = target / rel_path
-        if not full_path.is_file():
-            # File deleted since understand ran
+        if disk_hash_cache is not None and rel_path in disk_hash_cache:
+            disk_hash = disk_hash_cache[rel_path]
+        else:
+            if not full_path.is_file():
+                disk_hash = None
+            else:
+                disk_hash = sha256_file(full_path)
+            if disk_hash_cache is not None:
+                disk_hash_cache[rel_path] = disk_hash
+        if disk_hash is None:
             stale.add(rel_path)
             continue
-        disk_hash = sha256_file(full_path)
         if disk_hash != u_hash:
             stale.add(rel_path)
     return stale
