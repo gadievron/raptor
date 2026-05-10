@@ -1,0 +1,7 @@
+[workspace]
+members = ["guest", "host"]
+resolver = "2"
+
+# Phase 0 spike workspace. NOT a member of any larger Cargo workspace —
+# building this is `cargo build --manifest-path harness/Cargo.toml`. Phase 1
+# decides where the eventual core/zkpox/ crate lives in RAPTOR's tree.

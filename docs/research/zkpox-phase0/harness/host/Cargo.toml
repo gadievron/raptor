@@ -1,0 +1,19 @@
+[package]
+name = "zkpox-phase0-host"
+version = "0.0.0"
+edition = "2021"
+default-run = "prove-bof"
+
+[[bin]]
+name = "prove-bof"
+path = "src/main.rs"
+
+[dependencies]
+sp1-sdk = { version = "6.0.1", features = ["blocking", "native-gnark"] }
+clap = { version = "4.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+
+[build-dependencies]
+sp1-build = { version = "6.0.1" }
