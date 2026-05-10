@@ -20,7 +20,21 @@ from core.http import (
     SizeLimitExceeded,
     default_client,
 )
-from core.http.urllib_backend import UrllibClient
+from core.http.urllib_backend import (
+    UrllibClient, _HostCircuitBreaker,
+    reset_default_circuit_breaker,
+)
+
+
+@pytest.fixture(autouse=True)
+def _reset_default_breaker():
+    """Fresh module-level breaker per test — earlier tests' 429/5xx
+    paths trip the singleton and would leak state into later tests
+    that share an UrllibClient without an explicit ``circuit_breaker``
+    kwarg."""
+    reset_default_circuit_breaker()
+    yield
+    reset_default_circuit_breaker()
 
 
 def _stub_response(body: bytes, *, status: int = 200,
@@ -923,3 +937,208 @@ class TestRaiseOnStatus:
             "GET", "https://example.com/", raise_on_status=False,
         )
         assert captured.get("raise_on_status") is False
+
+
+# ---------------------------------------------------------------------------
+# Host circuit breaker
+# ---------------------------------------------------------------------------
+
+
+class TestHostCircuitBreaker:
+    """Per-host fail-fast cooldown for repeated 429 / 5xx."""
+
+    def test_fresh_breaker_allows_requests(self):
+        cb = _HostCircuitBreaker()
+        is_open, _ = cb.is_open("example.com", 443)
+        assert is_open is False
+
+    def test_below_threshold_stays_closed(self):
+        cb = _HostCircuitBreaker(threshold=3, window=60.0, cooldown=120.0)
+        cb.record_failure("a.example", 443)
+        cb.record_failure("a.example", 443)  # 2 < threshold=3
+        is_open, _ = cb.is_open("a.example", 443)
+        assert is_open is False
+
+    def test_at_threshold_opens(self):
+        cb = _HostCircuitBreaker(threshold=2, window=60.0, cooldown=120.0)
+        transitioned1 = cb.record_failure("a.example", 443)
+        transitioned2 = cb.record_failure("a.example", 443)
+        # First failure shouldn't open; second crosses threshold.
+        assert transitioned1 is False
+        assert transitioned2 is True
+        is_open, remaining = cb.is_open("a.example", 443)
+        assert is_open is True
+        assert 0 < remaining <= 120.0
+
+    def test_per_host_isolation(self):
+        """One host opening must NOT block another host."""
+        cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
+        cb.record_failure("bad.example", 443)
+        cb.record_failure("bad.example", 443)
+        assert cb.is_open("bad.example", 443)[0] is True
+        assert cb.is_open("ok.example", 443)[0] is False
+
+    def test_per_port_isolation(self):
+        """Different ports on same host are independent circuits."""
+        cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
+        cb.record_failure("a.example", 443)
+        cb.record_failure("a.example", 443)
+        assert cb.is_open("a.example", 443)[0] is True
+        assert cb.is_open("a.example", 8080)[0] is False
+
+    def test_success_resets(self):
+        """A 200 must clear both the failure history and any open state."""
+        cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
+        cb.record_failure("a.example", 443)
+        cb.record_failure("a.example", 443)
+        assert cb.is_open("a.example", 443)[0] is True
+        cb.record_success("a.example", 443)
+        assert cb.is_open("a.example", 443)[0] is False
+        # Subsequent failures restart the count from 0 — one failure
+        # alone shouldn't reopen.
+        cb.record_failure("a.example", 443)
+        assert cb.is_open("a.example", 443)[0] is False
+
+    def test_old_failures_drop_out_of_window(self, monkeypatch):
+        """Failures older than ``window`` shouldn't count toward
+        the open threshold."""
+        import core.http.urllib_backend as ub
+        t = [1000.0]
+        monkeypatch.setattr(ub.time, "monotonic", lambda: t[0])
+        cb = _HostCircuitBreaker(threshold=2, window=60.0, cooldown=120.0)
+        cb.record_failure("a.example", 443)
+        t[0] = 1100.0  # +100s, past the 60s window
+        cb.record_failure("a.example", 443)
+        # Only the recent one counts → still 1 < 2 threshold.
+        assert cb.is_open("a.example", 443)[0] is False
+
+    def test_cooldown_elapses_closes_circuit(self, monkeypatch):
+        import core.http.urllib_backend as ub
+        t = [1000.0]
+        monkeypatch.setattr(ub.time, "monotonic", lambda: t[0])
+        cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
+        cb.record_failure("a.example", 443)
+        cb.record_failure("a.example", 443)
+        assert cb.is_open("a.example", 443)[0] is True
+        t[0] = 1200.0  # +200s, past cooldown
+        assert cb.is_open("a.example", 443)[0] is False
+
+    def test_case_insensitive_host_keying(self):
+        cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
+        cb.record_failure("Example.com", 443)
+        cb.record_failure("EXAMPLE.COM", 443)
+        # Should treat as same host → opens after 2.
+        assert cb.is_open("example.com", 443)[0] is True
+
+
+class TestUrllibClientCircuitBreakerWiring:
+    """The breaker fires from inside _fetch on real-shaped retries."""
+
+    def test_two_429s_then_third_request_fails_fast(self):
+        """After two 429s on host A, a third request to host A must
+        raise immediately without invoking the pool."""
+        cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
+        # 6 stub responses (one per backoff slot) — but the third
+        # request should fail fast before the pool is hit again.
+        r429 = _stub_response(b"", status=429, reason="Too Many Requests")
+        pool = MagicMock()
+        pool.request.return_value = r429
+        client = UrllibClient(_http=pool, circuit_breaker=cb)
+
+        # First request: 3 attempts (retries=2 + initial), every
+        # attempt returns 429, cumulative sleep is 1+2 = 3s under
+        # the default schedule. Each 429 records a failure → circuit
+        # opens at 2nd record. total_timeout=60 leaves plenty of
+        # headroom for the 3s of total backoff.
+        with pytest.raises(HttpError):
+            client.get_json(
+                "https://rate-limited.example.com/x",
+                total_timeout=60, retries=2,
+            )
+
+        is_open, _ = cb.is_open("rate-limited.example.com", 443)
+        assert is_open is True
+
+        # Second request to the same host: must NOT hit the pool.
+        pool.request.reset_mock()
+        with pytest.raises(HttpError, match="Circuit open"):
+            client.get_json(
+                "https://rate-limited.example.com/y",
+                total_timeout=10, retries=2,
+            )
+        assert pool.request.call_count == 0, (
+            "Circuit-open path must not invoke the urllib3 pool"
+        )
+
+    def test_other_host_still_succeeds_when_one_host_open(self):
+        """Per-host isolation through the wiring path."""
+        cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
+        # Pre-open the breaker for a-host:443 directly.
+        cb.record_failure("a-host.example.com", 443)
+        cb.record_failure("a-host.example.com", 443)
+
+        # b-host serves a clean 200.
+        ok = _stub_response(b'{"ok": 1}', status=200)
+        pool = MagicMock()
+        pool.request.return_value = ok
+        client = UrllibClient(_http=pool, circuit_breaker=cb)
+
+        # b-host succeeds.
+        result = client.get_json("https://b-host.example.com/")
+        assert result == {"ok": 1}
+        # a-host fast-fails.
+        with pytest.raises(HttpError, match="Circuit open"):
+            client.get_json("https://a-host.example.com/")
+
+    def test_success_clears_breaker_history(self):
+        """After a successful response, the host's failure count must
+        reset — a single subsequent failure shouldn't reopen."""
+        cb = _HostCircuitBreaker(threshold=2, cooldown=120.0)
+        ok = _stub_response(b'{"ok": 1}', status=200)
+        pool = MagicMock()
+        pool.request.return_value = ok
+        client = UrllibClient(_http=pool, circuit_breaker=cb)
+
+        # Pre-stage one failure (still under threshold), then a 2xx.
+        cb.record_failure("flaky.example.com", 443)
+        client.get_json("https://flaky.example.com/")
+        # The 2xx should have reset failure history; one new failure
+        # alone must not open.
+        cb.record_failure("flaky.example.com", 443)
+        assert cb.is_open("flaky.example.com", 443)[0] is False
+
+    def test_breaker_state_persists_across_default_clients(self):
+        """The fix for the ~90s-per-sample stress-sweep regression:
+        when callers don't pass an explicit ``circuit_breaker``,
+        the module-level singleton is used. State persists across
+        HttpClient instances within one process so sweep-style
+        callers don't have to re-trip the breaker on every fresh
+        client (each ~90s of retry budget burned per sample on a
+        rate-limited host)."""
+        # Two CONSECUTIVE clients, each constructed with no explicit
+        # breaker. They should share the singleton.
+        r429 = _stub_response(b"", status=429)
+        pool1 = MagicMock()
+        pool1.request.return_value = r429
+        client1 = UrllibClient(_http=pool1)
+
+        # Trip the breaker via client1.
+        with pytest.raises(HttpError):
+            client1.get_json(
+                "https://shared-host.example.com/x",
+                total_timeout=60, retries=2,
+            )
+
+        # Now build a fresh client. It MUST see the open circuit.
+        pool2 = MagicMock()
+        pool2.request.return_value = r429
+        client2 = UrllibClient(_http=pool2)
+
+        with pytest.raises(HttpError, match="Circuit open"):
+            client2.get_json(
+                "https://shared-host.example.com/y",
+                total_timeout=10, retries=2,
+            )
+        # Confirm pool2 was never invoked — the second client benefits
+        # from the first client's discovery without redoing the work.
+        assert pool2.request.call_count == 0
