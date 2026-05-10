@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""Replay dataflow corpus findings through a validator and emit CSV.
+
+Usage:
+  raptor-corpus-run --output <csv> [--corpus-dir <dir>] [--validator <module:Cls>]
+
+Default validator is core.dataflow.validator:TrivialValidator (always
+exploitable) — the producer-only baseline. Pass --validator to plug in
+a real validator (e.g. PR1's LLM-backed sanitizer-evidence validator).
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.dataflow.run_corpus import main
+
+sys.exit(main())
