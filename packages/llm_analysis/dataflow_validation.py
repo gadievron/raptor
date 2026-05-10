@@ -1904,6 +1904,25 @@ def _ask_llm_for_predicates(
         "structure (imports, ConfigSig module, PathGraph, select clause) "
         "is provided mechanically — your output goes inside the braces."
     )
+    if language.lower() == "cpp":
+        # The cpp template aliases `semmle.code.cpp.security.FlowSources`
+        # to `FS` to avoid a `module DataFlow is ambiguous` compile error
+        # (see the comment block in dataflow_query_builder._TAINT_TEMPLATES
+        # ['cpp']). Any predicate body that references a FlowSources type
+        # MUST use the `FS::` prefix or it won't resolve. Examples:
+        # `n instanceof FS::FlowSource`, `n instanceof FS::RemoteFlowSource`.
+        prompt_parts.append(
+            "C/C++ specific: this query template aliases the FlowSources "
+            "import to `FS` — if you need to match attacker-controlled "
+            "input via a FlowSources class, use the `FS::` prefix (e.g. "
+            "`n instanceof FS::FlowSource` or `n instanceof FS::"
+            "RemoteFlowSource`). For most cpp memory-corruption findings "
+            "(CWE-120/125/787/190/476) the source is more naturally "
+            "expressed as `n.asExpr()` matching a specific argv / "
+            "parameter / external-input pattern — use that when "
+            "applicable. Without the `FS::` prefix, references to "
+            "FlowSource types will fail to resolve at compile time."
+        )
     if previous_error:
         prompt_parts.append(
             "Previous attempt failed to compile:\n"

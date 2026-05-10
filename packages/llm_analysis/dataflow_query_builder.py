@@ -423,9 +423,25 @@ select sink.getNode(), source, sink, "IRIS dataflow path"
  * @problem.severity error
  */
 import cpp
-import semmle.code.cpp.dataflow.new.DataFlow
 import semmle.code.cpp.dataflow.new.TaintTracking
-import semmle.code.cpp.security.FlowSources
+import semmle.code.cpp.security.FlowSources as FS
+
+// Two cpp imports both expose `module DataFlow`:
+//   * `semmle.code.cpp.dataflow.new.DataFlow` (used by ConfigSig — pulled
+//     in transitively via TaintTracking above)
+//   * `semmle.code.cpp.ir.dataflow.DataFlow` (transitively imported by
+//     `semmle.code.cpp.security.FlowSources`)
+// Without the `as FS` alias the second leaks into top-level scope and the
+// `DataFlow::ConfigSig` reference below fails to compile with
+// "module DataFlow is ambiguous between: DataFlow::DataFlow,
+// DataFlow::DataFlow". Aliasing FlowSources scopes its DataFlow under
+// FS::DataFlow and leaves the new-style DataFlow as the unique top-level
+// `DataFlow`. Matches the canonical pattern in
+// /home/raptor/.local/codeql-queries/cpp/ql/src/Security/CWE/CWE-120/
+// UnboundedWrite.ql. LLM-generated source/sink bodies that need
+// FlowSources types must use the FS:: prefix (e.g. `n instanceof
+// FS::FlowSource`) — see the prompt instructions in
+// _ask_llm_for_predicates.
 
 module IrisConfig implements DataFlow::ConfigSig {{
   predicate isSource(DataFlow::Node n) {{
