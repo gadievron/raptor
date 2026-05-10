@@ -860,7 +860,30 @@ for i, src in enumerate(FILES):
         # write(2) waiting for a reader).
         while proc.stderr.read(64 * 1024):
             pass
-    proc.wait()
+    # Per-file compile timeout. Pre-fix `proc.wait()` had no
+    # bound — a runaway compile (gcc on a pathological template
+    # instantiation, javac on infinite annotation processing,
+    # deliberately slow input from an untrusted target) hung
+    # the whole build script forever. CodeQL DB build then
+    # blocked indefinitely with no progress signal.
+    # 120s is comfortably above any legitimate single-file
+    # compile (the slowest C++ template compiles in real
+    # codebases run ~30s); a hung compile gets killed and
+    # counted as a failure so the rest of the pass continues.
+    _COMPILE_TIMEOUT_S = 120
+    try:
+        proc.wait(timeout=_COMPILE_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        fail += 1
+        sys.stderr.buffer.write(
+            f"\\n[compile timeout {{_COMPILE_TIMEOUT_S}}s on {{src!r}}]\\n".encode()
+        )
+        continue
     if proc.returncode == 0:
         ok += 1
     else:
