@@ -637,6 +637,119 @@ def run_codeql(
     return sarif_paths
 
 
+# ---------------------------------------------------------------------------
+# Coccinelle (spatch) — C/C++ structural patterns
+# ---------------------------------------------------------------------------
+
+
+# Repo-language heuristic: same set of extensions as the
+# /understand --hunt cocci backend (#457). Bounded so giant non-C
+# repos don't pay an unbounded rglob.
+_COCCI_C_EXTS: tuple = (".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh")
+
+
+def _repo_has_c_cpp_source(repo_path: Path,
+                           max_files_to_check: int = 200) -> bool:
+    """Quick heuristic: does the target have C/C++ source? Used by
+    the auto-skip for non-C/C++ targets (cocci is C-family only)."""
+    if not repo_path.is_dir():
+        return False
+    seen = 0
+    for entry in repo_path.rglob("*"):
+        if not entry.is_file():
+            continue
+        seen += 1
+        if entry.suffix.lower() in _COCCI_C_EXTS:
+            return True
+        if seen >= max_files_to_check:
+            return False
+    return False
+
+
+def _shipped_cocci_rules_dir() -> Optional[Path]:
+    """Return the in-tree shipped-rules directory or None if it
+    isn't present (minimal install / stripped tarball). The rules
+    live at ``engine/coccinelle/rules/`` — distributed with RAPTOR,
+    not generated."""
+    here = Path(__file__).resolve()
+    # packages/static-analysis/scanner.py → repo root → engine/...
+    candidate = here.parents[2] / "engine" / "coccinelle" / "rules"
+    if candidate.is_dir():
+        return candidate
+    return None
+
+
+def run_cocci(
+    repo_path: Path,
+    out_dir: Path,
+    rules_dir: Optional[Path] = None,
+    timeout: int = 300,
+) -> List[str]:
+    """Run Coccinelle's shipped rule set against ``repo_path`` and
+    emit SARIF.
+
+    Auto-skipped when:
+      * spatch isn't on PATH (degrades silently — operators without
+        cocci installed shouldn't see noise).
+      * the target has no C/C++ source (cocci is C-family-only).
+      * no shipped rules directory exists (defensive — minimal
+        install / packaging strip).
+
+    Returns the list of SARIF paths emitted (currently exactly one,
+    ``cocci.sarif``, when the run produced any output). Empty list
+    when skipped — same shape as ``run_codeql`` so the caller's
+    ``sarif_inputs = semgrep_sarifs + codeql_sarifs + cocci_sarifs``
+    union works without special-cases.
+
+    Errors during individual rule runs are captured into the SARIF
+    ``invocations[].toolExecutionNotifications`` so operators see
+    them in the combined report rather than silently lost.
+    """
+    from packages.coccinelle.runner import (
+        is_available as spatch_available,
+        run_rules as spatch_run_rules,
+    )
+    from packages.coccinelle.sarif import results_to_sarif
+
+    if not spatch_available():
+        logger.debug("cocci: spatch not on PATH; skipping")
+        return []
+    if not _repo_has_c_cpp_source(repo_path):
+        logger.debug("cocci: target has no C/C++ source; skipping")
+        return []
+
+    effective_rules_dir = rules_dir if rules_dir else _shipped_cocci_rules_dir()
+    if effective_rules_dir is None:
+        logger.debug(
+            "cocci: shipped rules dir not found "
+            "(engine/coccinelle/rules/); skipping",
+        )
+        return []
+
+    logger.info(
+        f"cocci: running {effective_rules_dir} against {repo_path} "
+        f"(timeout {timeout}s/rule)",
+    )
+    results = spatch_run_rules(
+        target=repo_path,
+        rules_dir=effective_rules_dir,
+        timeout_per_rule=timeout,
+        no_includes=True,  # operator targets are untrusted
+    )
+
+    sarif_doc = results_to_sarif(results, repo_path)
+    sarif_path = out_dir / "cocci.sarif"
+    save_json(sarif_path, sarif_doc)
+
+    n_results = sum(len(r.matches) for r in results)
+    n_errors = sum(len(r.errors or []) for r in results)
+    logger.info(
+        f"cocci: {n_results} matches across {len(results)} rules "
+        f"({n_errors} rule-level errors); SARIF at {sarif_path}",
+    )
+    return [str(sarif_path)]
+
+
 def _sarif_has_findings(sarif_path: Path) -> bool:
     """Return True iff the SARIF file contains at least one result.
 
@@ -904,6 +1017,15 @@ def main():
              "scan regardless of what defaults change in future.",
     )
     ap.add_argument(
+        "--no-cocci", action="store_true",
+        help="Disable the Coccinelle (spatch) stage. By default cocci runs "
+             "automatically when (a) spatch is on PATH and (b) the target has "
+             "C/C++ source. Catches structural patterns (missing NULL checks, "
+             "lock imbalance, unchecked returns) Semgrep doesn't model "
+             "AST-level. Auto-skips silently when the prerequisites aren't "
+             "met; this flag is for the explicit-opt-out case in scripts.",
+    )
+    ap.add_argument(
         "--languages",
         help="Comma-separated language list for CodeQL (e.g. cpp,java). "
              "Operator-friendly aliases (c, c++, js, ts, c#, kt, py) are "
@@ -1030,8 +1152,19 @@ def main():
                 build_command=args.build_command,
             )
 
+        # Coccinelle stage. Default-on for C/C++ targets; auto-skips
+        # silently when spatch is absent or the repo has no C/C++
+        # source. ``--no-cocci`` is the explicit opt-out (e.g.
+        # operator wants only semgrep/codeql signal). Cheap to run —
+        # the shipped rule set is small and AST-level matching is
+        # fast — but the opt-out exists for unattended pipelines
+        # where any extra signal is noise.
+        cocci_sarifs = []
+        if not args.no_cocci:
+            cocci_sarifs = run_cocci(repo_path, out_dir)
+
         # Merge SARIFs if more than one
-        sarif_inputs = semgrep_sarifs + codeql_sarifs
+        sarif_inputs = semgrep_sarifs + codeql_sarifs + cocci_sarifs
         merged = out_dir / "combined.sarif"
         if sarif_inputs:
             logger.info(f"Merging {len(sarif_inputs)} SARIF files...")
