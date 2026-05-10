@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "webgoat_codeql_java-path-injection_0f44059f6ef2",
+  "verdict": "false_positive",
+  "fp_category": "framework_mitigation",
+  "rationale": "@RequestParam fullName (line 41) is filtered via replace(\"../\", \"\") before being passed downstream (line 43). Pattern matchers without path-sanitisation models flag any user-input-to-File-path. The replace() is the project-specific mitigation; whether it's complete (it isn't \u2014 `....//` bypasses) is a separate semantic question.",
+  "labeler": "handlabel-juice-shop-webgoat",
+  "labeled_at": "2026-05-10"
+}
