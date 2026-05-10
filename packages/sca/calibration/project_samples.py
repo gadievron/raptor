@@ -382,6 +382,33 @@ PROJECT_SAMPLES: List[ProjectSample] = [
         repo_url="https://github.com/PowerShell/PowerShell.git",
         git_ref="v6.0.0", license_spdx="MIT",
     ),
+    # Round-7 NuGet count-gate fillers (2026-05-10).
+    # NuGet was at 33 findings post-round-6, well under the 100-
+    # finding per-eco refit threshold. Two more permissive samples
+    # to push it over without triggering the modern-CPM trap (where
+    # Directory.Packages.props centralises versions and SCA's csproj
+    # parser sees PackageReference rows with no Version attribute).
+    #
+    # Avalonia 0.10.18 — cross-platform .NET UI framework, MIT.
+    # 33 inline-pinned PackageReference rows across 100+ csproj
+    # files. Different stack to PowerShell (UI / windowing / x11 /
+    # gpu) — surfaces CVEs in deps that the systems-tooling samples
+    # don't touch.
+    ProjectSample(
+        name="avalonia-0.10", ecosystem="NuGet",
+        repo_url="https://github.com/AvaloniaUI/Avalonia.git",
+        git_ref="0.10.18", license_spdx="MIT",
+    ),
+    # Marten v6.2.0 — Postgres-backed event-sourcing + document DB
+    # for .NET, MIT. 118 inline-pinned PackageReference rows. No
+    # CPM (Directory.Packages.props absent), so the parser sees
+    # all 118 deps directly. Database / event-sourcing surface,
+    # different from UI + scripting samples.
+    ProjectSample(
+        name="marten-6.2", ecosystem="NuGet",
+        repo_url="https://github.com/JasperFx/marten.git",
+        git_ref="v6.2.0", license_spdx="MIT",
+    ),
 
     # Packagist +3.
     # bagisto 1.5 — Laravel-based e-commerce. 182 composer packages.
