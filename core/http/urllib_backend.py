@@ -704,7 +704,17 @@ class UrllibClient:
 
         last_exc: Optional[Exception] = None
         for attempt, delay in enumerate(schedule):
-            if time.monotonic() >= deadline:
+            # Deadline gate. Pre-fix the check was unconditional and
+            # used `>=`, which fired BEFORE the first attempt when
+            # `total_timeout == 0` (deadline = monotonic() + 0, then
+            # `monotonic() >= deadline` is immediately True at the
+            # top of the first iteration). The caller saw a "total
+            # timeout exceeded" error without any attempt being
+            # made — useless, since 0 here is most meaningfully read
+            # as "single attempt, no retry budget", not "no time at
+            # all". Skip the gate on attempt==0 so the first try
+            # always runs; check on subsequent iterations only.
+            if attempt > 0 and time.monotonic() >= deadline:
                 raise HttpError(
                     f"Total timeout ({total_timeout}s) exceeded for "
                     f"{_safe_url_for_log(url)}",
