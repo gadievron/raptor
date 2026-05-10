@@ -9,9 +9,11 @@ we wrap them with a reporting harness.
 """
 
 import json
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -99,12 +101,45 @@ def run_rule(
     rule_text = rule.read_text()
     needs_harness = RESULT_PREFIX not in rule_text and "script:python" not in rule_text
 
+    # If the rule needs harness injection, the modified text has to
+    # reach spatch via a real file path. Pre-fix this routed via
+    # ``--sp-file -`` (stdin), but spatch 1.3 (the build on every
+    # host we ship to) doesn't accept ``-`` / ``--sp-file=-`` /
+    # ``--sp-file /dev/stdin`` — each errors with either
+    # ``Sys_error("-: No such file or directory")`` or "unexpected
+    # code before the first rule". The only reliable invocation is
+    # a real path. Write the harnessed text to a tempfile and pass
+    # its path; cleanup in ``finally`` covers timeout / error paths.
+    harnessed_rule_path: Optional[Path] = None
     if needs_harness:
-        effective_rule = _inject_harness(rule_text, rule_name)
-    else:
-        effective_rule = None
+        injected = _inject_harness(rule_text, rule_name)
+        if injected != rule_text:
+            # Tempfile in the system tempdir — works under the
+            # default sandbox allowlist (``/tmp`` is reachable).
+            # delete=False so we control cleanup; without it the
+            # NamedTemporaryFile context manager would unlink on
+            # exit before spatch could read it through the
+            # subprocess_runner.
+            fd, tmp_name = tempfile.mkstemp(suffix=".cocci", prefix="raptor-cocci-")
+            try:
+                with os.fdopen(fd, "w") as fh:
+                    fh.write(injected)
+                harnessed_rule_path = Path(tmp_name)
+            except OSError:
+                # If we can't write, fall back to the un-harnessed
+                # rule path. The caller still gets spatch results,
+                # just without our structured COCCIRESULT lines —
+                # which is the same UX as a multi-rule file
+                # (handled below in _inject_harness's existing
+                # "return rule_text unchanged" path).
+                try:
+                    Path(tmp_name).unlink()
+                except OSError:
+                    pass
+                harnessed_rule_path = None
 
-    cmd = [_SPATCH_BIN, "--sp-file", str(rule) if not effective_rule else "-"]
+    sp_file_path = harnessed_rule_path if harnessed_rule_path else rule
+    cmd = [_SPATCH_BIN, "--sp-file", str(sp_file_path)]
 
     if target.is_dir():
         cmd.extend(["--dir", str(target)])
@@ -148,63 +183,73 @@ def run_rule(
     else:
         spatch_cwd = None
     try:
-        proc = runner(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=run_env,
-            input=effective_rule,
-            cwd=str(spatch_cwd) if spatch_cwd is not None else None,
+        try:
+            proc = runner(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=run_env,
+                cwd=str(spatch_cwd) if spatch_cwd is not None else None,
+            )
+        except subprocess.TimeoutExpired as exc:
+            # Capture partial output before giving up. spatch on
+            # large repos sometimes runs past the timeout AFTER
+            # producing partial results — pre-fix we threw away
+            # everything (returned only "Timeout" error). Now we
+            # parse whatever it managed to emit before the timeout
+            # so operators see those matches in the report
+            # alongside the timeout warning.
+            partial_stdout = exc.stdout if isinstance(exc.stdout, str) else (
+                exc.stdout.decode("utf-8", errors="replace") if exc.stdout else ""
+            )
+            partial_stderr = exc.stderr if isinstance(exc.stderr, str) else (
+                exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
+            )
+            partial_matches = _dedup_matches(
+                _parse_results(partial_stdout, rule_name)
+                + _parse_results(partial_stderr, rule_name)
+            )
+            return SpatchResult(
+                rule=rule_name, rule_path=str(rule),
+                matches=partial_matches,
+                errors=[f"Timeout after {timeout}s (partial output captured)"],
+                returncode=-1,
+            )
+        except OSError as e:
+            return SpatchResult(
+                rule=rule_name, rule_path=str(rule),
+                errors=[str(e)],
+                returncode=-1,
+            )
+        elapsed = int((time.monotonic() - start) * 1000)
+
+        matches = _dedup_matches(
+            _parse_results(proc.stdout, rule_name) + _parse_results(proc.stderr, rule_name)
         )
-    except subprocess.TimeoutExpired as exc:
-        # Capture partial output before giving up. spatch on
-        # large repos sometimes runs past the timeout AFTER
-        # producing partial results — pre-fix we threw away
-        # everything (returned only "Timeout" error). Now we
-        # parse whatever it managed to emit before the timeout
-        # so operators see those matches in the report
-        # alongside the timeout warning.
-        partial_stdout = exc.stdout if isinstance(exc.stdout, str) else (
-            exc.stdout.decode("utf-8", errors="replace") if exc.stdout else ""
-        )
-        partial_stderr = exc.stderr if isinstance(exc.stderr, str) else (
-            exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
-        )
-        partial_matches = _dedup_matches(
-            _parse_results(partial_stdout, rule_name)
-            + _parse_results(partial_stderr, rule_name)
-        )
+        errors = _parse_errors(proc.stderr)
+
+        files_examined = _collect_files_examined(target, {m.file for m in matches})
+
         return SpatchResult(
-            rule=rule_name, rule_path=str(rule),
-            matches=partial_matches,
-            errors=[f"Timeout after {timeout}s (partial output captured)"],
-            returncode=-1,
+            rule=rule_name,
+            rule_path=str(rule),
+            matches=matches,
+            files_examined=files_examined,
+            errors=errors,
+            elapsed_ms=elapsed,
+            returncode=proc.returncode,
         )
-    except OSError as e:
-        return SpatchResult(
-            rule=rule_name, rule_path=str(rule),
-            errors=[str(e)],
-            returncode=-1,
-        )
-    elapsed = int((time.monotonic() - start) * 1000)
-
-    matches = _dedup_matches(
-        _parse_results(proc.stdout, rule_name) + _parse_results(proc.stderr, rule_name)
-    )
-    errors = _parse_errors(proc.stderr)
-
-    files_examined = _collect_files_examined(target, {m.file for m in matches})
-
-    return SpatchResult(
-        rule=rule_name,
-        rule_path=str(rule),
-        matches=matches,
-        files_examined=files_examined,
-        errors=errors,
-        elapsed_ms=elapsed,
-        returncode=proc.returncode,
-    )
+    finally:
+        # Clean up the harnessed-rule tempfile. Covers timeout
+        # (early return), OSError (early return), and normal-exit
+        # paths uniformly. Best-effort; an already-unlinked file
+        # or permission flake doesn't affect the result.
+        if harnessed_rule_path is not None:
+            try:
+                harnessed_rule_path.unlink()
+            except OSError:
+                pass
 
 
 def run_rules(

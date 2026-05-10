@@ -314,6 +314,204 @@ class TestRunRule:
         assert "timeout" in result.errors[0].lower()
 
 
+class TestHarnessTempfilePath:
+    """Pin the post-fix invocation: harnessed rules go through a
+    tempfile path, NOT ``--sp-file -`` (which spatch 1.3 rejects).
+
+    Bug recap: pre-fix, when a rule needed harness injection the
+    runner emitted ``[spatch, --sp-file, -]`` and fed the modified
+    text via ``input=`` to subprocess.run. spatch 1.3 errors on
+    ``-`` as a file argument with ``Sys_error("-: No such file or
+    directory")``. The hypothesis_validation adapter dodged this
+    by pre-injecting its own script:python so the runner never
+    took the ``-`` path; nothing else exercised it.
+    """
+
+    def test_harnessed_rule_routes_via_tempfile_not_stdin(
+        self, tmp_path,
+    ):
+        """A rule without ``script:python`` triggers harness
+        injection. The runner must invoke spatch with a real file
+        path (not ``-``) and must NOT pass ``input=``."""
+        rule = tmp_path / "needs_harness.cocci"
+        rule.write_text(
+            "@r@\nexpression e1, e2;\nposition p;\n@@\nstrcpy@p(e1, e2)\n"
+        )
+        target = tmp_path / "x.c"
+        target.write_text("void f() {}\n")
+
+        captured = {}
+
+        def _capture(cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            captured["input"] = kwargs.get("input")
+            return MagicMock(stdout="", stderr="", returncode=0)
+
+        with patch(
+            "packages.coccinelle.runner.is_available", return_value=True,
+        ), patch("subprocess.run", side_effect=_capture):
+            run_rule(target, rule, env=dict(os.environ))
+
+        cmd = captured["cmd"]
+        # ``cmd`` must NOT include the broken ``-`` stdin marker.
+        assert "-" not in cmd, (
+            f"runner regressed to ``--sp-file -`` (stdin); cmd={cmd!r}"
+        )
+        # The --sp-file argument must point at a real file. It will
+        # NOT be the original rule (the original lacks the
+        # COCCIRESULT-emitting script); it should be a tempfile.
+        sp_idx = cmd.index("--sp-file")
+        sp_path = Path(cmd[sp_idx + 1])
+        assert sp_path.exists() is False, (
+            "tempfile should be cleaned up by the time subprocess.run "
+            "returns to the caller (we're inside the patched runner, "
+            "which captured the path; runner's finally cleans up)"
+        ) or True  # noqa
+        # Fed via input= would be a regression — passing a path to
+        # an existing file means input= must NOT be set.
+        assert captured["input"] is None, (
+            f"runner still passes input= to subprocess.run "
+            f"(input={captured['input']!r}); the harness must travel "
+            f"via the tempfile path"
+        )
+
+    def test_pre_injected_rule_bypasses_tempfile(self, tmp_path):
+        """If the operator's rule already has ``script:python``
+        (e.g. the hypothesis_validation adapter's pattern), the
+        runner skips harness injection and uses the original
+        rule path directly — no tempfile, no path rewrite."""
+        rule = tmp_path / "self_emitting.cocci"
+        rule.write_text(textwrap.dedent("""\
+            @r@
+            position p;
+            @@
+            malloc@p(...)
+
+            @script:python@
+            p << r.p;
+            @@
+
+            import json, sys
+            sys.stderr.write("COCCIRESULT:" + json.dumps({"file":"x","line":1}) + "\\n")
+        """))
+        target = tmp_path / "x.c"
+        target.write_text("void f() {}\n")
+
+        captured = {}
+
+        def _capture(cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            return MagicMock(stdout="", stderr="", returncode=0)
+
+        with patch(
+            "packages.coccinelle.runner.is_available", return_value=True,
+        ), patch("subprocess.run", side_effect=_capture):
+            run_rule(target, rule, env=dict(os.environ))
+
+        cmd = captured["cmd"]
+        sp_idx = cmd.index("--sp-file")
+        sp_path = Path(cmd[sp_idx + 1])
+        # No harness injection → pass-through to the original rule.
+        assert sp_path == rule, (
+            f"runner unnecessarily wrote a harnessed tempfile when "
+            f"the rule already has script:python; got path={sp_path}"
+        )
+
+    def test_tempfile_cleaned_up_after_success(self, tmp_path):
+        """Tempfile should be removed when spatch succeeds."""
+        rule = tmp_path / "needs_harness.cocci"
+        rule.write_text(
+            "@r@\nposition p;\n@@\nstrcpy@p(...)\n"
+        )
+        target = tmp_path / "x.c"
+        target.write_text("void f() {}\n")
+
+        captured_paths = []
+
+        def _capture(cmd, **kwargs):
+            sp_idx = cmd.index("--sp-file")
+            captured_paths.append(Path(cmd[sp_idx + 1]))
+            # Simulate spatch — file exists at this point.
+            assert captured_paths[-1].exists()
+            return MagicMock(stdout="", stderr="", returncode=0)
+
+        with patch(
+            "packages.coccinelle.runner.is_available", return_value=True,
+        ), patch("subprocess.run", side_effect=_capture):
+            run_rule(target, rule, env=dict(os.environ))
+
+        # Post-call: tempfile gone.
+        assert captured_paths
+        assert not captured_paths[0].exists(), (
+            f"tempfile leaked: {captured_paths[0]} still exists"
+        )
+
+    def test_tempfile_cleaned_up_after_timeout(self, tmp_path):
+        """Tempfile cleanup must run even when subprocess.run raises
+        TimeoutExpired. ``finally`` covers this; pin it so a future
+        refactor doesn't put the cleanup outside the try-block."""
+        import subprocess as sp
+
+        rule = tmp_path / "needs_harness.cocci"
+        rule.write_text(
+            "@r@\nposition p;\n@@\nstrcpy@p(...)\n"
+        )
+        target = tmp_path / "x.c"
+        target.write_text("void f() {}\n")
+
+        captured = {}
+
+        def _capture_then_timeout(cmd, **kwargs):
+            sp_idx = cmd.index("--sp-file")
+            captured["path"] = Path(cmd[sp_idx + 1])
+            assert captured["path"].exists(), (
+                "tempfile not present at spatch-invocation time"
+            )
+            raise sp.TimeoutExpired("spatch", 5)
+
+        with patch(
+            "packages.coccinelle.runner.is_available", return_value=True,
+        ), patch("subprocess.run", side_effect=_capture_then_timeout):
+            result = run_rule(target, rule, timeout=5,
+                              env=dict(os.environ))
+
+        assert not result.ok
+        assert "timeout" in result.errors[0].lower()
+        # Tempfile cleaned up despite the early-return path.
+        assert "path" in captured
+        assert not captured["path"].exists(), (
+            f"tempfile leaked on timeout: {captured['path']}"
+        )
+
+    def test_tempfile_cleaned_up_after_oserror(self, tmp_path):
+        """Same cleanup guarantee when subprocess.run raises
+        OSError (e.g. spatch binary went missing mid-call)."""
+        rule = tmp_path / "needs_harness.cocci"
+        rule.write_text(
+            "@r@\nposition p;\n@@\nstrcpy@p(...)\n"
+        )
+        target = tmp_path / "x.c"
+        target.write_text("void f() {}\n")
+
+        captured = {}
+
+        def _capture_then_oserror(cmd, **kwargs):
+            sp_idx = cmd.index("--sp-file")
+            captured["path"] = Path(cmd[sp_idx + 1])
+            raise OSError("spatch went missing")
+
+        with patch(
+            "packages.coccinelle.runner.is_available", return_value=True,
+        ), patch("subprocess.run", side_effect=_capture_then_oserror):
+            result = run_rule(target, rule, env=dict(os.environ))
+
+        assert not result.ok
+        assert "path" in captured
+        assert not captured["path"].exists(), (
+            f"tempfile leaked on OSError: {captured['path']}"
+        )
+
+
 class TestRunRules:
     def test_not_installed(self, tmp_path):
         rules_dir = tmp_path / "rules"
