@@ -1340,6 +1340,14 @@ def _tier4_smt_refine(
                 "model": dict(model),
                 "path_conditions": list(conditions),
                 "path_profile": profile_name,
+                # Map each `_anon_N` in the model to the original
+                # function-call subexpression Z3's parser substituted
+                # (e.g. `strlen(argv[1])`). Lets the /exploit prompt
+                # renderer show meaningful labels — without this the
+                # LLM sees `_anon_0 = 32` and can't connect that to
+                # anything actionable. Empty dict when no
+                # substitution happened (named-locals conditions).
+                "anon_var_map": dict(smt.get("anon_var_map") or {}),
             })
         refined = ValidationResult(
             verdict=result.verdict,
