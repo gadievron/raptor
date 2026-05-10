@@ -172,10 +172,34 @@ def _looks_like_real_sca_agent(text: str, resolved_path: Path) -> bool:
 
     Stronger discriminator: realpath inequality vs this file AND the
     string check. Both must hold.
+
+    Pre-fix the string check used a bare substring (`in text`),
+    which had two failure modes:
+      * Whitespace-fragile: a file with two spaces between
+        `import` and `SCA_ALLOWED_HOSTS` (legitimate Python,
+        formatter-rewritten by some tools) was rejected because
+        the literal substring didn't match.
+      * Matched COMMENTS too: a file with
+        `# from packages.sca import SCA_ALLOWED_HOSTS -- example`
+        was falsely classified as the real agent. A README-style
+        Python script next to the SCA tree could be mis-launched
+        as the agent.
+
+    Use a regex anchored to start-of-line with no leading `#`,
+    tolerating any whitespace between tokens. Multiline so the
+    match works across the file's full text.
     """
     if resolved_path.resolve() == _THIS_BRIDGE_FILE:
         return False
-    return "from packages.sca import SCA_ALLOWED_HOSTS" in text
+    import re as _re
+    # `(?m)^` line start, optional leading non-comment whitespace,
+    # then the import statement with flexible whitespace between
+    # tokens. `\b` after the symbol so `SCA_ALLOWED_HOSTSX` doesn't
+    # spuriously match.
+    return bool(_re.search(
+        r'(?m)^[ \t]*from[ \t]+packages\.sca[ \t]+import[ \t]+(?:[a-zA-Z_,\s]*\s)?SCA_ALLOWED_HOSTS\b',
+        text,
+    ))
 
 
 # ---------------------------------------------------------------------------
