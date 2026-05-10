@@ -801,7 +801,24 @@ def _validate_context_map_shape(parsed) -> Optional[str]:
         return "unparseable JSON"
     if not isinstance(parsed, dict):
         return "not a JSON object"
-    list_keys = ("entry_points", "sink_details", "sources", "sinks", "trust_boundaries")
+    list_keys = (
+        "entry_points",
+        "sink_details",
+        "sources",
+        "sinks",
+        "trust_boundaries",
+        # Pre-fix `unchecked_flows` was missing from this guard
+        # despite the bridge iterating it in `_filter_context_map`
+        # and `enrich_checklist`. A non-list value (LLM emitting
+        # `unchecked_flows: {}` or `unchecked_flows: "n/a"`)
+        # crashed the bridge after lifecycle had already started,
+        # producing a stack trace that read like a bridge bug
+        # rather than a malformed input.
+        "unchecked_flows",
+        # Same applies to `boundary_details` — _filter_context_map
+        # iterates this list under the same shape contract.
+        "boundary_details",
+    )
     for key in list_keys:
         value = parsed.get(key)
         if value is None:
