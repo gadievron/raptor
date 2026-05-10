@@ -1080,7 +1080,7 @@ def _bridge_understand_output(out_dir, checklist, target,
         detect stale files by comparing the understand run's hashes
         against current disk.
     """
-    from core.understand_bridge import (
+    from core.orchestration.understand_bridge import (
         find_understand_output, load_understand_context, enrich_checklist,
         _extract_hashes, _find_stale_files, _filter_context_map,
     )
