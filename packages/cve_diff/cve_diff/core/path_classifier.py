@@ -31,12 +31,19 @@ import re
 _TEST_PATH_RE = re.compile(
     # Directory components signaling test / spec / fixture content
     r"(?:^|/)(?:tests?|__tests__|specs?|testing|fixtures?)(?:/|$)"
-    # ``test_X`` filename (with or without extension) — leading-test prefix
-    r"|(?:^|/)test_[^/]+(?:\.[^/]+)?$"
+    # ``test_X`` filename (with or without extension) — leading-test prefix.
+    # Per-component matches are bounded at NAME_MAX (255) on POSIX
+    # filesystems. Pre-fix `[^/]+` was unbounded — the upstream
+    # `_PATH_LEN_CAP` truncation at 8 KB already constrained the input,
+    # but a defensive in-pattern bound makes the linear-time guarantee
+    # explicit at the regex level (no engine-version dependent
+    # behaviour) and survives a future caller that bypasses the
+    # length cap.
+    r"|(?:^|/)test_[^/]{1,255}(?:\.[^/]{1,255})?$"
     # ``X_test.ext`` filename — trailing-test suffix
-    r"|(?:^|/)[^/]+_test\.[^/]+$"
+    r"|(?:^|/)[^/]{1,255}_test\.[^/]{1,255}$"
     # ``X.test.ext`` or ``X.spec.ext`` filename — JS/TS-style test naming
-    r"|(?:^|/)[^/]+\.(?:test|spec)\.[^/]+$",
+    r"|(?:^|/)[^/]{1,255}\.(?:test|spec)\.[^/]{1,255}$",
     re.IGNORECASE,
 )
 
