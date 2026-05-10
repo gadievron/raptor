@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "owasp_BenchmarkTest01609_codeql_java-command-line-injection-local_4f2115c78c44",
+  "verdict": "true_positive",
+  "fp_category": null,
+  "rationale": "OWASP Benchmark BenchmarkTest01609 is marked as a real CWE-78 vulnerability in expectedresults-1.2.csv. Source flows to sink without a sanitizer.",
+  "labeler": "owasp-benchmark-generator",
+  "labeled_at": "2026-05-10"
+}
