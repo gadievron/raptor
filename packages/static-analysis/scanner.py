@@ -509,88 +509,106 @@ def semgrep_scan_sequential(
     return sarif_paths
 
 
-# This is a WIP CodeQL runner; assumes codeql CLI is installed and query packs are available
-# Expect this to change
-def run_codeql(repo_path: Path, out_dir: Path, languages):
+def run_codeql(
+    repo_path: Path,
+    out_dir: Path,
+    languages: Optional[List[str]] = None,
+    build_command: Optional[str] = None,
+) -> List[str]:
+    """Delegate CodeQL analysis to packages/codeql/agent.py.
+
+    Pre-unification this module shipped its own ~80-LOC WIP CodeQL
+    runner alongside the proper one in `packages/codeql/`. The two
+    diverged: the in-tree runner had no auto-detection (operator
+    had to hard-code the language list), no build-system detection
+    or synthesis (compiled C/C++ projects without a Makefile got
+    silent extraction failures), no content-addressed DB cache, no
+    target-repo trust check, no language alias normalisation
+    (PR #448), and a hard-coded query-dir path that broke if the
+    operator wasn't standing in repo root. The packages/codeql/
+    runner has all of those.
+
+    The two paths converge here: scanner.py invokes the proper
+    agent as a subprocess (mirroring how raptor_agentic.py runs it
+    at line 743). Output naming is identical — the agent writes
+    `codeql_<lang>.sarif` per detected language under `out_dir`,
+    matching the previous in-tree runner's convention so downstream
+    consumers (SARIF merge, coverage records) are unchanged.
+
+    Args:
+        repo_path: Repository to scan.
+        out_dir: Directory for SARIF + report outputs.
+        languages: Explicit language list. None ⇒ auto-detect
+            (recommended; the agent picks up everything in the
+            repo and skips empty languages, vs the pre-unification
+            "always create cpp/java/python/go DBs whether the repo
+            has those files or not" approach).
+        build_command: Optional CodeQL build command override
+            (e.g. for compiled languages with non-standard layouts).
+
+    Returns:
+        List of absolute SARIF paths the agent wrote. Empty on any
+        failure (logged); never raises.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     if shutil.which("codeql") is None:
+        logger.warning("codeql CLI not on PATH; skipping CodeQL stage")
         return []
-    sarif_paths = []
-    for lang in languages:
-        db = out_dir / f"codeql-db-{lang}"
-        sarif = out_dir / f"codeql_{lang}.sarif"
-        # Database. `--threads=0` lets codeql auto-detect a sane
-        # parallelism level (uses all available CPUs). Pre-fix
-        # codeql defaulted to single-threaded extraction on
-        # large repos — extraction time scaled linearly with
-        # repo size and exhausted the analyser's 1800s timeout
-        # on monorepos that should have completed in 5-10
-        # minutes with auto-parallelism.
-        rc, so, se = run(
-            ["codeql", "database", "create", str(db),
-             "--language", lang, "--source-root", str(repo_path),
-             "--threads=0"],
-            timeout=1800,
+
+    # repo root → packages/codeql/agent.py. scanner.py lives at
+    # packages/static-analysis/scanner.py so parents[2] is repo root.
+    script_root = Path(__file__).resolve().parents[2]
+    agent_script = script_root / "packages" / "codeql" / "agent.py"
+    if not agent_script.exists():
+        logger.warning(
+            f"codeql agent script missing at {agent_script}; skipping CodeQL stage"
         )
-        if rc != 0:
-            # Pre-fix this branch silently `continue`d on DB-create
-            # failure, leaving the operator with no idea why the
-            # SARIF list was short. The most common DB-create
-            # failures (missing build deps for compiled langs,
-            # source-root containing forbidden chars, codeql wheel
-            # version mismatch) produce diagnostic stderr that is
-            # actionable — but not visible.
-            #
-            # Truncate stderr to keep the log readable; codeql
-            # error output can run thousands of lines on
-            # extraction failures.
-            stderr_tail = (se or "").strip()
-            if len(stderr_tail) > 2000:
-                stderr_tail = "..." + stderr_tail[-2000:]
-            # `RaptorLogger.warning(message, **kwargs)` accepts ONLY
-            # a single message arg (no printf-style varargs like
-            # stdlib `logging.Logger.warning`). Pre-fix the call
-            # passed positional substitution args and raised
-            # `TypeError: warning() takes 2 positional arguments
-            # but 5 were given`. Pre-format via f-string.
-            _stderr_disp = stderr_tail or "<empty>"
-            logger.warning(
-                f"codeql database create failed for language {lang} "
-                f"(rc={rc}). Last stderr: {_stderr_disp}"
-            )
-            continue
-        # Queries — same `--threads=0` for parallel query
-        # execution. Quiet codeql query suites (cpp / java)
-        # have hundreds of queries; serial execution wastes
-        # 80%+ of CPU time on machines with multiple cores.
-        # Resolve the query directory via RaptorConfig instead of
-        # the bare relative path "codeql-queries". Pre-fix
-        # `Path("codeql-queries") / lang` was relative to the
-        # CALLER'S CWD, so:
-        #   * Operators running from /tmp / their home / a
-        #     subdirectory got `query_dir.exists() == False` and
-        #     the queries silently skipped (sarif_paths stayed
-        #     empty, no findings reported even though the DB was
-        #     built).
-        #   * The actual queries live under
-        #     `engine/codeql/queries/` (RaptorConfig.CODEQL_QUERIES_DIR).
-        # Use the canonical config path; falls back to the relative
-        # form if for some reason CODEQL_QUERIES_DIR isn't set.
-        try:
-            from core.config import RaptorConfig as _RC
-            query_dir = _RC.CODEQL_QUERIES_DIR / lang
-        except (ImportError, AttributeError):
-            query_dir = Path("codeql-queries") / lang
-        if not query_dir.exists():
-            continue
-        rc, so, se = run(
-            ["codeql", "query", "run", str(query_dir),
-             "--database", str(db), "--output", str(sarif),
-             "--threads=0"],
-            timeout=1800,
+        return []
+
+    cmd = [
+        sys.executable,
+        str(agent_script),
+        "--repo", str(repo_path),
+        "--out", str(out_dir),
+    ]
+    if languages:
+        cmd.extend(["--languages", ",".join(languages)])
+    if build_command:
+        cmd.extend(["--build-command", build_command])
+
+    logger.info(f"Delegating CodeQL stage to {agent_script.name}")
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=3600,
         )
-        if rc == 0 and sarif.exists():
-            sarif_paths.append(str(sarif))
+    except subprocess.TimeoutExpired:
+        logger.warning("codeql agent timed out after 3600s; skipping")
+        return []
+    except OSError as e:
+        logger.warning(f"failed to invoke codeql agent: {e}")
+        return []
+
+    if proc.returncode != 0:
+        # Surface the agent's stderr tail so the operator can see
+        # WHY the run failed — language detection miscount, build
+        # synthesis failure, trust-check rejection. Same truncation
+        # rationale as before — codeql error output can run
+        # thousands of lines.
+        stderr_tail = (proc.stderr or proc.stdout or "").strip()
+        if len(stderr_tail) > 2000:
+            stderr_tail = "..." + stderr_tail[-2000:]
+        logger.warning(
+            f"codeql agent exited rc={proc.returncode}. "
+            f"Last stderr: {stderr_tail or '<empty>'}"
+        )
+        # Don't return early — the agent may have produced partial
+        # SARIFs (one language succeeded, another failed). Glob and
+        # return whatever's there.
+
+    # Glob for the agent's SARIF outputs. Naming matches the old
+    # in-tree runner so downstream code (SARIF merge, coverage
+    # records, _classify_artifact) needs no changes.
+    sarif_paths = sorted(str(p) for p in out_dir.glob("codeql_*.sarif"))
     return sarif_paths
 
 
@@ -847,7 +865,31 @@ def main():
         dest="policy_groups",
         help="Comma-separated list of rule group names (e.g. crypto,secrets,injection,auth,all)",
     )
-    ap.add_argument("--codeql", action="store_true", help="Run CodeQL stage if available")
+    ap.add_argument(
+        "--codeql", action="store_true",
+        help="Run CodeQL stage. Delegates to packages/codeql/agent.py — the "
+             "same engine /codeql uses (auto-language-detection, build "
+             "synthesis, content-addressed DB cache, trust check). Off by "
+             "default to keep /scan fast; use --no-codeql to assert opt-out.",
+    )
+    ap.add_argument(
+        "--no-codeql", action="store_true",
+        help="Explicitly disable the CodeQL stage. Takes precedence over "
+             "--codeql. Useful in scripts that want a guaranteed Semgrep-only "
+             "scan regardless of what defaults change in future.",
+    )
+    ap.add_argument(
+        "--languages",
+        help="Comma-separated language list for CodeQL (e.g. cpp,java). "
+             "Operator-friendly aliases (c, c++, js, ts, c#, kt, py) are "
+             "normalised. Default: auto-detect, which only creates DBs for "
+             "languages actually present in the repo.",
+    )
+    ap.add_argument(
+        "--build-command",
+        help="Override CodeQL's build command for compiled languages. "
+             "Forwarded to packages/codeql/agent.py --build-command.",
+    )
     ap.add_argument("--keep", action="store_true", help="Keep temp working directory")
     ap.add_argument("--sequential", action="store_true", help="Disable parallel scanning (for debugging)")
     ap.add_argument("--out", default=None, help="Output directory (from lifecycle). Overrides auto-generated path.")
@@ -947,11 +989,21 @@ def main():
         else:
             semgrep_sarifs = semgrep_scan_parallel(repo_path, rules_dirs, out_dir)
 
-        # CodeQL stage (optional)
+        # CodeQL stage (optional). --no-codeql takes precedence —
+        # script-friendly so a default-flip from "off" to "on" can
+        # be opted out of without code changes.
         codeql_sarifs = []
-        if args.codeql:
-            # Basic language guess; you can make this dynamic later
-            codeql_sarifs = run_codeql(repo_path, out_dir, languages=["cpp", "java", "python", "go"])
+        run_codeql_stage = args.codeql and not args.no_codeql
+        if run_codeql_stage:
+            languages = (
+                [s.strip() for s in args.languages.split(",") if s.strip()]
+                if args.languages else None  # None ⇒ agent auto-detects
+            )
+            codeql_sarifs = run_codeql(
+                repo_path, out_dir,
+                languages=languages,
+                build_command=args.build_command,
+            )
 
         # Merge SARIFs if more than one
         sarif_inputs = semgrep_sarifs + codeql_sarifs

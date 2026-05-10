@@ -20,47 +20,151 @@ run_codeql = _scanner_mod.run_codeql
 
 
 # ---------------------------------------------------------------------------
-# run_codeql()
+# run_codeql() — post-unification: delegates to packages/codeql/agent.py
+# Pre-unification this module shipped its own ~80-LOC WIP CodeQL runner.
+# The proper one in packages/codeql/agent.py has auto-detect, build
+# synthesis, content-addressed cache, trust check, language alias
+# normalisation. Tests below assert the delegation contract: subprocess
+# invocation of the agent, SARIF discovery from out_dir, plumbing of
+# operator-supplied flags through to the agent's argv.
 # ---------------------------------------------------------------------------
 
-class TestRunCodeql:
+class TestRunCodeqlDelegation:
 
-    def test_returns_empty_list_when_codeql_not_installed(self, tmp_path):
+    def test_returns_empty_when_codeql_not_installed(self, tmp_path):
+        """No codeql CLI on PATH → bail before invoking agent."""
         with patch("shutil.which", return_value=None):
             result = run_codeql(tmp_path, tmp_path / "out", ["python"])
         assert result == []
 
-    @patch("shutil.which", return_value="/usr/bin/codeql")
-    @patch.object(_scanner_mod, "run")
-    def test_creates_output_dir(self, mock_run, mock_which, tmp_path):
-        mock_run.return_value = (1, "", "db create failed")
+    def test_creates_output_dir(self, tmp_path):
+        """out_dir is created up-front (matches pre-unification
+        contract — downstream consumers may glob for SARIFs even
+        if the agent never wrote one)."""
         out_dir = tmp_path / "codeql_out"
-        run_codeql(tmp_path, out_dir, ["python"])
+        with patch("shutil.which", return_value="/usr/bin/codeql"), \
+             patch.object(_scanner_mod.subprocess, "run") as mock_proc:
+            mock_proc.return_value = MagicMock(
+                returncode=1, stdout="", stderr="agent failed",
+            )
+            run_codeql(tmp_path, out_dir, ["python"])
         assert out_dir.exists()
 
-    @patch("shutil.which", return_value="/usr/bin/codeql")
-    @patch.object(_scanner_mod, "run")
-    def test_skips_language_if_db_create_fails(self, mock_run, mock_which, tmp_path):
-        mock_run.return_value = (1, "", "database create error")
-        result = run_codeql(tmp_path, tmp_path / "out", ["python", "java"])
+    def test_invokes_agent_subprocess_with_repo_and_out(self, tmp_path):
+        """The unification contract: subprocess invocation of
+        packages/codeql/agent.py with --repo and --out."""
+        out_dir = tmp_path / "out"
+        with patch("shutil.which", return_value="/usr/bin/codeql"), \
+             patch.object(_scanner_mod.subprocess, "run") as mock_proc:
+            mock_proc.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            run_codeql(tmp_path, out_dir, languages=None)
+
+        assert mock_proc.called, "subprocess.run was not called"
+        cmd = mock_proc.call_args.args[0]
+        assert cmd[0] == sys.executable
+        # Agent script path component.
+        assert any("packages/codeql/agent.py" in part for part in cmd), \
+            f"agent.py not in cmd: {cmd}"
+        # --repo and --out present and pointing at the right dirs.
+        assert "--repo" in cmd and str(tmp_path) in cmd
+        assert "--out" in cmd and str(out_dir) in cmd
+
+    def test_languages_forwarded_as_csv(self, tmp_path):
+        """An explicit language list flows through as --languages a,b."""
+        with patch("shutil.which", return_value="/usr/bin/codeql"), \
+             patch.object(_scanner_mod.subprocess, "run") as mock_proc:
+            mock_proc.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            run_codeql(tmp_path, tmp_path / "out", languages=["cpp", "java"])
+
+        cmd = mock_proc.call_args.args[0]
+        assert "--languages" in cmd
+        idx = cmd.index("--languages")
+        assert cmd[idx + 1] == "cpp,java"
+
+    def test_no_languages_arg_when_none(self, tmp_path):
+        """languages=None ⇒ no --languages flag passed; the agent
+        auto-detects. This is the recommended default — the agent
+        skips empty languages, vs the pre-unification 'always make
+        cpp/java/python/go DBs' behaviour."""
+        with patch("shutil.which", return_value="/usr/bin/codeql"), \
+             patch.object(_scanner_mod.subprocess, "run") as mock_proc:
+            mock_proc.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            run_codeql(tmp_path, tmp_path / "out", languages=None)
+
+        cmd = mock_proc.call_args.args[0]
+        assert "--languages" not in cmd
+
+    def test_build_command_forwarded(self, tmp_path):
+        """build_command flows through as --build-command for the
+        agent's CodeQL DB creation."""
+        with patch("shutil.which", return_value="/usr/bin/codeql"), \
+             patch.object(_scanner_mod.subprocess, "run") as mock_proc:
+            mock_proc.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            run_codeql(
+                tmp_path, tmp_path / "out",
+                languages=["cpp"], build_command="make -j4",
+            )
+
+        cmd = mock_proc.call_args.args[0]
+        assert "--build-command" in cmd
+        idx = cmd.index("--build-command")
+        assert cmd[idx + 1] == "make -j4"
+
+    def test_returns_globbed_sarif_paths(self, tmp_path):
+        """After the agent runs, scanner globs out_dir for
+        codeql_*.sarif. Naming matches pre-unification convention."""
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        # Simulate the agent having written two language SARIFs.
+        (out_dir / "codeql_cpp.sarif").write_text("{}")
+        (out_dir / "codeql_python.sarif").write_text("{}")
+        # And a non-matching file we must NOT pick up.
+        (out_dir / "scan_metrics.json").write_text("{}")
+
+        with patch("shutil.which", return_value="/usr/bin/codeql"), \
+             patch.object(_scanner_mod.subprocess, "run") as mock_proc:
+            mock_proc.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            result = run_codeql(tmp_path, out_dir, languages=None)
+
+        assert sorted(result) == sorted([
+            str(out_dir / "codeql_cpp.sarif"),
+            str(out_dir / "codeql_python.sarif"),
+        ])
+
+    def test_partial_success_returns_what_agent_wrote(self, tmp_path):
+        """Agent rc != 0 doesn't void the SARIFs that DID land.
+        One language extraction failing shouldn't drop the
+        successful one's findings."""
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        (out_dir / "codeql_python.sarif").write_text("{}")
+
+        with patch("shutil.which", return_value="/usr/bin/codeql"), \
+             patch.object(_scanner_mod.subprocess, "run") as mock_proc:
+            mock_proc.return_value = MagicMock(
+                returncode=1, stdout="", stderr="cpp build failed",
+            )
+            result = run_codeql(tmp_path, out_dir, languages=["python", "cpp"])
+
+        assert result == [str(out_dir / "codeql_python.sarif")]
+
+    def test_subprocess_timeout_returns_empty(self, tmp_path):
+        """Agent timeout: log and return empty rather than raise.
+        Matches the no-raise contract scanner.py expects from
+        every stage."""
+        import subprocess
+        with patch("shutil.which", return_value="/usr/bin/codeql"), \
+             patch.object(_scanner_mod.subprocess, "run") as mock_proc:
+            mock_proc.side_effect = subprocess.TimeoutExpired(cmd="codeql", timeout=3600)
+            result = run_codeql(tmp_path, tmp_path / "out", languages=None)
         assert result == []
 
-    @patch("shutil.which", return_value="/usr/bin/codeql")
-    @patch.object(_scanner_mod, "run")
-    def test_uses_list_based_args(self, mock_run, mock_which, tmp_path):
-        """run() must be called with list args, never shell strings."""
-        mock_run.return_value = (1, "", "")
-        run_codeql(tmp_path, tmp_path / "out", ["python"])
-        for c in mock_run.call_args_list:
-            cmd_arg = c.args[0] if c.args else c.kwargs.get("cmd", [])
-            assert isinstance(cmd_arg, list), "Command must be a list (no shell injection)"
-
-    @patch("shutil.which", return_value="/usr/bin/codeql")
-    @patch.object(_scanner_mod, "run")
-    def test_empty_languages_returns_empty(self, mock_run, mock_which, tmp_path):
-        result = run_codeql(tmp_path, tmp_path / "out", [])
+    def test_subprocess_oserror_returns_empty(self, tmp_path):
+        with patch("shutil.which", return_value="/usr/bin/codeql"), \
+             patch.object(_scanner_mod.subprocess, "run") as mock_proc:
+            mock_proc.side_effect = OSError("ENOEXEC")
+            result = run_codeql(tmp_path, tmp_path / "out", languages=None)
         assert result == []
-        mock_run.assert_not_called()
 
 
 _compute_python_tool_paths = _scanner_mod._compute_python_tool_paths
