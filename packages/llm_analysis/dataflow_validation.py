@@ -1325,6 +1325,22 @@ def _tier4_smt_refine(
             "witness",
             f"SMT witness for path conditions: {model_str or '(no model)'}",
         )
+        # Attach a structured witness record so downstream consumers
+        # (/exploit's prompt builder) can read it without parsing the
+        # reasoning string. The same model is also in `evidence` for
+        # report rendering, but a typed field is much easier to use
+        # as a PoC seed: the LLM gets concrete values that already
+        # satisfy the dangerous-path conditions and can amplify them
+        # rather than guess from scratch. Pre-fix the witness model
+        # was buried in a free-text evidence summary that /exploit's
+        # prompt builder dumped verbatim — useful for audit but not
+        # for steering exploit generation.
+        if model:
+            (analysis or {}).setdefault("smt_witness", {}).update({
+                "model": dict(model),
+                "path_conditions": list(conditions),
+                "path_profile": profile_name,
+            })
         refined = ValidationResult(
             verdict=result.verdict,
             evidence=list(result.evidence) + [ev],
