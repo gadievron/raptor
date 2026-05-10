@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "iris_e2e_multilang_codeql_js-command-injection_004",
+  "verdict": "true_positive",
+  "fp_category": null,
+  "rationale": "process.argv[2] interpolated into template-literal command and passed to child_process.exec. No validator. Stdlib CodeQL JS query uses ActiveThreatModelSource which excludes argv by default; RAPTOR's LocalFlowSource pack widens to commandargs and confirms. Real CWE-78.",
+  "labeler": "johnc",
+  "labeled_at": "2026-05-10"
+}

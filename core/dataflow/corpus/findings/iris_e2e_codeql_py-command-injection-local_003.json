@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "iris_e2e_codeql_py-command-injection-local_003",
+  "producer": "codeql",
+  "rule_id": "raptor/py/command-injection-local",
+  "message": "CLI argument flows to subprocess.call(shell=True)",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/iris_e2e/src/cli_command_injection.py",
+    "line": 21,
+    "column": 14,
+    "snippet": "target = sys.argv[1]",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/iris_e2e/src/cli_command_injection.py",
+    "line": 22,
+    "column": 12,
+    "snippet": "return subprocess.call(f\"ping -c1 {target}\", shell=True)",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

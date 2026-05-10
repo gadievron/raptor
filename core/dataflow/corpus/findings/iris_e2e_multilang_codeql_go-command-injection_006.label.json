@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "iris_e2e_multilang_codeql_go-command-injection_006",
+  "verdict": "true_positive",
+  "fp_category": null,
+  "rationale": "os.Args[1] concatenated into the third argument of exec.Command(\"sh\", \"-c\", ...). The sh -c form treats the argument as shell input, so the concatenated CLI value is shell-injectable. Stdlib CodeQL Go query is RemoteFlowSource-scoped; RAPTOR's LocalFlowSource pack confirms. Real CWE-78.",
+  "labeler": "johnc",
+  "labeled_at": "2026-05-10"
+}

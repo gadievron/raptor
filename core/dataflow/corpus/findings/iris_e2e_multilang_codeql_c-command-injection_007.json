@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "iris_e2e_multilang_codeql_c-command-injection_007",
+  "producer": "codeql",
+  "rule_id": "cpp/command-line-injection",
+  "message": "argv flows through snprintf into system()",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/iris_e2e_multilang/c/cmd_inj.c",
+    "line": 7,
+    "column": 5,
+    "snippet": "snprintf(buf, sizeof(buf), \"ping -c1 %s\", argv[1]);",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/iris_e2e_multilang/c/cmd_inj.c",
+    "line": 8,
+    "column": 12,
+    "snippet": "return system(buf);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "iris_e2e_multilang_codeql_js-command-injection_004",
+  "producer": "codeql",
+  "rule_id": "raptor/js/command-injection-local",
+  "message": "process.argv flows to child_process.exec",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/iris_e2e_multilang/js/cmd_inj.js",
+    "line": 2,
+    "column": 22,
+    "snippet": "const target = process.argv[2];",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/iris_e2e_multilang/js/cmd_inj.js",
+    "line": 3,
+    "column": 1,
+    "snippet": "exec(`ping -c1 ${target}`);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

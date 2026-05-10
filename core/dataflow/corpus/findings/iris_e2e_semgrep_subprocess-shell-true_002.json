@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "finding_id": "iris_e2e_semgrep_subprocess-shell-true_002",
+  "producer": "semgrep",
+  "rule_id": "python.lang.security.audit.dangerous-subprocess-use.dangerous-subprocess-use",
+  "message": "subprocess.call with shell=True on user-controlled input",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/iris_e2e/src/false_positive_command.py",
+    "line": 51,
+    "column": 16,
+    "snippet": "user_arg = request.args.get(\"cmd\", \"\")",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/iris_e2e/src/false_positive_command.py",
+    "line": 46,
+    "column": 12,
+    "snippet": "return subprocess.call(cmd, shell=True)",
+    "label": "sink"
+  },
+  "intermediate_steps": [
+    {
+      "file_path": "packages/llm_analysis/tests/fixtures/iris_e2e/src/false_positive_command.py",
+      "line": 52,
+      "column": 4,
+      "snippet": "sanitized = sanitize(user_arg)",
+      "label": "step"
+    },
+    {
+      "file_path": "packages/llm_analysis/tests/fixtures/iris_e2e/src/false_positive_command.py",
+      "line": 53,
+      "column": 4,
+      "snippet": "return str(execute_safe(sanitized))",
+      "label": "step"
+    },
+    {
+      "file_path": "packages/llm_analysis/tests/fixtures/iris_e2e/src/false_positive_command.py",
+      "line": 42,
+      "column": 4,
+      "snippet": "if cmd is None: return 1",
+      "label": "step"
+    }
+  ],
+  "raw": {}
+}

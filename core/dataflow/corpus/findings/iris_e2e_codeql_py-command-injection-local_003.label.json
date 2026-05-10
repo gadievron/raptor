@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "iris_e2e_codeql_py-command-injection-local_003",
+  "verdict": "true_positive",
+  "fp_category": null,
+  "rationale": "sys.argv[1] is attacker-controlled when invoked from a setuid wrapper or untrusted caller. Flows directly into f-string then subprocess.call(shell=True), no validator. Standard CodeQL py/command-line-injection misses this because its source model is RemoteFlowSource only; RAPTOR's LocalFlowSource pack widens the source model to include commandargs and catches it. Real CWE-78.",
+  "labeler": "johnc",
+  "labeled_at": "2026-05-10"
+}

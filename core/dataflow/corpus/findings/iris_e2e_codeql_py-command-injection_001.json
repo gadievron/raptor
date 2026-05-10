@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "iris_e2e_codeql_py-command-injection_001",
+  "producer": "codeql",
+  "rule_id": "py/command-line-injection",
+  "message": "Flask request input flows unsanitised to subprocess.call(shell=True)",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/iris_e2e/src/real_command_injection.py",
+    "line": 19,
+    "column": 11,
+    "snippet": "cmd = request.args.get(\"cmd\", \"\")",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/iris_e2e/src/real_command_injection.py",
+    "line": 20,
+    "column": 16,
+    "snippet": "return str(subprocess.call(cmd, shell=True))",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

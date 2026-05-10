@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "iris_e2e_multilang_codeql_c-command-injection_007",
+  "verdict": "true_positive",
+  "fp_category": null,
+  "rationale": "argv[1] concatenated via snprintf into a command string passed to system(). C's stdlib ExecTainted.ql uses parent FlowSource (remote + local union) and flags this directly, no LocalFlowSource pack required. Real CWE-78.",
+  "labeler": "johnc",
+  "labeled_at": "2026-05-10"
+}
