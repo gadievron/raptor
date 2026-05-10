@@ -110,6 +110,77 @@ def build_from_semgrep(run_dir: Path, semgrep_json_path: Path,
     return record
 
 
+def build_from_cocci(spatch_results: List[Any],
+                     spatch_version: Optional[str] = None,
+                     ) -> Optional[Dict[str, Any]]:
+    """Build a coverage record from a list of ``SpatchResult``.
+
+    Source of truth is the runner's structured output, NOT the
+    SARIF — the SARIF is the operator-facing artefact and re-parsing
+    it would lose data (notably ``files_examined``, which spatch
+    emits at runtime but the SARIF translation drops). Same trust
+    boundary as ``build_from_semgrep`` reading semgrep's JSON.
+
+    Args:
+        spatch_results: list of ``packages.coccinelle.models.SpatchResult``
+            produced by ``packages.coccinelle.runner.run_rules``. The
+            type is ``Any`` here to keep ``core.coverage.record``
+            importable without the ``packages/coccinelle`` package
+            (e.g. minimal containers, test scaffolds).
+        spatch_version: spatch version string (from
+            ``packages.coccinelle.runner.version()``). Best-effort —
+            tracked so coverage records distinguish runs across
+            spatch upgrades.
+
+    Returns the coverage-record dict, or None when no rules ran
+    (matches ``build_from_semgrep`` / ``build_from_codeql`` shape;
+    callers don't write empty records).
+    """
+    if not spatch_results:
+        return None
+
+    files: set = set()
+    rules_applied: List[str] = []
+    failures: List[Dict[str, str]] = []
+
+    for r in spatch_results:
+        # Defensive attribute access — these are SpatchResult fields
+        # but we don't import the dataclass to keep this module's
+        # dependency footprint at "stdlib + core.json".
+        rule_name = getattr(r, "rule", "") or ""
+        if rule_name:
+            rules_applied.append(rule_name)
+        for f in getattr(r, "files_examined", []) or []:
+            if f:
+                files.add(f)
+        # spatch errors → failures with the rule name as ``path``
+        # (no per-file binding from spatch errors; the rule itself
+        # is what failed).
+        for err in getattr(r, "errors", []) or []:
+            failures.append({
+                "path": rule_name,
+                "reason": str(err)[:500],
+            })
+
+    if not files and not rules_applied:
+        # Skipped run with no signal at all — don't write a record.
+        return None
+
+    record: Dict[str, Any] = {
+        "tool": "coccinelle",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "files_examined": sorted(files),
+    }
+    if spatch_version:
+        record["version"] = spatch_version
+    if rules_applied:
+        record["rules_applied"] = sorted(set(rules_applied))
+    if failures:
+        record["files_failed"] = failures
+
+    return record
+
+
 def build_from_codeql(sarif_path: Path) -> Optional[Dict[str, Any]]:
     """Build a coverage record from CodeQL SARIF output.
 
