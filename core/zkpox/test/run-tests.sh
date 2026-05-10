@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
 #
-# Phase 0 regression harness.
-#
-# For every witness in witnesses/, run the SP1 guest in execute mode
-# and assert both gadgets' verdicts:
+# zkpox regression harness — runs the prover binary against every
+# witness in ./witnesses/ and asserts both gadgets' verdicts:
 #
 #   *-benign.bin   crash_only=false  AND  oob_detected=false
 #   *-crash.bin    crash_only=true   AND  oob_detected=true
 #   *-fn.bin       crash_only=false  AND  oob_detected=true
 #                  (deliberate canarymatch witness — crash_only is blind
 #                  to it; oob_write *must* catch it. If oob_write also
-#                  misses, that's a real Phase-0 regression.)
+#                  misses, that's a real regression.)
 #
 # Usage:
 #   ./run-tests.sh                       # execute mode (fast)
@@ -24,7 +22,9 @@ set -uo pipefail
 cd "$(dirname "$0")"
 
 MODE="--execute"
-BIN="./harness/target/release/prove-bof"
+# Default binary path: ../target/release/zkpox-prove (workspace target dir
+# at core/zkpox/target/, this script runs from core/zkpox/test/).
+BIN="../target/release/zkpox-prove"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --prove) MODE="--prove"; shift ;;

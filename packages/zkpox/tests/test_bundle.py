@@ -1,213 +1,152 @@
-"""Tests for ``packages.zkpox.bundle`` — Tier 0/1 prover-ready
-bundle assembly + persistence."""
+"""Tests for packages.zkpox.bundle.
+
+CBOR round-trip + schema-shape coverage. The full prove → wrap →
+envelope → bundle → verify integration test lives in the SP1-marked
+suite (Phase 1.5 will land it once the RAPTOR command surface is
+wired); for 1.3 we just confirm the bundle producer/parser is faithful.
+"""
 
 from __future__ import annotations
 
-import json
-import sys
+import secrets
 from pathlib import Path
 
+import cbor2
 import pytest
 
-
-# packages/zkpox/tests/test_bundle.py → parents[3] = repo root
-REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
-
-from core.witness.store import WitnessStore  # noqa: E402
-from core.witness.types import (  # noqa: E402
-    Witness,
-    WitnessOutcome,
-    WitnessSource,
-    compute_bytes_hash,
-)
-from packages.zkpox.bundle import (  # noqa: E402
-    ZKPoXBundleError,
-    assemble_bundle,
-    render_bundle,
-    write_bundle,
+from packages.zkpox import (
+    Bundle,
+    BUNDLE_VERSION,
+    Envelope,
+    HarnessRef,
+    Proof,
+    Researcher,
+    Target,
+    VendorEnvelope,
+    Vulnerability,
+    from_cbor,
+    sha256_bytes,
+    sha256_file,
+    to_cbor,
+    vendor_envelope_from,
 )
 
 
-def _store_with_witness(
-    tmp_path: Path,
-    *,
-    outcome: WitnessOutcome = WitnessOutcome.EXIT_SIGNAL,
-    target_binary_hash="a" * 64,
-    target_source_hash=None,
-    data: bytes = b"crash-input",
-    source: WitnessSource = WitnessSource.FUZZ,
-):
-    store = WitnessStore(tmp_path / "witnesses")
-    w = Witness(
-        bytes_hash=compute_bytes_hash(data),
-        bytes_len=len(data),
-        source=source,
-        observed_outcome=outcome,
-        outcome_detail={"finding_id": "FIND-1", "signal": "SIGSEGV"},
-        target_binary_hash=target_binary_hash,
-        target_source_hash=target_source_hash,
-        produced_by="afl++",
+def _fresh_envelope() -> Envelope:
+    """Synthetic envelope with random bytes — no external tools called."""
+    return Envelope(
+        aes_blob=secrets.token_bytes(60),
+        ct_K_age=secrets.token_bytes(232),
+        ct_K_tlock=secrets.token_bytes(391),
     )
-    store.put(w, data)
-    return store, w
 
 
-# ----------------------------------------------------------------------
-# Assembly
-# ----------------------------------------------------------------------
-
-
-def test_assemble_eligible_witness(tmp_path):
-    store, w = _store_with_witness(tmp_path)
-    bundle = assemble_bundle(w, store)
-    assert bundle.witness_hash == w.bytes_hash
-    assert bundle.tier == "0/1"
-    assert bundle.observed_outcome == "exit_signal"
-    assert bundle.target_binary_hash == "a" * 64
-    assert bundle.reproduction is None
-    # Attestation carries the plain claim
-    assert "exhibit outcome exit_signal" in bundle.attestation["claim"]
-    assert bundle.attestation["attestation_only"] is True
-    assert bundle.attestation["target_artefact_kind"] == "binary"
-
-
-def test_assemble_source_target(tmp_path):
-    store, w = _store_with_witness(
-        tmp_path, target_binary_hash=None, target_source_hash="b" * 64,
+def _fresh_bundle(*, with_researcher: bool = False) -> Bundle:
+    env = _fresh_envelope()
+    vendor_env = vendor_envelope_from(
+        env,
+        vendor_pubkey="age1exampleexampleexampleexampleexampleexamplekjzqplexample",
+        drand_round_min=12345678,
     )
-    bundle = assemble_bundle(w, store)
-    assert bundle.target_source_hash == "b" * 64
-    assert bundle.attestation["target_artefact_kind"] == "source"
-
-
-def test_assemble_ineligible_raises(tmp_path):
-    """A NOT_RUN witness can't be bundled."""
-    store, w = _store_with_witness(
-        tmp_path, outcome=WitnessOutcome.NOT_RUN,
+    bundle = Bundle(
+        version=BUNDLE_VERSION,
+        target=Target(
+            kind="elf",
+            hash=sha256_bytes(b"target-binary-bytes"),
+            url="https://example.invalid/target.elf",
+            metadata={"arch": "riscv64", "loc_hint": "1k"},
+        ),
+        vulnerability=Vulnerability(
+            cls="memory-safety",
+            gadget_id="memory-safety::oob-write@0.1.0",
+            gadget_hash=sha256_bytes(b"gadget-source"),
+            leaked_fields=["function_name"],
+        ),
+        proof=Proof(
+            system="sp1-stark-core/v6.1.0",
+            bytes=secrets.token_bytes(2048),
+            verifier_key_hash=sha256_bytes(b"vk"),
+        ),
+        harness=HarnessRef(
+            git_url="https://github.com/example/raptor",
+            rev="deadbeef",
+            hash=sha256_bytes(b"harness-binary"),
+        ),
+        vendor_envelope=vendor_env,
+        researcher=(
+            Researcher(
+                pubkey="ed25519:...",
+                signature_over_bundle=secrets.token_bytes(64),
+                contact="researcher@example.invalid",
+            )
+            if with_researcher
+            else None
+        ),
     )
-    with pytest.raises(ZKPoXBundleError) as e:
-        assemble_bundle(w, store)
-    assert "ineligible" in str(e.value)
+    return bundle
 
 
-def test_assemble_missing_blob_raises(tmp_path):
-    """Witness manifest exists but blob is gone → can't assemble."""
-    store, w = _store_with_witness(tmp_path)
-    # Delete the blob
-    blob = store.blob_path(w.bytes_hash)
-    blob.unlink()
-    with pytest.raises(ZKPoXBundleError) as e:
-        assemble_bundle(w, store)
-    assert "bytes blob missing" in str(e.value)
+def test_round_trip_minimal_bundle():
+    bundle = _fresh_bundle()
+    blob = to_cbor(bundle)
+    parsed = from_cbor(blob)
+    assert parsed == bundle
 
 
-# ----------------------------------------------------------------------
-# Persistence
-# ----------------------------------------------------------------------
+def test_round_trip_with_researcher():
+    bundle = _fresh_bundle(with_researcher=True)
+    parsed = from_cbor(to_cbor(bundle))
+    assert parsed.researcher is not None
+    assert parsed.researcher.contact == "researcher@example.invalid"
+    assert len(parsed.researcher.signature_over_bundle) == 64
 
 
-def test_write_bundle_layout(tmp_path):
-    store, w = _store_with_witness(tmp_path, data=b"the-crash-bytes")
-    bundle = assemble_bundle(w, store)
-    out = tmp_path / "out"
-    bundle_dir = write_bundle(bundle, store, out)
-
-    assert bundle_dir == out / "zkpox" / w.bytes_hash
-    assert (bundle_dir / "manifest.json").is_file()
-    assert (bundle_dir / "witness.bin").is_file()
-
-    # Bytes copied verbatim (self-contained bundle)
-    assert (bundle_dir / "witness.bin").read_bytes() == b"the-crash-bytes"
-
-    # Manifest round-trips
-    manifest = json.loads((bundle_dir / "manifest.json").read_text())
-    assert manifest["witness_hash"] == w.bytes_hash
-    assert manifest["tier"] == "0/1"
-    assert manifest["observed_outcome"] == "exit_signal"
-    assert manifest["attestation"]["attestation_only"] is True
-
-
-def test_write_bundle_self_contained_bytes_match_hash(tmp_path):
-    """The copied witness.bin must hash to the manifest's
-    witness_hash — a prover handed just the bundle dir can verify
-    integrity without the original store."""
-    store, w = _store_with_witness(tmp_path, data=b"xyz" * 100)
-    bundle = assemble_bundle(w, store)
-    bundle_dir = write_bundle(bundle, store, tmp_path / "out")
-    copied = (bundle_dir / "witness.bin").read_bytes()
-    assert compute_bytes_hash(copied) == bundle.witness_hash
-
-
-# ----------------------------------------------------------------------
-# Render
-# ----------------------------------------------------------------------
-
-
-def test_render_bundle_includes_claim(tmp_path):
-    store, w = _store_with_witness(tmp_path)
-    bundle = assemble_bundle(w, store)
-    out = render_bundle(bundle)
-    assert "tier 0/1" in out
-    assert "exit_signal" in out
-    assert "claim:" in out
-
-
-def test_render_bundle_shows_reproduction_when_present(tmp_path):
-    store, w = _store_with_witness(tmp_path)
-    bundle = assemble_bundle(w, store)
-    bundle.reproduction = {"reproduced": True, "runs": 3}
-    out = render_bundle(bundle)
-    assert "reproduced: True" in out
-    assert "(3 runs)" in out  # no outcome list → plain planned count
-
-
-def test_render_bundle_names_k_of_n_when_runs_were_excluded(tmp_path):
-    """When spawn-failure exclusions left fewer executed runs than
-    planned, the render says "k/n runs executed" instead of a bare
-    "(n runs)" that would overstate the verdict's base."""
-    store, w = _store_with_witness(tmp_path)
-    bundle = assemble_bundle(w, store)
-    bundle.reproduction = {
-        "reproduced": True, "runs": 3,
-        "observed_outcomes": ["exit_signal", "exit_signal"],
-        "spawn_failures": 2,
+def test_blob_top_level_keys_match_proposal():
+    """Bundle binary form must include the §8-spec'd top-level fields,
+    so external CBOR-only verifiers can be written without our types."""
+    bundle = _fresh_bundle()
+    decoded = cbor2.loads(to_cbor(bundle))
+    expected = {
+        "version", "target", "vulnerability", "proof",
+        "harness", "vendor_envelope",
     }
-    out = render_bundle(bundle)
-    assert "reproduced: True (2/3 runs executed)" in out
+    assert expected <= set(decoded.keys())
+    assert decoded["version"] == "zkpox-1.0"
 
 
-# ----------------------------------------------------------------------
-# Path-traversal defense
-# ----------------------------------------------------------------------
+def test_envelope_substructure_exposes_layered_blobs():
+    """Phase 1.3 chose to surface the three ciphertexts directly rather
+    than collapse them into a single opaque `ciphertext` (per docstring
+    in bundle.py). Verifiers depend on this shape."""
+    bundle = _fresh_bundle()
+    decoded = cbor2.loads(to_cbor(bundle))
+    env = decoded["vendor_envelope"]
+    assert {"aes_blob", "ct_K_age", "ct_K_tlock"} <= set(env.keys())
+    for k in ("aes_blob", "ct_K_age", "ct_K_tlock"):
+        assert isinstance(env[k], (bytes, bytearray)), f"{k} must be bytes, got {type(env[k])}"
 
 
-def test_write_bundle_rejects_traversal_hash(tmp_path):
-    """A mutated/corrupt witness_hash containing path-traversal
-    segments must NOT cause write_bundle to mkdir outside the
-    output tree. Pre-fix the mkdir(parents=True) ran on the
-    escaped path before the blob lookup raised — creating a dir
-    in the wrong place. Post-fix _require_clean_hash rejects any
-    non-sha256-hex value before any path is touched."""
-    store, w = _store_with_witness(tmp_path)
-    bundle = assemble_bundle(w, store)
-    # Escape the output tree (`out`) into its parent — the threat is a
-    # mkdir *outside* `out`. Keep the probe under tmp_path so the test
-    # never touches a shared real-FS path like /tmp/zkpox_traversal_probe.
-    bundle.witness_hash = "../zkpox_traversal_probe"
-    out = tmp_path / "out"
-    with pytest.raises(ZKPoXBundleError) as e:
-        write_bundle(bundle, store, out)
-    assert "not a sha256 hex digest" in str(e.value)
-    assert not (tmp_path / "zkpox_traversal_probe").exists()
+def test_proof_bytes_round_trip_byte_exact():
+    """The proof bytes are the load-bearing artefact; verify they
+    survive CBOR's bstr encoding without truncation or re-encoding."""
+    bundle = _fresh_bundle()
+    parsed = from_cbor(to_cbor(bundle))
+    assert parsed.proof.bytes == bundle.proof.bytes
+    assert parsed.proof.system == bundle.proof.system
 
 
-def test_assemble_rejects_non_hex_hash(tmp_path):
-    """assemble_bundle validates the hash up-front too — a witness
-    whose bytes_hash isn't a clean digest is refused."""
-    store, w = _store_with_witness(tmp_path)
-    # Forge a bad hash on the witness object
-    object.__setattr__(w, "bytes_hash", "not-a-real-hash")
-    with pytest.raises(ZKPoXBundleError) as e:
-        assemble_bundle(w, store)
-    assert "not a sha256 hex digest" in str(e.value)
+def test_sha256_file_matches_known_value(tmp_path):
+    p = tmp_path / "x.bin"
+    p.write_bytes(b"hello")
+    expected = "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+    assert sha256_file(p) == expected
+
+
+def test_timestamp_field_omitted_when_none():
+    """Phase 1.4 will fill `timestamp`; Phase 1.3 must NOT emit a
+    placeholder (would fingerprint our bundles as pre-1.4 vs post-1.4
+    in unhelpful ways). Field is structurally absent."""
+    bundle = _fresh_bundle()
+    blob = to_cbor(bundle)
+    decoded = cbor2.loads(blob)
+    assert "timestamp" not in decoded
