@@ -172,6 +172,8 @@ def function_called(
     evidence: List[Tuple[str, int]] = []
     uncertain_reasons: List[Tuple[str, str]] = []
 
+    target_dot_func = f"{target_module}.{target_func}"
+    target_module_dot = target_module + "."
     for file_record in inventory.get("files", []):
         path = file_record.get("path") or ""
         if exclude_test_files and _is_test_file(path):
@@ -185,33 +187,34 @@ def function_called(
 
         getattr_targets = set(cg.get("getattr_targets") or [])
 
+        # Fast-path skip: when no import in this file binds to
+        # target_module (or its bare-name form), no call chain can
+        # resolve to target. The indirection branch below still runs
+        # because it depends only on target_func, not target_module.
+        # For Go's istio-scale inventory (~770 files × ~3000 deps),
+        # this drops _resolves_to invocations from 74M to ~hundreds —
+        # the main istio-1.4 scan-perf fix (cProfile flagged
+        # _resolves_to + its inner generator at >190s of 410s total).
+        target_in_imports = False
+        for bound in imports.values():
+            if (bound == target_module
+                    or bound == target_dot_func
+                    or bound.startswith(target_module_dot)):
+                target_in_imports = True
+                break
+
         file_has_evidence = False
-        for call in calls:
-            chain = call.get("chain") or []
-            if not chain:
-                continue
-            if _resolves_to(chain, imports, target_module, target_func):
-                file_has_evidence = True
-                evidence.append((path, int(call.get("line", 0) or 0)))
+        if target_in_imports:
+            for call in calls:
+                chain = call.get("chain") or []
+                if not chain:
+                    continue
+                if _resolves_to(chain, imports, target_module, target_func):
+                    file_has_evidence = True
+                    evidence.append((path, int(call.get("line", 0) or 0)))
 
         if file_has_evidence:
             continue
-
-        # Indirection is only a confounder when there's *some*
-        # signal that this file might be calling the target. A file
-        # that uses getattr but doesn't mention the target name in
-        # any form isn't suspect.
-        file_mentions_tail = (
-            target_func in getattr_targets
-            or any(
-                (c.get("chain") or [])[-1:] == [target_func]
-                for c in calls
-            )
-            or any(
-                qualified.split(".")[-1] == target_func
-                for qualified in imports.values()
-            )
-        )
 
         # getattr / importlib / __import__ flags taint a file IFF
         # the file mentions the target tail name (chain tail, import
@@ -221,9 +224,27 @@ def function_called(
         non_wildcard_flags = (flags & _MASKING_FLAGS) - {
             INDIRECTION_WILDCARD_IMPORT,
         }
-        if non_wildcard_flags and file_mentions_tail:
-            for flag in sorted(non_wildcard_flags):
-                uncertain_reasons.append((path, flag))
+
+        # Lazy-compute file_mentions_tail — required only by the
+        # non-wildcard indirection branch. Files without any non-
+        # wildcard masking flag (the common case at istio scale,
+        # ~770 files × ~3000 deps) skip the genexpr over ``calls``,
+        # which was the hot path after the imports-fast-path fix.
+        if non_wildcard_flags:
+            file_mentions_tail = (
+                target_func in getattr_targets
+                or any(
+                    (c.get("chain") or [])[-1:] == [target_func]
+                    for c in calls
+                )
+                or any(
+                    qualified.split(".")[-1] == target_func
+                    for qualified in imports.values()
+                )
+            )
+            if file_mentions_tail:
+                for flag in sorted(non_wildcard_flags):
+                    uncertain_reasons.append((path, flag))
 
         if INDIRECTION_WILDCARD_IMPORT in flags and (
             _wildcard_could_provide(imports, target_module, target_func)
