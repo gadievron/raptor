@@ -264,10 +264,12 @@ FP_REASONS = [
 # CWE → vuln_type: used by orchestrator.py to classify SARIF findings.
 # vuln_type → CWE: used by raptor_agentic.py to infer CWE when LLM omits it.
 CWE_TO_VULN_TYPE = {
-    "CWE-20": "other",              # Improper input validation
-    "CWE-22": "path_traversal",
-    "CWE-77": "command_injection",   # Generic command injection
+    # Note: keys must be unique — Python silently drops earlier dict
+    # literals on collision, so a duplicate key looks like a no-op
+    # but actually deletes the comment-documented intent. Keep one
+    # entry per CWE; expand the comment when multiple intents apply.
     "CWE-20": "other",              # Improper input validation (parent of injection-class CWEs; mark generic so a more-specific child wins when both appear)
+    "CWE-22": "path_traversal",
     "CWE-77": "command_injection",   # Command injection (parent of CWE-78 OS command injection — same vuln_type)
     "CWE-78": "command_injection",
     "CWE-79": "xss",
