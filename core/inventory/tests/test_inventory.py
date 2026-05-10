@@ -709,3 +709,89 @@ class TestInventoryOutputFormat:
         inv = build_inventory(str(src), str(tmp_path / "out"))
         for item in inv["files"][0]["items"]:
             assert "kind" in item
+
+
+class TestDefaultCacheDir:
+    """Persistent inventory cache when ``output_dir`` is omitted."""
+
+    def test_default_cache_dir_distinct_per_target(self, tmp_path):
+        """Two distinct target paths get distinct cache dirs."""
+        from core.inventory.builder import default_cache_dir
+        a = tmp_path / "project-a"
+        a.mkdir()
+        b = tmp_path / "project-b"
+        b.mkdir()
+        assert default_cache_dir(str(a)) != default_cache_dir(str(b))
+
+    def test_default_cache_dir_stable_for_same_target(self, tmp_path):
+        """Same target → same cache dir across calls (stable hash)."""
+        from core.inventory.builder import default_cache_dir
+        proj = tmp_path / "project"
+        proj.mkdir()
+        assert default_cache_dir(str(proj)) == default_cache_dir(str(proj))
+
+    def test_default_cache_dir_is_absolute(self, tmp_path):
+        from core.inventory.builder import default_cache_dir
+        proj = tmp_path / "project"
+        proj.mkdir()
+        cache = default_cache_dir(str(proj))
+        assert cache.is_absolute()
+        # Lives under ~/.raptor/cache/inventory/.
+        assert ".raptor" in cache.parts
+        assert "cache" in cache.parts
+        assert "inventory" in cache.parts
+
+    def test_default_cache_dir_resolves_relative_targets(self, tmp_path,
+                                                          monkeypatch):
+        """Relative + absolute paths to the same target resolve to the
+        same cache dir — the hash is over the resolved absolute path."""
+        from core.inventory.builder import default_cache_dir
+        proj = tmp_path / "project"
+        proj.mkdir()
+        monkeypatch.chdir(tmp_path)
+        rel = default_cache_dir("project")
+        absolute = default_cache_dir(str(proj))
+        assert rel == absolute
+
+    def test_build_inventory_uses_default_when_output_dir_omitted(
+        self, tmp_path, monkeypatch,
+    ):
+        """When ``output_dir=None``, build_inventory persists its
+        checklist to the default cache dir for the target. Re-runs
+        load the existing checklist, so unchanged files reuse parsed
+        entries (the SHA-keyed incremental optimisation kicks in)."""
+        # Point the default cache root at a tmp_path so the test
+        # doesn't pollute ~/.raptor.
+        import core.inventory.builder as builder
+        monkeypatch.setattr(
+            builder, "_DEFAULT_INVENTORY_CACHE_ROOT",
+            tmp_path / "tmp-inventory-cache",
+        )
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "app.py").write_text("def main(): pass\n")
+
+        # First call: no output_dir → uses default cache
+        inv1 = builder.build_inventory(str(src))
+        assert inv1["total_files"] == 1
+
+        # Second call against the same target — must load the
+        # existing checklist from the default cache and reuse it.
+        cache_dir = builder.default_cache_dir(str(src))
+        assert (cache_dir / "checklist.json").is_file()
+        inv2 = builder.build_inventory(str(src))
+        # Same content; reused parsed entries
+        assert inv2["total_files"] == 1
+        assert inv2["files"][0]["sha256"] == inv1["files"][0]["sha256"]
+
+    def test_build_inventory_explicit_output_dir_unchanged(self, tmp_path):
+        """Explicit ``output_dir`` argument unchanged behaviour —
+        callers passing tmpdirs (tests, one-shot tools) keep working."""
+        from core.inventory.builder import build_inventory
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "app.py").write_text("def main(): pass\n")
+        explicit = tmp_path / "explicit-out"
+        inv = build_inventory(str(src), str(explicit))
+        assert inv["total_files"] == 1
+        assert (explicit / "checklist.json").is_file()

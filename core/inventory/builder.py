@@ -1,10 +1,13 @@
 """Source inventory builder.
 
 Enumerates source files, extracts functions, computes checksums.
-Used by both /validate (Stage 0) and /understand (MAP-0).
+Used by /validate (Stage 0), /understand (MAP-0), SCA's
+function-level reachability tier, and any other consumer that
+needs a cached call-graph view of the project.
 """
 
 import fnmatch
+import hashlib
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -49,10 +52,41 @@ MAX_WORKERS = os.cpu_count() or 4
 # anywhere in the target tree killed the run.
 MAX_FILE_BYTES = 8 * 1024 * 1024  # 8 MiB
 
+# Default cache root for inventory checklists when callers don't
+# supply an explicit ``output_dir``. Lives under ``~/.raptor/cache/
+# inventory/<target-hash>/`` — the SHA-256-prefix-of-target-path
+# keys distinct projects so two scans of unrelated trees don't
+# share state. Operator-purge: ``rm -rf ~/.raptor/cache/inventory/``
+# or ``raptor-sca clean-cache``.
+_DEFAULT_INVENTORY_CACHE_ROOT = (
+    Path.home() / ".raptor" / "cache" / "inventory"
+)
+
+
+def default_cache_dir(target_path: str) -> Path:
+    """Return the persistent cache directory for ``target_path``'s
+    inventory checklist.
+
+    Keyed on a SHA-256 prefix of the resolved absolute target path so
+    distinct projects get distinct cache dirs. Auto-creates the
+    parent directory; the cache dir itself is created lazily by
+    ``build_inventory`` when needed.
+
+    Used as the default ``output_dir`` for ``build_inventory`` when
+    callers don't pass one explicitly. Useful for any consumer that
+    wants checklist persistence (incremental SHA-256-keyed re-parse)
+    without picking a project-specific path themselves.
+    """
+    target_abs = str(Path(target_path).resolve())
+    target_hash = hashlib.sha256(
+        target_abs.encode("utf-8"),
+    ).hexdigest()[:16]
+    return _DEFAULT_INVENTORY_CACHE_ROOT / target_hash
+
 
 def build_inventory(
     target_path: str,
-    output_dir: str,
+    output_dir: Optional[str] = None,
     exclude_patterns: Optional[List[str]] = None,
     extensions: Optional[Set[str]] = None,
     skip_generated: bool = True,
@@ -70,15 +104,25 @@ def build_inventory(
 
     Args:
         target_path: Directory or file to analyze.
-        output_dir: Directory to save checklist.json.
+        output_dir: Directory to save checklist.json. When ``None``
+            (default), uses :func:`default_cache_dir` to derive a
+            stable per-target cache dir under
+            ``~/.raptor/cache/inventory/<target-hash>/``. Persistence
+            across runs is the point — re-scans of an unchanged tree
+            collapse the inventory build to a hash-check pass
+            (sub-second on most projects, ~1s on large Go codebases
+            like istio's ~770 files). Callers wanting ephemeral
+            output (tests, one-shot tools) pass an explicit tempdir.
         exclude_patterns: Patterns to exclude (defaults to DEFAULT_EXCLUDES).
         extensions: File extensions to include (defaults to LANGUAGE_MAP keys).
         skip_generated: Skip auto-generated files.
         parallel: Use parallel processing for large codebases.
 
     Returns:
-        Inventory dict (also saved to output_dir/checklist.json).
+        Inventory dict (also saved to ``<output_dir>/checklist.json``).
     """
+    if output_dir is None:
+        output_dir = str(default_cache_dir(target_path))
     if exclude_patterns is None:
         exclude_patterns = DEFAULT_EXCLUDES
 
