@@ -1,11 +1,12 @@
 [package]
-name = "zkpox-phase0-host"
-version = "0.0.0"
-edition = "2021"
-default-run = "prove-bof"
+name = "zkpox-prover"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+default-run = "zkpox-prove"
 
 [[bin]]
-name = "prove-bof"
+name = "zkpox-prove"
 path = "src/main.rs"
 
 [dependencies]
