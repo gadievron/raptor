@@ -624,11 +624,27 @@ class CodeQLAgent:
                     sink_file = sink_loc.get("physicalLocation", {}).get("artifactLocation", {}).get("uri", "")
                     sink_line = sink_loc.get("physicalLocation", {}).get("region", {}).get("startLine", 0)
 
+                    # Pre-fix `Path(source_file).name` on Linux
+                    # treated `\` as a regular char, not a separator.
+                    # A SARIF emitted on Windows can carry URIs like
+                    # `src\foo\bar.c`. `Path(...).name` then returned
+                    # the WHOLE string `"src\foo\bar.c"` instead of
+                    # the basename `"bar.c"` — operator-facing
+                    # examples were unreadably long. SARIF's spec
+                    # says URIs use `/` but real-world emitters from
+                    # MSBuild + some Windows toolchains break this.
+                    # Split on BOTH `/` and `\` to handle either
+                    # convention without depending on the running
+                    # OS's path semantics.
+                    def _basename(p: str) -> str:
+                        if not p:
+                            return ""
+                        return p.replace("\\", "/").rsplit("/", 1)[-1]
                     examples.append({
                         "rule": rule_id.split("/")[-1] if "/" in rule_id else rule_id,
                         "message": message[:60] + "..." if len(message) > 60 else message,
-                        "source": f"{Path(source_file).name}:{source_line}",
-                        "sink": f"{Path(sink_file).name}:{sink_line}",
+                        "source": f"{_basename(source_file)}:{source_line}",
+                        "sink": f"{_basename(sink_file)}:{sink_line}",
                         "steps": len(locations)
                     })
 
