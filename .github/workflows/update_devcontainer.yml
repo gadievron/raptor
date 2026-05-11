@@ -1,0 +1,55 @@
+name: Update devcontainer's dependencies
+
+on:
+  schedule:
+    - cron: "0 0 * * 0" # every Sunday at midnight UTC
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to create a new branch with updates
+      pull-requests: write # to create a PR with the updates
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Update container dependencies
+        run: python3 .github/scripts/update_devcontainer.py
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set date
+        run: |
+          echo "DATE=$(date -u +"%Y-%m-%d")" >> "$GITHUB_ENV"
+
+      - name: Commit and push branch
+        if: steps.changes.outputs.has_changes == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b automation/update-image-deps-${{ env.DATE }}
+          git add .devcontainer/
+          git commit -m "chore: bump image dependencies"
+          git push --force-with-lease origin automation/update-image-deps-${{ env.DATE }}
+
+      - name: Create PR with GH CLI
+        if: steps.changes.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --title "chore: bump devcontainer dependencies" \
+            --body "This PR updates the devcontainer's image dependencies (semgrep, codeql, claude-code) to their latest versions." \
+            --base main \
+            --head automation/update-image-deps-${{ env.DATE }} \
+            --label "dependencies"
