@@ -549,14 +549,27 @@ class CodeQLAgent:
         dataflow_examples = []
 
         if result.sarif_files:
+            from core.sarif.parser import load_sarif as _load_sarif
             for sarif_path in result.sarif_files:
-                summary = self.query_runner.get_sarif_summary(Path(sarif_path))
+                # Load once, share between get_sarif_summary AND
+                # _extract_dataflow_examples. Pre-fix each helper
+                # re-parsed the SARIF independently — multi-MB files
+                # from C++/Java analyses paid the parse cost twice.
+                _sarif_path = Path(sarif_path)
+                _sarif_data = _load_sarif(_sarif_path)
+                summary = self.query_runner.get_sarif_summary(
+                    _sarif_path, sarif_data=_sarif_data,
+                )
                 total_dataflow_paths += summary.get("dataflow_paths", 0)
                 total_dataflow_steps += summary.get("total_dataflow_steps", 0)
 
                 # Collect example dataflow paths for visualization
                 if total_dataflow_paths > 0 and len(dataflow_examples) < 5:
-                    examples = self._extract_dataflow_examples(Path(sarif_path), limit=5 - len(dataflow_examples))
+                    examples = self._extract_dataflow_examples(
+                        _sarif_path,
+                        limit=5 - len(dataflow_examples),
+                        sarif_data=_sarif_data,
+                    )
                     dataflow_examples.extend(examples)
 
         if total_dataflow_paths > 0:
@@ -582,12 +595,27 @@ class CodeQLAgent:
         print(f"\nOutput directory: {self.out_dir}")
         print(f"{'=' * 70}\n")
 
-    def _extract_dataflow_examples(self, sarif_path: Path, limit: int = 5) -> list:
-        """Extract example dataflow paths from SARIF for visualization."""
+    def _extract_dataflow_examples(self, sarif_path: Path, limit: int = 5,
+                                    *, sarif_data: Optional[Dict] = None) -> list:
+        """Extract example dataflow paths from SARIF for visualization.
+
+        Pre-fix this always called `load_sarif(sarif_path)`. The
+        adjacent `get_sarif_summary` (called immediately before in
+        `print_summary`) had ALREADY loaded the same file. For a
+        run with N SARIF files, that doubled the JSON parse work
+        — multi-MB SARIFs from C++/Java analyses paid the parse
+        cost twice per `print_summary` call.
+
+        Accept optional pre-loaded `sarif_data` so the caller can
+        share the parse result across both helpers. Falls back to
+        `load_sarif` when the caller doesn't provide it (preserves
+        the standalone-call API).
+        """
         examples = []
         try:
-            from core.sarif.parser import load_sarif
-            sarif_data = load_sarif(sarif_path)
+            if sarif_data is None:
+                from core.sarif.parser import load_sarif
+                sarif_data = load_sarif(sarif_path)
             if not sarif_data:
                 return examples
 
