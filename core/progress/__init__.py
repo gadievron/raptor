@@ -84,7 +84,21 @@ class HackerProgress:
         self.disabled = disabled
         self.current = 0
         self.start_time = time.time()
-        self.last_update = 0
+        # Initialise `last_update` to `start_time`, NOT 0. Pre-fix
+        # `last_update=0` made `now - 0` always exceed the 1s
+        # throttle, so the FIRST `update()` call emitted
+        # immediately. For tight loops where the caller fires
+        # `update()` inside the first second of work, the
+        # initial emit displayed `current=0` (or whatever
+        # half-progressed value happened to be set) BEFORE any
+        # meaningful work had completed. The display then went
+        # silent for 1s waiting for the throttle to expire,
+        # producing a visible flicker (instant '0/N' flash, then
+        # blank, then real data at 1s).
+        # Anchoring `last_update` to `start_time` suppresses the
+        # first-second emits so the display only appears when
+        # there's real progress to show.
+        self.last_update = self.start_time
         self.spinner_idx = 0
 
     def _format_time(self, seconds: float) -> str:
