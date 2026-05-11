@@ -487,14 +487,47 @@ class CodeQLAgent:
             )
 
     def _save_report(self, result: CodeQLWorkflowResult):
-        """Save workflow report to JSON."""
+        """Save workflow report to JSON.
+
+        Pre-fix `save_json(..., result.to_dict())` failed entirely if
+        `to_dict()` raised mid-serialization (a finding with a nested
+        dataclass that had a broken `__repr__`, a non-serialisable
+        type leaking past the converter, an LLM-augmented field that
+        ended up holding a Path object instead of a str). The except
+        logged the error and returned — leaving NO report file on
+        disk. Operators reading the run dir saw the missing file and
+        had no breadcrumb pointing at "to_dict raised" vs "the run
+        crashed entirely".
+
+        Two-stage save: try the full to_dict; on failure, fall back
+        to a minimal report carrying just the high-level stats and
+        an explicit `error` field naming the failure. Operators get
+        SOMETHING on disk + a clear "the rich report couldn't be
+        serialised" diagnostic.
+        """
         report_path = self.out_dir / "codeql_report.json"
 
         try:
             save_json(report_path, result.to_dict())
             logger.info(f"✓ Report saved: {report_path}")
+            return
         except Exception as e:
-            logger.error(f"Failed to save report: {e}")
+            logger.error(f"Failed to save full report: {e}")
+        # Fallback: minimal report with stats we know are JSON-safe.
+        try:
+            minimal = {
+                "schema_version": "minimal-fallback",
+                "repo_path": str(getattr(result, "repo_path", "")),
+                "duration_seconds": float(getattr(result, "duration_seconds", 0.0)),
+                "success": bool(getattr(result, "success", False)),
+                "total_findings": int(getattr(result, "total_findings", 0)),
+                "sarif_files": [str(p) for p in getattr(result, "sarif_files", [])],
+                "error": "to_dict() raised mid-serialization; see raptor.log",
+            }
+            save_json(report_path, minimal)
+            logger.info(f"✓ Minimal-fallback report saved: {report_path}")
+        except Exception as e2:
+            logger.error(f"Minimal report also failed: {e2}")
 
     def print_summary(self, result: CodeQLWorkflowResult):
         """Print workflow summary."""
