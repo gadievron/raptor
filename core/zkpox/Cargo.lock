@@ -6268,6 +6268,7 @@ dependencies = [
  "serde_json",
  "sp1-build",
  "sp1-sdk",
+ "tokio",
 ]
 
 [[package]]

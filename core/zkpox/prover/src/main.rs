@@ -115,6 +115,21 @@ fn main() -> Result<()> {
         return Err(anyhow!("specify either --execute or --prove"));
     }
 
+    // For Groth16 wrap, ensure SP1's circuit artifacts are present *before*
+    // we burn STARK cycles. Without this, the first invocation crashes at
+    // the final wrap step with "artifact not found" after ~20 minutes of
+    // upstream proving — discovered during Phase 1.2 bench. The download
+    // is ~6 GB compressed (~15 GB extracted); subsequent runs hit the cache
+    // and skip silently.
+    if args.prove && args.wrap == Wrap::Groth16 {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("spinning a tokio runtime for artifact install")?;
+        rt.block_on(sp1_sdk::install::try_install_circuit_artifacts("groth16"))
+            .context("installing SP1 groth16 circuit artifacts")?;
+    }
+
     let witness = std::fs::read(&args.witness)
         .with_context(|| format!("reading witness {}", args.witness.display()))?;
     let witness_bytes = witness.len() as u64;
