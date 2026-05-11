@@ -39,17 +39,8 @@ fn pick_clang() -> String {
     "clang".to_string()
 }
 
-fn main() {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let target_c = manifest_dir.join("../targets/01-stack-bof.c");
-    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
-    let obj_path = out_dir.join("01-stack-bof.o");
-    let archive_path = out_dir.join("libzkpox_target_01.a");
-
-    let clang = pick_clang();
-
-    // Compile C → object
-    let status = Command::new(&clang)
+fn compile_c(clang: &str, src: &PathBuf, obj: &PathBuf) {
+    let status = Command::new(clang)
         .args([
             "--target=riscv64-unknown-none-elf",
             "-march=rv64im",
@@ -63,18 +54,19 @@ fn main() {
             "-Wextra",
             "-c",
         ])
-        .arg(&target_c)
+        .arg(src)
         .args(["-o"])
-        .arg(&obj_path)
+        .arg(obj)
         .status()
         .expect("failed to invoke clang");
     if !status.success() {
-        panic!("clang failed compiling {}", target_c.display());
+        panic!("clang failed compiling {}", src.display());
     }
+}
 
-    // Wrap as static archive so cargo can link it. We use whichever `ar`
-    // we can find — llvm-ar shipped with the same Homebrew LLVM is ideal,
-    // GNU ar / Apple ar also fine because the format is portable.
+fn archive_objects(out_dir: &PathBuf, archive: &PathBuf, objs: &[PathBuf]) {
+    // llvm-ar shipped with Homebrew LLVM, GNU ar, and Apple ar all work —
+    // the archive format is portable. Pick the first one that succeeds.
     let archiver_candidates = [
         std::env::var("ZKPOX_AR").unwrap_or_default(),
         "/opt/homebrew/opt/llvm/bin/llvm-ar".to_string(),
@@ -83,12 +75,12 @@ fn main() {
     ];
     let mut last_err = None;
     for ar in archiver_candidates.iter().filter(|s| !s.is_empty()) {
-        let r = Command::new(ar)
-            .arg("rcs")
-            .arg(&archive_path)
-            .arg(&obj_path)
-            .status();
-        match r {
+        let mut cmd = Command::new(ar);
+        cmd.arg("rcs").arg(archive);
+        for obj in objs {
+            cmd.arg(obj);
+        }
+        match cmd.status() {
             Ok(s) if s.success() => {
                 last_err = None;
                 break;
@@ -100,10 +92,37 @@ fn main() {
     if let Some(msg) = last_err {
         panic!("no archiver succeeded: {msg}");
     }
+    let _ = out_dir;
+}
+
+fn main() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
+    let clang = pick_clang();
+
+    // Per-target sources kept in a list so adding target #N is a single
+    // line change. The static archive bundles every target object — the
+    // guest's `extern "C"` bindings resolve against whichever symbol the
+    // dispatch picks per invocation.
+    let targets: Vec<(&str, &str)> = vec![
+        ("01-stack-bof.c",  "01-stack-bof.o"),
+        ("02-off-by-one.c", "02-off-by-one.o"),
+    ];
+
+    let mut obj_paths = Vec::with_capacity(targets.len());
+    for (src_name, obj_name) in &targets {
+        let src = manifest_dir.join("../targets").join(src_name);
+        let obj = out_dir.join(obj_name);
+        compile_c(&clang, &src, &obj);
+        println!("cargo:rerun-if-changed={}", src.display());
+        obj_paths.push(obj);
+    }
+
+    let archive_path = out_dir.join("libzkpox_targets.a");
+    archive_objects(&out_dir, &archive_path, &obj_paths);
 
     println!("cargo:rustc-link-search=native={}", out_dir.display());
-    println!("cargo:rustc-link-lib=static=zkpox_target_01");
-    println!("cargo:rerun-if-changed={}", target_c.display());
+    println!("cargo:rustc-link-lib=static=zkpox_targets");
     println!("cargo:rerun-if-env-changed=ZKPOX_CLANG");
     println!("cargo:rerun-if-env-changed=ZKPOX_AR");
 }

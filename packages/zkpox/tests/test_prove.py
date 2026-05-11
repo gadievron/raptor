@@ -43,6 +43,7 @@ def test_parse_full_record_via_fake_binary(tmp_path, monkeypatch):
         "witness_bytes": 32,
         "mode": "execute",
         "verdicts": {
+            "target_id": 1,
             "crash_only_crashed": True,
             "oob_detected": True,
             "oob_count": 16,
