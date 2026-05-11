@@ -337,7 +337,22 @@ class TestLLDBNoPathInjection:
             r.returncode = 0
             return r
 
-        with patch("subprocess.run", side_effect=fake_run):
+        # Patch the *imported* `_sandbox_run` symbol inside
+        # `packages.binary_analysis.crash_analyser` rather than the
+        # top-level `subprocess.run`. Pre-fix the test patched
+        # `subprocess.run`, but `_run_lldb_analysis` invokes
+        # `_sandbox_run` (imported at module top as
+        # `from core.sandbox import run as _sandbox_run`). The
+        # `subprocess.run` patch never fired, the fake_run
+        # callback was never invoked, `captured_scripts` stayed
+        # empty, and the post-FIO14 assertion (which fails loud
+        # on empty captures) tripped vacuously.
+        # Patch the actual call site so the script-write +
+        # path-injection invariant gets exercised.
+        with patch(
+            "packages.binary_analysis.crash_analyser._sandbox_run",
+            side_effect=fake_run,
+        ):
             try:
                 analyser._run_lldb_analysis(input_file)
             except Exception:
