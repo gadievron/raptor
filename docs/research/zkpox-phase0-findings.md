@@ -212,7 +212,7 @@ unattended after every harness change.
 
 The list, with rough effort estimates, in order of recommended start:
 
-1. **Wire the Groth16 wrap** (~3 days). Single SDK call, but adds CI/install dep on Gnark/Go (already in our Dockerfile). Brings proof size from 2.65 MB → ~256 B and unblocks the CBOR bundle.
+1. **Wire the Groth16 wrap** (~3 days). Single SDK call, but adds CI/install dep on Gnark/Go (already in our Dockerfile). Brings proof size from 2.65 MB → ~256 B and unblocks the CBOR bundle. **LANDED in Phase 1.2 — see Appendix: Phase 1.2 Groth16 bench below for actual numbers.**
 2. **Shadow allocation table for `oob_write`** (~5 days). Replace the probabilistic redzone with per-store instrumentation. Requires lightweight LLVM pass or libfuzzer-style hooks at the C compile stage. Closes the canarymatch class entirely (not just probabilistically).
 3. **CBOR bundle schema + Sigstore Rekor anchor** (~5 days). Spec is in §8 of the proposal; the implementation is glue.
 4. **`pk` / `vk` cache layer** (~2 days). The 70-s setup time per fresh build is amortizable; a content-addressable cache keyed by guest-ELF hash brings the second-and-subsequent prove of a given target down to the 15-s warm number.
@@ -281,3 +281,86 @@ This spike builds directly on the zkpox proposal at
 projects. Issues, mitigations, and the Phase 1 follow-on list above are
 specific to the bench host and software versions captured in
 `versions.txt`; expect details to drift on any meaningful version bump.
+
+---
+
+## Appendix: Phase 1.2 Groth16 bench (post-spike)
+
+Captured 2026-05-11 on the same Mac host. The Phase 1.2 commit wired
+`--wrap=groth16` into the prover and validated the chain end-to-end.
+
+### Numbers
+
+| Metric | Value |
+|---|---|
+| Total wall-clock (first run: download + STARK + wrap) | **1,445.57 s (24 m 06 s)** |
+| In-process `.groth16().run()` | **1,031.39 s (17 m 11 s)** |
+| Groth16 wrap step alone (Gnark) | **4 m 59 s** |
+| Gnark R1CS load | 1 m 30 s |
+| Gnark proving-key load | 1 m 13 s |
+| Constraints solved | **15,972,262** |
+| Wrap constraint-solver time | 58.96 s |
+| Wrap prover time | 239.75 s |
+| Verifier (in-process) | **4.8 ms** |
+| Peak RSS | **2.89 GB** |
+| Proof artifact (SDK saved) | **1,704 bytes** |
+| Verification | ✓ |
+| Verdicts (identical to core STARK) | `crash_only=true, oob=true, n=16, off=+16` |
+
+### What the proposal got right and what needs correction
+
+- **Right:** Verification is sub-second (4.8 ms wall in-process).
+- **Right:** The wrap step is "1–3 min on CPU" — though that's just the
+  Gnark prover step. Add 2–3 min for Gnark's R1CS + proving-key load
+  per invocation; the SDK keeps these in memory across calls in a
+  long-lived service but reloads them every run from a CLI.
+- **Refined:** "~256 B proof artifact" needs a footnote.
+  - The bare BN254 Groth16 proof is ~192–256 B and that's what an
+    on-chain Solidity verifier reads from calldata.
+  - The SDK's saved proof (`SP1ProofWithPublicValues::save`) is **1,704
+    B** here — wraps the bare proof with public values + VK reference
+    so the artifact is self-contained for verification without a side
+    channel for the public values.
+  - **The 1,704 B number is the right one for the CBOR disclosure
+    bundle**, because the bundle is meant to be self-contained.
+- **Refined:** "Brings proof size from 2.65 MB → ~256 B" — actual
+  compression ratio is **~1,560×** (2,777,208 B → 1,704 B). Either way
+  the bundle becomes overhead-negligible.
+- **New cost item:** the SP1 Groth16 circuit artifacts (PK, VK,
+  R1CS, Solidity verifier) are **6.21 GB compressed / 7.8 GB extracted**
+  and live at `~/.sp1/circuits/groth16/<version>/`. First-time install
+  is ~10 min on a residential connection. CI runners must either pre-
+  warm this cache or budget the download time.
+
+### Issue #8 (Phase 1.2 — captured here for completeness)
+
+The first Groth16 bench attempt **failed after 18.7 min of upstream
+proving work** with `Error: prove (Groth16) failed: An unexpected
+error occurred: artifact not found`. Root cause: SP1 v6's
+`.groth16().run()` does *not* auto-install the BN254 circuit
+artifacts — the SDK exposes `sp1_sdk::install::try_install_circuit_artifacts`
+but you have to call it yourself. The first attempt's partial 1.77 GB
+of 6.21 GB tarball lived at `~/.sp1/circuits/groth16/v6.1.0/artifacts.tar.gz`
+in a state SP1's artifact lookup treated as "already installed,
+skipping" — fatally inconsistent.
+
+Fix (committed in the Phase 1.2 follow-up commit alongside this
+appendix): prover's `main` calls `try_install_circuit_artifacts("groth16")`
+via a single-threaded Tokio runtime before any `.groth16().run()`
+invocation. The function is idempotent: subsequent runs hit the cache
+in milliseconds. Without the fix, every first-time user hits the
+same 18-min cliff.
+
+### Implication for Phase 1.3+ work
+
+- The CBOR bundle's `proof.bytes` field carries the 1,704-B SDK-
+  saved proof, not the bare ~256-B Groth16 proof. Bundle size
+  remains well under any practical envelope ceiling.
+- Phase 1.5's `/verify-exploit-proof` command, and the Rust
+  `zkpox-verify` binary once `sp1-sdk` is wired into it (currently
+  stubbed), need the same `try_install_circuit_artifacts` call —
+  but for *verifying-key* artifacts. Same provisioning pattern.
+- The 24-min first-run cost (and 17-min steady-state) means a Phase
+  1.7 zlib-CVE demo running Groth16 wrap on each prove is feasible
+  but not interactive. Future GPU acceleration brings this to
+  sub-minute, per SP1's roadmap.
