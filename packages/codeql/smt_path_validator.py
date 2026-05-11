@@ -500,6 +500,21 @@ def _substitute_calls(
                 continue
             # Unbalanced: fall through and copy the head char-by-char so
             # the parens-check can flag it.
+        # Pre-fix the no-match path always did `i += 1`, even when
+        # `_CALL_HEAD_RE.match` returned an identifier-shaped match
+        # that just wasn't followed by `(`. That meant for an
+        # identifier-heavy input (100k chars of `foo bar baz qux ...`
+        # / large macro-expanded condition text), each character
+        # position re-scanned the identifier from scratch — O(N) per
+        # position × N positions = O(N²) wallclock.
+        # When we matched an identifier but it wasn't a call, jump
+        # past the identifier in one step instead of one char at a
+        # time. Append the matched substring as-is. Reduces O(N²)
+        # to O(N) for identifier-heavy text.
+        if m:
+            out.append(text[i:m.end()])
+            i = m.end()
+            continue
         out.append(text[i])
         i += 1
     return ''.join(out)
