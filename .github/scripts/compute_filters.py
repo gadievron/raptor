@@ -40,15 +40,17 @@ FILTERS: dict[str, list[str]] = {
         "core/sandbox/**",
         "core/security/**",
         "core/config.py",
+        "core/config/**",
         "core/run/**",
         "libexec/raptor-run-sandboxed",
         "libexec/raptor-pid1-shim",
         "requirements*.txt",
         ".github/workflows/tests.yml",
     ],
-    # Direct + transitive deps for exploit_feasibility. Several core/
-    # modules are flat .py files (logging.py, config.py) so they are
-    # listed by name rather than as ``foo/**`` glob prefixes.
+    # Direct + transitive deps for exploit_feasibility. ``logging`` and
+    # ``config`` exist as both flat .py and package directory across
+    # branches (#447 in flight) — list both forms so the filter works
+    # on either side of the rebase.
     "exploit_feasibility": [
         "packages/exploit_feasibility/**",
         "packages/binary_analysis/**",
@@ -58,6 +60,7 @@ FILTERS: dict[str, list[str]] = {
         "core/logging.py",
         "core/logging/**",
         "core/config.py",
+        "core/config/**",
         "core/orchestration/**",
         "core/sandbox/**",
         "core/smt_solver/**",
@@ -82,6 +85,7 @@ FILTERS: dict[str, list[str]] = {
         "packages/codeql/**",
         "core/build/**",
         "core/config.py",
+        "core/config/**",
         "core/coverage/**",
         "core/git/**",
         "core/hash/**",
@@ -111,6 +115,7 @@ FILTERS: dict[str, list[str]] = {
         "packages/hypothesis_validation/**",
         "core/annotations/**",
         "core/config.py",
+        "core/config/**",
         "core/coverage/**",
         "core/inventory/**",
         "core/json/**",
@@ -119,13 +124,16 @@ FILTERS: dict[str, list[str]] = {
         "core/logging/**",
         "core/orchestration/**",
         "core/progress.py",
+        "core/progress/**",
         "core/reporting/**",
         "core/run/**",
         "core/sage/**",
         "core/sandbox/**",
         "core/sarif/**",
         "core/schema_constants.py",
+        "core/schema_constants/**",
         "core/security/**",
+        "core/smt_solver/**",
         "requirements*.txt",
         ".github/workflows/tests.yml",
     ],
@@ -133,10 +141,13 @@ FILTERS: dict[str, list[str]] = {
         "packages/cve_diff/**",
         "packages/nvd/**",
         "packages/osv/**",
+        "core/config.py",
+        "core/config/**",
         "core/git/**",
         "core/http/**",
         "core/json/**",
         "core/llm/**",
+        "core/security/**",
         "core/url_patterns.py",
         "core/url_patterns/**",
         "requirements*.txt",
@@ -145,6 +156,7 @@ FILTERS: dict[str, list[str]] = {
     "fuzzing": [
         "packages/fuzzing/**",
         "core/config.py",
+        "core/config/**",
         "core/hash/**",
         "core/logging.py",
         "core/logging/**",
@@ -155,6 +167,7 @@ FILTERS: dict[str, list[str]] = {
     "sage": [
         "core/sage/**",
         "core/config.py",
+        "core/config/**",
         "core/hash/**",
         "core/llm/**",
         "core/logging.py",
@@ -170,6 +183,7 @@ FILTERS: dict[str, list[str]] = {
     "orchestration": [
         "core/orchestration/**",
         "core/config.py",
+        "core/config/**",
         "core/hash/**",
         "core/inventory/**",
         "core/json/**",
@@ -177,6 +191,7 @@ FILTERS: dict[str, list[str]] = {
         "core/run/**",
         "core/sandbox/**",
         "core/schema_constants.py",
+        "core/schema_constants/**",
         "core/security/**",
         "packages/codeql/**",
         "packages/exploitability_validation/**",
