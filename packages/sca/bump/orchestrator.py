@@ -131,6 +131,7 @@ def run_bump(
     now: Optional[datetime] = None,
     cache=None,
     github_token: Optional[str] = None,
+    policy=None,
 ) -> BumpReport:
     """Walk Dockerfiles under ``target``, propose ARG bumps,
     compute verdicts, optionally apply.
@@ -144,9 +145,34 @@ def run_bump(
     project_sca_dependabot_plus_plus.md).
     """
     now = now or datetime.now(timezone.utc)
+    # Load operator policy from .raptor-sca-bump.yml (or use
+    # default). The walker emits all candidates; policy-skips
+    # are applied AFTER enumeration so the report can still
+    # surface "N candidates skipped by policy" for audit.
+    from .policy import load_policy
+    policy = policy or load_policy(target)
     candidates, skipped = _enumerate_candidates(
         target, http=http, cache=cache, github_token=github_token,
     )
+    # Apply policy ``skip:`` rules — these move candidates from
+    # the candidates list into the skipped list with the
+    # operator's stated reason.
+    if policy.skip:
+        kept: List[BumpCandidate] = []
+        for cand in candidates:
+            rule = policy.is_skipped(
+                kind=cand.kind, locator=cand.locator,
+            )
+            if rule is not None:
+                skipped.append((
+                    cand.locator, cand.file,
+                    f"policy skip: {rule.reason}"
+                    if rule.reason
+                    else "policy skip",
+                ))
+                continue
+            kept.append(cand)
+        candidates = kept
     results: List[BumpResult] = []
     for cand in candidates:
         result = _evaluate_one(
@@ -155,7 +181,16 @@ def run_bump(
             osv_client=osv_client,
             kev_client=kev_client, epss_client=epss_client,
             now=now,
+            rapid_release_days=policy.thresholds.rapid_release_days,
         )
+        # Policy override: ``block_on_major`` forces major-version
+        # bumps to Block-tier so operators always review them.
+        if (policy.thresholds.block_on_major
+                and _is_major_bump(cand.current_version,
+                                    cand.target_version)
+                and result.verdict != _VERDICT_BLOCK):
+            result.verdict = _VERDICT_BLOCK
+            result.verdict_label = _VERDICT_LABEL[_VERDICT_BLOCK]
         if apply and result.verdict == _VERDICT_CLEAN:
             if cand.kind == "git_submodule":
                 # Submodule SHAs live in git's object database,
@@ -473,6 +508,7 @@ def _evaluate_one(
     kev_client=None,
     epss_client=None,
     now: datetime,
+    rapid_release_days: int = 30,
 ) -> BumpResult:
     """Compute the verdict for one bump candidate.
 
@@ -498,6 +534,7 @@ def _evaluate_one(
                 target_version=cand.target_version,
                 pypi_client=pypi_client, npm_client=npm_client,
                 now=now,
+                rapid_release_days=rapid_release_days,
             )
         except Exception as e:                # noqa: BLE001
             return BumpResult(
@@ -1083,6 +1120,21 @@ def _lookup_latest_release_or_tag(
             return None
     uses_cache[cache_key] = target_ref
     return target_ref
+
+
+def _is_major_bump(current: str, target: str) -> bool:
+    """True if ``target`` is in a different major version than
+    ``current``. Used by the ``block_on_major`` policy threshold.
+
+    Conservative: if either version can't be parsed as
+    stable-semver, returns False (don't force-block what we
+    can't reason about)."""
+    from core.upstream_latest._version_filter import parse_stable
+    cur = parse_stable(current)
+    tgt = parse_stable(target)
+    if cur is None or tgt is None or not cur or not tgt:
+        return False
+    return cur[0] != tgt[0]
 
 
 def _same_major_pin(current: str, target: str) -> bool:
