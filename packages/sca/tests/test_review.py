@@ -545,3 +545,138 @@ def test_single_critical_no_epss_does_not_block() -> None:
     )
     f = _vuln(severity="critical", epss=None)
     assert _compute_verdict([f], []) == _VERDICT_REVIEW
+
+
+# ---------------------------------------------------------------------------
+# _compute_verdict — bump-tier supply-chain findings
+#
+# These tests exercise the ``bump_supply_chain_findings=`` parameter
+# added for the dependabot++ bumper loop. Bump-time supply-chain
+# signals are evaluated by the bumper evaluator (separate module,
+# tested separately); this verdict pass just consumes pre-computed
+# findings and maps them onto Clean / Review / Block.
+# ---------------------------------------------------------------------------
+
+from packages.sca.models import SupplyChainFinding         # noqa: E402
+
+
+def _supply(kind: str = "recent_publish",
+             severity: str = "medium",
+             detail: str = "") -> SupplyChainFinding:
+    dep = Dependency(
+        ecosystem="PyPI", name="x", version="2.0",
+        declared_in=Path("/r/req.txt"), scope="main",
+        is_lockfile=False, pin_style=PinStyle.EXACT, direct=True,
+        purl="pkg:pypi/x@2.0",
+        parser_confidence=Confidence("high", reason="t"),
+    )
+    return SupplyChainFinding(
+        finding_id=f"sca:supply:{kind}:PyPI:x@2.0",
+        kind=kind,                # type: ignore[arg-type]
+        dependency=dep,
+        detail=detail or f"{kind} fired on bump",
+        evidence={},
+        severity=severity,        # type: ignore[arg-type]
+        confidence=Confidence("high", reason="bump-tier"),
+    )
+
+
+def test_bump_unused_when_param_omitted() -> None:
+    """Default ``check`` flow doesn't pass bump findings; verdict
+    is computed exactly as before. Pin against accidental
+    behavioural drift."""
+    from packages.sca.review import (
+        _VERDICT_CLEAN, _compute_verdict,
+    )
+    assert _compute_verdict([], []) == _VERDICT_CLEAN
+
+
+def test_bump_single_high_severity_blocks() -> None:
+    """A ``high``-severity bump-tier finding alone is enough to
+    Block: e.g. maintainer account ownership flipped between
+    current and target (account-takeover shape) — the operator
+    should not auto-merge that bump."""
+    from packages.sca.review import (
+        _VERDICT_BLOCK, _compute_verdict,
+    )
+    sf = _supply(kind="maintainer_account_change", severity="high")
+    assert _compute_verdict([], [], bump_supply_chain_findings=[sf]) == _VERDICT_BLOCK
+
+
+def test_bump_single_medium_escalates_to_review() -> None:
+    """A single ``medium``-severity bump-tier finding escalates
+    Clean → Review. Example: target version published 5 days ago
+    (rapid-release window) — operator should pause and look."""
+    from packages.sca.review import (
+        _VERDICT_REVIEW, _compute_verdict,
+    )
+    sf = _supply(kind="recent_publish", severity="medium")
+    assert _compute_verdict([], [], bump_supply_chain_findings=[sf]) == _VERDICT_REVIEW
+
+
+def test_bump_two_mediums_compound_block() -> None:
+    """Two ``medium`` bump-tier findings on the same bump compound
+    into a Block. Three Review-tier signals stacked aren't "three
+    Review-tier signals" — they're a supply-chain-attack shape:
+    e.g. recently published AND from a changed maintainer AND
+    added an install hook."""
+    from packages.sca.review import (
+        _VERDICT_BLOCK, _compute_verdict,
+    )
+    sfs = [
+        _supply(kind="recent_publish", severity="medium"),
+        _supply(kind="maintainer_change", severity="medium"),
+    ]
+    assert _compute_verdict([], [], bump_supply_chain_findings=sfs) == _VERDICT_BLOCK
+
+
+def test_bump_low_info_does_not_change_verdict() -> None:
+    """``low`` / ``info`` bump-tier findings annotate but don't
+    move the verdict ladder. Example: a low-severity
+    ``maintainer_email_change`` is operator-visible context, not
+    a gate signal."""
+    from packages.sca.review import (
+        _VERDICT_CLEAN, _compute_verdict,
+    )
+    sfs = [
+        _supply(kind="maintainer_email_change", severity="low"),
+        _supply(kind="recent_publish", severity="info"),
+    ]
+    assert _compute_verdict([], [], bump_supply_chain_findings=sfs) == _VERDICT_CLEAN
+
+
+def test_bump_high_severity_dominates_typo_distance_two() -> None:
+    """When both a typosquat-distance-two AND a high-severity
+    bump-tier signal fire, the higher-tier signal wins. (Typo
+    distance two alone would be Review; a high-severity bump
+    finding alone is Block.)"""
+    from packages.sca.review import (
+        _VERDICT_BLOCK, _compute_verdict,
+    )
+    from packages.sca.supply_chain.typosquat import TyposquatFinding
+    typo_dep = Dependency(
+        ecosystem="npm", name="loadash", version="1.0",
+        declared_in=Path("/r/package.json"), scope="main",
+        is_lockfile=False, pin_style=PinStyle.EXACT, direct=True,
+        purl="pkg:npm/loadash@1.0",
+        parser_confidence=Confidence("high", reason="t"),
+    )
+    typo = TyposquatFinding(
+        dependency=typo_dep, nearest_popular="lodash",
+        distance=2, severity="medium",
+        confidence=Confidence("high", reason="t"),
+    )
+    sf = _supply(severity="high")
+    assert _compute_verdict([], [typo],
+                              bump_supply_chain_findings=[sf]) == _VERDICT_BLOCK
+
+
+def test_bump_clean_when_only_clean_signals() -> None:
+    """No bump-tier findings + no vuln/typo findings → Clean.
+    Pinpoints the Clean-tier passthrough for the bumper's
+    auto-merge eligibility check."""
+    from packages.sca.review import (
+        _VERDICT_CLEAN, _compute_verdict,
+    )
+    assert _compute_verdict([], [],
+                              bump_supply_chain_findings=[]) == _VERDICT_CLEAN

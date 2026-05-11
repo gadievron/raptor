@@ -45,6 +45,7 @@ from .models import (
     Confidence,
     Dependency,
     PinStyle,
+    SupplyChainFinding,
     VulnFinding,
 )
 from .osv import OsvClient
@@ -247,6 +248,7 @@ def _compute_verdict(
     transitive_findings: Optional[List[VulnFinding]] = None,
     *,
     seed_metadata_unverifiable: bool = False,
+    bump_supply_chain_findings: Optional[List[SupplyChainFinding]] = None,
 ) -> int:
     """Map signals onto clean / review / block.
 
@@ -261,6 +263,17 @@ def _compute_verdict(
     to Review: a registry that can't confirm the package even exists is
     a strong reason to look closer (typosquat, deleted package, network
     issue) rather than declare it Clean.
+
+    ``bump_supply_chain_findings`` is the bump-tier escape hatch: when
+    the caller is evaluating a proposed bump (current → target), it
+    can pre-compute supply-chain signals SPECIFIC to the bump (target
+    publish age, maintainer change between current+target's publish
+    windows, install-hook diff added by target, etc.) and pass them
+    in. The verdict ladder treats them like other signals: ``high``+
+    severity → Block; ``medium`` → at least Review; two or more
+    ``medium``+ findings stacked on the same bump → Block (compound
+    red flags). Bumper subcommands ship the evaluator that produces
+    these findings; ``check`` callers leave it unset.
     """
     verdict = _VERDICT_CLEAN
     all_vuln_findings = list(vuln_findings)
@@ -301,6 +314,40 @@ def _compute_verdict(
         verdict = max(verdict, _VERDICT_REVIEW)
     if seed_metadata_unverifiable:
         verdict = max(verdict, _VERDICT_REVIEW)
+    # Bump-tier supply-chain signals: evaluated by the bumper
+    # evaluator against the proposed target version specifically
+    # (recent_publish on target, maintainer_change between current
+    # and target's publish windows, install-hook diff added by
+    # target, etc.). Verdict mapping:
+    #
+    #   * Any ``high``+ finding → Block. Examples: install-hook
+    #     added by target version + that hook is recent;
+    #     maintainer account ownership flipped between current
+    #     and target.
+    #   * Any ``medium`` finding → escalate to Review. Examples:
+    #     target version published <30 days ago (rapid-release
+    #     window); maintainer set changed between current and
+    #     target (legitimate handover OR malicious takeover —
+    #     operator decides).
+    #   * Two or more ``medium``+ findings stacked on the same
+    #     bump → Block. Compound red flags: a bump that's BOTH
+    #     recently published AND from a new maintainer AND adds
+    #     install hooks isn't "three Review-tier signals", it's a
+    #     supply-chain attack shape.
+    if bump_supply_chain_findings:
+        medium_or_higher = 0
+        for sf in bump_supply_chain_findings:
+            if severity_rank(sf.severity) >= severity_rank("high"):
+                return _VERDICT_BLOCK
+            if severity_rank(sf.severity) >= severity_rank("medium"):
+                medium_or_higher += 1
+                verdict = max(verdict, _VERDICT_REVIEW)
+            else:
+                # ``low`` / ``info`` annotate the PR comment but
+                # don't change the verdict ladder.
+                pass
+        if medium_or_higher >= 2:
+            return _VERDICT_BLOCK
     return verdict
 
 
