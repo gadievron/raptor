@@ -826,6 +826,73 @@ class TestPathConditionsForwarding:
 # normalize_context_map
 # ---------------------------------------------------------------------------
 
+class TestUncheckedFlowPathConditionsImport:
+    """A4: /understand --map's sink_details may carry optional
+    `path_conditions` / `path_profile` for memory-corruption /
+    arithmetic / bounds sinks. The bridge propagates each such
+    unchecked_flow as an attack-paths.json entry so Stage B's SMT
+    pre-flight ([B-3.1.5]) finds the conditions ready-made instead
+    of re-extracting from source."""
+
+    def _build_context_map(self, sink_extras=None):
+        """Build a context_map with one unchecked_flow + sink_detail.
+        `sink_extras` overrides on the sink_detail (e.g. add
+        path_conditions / path_profile)."""
+        cm = copy.deepcopy(MINIMAL_CONTEXT_MAP)
+        if sink_extras:
+            cm["sink_details"][0].update(sink_extras)
+        return cm
+
+    def _import_and_get_paths(self, tmp_path, sink_extras=None):
+        understand_dir = tmp_path / "understand"
+        validate_dir = tmp_path / "validate"
+        understand_dir.mkdir()
+        validate_dir.mkdir()
+        _write_json(
+            understand_dir / "context-map.json",
+            self._build_context_map(sink_extras),
+        )
+        load_understand_context(understand_dir, validate_dir)
+        paths_path = validate_dir / "attack-paths.json"
+        if not paths_path.exists():
+            return []
+        return json.loads(paths_path.read_text())
+
+    def test_no_conditions_no_attack_path(self, tmp_path):
+        """sink_detail without path_conditions → no attack-paths
+        entry. The existing priority_targets path covers this case
+        without polluting attack-paths.json."""
+        paths = self._import_and_get_paths(tmp_path)
+        # No path_conditions on the sink, no path-with-source=map
+        assert not any(p.get("source") == "understand:map" for p in paths)
+
+    def test_with_conditions_emits_attack_path(self, tmp_path):
+        """sink_detail with path_conditions → attack-paths entry
+        carrying the conditions + understand:map source label."""
+        paths = self._import_and_get_paths(tmp_path, sink_extras={
+            "path_conditions": ["strlen(argv[1]) >= 16"],
+            "path_profile": "uint64",
+        })
+        map_paths = [p for p in paths if p.get("source") == "understand:map"]
+        assert len(map_paths) == 1
+        entry = map_paths[0]
+        assert entry["path_conditions"] == ["strlen(argv[1]) >= 16"]
+        assert entry["path_profile"] == "uint64"
+
+    def test_malformed_conditions_dropped(self, tmp_path):
+        """Same validation as the trace path: malformed path_conditions
+        (not a list) drop the field rather than poison downstream."""
+        paths = self._import_and_get_paths(tmp_path, sink_extras={
+            "path_conditions": "not a list",
+        })
+        # Either no entry written (no valid conditions) or entry
+        # without path_conditions — both are acceptable, the key
+        # is malformed data doesn't propagate
+        for p in paths:
+            if p.get("source") == "understand:map":
+                assert "path_conditions" not in p
+
+
 class TestNormalizeContextMap:
     def _checklist(self, files):
         return {"target_path": "/repo", "files": files}
