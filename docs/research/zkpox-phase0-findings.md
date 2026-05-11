@@ -626,3 +626,191 @@ Default pytest run (no slow / no network) is 27 passes, 3 skips, ~0.6 s.
   schema picks a canonical home (1.7 candidate).
 - Bench prove-mode numbers for target 02 — same shape as target 01
   (the wrap step is target-agnostic), no new information to learn.
+
+---
+
+## Appendix: Phase 1.7 — third target, CVE-2017-9047
+
+Phase 1.6's case for the gadget abstraction rested on two
+hand-written textbook bugs (stack BOF, off-by-one). Phase 1.7 lands a
+slice of a *real, public, low-severity* CVE — libxml2's
+`xmlSnprintfElementContent` stale-`len` bug, fixed in GNOME/libxml2
+commit `932cc9896ab4` — to test whether the same redzone primitive
+catches a bug shape that wasn't designed around it.
+
+### Why CVE-2017-9047 specifically
+
+The proposal called for "memory-safety bugs in C/C++" as the MVP
+scope. CVE-2017-9047 is at the small end of that distribution:
+
+- **Real upstream fix.** Public patch, public reproducer in the CVE
+  details, fixed > 9 years before this work. No disclosure risk.
+- **Tiny.** The bug is one stale variable across one strcat; the
+  whole pre-patch branch is ~10 lines. The fix is ~7 lines.
+- **Low CVSS (5.9).** Moderate severity — exactly the "lesser
+  vulnerability" Phase 1.7 was scoped against. If the gadget catches
+  the small ones, the big ones are trivially covered.
+- **Bypass window doesn't fit a 16-byte buffer.** The bug only
+  triggers when `prefix_len > 8` (so `len`'s lag exceeds the
+  safety margin of 10 in the size check). With `size = 16` and the
+  bypass cap `prefix_len <= size - 10 = 6`, no overflow is reachable.
+  This was useful: it forced the dispatch to grow per-target buffer
+  geometry, which is a generally-useful capability for future targets
+  (heap-allocated structs, etc.).
+
+### The bug, restated
+
+`xmlSnprintfElementContent` enters with `int len = strlen(buf)`. The
+`XML_ELEMENT_CONTENT_ELEMENT` branch then, when `content->prefix !=
+NULL`, appends `prefix` and `":"` to `buf` — growing the buffer by
+`prefix_len + 1` bytes — but never updates `len`. The next check,
+"is there room for content->name?", uses the stale `len` and so
+under-counts the bytes already consumed by exactly `prefix_len + 1`.
+
+With caller-supplied empty `buf` (the common libxml2 caller pattern):
+
+| Constraint | Inequality |
+|---|---|
+| Bypass prefix size check | `prefix_len <= size - 10` |
+| Bypass name size check (stale `len`) | `name_len <= size - 10` |
+| Overflow actually occurs | `prefix_len + name_len + 1 > size - 1` |
+
+The third row simplifies to `prefix_len + name_len > size - 2`.
+Combining: overflow needs `prefix_len > 8` (so the lag exceeds the
+margin). Max bytes past buffer = `prefix_len - 8` for fixed
+`name_len = size - 10`.
+
+For target 03's `size = 32`: `prefix_len ∈ (8, 22]`, max overflow 14
+bytes. That fits inside the existing `MIN_TRAILING_REDZONE = 16`, so
+no further changes to the redzone primitive were needed.
+
+### Buffer geometry override
+
+`core/zkpox/guest/src/main.rs` previously hardcoded a single
+`BUF_SIZE = 16` constant shared by all targets. Phase 1.7 splits this
+into `BUF_SIZE_DEFAULT = 16` (targets 01, 02) and `BUF_SIZE_T03 = 32`,
+selected in the `dispatch()` match alongside the C victim. The
+`scan_around` primitive already accepts `buf_size` as a parameter —
+no changes there. Adding target #N with its own geometry is now: one
+const, one match arm.
+
+### Witness encoding
+
+```
+witness[0]                              prefix_len (u8)
+witness[1]                              name_len   (u8)
+witness[2 .. 2+prefix_len]              prefix bytes
+witness[2+prefix_len .. 2+prefix_len+name_len]  name bytes
+```
+
+The freestanding C extraction parses these inline; a witness shorter
+than `2 + prefix_len + name_len` is a no-op (returns without touching
+the buggy path). This mirrors what would happen if libxml2 received a
+corrupt content tree before reaching the bug — a clean "the gadget
+ran but found nothing" verdict rather than a guest-side crash.
+
+### Corpus shape
+
+15 witnesses total (9 benign, 6 crash, 0 fn). Benign cases cover:
+
+- empty witness (no-op early return)
+- no-prefix paths (bug inert without prefix)
+- both small (sum well under buffer)
+- prefix-only (`name_len = 0` skips the buggy strcat)
+- borderline (sum exactly fills buffer, no overflow)
+- bypass-fails paths (`prefix_len > 22` or `name_len > 22` → libxml2's
+  safe `" ..."` return)
+- **all-NUL prefix** (`prefix_byte = 0x00`) — soundness probe; see
+  below.
+
+Crash cases sweep `prefix_len ∈ {9, 10, 15, 22}` with `name_len = 22`
+(the maximum bypassable name length) to exercise overflow widths of
+1, 2, 7, and 14 bytes respectively, plus high-bit (`0xFF`) and
+zero-name-with-nonzero-prefix (`0x01` prefix, `0x00` name) fills for
+byte-pattern coverage.
+
+### Soundness probe: the bug requires a non-NUL prefix
+
+Surfaced during the Phase 1.7 regression sweep — the originally-named
+`03-allzero-crash.bin` (prefix and name both `0x00*N`) reported
+benign verdicts. Investigation: when the very first byte appended is
+`0x00`, the buffer's first NUL terminator lands at position 0, so the
+*next* `strcat`'s `strlen(buf)` returns 0 — not `prefix_len`. The
+stale-`len` lag the bug relies on never opens, and the final write
+stays inside the buffer.
+
+This is a real property of CVE-2017-9047 in production libxml2: a
+content tree whose `prefix` field is a zero-length-but-non-NULL
+string (or, equivalently, a string starting with `\0`) doesn't
+trigger the overflow regardless of how big `name` is. We rename the
+witness to `03-nulprefix-benign.bin` (documenting the soundness
+property) and add `03-nullname-crash.bin` (prefix `0x01*15`, name
+`0x00*22`) to preserve byte-pattern coverage with a non-NUL prefix.
+40 witnesses, 40 passes.
+
+### Why no `-fn` (canarymatch) witness for target 03
+
+The bug is strcat-style, so every overflow run ends with a NUL
+terminator (`'\0' == 0x00`). For an all-uniform-canary overflow we'd
+need every OOB byte to equal `0xA5`, and one of those bytes is
+unavoidably `0x00`. The set of "canarymatch false-negatives" is
+empty by construction — not a bug in the gadget, but a property of
+strcat-shape overflows.
+
+This is structurally different from targets 01 and 02, whose `buf[i]
+= input[i]` writes have no implicit terminator and can therefore be
+adversarially set to canary bytes. The generator's
+`_assert_not_canarymatch` has an explicit no-op arm for target 03
+that documents this so a future reader doesn't add a redundant
+check.
+
+### Schema impact
+
+None. Phase 1.6's 5-field public-values schema (`target_id`,
+`crash_only_crashed`, `oob_detected`, `oob_count`, `oob_first_offset`)
+covers target 03 unchanged. Side-by-side `oob_count` on the same
+strcat-shape overflow widths:
+
+| Witness                  | prefix | name | OOB written            | oob_count |
+|--------------------------|-------:|-----:|------------------------|----------:|
+| 03-overflow1-crash       |      9 |   22 | 1× NUL                 |         1 |
+| 03-overflow2-crash       |     10 |   22 | 1× name + 1× NUL       |         2 |
+| 03-deep-crash            |     15 |   22 | 6× name + 1× NUL       |         7 |
+| 03-max-crash             |     22 |   22 | 13× name + 1× NUL      |        14 |
+
+The `oob_count = prefix_len + name_len + 2 - size` identity holds
+across the corpus and is the cheapest invariant a future regression
+could assert. The harness doesn't currently assert it (only the
+boolean verdicts), but the field is on the bundle for downstream
+verifiers to use.
+
+### Regression / pytest coverage
+
+`run-tests.sh` now accepts the `03-` prefix in its target case arm;
+no other changes needed (the verdict suffix parsing was already
+target-agnostic, and the target-id round-trip check uses
+`$((10#$target))` which handles `03` → 3 correctly).
+
+`packages/zkpox/tests/test_regression.py` asserts `" t=3 "` is
+present in output and bumps the minimum pass count from 25 to 39
+(13 + 12 + 14 = 39, exactly the current corpus).
+
+### What 1.7 did NOT do
+
+- Bring in the full libxml2 source tree. The freestanding extraction
+  preserves the buggy logic byte-for-byte but skips the recursive
+  tree-walking and the SEQ/OR/PCDATA arms. A "vendored libxml2 slice"
+  variant is a 1.7.x candidate but not load-bearing for the gadget
+  story.
+- Add a fourth target. The gadget catches all three bug shapes with
+  zero per-target patches to the redzone primitive — that's the
+  property Phase 0 hypothesised and 1.7 finishes nailing down.
+- Bench prove-mode numbers for target 03. Same shape as 01/02 (the
+  wrap step is target-agnostic, the C side adds a few hundred cycles
+  for the inline strlen/strcat — within noise on the ~10k-cycle
+  total). Execute-mode numbers are exercised by the regression
+  harness.
+- Wire `target_id = 3` through to the bundle's `vulnerability`
+  substructure as a labelled CVE. Same deferral as Phase 1.6:
+  producers set `target.metadata.cve = "CVE-2017-9047"` for now;
+  the canonical schema home is a 1.8 candidate.

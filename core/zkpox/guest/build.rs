@@ -105,8 +105,9 @@ fn main() {
     // guest's `extern "C"` bindings resolve against whichever symbol the
     // dispatch picks per invocation.
     let targets: Vec<(&str, &str)> = vec![
-        ("01-stack-bof.c",  "01-stack-bof.o"),
-        ("02-off-by-one.c", "02-off-by-one.o"),
+        ("01-stack-bof.c",                "01-stack-bof.o"),
+        ("02-off-by-one.c",               "02-off-by-one.o"),
+        ("03-libxml2-cve-2017-9047.c",    "03-libxml2-cve-2017-9047.o"),
     ];
 
     let mut obj_paths = Vec::with_capacity(targets.len());
