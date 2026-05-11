@@ -157,15 +157,36 @@ def run_bump(
             now=now,
         )
         if apply and result.verdict == _VERDICT_CLEAN:
-            edit = RewriteEdit(
-                locator=cand.locator,
-                old_value=cand.current_version,
-                new_value=cand.target_version,
-                extra=cand.extra,
-            )
-            rewrites = rewrite(cand.file, [edit])
-            if rewrites:
-                result.rewrite_result = rewrites[0]
+            if cand.kind == "git_submodule":
+                # Submodule SHAs live in git's object database,
+                # not a text file we can rewrite. Apply path
+                # emits a manual-action instruction so operators
+                # know what to run.
+                sm_path = (cand.extra or {}).get("submodule_path", "?")
+                result.rewrite_result = RewriteResult(
+                    edit=RewriteEdit(
+                        locator=cand.locator,
+                        old_value=cand.current_version,
+                        new_value=cand.target_version,
+                        extra=cand.extra,
+                    ),
+                    applied=False,
+                    reason=(
+                        f"manual: run `git submodule update "
+                        f"--remote --merge -- {sm_path}` "
+                        f"then `git add {sm_path}`"
+                    ),
+                )
+            else:
+                edit = RewriteEdit(
+                    locator=cand.locator,
+                    old_value=cand.current_version,
+                    new_value=cand.target_version,
+                    extra=cand.extra,
+                )
+                rewrites = rewrite(cand.file, [edit])
+                if rewrites:
+                    result.rewrite_result = rewrites[0]
         results.append(result)
     return BumpReport(
         target=target,
@@ -301,6 +322,19 @@ def _enumerate_candidates(
     )
     candidates.extend(helm_candidates)
     skipped.extend(helm_skipped)
+
+    # Git submodule pins (``.gitmodules`` + recorded SHA in the
+    # parent repo's git index). The bumper identifies candidates
+    # but ``--apply`` doesn't rewrite — submodule SHAs live in
+    # git's object database, not a text file. Operators apply
+    # manually via ``git submodule update --remote``.
+    sub_candidates, sub_skipped = _enumerate_git_submodule_candidates(
+        target, http=http, cache=cache,
+        github_token=github_token,
+        sub_cache=latest_cache,
+    )
+    candidates.extend(sub_candidates)
+    skipped.extend(sub_skipped)
 
     # GitHub Actions ``uses:`` refs — bump candidates from
     # ``.github/workflows/*.yml`` files. Phase 3.b ships tag-
@@ -696,6 +730,119 @@ def _enumerate_helm_chart_candidates(
                 target_version=target_version,
                 upstream=None,
                 extra={"repository": repo},
+            ))
+    return candidates, skipped
+
+
+def _enumerate_git_submodule_candidates(
+    target: Path,
+    *,
+    http,
+    cache,
+    github_token: Optional[str],
+    sub_cache: dict,
+) -> Tuple[List[BumpCandidate], List[Tuple[str, Path, str]]]:
+    """Walk ``.gitmodules`` submodules via the existing parser.
+    For each GitHub-shaped submodule with a recorded current SHA,
+    look up upstream-latest tag and resolve to a target SHA.
+
+    Phase 3.e ships candidate emission only. The ``--apply`` path
+    refuses to rewrite (submodule SHAs are in git's object
+    database, not a text file); reviewers see the proposed SHA
+    and the manual ``git submodule update --remote --
+    <path>`` instruction.
+    """
+    from ..discovery import find_manifests
+    from ..parsers import parse_manifest
+    from core.upstream_latest.github_releases import (
+        NoStableVersionsFound, UpstreamLookupError,
+        latest_release, latest_tag, resolve_tag_to_sha,
+    )
+
+    candidates: List[BumpCandidate] = []
+    skipped: List[Tuple[str, Path, str]] = []
+    try:
+        manifests = find_manifests(target)
+    except Exception:                       # noqa: BLE001
+        return candidates, skipped
+    for manifest in manifests:
+        if manifest.path.name != ".gitmodules":
+            continue
+        try:
+            deps = parse_manifest(manifest)
+        except Exception:                  # noqa: BLE001
+            continue
+        for dep in deps:
+            # We only handle GitHub-hosted submodules in Phase 3.e
+            # — other git hosts need different upstream-latest
+            # mechanisms (git ls-remote against arbitrary URLs).
+            if dep.ecosystem != "GitHub":
+                continue
+            current_sha = dep.version  # may be None (unresolved)
+            if not current_sha or len(current_sha) != 40:
+                # Unresolved or non-SHA pin — can't propose a bump
+                # without a current anchor.
+                continue
+            repo = dep.name      # ``owner/repo`` for GitHub URLs
+            cache_key = ("gha_uses", repo)
+            if cache_key in sub_cache:
+                target_tag = sub_cache[cache_key]
+            else:
+                try:
+                    target_tag = latest_release(
+                        repo, http=http, cache=cache,
+                        github_token=github_token,
+                    )
+                except UpstreamLookupError:
+                    try:
+                        target_tag = latest_tag(
+                            repo, http=http, cache=cache,
+                            github_token=github_token,
+                        )
+                    except (UpstreamLookupError, NoStableVersionsFound) as e:
+                        skipped.append((
+                            repo, manifest.path,
+                            f"submodule upstream lookup failed: {e}",
+                        ))
+                        sub_cache[cache_key] = None
+                        continue
+                sub_cache[cache_key] = target_tag
+            if not target_tag:
+                continue
+            # Resolve target tag → SHA. Cache separately from the
+            # tag-lookup (different OSV/GitHub endpoints).
+            sha_cache_key = ("tag_to_sha", repo, target_tag)
+            if sha_cache_key in sub_cache:
+                target_sha = sub_cache[sha_cache_key]
+            else:
+                try:
+                    target_sha = resolve_tag_to_sha(
+                        repo, target_tag, http=http, cache=cache,
+                        github_token=github_token,
+                    )
+                except UpstreamLookupError as e:
+                    skipped.append((
+                        repo, manifest.path,
+                        f"submodule tag→SHA resolution failed: {e}",
+                    ))
+                    sub_cache[sha_cache_key] = None
+                    continue
+                sub_cache[sha_cache_key] = target_sha
+            if not target_sha or target_sha == current_sha:
+                continue
+            sm_path = (dep.source_extra or {}).get("path", "")
+            candidates.append(BumpCandidate(
+                kind="git_submodule",
+                locator=repo,
+                file=manifest.path,
+                current_version=current_sha,
+                target_version=target_tag,    # human-readable tag
+                upstream=None,
+                extra={
+                    "old_sha": current_sha,
+                    "new_sha": target_sha,
+                    "submodule_path": sm_path,
+                },
             ))
     return candidates, skipped
 
