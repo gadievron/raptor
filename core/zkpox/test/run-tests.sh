@@ -54,10 +54,10 @@ shopt -s nullglob
 for w in witnesses/*.bin; do
     base=$(basename "$w" .bin)
     # Filename schema: <NN>-<descriptor>-<verdict>.bin where NN is the
-    # target id ("01" or "02"); see witnesses/generate.py.
+    # target id ("01", "02", or "03"); see witnesses/generate.py.
     target="${base:0:2}"
     case "$target" in
-        01|02) ;;
+        01|02|03) ;;
         *) echo "skip: $base (no target prefix)"; continue ;;
     esac
     case "$base" in

@@ -51,6 +51,11 @@ enum TargetSel {
     #[clap(name = "02")]
     #[serde(rename = "02")]
     T02,
+    /// Target 03 — CVE-2017-9047 (libxml2 xmlSnprintfElementContent
+    /// stale-len; freestanding extraction). Uses a 32-byte buffer.
+    #[clap(name = "03")]
+    #[serde(rename = "03")]
+    T03,
 }
 
 impl TargetSel {
@@ -58,6 +63,7 @@ impl TargetSel {
         match self {
             TargetSel::T01 => 0x01,
             TargetSel::T02 => 0x02,
+            TargetSel::T03 => 0x03,
         }
     }
 }
@@ -168,7 +174,7 @@ fn main() -> Result<()> {
     let witness_bytes = witness.len() as u64;
 
     // Prepend the target-id byte so the guest's dispatch picks the
-    // right C victim binding. Phase 1.6 schema: [target_id: u8] || witness.
+    // right C victim binding. Phase 1.6+ schema: [target_id: u8] || witness.
     let mut framed = Vec::with_capacity(witness.len() + 1);
     framed.push(args.target.id_byte());
     framed.extend_from_slice(&witness);

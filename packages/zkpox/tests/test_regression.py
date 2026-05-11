@@ -55,13 +55,14 @@ def test_regression_full_corpus():
         f"stderr (tail):\n{_tail(result.stderr, 20)}"
     )
 
-    # Cheap structural sanity: both target families must appear and
-    # both must report PASSes. Otherwise we may have silently regressed
+    # Cheap structural sanity: all target families must appear and
+    # each must report PASSes. Otherwise we may have silently regressed
     # to a single-target run.
     assert " t=1 " in result.stdout, "no target-01 verdicts in output"
     assert " t=2 " in result.stdout, "no target-02 verdicts in output"
+    assert " t=3 " in result.stdout, "no target-03 verdicts in output"
 
-    # And the summary line must report ≥ 25 passes (current corpus
+    # And the summary line must report ≥ 40 passes (current corpus
     # size; tightens automatically if the corpus grows).
     pass_line = next(
         (l for l in result.stdout.splitlines() if l.startswith("passed:")),
@@ -69,7 +70,7 @@ def test_regression_full_corpus():
     )
     assert pass_line, f"no `passed:` summary line: {result.stdout[-400:]!r}"
     n = int(pass_line.split(":", 1)[1].strip())
-    assert n >= 25, f"only {n} passes (expected ≥25 for current corpus)"
+    assert n >= 40, f"only {n} passes (expected ≥40 for current corpus)"
 
 
 def _tail(text: str, n: int) -> str:
