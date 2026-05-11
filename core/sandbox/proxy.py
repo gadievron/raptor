@@ -804,9 +804,47 @@ class EgressProxy:
                 if t is not None and not t.done():
                     t.cancel()
 
-    def stop(self) -> None:
-        """Close the server and stop the event loop. Safe to call twice."""
+    def stop(self, *, drain_timeout: float = 5.0) -> None:
+        """Close the server and stop the event loop. Safe to call twice.
+
+        Pre-fix `stop()` called `self._loop.stop` immediately, which
+        terminated in-flight CONNECT tunnels mid-stream. Tunnels that
+        had completed their TLS handshake but not yet finished proxying
+        bytes were dropped — clients saw connection-reset mid-request,
+        and the proxy's audit-log entries for those tunnels were
+        truncated.
+
+        With `drain_timeout > 0` we first stop ACCEPTING new connections
+        (close the server socket via `_server.close()`), then wait up to
+        `drain_timeout` seconds for existing tunnels to complete
+        naturally before stopping the event loop. New connections that
+        arrive during the drain window get connection-refused at the
+        OS level, which is the correct behaviour for a graceful
+        shutdown.
+
+        Set `drain_timeout=0` to preserve the legacy abrupt-stop
+        behaviour (callers that need synchronous teardown for tests).
+        """
         if self._loop is None:
+            return
+        if drain_timeout > 0 and self._server is not None and self._loop.is_running():
+            async def _graceful():
+                try:
+                    self._server.close()
+                    await asyncio.wait_for(
+                        self._server.wait_closed(),
+                        timeout=drain_timeout,
+                    )
+                except (asyncio.TimeoutError, RuntimeError):
+                    pass
+                self._loop.stop()
+            try:
+                asyncio.run_coroutine_threadsafe(_graceful(), self._loop)
+            except RuntimeError:
+                # Loop stopped between is_running() and submit. Close
+                # the unawaited coroutine to suppress the
+                # "never awaited" warning.
+                _graceful().close()
             return
         try:
             self._loop.call_soon_threadsafe(self._loop.stop)
