@@ -35,7 +35,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -147,10 +146,20 @@ def _parse_rekor_response(entry_response: dict) -> Timestamp:
     (uuid, body), = entry_response.items()
     verification = body.get("verification") or {}
     inc = verification.get("inclusionProof") or {}
+    # `integratedTime` is the canonical "Rekor recorded this hash at" time.
+    # We MUST NOT substitute a local-clock fallback — doing so would make
+    # the bundle's timestamp.integrated_time disagree with what's actually
+    # in Rekor's log, breaking the anchor verification path. Raise instead.
+    if "integratedTime" not in body:
+        raise AnchorError(
+            f"Rekor response for entry {uuid} omits integratedTime; "
+            "cannot anchor without it. Body keys: "
+            f"{sorted(body.keys())}"
+        )
     return Timestamp(
         rekor_log_index=int(body["logIndex"]),
         rekor_log_id=str(body["logID"]),
-        integrated_time=int(body.get("integratedTime") or time.time()),
+        integrated_time=int(body["integratedTime"]),
         entry_uuid=uuid,
         inclusion_proof_root_hash=str(inc.get("rootHash", "")),
         inclusion_proof_tree_size=int(inc.get("treeSize", 0)),

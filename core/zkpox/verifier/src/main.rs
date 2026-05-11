@@ -29,8 +29,19 @@ use std::path::PathBuf;
 
 const SUPPORTED_VERSION: &str = "zkpox-1.0";
 
+/// The current envelope scheme; bundles whose `vendor_envelope.scheme`
+/// starts with anything else MUST be rejected by a v1 verifier. Without
+/// this check a future v2 envelope could be replayed under v1 framing
+/// (the AAD mismatch would surface as an AES-GCM authentication failure
+/// but only on decrypt — too late for the structural pass).
+const SUPPORTED_ENVELOPE_PREFIX: &str = "zkpox-aes256gcm+age+tlock-drand-quicknet/v1";
+/// "No envelope" sentinel — Phase 1.5 `cmd_prove` writes this when the
+/// caller omits `--vendor-pubkey`. Structurally distinct from a real v1
+/// envelope and from a future v2.
+const SENTINEL_ENVELOPE_NONE: &str = "zkpox-none/v1";
+
 #[derive(Parser, Debug)]
-#[command(about = "Verify a zkpox CBOR disclosure bundle (structural; STARK verification is Phase 1.3.x)")]
+#[command(about = "Verify a zkpox CBOR disclosure bundle (structural; STARK verification is Phase 1.5.x)")]
 struct Args {
     /// Path to the CBOR bundle.
     bundle: PathBuf,
@@ -38,6 +49,14 @@ struct Args {
     /// Print JSON output (machine-readable) instead of human-readable.
     #[arg(long)]
     json: bool,
+
+    /// Exit non-zero on any DEFERRED check (STARK, Rekor inclusion).
+    /// Default off in Phase 1.5; becomes the default once 1.5.x lands
+    /// the deferred checks. Use this in CI / automated disclosure
+    /// pipelines so a structural-only pass is not silently treated as
+    /// "the bundle is verified."
+    #[arg(long)]
+    strict: bool,
 }
 
 #[derive(Serialize)]
@@ -48,7 +67,7 @@ struct Summary {
     target_url: Option<String>,
     vulnerability_class: String,
     gadget_id: String,
-    gadget_hash: String,
+    gadget_id_hash: String,
     proof_system: String,
     proof_bytes_len: usize,
     verifier_key_hash: String,
@@ -96,10 +115,44 @@ fn main() -> Result<()> {
         println!("{out}");
     } else {
         print_human(&summary);
+        if !args.strict {
+            // Loud banner so a casual reader doesn't mistake exit 0
+            // for "the bundle is verified." Suppressed in --json so
+            // automated consumers parse the verdict fields instead.
+            eprintln!();
+            eprintln!(
+                "  MODE: structural-only — STARK proof and Rekor inclusion checks are DEFERRED."
+            );
+            eprintln!(
+                "        Pass --strict to fail on any deferred check."
+            );
+        }
     }
 
     if !summary.structural_checks_passed {
         std::process::exit(1);
+    }
+    // --strict treats any DEFERRED check as a hard failure. Phase 1.5
+    // ships with both STARK and Rekor inclusion deferred; in 1.5.x the
+    // strict path narrows as each lands.
+    if args.strict {
+        let stark_done = !summary.stark_verification.starts_with("DEFERRED");
+        let rekor_done = summary.timestamp.is_none()
+            || !summary.rekor_inclusion_verification.starts_with("DEFERRED");
+        if !stark_done || !rekor_done {
+            eprintln!();
+            eprintln!("FAIL (--strict): deferred checks are present:");
+            if !stark_done {
+                eprintln!("  - stark_verification: {}", summary.stark_verification);
+            }
+            if !rekor_done {
+                eprintln!(
+                    "  - rekor_inclusion_verification: {}",
+                    summary.rekor_inclusion_verification,
+                );
+            }
+            std::process::exit(2);
+        }
     }
     Ok(())
 }
@@ -133,6 +186,20 @@ fn inspect(map: &[(ciborium::Value, ciborium::Value)]) -> Result<Summary> {
     if vendor_fingerprint != format!("sha256:{expected_fp}") {
         eprintln!(
             "FAIL: vendor_pubkey_fingerprint {vendor_fingerprint:?} != sha256(vendor_pubkey) (computed sha256:{expected_fp})"
+        );
+        checks_passed = false;
+    }
+
+    // Version-binding check: envelope scheme must match a scheme this
+    // verifier understands for the current bundle version. Otherwise a
+    // future v2 envelope could be replayed under v1 framing — the AAD
+    // mismatch would only surface on the decrypt path, far too late for
+    // the structural pass to catch.
+    let envelope_ok = envelope_scheme.starts_with(SUPPORTED_ENVELOPE_PREFIX)
+        || envelope_scheme == SENTINEL_ENVELOPE_NONE;
+    if !envelope_ok {
+        eprintln!(
+            "FAIL: vendor_envelope.scheme {envelope_scheme:?} not supported by this verifier (expected prefix {SUPPORTED_ENVELOPE_PREFIX:?} or sentinel {SENTINEL_ENVELOPE_NONE:?})"
         );
         checks_passed = false;
     }
@@ -171,7 +238,7 @@ fn inspect(map: &[(ciborium::Value, ciborium::Value)]) -> Result<Summary> {
         target_url: optional_string_at(target, "url"),
         vulnerability_class: string_at(vuln, "class")?,
         gadget_id: string_at(vuln, "gadget_id")?,
-        gadget_hash: string_at(vuln, "gadget_hash")?,
+        gadget_id_hash: string_at(vuln, "gadget_id_hash")?,
         proof_system: string_at(proof, "system")?,
         proof_bytes_len: proof_bytes.len(),
         verifier_key_hash,
@@ -194,7 +261,7 @@ fn print_human(s: &Summary) {
         println!("                 {url}");
     }
     println!("  vulnerability: {} :: {}", s.vulnerability_class, s.gadget_id);
-    println!("                 gadget {}", s.gadget_hash);
+    println!("                 gadget_id_hash {}", s.gadget_id_hash);
     println!("  proof:         {} ({} bytes)", s.proof_system, s.proof_bytes_len);
     println!("                 vk    {}", s.verifier_key_hash);
     println!("  envelope:      {}", s.envelope_scheme);

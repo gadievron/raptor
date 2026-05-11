@@ -50,7 +50,11 @@ class Target:
 class Vulnerability:
     cls: str            # "memory-safety" | "cfi" | "info-leak" | "evm-*"
     gadget_id: str      # e.g. "memory-safety::oob-write@1.0.0"
-    gadget_hash: str    # "sha256:HEX" — commits to the gadget code
+    gadget_id_hash: str # "sha256:HEX" — commits to the gadget IDENTIFIER
+                        # string (not yet the source). Phase 1.5.x will
+                        # add a separate `gadget_code_hash` that commits
+                        # to the gadget implementation; see
+                        # docs/zkpox-scope.md.
     leaked_fields: list[str] = field(default_factory=list)
 
 
@@ -236,7 +240,7 @@ def _to_dict(bundle: Bundle) -> dict[str, Any]:
         "vulnerability": {
             "class": bundle.vulnerability.cls,
             "gadget_id": bundle.vulnerability.gadget_id,
-            "gadget_hash": bundle.vulnerability.gadget_hash,
+            "gadget_id_hash": bundle.vulnerability.gadget_id_hash,
             "leaked_fields": list(bundle.vulnerability.leaked_fields),
         },
         "proof": {
@@ -300,7 +304,7 @@ def _from_dict(d: dict[str, Any]) -> Bundle:
         vulnerability=Vulnerability(
             cls=vuln_d["class"],
             gadget_id=vuln_d["gadget_id"],
-            gadget_hash=vuln_d["gadget_hash"],
+            gadget_id_hash=vuln_d["gadget_id_hash"],
             leaked_fields=list(vuln_d.get("leaked_fields", [])),
         ),
         proof=Proof(

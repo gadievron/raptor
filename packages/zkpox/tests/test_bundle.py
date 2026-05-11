@@ -62,7 +62,7 @@ def _fresh_bundle(*, with_researcher: bool = False) -> Bundle:
         vulnerability=Vulnerability(
             cls="memory-safety",
             gadget_id="memory-safety::oob-write@0.1.0",
-            gadget_hash=sha256_bytes(b"gadget-source"),
+            gadget_id_hash=sha256_bytes(b"gadget-source"),
             leaked_fields=["function_name"],
         ),
         proof=Proof(
