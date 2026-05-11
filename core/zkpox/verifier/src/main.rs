@@ -54,8 +54,8 @@ struct Summary {
     verifier_key_hash: String,
     envelope_scheme: String,
     envelope_aes_blob_len: usize,
-    envelope_ct_K_age_len: usize,
-    envelope_ct_K_tlock_len: usize,
+    envelope_ct_k_age_len: usize,
+    envelope_ct_k_tlock_len: usize,
     drand_round_min: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     timestamp: Option<TimestampSummary>,
@@ -177,8 +177,8 @@ fn inspect(map: &[(ciborium::Value, ciborium::Value)]) -> Result<Summary> {
         verifier_key_hash,
         envelope_scheme,
         envelope_aes_blob_len: aes_blob.len(),
-        envelope_ct_K_age_len: ct_age.len(),
-        envelope_ct_K_tlock_len: ct_tlock.len(),
+        envelope_ct_k_age_len: ct_age.len(),
+        envelope_ct_k_tlock_len: ct_tlock.len(),
         drand_round_min: optional_int_at(envelope, "drand_round_min"),
         timestamp,
         structural_checks_passed: checks_passed,
@@ -201,8 +201,8 @@ fn print_human(s: &Summary) {
     println!(
         "                 aes={}B  age={}B  tlock={}B  round_min={:?}",
         s.envelope_aes_blob_len,
-        s.envelope_ct_K_age_len,
-        s.envelope_ct_K_tlock_len,
+        s.envelope_ct_k_age_len,
+        s.envelope_ct_k_tlock_len,
         s.drand_round_min,
     );
     println!("  STARK:         {}", s.stark_verification);
