@@ -102,8 +102,32 @@ class Bundle:
     harness: HarnessRef
     vendor_envelope: VendorEnvelope
     researcher: Researcher | None = None
-    # Phase 1.4 fills `timestamp`; absent in 1.3.
-    timestamp: dict[str, Any] | None = None
+    timestamp: "Timestamp | None" = None
+
+
+@dataclass(frozen=True)
+class Timestamp:
+    """Sigstore Rekor anchor binding the bundle hash to a moment in time.
+
+    The bundle hash this binds to is `bundle_hash_pre_timestamp(bundle)` —
+    a canonical-CBOR hash of the bundle with `timestamp` omitted. That
+    lets the Timestamp be added *after* signing/serialising the rest of
+    the bundle without invalidating the binding.
+
+    Field semantics mirror Rekor's response shape (the `verification`
+    block of POST /api/v1/log/entries). `inclusion_proof_hashes` is the
+    Merkle path from our entry up to the tree root; combined with
+    `inclusion_proof_root_hash` + `inclusion_proof_tree_size` it lets a
+    verifier reconstruct and check the path.
+    """
+
+    rekor_log_index: int
+    rekor_log_id: str            # sha256 hex of Rekor's log public key
+    integrated_time: int          # Unix seconds the entry was integrated
+    entry_uuid: str               # Rekor's per-entry UUID
+    inclusion_proof_root_hash: str  # hex of the tree root at integration
+    inclusion_proof_tree_size: int
+    inclusion_proof_hashes: list[str]  # Merkle path, hex per node
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +186,45 @@ def from_cbor(blob: bytes) -> Bundle:
     return _from_dict(cbor2.loads(blob))
 
 
+def bundle_hash_pre_timestamp(bundle: Bundle) -> bytes:
+    """Canonical-CBOR sha256 of the bundle with timestamp set to None.
+
+    This is the hash a Sigstore Rekor anchor binds: anchoring happens
+    AFTER everything else but BEFORE the timestamp field is filled, so
+    we compute the hash with timestamp excluded. The producer
+    (anchor.py) signs this hash; the verifier checks
+    sha256(canonical_cbor(bundle with timestamp=None)) matches what
+    Rekor recorded.
+
+    Uses cbor2's `canonical=True` encoder for deterministic
+    serialisation: map keys sorted by length-then-bytewise per
+    RFC 8949 §4.2.1.
+    """
+    pre = bundle if bundle.timestamp is None else _replace_timestamp(bundle, None)
+    return hashlib.sha256(cbor2.dumps(_to_dict(pre), canonical=True)).digest()
+
+
+def _replace_timestamp(bundle: Bundle, ts: "Timestamp | None") -> Bundle:
+    """Functional update — `dataclasses.replace` would also work, but
+    Bundle is frozen so we go the long way for clarity."""
+    return Bundle(
+        version=bundle.version,
+        target=bundle.target,
+        vulnerability=bundle.vulnerability,
+        proof=bundle.proof,
+        harness=bundle.harness,
+        vendor_envelope=bundle.vendor_envelope,
+        researcher=bundle.researcher,
+        timestamp=ts,
+    )
+
+
+def with_timestamp(bundle: Bundle, ts: "Timestamp") -> Bundle:
+    """Return a copy of `bundle` with its timestamp field set. Useful
+    after anchor.anchor_bundle(...) returns a Timestamp."""
+    return _replace_timestamp(bundle, ts)
+
+
 def _to_dict(bundle: Bundle) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "version": bundle.version,
@@ -205,7 +268,16 @@ def _to_dict(bundle: Bundle) -> dict[str, Any]:
             "contact": bundle.researcher.contact,
         }
     if bundle.timestamp is not None:
-        payload["timestamp"] = bundle.timestamp
+        ts = bundle.timestamp
+        payload["timestamp"] = {
+            "rekor_log_index": ts.rekor_log_index,
+            "rekor_log_id": ts.rekor_log_id,
+            "integrated_time": ts.integrated_time,
+            "entry_uuid": ts.entry_uuid,
+            "inclusion_proof_root_hash": ts.inclusion_proof_root_hash,
+            "inclusion_proof_tree_size": ts.inclusion_proof_tree_size,
+            "inclusion_proof_hashes": list(ts.inclusion_proof_hashes),
+        }
     return payload
 
 
@@ -259,5 +331,17 @@ def _from_dict(d: dict[str, Any]) -> Bundle:
                 contact=researcher_d.get("contact"),
             )
         ),
-        timestamp=timestamp_d,
+        timestamp=(
+            None
+            if timestamp_d is None
+            else Timestamp(
+                rekor_log_index=int(timestamp_d["rekor_log_index"]),
+                rekor_log_id=timestamp_d["rekor_log_id"],
+                integrated_time=int(timestamp_d["integrated_time"]),
+                entry_uuid=timestamp_d["entry_uuid"],
+                inclusion_proof_root_hash=timestamp_d["inclusion_proof_root_hash"],
+                inclusion_proof_tree_size=int(timestamp_d["inclusion_proof_tree_size"]),
+                inclusion_proof_hashes=list(timestamp_d.get("inclusion_proof_hashes", [])),
+            )
+        ),
     )

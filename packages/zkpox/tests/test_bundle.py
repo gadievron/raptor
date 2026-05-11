@@ -22,13 +22,16 @@ from packages.zkpox import (
     Proof,
     Researcher,
     Target,
+    Timestamp,
     VendorEnvelope,
     Vulnerability,
+    bundle_hash_pre_timestamp,
     from_cbor,
     sha256_bytes,
     sha256_file,
     to_cbor,
     vendor_envelope_from,
+    with_timestamp,
 )
 
 
@@ -143,10 +146,93 @@ def test_sha256_file_matches_known_value(tmp_path):
 
 
 def test_timestamp_field_omitted_when_none():
-    """Phase 1.4 will fill `timestamp`; Phase 1.3 must NOT emit a
-    placeholder (would fingerprint our bundles as pre-1.4 vs post-1.4
-    in unhelpful ways). Field is structurally absent."""
+    """Phase 1.3 must NOT emit a placeholder for an unset timestamp —
+    that would fingerprint pre-1.4 bundles. Field is structurally absent."""
     bundle = _fresh_bundle()
     blob = to_cbor(bundle)
     decoded = cbor2.loads(blob)
     assert "timestamp" not in decoded
+
+
+# ---------------------------------------------------------------------------
+# Phase 1.4 — Timestamp field round-trip + pre-anchor hash stability
+# ---------------------------------------------------------------------------
+
+def _fresh_timestamp() -> Timestamp:
+    return Timestamp(
+        rekor_log_index=123_456_789,
+        rekor_log_id="sha256:" + "ab" * 32,
+        integrated_time=1_715_000_000,
+        entry_uuid="ffffffff-aaaa-bbbb-cccc-deadbeefcafe",
+        inclusion_proof_root_hash="cd" * 32,
+        inclusion_proof_tree_size=987_654_321,
+        inclusion_proof_hashes=["ef" * 32, "12" * 32, "34" * 32],
+    )
+
+
+def test_timestamp_round_trip():
+    bundle = with_timestamp(_fresh_bundle(), _fresh_timestamp())
+    parsed = from_cbor(to_cbor(bundle))
+    assert parsed.timestamp is not None
+    assert parsed.timestamp == bundle.timestamp
+
+
+def test_timestamp_top_level_key_present_when_set():
+    bundle = with_timestamp(_fresh_bundle(), _fresh_timestamp())
+    decoded = cbor2.loads(to_cbor(bundle))
+    assert "timestamp" in decoded
+    ts = decoded["timestamp"]
+    for field in (
+        "rekor_log_index", "rekor_log_id", "integrated_time", "entry_uuid",
+        "inclusion_proof_root_hash", "inclusion_proof_tree_size",
+        "inclusion_proof_hashes",
+    ):
+        assert field in ts, f"missing timestamp field: {field}"
+
+
+def test_pre_anchor_hash_invariant_under_timestamp_mutation():
+    """The whole point of bundle_hash_pre_timestamp: adding (or rotating)
+    the timestamp must NOT change the hash that the Rekor anchor binds
+    to. Otherwise we couldn't add a timestamp post-hoc."""
+    bundle = _fresh_bundle()
+    h0 = bundle_hash_pre_timestamp(bundle)
+
+    h1 = bundle_hash_pre_timestamp(with_timestamp(bundle, _fresh_timestamp()))
+    assert h1 == h0
+
+    h2 = bundle_hash_pre_timestamp(
+        with_timestamp(
+            bundle,
+            Timestamp(
+                rekor_log_index=999_999_999,
+                rekor_log_id="sha256:" + "ff" * 32,
+                integrated_time=0,
+                entry_uuid="deadbeef-dead-beef-dead-deadbeefdead",
+                inclusion_proof_root_hash="00" * 32,
+                inclusion_proof_tree_size=0,
+                inclusion_proof_hashes=[],
+            ),
+        )
+    )
+    assert h2 == h0
+
+
+def test_pre_anchor_hash_changes_when_proof_changes():
+    """Inverse invariant: the pre-anchor hash MUST track every other
+    field. If you can mutate proof bytes without the hash changing,
+    Rekor's anchor doesn't bind to what you claim it does."""
+    a = _fresh_bundle()
+    b = Bundle(
+        version=a.version,
+        target=a.target,
+        vulnerability=a.vulnerability,
+        proof=Proof(
+            system=a.proof.system,
+            bytes=a.proof.bytes + b"\x00",
+            verifier_key_hash=a.proof.verifier_key_hash,
+        ),
+        harness=a.harness,
+        vendor_envelope=a.vendor_envelope,
+        researcher=a.researcher,
+    )
+    assert bundle_hash_pre_timestamp(a) != bundle_hash_pre_timestamp(b)

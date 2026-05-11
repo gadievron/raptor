@@ -57,8 +57,22 @@ struct Summary {
     envelope_ct_K_age_len: usize,
     envelope_ct_K_tlock_len: usize,
     drand_round_min: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timestamp: Option<TimestampSummary>,
     structural_checks_passed: bool,
     stark_verification: &'static str,
+    rekor_inclusion_verification: &'static str,
+}
+
+#[derive(Serialize)]
+struct TimestampSummary {
+    rekor_log_index: i64,
+    rekor_log_id: String,
+    integrated_time: i64,
+    entry_uuid: String,
+    inclusion_proof_root_hash: String,
+    inclusion_proof_tree_size: i64,
+    inclusion_proof_path_len: usize,
 }
 
 fn main() -> Result<()> {
@@ -134,6 +148,22 @@ fn inspect(map: &[(ciborium::Value, ciborium::Value)]) -> Result<Summary> {
         checks_passed = false;
     }
 
+    // Optional Phase 1.4 timestamp field. Structural read only; full
+    // Merkle inclusion verification + Rekor STH validation is 1.4.x.
+    let timestamp = optional_submap(map, "timestamp")
+        .map(|ts_map| -> Result<TimestampSummary> {
+            Ok(TimestampSummary {
+                rekor_log_index: required_int_at(ts_map, "rekor_log_index")?,
+                rekor_log_id: string_at(ts_map, "rekor_log_id")?,
+                integrated_time: required_int_at(ts_map, "integrated_time")?,
+                entry_uuid: string_at(ts_map, "entry_uuid")?,
+                inclusion_proof_root_hash: string_at(ts_map, "inclusion_proof_root_hash")?,
+                inclusion_proof_tree_size: required_int_at(ts_map, "inclusion_proof_tree_size")?,
+                inclusion_proof_path_len: count_strings_at(ts_map, "inclusion_proof_hashes"),
+            })
+        })
+        .transpose()?;
+
     Ok(Summary {
         version,
         target_kind: string_at(target, "kind")?,
@@ -150,8 +180,10 @@ fn inspect(map: &[(ciborium::Value, ciborium::Value)]) -> Result<Summary> {
         envelope_ct_K_age_len: ct_age.len(),
         envelope_ct_K_tlock_len: ct_tlock.len(),
         drand_round_min: optional_int_at(envelope, "drand_round_min"),
+        timestamp,
         structural_checks_passed: checks_passed,
         stark_verification: "DEFERRED — Phase 1.3.x / 1.5 wires sp1-sdk into this verifier",
+        rekor_inclusion_verification: "DEFERRED — Phase 1.4.x checks Merkle path + STH",
     })
 }
 
@@ -174,6 +206,19 @@ fn print_human(s: &Summary) {
         s.drand_round_min,
     );
     println!("  STARK:         {}", s.stark_verification);
+    if let Some(ts) = &s.timestamp {
+        println!("  rekor anchor:  log_index={} log_id={}", ts.rekor_log_index, ts.rekor_log_id);
+        println!(
+            "                 entry={}  integrated={}  tree_size={}  path_len={}",
+            ts.entry_uuid,
+            ts.integrated_time,
+            ts.inclusion_proof_tree_size,
+            ts.inclusion_proof_path_len,
+        );
+        println!("  rekor incl.:   {}", s.rekor_inclusion_verification);
+    } else {
+        println!("  rekor anchor:  (none)");
+    }
 }
 
 // ---------- ciborium accessor helpers ---------- //
@@ -232,6 +277,50 @@ fn bytes_at<'a>(map: &'a [(ciborium::Value, ciborium::Value)], key: &str) -> Res
         ciborium::Value::Bytes(b) => Ok(b.as_slice()),
         _ => Err(anyhow!("field {key:?} is not bytes")),
     }
+}
+
+fn optional_submap<'a>(
+    map: &'a [(ciborium::Value, ciborium::Value)],
+    key: &str,
+) -> Option<&'a [(ciborium::Value, ciborium::Value)]> {
+    for (k, v) in map {
+        if let ciborium::Value::Text(t) = k {
+            if t == key {
+                if let ciborium::Value::Map(m) = v {
+                    return Some(m.as_slice());
+                }
+                return None;
+            }
+        }
+    }
+    None
+}
+
+fn required_int_at(
+    map: &[(ciborium::Value, ciborium::Value)],
+    key: &str,
+) -> Result<i64> {
+    match lookup(map, key)? {
+        ciborium::Value::Integer(i) => i64::try_from(*i)
+            .map_err(|_| anyhow!("field {key:?} integer does not fit i64")),
+        _ => Err(anyhow!("field {key:?} is not an integer")),
+    }
+}
+
+fn count_strings_at(
+    map: &[(ciborium::Value, ciborium::Value)],
+    key: &str,
+) -> usize {
+    for (k, v) in map {
+        if let ciborium::Value::Text(t) = k {
+            if t == key {
+                if let ciborium::Value::Array(items) = v {
+                    return items.len();
+                }
+            }
+        }
+    }
+    0
 }
 
 fn lookup<'a>(
