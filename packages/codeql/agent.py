@@ -26,6 +26,7 @@ from core.json import save_json
 from core.config import RaptorConfig
 from core.logging import get_logger
 from core.run.safe_io import safe_run_mkdir
+from core.run.output import unique_run_suffix as _unique_run_suffix
 from packages.codeql.language_detector import LanguageDetector, LanguageInfo
 from packages.codeql.build_detector import BuildDetector, BuildSystem
 from packages.codeql.database_manager import DatabaseManager, DatabaseResult
@@ -174,9 +175,15 @@ class CodeQLAgent:
             self.out_dir = Path(out_dir)
         else:
             # Collision-prevention via unique_run_suffix — see core/run/output.py.
-            from core.run.output import unique_run_suffix
+            # Pre-fix the import was lazy (inside this branch), so a
+            # missing-symbol failure (renamed function, removed module,
+            # broken stdlib stub) didn't surface until SOMEONE actually
+            # constructed CodeQLAgent without `out_dir` — could be
+            # weeks after the change shipped. Hoisted to module-top
+            # so the ImportError fires at agent.py import time, where
+            # operators expect import-time failures to manifest.
             repo_name = self.repo_path.name
-            self.out_dir = RaptorConfig.BASE_OUT_DIR / f"codeql_{repo_name}_{unique_run_suffix('_')}"
+            self.out_dir = RaptorConfig.BASE_OUT_DIR / f"codeql_{repo_name}_{_unique_run_suffix('_')}"
 
         self.out_dir.parent.mkdir(parents=True, exist_ok=True)
         safe_run_mkdir(self.out_dir)
@@ -807,11 +814,10 @@ Examples:
         if args.out:
             _precomputed_out_dir = Path(args.out)
         else:
-            from core.run.output import unique_run_suffix
             _repo_name = Path(args.repo).resolve().name
             _precomputed_out_dir = (
                 RaptorConfig.BASE_OUT_DIR
-                / f"codeql_{_repo_name}_{unique_run_suffix('_')}"
+                / f"codeql_{_repo_name}_{_unique_run_suffix('_')}"
             )
         _precomputed_out_dir.parent.mkdir(parents=True, exist_ok=True)
         safe_run_mkdir(_precomputed_out_dir)
