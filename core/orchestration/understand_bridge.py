@@ -1226,11 +1226,27 @@ def _trace_references_stale(trace: Dict[str, Any], stale_files: Set[str]) -> boo
         f = step.get("file", "")
         if f and f in stale_files:
             return True
-        # Embedded in action/result strings — extract filenames via regex
+        # Embedded in action/result strings — extract filenames via regex.
+        # Pre-fix the pattern was `[\w./+-]+\.\w+(?=:\d)` without
+        # bounds and without `re.ASCII`. Two issues:
+        #   * Unbounded greedy `+` quantifiers — pathological action /
+        #     result strings (operator pasted a base64 blob, an LLM
+        #     emitted a 100K-char identifier-shaped run, malformed
+        #     JSON serialiser concatenated huge run) burned CPU
+        #     scanning the regex engine for a "filename ending in
+        #     .ext: digit". Same ReDoS shape that the sister callsite
+        #     at understand_bridge.py:1034 was already hardened
+        #     against in batch RX66 (file-token findall).
+        #   * Unicode-default `\w` admits Cyrillic / CJK / Devanagari
+        #     "filenames" that never match the ASCII canonical form
+        #     in `stale_files`, so the staleness check silently
+        #     missed real matches when the upstream encoded glyphs.
+        # Apply the same bounds (`{1,1024}` for the path body,
+        # `{1,32}` for the extension) + `re.ASCII` for parity.
         for field in ("action", "result"):
             val = step.get(field, "")
             if val:
-                for match in re.findall(r'[\w./+-]+\.\w+(?=:\d)', val):
+                for match in re.findall(r'[\w./+-]{1,1024}\.\w{1,32}(?=:\d)', val, flags=re.ASCII):
                     if match in stale_files:
                         return True
     return False
@@ -1457,8 +1473,24 @@ def _merge_list_by_key(
 def _boundary_matches(boundary: Dict[str, Any], detail: Dict[str, Any]) -> bool:
     """Check whether a trust_boundaries entry corresponds to a boundary_details entry.
 
-    Uses normalised substring matching with a minimum length to avoid
-    short strings like "a" matching everything.
+    Pre-fix used a bare substring containment check
+    (`boundary_name in detail_id or detail_id in boundary_name`)
+    with only a 4-char minimum-length guard. That produced
+    false positives like:
+        boundary_name = "auth"
+        detail_id     = "author_handler"
+    `"auth" in "author_handler"` is True — but the two refer to
+    semantically-distinct boundaries. Operators saw bridged
+    `boundary_details` entries getting wrongly attributed to
+    auth boundaries (or any short-prefix-shared name pair).
+
+    Tokenise on non-alphanumeric separators and require
+    word-level equality OR full-string equality. `auth` only
+    matches `auth` as a token, not embedded inside `author`.
+    Two-token boundary names like `auth_check` still match
+    detail IDs containing `auth_check` as a contiguous token
+    sequence — preserves the legitimate match cases the
+    substring path was trying to capture.
     """
     boundary_name = boundary.get("boundary", "").lower().strip()
     detail_id = detail.get("id", "").lower().strip()
@@ -1466,10 +1498,22 @@ def _boundary_matches(boundary: Dict[str, Any], detail: Dict[str, Any]) -> bool:
     if not boundary_name or not detail_id:
         return False
 
-    # Require the shorter string to be at least 4 chars to avoid
-    # false positives from very short boundary names
-    shorter = min(len(boundary_name), len(detail_id))
-    if shorter < 4:
-        return boundary_name == detail_id
+    # Exact match: always wins regardless of length.
+    if boundary_name == detail_id:
+        return True
 
-    return boundary_name in detail_id or detail_id in boundary_name
+    # Token-level membership: split each on non-alphanumeric
+    # separators and require all of the SHORTER side's tokens
+    # to be present in the LONGER side's token list, in order
+    # (so `auth_check` matches `pre_auth_check_v2` but not
+    # `check_post_auth`).
+    import re as _re
+    a_tokens = [t for t in _re.split(r"[^a-z0-9]+", boundary_name, flags=_re.ASCII) if t]
+    b_tokens = [t for t in _re.split(r"[^a-z0-9]+", detail_id, flags=_re.ASCII) if t]
+    if not a_tokens or not b_tokens:
+        return False
+    short, long_ = (a_tokens, b_tokens) if len(a_tokens) <= len(b_tokens) else (b_tokens, a_tokens)
+    # Subsequence-of-contiguous-tokens check: short must appear
+    # as a contiguous slice of long.
+    n = len(short)
+    return any(long_[i:i + n] == short for i in range(len(long_) - n + 1))

@@ -332,26 +332,50 @@ def _parse_expr(
         # input.  Raise so the invariant survives under ``python -O``.
         raise RuntimeError(f"unhandled operator {op!r}")
 
+    # Recursion depth bound for `_climb`. Pre-fix the recursive
+    # precedence-climber unwound through Python's call stack one
+    # frame per nested operator. A long flat chain like
+    # `a+a+a+a+...+a` (1000+ ops) crossed Python's default
+    # recursion limit (~1000) and raised RecursionError, which
+    # bypassed every Rejection-shaped error path the parser
+    # relied on. Bound depth explicitly + return a Rejection
+    # rather than crashing. 256 is well above any realistic
+    # human-or-LLM-emitted condition (deeply-nested constraints
+    # in real RAPTOR runs top out at <20 ops).
+    _MAX_CLIMB_DEPTH = 256
+    _climb_depth = [0]
+
     def _climb(min_prec: int) -> Union[Any, Rejection]:
-        lhs = _atom()
-        if isinstance(lhs, Rejection):
-            return lhs
-        while pos[0] < len(tokens):
-            tok = tokens[pos[0]]
-            if tok not in _PRECEDENCE:
-                # Anything else — ``)``, a relational op, an extra atom —
-                # ends this climb level.  The outer dispatcher classifies
-                # the leftover (paren imbalance, unsupported operator, or
-                # plain trailing token).
-                break
-            prec = _PRECEDENCE[tok]
-            if prec < min_prec:
-                break
-            pos[0] += 1
-            rhs = _climb(prec + 1)  # left-associative
-            if isinstance(rhs, Rejection):
-                return rhs
-            lhs = _apply(tok, lhs, rhs)
+        if _climb_depth[0] >= _MAX_CLIMB_DEPTH:
+            return Rejection(
+                ' '.join(tokens),
+                RejectionKind.UNRECOGNIZED_FORM,
+                f"expression nesting exceeded depth {_MAX_CLIMB_DEPTH}; "
+                f"refusing to recurse further",
+            )
+        _climb_depth[0] += 1
+        try:
+            lhs = _atom()
+            if isinstance(lhs, Rejection):
+                return lhs
+            while pos[0] < len(tokens):
+                tok = tokens[pos[0]]
+                if tok not in _PRECEDENCE:
+                    # Anything else — ``)``, a relational op, an extra atom —
+                    # ends this climb level.  The outer dispatcher classifies
+                    # the leftover (paren imbalance, unsupported operator, or
+                    # plain trailing token).
+                    break
+                prec = _PRECEDENCE[tok]
+                if prec < min_prec:
+                    break
+                pos[0] += 1
+                rhs = _climb(prec + 1)  # left-associative
+                if isinstance(rhs, Rejection):
+                    return rhs
+                lhs = _apply(tok, lhs, rhs)
+        finally:
+            _climb_depth[0] -= 1
         return lhs
 
     result = _climb(0)
@@ -500,6 +524,21 @@ def _substitute_calls(
                 continue
             # Unbalanced: fall through and copy the head char-by-char so
             # the parens-check can flag it.
+        # Pre-fix the no-match path always did `i += 1`, even when
+        # `_CALL_HEAD_RE.match` returned an identifier-shaped match
+        # that just wasn't followed by `(`. That meant for an
+        # identifier-heavy input (100k chars of `foo bar baz qux ...`
+        # / large macro-expanded condition text), each character
+        # position re-scanned the identifier from scratch — O(N) per
+        # position × N positions = O(N²) wallclock.
+        # When we matched an identifier but it wasn't a call, jump
+        # past the identifier in one step instead of one char at a
+        # time. Append the matched substring as-is. Reduces O(N²)
+        # to O(N) for identifier-heavy text.
+        if m:
+            out.append(text[i:m.end()])
+            i = m.end()
+            continue
         out.append(text[i])
         i += 1
     return ''.join(out)
@@ -558,9 +597,19 @@ def _parse_condition(
             f"{depth} unmatched '(' at end of input",
         )
 
-    # Bitmask: lhs & mask (==|!=) val
+    # Bitmask: lhs & mask (==|!=) val.
+    #
+    # Pre-fix the LHS was `(.+?)` — a lazy unbounded quantifier
+    # over ANY character, including `&`. On a non-bitmask input
+    # the regex engine had to expand `.+?` greedily one character
+    # at a time, hunting for a `&` separator that never arrived;
+    # for an N-character input that's O(N) failed-match cost per
+    # invocation. Same ReDoS shape that `_parse_atom` was already
+    # hardened against by switching to `[^&]+?` (negated class so
+    # the lazy quantifier short-circuits at the first `&`).
+    # Apply the same fix here for parity.
     m = re.fullmatch(
-        r'(.+?)\s*&\s*(0x[0-9a-f]+|\d+)\s*(==|!=)\s*(0x[0-9a-f]+|\d+)',
+        r'([^&]+?)\s*&\s*(0x[0-9a-f]+|\d+)\s*(==|!=)\s*(0x[0-9a-f]+|\d+)',
         t, re.IGNORECASE,
     )
     if m:

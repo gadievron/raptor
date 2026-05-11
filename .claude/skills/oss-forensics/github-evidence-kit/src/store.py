@@ -134,10 +134,37 @@ class EvidenceStore:
         return json.dumps(data, indent=indent, default=str)
 
     def save(self, path: str | Path) -> None:
-        """Save store to JSON file."""
+        """Save store to JSON file (atomic write).
+
+        Pre-fix `path.write_text(...)` used `open(path, 'w')`
+        internally — truncate-then-write. A crash, OOM kill, or
+        SIGTERM between truncate and write left a partially-written
+        evidence file. Forensic investigations that resumed against
+        a corrupted store either failed to load (JSONDecodeError) or
+        loaded a truncated set, dropping evidence silently. Both
+        modes destroy the audit trail the store is supposed to
+        preserve.
+
+        Atomic-write pattern: serialise to `<path>.tmp.<pid>` in the
+        same directory then `os.replace` (atomic per POSIX). PID
+        suffix disambiguates concurrent saves from different
+        processes. On any write failure, clean up the staging file
+        so we don't leak `.tmp.<pid>` siblings across crashes.
+        """
+        import os
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.to_json())
+        body = self.to_json()
+        tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+        try:
+            tmp.write_text(body)
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
 
     # Cap on JSON-string input. Pre-fix `from_json` accepted any
     # length string. A hostile or corrupted evidence file (a 10 GB

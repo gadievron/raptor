@@ -26,9 +26,45 @@ RESULT_PREFIX = "COCCIRESULT:"
 _SPATCH_BIN = "spatch"
 _SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9_-]")
 
+# Resolve `spatch` ONCE per process via shutil.which and cache the
+# absolute path. Pre-fix every subprocess call passed the bare
+# `"spatch"` and the kernel did a fresh PATH lookup at exec time.
+# Two pain points the cache closes:
+#   * Performance: a multi-rule scan run can fire dozens of
+#     subprocess.run / Popen invocations; each one re-scans every
+#     PATH entry to find spatch.
+#   * Race: between `is_available()` (which probes PATH via
+#     `shutil.which`) and the subsequent subprocess.run that
+#     re-resolves PATH internally, an attacker who can rewrite PATH
+#     (a long-running RAPTOR session that picks up a new env var
+#     mid-run, an upstream tool that mutates os.environ) could
+#     swap out spatch. Cache locks in the resolved path discovered
+#     at first probe.
+_resolved_spatch: Optional[str] = None
+_spatch_resolved: bool = False  # True once we've cached (None or path).
+def _spatch_path() -> Optional[str]:
+    global _resolved_spatch, _spatch_resolved
+    if not _spatch_resolved:
+        _resolved_spatch = shutil.which(_SPATCH_BIN)
+        _spatch_resolved = True
+    return _resolved_spatch
+
+
+def reset_spatch_path_cache() -> None:
+    """Clear the cached spatch path. Call between tests that patch
+    `shutil.which` so the next probe re-resolves PATH.
+    """
+    global _resolved_spatch, _spatch_resolved
+    _resolved_spatch = None
+    _spatch_resolved = False
+
 
 def is_available() -> bool:
     """Check whether spatch is on PATH."""
+    # Always re-probe in is_available so test mocks of shutil.which
+    # work as expected. The cache only locks in for command builds
+    # (where the race-protection matters); is_available is a
+    # cheap probe.
     return shutil.which(_SPATCH_BIN) is not None
 
 
@@ -38,7 +74,7 @@ def version() -> Optional[str]:
         return None
     try:
         proc = subprocess.run(
-            [_SPATCH_BIN, "--version"],
+            [_spatch_path() or _SPATCH_BIN, "--version"],
             capture_output=True, text=True, timeout=10,
         )
         for line in proc.stdout.splitlines():
@@ -139,7 +175,7 @@ def run_rule(
                 harnessed_rule_path = None
 
     sp_file_path = harnessed_rule_path if harnessed_rule_path else rule
-    cmd = [_SPATCH_BIN, "--sp-file", str(sp_file_path)]
+    cmd = [_spatch_path() or _SPATCH_BIN, "--sp-file", str(sp_file_path)]
 
     if target.is_dir():
         cmd.extend(["--dir", str(target)])

@@ -84,16 +84,45 @@ def _patch_url_for(ref: RepoRef) -> str | None:
     # `<base>/commit/?id=<sha>&format=patch`. We strip a trailing `.git`
     # / trailing slash and append the cgit query.
     #
-    # ``is_kernel_org_url`` is hostname-anchored so a ``kernel.org``
-    # substring inside an attacker-supplied path can't match. The
-    # ``/cgit/`` and ``git.savannah`` checks remain substring-based —
-    # ``cgit`` is a path token (forge software, not a host) and
-    # ``git.savannah.gnu.org`` shows up in two slightly different host
-    # forms across NVD records, so a strict hostname check would miss
-    # legitimate variants.
+    # Pre-fix `"/cgit/" in low or "git.savannah" in low` was a bare
+    # substring check that fired for attacker-controlled URLs like
+    # `https://attacker.com/?fake=/cgit/repo` or
+    # `https://attacker.com/git.savannah-fakepath`. The cgit query
+    # path was then constructed against the attacker host, and the
+    # subsequent fetch reached attacker-controlled infrastructure
+    # — SSRF via the URL-pattern selector itself.
+    #
+    # Anchor to PATH or HOSTNAME rather than arbitrary substring:
+    #   * `is_kernel_org_url` — hostname-anchored (already safe).
+    #   * cgit: parse the URL and require `/cgit/` to be a path
+    #     component (i.e. immediately preceded and followed by `/`
+    #     in the URL's path component, not in query or fragment).
+    #   * savannah: anchor to hostname (`git.savannah.gnu.org`
+    #     and `savannah.gnu.org` both legitimate); reject all
+    #     attacker-controlled variants.
     from core.url_patterns import is_kernel_org_url
-    low = url.lower()
-    if is_kernel_org_url(url) or "/cgit/" in low or "git.savannah" in low:
+    from urllib.parse import urlsplit
+    if is_kernel_org_url(url):
+        base = url.rstrip("/")
+        if base.endswith(".git"):
+            base = base[:-4]
+        return f"{base}/commit/?id={sha}&format=patch"
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    host = (parts.hostname or "").lower()
+    path = parts.path or ""
+    # Path-component cgit (allowlist by hostname not required —
+    # `/cgit/` as a path component is the cgit route convention,
+    # but require it to be a true path component):
+    if "/cgit/" in path:
+        base = url.rstrip("/")
+        if base.endswith(".git"):
+            base = base[:-4]
+        return f"{base}/commit/?id={sha}&format=patch"
+    if host in ("git.savannah.gnu.org", "savannah.gnu.org",
+                "git.savannah.nongnu.org", "savannah.nongnu.org"):
         base = url.rstrip("/")
         if base.endswith(".git"):
             base = base[:-4]

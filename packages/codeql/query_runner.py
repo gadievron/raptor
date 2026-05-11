@@ -862,16 +862,25 @@ class QueryRunner:
             return 0
         return sum(len(run.get("results", [])) for run in sarif_data.get("runs", []))
 
-    def get_sarif_summary(self, sarif_path: Path) -> Dict:
+    def get_sarif_summary(self, sarif_path: Path,
+                          *, sarif_data: Optional[Dict] = None) -> Dict:
         """
         Extract summary information from SARIF file.
+
+        `sarif_data` (optional) is a pre-parsed SARIF dict. When the
+        caller has already loaded the file (e.g. agent.print_summary
+        loading it once and sharing across summary + example
+        extraction), pass it here to avoid the redundant parse.
+        Defaults to None → load the file ourselves (preserves the
+        standalone-call API).
 
         Returns:
             Dict with summary statistics
         """
         try:
-            from core.sarif.parser import load_sarif
-            sarif_data = load_sarif(sarif_path)
+            if sarif_data is None:
+                from core.sarif.parser import load_sarif
+                sarif_data = load_sarif(sarif_path)
             if not sarif_data:
                 return {}
 

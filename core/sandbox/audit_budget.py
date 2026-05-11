@@ -327,7 +327,51 @@ class AuditBudget:
 
     @property
     def total_records(self) -> int:
+        """Records counted toward the global cap.
+
+        NOTE: this excludes records kept under per-category SAMPLING
+        (the sampled-keep path returns KEEP but intentionally does
+        NOT bump `_record_count` to preserve the global-cap promise).
+        Use :meth:`total_records_emitted` for "everything we passed
+        through" — that includes sampled keeps.
+
+        Pre-fix the property name was ambiguous and operators reading
+        the summary value (`total_records: 5000`) couldn't tell whether
+        sampled-kept records were included. They were not, but there
+        was no docstring or sibling counter to make the distinction
+        observable. The summary undercounted relative to "records
+        actually written downstream" by the number of sampled keeps.
+        """
         return self._record_count
+
+    @property
+    def total_records_emitted(self) -> int:
+        """All records that were KEPT (returned downstream),
+        including per-category sampled keeps.
+
+        Equals `total_records + sum(per-category sampled-keep count)`.
+        Use this when you want the "what did the audit log actually
+        get" count, vs `total_records` which is "what counted toward
+        the global budget".
+        """
+        # Sampled keeps land in `_sampling_counters` only on the keep
+        # path (every Nth event in over-cap categories). The counter
+        # holds the count of OVER-CAP events seen per category, of
+        # which 1-in-N were kept. Approximate the kept count via
+        # `count // sample_n` per category — exact when sample_n
+        # divides evenly, off by at most 1 per category in the
+        # general case.
+        sampled_keeps = 0
+        for cat, count in getattr(self, "_sampling_counters", {}).items():
+            cat_cfg = (
+                getattr(self, "_per_category_sampling", {}).get(cat)
+                if hasattr(self, "_per_category_sampling")
+                else None
+            )
+            sample_n = cat_cfg if isinstance(cat_cfg, int) and cat_cfg > 0 else 0
+            if sample_n > 0:
+                sampled_keeps += count // sample_n
+        return self._record_count + sampled_keeps
 
     @property
     def category_counts(self) -> Dict[str, int]:

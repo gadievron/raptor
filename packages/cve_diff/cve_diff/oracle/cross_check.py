@@ -60,7 +60,19 @@ def _load_pick_from_osv_file(summary_dir: Path, cve_id: str) -> tuple[str, str]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return "", ""
-    for ref in data.get("references") or []:
+    # Pre-fix `for ref in data.get("references") or []` then
+    # `ref.get("url")` raised AttributeError if any element of
+    # `references` was a non-dict (legitimately seen in malformed
+    # OSV files where the writer used a bare URL string in the
+    # references array instead of `{"url": "..."}`). The whole
+    # oracle path then crashed. Guard the iteration so non-dict
+    # entries get skipped silently rather than crashing.
+    refs_raw = data.get("references") or []
+    if not isinstance(refs_raw, list):
+        refs_raw = []
+    for ref in refs_raw:
+        if not isinstance(ref, dict):
+            continue
         url = (ref.get("url") or "")
         m = _GH_COMMIT_URL.search(url)
         if m:

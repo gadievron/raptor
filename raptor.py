@@ -339,8 +339,20 @@ def _run_script(script_path: Path, args: list) -> int:
             pass
         return 130
     except Exception as e:
-        print(f"\n✗ Error running {script_path.name}: {e}")
-        return 1
+        # Pre-fix the blanket `return 1` collapsed every internal
+        # exception (FileNotFoundError, ValueError, RuntimeError,
+        # OSError, etc.) into the same exit code as a child process
+        # that legitimately exited 1. Operators reading the rc had
+        # no signal whether the child had failed or whether the
+        # launcher itself had crashed before/after spawning.
+        #
+        # Distinguish via exit code 2 (launcher-internal failure)
+        # from rc=1 (child returned 1). Print the exception CLASS
+        # alongside the message so logs show the failure shape
+        # without needing a traceback.
+        print(f"\n✗ Error running {script_path.name}: "
+              f"{type(e).__name__}: {e}")
+        return 2
 
 
 def mode_scan(args: list) -> int:

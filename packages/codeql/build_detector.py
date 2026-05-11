@@ -792,6 +792,23 @@ _SCRUB_ENV_VARS = (
     "BASH_ENV", "ENV",
     "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS",
 )
+# Pre-fix the script scrubbed _SCRUB_ENV_VARS only from the env
+# passed to gcc/javac subprocesses (`_BUILD_ENV` below). The script
+# ITSELF (this python3 process) inherited the parent's full env —
+# so an attacker who could plant `LD_PRELOAD=/tmp/evil.so` in the
+# parent (a poisoned `.envrc` in the target repo, an operator's
+# config that set it for unrelated reasons) attached attacker code
+# to the python3 interpreter running the build script. The
+# subsequent `os.environ.items()` iteration would then capture the
+# tainted env even with the scrub above (because the script's own
+# state was already compromised). Defang at script entry by
+# popping the scrub vars from `os.environ` BEFORE building
+# `_BUILD_ENV`. The python3 interpreter's already-loaded preload
+# can't be unloaded mid-run, but removing the env var means any
+# subprocesses (including subprocess.run / Popen calls below)
+# don't re-inherit the preload chain.
+for _v in _SCRUB_ENV_VARS:
+    os.environ.pop(_v, None)
 _BUILD_ENV = {{k: v for k, v in os.environ.items() if k not in _SCRUB_ENV_VARS}}
 
 COMPILER = {compiler!r}
@@ -860,7 +877,30 @@ for i, src in enumerate(FILES):
         # write(2) waiting for a reader).
         while proc.stderr.read(64 * 1024):
             pass
-    proc.wait()
+    # Per-file compile timeout. Pre-fix `proc.wait()` had no
+    # bound — a runaway compile (gcc on a pathological template
+    # instantiation, javac on infinite annotation processing,
+    # deliberately slow input from an untrusted target) hung
+    # the whole build script forever. CodeQL DB build then
+    # blocked indefinitely with no progress signal.
+    # 120s is comfortably above any legitimate single-file
+    # compile (the slowest C++ template compiles in real
+    # codebases run ~30s); a hung compile gets killed and
+    # counted as a failure so the rest of the pass continues.
+    _COMPILE_TIMEOUT_S = 120
+    try:
+        proc.wait(timeout=_COMPILE_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        fail += 1
+        sys.stderr.buffer.write(
+            f"\\n[compile timeout {{_COMPILE_TIMEOUT_S}}s on {{src!r}}]\\n".encode()
+        )
+        continue
     if proc.returncode == 0:
         ok += 1
     else:
