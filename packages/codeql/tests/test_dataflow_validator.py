@@ -238,12 +238,20 @@ class TestSanitizerEvidenceInstructions:
         assert SANITIZER_EVIDENCE_INSTRUCTIONS.strip() != ""
 
     def test_instructions_mention_semantic_judgement_requirement(self):
-        """Regression guard: the LLM must be told that pattern matchers
-        don't model semantics — that's the whole point of the evidence
-        pipeline."""
-        assert "semantics" in SANITIZER_EVIDENCE_INSTRUCTIONS.lower()
-        assert "do not model semantics" in SANITIZER_EVIDENCE_INSTRUCTIONS.lower() or \
-               "not model semantics" in SANITIZER_EVIDENCE_INSTRUCTIONS.lower()
+        """Regression guard: the LLM must be told to check that the
+        candidate's semantics_tag matches the sink's attack class."""
+        text = SANITIZER_EVIDENCE_INSTRUCTIONS.lower()
+        assert "semantics" in text
+        assert "attack class" in text
+
+    def test_instructions_warn_against_partial_validators(self):
+        """Regression guard: the 2026-05-10 corpus measurement showed
+        the LLM judge accepted regex-blocklist 'validators' and
+        downgraded real exploits. The addendum must warn that 0.5-0.9
+        confidence candidates are partial defences with known bypasses."""
+        text = SANITIZER_EVIDENCE_INSTRUCTIONS.lower()
+        assert "partial" in text
+        assert "bypass" in text or "do not mark" in text
 
     def test_instructions_warn_about_inlined_helpers_gap(self):
         """The inlined_helpers field is the honest 'we didn't follow

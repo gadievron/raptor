@@ -53,14 +53,24 @@ EvidenceCollector = Callable[
 # guidance on how to weigh it.
 SANITIZER_EVIDENCE_INSTRUCTIONS = (
     "\n7. Sanitizer evidence: A 'sanitizer-evidence' block lists "
-    "project-specific validators extracted from referenced source. For "
-    "validators marked 'on-path' for any step, judge whether their "
-    "*semantics* (sql_escape, url_allowlist, ...) actually cover the sink's "
-    "attack class — pattern matchers do not model semantics; you must. "
-    "'inlined helpers' mark gaps where the structural analysis stopped; the "
-    "validator might be inside one of those helpers, in which case the "
-    "annotation is incomplete and you should weigh the rest of the path "
-    "accordingly."
+    "project-specific validators extracted from referenced source. Read "
+    "each candidate's confidence value carefully:\n"
+    "  - 0.9+ candidates are comprehensive defences (parameterised "
+    "queries, framework auto-escape, explicit allowlists). If a 0.9+ "
+    "validator with matching semantics_tag is on-path between source "
+    "and sink, the path is likely sanitised.\n"
+    "  - 0.5-0.9 candidates are PARTIAL defences (regex blocklists, "
+    "length checks, character substitutions, ad-hoc filters). Treat "
+    "these as having known bypasses for the attack class — DO NOT mark "
+    "the path as not-exploitable on the strength of a partial validator "
+    "alone, even if its semantics_text claims coverage.\n"
+    "  - <0.5 candidates are noise; ignore.\n"
+    "Also check semantics_tag matches the sink's attack class: a "
+    "url_allowlist validator does NOT mitigate SQL injection; a "
+    "sql_escape validator does NOT mitigate command injection. "
+    "'inlined helpers' mark gaps where the structural analysis "
+    "stopped; the validator might be inside one of those helpers, in "
+    "which case the annotation is incomplete."
 )
 
 
