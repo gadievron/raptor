@@ -407,6 +407,225 @@ def test_maintainer_change_recent_publish_compound_two_mediums() -> None:
     assert all(f.severity == "medium" for f in findings)
 
 
+# ---------------------------------------------------------------------------
+# install_hook_delta detector (npm-only initially)
+# ---------------------------------------------------------------------------
+
+def test_install_hook_delta_postinstall_added_fires() -> None:
+    """Target version adds a ``postinstall`` script the current
+    version didn't have. Classic event-stream / colors.js
+    payload-injection shape — the bump introduces install-time
+    code execution against downstream consumers."""
+    now = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    npm = _StubNpmClient({
+        "x": {"name": "x", "versions": {
+            "1.0.0": {
+                "maintainers": [{"name": "alice"}],
+                "scripts": {},
+            },
+            "1.0.1": {
+                "maintainers": [{"name": "alice"}],
+                "scripts": {
+                    "postinstall": "node ./scripts/phone-home.js",
+                },
+            },
+        }},
+    })
+    findings = evaluate_bump_supply_chain(
+        ecosystem="npm", name="x",
+        current_version="1.0.0", target_version="1.0.1",
+        pypi_client=None, npm_client=npm, now=now,
+    )
+    hooks = [f for f in findings if f.kind == "install_hook_suspicious"]
+    assert len(hooks) == 1
+    f = hooks[0]
+    assert f.severity == "medium"
+    assert "postinstall" in f.evidence["added_hooks"]
+    # Hook body is in evidence so reviewers can see what it runs.
+    assert "phone-home" in f.evidence["hook_bodies"]["postinstall"]
+
+
+def test_install_hook_delta_unchanged_silent() -> None:
+    """Both versions have the same install-time hooks → no
+    finding. A bump that doesn't change install-time behaviour
+    is fine on this axis."""
+    now = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    scripts = {"postinstall": "node-gyp rebuild"}
+    npm = _StubNpmClient({
+        "native-lib": {"name": "native-lib", "versions": {
+            "1.0.0": {"maintainers": [{"name": "x"}], "scripts": scripts},
+            "1.0.1": {"maintainers": [{"name": "x"}], "scripts": scripts},
+        }},
+    })
+    findings = evaluate_bump_supply_chain(
+        ecosystem="npm", name="native-lib",
+        current_version="1.0.0", target_version="1.0.1",
+        pypi_client=None, npm_client=npm, now=now,
+    )
+    assert [f for f in findings
+             if f.kind == "install_hook_suspicious"] == []
+
+
+def test_install_hook_delta_removed_hook_silent() -> None:
+    """Target REMOVED a hook → no finding. Removing install-time
+    code is strictly safer; not a supply-chain concern."""
+    now = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    npm = _StubNpmClient({
+        "x": {"name": "x", "versions": {
+            "1.0.0": {
+                "maintainers": [{"name": "x"}],
+                "scripts": {"postinstall": "do-thing"},
+            },
+            "1.0.1": {
+                "maintainers": [{"name": "x"}],
+                "scripts": {},
+            },
+        }},
+    })
+    findings = evaluate_bump_supply_chain(
+        ecosystem="npm", name="x",
+        current_version="1.0.0", target_version="1.0.1",
+        pypi_client=None, npm_client=npm, now=now,
+    )
+    assert [f for f in findings
+             if f.kind == "install_hook_suspicious"] == []
+
+
+def test_install_hook_delta_preinstall_and_install_both_count() -> None:
+    """``preinstall`` / ``install`` / ``postinstall`` all matter
+    for downstream supply-chain. ``prepublish*`` runs on the
+    publisher's machine only — out of scope."""
+    now = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    npm = _StubNpmClient({
+        "x": {"name": "x", "versions": {
+            "1.0.0": {"maintainers": [{"name": "x"}], "scripts": {}},
+            "1.0.1": {
+                "maintainers": [{"name": "x"}],
+                "scripts": {
+                    "preinstall": "echo hi",
+                    "install": "node compile.js",
+                    "prepublish": "this should NOT count",
+                },
+            },
+        }},
+    })
+    findings = evaluate_bump_supply_chain(
+        ecosystem="npm", name="x",
+        current_version="1.0.0", target_version="1.0.1",
+        pypi_client=None, npm_client=npm, now=now,
+    )
+    hooks = [f for f in findings if f.kind == "install_hook_suspicious"]
+    assert len(hooks) == 1
+    added = hooks[0].evidence["added_hooks"]
+    assert "preinstall" in added
+    assert "install" in added
+    assert "prepublish" not in added
+
+
+def test_install_hook_delta_empty_string_hook_treated_as_absent() -> None:
+    """``scripts.postinstall = ""`` is a no-op for npm; treating
+    an empty-string hook as "present" would cause spurious
+    findings on packages that toggle the empty-string convention
+    between versions."""
+    now = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    npm = _StubNpmClient({
+        "x": {"name": "x", "versions": {
+            "1.0.0": {
+                "maintainers": [{"name": "x"}],
+                "scripts": {"postinstall": ""},
+            },
+            "1.0.1": {
+                "maintainers": [{"name": "x"}],
+                "scripts": {"postinstall": ""},
+            },
+        }},
+    })
+    findings = evaluate_bump_supply_chain(
+        ecosystem="npm", name="x",
+        current_version="1.0.0", target_version="1.0.1",
+        pypi_client=None, npm_client=npm, now=now,
+    )
+    assert [f for f in findings
+             if f.kind == "install_hook_suspicious"] == []
+
+
+def test_install_hook_delta_pypi_returns_no_finding() -> None:
+    """PyPI's setup.py-based install hooks need sdist download +
+    AST parse to detect. Out of scope for the per-version
+    metadata path. Deferred — bumper falls through to vuln-only
+    verdict for PyPI bumps on this axis."""
+    now = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    pypi = _StubPyPIClient({
+        "x": {"releases": {"2.0": []}},
+    })
+    findings = evaluate_bump_supply_chain(
+        ecosystem="PyPI", name="x",
+        current_version="1.0", target_version="2.0",
+        pypi_client=pypi, npm_client=None, now=now,
+    )
+    assert [f for f in findings
+             if f.kind == "install_hook_suspicious"] == []
+
+
+def test_install_hook_delta_hook_body_truncated() -> None:
+    """Hook bodies are truncated in evidence to keep the
+    PR-comment renderer's output bounded. Cap is 200 chars."""
+    now = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    long_script = "echo " + "a" * 500
+    npm = _StubNpmClient({
+        "x": {"name": "x", "versions": {
+            "1.0.0": {"maintainers": [{"name": "x"}], "scripts": {}},
+            "1.0.1": {
+                "maintainers": [{"name": "x"}],
+                "scripts": {"postinstall": long_script},
+            },
+        }},
+    })
+    findings = evaluate_bump_supply_chain(
+        ecosystem="npm", name="x",
+        current_version="1.0.0", target_version="1.0.1",
+        pypi_client=None, npm_client=npm, now=now,
+    )
+    hook_body = next(f for f in findings
+                      if f.kind == "install_hook_suspicious"
+                      ).evidence["hook_bodies"]["postinstall"]
+    assert len(hook_body) <= 200
+
+
+def test_install_hook_compounded_with_recent_publish_blocks() -> None:
+    """End-to-end: target version is both recently published AND
+    introduces a new postinstall hook. Two mediums → Block.
+    This is one of the most dangerous shapes — fresh release
+    plus install-time payload."""
+    from packages.sca.review import _VERDICT_BLOCK, _compute_verdict
+    now = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    npm = _StubNpmClient({
+        "x": {
+            "name": "x",
+            "versions": {
+                "1.0.0": {
+                    "maintainers": [{"name": "x"}],
+                    "scripts": {},
+                },
+                "1.0.1": {
+                    "maintainers": [{"name": "x"}],
+                    "scripts": {"postinstall": "node ./drop-payload.js"},
+                },
+            },
+            "time": {"1.0.1": "2026-05-09T00:00:00.000Z"},
+        },
+    })
+    findings = evaluate_bump_supply_chain(
+        ecosystem="npm", name="x",
+        current_version="1.0.0", target_version="1.0.1",
+        pypi_client=None, npm_client=npm, now=now,
+    )
+    kinds = sorted(f.kind for f in findings)
+    assert kinds == ["install_hook_suspicious", "recent_publish"]
+    verdict = _compute_verdict([], [], bump_supply_chain_findings=findings)
+    assert verdict == _VERDICT_BLOCK
+
+
 def test_pypi_chooses_earliest_upload_time_across_files() -> None:
     """A PyPI release can have multiple distribution files (.whl
     for each platform + .tar.gz source). The earliest upload

@@ -113,6 +113,19 @@ def evaluate_bump_supply_chain(
     if change is not None:
         findings.append(change)
 
+    # install_hook_delta — target adds install-time scripts that
+    # the current version didn't have. npm-only initially; PyPI
+    # would require downloading the sdist and parsing setup.py
+    # (deferred).
+    hook_delta = _install_hook_delta(
+        ecosystem=ecosystem, name=name,
+        current_version=current_version,
+        target_version=target_version,
+        npm_client=npm_client,
+    )
+    if hook_delta is not None:
+        findings.append(hook_delta)
+
     return findings
 
 
@@ -261,6 +274,151 @@ def _maintainer_name_set(raw) -> set:
             # Some npm tooling shorthand emits "name <email>" strings.
             out.add(m.split("<")[0].strip().lower())
     return out
+
+
+# ---------------------------------------------------------------------------
+# Per-ecosystem install-hook delta extraction
+# ---------------------------------------------------------------------------
+
+#: npm script hooks that run during ``npm install`` (including
+#: transitive installs). These are the ones that matter for
+#: supply-chain — when a user pulls in the package, these execute.
+#: ``prepublish*`` / ``prepack`` / ``postpublish`` run on the
+#: PUBLISHER's machine, not the installer's, so they aren't a
+#: supply-chain vector against downstream consumers.
+_INSTALL_TIME_HOOKS = ("preinstall", "install", "postinstall")
+
+
+def _install_hook_delta(
+    *,
+    ecosystem: str,
+    name: str,
+    current_version: str,
+    target_version: str,
+    npm_client,
+) -> Optional[SupplyChainFinding]:
+    """Compare install-time scripts between current and target.
+
+    Returns a single ``install_hook_suspicious`` finding when the
+    target adds preinstall / install / postinstall hooks the
+    current version didn't have. The shape detected is
+    "the bump introduces install-time code execution that the
+    current pin doesn't have" — the event-stream / colors.js
+    payload-injection class.
+
+    Returns ``None`` when the ecosystem isn't npm, the data is
+    unavailable, or no new install-time hook was added.
+    """
+    if ecosystem != "npm" or npm_client is None:
+        return None
+    meta = npm_client.get_metadata(name)
+    if not isinstance(meta, dict):
+        return None
+    versions = meta.get("versions") or {}
+    cur_entry = versions.get(current_version)
+    tgt_entry = versions.get(target_version)
+    if not isinstance(cur_entry, dict) or not isinstance(tgt_entry, dict):
+        return None
+
+    cur_hooks = _install_hook_set(cur_entry.get("scripts"))
+    tgt_hooks = _install_hook_set(tgt_entry.get("scripts"))
+    added = sorted(tgt_hooks - cur_hooks)
+    if not added:
+        return None
+
+    return _install_hook_finding(
+        ecosystem=ecosystem, name=name,
+        current_version=current_version,
+        target_version=target_version,
+        added_hooks=added,
+        target_scripts=tgt_entry.get("scripts") or {},
+    )
+
+
+def _install_hook_set(scripts) -> set:
+    """Return the subset of ``_INSTALL_TIME_HOOKS`` that have a
+    non-empty entry in the scripts map. An empty-string script
+    counts as "no hook" — npm treats those as no-ops."""
+    if not isinstance(scripts, dict):
+        return set()
+    out: set = set()
+    for hook in _INSTALL_TIME_HOOKS:
+        body = scripts.get(hook)
+        if isinstance(body, str) and body.strip():
+            out.add(hook)
+    return out
+
+
+def _install_hook_finding(
+    *,
+    ecosystem: str,
+    name: str,
+    current_version: str,
+    target_version: str,
+    added_hooks: list,
+    target_scripts: dict,
+) -> SupplyChainFinding:
+    """``install_hook_suspicious`` finding for a bump that
+    introduces install-time scripts.
+
+    Severity ``medium``: install hooks aren't malicious by
+    default (legitimate packages use them for native builds),
+    but adding them in a bump from an existing pin is a Review-
+    tier signal. The verdict ladder compounds this to Block when
+    paired with recent_publish or maintainer_change.
+
+    Evidence carries the actual hook content (truncated) so PR
+    reviewers can see what the new hook does without having to
+    open the registry tab. Sanitised to escape ANSI / control
+    chars before render.
+    """
+    placeholder_dep = Dependency(
+        ecosystem=ecosystem,
+        name=name,
+        version=target_version,
+        declared_in=Path("/<bump>"),
+        scope="main",
+        is_lockfile=False,
+        pin_style=PinStyle.EXACT,
+        direct=True,
+        purl=f"pkg:{ecosystem.lower()}/{name}@{target_version}",
+        parser_confidence=Confidence(
+            "high",
+            reason="bump-evaluator synthetic dep",
+        ),
+    )
+    # Carry the hook bodies in evidence (truncated) so reviewers
+    # see what the new script runs. Truncation cap kept tight
+    # because PR-comment renderers will surface this verbatim.
+    hook_bodies = {
+        h: (target_scripts.get(h) or "")[:200]
+        for h in added_hooks
+    }
+    detail = (
+        f"target version {target_version} introduces install-time "
+        f"hook(s) not present in {current_version}: "
+        f"{', '.join(added_hooks)}"
+    )
+    return SupplyChainFinding(
+        finding_id=(
+            f"sca:bump:install_hook:{ecosystem}:{name}"
+            f"@{current_version}->{target_version}"
+        ),
+        kind="install_hook_suspicious",
+        dependency=placeholder_dep,
+        detail=detail,
+        evidence={
+            "current_version": current_version,
+            "target_version": target_version,
+            "added_hooks": added_hooks,
+            "hook_bodies": hook_bodies,
+        },
+        severity="medium",
+        confidence=Confidence(
+            "high",
+            reason="per-version scripts from npm packument",
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
