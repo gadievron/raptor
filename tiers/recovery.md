@@ -47,14 +47,24 @@
 - If all fail: Analyze SARIF files manually
 
 **Placeholder exploits (TODO comments):**
-- Load: `tiers/personas/exploit_developer.md` explicitly
-- Command: "Load tiers/personas/exploit_developer.md and fix finding #X"
+- Preferred: `/exploit <finding-id>` — wraps the
+  exploit-developer workflow with sandbox + budget tracking
+  and produces a working PoC in `out/exploit_<id>/`.
+- Manual fallback: load `tiers/personas/exploit_developer.md`
+  explicitly only if `/exploit` is unavailable / disabled.
+  Command: "Load tiers/personas/exploit_developer.md and fix
+  finding #X".
 
 **Template patches (recommendations not code):**
-- Load: `tiers/personas/patch_engineer.md` (or
-  `tiers/personas/exploit_developer.md` for exploit
-  PoC patches)
-- Command: "Load tiers/personas/patch_engineer.md and create working patch"
+- Preferred: `/patch <finding-id>` — wraps the patch-engineer
+  workflow and produces an applyable diff in
+  `out/patch_<id>/`. For exploit PoC patches, run `/exploit`
+  first to confirm the finding is exploitable.
+- Manual fallback: load `tiers/personas/patch_engineer.md`
+  (or `tiers/personas/exploit_developer.md` for exploit PoC
+  patches) only if `/patch` is unavailable.
+  Command: "Load tiers/personas/patch_engineer.md and create
+  working patch".
 
 **Model not found (Ollama):**
 - Check: `ollama list` for available models
