@@ -95,6 +95,30 @@ For the SP1 reference (Fibonacci(20), 9,618 cycles): 68.8 s prove,
 2.45 GB peak RSS. Our target #1 (5,500–15,000 cycles per pair of runs)
 sits squarely in the same per-cycle envelope.
 
+### Proof mode comparison — target #1, crash witness (32 B)
+
+Apples-to-apples on the same witness across all three execution modes
+the prover supports as of the Phase 1.2 commit. Cold = first run on a
+clean cache; warm = subsequent runs with `pk` (and, for groth16, the
+6.2 GB circuit artifacts) already on disk.
+
+| Mode                  | Wall (in-process) | Wall (total, cold) | Peak RSS | Proof bytes | Verifier | Verified |
+|-----------------------|------------------:|-------------------:|---------:|------------:|---------:|---------:|
+| `--execute`           | 0.01 s            | 0.06 s             | —        | —           | —        | — (no proof) |
+| `--prove --wrap=core`    | 15–18 s (warm `pk`) | 124 s              | 1.33 GB  | **2,777,208** (2.65 MB) | sub-ms in-process | ✓ |
+| `--prove --wrap=groth16` | **17 m 11 s**     | **24 m 06 s** (incl. 6.2 GB download) | 2.89 GB  | **1,704** (1.7 KB) | **4.8 ms** in-process | ✓ |
+
+Read across the rows for the cost / compression tradeoff:
+
+- **core → groth16: ~60× wall-clock penalty in steady state, ~1,560× proof-size reduction** (2.65 MB → 1.7 KB).
+- Verifier time is the same order of magnitude for both wraps in-process (sub-ms to ms); the *real* benefit of Groth16 is the on-chain / cross-tool verifier that doesn't carry the SP1 SDK.
+- `--wrap=groth16` first run also pays a one-time **6.21 GB compressed / 7.8 GB extracted** circuit-artifact download (~10 min on a residential connection); the prover's `try_install_circuit_artifacts()` call (committed in Phase 1.2) makes this idempotent across reruns.
+- The 1,704 B figure is the SDK-saved bundle-friendly proof (includes public values + VK reference). The bare on-chain BN254 Groth16 proof is ~192–256 B — but a disclosure bundle wants the self-contained form, so 1,704 B is the right number for our CBOR envelope.
+
+See "Appendix: Phase 1.2 Groth16 bench" at the bottom of this doc for
+the full Gnark-stage breakdown (R1CS load / PK load / constraints
+solved / wrap step).
+
 ---
 
 ## Envelope round-trip (Task 7)
