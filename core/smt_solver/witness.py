@@ -131,6 +131,26 @@ def format_vars(
     `signed` accepts either a global `bool` (legacy) or a
     `Mapping[str, bool]` per-decl signedness map. Per-decl is
     preferred — see `_resolve_signedness`.
+
+    `completion` semantics (default False):
+      * False — `model[var]` returns None for variables Z3 didn't
+        constrain. The function silently skips them. Pre-fix
+        operators reading the resulting witness saw ONLY the
+        constrained vars but had no signal that OTHER vars
+        existed as unconstrained. A `pop_rdi_ret` solver model
+        with 8 free vars and 1 constrained showed only the 1
+        constrained — operators concluded the witness was
+        complete and tried to apply it, missing the 7 free
+        slots.
+      * True — Z3 fills any unconstrained variable with an
+        arbitrary concrete value (model completion). The
+        returned dict is then complete but the values for
+        unconstrained vars are arbitrary (a single satisfying
+        assignment, not "any").
+
+    The default stays False for back-compat. A debug-level log
+    line on each silent skip lets operators investigate
+    suspicious witness gaps without changing the public API.
     """
     out: Dict[str, int] = {}
     for name, var in vars_.items():
@@ -139,6 +159,21 @@ def format_vars(
         else:
             val = model[var]
         if val is None or not z3.is_bv_value(val):
+            # Pre-fix this skip was silent. Log so operators
+            # tailing debug see WHICH vars went unconstrained.
+            # `model[var] is None` (the unconstrained case) and
+            # "not a bv_value" (the corrupt-state case) are both
+            # surfaced via the same debug line — both indicate
+            # the witness will be incomplete.
+            try:
+                from core.logging import get_logger
+                get_logger(__name__).debug(
+                    "format_vars: skipping %r — model[%r]=%r "
+                    "(consider completion=True for model_completion semantics)",
+                    name, name, val,
+                )
+            except Exception:
+                pass
             continue
         out[name] = bv_to_int(
             val.as_long(), val.size(), _resolve_signedness(name, signed),
