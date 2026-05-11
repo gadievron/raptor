@@ -293,6 +293,82 @@ class TestHashFreshness:
         hashes = _extract_hashes(MINIMAL_CHECKLIST)
         assert hashes == {"src/routes/query.py": "aaa", "src/db/query.py": "bbb"}
 
+    def test_extract_hashes_guards_missing_path(self):
+        """File entry with sha256 but no path key skipped silently
+        (regression for R25 guard against KeyError in older
+        understand outputs that recorded synthesised pseudo-files
+        with hash-only entries)."""
+        checklist = {
+            "files": [
+                {"path": "good.py", "sha256": "111"},
+                {"sha256": "222"},  # missing path
+                {"path": "also_good.py", "sha256": "333"},
+            ]
+        }
+        # Pre-fix this raised KeyError mid-comprehension. Now skips
+        # the path-less entry and returns the good ones.
+        assert _extract_hashes(checklist) == {
+            "good.py": "111",
+            "also_good.py": "333",
+        }
+
+    def test_extract_hashes_guards_missing_sha(self):
+        """File entry with path but no sha256 key skipped silently
+        (the existing `if f.get('sha256')` guard, still validates
+        the post-R25 isinstance shape)."""
+        checklist = {
+            "files": [
+                {"path": "with_sha.py", "sha256": "abc"},
+                {"path": "no_sha.py"},  # missing sha256
+                {"path": "also_no_sha.py", "sha256": ""},  # empty
+                {"path": "good.py", "sha256": "def"},
+            ]
+        }
+        assert _extract_hashes(checklist) == {
+            "with_sha.py": "abc",
+            "good.py": "def",
+        }
+
+    def test_extract_hashes_guards_non_dict_entry(self):
+        """Non-dict element in `files` list skipped silently
+        (regression for R25 isinstance guard against AttributeError
+        when a corrupt-list-element snuck in)."""
+        checklist = {
+            "files": [
+                {"path": "good.py", "sha256": "111"},
+                "this_is_not_a_dict",  # corrupt element
+                None,
+                42,
+                ["nested", "list"],
+                {"path": "also_good.py", "sha256": "222"},
+            ]
+        }
+        # Pre-fix the string / list entries raised AttributeError on
+        # `.get('sha256')`. Now isinstance(f, dict) skips them.
+        assert _extract_hashes(checklist) == {
+            "good.py": "111",
+            "also_good.py": "222",
+        }
+
+    def test_extract_hashes_guards_non_string_values(self):
+        """File entry with non-string path/sha256 skipped silently
+        (the post-R25 isinstance(str) guard rejects int/None/list
+        values that would otherwise contaminate the dict and break
+        downstream filename-comparison logic)."""
+        checklist = {
+            "files": [
+                {"path": "good.py", "sha256": "111"},
+                {"path": 42, "sha256": "222"},  # non-string path
+                {"path": "x.py", "sha256": None},  # non-string sha
+                {"path": "y.py", "sha256": ["list", "value"]},
+                {"path": "also_good.py", "sha256": "333"},
+            ]
+        }
+        assert _extract_hashes(checklist) == {
+            "good.py": "111",
+            "also_good.py": "333",
+        }
+
     def test_stale_empty_when_matching(self, tmp_path):
         """On-disk files matching understand hashes → no stale files."""
         import hashlib
