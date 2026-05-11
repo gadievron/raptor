@@ -785,23 +785,45 @@ Examples:
         build_commands = {languages[0]: args.build_command}
 
     try:
-        # Initialize agent
+        # Pre-compute out_dir BEFORE constructing the agent so we
+        # can call set_active_run_dir FIRST. Pre-fix the order was:
+        #   1. agent = CodeQLAgent(...)        # init components
+        #   2. set_active_run_dir(agent.out_dir)
+        # Step 1's component constructors (DatabaseManager,
+        # QueryRunner, LanguageDetector, BuildDetector) shell out
+        # to detect codeql binaries, probe the sandbox profile,
+        # walk the repo. Each subprocess / probe can fire sandbox
+        # events (proxy connections, Landlock denials, audit-log
+        # entries). Until set_active_run_dir is called, the
+        # event-router has no destination — events are silently
+        # dropped. Operators reading sandbox-summary.json saw a
+        # mysterious gap covering the constructor window.
+        #
+        # Compute the same `out_dir` the constructor would compute,
+        # call set_active_run_dir, THEN construct the agent
+        # passing the path explicitly so the constructor uses
+        # OUR computed value (no second computation, no path drift).
+        from core.sandbox.summary import set_active_run_dir
+        if args.out:
+            _precomputed_out_dir = Path(args.out)
+        else:
+            from core.run.output import unique_run_suffix
+            _repo_name = Path(args.repo).resolve().name
+            _precomputed_out_dir = (
+                RaptorConfig.BASE_OUT_DIR
+                / f"codeql_{_repo_name}_{unique_run_suffix('_')}"
+            )
+        _precomputed_out_dir.parent.mkdir(parents=True, exist_ok=True)
+        safe_run_mkdir(_precomputed_out_dir)
+        set_active_run_dir(_precomputed_out_dir)
+
+        # Initialize agent — sandbox events from constructor probes
+        # now route to _precomputed_out_dir.
         agent = CodeQLAgent(
             repo_path=Path(args.repo),
-            out_dir=Path(args.out) if args.out else None,
+            out_dir=_precomputed_out_dir,
             codeql_cli=args.codeql_cli
         )
-
-        # Make record_denial calls (proxy events, generic Landlock
-        # denials) write to THIS subprocess's out_dir. Without this,
-        # active_run_dir is None → record_denial is no-op → events
-        # are silently dropped. The lifecycle hook in raptor.py /
-        # raptor_codeql.py wires this for top-level invocations;
-        # for the agentic flow, codeql/agent.py runs as a subprocess
-        # and must wire it itself. summarize_and_write at end-of-
-        # main converts the JSONL to sandbox-summary.json.
-        from core.sandbox.summary import set_active_run_dir
-        set_active_run_dir(agent.out_dir)
 
         # Run analysis
         result = agent.run_autonomous_analysis(
