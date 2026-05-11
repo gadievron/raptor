@@ -467,7 +467,8 @@ select sink.getNode(), source, sink, "IRIS dataflow path"
  * @problem.severity error
  */
 import javascript
-import DataFlow::PathGraph
+import semmle.javascript.dataflow.DataFlow
+import semmle.javascript.dataflow.TaintTracking
 
 module IrisConfig implements DataFlow::ConfigSig {{
   predicate isSource(DataFlow::Node n) {{
@@ -479,6 +480,7 @@ module IrisConfig implements DataFlow::ConfigSig {{
 }}
 
 module IrisFlow = TaintTracking::Global<IrisConfig>;
+import IrisFlow::PathGraph
 
 from IrisFlow::PathNode source, IrisFlow::PathNode sink
 where IrisFlow::flowPath(source, sink)

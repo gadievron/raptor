@@ -918,6 +918,7 @@ def check_path_feasibility(
     conditions: List[PathCondition],
     *,
     profile: BVProfile = BV_C_UINT64,
+    timeout_ms: Optional[int] = None,
 ) -> PathSMTResult:
     """
     Check whether a set of path conditions are jointly satisfiable.
@@ -959,7 +960,12 @@ def check_path_feasibility(
         )
 
     vars_: Dict[str, Any] = {}
-    solver = _new_solver()
+    # Per-call timeout override. Default to the substrate's
+    # DEFAULT_TIMEOUT_MS (5s). Callers that know their CWE-class
+    # solving-cost profile (CWE-190 wraparound is fast; CWE-787
+    # OOB with complex array indexing may need longer) can pass
+    # a tuned value via _tier4_smt_refine or the libexec shims.
+    solver = _new_solver(timeout_ms) if timeout_ms is not None else _new_solver()
     # Per-check anon-var mapping. Populated by `_substitute_calls`
     # as it allocates `_anon_N` placeholders for function-call
     # subterms; threaded into the PathSMTResult so downstream
