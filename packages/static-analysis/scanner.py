@@ -135,10 +135,26 @@ def _compute_python_tool_paths(cmd) -> list:
         if _interesting(bin_dir):
             paths.add(bin_dir)
     # 2. Read shebang to find the interpreter.
+    #
+    # Pre-fix `f.readline()` was unbounded — `readline` reads
+    # until newline OR EOF. A file at `cmd0` with no newline
+    # (a binary, a corrupted script, an attacker-planted file
+    # at the resolved path) would read the WHOLE file into RSS
+    # before we noticed it wasn't a shebang. For multi-MB
+    # binaries that happen to live at `cmd[0]` (semgrep itself
+    # is a Python wrapper but some installs ship a compiled
+    # bin), the readline allocated the binary's full contents.
+    #
+    # Cap at 4 KB. POSIX shebangs are limited to 127 chars on
+    # Linux + 512 on most BSDs anyway; 4 KB is well above any
+    # legitimate shebang line.
+    _SHEBANG_READ_CAP = 4096
     interp = None
     try:
         with open(cmd0, "rb") as f:
-            first_line = f.readline().decode("utf-8", errors="ignore").strip()
+            first_line = f.readline(_SHEBANG_READ_CAP).decode(
+                "utf-8", errors="ignore"
+            ).strip()
         if first_line.startswith("#!"):
             interp = first_line[2:].split()[0]
     except (OSError, IndexError, UnicodeDecodeError):
