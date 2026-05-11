@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Iterator, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from core.http import HttpClient
 
@@ -166,6 +166,49 @@ class OciRegistryClient:
             content_type=content_type.split(";", 1)[0].strip(),
             digest=digest,
         )
+
+    def list_tags(
+        self, ref: ImageRef, *, per_page: int = 100,
+    ) -> List[str]:
+        """Return the tag list for ``ref.repository`` on its registry.
+
+        Hits ``GET /v2/<repo>/tags/list?n=<per_page>``. The OCI
+        Distribution Spec ``/tags/list`` endpoint returns
+        ``{"name": "<repo>", "tags": [...]}``. Only the first page
+        is fetched — the bumper's "what's the latest stable tag"
+        use case doesn't need exhaustive pagination, and most
+        registries cap responses around 100-1000 tags anyway. If a
+        future caller needs all tags, follow the ``Link`` header.
+
+        Raises :class:`RegistryError` on non-200 or malformed
+        response.
+        """
+        url = f"/v2/{ref.repository}/tags/list?n={per_page}"
+        resp = self._authed_request("GET", ref.registry, url)
+        if resp.status_code != 200:
+            raise RegistryError(
+                resp.status_code,
+                f"tags/list failed for {ref.repository} on "
+                f"{ref.registry}: {resp.text[:200]}",
+            )
+        try:
+            data = json.loads(resp.content)
+        except (ValueError, TypeError) as e:
+            raise RegistryError(
+                resp.status_code,
+                f"tags/list JSON parse failed for "
+                f"{ref.repository}: {e}",
+            )
+        tags = data.get("tags") if isinstance(data, dict) else None
+        if not isinstance(tags, list):
+            raise RegistryError(
+                resp.status_code,
+                f"tags/list response missing 'tags' array "
+                f"for {ref.repository}",
+            )
+        # Filter to non-empty strings — registries occasionally
+        # include nulls for in-progress pushes.
+        return [t for t in tags if isinstance(t, str) and t]
 
     def stream_blob(
         self, ref: ImageRef, digest: str,
