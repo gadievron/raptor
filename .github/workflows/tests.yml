@@ -626,8 +626,15 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install clang + lld + llvm (RISC-V backend for guest C cross-compile)
-        run: sudo apt-get update && sudo apt-get install -y clang lld llvm jq
+      - name: Install clang + lld + llvm + protoc + go
+        # clang/lld/llvm provide the RISC-V backend for guest C
+        # cross-compile (build.rs's `clang --target=riscv64-...`).
+        # protobuf-compiler is needed by sp1-prover-types' build.rs.
+        # golang-go is a transitive build-time dep via
+        # sp1-recursion-gnark-ffi (pulled even in execute-only flows);
+        # see docs/research/zkpox-phase0-findings.md "Issues discovered"
+        # row 1.
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm protobuf-compiler golang-go jq
 
       - name: Cache SP1 toolchain + cargo + target
         uses: actions/cache@v4
