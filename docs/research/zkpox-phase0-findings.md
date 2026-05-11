@@ -388,3 +388,120 @@ same 18-min cliff.
   1.7 zlib-CVE demo running Groth16 wrap on each prove is feasible
   but not interactive. Future GPU acceleration brings this to
   sub-minute, per SP1's roadmap.
+
+---
+
+## Appendix: Phase 1.4 Sigstore Rekor anchoring (post-spike)
+
+Captured 2026-05-11 alongside the Phase 1.4 commit.
+
+### Shape of the work
+
+- `packages/zkpox/anchor.py` — Rekor producer: ed25519 keypair gen,
+  `hashedrekord/0.0.1` POST to `rekor.sigstore.dev` (overridable via
+  `ZKPOX_REKOR_URL`), response parsed into a typed `Timestamp`.
+- `packages/zkpox/bundle.py` — `Timestamp` dataclass added; new
+  `bundle_hash_pre_timestamp()` returns the canonical-CBOR sha256 of
+  the bundle with `timestamp` omitted. This is the hash Rekor binds
+  to, which is the property that lets the anchor be added *after* the
+  rest of the bundle is built without invalidating the binding.
+- `core/zkpox/verifier/` — reads and displays the timestamp
+  structurally (log_index, log_id, entry_uuid, integrated_time, tree
+  size, path length). **Full Merkle inclusion verification + Rekor STH
+  validation is Phase 1.4.x** — same pattern as the 1.3 verifier:
+  parse + display now, cryptographic checks land alongside the
+  `/verify-exploit-proof` command surface in 1.5.
+
+### Anchor flow
+
+```
+bundle (no timestamp)
+   │
+   │  bundle_hash_pre_timestamp(bundle)  →  32-byte digest
+   ▼
+ed25519.sign(digest)                     →  signature
+   ▼
+POST /api/v1/log/entries
+     { apiVersion: "0.0.1", kind: "hashedrekord",
+       spec: { data:      { hash: { algorithm, value } },
+               signature: { content, publicKey: { content } } } }
+   ▼
+Rekor 201
+     { <uuid>: { logIndex, logID, integratedTime,
+                 verification: { inclusionProof: {…},
+                                 signedEntryTimestamp } } }
+   ▼
+Timestamp dataclass               ─►  attached to bundle via with_timestamp
+```
+
+### Why "pre-timestamp" hash matters
+
+The natural mistake is to anchor the *final* bundle. But the final
+bundle contains the timestamp, which contains values returned by
+Rekor — chicken-and-egg. By hashing the bundle with `timestamp = None`,
+the same hash is produced before and after anchoring; verifiers
+recompute it from a received bundle by setting `timestamp = None` and
+re-serialising.
+
+Two tests guard this invariant (in `tests/test_bundle.py`):
+
+- `test_pre_anchor_hash_invariant_under_timestamp_mutation` —
+  asserts the hash doesn't change when the timestamp field is added
+  or rotated.
+- `test_pre_anchor_hash_changes_when_proof_changes` — the inverse:
+  mutating *any* non-timestamp field MUST change the hash, otherwise
+  Rekor's anchor doesn't bind what we claim.
+
+### What's deferred to Phase 1.4.x
+
+Phase 1.4 establishes the weakest useful Rekor property: "Rekor
+recorded a hash matching our bundle at log index N." Real soundness
+needs three more steps, all of which are mechanical extensions:
+
+1. **Merkle inclusion-proof verification.** The `inclusion_proof_hashes`
+   list is a path of sibling-hash nodes; combined with the leaf hash
+   and the recorded `inclusion_proof_root_hash`, you reconstruct the
+   tree root and confirm it matches. ~50 lines of RFC 9162-compatible
+   code; defer until the Rust verifier learns `sp1-sdk`.
+2. **Signed tree-head (STH) validation.** Rekor publishes signed tree
+   heads at `/api/v1/log`; verifying our recorded `root_hash` matches
+   one of those tree heads (or chains to a more recent one via a
+   consistency proof) is what makes the inclusion proof
+   trust-rooted in Rekor's signing key rather than just in the
+   server-of-the-moment.
+3. **Offline verifier.** Phase 1.4's `confirm_anchor_matches()`
+   fetches the entry from Rekor at verify-time. A truly offline
+   verifier would compare against the locally-stored inclusion proof
+   instead, and only ever go online to refresh Rekor's STH key.
+
+### Network and ergonomic costs
+
+- Anchoring costs **one POST** to Rekor (~200–500 ms on a residential
+  connection from this Mac). The response body is ~2 KB.
+- The `Timestamp` field adds ~250 bytes to the CBOR bundle.
+- Public Rekor is rate-limited; bursts of anchors should batch or
+  back off. Self-hosted Rekor (e.g. private CVD pipelines) has no
+  rate limit.
+- The default URL `https://rekor.sigstore.dev` is hard-coded but
+  overridable via `ZKPOX_REKOR_URL` — internal CI may want to
+  anchor to a private log; vendors may want their own log of
+  disclosures they've received.
+
+### Tests landed
+
+`packages/zkpox/tests/test_anchor.py`:
+
+- Keypair generation + ed25519 self-verify.
+- SubjectPublicKeyInfo PEM round-trip (Rekor's expected format).
+- Ed25519 determinism (same key + message → same signature).
+- `_make_hashedrekord_entry` schema shape (catches drift offline).
+- `ZKPOX_REKOR_URL` env override.
+- **Network-gated:** `test_anchor_and_confirm_round_trip` actually
+  anchors a synthetic bundle, GETs it back, asserts the recorded hash
+  matches the locally-computed `bundle_hash_pre_timestamp`. Gated on
+  `RAPTOR_NET_TESTS=1` because it writes a permanent public Rekor
+  entry.
+
+`packages/zkpox/tests/test_bundle.py` gained 4 Timestamp-specific
+tests covering round-trip, schema presence, and the two
+pre-anchor-hash invariants above.
