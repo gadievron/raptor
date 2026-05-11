@@ -898,13 +898,22 @@ class EgressProxy:
             self._ready.set()
             return
         finally:
-            if self._server is not None:
+            # Pre-fix `self._loop.close()` raised AttributeError if
+            # `new_event_loop()` itself raised at the top of the try
+            # (rare — under heavy fd pressure / sandbox configs that
+            # blocked the loop's internal pipe creation). `self._loop`
+            # was still None from the constructor, so `.close()` on
+            # None crashed the finally and masked the original error.
+            # Same for `_server` which is also None until `start_server`
+            # completes — guard both.
+            if self._server is not None and self._loop is not None:
                 self._server.close()
                 try:
                     self._loop.run_until_complete(self._server.wait_closed())
                 except Exception:
                     pass
-            self._loop.close()
+            if self._loop is not None:
+                self._loop.close()
 
     # ----- async CONNECT handler -----
 
