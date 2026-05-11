@@ -1391,12 +1391,24 @@ class EgressProxy:
                 return
             if not chunk:
                 return
-            counters[counter_key] += len(chunk)
+            # Pre-fix the counter was bumped BEFORE `dst.drain()`. If
+            # drain raised (peer reset, broken pipe), the counter
+            # had already recorded the chunk as "delivered" even
+            # though the write never completed end-to-end. Audit
+            # logs over-reported bytes-relayed; capacity-planning
+            # off the bytes_c2u/bytes_u2c counters drifted up by
+            # the size of every aborted final chunk.
+            #
+            # Move the increment AFTER successful drain. The
+            # ConnectionResetError / BrokenPipeError branch returns
+            # early without bumping so the count reflects "bytes
+            # actually pushed through" rather than "bytes attempted".
             dst.write(chunk)
             try:
                 await dst.drain()
             except (ConnectionResetError, BrokenPipeError):
                 return
+            counters[counter_key] += len(chunk)
 
     async def _write_error(self, writer: asyncio.StreamWriter,
                            code: int, reason: str) -> None:
