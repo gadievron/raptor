@@ -618,18 +618,25 @@ class EgressProxy:
             self._sandbox_buffers_snapshot = tuple(
                 self._sandbox_buffers.values()
             )
-        # Copy + stamp outside the lock. The snapshot has been refreshed
-        # so _record's hot-path readers won't pick up this buffer
-        # anymore. A late append from a tunnel handler that already
-        # snapshotted the OLD tuple may still land on `events`, but
-        # since the iteration below is the only consumer that sees this
-        # list, the late append is silently dropped from the caller's
-        # returned view (CPython list iteration tolerates concurrent
-        # appends without raising). Caller's audit trail remains
-        # consistent with the snapshot-at-unregister-time semantics.
-        if label is not None:
-            return [{**e, "caller": label} for e in events]
-        return [dict(e) for e in events]
+            # Pre-fix the copy `[{**e, "caller": label} for e in events]`
+            # happened OUTSIDE the lock. Per the docstring some event
+            # fields (bytes_c2u, bytes_u2c, duration) are mutated in
+            # place after the at-open record. If the recorder thread
+            # mid-mutated a dict during the spread (`{**e}` reads
+            # keys/values one at a time, not atomically), the copied
+            # dict captured a half-updated state — bytes_c2u updated
+            # but bytes_u2c stale, or duration updated but the bytes
+            # counters not yet. Operators reading the audit trail saw
+            # nonsensical inconsistencies they had to filter out.
+            #
+            # Move the copy inside the lock. The recorder's mutate
+            # path also takes `_buffer_lock` (see `_record`), so the
+            # spread now happens with the recorder serialised out.
+            # Cost: a few extra microseconds per event in unregister;
+            # benefit: consistent snapshots in the audit trail.
+            if label is not None:
+                return [{**e, "caller": label} for e in events]
+            return [dict(e) for e in events]
 
     def _record(self, event: dict) -> None:
         """Fan a tunnel event into every registered sandbox's buffer.
