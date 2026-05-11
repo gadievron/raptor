@@ -53,6 +53,13 @@ declare -a failures=()
 shopt -s nullglob
 for w in witnesses/*.bin; do
     base=$(basename "$w" .bin)
+    # Filename schema: <NN>-<descriptor>-<verdict>.bin where NN is the
+    # target id ("01" or "02"); see witnesses/generate.py.
+    target="${base:0:2}"
+    case "$target" in
+        01|02) ;;
+        *) echo "skip: $base (no target prefix)"; continue ;;
+    esac
     case "$base" in
         *-benign) expected_crash="false" expected_oob="false" ;;
         *-crash)  expected_crash="true"  expected_oob="true"  ;;
@@ -60,7 +67,7 @@ for w in witnesses/*.bin; do
         *) echo "skip: $base (no verdict suffix)"; continue ;;
     esac
 
-    out=$("$BIN" --witness "$w" $MODE --tag "regression:$base" 2>/dev/null) || {
+    out=$("$BIN" --witness "$w" "--target=$target" $MODE --tag "regression:$base" 2>/dev/null) || {
         printf '  [ERROR]    %-40s harness exited non-zero\n' "$base"
         failures+=("$base (harness error)")
         fail=$((fail + 1))
@@ -71,11 +78,22 @@ for w in witnesses/*.bin; do
     oob=$(echo "$out" | jq -r '.verdicts.oob_detected')
     oob_count=$(echo "$out" | jq -r '.verdicts.oob_count')
     oob_offset=$(echo "$out" | jq -r '.verdicts.oob_first_offset')
+    target_id=$(echo "$out" | jq -r '.verdicts.target_id')
     metric=$(echo "$out" | jq -r '.cycles // .wall_secs')
 
+    # Soundness check: the guest must echo back the target id we sent.
+    expected_target_id=$((10#$target))
+    if [[ "$target_id" != "$expected_target_id" ]]; then
+        printf '  [FAIL] %-38s target_id=%s/%s (guest dispatch wrong)\n' \
+            "$base" "$target_id" "$expected_target_id"
+        failures+=("$base (target_id=$target_id/$expected_target_id)")
+        fail=$((fail + 1))
+        continue
+    fi
+
     if [[ "$crash" == "$expected_crash" && "$oob" == "$expected_oob" ]]; then
-        printf '  [PASS] %-38s crash_only=%-5s oob=%-5s n=%s @off=%s metric=%s\n' \
-            "$base" "$crash" "$oob" "$oob_count" "$oob_offset" "$metric"
+        printf '  [PASS] %-38s t=%s crash_only=%-5s oob=%-5s n=%s @off=%s metric=%s\n' \
+            "$base" "$target_id" "$crash" "$oob" "$oob_count" "$oob_offset" "$metric"
         pass=$((pass + 1))
     else
         printf '  [FAIL] %-38s crash_only=%s/%s oob=%s/%s\n' \
