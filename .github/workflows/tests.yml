@@ -87,6 +87,7 @@ jobs:
       fuzzing: ${{ steps.filter.outputs.fuzzing }}
       sage: ${{ steps.filter.outputs.sage }}
       orchestration: ${{ steps.filter.outputs.orchestration }}
+      zkpox: ${{ steps.filter.outputs.zkpox }}
       force_full: ${{ steps.force.outputs.force_full }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
@@ -596,4 +597,62 @@ jobs:
         run: |
           source $VENV_PATH/bin/activate
           python -m pytest core/orchestration/tests -n auto
+
+  # ZKPoX regression: build the SP1 guest + host prover, regenerate
+  # the witness corpus, and run the execute-mode sweep through every
+  # witness in core/zkpox/test/witnesses/. Catches the kind of
+  # breakage that only surfaces when the real SP1 cross-compile +
+  # gadget primitive actually run on a witness (e.g., a "crash"
+  # witness whose bytes interact with strcat semantics in a way the
+  # bug doesn't fire on).
+  #
+  # Scope: execute mode only. --prove --wrap=core is ~17 s/witness
+  # warm × 40 witnesses ≈ 11 min just for proves; --wrap=groth16
+  # is ~17 min/witness plus a one-time 6.2 GB circuit-artifact
+  # download. Either belongs on the schedule/nightly tier, not a
+  # PR gate. See docs/research/zkpox-phase0-findings.md.
+  zkpox-regression:
+    needs: [pre_check, changes]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.zkpox == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install clang + lld + llvm (RISC-V backend for guest C cross-compile)
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm jq
+
+      - name: Cache SP1 toolchain + cargo + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.sp1
+            ~/.cargo/registry
+            ~/.cargo/git
+            core/zkpox/target
+          key: zkpox-${{ runner.os }}-${{ hashFiles('core/zkpox/Cargo.lock') }}
+          restore-keys: |
+            zkpox-${{ runner.os }}-
+
+      - name: Install SP1 (sp1up)
+        run: |
+          curl -L https://sp1up.succinct.xyz | bash
+          echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
+          "$HOME/.sp1/bin/sp1up"
+
+      - name: Build zkpox workspace
+        run: cargo build --release --manifest-path core/zkpox/Cargo.toml
+
+      - name: Regenerate witness corpus
+        run: python3 core/zkpox/test/witnesses/generate.py
+
+      - name: Regression sweep (execute mode)
+        run: bash core/zkpox/test/run-tests.sh
 
