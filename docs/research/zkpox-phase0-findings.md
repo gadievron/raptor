@@ -388,3 +388,241 @@ same 18-min cliff.
   1.7 zlib-CVE demo running Groth16 wrap on each prove is feasible
   but not interactive. Future GPU acceleration brings this to
   sub-minute, per SP1's roadmap.
+
+---
+
+## Appendix: Phase 1.4 Sigstore Rekor anchoring (post-spike)
+
+Captured 2026-05-11 alongside the Phase 1.4 commit.
+
+### Shape of the work
+
+- `packages/zkpox/anchor.py` — Rekor producer: ed25519 keypair gen,
+  `hashedrekord/0.0.1` POST to `rekor.sigstore.dev` (overridable via
+  `ZKPOX_REKOR_URL`), response parsed into a typed `Timestamp`.
+- `packages/zkpox/bundle.py` — `Timestamp` dataclass added; new
+  `bundle_hash_pre_timestamp()` returns the canonical-CBOR sha256 of
+  the bundle with `timestamp` omitted. This is the hash Rekor binds
+  to, which is the property that lets the anchor be added *after* the
+  rest of the bundle is built without invalidating the binding.
+- `core/zkpox/verifier/` — reads and displays the timestamp
+  structurally (log_index, log_id, entry_uuid, integrated_time, tree
+  size, path length). **Full Merkle inclusion verification + Rekor STH
+  validation is Phase 1.4.x** — same pattern as the 1.3 verifier:
+  parse + display now, cryptographic checks land alongside the
+  `/verify-exploit-proof` command surface in 1.5.
+
+### Anchor flow
+
+```
+bundle (no timestamp)
+   │
+   │  bundle_hash_pre_timestamp(bundle)  →  32-byte digest
+   ▼
+ed25519.sign(digest)                     →  signature
+   ▼
+POST /api/v1/log/entries
+     { apiVersion: "0.0.1", kind: "hashedrekord",
+       spec: { data:      { hash: { algorithm, value } },
+               signature: { content, publicKey: { content } } } }
+   ▼
+Rekor 201
+     { <uuid>: { logIndex, logID, integratedTime,
+                 verification: { inclusionProof: {…},
+                                 signedEntryTimestamp } } }
+   ▼
+Timestamp dataclass               ─►  attached to bundle via with_timestamp
+```
+
+### Why "pre-timestamp" hash matters
+
+The natural mistake is to anchor the *final* bundle. But the final
+bundle contains the timestamp, which contains values returned by
+Rekor — chicken-and-egg. By hashing the bundle with `timestamp = None`,
+the same hash is produced before and after anchoring; verifiers
+recompute it from a received bundle by setting `timestamp = None` and
+re-serialising.
+
+Two tests guard this invariant (in `tests/test_bundle.py`):
+
+- `test_pre_anchor_hash_invariant_under_timestamp_mutation` —
+  asserts the hash doesn't change when the timestamp field is added
+  or rotated.
+- `test_pre_anchor_hash_changes_when_proof_changes` — the inverse:
+  mutating *any* non-timestamp field MUST change the hash, otherwise
+  Rekor's anchor doesn't bind what we claim.
+
+### What's deferred to Phase 1.4.x
+
+Phase 1.4 establishes the weakest useful Rekor property: "Rekor
+recorded a hash matching our bundle at log index N." Real soundness
+needs three more steps, all of which are mechanical extensions:
+
+1. **Merkle inclusion-proof verification.** The `inclusion_proof_hashes`
+   list is a path of sibling-hash nodes; combined with the leaf hash
+   and the recorded `inclusion_proof_root_hash`, you reconstruct the
+   tree root and confirm it matches. ~50 lines of RFC 9162-compatible
+   code; defer until the Rust verifier learns `sp1-sdk`.
+2. **Signed tree-head (STH) validation.** Rekor publishes signed tree
+   heads at `/api/v1/log`; verifying our recorded `root_hash` matches
+   one of those tree heads (or chains to a more recent one via a
+   consistency proof) is what makes the inclusion proof
+   trust-rooted in Rekor's signing key rather than just in the
+   server-of-the-moment.
+3. **Offline verifier.** Phase 1.4's `confirm_anchor_matches()`
+   fetches the entry from Rekor at verify-time. A truly offline
+   verifier would compare against the locally-stored inclusion proof
+   instead, and only ever go online to refresh Rekor's STH key.
+
+### Network and ergonomic costs
+
+- Anchoring costs **one POST** to Rekor (~200–500 ms on a residential
+  connection from this Mac). The response body is ~2 KB.
+- The `Timestamp` field adds ~250 bytes to the CBOR bundle.
+- Public Rekor is rate-limited; bursts of anchors should batch or
+  back off. Self-hosted Rekor (e.g. private CVD pipelines) has no
+  rate limit.
+- The default URL `https://rekor.sigstore.dev` is hard-coded but
+  overridable via `ZKPOX_REKOR_URL` — internal CI may want to
+  anchor to a private log; vendors may want their own log of
+  disclosures they've received.
+
+### Tests landed
+
+`packages/zkpox/tests/test_anchor.py`:
+
+- Keypair generation + ed25519 self-verify.
+- SubjectPublicKeyInfo PEM round-trip (Rekor's expected format).
+- Ed25519 determinism (same key + message → same signature).
+- `_make_hashedrekord_entry` schema shape (catches drift offline).
+- `ZKPOX_REKOR_URL` env override.
+- **Network-gated:** `test_anchor_and_confirm_round_trip` actually
+  anchors a synthetic bundle, GETs it back, asserts the recorded hash
+  matches the locally-computed `bundle_hash_pre_timestamp`. Gated on
+  `RAPTOR_NET_TESTS=1` because it writes a permanent public Rekor
+  entry.
+
+`packages/zkpox/tests/test_bundle.py` gained 4 Timestamp-specific
+tests covering round-trip, schema presence, and the two
+pre-anchor-hash invariants above.
+
+---
+
+## Appendix: Phase 1.6 — second C target
+
+Phase 0 demonstrated the redzone+pattern *primitive* generalises;
+Phase 1.6 lands a concrete second instance to back the claim.
+
+### What target #2 adds
+
+`core/zkpox/targets/02-off-by-one.c`:
+
+```c
+for (size_t i = 0; i <= buf_size && i < n; i++) {
+    buf[i] = input[i];   // bug: <= instead of <
+}
+```
+
+Distinct bug *shape* from target 01's "no bound check at all":
+
+- Target 01 (stack BOF): any `n > buf_size` writes `n - buf_size`
+  bytes past the buffer.
+- Target 02 (off-by-one): any `n > buf_size` writes EXACTLY ONE
+  byte at offset `buf_size`. Subsequent input bytes are unreached.
+
+That difference is a structural-output test the gadget infrastructure
+has to pass: `oob_count` for target-02 crash witnesses is always 1,
+regardless of `n`. The bench table below confirms this.
+
+### Schema bump: target_id in public values
+
+The guest now reads a 1-byte `target_id` prefix off the witness and
+commits it as the *first* public value. Schema is now 5 fields:
+
+```
+target_id              : u32   (0x01 = stack-bof, 0x02 = off-by-one)
+crash_only_crashed     : bool
+oob_detected           : bool
+oob_count              : u32
+oob_first_offset       : i32
+```
+
+Pre-1.6 witnesses (no prefix byte) get default-routed to target 01;
+the prover's `--target` flag defaults to 01 too, so Phase 0 / 1.1–1.5
+bench commands keep producing comparable numbers.
+
+The host prepends the byte before `stdin.write()`; witnesses on disk
+stay as raw exploit bytes. `core/zkpox/test/run-tests.sh` parses the
+target id from each witness's filename prefix (`01-…`, `02-…`) and
+passes the matching `--target` flag.
+
+### Bench table — target 02
+
+Same gadget pair (`crash_only` + `oob_write`) as target 01, both
+running in execute mode over the new witness corpus.
+
+| Witness                 | Bytes | Cycles | crash_only | oob_write | n  | offset |
+|-------------------------|-------|--------|------------|-----------|----|--------|
+| 02-empty-benign         | 0     |  8,229 | false      | false     | 0  | —      |
+| 02-1byte-benign         | 1     |  8,808 | false      | false     | 0  | —      |
+| 02-benign               | 5     |  9,108 | false      | false     | 0  | —      |
+| 02-15bytes-benign       | 15    |  9,793 | false      | false     | 0  | —      |
+| 02-fill16-benign        | 16    |  9,860 | false      | false     | 0  | —      |
+| 02-overflow1-crash      | 17    |  9,930 | true       | true      | **1** | +16 |
+| 02-overflow2-crash      | 18    |  9,943 | true       | true      | **1** | +16 |
+| 02-crash                | 32    | 10,327 | true       | true      | **1** | +16 |
+| 02-deep-crash           | 96    | 12,715 | true       | true      | **1** | +16 |
+| 02-highbit-crash        | 32    | 10,327 | true       | true      | **1** | +16 |
+| 02-zerobyte-crash       | 17    |  9,930 | true       | true      | **1** | +16 |
+| 02-canarymatch-fn       | 17    |  9,926 | **false**  | **true**  | 1  | +16   |
+
+Every crash witness reports `oob_count = 1` — the off-by-one's signature.
+
+For comparison, the same-length witnesses against target 01:
+
+| Witness            | Bytes | t01 oob_count | t02 oob_count |
+|--------------------|-------|--------------:|--------------:|
+| -overflow1-crash   | 17    |   1           |   1           |
+| -overflow2-crash   | 18    |   2           |   1           |
+| -crash             | 32    |  16           |   1           |
+| -deep-crash        | 96/100|  83           |   1           |
+
+The gap widens with witness length — exactly the structural difference
+between "every byte past the buffer is written" and "one byte past the
+buffer is written, then return."
+
+### Soundness probes
+
+`02-canarymatch-fn.bin` writes the canary value (0xA5) at exactly the
+off-by-one byte position. Same `crash_only=false, oob_detected=true`
+verdict as the target-01 canarymatch witnesses — the gadget upgrade
+generalises cleanly to the new bug shape, no per-target patching of
+the redzone primitive needed.
+
+### Regression / pytest coverage
+
+`run-tests.sh` now iterates the 25-witness combined corpus, parsing
+target id from each filename prefix and asserting target-id round-trip
+in addition to the gadget verdicts. 25/25 pass on this Mac.
+
+`packages/zkpox/tests/test_regression.py` wraps the shell harness in a
+pytest test — subprocesses `bash run-tests.sh`, asserts exit 0, plus
+some structural checks (both target families present in output, ≥25
+passes). **Gated behind `RAPTOR_SLOW_TESTS=1`** — SP1 SDK startup
+costs ~20 s per invocation, so a full sweep is ~10 min wall-clock.
+CI workflows in Phase 1.8 can opt in on a slower job tier.
+
+Default pytest run (no slow / no network) is 27 passes, 3 skips, ~0.6 s.
+
+### What 1.6 did NOT do
+
+- Add a third target. Two is enough to demonstrate the abstraction
+  generalises; the proposal's full "5 known-vulnerable / 5 known-safe
+  binary pairs per gadget" is part of the Phase 1.7 demo plan.
+- Wire the bundle to thread `target_id` through to `proof.system` or
+  the `vulnerability` substructure. Currently the bundle's
+  `gadget_id` describes the *gadget*; producers should label the
+  target via a free-form `target.metadata.target_id` until the
+  schema picks a canonical home (1.7 candidate).
+- Bench prove-mode numbers for target 02 — same shape as target 01
+  (the wrap step is target-agnostic), no new information to learn.

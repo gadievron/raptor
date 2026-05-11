@@ -39,11 +39,40 @@ enum Wrap {
     Groth16,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum, Serialize)]
+#[serde(rename_all = "lowercase")]
+#[clap(rename_all = "lowercase")]
+enum TargetSel {
+    /// Target 01 — stack BOF (no bound check at all).
+    #[clap(name = "01")]
+    #[serde(rename = "01")]
+    T01,
+    /// Target 02 — off-by-one (i <= buf_size).
+    #[clap(name = "02")]
+    #[serde(rename = "02")]
+    T02,
+}
+
+impl TargetSel {
+    fn id_byte(self) -> u8 {
+        match self {
+            TargetSel::T01 => 0x01,
+            TargetSel::T02 => 0x02,
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
-#[command(about = "zkpox-prove — SP1 driver for stack-BOF target")]
+#[command(about = "zkpox-prove — SP1 driver for the multi-target guest")]
 struct Args {
     #[arg(long, value_name = "FILE")]
     witness: PathBuf,
+
+    /// Which C target the witness belongs to. The prover prepends a
+    /// one-byte selector to the witness bytes; the guest dispatches on
+    /// it (see core/zkpox/guest/src/main.rs).
+    #[arg(long, value_enum, default_value_t = TargetSel::T01)]
+    target: TargetSel,
 
     #[arg(long, conflicts_with = "prove")]
     execute: bool,
@@ -71,6 +100,7 @@ struct Args {
 
 #[derive(Serialize)]
 struct Verdicts {
+    target_id: u32,
     crash_only_crashed: bool,
     oob_detected: bool,
     oob_count: u32,
@@ -94,12 +124,15 @@ struct BenchRecord<'a> {
 }
 
 fn read_verdicts(public_values: &mut sp1_sdk::SP1PublicValues) -> Verdicts {
-    // Order must match the four `commit(...)` calls in the guest.
+    // Order must match the five `commit(...)` calls in the guest
+    // (core/zkpox/guest/src/main.rs).
+    let target_id: u32 = public_values.read::<u32>();
     let crash_only_crashed: bool = public_values.read::<bool>();
     let oob_detected: bool = public_values.read::<bool>();
     let oob_count: u32 = public_values.read::<u32>();
     let oob_first_offset: i32 = public_values.read::<i32>();
     Verdicts {
+        target_id,
         crash_only_crashed,
         oob_detected,
         oob_count,
@@ -134,8 +167,14 @@ fn main() -> Result<()> {
         .with_context(|| format!("reading witness {}", args.witness.display()))?;
     let witness_bytes = witness.len() as u64;
 
+    // Prepend the target-id byte so the guest's dispatch picks the
+    // right C victim binding. Phase 1.6 schema: [target_id: u8] || witness.
+    let mut framed = Vec::with_capacity(witness.len() + 1);
+    framed.push(args.target.id_byte());
+    framed.extend_from_slice(&witness);
+
     let mut stdin = SP1Stdin::new();
-    stdin.write(&witness);
+    stdin.write(&framed);
 
     let client = ProverClient::from_env();
 
