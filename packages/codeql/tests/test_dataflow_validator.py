@@ -107,3 +107,153 @@ class TestInferBVProfileInvalidHints:
     def test_missing_keys_tolerated(self):
         p = _infer_bv_profile("cpp/integer-overflow-bug", {})
         assert p.width == 32
+
+
+# ---------------------------------------------------------------------
+# Sanitizer-evidence integration (PR1c-2)
+# ---------------------------------------------------------------------
+
+
+from pathlib import Path as _Path
+from unittest.mock import MagicMock
+
+from core.dataflow.sanitizer_evidence import (
+    PROVENANCE_LLM,
+    SEMANTICS_SQL_ESCAPE,
+    CandidateValidator,
+    SanitizerEvidence,
+    StepAnnotation,
+)
+from core.security.prompt_envelope import UntrustedBlock
+from packages.codeql.dataflow_validator import (
+    DataflowPath,
+    DataflowStep,
+    SANITIZER_EVIDENCE_INSTRUCTIONS,
+    _build_sanitizer_evidence_block,
+)
+
+
+def _dp() -> DataflowPath:
+    return DataflowPath(
+        source=DataflowStep(file_path="a.py", line=1, column=0, snippet="x", label="source"),
+        sink=DataflowStep(file_path="a.py", line=2, column=0, snippet="y", label="sink"),
+        intermediate_steps=[],
+        sanitizers=[],
+        rule_id="py/x",
+        message="m",
+    )
+
+
+def _evidence_with_one_candidate() -> SanitizerEvidence:
+    return SanitizerEvidence(
+        candidate_pool=(
+            CandidateValidator(
+                name="escape_sql",
+                qualified_name="db.escape_sql",
+                semantics_tag=SEMANTICS_SQL_ESCAPE,
+                semantics_text="doubles single quotes",
+                confidence=0.9,
+                source_file="db/helpers.py",
+                source_line=18,
+                extraction_provenance=PROVENANCE_LLM,
+            ),
+        ),
+        step_annotations=(
+            StepAnnotation(step_index=0, on_path_validators=("db.escape_sql",)),
+        ),
+        pool_completeness="scoped_to_2_files",
+    )
+
+
+class TestBuildSanitizerEvidenceBlock:
+    """The helper that turns SanitizerEvidence into an UntrustedBlock for
+    injection into the validate_path prompt. Free function — testable
+    without instantiating DataflowValidator (which needs a full
+    LLM-client mock)."""
+
+    def test_no_collector_returns_none(self):
+        result = _build_sanitizer_evidence_block(
+            None, _dp(), _Path("/tmp"), MagicMock()
+        )
+        assert result is None
+
+    def test_collector_returning_none_returns_none(self):
+        def _collector(_dp, _path):
+            return None
+
+        result = _build_sanitizer_evidence_block(
+            _collector, _dp(), _Path("/tmp"), MagicMock()
+        )
+        assert result is None
+
+    def test_collector_returning_evidence_produces_untrusted_block(self):
+        def _collector(_dp, _path):
+            return _evidence_with_one_candidate()
+
+        result = _build_sanitizer_evidence_block(
+            _collector, _dp(), _Path("/tmp"), MagicMock()
+        )
+        assert isinstance(result, UntrustedBlock)
+        assert result.kind == "sanitizer-evidence"
+        assert result.origin == "project-source-extracted"
+        assert "escape_sql" in result.content
+        assert "db.escape_sql" in result.content
+
+    def test_collector_exception_logged_and_returns_none(self):
+        def _collector(_dp, _path):
+            raise RuntimeError("boom")
+
+        log = MagicMock()
+        result = _build_sanitizer_evidence_block(
+            _collector, _dp(), _Path("/tmp"), log
+        )
+        assert result is None
+        assert log.warning.called
+        # The first positional arg of warning() is the format string;
+        # check the boom mention appears in the formatted message.
+        call_args = log.warning.call_args
+        rendered = call_args.args[0] % tuple(call_args.args[1:])
+        assert "boom" in rendered
+
+    def test_collector_passed_dataflow_and_repo_root(self):
+        captured = {}
+
+        def _collector(dp, path):
+            captured["dp"] = dp
+            captured["path"] = path
+            return None
+
+        repo = _Path("/some/repo")
+        _build_sanitizer_evidence_block(_collector, _dp(), repo, MagicMock())
+        assert captured["path"] == repo
+        assert captured["dp"].rule_id == "py/x"
+
+
+class TestSanitizerEvidenceInstructions:
+    """The system-prompt addendum applied only when an evidence block is
+    built. Tested as a string so an accidental rename / removal in a
+    refactor surfaces as a test failure."""
+
+    def test_instructions_constant_is_non_empty(self):
+        assert SANITIZER_EVIDENCE_INSTRUCTIONS.strip() != ""
+
+    def test_instructions_mention_semantic_judgement_requirement(self):
+        """Regression guard: the LLM must be told to check that the
+        candidate's semantics_tag matches the sink's attack class."""
+        text = SANITIZER_EVIDENCE_INSTRUCTIONS.lower()
+        assert "semantics" in text
+        assert "attack class" in text
+
+    def test_instructions_warn_against_partial_validators(self):
+        """Regression guard: the 2026-05-10 corpus measurement showed
+        the LLM judge accepted regex-blocklist 'validators' and
+        downgraded real exploits. The addendum must warn that 0.5-0.9
+        confidence candidates are partial defences with known bypasses."""
+        text = SANITIZER_EVIDENCE_INSTRUCTIONS.lower()
+        assert "partial" in text
+        assert "bypass" in text or "do not mark" in text
+
+    def test_instructions_warn_about_inlined_helpers_gap(self):
+        """The inlined_helpers field is the honest 'we didn't follow
+        these' caveat. The LLM must know to weigh that gap."""
+        assert "inlined helpers" in SANITIZER_EVIDENCE_INSTRUCTIONS.lower()

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "juiceshop_semgrep_javascript-express-security-express-mass-assignment_acf2765c6100",
+  "verdict": "false_positive",
+  "fp_category": "framework_mitigation",
+  "rationale": "req.body.id and review id are used to update a review, but the _correct variant filters by author === user.email so a user can only edit their own reviews. Pattern matcher sees the update with user-controlled id and flags it; the ownership predicate is the framework-side mitigation.",
+  "labeler": "handlabel-juice-shop-webgoat",
+  "labeled_at": "2026-05-10"
+}

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "juiceshop_semgrep_javascript-express-security-audit-missing-auth_2ae205ef16ae",
+  "verdict": "false_positive",
+  "fp_category": "framework_mitigation",
+  "rationale": "Same admin route, but wrapped with security.isAuthorized() middleware checking admin role. Pattern matchers that only see the route declaration miss the middleware chain.",
+  "labeler": "handlabel-juice-shop-webgoat",
+  "labeled_at": "2026-05-10"
+}

@@ -1,0 +1,318 @@
+{
+  "schema_version": 1,
+  "finding_id": "owasp_BenchmarkTest01517_codeql_java-command-line-injection_8957b9b48d2f",
+  "producer": "codeql",
+  "rule_id": "java/command-line-injection",
+  "message": "This command line depends on a [user-provided value](1).",
+  "source": {
+    "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/helpers/SeparateClassRequest.java",
+    "line": 31,
+    "column": 16,
+    "snippet": "return request.getParameter(p);",
+    "label": "getParameter(...) : String"
+  },
+  "sink": {
+    "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01517.java",
+    "line": 62,
+    "column": 48,
+    "snippet": "ProcessBuilder pb = new ProcessBuilder(args);",
+    "label": "args"
+  },
+  "intermediate_steps": [
+    {
+      "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01517.java",
+      "line": 45,
+      "column": 24,
+      "snippet": "String param = scr.getTheParameter(\"BenchmarkTest01517\");",
+      "label": "getTheParameter(...) : String"
+    },
+    {
+      "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01517.java",
+      "line": 48,
+      "column": 54,
+      "snippet": "String bar = new Test().doSomething(request, param);",
+      "label": "param : String"
+    },
+    {
+      "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01517.java",
+      "line": 76,
+      "column": 63,
+      "snippet": "public String doSomething(HttpServletRequest request, String param)",
+      "label": "param : String"
+    },
+    {
+      "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01517.java",
+      "line": 86,
+      "column": 20,
+      "snippet": "return bar;",
+      "label": "bar : String"
+    },
+    {
+      "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01517.java",
+      "line": 48,
+      "column": 22,
+      "snippet": "String bar = new Test().doSomething(request, param);",
+      "label": "doSomething(...) : String"
+    },
+    {
+      "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01517.java",
+      "line": 60,
+      "column": 34,
+      "snippet": "String[] args = {a1, a2, \"echo \" + bar};",
+      "label": "... + ... : String"
+    },
+    {
+      "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01517.java",
+      "line": 60,
+      "column": 25,
+      "snippet": "String[] args = {a1, a2, \"echo \" + bar};",
+      "label": "{...} : String[] [[]] : String"
+    }
+  ],
+  "raw": {
+    "ruleId": "java/command-line-injection",
+    "ruleIndex": 3,
+    "rule": {
+      "id": "java/command-line-injection",
+      "index": 3
+    },
+    "message": {
+      "text": "This command line depends on a [user-provided value](1)."
+    },
+    "locations": [
+      {
+        "physicalLocation": {
+          "artifactLocation": {
+            "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01517.java",
+            "uriBaseId": "%SRCROOT%",
+            "index": 127
+          },
+          "region": {
+            "startLine": 62,
+            "startColumn": 48,
+            "endColumn": 52
+          }
+        }
+      }
+    ],
+    "partialFingerprints": {
+      "primaryLocationLineHash": "61e0608dcbd8c28:1",
+      "primaryLocationStartColumnFingerprint": "39"
+    },
+    "codeFlows": [
+      {
+        "threadFlows": [
+          {
+            "locations": [
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/helpers/SeparateClassRequest.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 108
+                    },
+                    "region": {
+                      "startLine": 31,
+                      "startColumn": 16,
+                      "endColumn": 39
+                    }
+                  },
+                  "message": {
+                    "text": "getParameter(...) : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01517.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 127
+                    },
+                    "region": {
+                      "startLine": 45,
+                      "startColumn": 24,
+                      "endColumn": 65
+                    }
+                  },
+                  "message": {
+                    "text": "getTheParameter(...) : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01517.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 127
+                    },
+                    "region": {
+                      "startLine": 48,
+                      "startColumn": 54,
+                      "endColumn": 59
+                    }
+                  },
+                  "message": {
+                    "text": "param : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01517.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 127
+                    },
+                    "region": {
+                      "startLine": 76,
+                      "startColumn": 63,
+                      "endColumn": 75
+                    }
+                  },
+                  "message": {
+                    "text": "param : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01517.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 127
+                    },
+                    "region": {
+                      "startLine": 86,
+                      "startColumn": 20,
+                      "endColumn": 23
+                    }
+                  },
+                  "message": {
+                    "text": "bar : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01517.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 127
+                    },
+                    "region": {
+                      "startLine": 48,
+                      "startColumn": 22,
+                      "endColumn": 60
+                    }
+                  },
+                  "message": {
+                    "text": "doSomething(...) : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01517.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 127
+                    },
+                    "region": {
+                      "startLine": 60,
+                      "startColumn": 34,
+                      "endColumn": 47
+                    }
+                  },
+                  "message": {
+                    "text": "... + ... : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01517.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 127
+                    },
+                    "region": {
+                      "startLine": 60,
+                      "startColumn": 25,
+                      "endColumn": 48
+                    }
+                  },
+                  "message": {
+                    "text": "{...} : String[] [[]] : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01517.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 127
+                    },
+                    "region": {
+                      "startLine": 62,
+                      "startColumn": 48,
+                      "endColumn": 52
+                    }
+                  },
+                  "message": {
+                    "text": "args"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "relatedLocations": [
+      {
+        "id": 1,
+        "physicalLocation": {
+          "artifactLocation": {
+            "uri": "src/main/java/org/owasp/benchmark/helpers/SeparateClassRequest.java",
+            "uriBaseId": "%SRCROOT%",
+            "index": 108
+          },
+          "region": {
+            "startLine": 31,
+            "startColumn": 16,
+            "endColumn": 39
+          }
+        },
+        "message": {
+          "text": "user-provided value"
+        }
+      },
+      {
+        "physicalLocation": {
+          "artifactLocation": {
+            "uri": "src/main/java/org/owasp/benchmark/helpers/SeparateClassRequest.java",
+            "uriBaseId": "%SRCROOT%",
+            "index": 108
+          },
+          "region": {
+            "startLine": 31,
+            "startColumn": 16,
+            "endColumn": 39
+          }
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "owasp_BenchmarkTest02513_codeql_java-command-line-injection-local_4b468854b74d",
+  "verdict": "false_positive",
+  "fp_category": "missing_sanitizer_model",
+  "rationale": "OWASP Benchmark BenchmarkTest02513 is marked NOT a real CWE-78 vulnerability in expectedresults-1.2.csv. OWASP design: every FP test case is a TP sibling with a sanitizer added. CodeQL flagging it means the sanitizer is not modelled in the producer's catalog (canonical missing_sanitizer_model class).",
+  "labeler": "owasp-benchmark-generator",
+  "labeled_at": "2026-05-10"
+}

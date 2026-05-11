@@ -10,7 +10,7 @@ import json
 import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from core.smt_solver import BVProfile
 from packages.codeql.smt_path_validator import (
@@ -23,6 +23,8 @@ from packages.codeql.smt_path_validator import (
 # packages/codeql/dataflow_validator.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[2]))
 
+from core.dataflow.evidence_renderer import render_evidence_for_prompt
+from core.dataflow.sanitizer_evidence import SanitizerEvidence
 from core.llm.task_types import TaskType
 from core.logging import get_logger
 from core.security.prompt_defense_profiles import CONSERVATIVE
@@ -33,6 +35,83 @@ from core.security.prompt_envelope import (
 )
 
 logger = get_logger()
+
+
+# Optional injection point: when a DataflowValidator is constructed with an
+# ``evidence_collector``, the validator calls it before each LLM round-trip
+# and folds the rendered evidence into the prompt as an additional
+# ``UntrustedBlock``. The collector takes the dataflow path and the repo
+# root and returns a :class:`SanitizerEvidence` (or ``None`` to skip).
+EvidenceCollector = Callable[
+    ["DataflowPath", Path], Optional[SanitizerEvidence]
+]
+
+
+# System-prompt addendum applied only when an evidence block is built. The
+# instruction tells the LLM how to interpret the structured candidate +
+# step-annotation block — without this, the model has data but no
+# guidance on how to weigh it.
+SANITIZER_EVIDENCE_INSTRUCTIONS = (
+    "\n7. Sanitizer evidence: A 'sanitizer-evidence' block lists "
+    "project-specific validators extracted from referenced source. Read "
+    "each candidate's confidence value carefully:\n"
+    "  - 0.9+ candidates are comprehensive defences (parameterised "
+    "queries, framework auto-escape, explicit allowlists). If a 0.9+ "
+    "validator with matching semantics_tag is on-path between source "
+    "and sink, the path is likely sanitised.\n"
+    "  - 0.5-0.9 candidates are PARTIAL defences (regex blocklists, "
+    "length checks, character substitutions, ad-hoc filters). Treat "
+    "these as having known bypasses for the attack class — DO NOT mark "
+    "the path as not-exploitable on the strength of a partial validator "
+    "alone, even if its semantics_text claims coverage.\n"
+    "  - <0.5 candidates are noise; ignore.\n"
+    "Also check semantics_tag matches the sink's attack class: a "
+    "url_allowlist validator does NOT mitigate SQL injection; a "
+    "sql_escape validator does NOT mitigate command injection. "
+    "'inlined helpers' mark gaps where the structural analysis "
+    "stopped; the validator might be inside one of those helpers, in "
+    "which case the annotation is incomplete."
+)
+
+
+def _build_sanitizer_evidence_block(
+    collector: Optional[EvidenceCollector],
+    dataflow: "DataflowPath",
+    repo_path: Path,
+    log,
+) -> Optional[UntrustedBlock]:
+    """Build the optional sanitizer-evidence ``UntrustedBlock``.
+
+    Returns ``None`` when:
+      * no collector is configured (default for existing call sites);
+      * the collector itself returns ``None`` (e.g. evidence couldn't be
+        gathered for this finding);
+      * the collector raises (logged at warning level — validation
+        proceeds without the evidence rather than failing the whole
+        validate_path call over an extraction issue).
+
+    The rendered evidence is wrapped as ``UntrustedBlock`` because its
+    candidate ``name`` / ``qualified_name`` / ``semantics_text`` fields
+    came from LLM extraction over potentially-adversarial source.
+    """
+    if collector is None:
+        return None
+    try:
+        evidence = collector(dataflow, repo_path)
+    except Exception as e:  # pragma: no cover - defensive
+        log.warning(
+            "Sanitizer-evidence collection failed: %s; "
+            "proceeding without evidence block",
+            e,
+        )
+        return None
+    if evidence is None:
+        return None
+    return UntrustedBlock(
+        content=render_evidence_for_prompt(evidence),
+        kind="sanitizer-evidence",
+        origin="project-source-extracted",
+    )
 
 
 @dataclass
@@ -213,14 +292,26 @@ class DataflowValidator:
     - What's the real attack complexity?
     """
 
-    def __init__(self, llm_client):
+    def __init__(
+        self,
+        llm_client,
+        evidence_collector: Optional[EvidenceCollector] = None,
+    ):
         """
         Initialize dataflow validator.
 
         Args:
             llm_client: LLM client from core/llm/client.py
+            evidence_collector: optional callable that takes a
+                ``DataflowPath`` and a repo root and returns a
+                :class:`~core.dataflow.sanitizer_evidence.SanitizerEvidence`.
+                When set, ``validate_dataflow_path`` folds the rendered
+                evidence into the LLM prompt as an additional
+                ``UntrustedBlock``. Default ``None`` keeps the legacy
+                behaviour — no evidence collection, no prompt change.
         """
         self.llm = llm_client
+        self._evidence_collector = evidence_collector
         self.logger = get_logger()
 
     def _fast_tier_model_name(self) -> str:
@@ -704,6 +795,17 @@ class DataflowValidator:
                 kind="smt-analysis",
                 origin="smt:path-feasibility",
             ))
+
+        # Optional sanitizer-evidence block. Off by default; activated
+        # when DataflowValidator is constructed with an evidence_collector
+        # (PR1c-3 wires the production extractor). System prompt gets the
+        # interpretation instructions only when a block was actually built.
+        evidence_block = _build_sanitizer_evidence_block(
+            self._evidence_collector, dataflow, repo_path, self.logger
+        )
+        if evidence_block is not None:
+            blocks.append(evidence_block)
+            system = system + SANITIZER_EVIDENCE_INSTRUCTIONS
 
         slots = {
             "rule_id": TaintedString(value=dataflow.rule_id, trust="untrusted"),

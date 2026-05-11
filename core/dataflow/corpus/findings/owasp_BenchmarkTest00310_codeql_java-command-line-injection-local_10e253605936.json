@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "finding_id": "owasp_BenchmarkTest00310_codeql_java-command-line-injection-local_10e253605936",
+  "producer": "codeql",
+  "rule_id": "java/command-line-injection-local",
+  "message": "This command line depends on a [user-provided value](1).",
+  "source": {
+    "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00310.java",
+    "line": 85,
+    "column": 65,
+    "snippet": "r.exec(cmd + bar, argsEnv, new java.io.File(System.getProperty(\"user.dir\")));",
+    "label": "getProperty(...) : String"
+  },
+  "sink": {
+    "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00310.java",
+    "line": 85,
+    "column": 48,
+    "snippet": "r.exec(cmd + bar, argsEnv, new java.io.File(System.getProperty(\"user.dir\")));",
+    "label": "new File(...)"
+  },
+  "intermediate_steps": [],
+  "raw": {
+    "ruleId": "java/command-line-injection-local",
+    "ruleIndex": 0,
+    "rule": {
+      "id": "java/command-line-injection-local",
+      "index": 0
+    },
+    "message": {
+      "text": "This command line depends on a [user-provided value](1)."
+    },
+    "locations": [
+      {
+        "physicalLocation": {
+          "artifactLocation": {
+            "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00310.java",
+            "uriBaseId": "%SRCROOT%",
+            "index": 7
+          },
+          "region": {
+            "startLine": 85,
+            "startColumn": 48,
+            "endColumn": 96
+          }
+        }
+      }
+    ],
+    "partialFingerprints": {
+      "primaryLocationLineHash": "258bc5255dff505:1",
+      "primaryLocationStartColumnFingerprint": "27"
+    },
+    "codeFlows": [
+      {
+        "threadFlows": [
+          {
+            "locations": [
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00310.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 7
+                    },
+                    "region": {
+                      "startLine": 85,
+                      "startColumn": 65,
+                      "endColumn": 95
+                    }
+                  },
+                  "message": {
+                    "text": "getProperty(...) : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00310.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 7
+                    },
+                    "region": {
+                      "startLine": 85,
+                      "startColumn": 48,
+                      "endColumn": 96
+                    }
+                  },
+                  "message": {
+                    "text": "new File(...)"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "relatedLocations": [
+      {
+        "id": 1,
+        "physicalLocation": {
+          "artifactLocation": {
+            "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00310.java",
+            "uriBaseId": "%SRCROOT%",
+            "index": 7
+          },
+          "region": {
+            "startLine": 85,
+            "startColumn": 65,
+            "endColumn": 95
+          }
+        },
+        "message": {
+          "text": "user-provided value"
+        }
+      },
+      {
+        "physicalLocation": {
+          "artifactLocation": {
+            "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest00310.java",
+            "uriBaseId": "%SRCROOT%",
+            "index": 7
+          },
+          "region": {
+            "startLine": 85,
+            "startColumn": 65,
+            "endColumn": 95
+          }
+        }
+      }
+    ]
+  }
+}

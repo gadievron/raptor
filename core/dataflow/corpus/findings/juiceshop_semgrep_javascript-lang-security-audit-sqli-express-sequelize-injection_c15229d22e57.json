@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "finding_id": "juiceshop_semgrep_javascript-lang-security-audit-sqli-express-sequelize-injection_c15229d22e57",
+  "producer": "semgrep",
+  "rule_id": "javascript.lang.security.audit.sqli.express-sequelize-injection",
+  "message": "email/password passed to Sequelize bind parameters",
+  "source": {
+    "file_path": "out/dataflow-corpus-fixtures/juice-shop/data/static/codefixes/loginAdminChallenge_4_correct.ts",
+    "line": 15,
+    "column": 0,
+    "snippet": "models.sequelize.query(`SELECT * FROM Users WHERE email = $1 AND password = $2 AND deletedAt IS NULL`,",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "out/dataflow-corpus-fixtures/juice-shop/data/static/codefixes/loginAdminChallenge_4_correct.ts",
+    "line": 15,
+    "column": 0,
+    "snippet": "models.sequelize.query(`SELECT * FROM Users WHERE email = $1 AND password = $2 AND deletedAt IS NULL`,",
+    "label": "sink"
+  },
+  "intermediate_steps": [
+    {
+      "file_path": "out/dataflow-corpus-fixtures/juice-shop/data/static/codefixes/loginAdminChallenge_4_correct.ts",
+      "line": 16,
+      "column": 0,
+      "snippet": "{ bind: [ req.body.email, security.hash(req.body.password) ], model: models.User, plain: true })",
+      "label": "step"
+    }
+  ],
+  "raw": {}
+}

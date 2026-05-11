@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "finding_id": "webgoat_codeql_java-sql-injection_2f489964e20a",
+  "producer": "codeql",
+  "rule_id": "java/sql-injection",
+  "message": "user input passes minimal validation, reaches injectable query",
+  "source": {
+    "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/sqlinjection/mitigation/SqlOnlyInputValidation.java",
+    "line": 31,
+    "column": 0,
+    "snippet": "public AttackResult attack(@RequestParam(\"userid_sql_only_input_validation\") String userId) {",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/sqlinjection/mitigation/SqlOnlyInputValidation.java",
+    "line": 35,
+    "column": 0,
+    "snippet": "AttackResult attackResult = lesson6a.injectableQuery(userId);",
+    "label": "sink"
+  },
+  "intermediate_steps": [
+    {
+      "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/sqlinjection/mitigation/SqlOnlyInputValidation.java",
+      "line": 32,
+      "column": 0,
+      "snippet": "if (userId.contains(\" \")) {",
+      "label": "step"
+    }
+  ],
+  "raw": {}
+}
