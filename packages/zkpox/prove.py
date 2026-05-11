@@ -37,8 +37,13 @@ def _default_binary() -> Path:
 
 @dataclass(frozen=True)
 class Verdicts:
-    """Public-values shape committed by the SP1 guest."""
+    """Public-values shape committed by the SP1 guest.
 
+    Phase 1.6 added `target_id` as the first committed value so the
+    bundle records which C target was proven against.
+    """
+
+    target_id: int
     crash_only_crashed: bool
     oob_detected: bool
     oob_count: int
@@ -122,6 +127,7 @@ def run(
         witness_bytes=int(record["witness_bytes"]),
         mode=record["mode"],
         verdicts=Verdicts(
+            target_id=int(v.get("target_id", 0x01)),  # default 01 for pre-1.6 records
             crash_only_crashed=bool(v["crash_only_crashed"]),
             oob_detected=bool(v["oob_detected"]),
             oob_count=int(v["oob_count"]),

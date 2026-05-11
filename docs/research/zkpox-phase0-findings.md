@@ -505,3 +505,124 @@ needs three more steps, all of which are mechanical extensions:
 `packages/zkpox/tests/test_bundle.py` gained 4 Timestamp-specific
 tests covering round-trip, schema presence, and the two
 pre-anchor-hash invariants above.
+
+---
+
+## Appendix: Phase 1.6 — second C target
+
+Phase 0 demonstrated the redzone+pattern *primitive* generalises;
+Phase 1.6 lands a concrete second instance to back the claim.
+
+### What target #2 adds
+
+`core/zkpox/targets/02-off-by-one.c`:
+
+```c
+for (size_t i = 0; i <= buf_size && i < n; i++) {
+    buf[i] = input[i];   // bug: <= instead of <
+}
+```
+
+Distinct bug *shape* from target 01's "no bound check at all":
+
+- Target 01 (stack BOF): any `n > buf_size` writes `n - buf_size`
+  bytes past the buffer.
+- Target 02 (off-by-one): any `n > buf_size` writes EXACTLY ONE
+  byte at offset `buf_size`. Subsequent input bytes are unreached.
+
+That difference is a structural-output test the gadget infrastructure
+has to pass: `oob_count` for target-02 crash witnesses is always 1,
+regardless of `n`. The bench table below confirms this.
+
+### Schema bump: target_id in public values
+
+The guest now reads a 1-byte `target_id` prefix off the witness and
+commits it as the *first* public value. Schema is now 5 fields:
+
+```
+target_id              : u32   (0x01 = stack-bof, 0x02 = off-by-one)
+crash_only_crashed     : bool
+oob_detected           : bool
+oob_count              : u32
+oob_first_offset       : i32
+```
+
+Pre-1.6 witnesses (no prefix byte) get default-routed to target 01;
+the prover's `--target` flag defaults to 01 too, so Phase 0 / 1.1–1.5
+bench commands keep producing comparable numbers.
+
+The host prepends the byte before `stdin.write()`; witnesses on disk
+stay as raw exploit bytes. `core/zkpox/test/run-tests.sh` parses the
+target id from each witness's filename prefix (`01-…`, `02-…`) and
+passes the matching `--target` flag.
+
+### Bench table — target 02
+
+Same gadget pair (`crash_only` + `oob_write`) as target 01, both
+running in execute mode over the new witness corpus.
+
+| Witness                 | Bytes | Cycles | crash_only | oob_write | n  | offset |
+|-------------------------|-------|--------|------------|-----------|----|--------|
+| 02-empty-benign         | 0     |  8,229 | false      | false     | 0  | —      |
+| 02-1byte-benign         | 1     |  8,808 | false      | false     | 0  | —      |
+| 02-benign               | 5     |  9,108 | false      | false     | 0  | —      |
+| 02-15bytes-benign       | 15    |  9,793 | false      | false     | 0  | —      |
+| 02-fill16-benign        | 16    |  9,860 | false      | false     | 0  | —      |
+| 02-overflow1-crash      | 17    |  9,930 | true       | true      | **1** | +16 |
+| 02-overflow2-crash      | 18    |  9,943 | true       | true      | **1** | +16 |
+| 02-crash                | 32    | 10,327 | true       | true      | **1** | +16 |
+| 02-deep-crash           | 96    | 12,715 | true       | true      | **1** | +16 |
+| 02-highbit-crash        | 32    | 10,327 | true       | true      | **1** | +16 |
+| 02-zerobyte-crash       | 17    |  9,930 | true       | true      | **1** | +16 |
+| 02-canarymatch-fn       | 17    |  9,926 | **false**  | **true**  | 1  | +16   |
+
+Every crash witness reports `oob_count = 1` — the off-by-one's signature.
+
+For comparison, the same-length witnesses against target 01:
+
+| Witness            | Bytes | t01 oob_count | t02 oob_count |
+|--------------------|-------|--------------:|--------------:|
+| -overflow1-crash   | 17    |   1           |   1           |
+| -overflow2-crash   | 18    |   2           |   1           |
+| -crash             | 32    |  16           |   1           |
+| -deep-crash        | 96/100|  83           |   1           |
+
+The gap widens with witness length — exactly the structural difference
+between "every byte past the buffer is written" and "one byte past the
+buffer is written, then return."
+
+### Soundness probes
+
+`02-canarymatch-fn.bin` writes the canary value (0xA5) at exactly the
+off-by-one byte position. Same `crash_only=false, oob_detected=true`
+verdict as the target-01 canarymatch witnesses — the gadget upgrade
+generalises cleanly to the new bug shape, no per-target patching of
+the redzone primitive needed.
+
+### Regression / pytest coverage
+
+`run-tests.sh` now iterates the 25-witness combined corpus, parsing
+target id from each filename prefix and asserting target-id round-trip
+in addition to the gadget verdicts. 25/25 pass on this Mac.
+
+`packages/zkpox/tests/test_regression.py` wraps the shell harness in a
+pytest test — subprocesses `bash run-tests.sh`, asserts exit 0, plus
+some structural checks (both target families present in output, ≥25
+passes). **Gated behind `RAPTOR_SLOW_TESTS=1`** — SP1 SDK startup
+costs ~20 s per invocation, so a full sweep is ~10 min wall-clock.
+CI workflows in Phase 1.8 can opt in on a slower job tier.
+
+Default pytest run (no slow / no network) is 27 passes, 3 skips, ~0.6 s.
+
+### What 1.6 did NOT do
+
+- Add a third target. Two is enough to demonstrate the abstraction
+  generalises; the proposal's full "5 known-vulnerable / 5 known-safe
+  binary pairs per gadget" is part of the Phase 1.7 demo plan.
+- Wire the bundle to thread `target_id` through to `proof.system` or
+  the `vulnerability` substructure. Currently the bundle's
+  `gadget_id` describes the *gadget*; producers should label the
+  target via a free-form `target.metadata.target_id` until the
+  schema picks a canonical home (1.7 candidate).
+- Bench prove-mode numbers for target 02 — same shape as target 01
+  (the wrap step is target-agnostic), no new information to learn.
