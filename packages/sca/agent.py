@@ -329,6 +329,22 @@ def get_out_dir() -> Path:
     base = os.environ.get("RAPTOR_OUT_DIR")
     out = Path(base).resolve() if base else Path("out").resolve()
     out.mkdir(parents=True, exist_ok=True)
+    # Pre-fix this returned the path WITHOUT validating that the
+    # resolved location was actually writable. Operators setting
+    # RAPTOR_OUT_DIR to a path on a read-only mount, a directory
+    # owned by another user, or a stale symlink target got the
+    # resolved Path back and crashed on the first downstream
+    # write — confusing errors point at the write site, not the
+    # source-of-truth (the env var).
+    # `os.access` checks effective permissions for the running
+    # user. Failing here surfaces a clear "RAPTOR_OUT_DIR=...
+    # is not writable" error early.
+    if not os.access(str(out), os.W_OK):
+        raise OSError(
+            f"RAPTOR_OUT_DIR={out!s} resolves to a directory the current "
+            f"process cannot write to (permissions / read-only mount / "
+            f"wrong owner). Fix the env var or the directory perms."
+        )
     return out
 
 
