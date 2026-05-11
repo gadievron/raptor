@@ -243,5 +243,47 @@ class HackerProgressBarTickThrottlingTest(unittest.TestCase):
             self.assertEqual(bar._stage_done, 3)
 
 
+class HackerProgressBarLastStageSideChannelTest(unittest.TestCase):
+    """Module-level ``last_stage_name()`` lets out-of-band exception
+    handlers report which pipeline phase was active when an error
+    occurred — without threading the bar through every call site."""
+
+    def test_stage_call_updates_last_stage_name(self) -> None:
+        from core.progress import last_stage_name
+        buf = io.StringIO()
+        with HackerProgressBar(disabled=True, stream=buf) as bar:
+            bar.stage("discovery")
+            self.assertEqual(last_stage_name(), "discovery")
+            bar.stage("osv")
+            self.assertEqual(last_stage_name(), "osv")
+
+    def test_last_stage_persists_after_done(self) -> None:
+        """The last-stage value survives ``done()`` / ``end()``
+        so handlers can still attribute failures that happen
+        between stages (e.g. while writing artefacts after the
+        pipeline body returns)."""
+        from core.progress import last_stage_name
+        buf = io.StringIO()
+        with HackerProgressBar(disabled=True, stream=buf) as bar:
+            bar.stage("emit")
+            bar.done(summary="ok")
+            bar.end(summary="all done")
+        # End ran; the name should still be retrievable for an
+        # exception that fires post-end.
+        self.assertEqual(last_stage_name(), "emit")
+
+    def test_silent_bar_still_updates_last_stage(self) -> None:
+        """Even when output is suppressed (``--no-progress``),
+        the side-channel must still update — operators using
+        ``--no-progress`` benefit *more* from a phase-attributed
+        error message because they have no rolling stage line to
+        glance at."""
+        from core.progress import last_stage_name
+        buf = io.StringIO()
+        with HackerProgressBar(disabled=True, stream=buf) as bar:
+            bar.stage("reach")
+        self.assertEqual(last_stage_name(), "reach")
+
+
 if __name__ == "__main__":
     unittest.main()

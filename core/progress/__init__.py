@@ -10,6 +10,29 @@ from datetime import datetime
 from typing import Optional
 
 
+# Module-level "last stage that ran" — readable by out-of-band
+# exception handlers via :func:`last_stage_name`. See the
+# ``HackerProgressBar`` docstring for the design rationale.
+_LAST_STAGE_NAME: Optional[str] = None
+
+
+def last_stage_name() -> Optional[str]:
+    """The most-recent stage name that any active or recent
+    ``HackerProgressBar`` started, or ``None`` if no bar has
+    started a stage in this process.
+
+    Used by top-level exception handlers to attribute failures
+    to the pipeline phase that was active when the error occurred:
+    "raptor-sca: error during osv" beats the un-attributed
+    "raptor-sca: unrecoverable error".
+
+    The value persists past ``done()`` / ``end()`` so handlers can
+    still show context for failures that occurred between stages
+    (e.g. while writing an artefact between two ``stage()`` calls).
+    """
+    return _LAST_STAGE_NAME
+
+
 def _stderr_supports_unicode() -> bool:
     """Probe whether stderr can encode the unicode block characters
     used by the spinner / status decorations.
@@ -207,6 +230,21 @@ class HackerProgressBar:
     that's the simpler operations >15s case. ``HackerProgressBar``
     is for pipelines with N discrete phases the operator wants
     to see resolve one by one.
+
+    Side-channel last-stage tracking
+    -------------------------------
+    On every ``stage()`` call the bar updates a module-level
+    ``_LAST_STAGE_NAME`` so out-of-band exception handlers can
+    surface "which phase was running when this died" without
+    threading the bar through every call site. The CLI's outer
+    ``except`` reads it via :func:`last_stage_name` to print
+    "raptor-sca: unrecoverable error during osv (...)" instead
+    of the opaque pre-fix "unrecoverable error during run".
+
+    The variable persists past ``done()`` / ``end()`` so the
+    handler still has context if the failure occurred between
+    stages (e.g. during an artefact write that isn't itself a
+    stage).
     """
 
     _BLOCK_FULL = "▓" if _UNICODE_OK else "#"
@@ -286,6 +324,10 @@ class HackerProgressBar:
         self._stage_start = time.time()
         self._stage_detail = ""
         self._last_redraw = 0.0
+        # Update module-level side-channel for out-of-band exception
+        # handlers (see ``last_stage_name``).
+        global _LAST_STAGE_NAME
+        _LAST_STAGE_NAME = name
         self._render()
 
     def tick(self, done: Optional[int] = None,
