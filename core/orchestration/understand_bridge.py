@@ -443,6 +443,20 @@ def load_understand_context(
     trace_stats = _import_flow_traces(understand_dir, validate_dir, stale_files)
     summary["flow_traces"] = trace_stats
 
+    # --- Import unchecked_flows with SMT path_conditions ---
+    # /understand --map's sink_details can carry optional
+    # `path_conditions` / `path_profile` for memory-corruption /
+    # arithmetic / bounds sinks. Forward each such unchecked_flow
+    # as an attack-paths.json entry so /validate Stage B's SMT
+    # pre-flight finds the conditions ready-made (saves the LLM
+    # re-extracting from source). Sinks without path_conditions
+    # are skipped — the existing priority_targets path covers
+    # them for non-SMT consumers.
+    map_smt_stats = _import_unchecked_flow_conditions(
+        context_map, validate_dir,
+    )
+    summary["map_smt_paths"] = map_smt_stats
+
     logger.info(
         "understand_bridge: loaded context map from %s — "
         "%d sources, %d sinks, %d trust boundaries, %d unchecked flows, "
@@ -1343,6 +1357,88 @@ def _import_flow_traces(
         save_json(paths_path, existing_paths)
 
     return {"count": len(trace_files), "imported_as_paths": imported, "skipped_stale": skipped_stale}
+
+
+def _import_unchecked_flow_conditions(
+    context_map: Dict[str, Any],
+    validate_dir: Path,
+) -> Dict[str, Any]:
+    """Import path_conditions from sink_details into attack-paths.json.
+
+    Walks `unchecked_flows`; for each flow whose referenced sink_detail
+    has `path_conditions` set, writes an attack-paths.json entry
+    carrying those conditions (+ optional `path_profile`). /validate
+    Stage B's SMT pre-flight then finds them ready-made instead of
+    re-extracting from source.
+
+    Skips flows whose sink_detail has no path_conditions — those stay
+    in priority_targets (existing path) without polluting attack-paths.
+
+    Returns {"count": <total>, "imported_as_paths": <with_conditions>,
+    "skipped_no_conditions": <without>}.
+    """
+    flows = _list_at(context_map, "unchecked_flows")
+    if not flows:
+        return {"count": 0, "imported_as_paths": 0, "skipped_no_conditions": 0}
+
+    _, sink_by_id = _index_entries_by_id(context_map)
+
+    paths_path = validate_dir / "attack-paths.json"
+    existing_paths: List[Dict[str, Any]] = []
+    if paths_path.exists():
+        loaded = load_json(paths_path)
+        if isinstance(loaded, list):
+            existing_paths = loaded
+    existing_ids = {p.get("id") for p in existing_paths if p.get("id")}
+
+    imported = 0
+    skipped = 0
+    for i, flow in enumerate(flows):
+        if not isinstance(flow, dict):
+            continue
+        sink_id = flow.get("sink")
+        sink = sink_by_id.get(sink_id) if isinstance(sink_id, str) else None
+        if not sink:
+            skipped += 1
+            continue
+        pc = _validate_path_conditions(
+            sink.get("path_conditions"), f"sink_detail:{sink_id}",
+        )
+        if pc is None:
+            skipped += 1
+            continue
+        path_id = f"map-flow-{i:03d}"
+        if path_id in existing_ids:
+            continue
+        entry: Dict[str, Any] = {
+            "id": path_id,
+            "name": f"Imported from /understand --map: {flow.get('entry_point')} → {sink_id}",
+            "finding": "",
+            "steps": [],
+            "proximity": 0,
+            "blockers": [],
+            "status": "uncertain",
+            "source": "understand:map",
+            "imported_at": datetime.now(timezone.utc).isoformat(),
+            "path_conditions": pc,
+        }
+        pp = _validate_path_profile(
+            sink.get("path_profile"), f"sink_detail:{sink_id}",
+        )
+        if pp is not None:
+            entry["path_profile"] = pp
+        existing_paths.append(entry)
+        existing_ids.add(path_id)
+        imported += 1
+
+    if imported > 0:
+        save_json(paths_path, existing_paths)
+
+    return {
+        "count": len(flows),
+        "imported_as_paths": imported,
+        "skipped_no_conditions": skipped,
+    }
 
 
 def _trace_to_attack_path(trace: Dict[str, Any], trace_file: Path) -> Dict[str, Any]:

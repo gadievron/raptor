@@ -139,6 +139,23 @@ Produce a brief summary covering:
       "notes": "Query string built via f-string at line 87"
     }
   ],
+```
+
+For memory-corruption / arithmetic / bounds sinks (CWE-119/120/121/122/125/787/190/191/476), optionally include SMT-checkable path conditions on the sink_detail. The bridge propagates them into attack-paths.json so /validate Stage B's SMT pre-flight ([B-3.1.5]) doesn't have to re-extract from source. Skip for sinks where SMT doesn't apply (XSS/SQLi/cmdi etc — Z3 can't reason about strings the way string-sanitizer-bypass needs):
+
+```json
+{
+  "sink_details": [
+    {
+      "id": "SINK-002",
+      "type": "buffer_write",
+      "operation": "strcpy(buf, argv[1])",
+      "file": "src/util.c",
+      "line": 42,
+      "path_conditions": ["strlen(argv[1]) >= 16"],
+      "path_profile": "uint64"
+    }
+  ],
   "boundary_details": [
     {
       "id": "TB-001",
