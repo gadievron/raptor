@@ -655,7 +655,15 @@ jobs:
           "$HOME/.sp1/bin/sp1up"
 
       - name: Build zkpox workspace
-        run: cargo build --release --manifest-path core/zkpox/Cargo.toml
+        # sp1-build v6.1.0 emits two unconditional `cargo:warning=`
+        # info-notices on every build — the succinct rustc version and
+        # the guest's build timestamp. They are not actionable warnings
+        # (the upstream maintainers just chose `cargo:warning=` as the
+        # only build-script channel cargo surfaces to the user). Strip
+        # only those exact signatures so real warnings still show.
+        run: |
+          cargo build --release --manifest-path core/zkpox/Cargo.toml 2>&1 \
+            | awk '!/^warning: zkpox-prover@[0-9.]+: (rustc \+succinct --version:|zkpox-guest built at )/'
 
       - name: Regenerate witness corpus
         run: python3 core/zkpox/test/witnesses/generate.py
