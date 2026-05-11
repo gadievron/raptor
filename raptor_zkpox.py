@@ -52,10 +52,32 @@ def _resolve_prover_binary() -> Path:
     return candidate
 
 
+_PLACEHOLDER_VK_DIGEST = "placeholder-vk-1.5"
+_PLACEHOLDER_HARNESS_DIGEST = "harness-1.5"
+_PLACEHOLDER_WARNING = (
+    "[zkpox] WARNING: bundle's verifier_key_hash and harness.hash are "
+    "Phase 1.5 PLACEHOLDERS. They do NOT bind to the real SP1 verifying "
+    "key or the harness binary. Do NOT use this bundle for a real "
+    "disclosure until Phase 1.5.x replaces them. See docs/zkpox-scope.md."
+)
+
+
 def cmd_prove(args: argparse.Namespace) -> int:
     """End-to-end prove → wrap → envelope → bundle → anchor."""
     out_dir = Path(args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    if not args.allow_placeholder_hashes:
+        raise SystemExit(
+            "[zkpox] refusing to write a bundle: Phase 1.5 produces "
+            "placeholder verifier_key_hash and harness.hash, which do "
+            "not bind to the real SP1 verifying key or the harness. "
+            "Re-run with --allow-placeholder-hashes to acknowledge and "
+            "proceed; the bundle will print a loud warning on every "
+            "verify. Real-disclosure use should wait for Phase 1.5.x. "
+            "Background: docs/zkpox-scope.md."
+        )
+    logger.warning(_PLACEHOLDER_WARNING)
 
     # ---- 1. Drive the Rust prover --------------------------------------
     prover = _resolve_prover_binary()
@@ -104,18 +126,26 @@ def cmd_prove(args: argparse.Namespace) -> int:
         vulnerability=zkpox.Vulnerability(
             cls=args.vuln_class,
             gadget_id=args.gadget_id,
-            gadget_hash=zkpox.sha256_bytes(args.gadget_id.encode()),
+            # Hashes the gadget IDENTIFIER, not its source. The field name
+            # was `gadget_hash` pre-Phase-1.5; renamed to make the binding
+            # honest (see docs/zkpox-scope.md). Phase 1.5.x will add a
+            # separate `gadget_code_hash` over the gadget implementation
+            # files.
+            gadget_id_hash=zkpox.sha256_bytes(args.gadget_id.encode()),
             leaked_fields=[f.strip() for f in (args.leaked or "").split(",") if f.strip()],
         ),
         proof=zkpox.Proof(
             system=f"sp1-{args.wrap}/v6.1.0",
             bytes=proof_bytes,
-            verifier_key_hash=zkpox.sha256_bytes(b"placeholder-vk-1.5"),
+            # Placeholder until Phase 1.5.x wires sp1-sdk's real vk digest.
+            # cmd_prove refuses to reach this branch without the explicit
+            # --allow-placeholder-hashes opt-in (see top of this function).
+            verifier_key_hash=zkpox.sha256_bytes(_PLACEHOLDER_VK_DIGEST.encode()),
         ),
         harness=zkpox.HarnessRef(
             git_url=args.harness_git_url,
             rev=args.harness_rev,
-            hash=zkpox.sha256_bytes(b"harness-1.5"),
+            hash=zkpox.sha256_bytes(_PLACEHOLDER_HARNESS_DIGEST.encode()),
         ),
         vendor_envelope=(
             zkpox.vendor_envelope_from(
@@ -231,6 +261,17 @@ def _build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--harness-rev",
                     help="Harness source git revision")
     pp.add_argument("--tag", help="Bench tag for the prover record")
+    pp.add_argument(
+        "--allow-placeholder-hashes",
+        action="store_true",
+        help=(
+            "Acknowledge that Phase 1.5 produces a bundle with placeholder "
+            "verifier_key_hash and harness.hash that do NOT bind to real "
+            "SP1 / harness state. Required until Phase 1.5.x replaces "
+            "them. Bundle will print a loud warning; do not use for real "
+            "disclosure."
+        ),
+    )
     pp.add_argument("--out", required=True,
                     help="Output directory (bundle.cbor + proof.bin + prove-record.json)")
     pp.set_defaults(func=cmd_prove)

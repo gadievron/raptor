@@ -38,8 +38,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ ! -x "$BIN" ]]; then
-    echo "harness not built: $BIN" >&2
-    echo "build it with: (cd harness/host && cargo build --release)" >&2
+    echo "prover not built: $BIN" >&2
+    echo "build it with: cargo build --release --manifest-path core/zkpox/Cargo.toml" >&2
     exit 2
 fi
 

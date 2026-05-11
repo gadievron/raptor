@@ -47,7 +47,7 @@ def _fresh_bundle() -> Bundle:
         vulnerability=Vulnerability(
             cls="memory-safety",
             gadget_id="memory-safety::oob-write@0.1.0",
-            gadget_hash=sha256_bytes(b"gadget"),
+            gadget_id_hash=sha256_bytes(b"gadget"),
         ),
         proof=Proof(
             system="sp1-stark-core/v6.1.0",
