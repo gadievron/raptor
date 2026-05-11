@@ -1,8 +1,10 @@
 # core/zkpox — Zero-Knowledge Proof of Exploit (Rust workspace)
 
 The Rust portion of RAPTOR's zkpox feature: SP1-backed proofs of
-exploitability for C/C++ memory-safety bugs, with a layered disclosure
-envelope.
+memory-safety violation predicates, with a layered disclosure envelope.
+**Read `docs/zkpox-scope.md` first** for an honest statement of what
+the MVP actually proves (and what it does NOT prove — "exploit" in the
+operational sense is broader than what the redzone gadget catches).
 
 Companion Python orchestration lives at `packages/zkpox/`.
 Design proposal: `docs/proposals/raptor-zkpox-design.md`.
@@ -29,10 +31,13 @@ cd core/zkpox && cargo build --release
 ## Test
 
 ```sh
-# Regression sweep across the witness corpus (execute mode, fast).
+# Regression sweep across the 40-witness corpus (execute mode, fast).
 cd core/zkpox/test && ./run-tests.sh
 
-# Full prove-mode sweep (slow — ~3 min for the 13 witnesses).
+# PR-tier subset (8 witnesses) — what CI runs.
+cd core/zkpox/test && ./run-tests.sh --ci-subset
+
+# Full prove-mode sweep (slow — ~10 min on warm cache).
 cd core/zkpox/test && ./run-tests.sh --prove
 ```
 
