@@ -69,9 +69,31 @@ def sanitise_code(s: str, *, max_chars: int = 10_000) -> str:
     contains ``#include``, ``*ptr``, ``__attribute__`` legitimately.
     Fenced code blocks (` ``` `) already isolate markdown rendering; the
     remaining threat is ANSI/BIDI/control-byte injection via terminal
-    emulators (``cat report.md``).
+    emulators (``cat report.md``) — handled by `escape_nonprintable`.
+
+    Fence-break protection: LLM-returned code can legitimately contain
+    triple-backtick runs (nested fenced blocks in a docstring, code
+    that quotes another fenced block, an LLM that hallucinated a
+    fence inside its response). Pre-fix the function returned that
+    code as-is; the wrapping renderer's outer ``` fence was then
+    prematurely closed by the embedded ```, and everything AFTER
+    that point spilled out of the code block — rendering as
+    interpreted markdown (links autofetch, headings break layout,
+    `<script>` tags execute on some preview surfaces).
+
+    Insert a zero-width-space (U+200B) between the second and third
+    backtick of any 3+ backtick run. Visually invisible to the
+    operator reading the rendered markdown, but the markdown parser
+    no longer sees a fence terminator. The reader's eye still sees
+    ``` if they care, just not as a parse-relevant fence.
     """
     s = escape_nonprintable(s, preserve_newlines=True)
+    # Defang fence-break: any run of 3+ backticks gets a ZWSP
+    # inserted after the second char so the markdown parser sees
+    # `` then `` ``` `` becomes `` `` U+200B ` `` etc. Use a regex
+    # with a callback to handle 3, 4, 5+ backtick runs uniformly.
+    import re as _re
+    s = _re.sub(r"`{3,}", lambda m: "``​" + "`" * (len(m.group(0)) - 2), s)
     if len(s) > max_chars:
         s = s[: max_chars - 1] + _ELLIPSIS
     return s
