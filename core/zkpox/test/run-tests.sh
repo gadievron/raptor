@@ -22,6 +22,7 @@ set -uo pipefail
 cd "$(dirname "$0")"
 
 MODE="--execute"
+CI_SUBSET=0
 # Default binary path: ../target/release/zkpox-prove (workspace target dir
 # at core/zkpox/target/, this script runs from core/zkpox/test/).
 BIN="../target/release/zkpox-prove"
@@ -30,6 +31,7 @@ while [[ $# -gt 0 ]]; do
         --prove) MODE="--prove"; shift ;;
         --execute) MODE="--execute"; shift ;;
         --binary) BIN="$2"; shift 2 ;;
+        --ci-subset) CI_SUBSET=1; shift ;;
         -h|--help) sed -n '2,/^$/p' "$0"; exit 0 ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
     esac
@@ -51,7 +53,46 @@ fail=0
 declare -a failures=()
 
 shopt -s nullglob
-for w in witnesses/*.bin; do
+if (( CI_SUBSET )); then
+    # PR-tier CI subset — the *brutal* minimum that still validates
+    # each target's gadget story end-to-end. Each SP1 SDK startup is
+    # ~20-25 s in CI, so every witness here is paid for. Goal: keep
+    # the sweep portion under ~4 min so the cold-cache build (~20
+    # min) plus sweep fits inside the 25-min job timeout.
+    #
+    # The full 40-witness corpus runs on the schedule /
+    # workflow_dispatch / merge_group tier (force_full=true) where
+    # wall-clock isn't capped — see the workflow's `force_full`
+    # branching.
+    #
+    # Coverage rationale (one line per witness):
+    #   01-overflow1-crash         — T01 catches the canonical BOF
+    #   01-canarymatch-deep-fn     — position-varying gadget catches
+    #                                 uniform-canary's blind spot (T01)
+    #   02-overflow1-crash         — T02 catches the canonical off-by-one
+    #   02-canarymatch-fn          — same gadget-upgrade probe for T02
+    #   03-noprefix-benign         — T03 bug is inert without a prefix
+    #   03-overflow1-crash         — T03 catches CVE-2017-9047
+    #   03-nulprefix-benign        — soundness probe: bug requires
+    #                                 non-NUL prefix (real CVE property)
+    #   03-nullname-crash          — bug fires with zero-name + non-NUL
+    #                                 prefix; covers a different byte
+    #                                 pattern than 03-overflow1
+    witness_set=(
+        witnesses/01-overflow1-crash.bin
+        witnesses/01-canarymatch-deep-fn.bin
+        witnesses/02-overflow1-crash.bin
+        witnesses/02-canarymatch-fn.bin
+        witnesses/03-noprefix-benign.bin
+        witnesses/03-overflow1-crash.bin
+        witnesses/03-nulprefix-benign.bin
+        witnesses/03-nullname-crash.bin
+    )
+else
+    witness_set=(witnesses/*.bin)
+fi
+
+for w in "${witness_set[@]}"; do
     base=$(basename "$w" .bin)
     # Filename schema: <NN>-<descriptor>-<verdict>.bin where NN is the
     # target id ("01", "02", or "03"); see witnesses/generate.py.
