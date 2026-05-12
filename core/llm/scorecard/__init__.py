@@ -46,6 +46,14 @@ common destructive case (``reset --model X`` after a model switch)
 a single dict delete rather than a walk.
 """
 
+# Canonical cap for disagreement-sample reasoning text length. Every
+# scorecard producer (`tool_evidence`, `judge`, `consensus`,
+# `reasoning_divergence`) slices `analysis_reasoning` /
+# `this_reasoning` / `sample_reasoning` by this value before persisting
+# the sample. Defined once here so the 4 producers cannot drift apart;
+# `tests/test_reasoning_cap_unique.py` is the parse-time guard.
+_MAX_REASONING_CHARS = 500
+
 from .scorecard import (
     ModelScorecard,
     EventType,
@@ -68,4 +76,5 @@ __all__ = [
     "PrefilterDecision",
     "prefilter_decision",
     "record_prefilter_outcome",
+    "_MAX_REASONING_CHARS",
 ]

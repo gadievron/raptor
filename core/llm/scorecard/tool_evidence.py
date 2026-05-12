@@ -32,12 +32,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Iterable, Optional
 
+from . import _MAX_REASONING_CHARS
 from .scorecard import EventType, ModelScorecard
 
 logger = logging.getLogger(__name__)
-
-
-_MAX_REASONING_CHARS = 500
 
 
 def record_tool_evidence_outcome(
