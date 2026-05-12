@@ -123,13 +123,31 @@ def record_denial(cmd_display: str, returncode: int,
     run_dir = _active_run_dir
     if run_dir is None:
         return
-    # Per-run cap: silently drop denials past MAX_DENIALS_PER_RUN. Logs
-    # once at the boundary so a developer can find it. Lock-free
-    # increment is fine under CPython GIL (slight overcount past cap is
-    # acceptable for a DoS defense).
-    _denial_count += 1
-    if _denial_count > MAX_DENIALS_PER_RUN:
-        if _denial_count == MAX_DENIALS_PER_RUN + 1:
+    # Per-run cap: silently drop denials past MAX_DENIALS_PER_RUN.
+    # Logs once at the boundary so a developer can find it.
+    #
+    # Pre-fix the comment claimed "lock-free increment is fine
+    # under CPython GIL (slight overcount past cap is acceptable
+    # for a DoS defense)." But `+= 1` is NOT atomic in CPython —
+    # it compiles to LOAD + BINARY_ADD + STORE. Two threads can
+    # both load N, both add, both store N+1 (one update lost).
+    # That's harmless for the cap itself (a few extra records
+    # past the cap) BUT can cause the boundary log
+    # (`if _denial_count == MAX + 1`) to be missed entirely if
+    # the counter jumps from N to N+2 across a missed update.
+    # The boundary log is the operator's one signal that the cap
+    # was reached; missing it means an adversarial target's
+    # denials silently disappear with no log line announcing the
+    # cap.
+    # Hold `_lock` (already used by set_active_run_dir for the
+    # same `_denial_count` global) across the increment + boundary
+    # check + early return so the boundary log fires exactly once.
+    with _lock:
+        _denial_count += 1
+        local_count = _denial_count
+        is_boundary = (local_count == MAX_DENIALS_PER_RUN + 1)
+    if local_count > MAX_DENIALS_PER_RUN:
+        if is_boundary:
             logger.warning(
                 "sandbox summary cap reached (%d denials this run); "
                 "dropping further denials. Adversarial target or runaway "
