@@ -534,7 +534,6 @@ def test_post_submit_retry_on_analysis_error_recovers(tmp_path):
     # check by patching it to fail-then-succeed.
     from cve_diff import pipeline as pipeline_mod
     shape_calls = {"n": 0}
-    real_check = pipeline_mod.check_diff_shape
 
     def flaky_check(shape: str):
         shape_calls["n"] += 1

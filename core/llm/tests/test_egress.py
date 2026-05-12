@@ -240,7 +240,6 @@ class TestEnableLLMEgress:
         Subsequent calls only union the allowlist."""
         cfg = _config(primary=_model(provider="anthropic"))
         egress.enable_llm_egress(cfg)
-        first_value = os.environ["HTTPS_PROXY"]
 
         # Mutate the env to detect a second overwrite if it happens.
         os.environ["HTTPS_PROXY"] = "http://sentinel:99"

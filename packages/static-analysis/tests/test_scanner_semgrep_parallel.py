@@ -134,7 +134,6 @@ class TestSemgrepScanParallel:
         secrets_dir = tmp_path / "secrets"
         secrets_dir.mkdir()
         semgrep_scan_parallel(tmp_path, [str(secrets_dir)], tmp_path, timeout=10)
-        called_configs = [c.args[1] for c in mock_single.call_args_list]
         # secrets pack is in both POLICY_GROUP and BASELINE — must de-dup
         # (the local-rules dir gets its own ``category_secrets`` entry, which
         # is intentional and not considered a duplicate).
@@ -207,7 +206,6 @@ class TestSemgrepScanSequential:
         secrets_dir = tmp_path / "secrets"
         secrets_dir.mkdir()
         semgrep_scan_sequential(tmp_path, [str(secrets_dir)], tmp_path, timeout=10)
-        called_configs = [c.args[1] for c in mock_single.call_args_list]
         # secrets pack is in both POLICY_GROUP and BASELINE — must de-dup
         # (the local-rules dir gets its own ``category_secrets`` entry, which
         # is intentional and not considered a duplicate).

@@ -220,7 +220,7 @@ class TestAtomicRuleWrite:
         llm = _stub_llm([
             {"rule_body": "rules: A_VERSION", "rationale": "first"},
         ])
-        r1 = synthesise_and_run(seed, tmp_path, tmp_path / "out", llm)
+        synthesise_and_run(seed, tmp_path, tmp_path / "out", llm)
         # Reset engine call count — second write also runs probe.
         # Plant fresh stub.
         _stub_engines(

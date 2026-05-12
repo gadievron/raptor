@@ -78,7 +78,6 @@ class TestAddDirectory(unittest.TestCase):
             run_dir.mkdir()
             (run_dir / "findings.json").write_text("[]")
 
-        runs_parent = Path(self.tmpdir.name)
         # Add all at once — they're in tmpdir alongside projects dir
         # Create a subdirectory with just the runs
         runs = Path(self.tmpdir.name) / "batch"

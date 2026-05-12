@@ -1655,7 +1655,7 @@ class TestToolPathsKwarg(unittest.TestCase):
 
     def test_tool_paths_accepted_by_sandbox(self):
         from core.sandbox import sandbox
-        with sandbox(tool_paths=["/opt/foo/bin"]) as run:
+        with sandbox(tool_paths=["/opt/foo/bin"]):
             pass
 
     def test_tool_paths_accepted_by_top_level_run(self):

@@ -198,7 +198,7 @@ class TestFindUnderstandOutput:
         validate_dir = project_dir / "validate-20260403-120000"
         validate_dir.mkdir(parents=True)
 
-        old = _make_understand_dir(project_dir, "understand-20260401-120000")
+        _make_understand_dir(project_dir, "understand-20260401-120000")
         time.sleep(0.01)
         new = _make_understand_dir(project_dir, "understand-20260402-120000")
 

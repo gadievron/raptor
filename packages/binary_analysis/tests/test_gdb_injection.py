@@ -251,8 +251,6 @@ class TestDebuggerTempFile:
         """
         import subprocess as sp
 
-        script_paths = []
-
         # Verify cleanup behavior directly via filesystem
         # inspection — pre-fix this test had no assertions.
         # The script lands under `binary_dir` (per batch 836)

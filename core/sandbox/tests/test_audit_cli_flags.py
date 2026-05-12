@@ -264,7 +264,7 @@ class TestSandboxAuditKwarg:
                 audit=True,
                 use_egress_proxy=True,
                 proxy_hosts=["api.example.com"],
-            ) as run:
+            ):
                 # Audit engaged via per-call kwarg → proxy acquired.
                 assert proxy_inst._audit_count == 1
             assert proxy_inst._audit_count == 0

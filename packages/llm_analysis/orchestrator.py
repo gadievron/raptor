@@ -1314,6 +1314,7 @@ def _intersect_profiles(profiles: list) -> Any:
     defences applied uniformly to every dispatcher.
     """
     from core.security.prompt_envelope import ModelDefenseProfile
+    from core.security.prompt_defense_profiles import CONSERVATIVE
     if not profiles:
         return CONSERVATIVE
     if len(profiles) == 1:

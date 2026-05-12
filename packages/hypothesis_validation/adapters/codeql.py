@@ -399,7 +399,7 @@ class CodeQLAdapter(ToolAdapter):
                         capture_output=True, text=True,
                         timeout=120, env=env,
                     )
-                except Exception as e:
+                except Exception:
                     # Pack install is best-effort. If the query has no
                     # external imports it will still compile.
                     pass
