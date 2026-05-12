@@ -276,7 +276,7 @@ class TestMigrationDetection:
 
 
 try:
-    import yaml
+    import yaml  # noqa: F401 — availability probe for the @skipif gate below
     HAS_PYYAML = True
 except ImportError:
     HAS_PYYAML = False

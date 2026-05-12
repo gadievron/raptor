@@ -93,15 +93,22 @@ jobs:
           source $VENV_PATH/bin/activate
           uv pip install "$(grep -E '^ruff==' requirements-dev.txt)"
 
-      - name: Run ruff (F401, F811)
+      - name: Run ruff (F401, F811, F821, F841)
         run: |
           source $VENV_PATH/bin/activate
-          # Conservative starting rule set: unused-import + redefined-
-          # while-unused only. F821 + F841 manual fixes land in a
-          # follow-up PR (DEEP-1b); __init__.py __all__ declarations
-          # land in another follow-up (DEEP-1c). E501 (3,204 default-88
-          # violations) deferred until a separate evaluation of line-
-          # length policy. See notes/_judge/W14-E1-lint-ci-gate-design.md.
-          ruff check --select F401,F811 \
+          # Name-correctness rule set: F401 (unused-import),
+          # F811 (redefined-while-unused), F821 (undefined-name),
+          # F841 (unused-variable). E501 (3,204 default-88 violations)
+          # deferred until a separate evaluation of line-length policy.
+          # See notes/_judge/W14-E1-lint-ci-gate-design.md.
+          #
+          # NOTE: this branch's lint.yml SELECTS F401/F811/F821/F841 but
+          # F401 still has ~535 violations on this branch (the autofix
+          # lives on bug-fixes-W14-deep1a). This branch closes the 74
+          # F401 sites in the 5 `__init__.py` re-export hubs via
+          # explicit `__all__` declarations; the remaining ~535 are
+          # DEEP-1a's autofix territory. Once DEEP-1a + DEEP-1b merge,
+          # F401 will be 0 and this gate passes end-to-end.
+          ruff check --select F401,F811,F821,F841 \
             --output-format=github \
             .

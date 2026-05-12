@@ -12,7 +12,6 @@ Dataclasses live in ``agent/types.py``; tools in ``agent/tools.py``.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import time

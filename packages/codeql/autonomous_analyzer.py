@@ -235,9 +235,7 @@ class AutonomousCodeQLAnalyzer:
 
         try:
             from core.inventory.lookup import lookup_function
-            from core.inventory.reachability import (
-                Verdict, function_called,
-            )
+            from core.inventory.reachability import function_called
         except ImportError:
             return None
 

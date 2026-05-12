@@ -210,7 +210,6 @@ class TestRunSandboxedSmokeTest(unittest.TestCase):
         mount_ns_flake.md). Fix: per-run path tracking via
         monkey-patch.
         """
-        from core.sandbox import _spawn
         from core.sandbox._spawn import run_sandboxed
         captured_stubs = []
         # _spawn.run_sandboxed imports tempfile internally as _tempfile.
