@@ -306,8 +306,46 @@ def run_sca_subprocess(
 # ---------------------------------------------------------------------------
 
 def get_out_dir() -> Path:
+    """Resolve RAPTOR_OUT_DIR (or default `./out`) and ensure it exists.
+
+    Pre-fix `get_out_dir` returned the resolved path WITHOUT creating
+    the directory. `main()` then called `safe_run_mkdir(out_dir)`
+    afterwards as a separate step. Other callers using
+    `get_out_dir()` directly (test helpers, ad-hoc subprocess
+    wrappers, future entry points) didn't run the mkdir and crashed
+    on the first `path.write_text(...)` / `open(..., 'w')` against a
+    non-existent directory.
+
+    Move the mkdir INTO `get_out_dir` so every caller sees a usable
+    directory. `parents=True, exist_ok=True` is idempotent — the
+    extra mkdir in `main()` becomes a no-op rather than a duplicate
+    side effect.
+
+    Best-effort: a permissions failure in mkdir surfaces as the
+    operator's underlying OSError so they get an actionable
+    diagnostic at first use rather than a confusing "file not found"
+    later.
+    """
     base = os.environ.get("RAPTOR_OUT_DIR")
-    return Path(base).resolve() if base else Path("out").resolve()
+    out = Path(base).resolve() if base else Path("out").resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    # Pre-fix this returned the path WITHOUT validating that the
+    # resolved location was actually writable. Operators setting
+    # RAPTOR_OUT_DIR to a path on a read-only mount, a directory
+    # owned by another user, or a stale symlink target got the
+    # resolved Path back and crashed on the first downstream
+    # write — confusing errors point at the write site, not the
+    # source-of-truth (the env var).
+    # `os.access` checks effective permissions for the running
+    # user. Failing here surfaces a clear "RAPTOR_OUT_DIR=...
+    # is not writable" error early.
+    if not os.access(str(out), os.W_OK):
+        raise OSError(
+            f"RAPTOR_OUT_DIR={out!s} resolves to a directory the current "
+            f"process cannot write to (permissions / read-only mount / "
+            f"wrong owner). Fix the env var or the directory perms."
+        )
+    return out
 
 
 # Vendored / cache / build directories whose dependency manifests

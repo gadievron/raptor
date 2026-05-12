@@ -201,9 +201,24 @@ remove_mcp_entry() {
     trap - RETURN
     # If the file now contains only an empty mcpServers object (and nothing
     # else at the top level), delete it — it's ours to clean up.
+    #
+    # Pre-fix `jq -r 'keys | length' "$MCP"` was ambiguous for
+    # non-object roots: `keys` works on BOTH objects AND arrays, so
+    # an MCP file whose root happened to be `[...]` (corrupted writer,
+    # operator hand-edit, manual JSON re-export from a tool that
+    # serialised the wrong shape) returned the array's length — and
+    # the `top_count == 1` test could match a 1-element array, leading
+    # to deletion of an MCP file we shouldn't have touched. For
+    # scalar roots (`null`, `true`, `42`, `"string"`) `keys` errors
+    # outright, which jq returns rc=5 — the unset `top_count` then
+    # compared "" against "1" and we left the file in place (correct
+    # by accident, not by design).
+    # Type-guard explicitly: only count keys when the root IS an
+    # object; otherwise return 0 (so the cleanup branch doesn't
+    # fire on non-object roots).
     local server_count top_count
     server_count="$(jq -r '.mcpServers // {} | length' "$MCP")"
-    top_count="$(jq -r 'keys | length' "$MCP")"
+    top_count="$(jq -r 'if type == "object" then keys|length else 0 end' "$MCP")"
     if [ "$server_count" = "0" ] && [ "$top_count" = "1" ]; then
         rm -f "$MCP"
         echo "Removed $MCP (no MCP servers remaining)."
