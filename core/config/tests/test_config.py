@@ -302,3 +302,72 @@ class TestGetSafeEnvIncludePythonUserBase:
             assert env.get("PYTHONUSERBASE") == "/home/user/.local"
 
 
+class TestGetLlmEnvIncludePythonUserBase:
+    """F102b — ``get_llm_env()`` must forward
+    ``include_python_user_base`` to ``get_safe_env()``.
+
+    Without this forwarding, ``python raptor.py agentic`` (the
+    canonical operator entry point at ``raptor.py:313,317``) calls
+    ``get_llm_env()`` which strips PYTHONUSERBASE before the
+    ``raptor_agentic.py:757`` opt-in can restore it for the semgrep
+    spawn — the F102 fix is orphaned on this path.
+
+    Default (False) must keep the existing strip behaviour;
+    opt-in (True) must preserve the var. Mirrors the existing
+    ``preserve_proxy`` opt-in pattern on the underlying
+    ``get_safe_env``. Sibling test class:
+    ``TestGetSafeEnvIncludePythonUserBase``.
+    """
+
+    def test_default_strips_pythonuserbase(self):
+        """Backward-compat regression guard: default ``get_llm_env()``
+        still strips PYTHONUSERBASE (security contract unchanged)."""
+        with patch.dict(os.environ, {"PYTHONUSERBASE": "/home/user/.local"}):
+            env = RaptorConfig.get_llm_env()
+            assert "PYTHONUSERBASE" not in env
+
+    def test_include_python_user_base_keeps_pythonuserbase(self):
+        """F102b: when caller passes
+        ``include_python_user_base=True``, the var flows through to
+        the returned env so the canonical operator path
+        (``raptor.py:313,317``) can preserve it for the agentic
+        subprocess that wires it into the semgrep spawn."""
+        with patch.dict(os.environ, {"PYTHONUSERBASE": "/home/user/.local"}):
+            env = RaptorConfig.get_llm_env(include_python_user_base=True)
+            assert env.get("PYTHONUSERBASE") == "/home/user/.local"
+
+    def test_include_python_user_base_no_op_when_not_set(self):
+        """If the original env has no PYTHONUSERBASE, opt-in must
+        not invent one."""
+        scrubbed = {k: v for k, v in os.environ.items() if k != "PYTHONUSERBASE"}
+        with patch.dict(os.environ, scrubbed, clear=True):
+            env = RaptorConfig.get_llm_env(include_python_user_base=True)
+            assert "PYTHONUSERBASE" not in env
+
+    def test_include_python_user_base_does_not_re_admit_other_dangerous_vars(self):
+        """Opt-in is targeted — the LLM-env opt-in must not lift the
+        wider DANGEROUS_ENV_VARS blocklist (regression guard against
+        an over-broad forwarding implementation)."""
+        injected = {var: f"malicious_{var}" for var in RaptorConfig.DANGEROUS_ENV_VARS}
+        with patch.dict(os.environ, injected):
+            env = RaptorConfig.get_llm_env(include_python_user_base=True)
+            for var in RaptorConfig.DANGEROUS_ENV_VARS:
+                if var == "PYTHONUSERBASE":
+                    assert env.get(var) == "malicious_PYTHONUSERBASE"
+                else:
+                    assert var not in env, f"{var} should still be stripped"
+
+    def test_include_python_user_base_preserves_llm_api_key_passthrough(self):
+        """Combining the opt-in with the LLM-key passthrough must
+        not break either contract: API keys still flow, PYTHONUSERBASE
+        is preserved."""
+        injected = {
+            "PYTHONUSERBASE": "/home/user/.local",
+            "ANTHROPIC_API_KEY": "sk-ant-test-f102b",
+        }
+        with patch.dict(os.environ, injected):
+            env = RaptorConfig.get_llm_env(include_python_user_base=True)
+            assert env.get("PYTHONUSERBASE") == "/home/user/.local"
+            assert env.get("ANTHROPIC_API_KEY") == "sk-ant-test-f102b"
+
+
