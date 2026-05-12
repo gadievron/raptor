@@ -143,21 +143,32 @@ def record_denial(cmd_display: str, returncode: int,
     # values (very long paths, env-string args) could still blow up.
     if len(cmd_display) > MAX_CMD_LEN:
         cmd_display = cmd_display[:MAX_CMD_LEN - 1] + "…"
-    # Redact secrets in cmd_display before persisting. The string is already
-    # escape_nonprintable'd by context.py at construction, but redact_secrets
-    # is what catches user:pass@host URLs, Bearer/Basic headers, and similar
-    # credential shapes that escape doesn't touch. Logs are typically rotated
-    # frequently (hourly) by syslog/journald; summaries live in the run dir
-    # until the operator runs `/project clean` (days-to-weeks), and operators
-    # paste run-dir contents into bug reports without thinking. The longer
-    # window + the "share without thinking" pattern justify the extra defense.
+    # Redact secrets + defensive escape_nonprintable in cmd_display
+    # before persisting.
+    #
+    # Pre-fix the comment claimed cmd_display was "already
+    # escape_nonprintable'd by context.py at construction" — but
+    # that relied on an UPSTREAM CONTRACT. A future caller (a new
+    # observation site, a refactored context.py, an LLM-generated
+    # call from agentic dispatch) that bypasses the construction
+    # path would feed raw control bytes (ANSI escape sequences,
+    # BIDI overrides, NUL/CR/LF) straight into the JSONL line.
+    # Operators tailing the JSONL via `tail -f` would then see
+    # forged log lines / smuggled escape sequences.
+    # Defense in depth: escape_nonprintable AFTER redact_secrets
+    # so even a contract violation upstream gets defanged here.
+    # Order matters — redact first so secrets don't get
+    # escape-byte-rewritten before pattern matching, then escape
+    # so any remaining non-printables are visible-form'd.
+    from core.security.prompt_output_sanitise import escape_nonprintable
+    cmd_safe = escape_nonprintable(redact_secrets(cmd_display))
     # Spread `details` FIRST so the explicit reserved fields below override
     # — without this, a caller passing details={"type": "evil", "cmd": ...}
     # could mask the real denial values.
     record = {
         **details,
         "ts": datetime.now(timezone.utc).isoformat(),
-        "cmd": redact_secrets(cmd_display),
+        "cmd": cmd_safe,
         "returncode": returncode,
         "type": denial_type,
         "suggested_fix": _suggested_fix(denial_type, **details),
