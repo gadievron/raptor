@@ -633,7 +633,11 @@ class RaptorConfig:
         return RaptorConfig.MCP_JOB_DIR / job_id
 
     @staticmethod
-    def get_safe_env(*, preserve_proxy: bool = False) -> dict:
+    def get_safe_env(
+        *,
+        preserve_proxy: bool = False,
+        include_python_user_base: bool = False,
+    ) -> dict:
         """Return a sanitised copy of os.environ for subprocess use.
 
         Two-stage filter:
@@ -657,6 +661,18 @@ class RaptorConfig:
         an operator's HTTPS_PROXY setting. The dangerous-env-var
         strip still applies.
 
+        ``include_python_user_base=True`` (F102) re-admits the
+        ``PYTHONUSERBASE`` variable from the original os.environ
+        AFTER the dangerous-env-vars strip. Use only at scanner
+        invocation sites that legitimately depend on a
+        ``pip install --user`` tool (e.g. semgrep). The variable is
+        a real RCE vector via .pth files (see DANGEROUS_ENV_VARS
+        comment at PYTHONUSERBASE) and stays stripped by default;
+        but if the operator deliberately installed the scanner under
+        ``~/.local`` with a non-default ``PYTHONUSERBASE`` set, the
+        subprocess fails ``ModuleNotFoundError`` without this opt-in.
+        Mirrors the ``preserve_proxy`` opt-in pattern.
+
         Callers who need a specific extra var (JAVA_HOME for a Java tool,
         a custom CA bundle, etc.) should add it to the returned dict
         explicitly after calling get_safe_env(), or pass their own env=
@@ -674,6 +690,14 @@ class RaptorConfig:
         if not preserve_proxy:
             env = strip_env_vars(env, RaptorConfig.PROXY_ENV_VARS)
         env = strip_env_vars(env, RaptorConfig.DANGEROUS_ENV_VARS)
+        # F102: restore PYTHONUSERBASE AFTER the dangerous-var strip
+        # for callers that opted in (e.g. semgrep scanner spawn).
+        # Take the value verbatim from os.environ — do NOT invent
+        # one if the operator didn't set it.
+        if include_python_user_base:
+            _userbase = os.environ.get("PYTHONUSERBASE")
+            if _userbase is not None:
+                env["PYTHONUSERBASE"] = _userbase
         env["PYTHONUNBUFFERED"] = "1"
         return env
 

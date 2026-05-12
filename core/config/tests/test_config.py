@@ -231,3 +231,74 @@ class TestEnsureDirectories:
             RaptorConfig.ensure_directories()  # must not raise
 
 
+class TestGetSafeEnvIncludePythonUserBase:
+    """F102 — opt-in restoration of PYTHONUSERBASE for scanners that
+    depend on ``pip install --user`` tools (semgrep, etc.).
+
+    Default behaviour: PYTHONUSERBASE is in DANGEROUS_ENV_VARS and
+    must remain stripped (it's a real RCE vector via .pth files —
+    see core/config/__init__.py line 396-400).
+
+    With ``include_python_user_base=True``, scanner sites that
+    legitimately invoke a pip-installed user tool can re-admit the
+    variable so the tool finds its site-packages. The same kwarg
+    pattern as ``preserve_proxy``.
+
+    Without this opt-in, an operator who installed semgrep with
+    ``pip install --user`` and set ``PYTHONUSERBASE`` outside the
+    default sees ``ModuleNotFoundError: No module named 'semgrep'``
+    when RAPTOR spawns the scanner subprocess — verified in
+    W6/W9 PoC.
+    """
+
+    def test_default_strips_pythonuserbase(self):
+        """Backward-compat regression guard: default behaviour
+        unchanged. PYTHONUSERBASE still removed."""
+        with patch.dict(os.environ, {"PYTHONUSERBASE": "/home/user/.local"}):
+            env = RaptorConfig.get_safe_env()
+            assert "PYTHONUSERBASE" not in env
+
+    def test_include_python_user_base_keeps_pythonuserbase(self):
+        """Opt-in: when caller passes
+        ``include_python_user_base=True``, the var flows through."""
+        with patch.dict(os.environ, {"PYTHONUSERBASE": "/home/user/.local"}):
+            env = RaptorConfig.get_safe_env(include_python_user_base=True)
+            assert env.get("PYTHONUSERBASE") == "/home/user/.local"
+
+    def test_include_python_user_base_no_op_when_not_set(self):
+        """If the original env has no PYTHONUSERBASE, opt-in must
+        not invent one."""
+        # Build an env without PYTHONUSERBASE
+        scrubbed = {k: v for k, v in os.environ.items() if k != "PYTHONUSERBASE"}
+        with patch.dict(os.environ, scrubbed, clear=True):
+            env = RaptorConfig.get_safe_env(include_python_user_base=True)
+            assert "PYTHONUSERBASE" not in env
+
+    def test_include_python_user_base_does_not_re_admit_other_dangerous_vars(self):
+        """Opt-in is targeted — every OTHER dangerous var must still
+        be stripped. Regression guard against an over-broad opt-in
+        that accidentally lifts the whole blocklist."""
+        injected = {var: f"malicious_{var}" for var in RaptorConfig.DANGEROUS_ENV_VARS}
+        with patch.dict(os.environ, injected):
+            env = RaptorConfig.get_safe_env(include_python_user_base=True)
+            # PYTHONUSERBASE is the ONLY var the opt-in re-admits.
+            for var in RaptorConfig.DANGEROUS_ENV_VARS:
+                if var == "PYTHONUSERBASE":
+                    assert env.get(var) == "malicious_PYTHONUSERBASE"
+                else:
+                    assert var not in env, f"{var} should still be stripped"
+
+    def test_include_python_user_base_combines_with_preserve_proxy(self):
+        """Combining both kwargs is legal — neither flag rejects
+        the other. (Whether ``preserve_proxy`` actually re-admits
+        proxy vars depends on the allowlist; out of scope here.
+        This test only guards against an accidental kwarg-collision
+        regression in the function signature.)"""
+        injected = {"PYTHONUSERBASE": "/home/user/.local"}
+        with patch.dict(os.environ, injected):
+            env = RaptorConfig.get_safe_env(
+                preserve_proxy=True, include_python_user_base=True,
+            )
+            assert env.get("PYTHONUSERBASE") == "/home/user/.local"
+
+
