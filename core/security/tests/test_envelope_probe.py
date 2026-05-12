@@ -356,3 +356,97 @@ class TestProbeIsAttackerProof:
         result = probe_envelope_compatibility("test-model", CONSERVATIVE, dispatch)
         assert result.compatible
         # The probe doesn't touch the target repo at all
+
+
+# ============================================================
+# 6. F058 — strict=True raises on empty/refusal content
+# ============================================================
+#
+# In default (non-strict) mode the probe returns
+# ``ProbeResult(compatible=False)`` when the model returns an empty
+# response or a refusal. Callers that interpret ``compatible=False``
+# as "fall back to PASSTHROUGH" silently disable the envelope
+# defences in that case — see ``packages/llm_analysis/orchestrator``
+# where ``--accept-weakened-defenses`` flips a failed probe straight
+# to ``profile = PASSTHROUGH``. An empty response is genuinely
+# ambiguous: the model may be transiently overloaded, the prompt may
+# have tripped a refusal filter, or the network may have flaked —
+# none of those signal "this model can't honour the envelope".
+#
+# ``strict=True`` is an opt-in fail-CLOSED conversion: raise
+# :class:`ProbeContentError` on empty/refusal/dispatch-raised paths so
+# the caller can distinguish "ambiguous transient" from "definitely
+# incompatible verdict" and surface to the operator instead of
+# silently weakening defences.
+
+class TestProbeStrictMode:
+    """F058 — strict=True raises on empty/refusal content.
+
+    Default (non-strict) behaviour preserved — existing callers see
+    no change. Opt-in strict mode lets fail-CLOSED callers surface
+    ambiguous transient failures as errors instead of treating them
+    as "model is incompatible, switch to PASSTHROUGH".
+    """
+
+    def test_strict_raises_on_empty_content(self):
+        from core.security.envelope_probe import ProbeContentError
+        dispatch = _make_dispatch_fn(raw_text="")
+        with pytest.raises(ProbeContentError):
+            probe_envelope_compatibility(
+                "phi-3", CONSERVATIVE, dispatch, strict=True,
+            )
+
+    def test_strict_raises_on_whitespace_content(self):
+        from core.security.envelope_probe import ProbeContentError
+        dispatch = _make_dispatch_fn(raw_text="   \n\t  ")
+        with pytest.raises(ProbeContentError):
+            probe_envelope_compatibility(
+                "phi-3", CONSERVATIVE, dispatch, strict=True,
+            )
+
+    def test_strict_raises_on_dispatch_exception(self):
+        from core.security.envelope_probe import ProbeContentError
+        dispatch = _make_dispatch_fn(raise_error=RuntimeError("network blip"))
+        with pytest.raises(ProbeContentError):
+            probe_envelope_compatibility(
+                "phi-3", CONSERVATIVE, dispatch, strict=True,
+            )
+
+    def test_strict_does_not_raise_on_compatible_response(self):
+        """A real compatible response must NOT raise even in strict
+        mode — strict only escalates ambiguous-empty paths, it does
+        not re-classify the successful case."""
+        dispatch = _make_dispatch_fn(response_json={
+            "is_vulnerable": True,
+            "vulnerability_type": "buffer_overflow",
+            "confidence": 0.9,
+        })
+        result = probe_envelope_compatibility(
+            "gpt-5", CONSERVATIVE, dispatch, strict=True,
+        )
+        assert result.compatible
+
+    def test_strict_does_not_raise_on_wrong_verdict(self):
+        """A model that produces valid JSON but the wrong verdict is
+        a definitive incompatibility signal (not transient/ambiguous)
+        — strict still returns ``compatible=False`` for that case."""
+        dispatch = _make_dispatch_fn(response_json={
+            "is_vulnerable": False,
+            "vulnerability_type": "none",
+            "confidence": 0.1,
+        })
+        result = probe_envelope_compatibility(
+            "mistral-7b", CONSERVATIVE, dispatch, strict=True,
+        )
+        assert not result.compatible
+        assert "buffer overflow" in result.error.lower()
+
+    def test_default_mode_preserves_legacy_behaviour(self):
+        """Without ``strict=True`` the probe must still return
+        ``compatible=False`` on empty content — backward-compat for
+        existing orchestrator callers."""
+        dispatch = _make_dispatch_fn(raw_text="")
+        result = probe_envelope_compatibility("phi-3", CONSERVATIVE, dispatch)
+        assert not result.compatible
+        assert result.error is not None
+

@@ -49,6 +49,19 @@ _CANARY_RULE_ID = "CWE-120"
 _CANARY_FILE = "canary_probe.c"
 
 
+class ProbeContentError(RuntimeError):
+    """Raised in strict mode when the probe dispatch yields empty /
+    refusal content or the underlying dispatch raises.
+
+    Default (non-strict) mode preserves the legacy
+    ``ProbeResult(compatible=False)`` return — see F058 in
+    ``notes/_logs/bugs-fixes-log-BF2.md``. Strict-mode callers
+    catch this to distinguish "ambiguous transient failure" from
+    "definitively incompatible verdict" and avoid silently falling
+    back to PASSTHROUGH (defences off) on a transient blip.
+    """
+
+
 @dataclass(frozen=True)
 class ProbeResult:
     compatible: bool
@@ -168,6 +181,8 @@ def probe_envelope_compatibility(
     analysis_model: Any,
     profile: ModelDefenseProfile,
     dispatch_fn,
+    *,
+    strict: bool = False,
 ) -> ProbeResult:
     """Send a canary probe through the dispatch path.
 
@@ -187,6 +202,19 @@ def probe_envelope_compatibility(
 
     Returns a ProbeResult with .compatible indicating whether the model
     handled the envelope correctly.
+
+    ``strict`` (default ``False``, F058): when ``True``, raise
+    :class:`ProbeContentError` on the ambiguous-transient paths —
+    dispatch raised, OR dispatch returned empty / whitespace-only
+    content. The legacy non-strict default returns
+    ``ProbeResult(compatible=False)`` for those cases; callers that
+    treat ``compatible=False`` as "fall back to PASSTHROUGH" then
+    silently disable the envelope defences when the model simply
+    glitched. Strict callers see the distinction and can surface to
+    the operator (or retry) rather than weakening defences blind.
+    A model that produces *valid JSON with the wrong verdict* is a
+    definitive incompatibility signal and is NOT escalated by strict
+    mode — those still return ``compatible=False``.
     """
     system, user, nonce = build_canary_prompt(profile)
     model_name = getattr(analysis_model, "model_name", None) or str(analysis_model)
@@ -194,13 +222,34 @@ def probe_envelope_compatibility(
     try:
         result = dispatch_fn(user, None, system, 0.0, analysis_model)
         raw = ""
+        # ``content_was_empty`` distinguishes "model produced an
+        # empty/whitespace response" from "result envelope had no
+        # content field". The legacy line 226 collapsed both via
+        # ``... or json.dumps(result.result)`` — for F058 strict
+        # mode we need to detect "actually empty content" before
+        # that fallback masks it as a non-empty JSON dump.
+        content_was_empty = False
         if hasattr(result, "result") and isinstance(result.result, dict):
-            raw = result.result.get("content", "") or json.dumps(result.result)
+            _content = result.result.get("content", "")
+            if isinstance(_content, str) and not _content.strip():
+                content_was_empty = True
+            raw = _content or json.dumps(result.result)
         elif hasattr(result, "result"):
             raw = str(result.result)
+            if not raw.strip():
+                content_was_empty = True
         else:
             raw = str(result)
+            if not raw.strip():
+                content_was_empty = True
     except Exception as e:
+        if strict:
+            raise ProbeContentError(
+                f"Envelope probe dispatch raised for {model_name} "
+                f"(profile: {profile.name}): {e}. Strict mode refuses "
+                f"to silently fall back to PASSTHROUGH on an ambiguous "
+                f"transient failure."
+            ) from e
         return ProbeResult(
             compatible=False,
             valid_json=False,
@@ -208,6 +257,19 @@ def probe_envelope_compatibility(
             nonce_leaked=False,
             raw_response="",
             error=f"Dispatch failed: {e}",
+        )
+
+    # F058 strict-mode: empty / whitespace-only content is
+    # genuinely ambiguous (transient overload, refusal filter,
+    # network blip) and should NOT be silently treated as
+    # "model is incompatible with the envelope, downgrade to
+    # PASSTHROUGH". Escalate so the caller surfaces it.
+    if strict and content_was_empty:
+        raise ProbeContentError(
+            f"Envelope probe got empty / whitespace-only response from "
+            f"{model_name} (profile: {profile.name}). Strict mode refuses "
+            f"to silently fall back to PASSTHROUGH on an ambiguous "
+            f"transient failure."
         )
 
     probe_result = evaluate_probe_response(raw, nonce)
