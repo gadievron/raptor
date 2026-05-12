@@ -572,6 +572,10 @@ Examples:
             print(f"\n📚 SAGE: Recalled {len(sage_context)} historical memories for context")
             for mem in sage_context[:3]:
                 print(f"   [{mem['confidence']:.0%}] {mem['content'][:100]}...")
+        try:
+            save_json(out_dir / "sage_precall_scan.json", {"memories": sage_context})
+        except Exception:
+            pass
     except Exception as e:
         logger.debug(f"SAGE pre-scan recall skipped: {e}")
 
@@ -1062,6 +1066,9 @@ Examples:
         # want annotation side effects (CI / scratch runs) can suppress.
         if args.no_annotations:
             analysis_cmd.append("--no-annotations")
+        precall_path = out_dir / "sage_precall_scan.json"
+        if precall_path.exists():
+            analysis_cmd.extend(["--sage-precall", str(precall_path)])
 
         # Phase 3 preps data; Phase 4 handles LLM work (unless --sequential)
         if (llm_env.claude_code or llm_env.external_llm) and not args.sequential:

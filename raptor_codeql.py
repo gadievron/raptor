@@ -28,6 +28,7 @@ from core.json import save_json
 from core.logging import get_logger
 from core.sarif.parser import load_sarif
 from core.sage.hooks import (
+    format_sage_memories_for_prompt,
     recall_context_for_codeql_build,
     store_codeql_build_reliability,
 )
@@ -100,9 +101,10 @@ def run_autonomous_workflow(args):
             logger.error("--build-command requires exactly one language")
             sys.exit(1)
         build_commands = {languages[0]: args.build_command}
-    # Future-agent note: planner hint recall happens before scanning so
-    # build strategy can benefit from prior SAGE knowledge.
-    recall_context_for_codeql_build(repo_path=args.repo, languages=languages)
+    sage_rows = recall_context_for_codeql_build(repo_path=args.repo, languages=languages)
+    sage_build_ctx = format_sage_memories_for_prompt(sage_rows)
+    if sage_build_ctx:
+        logger.info("SAGE CodeQL build recall (methodology domain):\n%s", sage_build_ctx[:4000])
 
     # PHASE 1: CodeQL Scanning
     logger.info("\n" + "=" * 70)
@@ -120,7 +122,8 @@ def run_autonomous_workflow(args):
         build_commands=build_commands,
         force_db_creation=args.force,
         use_extended=args.extended,
-        min_files=args.min_files
+        min_files=args.min_files,
+        sage_build_recall=sage_build_ctx or None,
     )
 
     if not scan_result.success:

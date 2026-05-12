@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 from core.json import save_json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from core.llm.task_types import TaskType
 from core.logging import get_logger
@@ -82,6 +82,8 @@ def _build_crash_analysis_bundle(
     crash_context: CrashContext,
     signal_name_fn,
     format_registers_fn,
+    *,
+    sage_prior_recall: Optional[str] = None,
 ) -> PromptBundle:
     """Build the crash-analysis prompt as a role-separated PromptBundle.
 
@@ -119,6 +121,13 @@ def _build_crash_analysis_bundle(
             content=crash_context.disassembly,
             kind="disassembly",
             origin=f"crash:{crash_context.crash_id}:{crash_context.crash_address or '?'}",
+        ))
+
+    if sage_prior_recall and sage_prior_recall.strip():
+        blocks.append(UntrustedBlock(
+            content=sage_prior_recall.strip(),
+            kind="sage-crash-pattern-recall",
+            origin="sage:crashes",
         ))
 
     asan_output = crash_context.binary_info.get('asan_output')
@@ -342,7 +351,7 @@ class CrashAnalysisAgent:
                 print("\n⚠️  No LLM available — producing structured findings for manual review")
             print()
 
-    def analyse_crash(self, crash_context: CrashContext) -> bool:
+    def analyse_crash(self, crash_context: CrashContext, *, sage_prior_recall: Optional[str] = None) -> bool:
         """
         Analyse a crash using LLM.
 
@@ -361,7 +370,10 @@ class CrashAnalysisAgent:
         # Build prompt via core/security/prompt_envelope. Untrusted target content
         # (stack traces, register dumps, ASan output, hex dump of attacker input,
         # disassembly) is wrapped in envelope blocks; identifiers go in slots.
-        bundle = _build_crash_analysis_bundle(crash_context, self._signal_name, self._format_registers)
+        bundle = _build_crash_analysis_bundle(
+            crash_context, self._signal_name, self._format_registers,
+            sage_prior_recall=sage_prior_recall,
+        )
         prompt = next(m.content for m in bundle.messages if m.role == "user")
         system_prompt = next(m.content for m in bundle.messages if m.role == "system")
 

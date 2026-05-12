@@ -58,6 +58,39 @@ def _patch_system_text(profile: ModelDefenseProfile = CONSERVATIVE) -> str:
     )
 
 
+def _sage_precall_blocks(finding: Dict) -> tuple:
+    """Untrusted blocks derived from optional Phase-0 SAGE scan recall."""
+    from core.security.prompt_envelope import UntrustedBlock
+
+    ctx = finding.get("_sage_precall_scan_context")
+    if not ctx:
+        return ()
+    return (
+        UntrustedBlock(
+            content=str(ctx),
+            kind="sage-precall-scan-context",
+            origin="sage:precall",
+        ),
+    )
+
+
+def _merge_sage_precall(finding: Dict, *blocks) -> tuple:
+    return _sage_precall_blocks(finding) + tuple(blocks)
+
+
+def _group_sage_precall_blocks(
+    finding_ids: List[str],
+    results_by_id: Dict[str, Dict],
+) -> tuple:
+    """Reuse Phase-0 scan precall from any member finding (same text per run)."""
+    for fid in finding_ids:
+        r = results_by_id.get(fid) or {}
+        blocks = _sage_precall_blocks(r)
+        if blocks:
+            return blocks
+    return ()
+
+
 class AnalysisTask(DispatchTask):
     """Per-finding exploitability analysis."""
 
@@ -76,7 +109,11 @@ class AnalysisTask(DispatchTask):
         return [model] if model else []
 
     def build_prompt(self, finding):
-        bundle = build_analysis_prompt_bundle_from_finding(finding, profile=self.profile)
+        bundle = build_analysis_prompt_bundle_from_finding(
+            finding,
+            profile=self.profile,
+            extra_blocks=_sage_precall_blocks(finding),
+        )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)
 
@@ -261,7 +298,11 @@ class ConsensusTask(DispatchTask):
         return selected
 
     def build_prompt(self, finding):
-        bundle = build_analysis_prompt_bundle_from_finding(finding, profile=self.profile)
+        bundle = build_analysis_prompt_bundle_from_finding(
+            finding,
+            profile=self.profile,
+            extra_blocks=_sage_precall_blocks(finding),
+        )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)
 
@@ -420,7 +461,9 @@ class JudgeTask(DispatchTask):
         )
 
         bundle = build_analysis_prompt_bundle_from_finding(
-            finding, profile=self.profile, extra_blocks=extra_blocks,
+            finding,
+            profile=self.profile,
+            extra_blocks=_merge_sage_precall(finding, *extra_blocks),
         )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)
@@ -657,14 +700,17 @@ class GroupAnalysisTask(DispatchTask):
 
         findings_text = "\n".join(summaries) if summaries else "(no prior results)"
 
+        precall = _group_sage_precall_blocks(finding_ids, self.results_by_id)
         bundle = _build_prompt(
             system=GroupAnalysisTask._SYSTEM_TEXT,
             profile=self.profile,
-            untrusted_blocks=(UntrustedBlock(
-                content=findings_text,
-                kind="prior-finding-summaries",
-                origin=f"group:{criterion}={criterion_value}",
-            ),),
+            untrusted_blocks=precall + (
+                UntrustedBlock(
+                    content=findings_text,
+                    kind="prior-finding-summaries",
+                    origin=f"group:{criterion}={criterion_value}",
+                ),
+            ),
             slots={
                 "criterion": TaintedString(value=str(criterion), trust="untrusted"),
                 "criterion_value": TaintedString(value=str(criterion_value), trust="untrusted"),
@@ -788,7 +834,9 @@ class RetryTask(AnalysisTask):
             )
 
         bundle = build_analysis_prompt_bundle_from_finding(
-            finding, profile=self.profile, extra_blocks=extra_blocks,
+            finding,
+            profile=self.profile,
+            extra_blocks=_merge_sage_precall(finding, *extra_blocks),
         )
         self._tls.nonce = bundle.nonce
         return _user_message_from_bundle(bundle)

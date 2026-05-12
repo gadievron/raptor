@@ -206,7 +206,8 @@ class CodeQLAgent:
         build_commands: Optional[Dict[str, str]] = None,
         force_db_creation: bool = False,
         use_extended: bool = False,
-        min_files: int = 3
+        min_files: int = 3,
+        sage_build_recall: Optional[str] = None,
     ) -> CodeQLWorkflowResult:
         """
         Run complete autonomous CodeQL analysis workflow.
@@ -217,11 +218,18 @@ class CodeQLAgent:
             force_db_creation: Force database recreation
             use_extended: Use extended security suites
             min_files: Minimum files to consider a language present
+            sage_build_recall: Optional formatted SAGE recall text for CodeQL build hints
 
         Returns:
             CodeQLWorkflowResult with complete analysis results
         """
         errors = []
+
+        self.build_detector.sage_prior_build_notes = (
+            sage_build_recall.strip() if sage_build_recall else None
+        )
+        if self.build_detector.sage_prior_build_notes:
+            logger.info("SAGE CodeQL build recall will be passed into CC flag-suggestion prompts when used.")
 
         try:
             # PHASE 1: Language Detection
@@ -831,13 +839,22 @@ Examples:
             codeql_cli=args.codeql_cli
         )
 
+        from core.sage.hooks import format_sage_memories_for_prompt, recall_context_for_codeql_build
+        sage_rows = recall_context_for_codeql_build(
+            str(Path(args.repo).resolve()), languages=languages
+        )
+        sage_ctx = format_sage_memories_for_prompt(sage_rows)
+        if sage_ctx:
+            logger.info("SAGE CodeQL build recall:\n%s", sage_ctx[:4000])
+
         # Run analysis
         result = agent.run_autonomous_analysis(
             languages=languages,
             build_commands=build_commands,
             force_db_creation=args.force,
             use_extended=args.extended,
-            min_files=args.min_files
+            min_files=args.min_files,
+            sage_build_recall=sage_ctx or None,
         )
 
         # Print summary

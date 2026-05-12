@@ -390,9 +390,15 @@ def convert_validated_to_agent_format(data: dict) -> List[Dict[str, Any]]:
 
 
 class AutonomousSecurityAgentV2:
-    def __init__(self, repo_path: Path, out_dir: Path, llm_config: Optional[LLMConfig] = None,
-                 prep_only: bool = False,
-                 synthesise_checkers: bool = True):
+    def __init__(
+        self,
+        repo_path: Path,
+        out_dir: Path,
+        llm_config: Optional[LLMConfig] = None,
+        prep_only: bool = False,
+        synthesise_checkers: bool = True,
+        sage_precall_memories: Optional[List[Dict[str, Any]]] = None,
+    ):
         self.repo_path = repo_path
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -401,6 +407,13 @@ class AutonomousSecurityAgentV2:
         # for variants found across the codebase. Default on; opt out
         # via ``--no-checker-synthesis`` for cost-sensitive runs.
         self.synthesise_checkers = synthesise_checkers
+
+        self._sage_precall_text = ""
+        if sage_precall_memories:
+            from core.sage.hooks import format_sage_memories_for_prompt
+            self._sage_precall_text = (
+                format_sage_memories_for_prompt(sage_precall_memories) or ""
+            )
 
         # Detect LLM availability and choose provider
         availability = detect_llm_availability()
@@ -656,6 +669,18 @@ class AutonomousSecurityAgentV2:
         file_includes = meta.get("includes") or ()
         function_calls_made = meta.get("calls") or meta.get("callees") or ()
 
+        from core.security.prompt_envelope import UntrustedBlock
+
+        extra_blocks: tuple[UntrustedBlock, ...] = ()
+        if getattr(self, "_sage_precall_text", ""):
+            extra_blocks = (
+                UntrustedBlock(
+                    content=self._sage_precall_text,
+                    kind="sage-precall-scan-context",
+                    origin="sage:precall",
+                ),
+            )
+
         bundle = build_analysis_prompt_bundle(
             rule_id=vuln.rule_id,
             level=vuln.level,
@@ -675,6 +700,7 @@ class AutonomousSecurityAgentV2:
             function_name=function_name,
             file_includes=file_includes,
             function_calls_made=function_calls_made,
+            extra_blocks=extra_blocks,
         )
         prompt = next(m.content for m in bundle.messages if m.role == "user")
         system_prompt = next(m.content for m in bundle.messages if m.role == "system")
@@ -1659,6 +1685,11 @@ def main() -> None:
              "exploitable findings — at the price of losing variant "
              "discovery.",
     )
+    ap.add_argument(
+        "--sage-precall",
+        metavar="PATH",
+        help='JSON file with {"memories": [...]} from SAGE pre-scan recall',
+    )
     ap.add_argument("--prep-only", action="store_true",
                     help="Skip LLM analysis; produce structured findings for external orchestration")
     ap.add_argument("--max-parallel", type=int, default=3, help="Max parallel dispatch threads")
@@ -1728,12 +1759,22 @@ def main() -> None:
         # Collision-prevention via unique_run_suffix — see core/run/output.py.
         out_dir = RaptorConfig.get_out_dir() / f"autonomous_v2_{unique_run_suffix('_')}"
 
+    sage_precall_memories: Optional[List[Dict[str, Any]]] = None
+    if getattr(args, "sage_precall", None):
+        precall_path = Path(args.sage_precall)
+        if precall_path.is_file():
+            raw = load_json(precall_path)
+            if isinstance(raw, dict):
+                sage_precall_memories = raw.get("memories") or []
+
     # When role flags are present, force prep-only then hand off to orchestrator
     prep_only = args.prep_only or _has_role_flags
     agent = AutonomousSecurityAgentV2(
-        repo_path, out_dir,
+        repo_path,
+        out_dir,
         prep_only=prep_only,
         synthesise_checkers=not args.no_checker_synthesis,
+        sage_precall_memories=sage_precall_memories,
     )
 
     # Load checklist for metadata lookup

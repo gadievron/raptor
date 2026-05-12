@@ -18,7 +18,11 @@ from core.json import save_json
 from core.logging import get_logger
 from core.llm.providers import LLMProvider
 from core.run.safe_io import safe_run_mkdir
-from core.sage.hooks import recall_context_for_web_scan, store_web_payload_effectiveness
+from core.sage.hooks import (
+    format_sage_memories_for_prompt,
+    recall_context_for_web_scan,
+    store_web_payload_effectiveness,
+)
 from packages.web.client import WebClient
 from packages.web.crawler import WebCrawler
 from packages.web.fuzzer import WebFuzzer
@@ -51,12 +55,13 @@ class WebScanner:
             Scan results with findings
         """
         logger.info("Starting autonomous web security scan")
-        # Future-agent note: web recall is intentionally keyed by target URL
-        # fingerprint (not output directory) so repeated scans can learn.
-        recall_context_for_web_scan(
+        sage_rows = recall_context_for_web_scan(
             repo_path=self.base_url,
             target_fingerprint=self.base_url,
         )
+        sage_web_text = format_sage_memories_for_prompt(sage_rows)
+        if self.fuzzer:
+            self.fuzzer.set_sage_prior_recall(sage_web_text, sage_rows)
 
         # Phase 1: Discovery
         logger.info("Phase 1: Web Discovery and Crawling")

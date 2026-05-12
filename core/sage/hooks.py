@@ -195,6 +195,157 @@ def _propose_redacted(
 # Pre-analysis hook
 # ─────────────────────────────────────────────────────────────────────────────
 
+def recall_row_confidence(row: Dict[str, Any]) -> float:
+    """Parse 0–1 confidence from a SAGE recall row (missing → 0)."""
+    try:
+        return float(row.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def pick_strongest_recall_row(
+    rows: List[Dict[str, Any]],
+    *,
+    min_confidence: float = 0.0,
+) -> Optional[Dict[str, Any]]:
+    """Return the highest-confidence recall row, or None if below ``min_confidence``."""
+    if not rows:
+        return None
+    best = max(rows, key=recall_row_confidence)
+    if recall_row_confidence(best) < min_confidence:
+        return None
+    return best
+
+
+def infer_afl_fuzz_flags_from_sage_recall_row(
+    row: Optional[Dict[str, Any]],
+) -> List[str]:
+    """Derive conservative ``afl-fuzz`` flag tokens from a high-confidence SAGE row.
+
+    Only adds flags that are valid without extra instrumented binaries.
+    CMPLOG / companion-binary flows are intentionally skipped here.
+
+    Recognised natural-language hints (substring match on lowercased content):
+
+    - **MOpt:** ``mopt``, ``m-opt`` → ``-L 0``
+    - **Deterministic mode:** ``deterministic`` + ``fuzz`` → ``-D``
+    - **Power schedules (AFL++):** ``explore`` / ``exploit`` / ``fast`` together
+      with ``schedule``, ``power``, ``afl``, or ``fuzz`` → ``-p explore|exploit|fast``
+      (at most one ``-p`` pair; explore wins over exploit wins over fast when
+      multiple keywords appear).
+
+    Disable all mechanical AFL flag injection with env ``RAPTOR_SAGE_AFL_PRIOR=0``
+    (see ``raptor_fuzzing.py`` / ``FuzzingPlanner``).
+    """
+    if not row:
+        return []
+    text = str(row.get("content") or "").lower()
+    parts: List[str] = []
+    if "mopt" in text or "m-opt" in text:
+        parts.extend(["-L", "0"])
+    if "deterministic" in text and "fuzz" in text:
+        parts.append("-D")
+
+    sched_ctx = (
+        "schedule" in text
+        or "power" in text
+        or "afl" in text
+        or "fuzz" in text
+    )
+    if sched_ctx:
+        if "explore" in text:
+            parts.extend(["-p", "explore"])
+        elif "exploit" in text:
+            parts.extend(["-p", "exploit"])
+        elif "fast" in text:
+            parts.extend(["-p", "fast"])
+
+    return _dedupe_afl_flag_tokens(parts)
+
+
+def _dedupe_afl_flag_tokens(tokens: List[str]) -> List[str]:
+    """Order-preserving dedupe for ``afl-fuzz`` argv fragments."""
+    out: List[str] = []
+    seen_p = False
+    seen_mopt = False
+    seen_d = False
+    i = 0
+    while i < len(tokens):
+        if i + 1 < len(tokens) and tokens[i] == "-p":
+            if not seen_p:
+                out.extend([tokens[i], tokens[i + 1]])
+                seen_p = True
+            i += 2
+            continue
+        if i + 1 < len(tokens) and tokens[i] == "-L" and tokens[i + 1] == "0":
+            if not seen_mopt:
+                out.extend(["-L", "0"])
+                seen_mopt = True
+            i += 2
+            continue
+        t = tokens[i]
+        if t == "-D" and not seen_d:
+            out.append("-D")
+            seen_d = True
+        i += 1
+    return out
+
+
+def format_sage_memories_for_prompt(
+    memories: List[Dict[str, Any]],
+    *,
+    max_items: int = 8,
+    max_content_len: int = 1200,
+) -> str:
+    """Turn SAGE recall rows into a single untrusted context string for LLM prompts.
+
+    Sorted by descending confidence so high-confidence priors appear first
+    (per SAGE usage guidance).
+    """
+    if not memories:
+        return ""
+
+    rows = sorted(memories, key=recall_row_confidence, reverse=True)[:max_items]
+    lines = [
+        "Prior cross-run memory from SAGE (ordered by confidence; untrusted hints only):",
+    ]
+    for i, row in enumerate(rows, 1):
+        c = recall_row_confidence(row)
+        dom = str(row.get("domain") or row.get("domain_tag") or "").strip()
+        content = str(row.get("content") or "").strip()
+        if len(content) > max_content_len:
+            content = content[:max_content_len] + "…"
+        dom_part = f" [{dom}]" if dom else ""
+        lines.append(f"{i}. ({c:.2f}){dom_part} {content}")
+    lines.append(
+        "Weight higher-confidence items more when planning; they reflect stronger prior signal."
+    )
+    return "\n".join(lines)
+
+
+def _merge_recall_rows(
+    *hit_lists: List[List[Dict[str, Any]]],
+    top_k: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Merge SAGE query rows from multiple domains with stable priority.
+
+    Lists are consumed in order so repo-scoped hits precede global
+    methodology; duplicate ``content`` strings are dropped.
+    """
+    seen: set = set()
+    out: List[Dict[str, Any]] = []
+    for lst in hit_lists:
+        for r in lst:
+            c = (str(r.get("content") or "")).strip()
+            if not c or c in seen:
+                continue
+            seen.add(c)
+            out.append(r)
+            if top_k is not None and len(out) >= top_k:
+                return out
+    return out
+
+
 def recall_context_for_scan(
     repo_path: str,
     languages: Optional[List[str]] = None,
@@ -225,7 +376,7 @@ def recall_context_for_scan(
             top_k=3,
         )
 
-        all_results = results + methodology
+        all_results = _merge_recall_rows(results, methodology, top_k=8)
         if all_results:
             logger.info(
                 f"SAGE: Recalled {len(all_results)} historical memories for scan context"
@@ -261,8 +412,21 @@ def recall_context_for_crash_analysis(
             domain_tag=_crashes_domain(repo_path),
             top_k=5,
         )
-        _sage_metrics["recall_hits"] += len(results)
-        return results
+        meth_parts = [
+            "Native crash triage, sanitizer interpretation, and exploitability heuristics",
+        ]
+        if signal:
+            meth_parts.append(f"for signal {signal}")
+        if function_name:
+            meth_parts.append(f"near function {function_name}")
+        methodology = client.query(
+            text=", ".join(meth_parts) + ".",
+            domain_tag="raptor-methodology",
+            top_k=3,
+        )
+        merged = _merge_recall_rows(results, methodology, top_k=8)
+        _sage_metrics["recall_hits"] += len(merged)
+        return merged
     except Exception as e:
         logger.debug(f"SAGE crash recall failed: {e}")
         return []
@@ -285,8 +449,17 @@ def recall_context_for_web_scan(
             domain_tag=_web_domain(repo_path),
             top_k=5,
         )
-        _sage_metrics["recall_hits"] += len(results)
-        return results
+        methodology = client.query(
+            text=(
+                "Web application security testing methodology: payload differentiation, "
+                "authentication edge cases, and false positive triage."
+            ),
+            domain_tag="raptor-methodology",
+            top_k=3,
+        )
+        merged = _merge_recall_rows(results, methodology, top_k=8)
+        _sage_metrics["recall_hits"] += len(merged)
+        return merged
     except Exception as e:
         logger.debug(f"SAGE web recall failed: {e}")
         return []
@@ -302,7 +475,15 @@ def recall_context_for_codeql_build(
     try:
         _sage_metrics["recall_attempted"] += 1
         lang_str = ", ".join(languages or []) or "unknown"
-        results = client.query(
+        findings = client.query(
+            text=(
+                f"Static analysis and CodeQL-related findings or triage notes "
+                f"for {lang_str} in this repository"
+            ),
+            domain_tag=_findings_domain(repo_path),
+            top_k=3,
+        )
+        methodology = client.query(
             text=(
                 "What CodeQL build approach succeeded last time "
                 f"for {lang_str} and what failures should we skip retrying?"
@@ -310,8 +491,9 @@ def recall_context_for_codeql_build(
             domain_tag="raptor-methodology",
             top_k=5,
         )
-        _sage_metrics["recall_hits"] += len(results)
-        return results
+        merged = _merge_recall_rows(findings, methodology, top_k=8)
+        _sage_metrics["recall_hits"] += len(merged)
+        return merged
     except Exception as e:
         logger.debug(f"SAGE codeql recall failed: {e}")
         return []
@@ -338,8 +520,17 @@ def recall_context_for_fuzzing_strategy(
             domain_tag="raptor-fuzzing",
             top_k=5,
         )
-        _sage_metrics["recall_hits"] += len(results)
-        return results
+        methodology = client.query(
+            text=(
+                "General fuzzing methodology: corpus quality, determinism, "
+                "coverage guidance, and crash deduplication for native binaries."
+            ),
+            domain_tag="raptor-methodology",
+            top_k=3,
+        )
+        merged = _merge_recall_rows(results, methodology, top_k=8)
+        _sage_metrics["recall_hits"] += len(merged)
+        return merged
     except Exception as e:
         logger.debug(f"SAGE fuzzing recall failed: {e}")
         return []
@@ -516,25 +707,48 @@ def enrich_analysis_prompt(
 
     try:
         vuln_type = rule_id.rsplit(".", 1)[-1].replace("-", " ").replace("_", " ")
-        results = client.query(
-            text=f"{vuln_type} vulnerability findings and exploitability in {language} code",
+        lang = language or "unknown"
+        findings_hits = client.query(
+            text=f"{vuln_type} vulnerability findings and exploitability in {lang} code",
             domain_tag=_findings_domain(repo_path),
             top_k=3,
         )
+        methodology_hits = client.query(
+            text=(
+                f"static analysis methodology, false positive patterns, and triage "
+                f"heuristics for {vuln_type} in {lang} code"
+            ),
+            domain_tag="raptor-methodology",
+            top_k=2,
+        )
 
-        if not results:
+        if not findings_hits and not methodology_hits:
             return ""
 
-        context_parts = [
-            "\n**Historical Context from SAGE (cross-run learning):**"
-        ]
-        for r in results:
-            confidence = r.get("confidence", 0)
-            content = r.get("content", "")[:200]
-            context_parts.append(f"- [{confidence:.0%}] {content}")
+        sections: List[str] = []
+        if findings_hits:
+            parts = [
+                "\n**Historical Context from SAGE (cross-run learning):**"
+            ]
+            for r in findings_hits:
+                confidence = r.get("confidence", 0)
+                content = r.get("content", "")[:200]
+                parts.append(f"- [{confidence:.0%}] {content}")
+            sections.append("\n".join(parts))
 
-        context = "\n".join(context_parts) + "\n"
-        logger.debug(f"SAGE: Enriched prompt with {len(results)} historical memories")
+        if methodology_hits:
+            parts = [
+                "\n**Methodology hints from SAGE (cross-run learning):**"
+            ]
+            for r in methodology_hits:
+                confidence = r.get("confidence", 0)
+                content = r.get("content", "")[:200]
+                parts.append(f"- [{confidence:.0%}] {content}")
+            sections.append("\n".join(parts))
+
+        context = "\n".join(sections) + "\n"
+        n = len(findings_hits) + len(methodology_hits)
+        logger.debug(f"SAGE: Enriched prompt with {n} historical memories")
         return context
 
     except Exception as e:

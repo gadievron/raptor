@@ -6,7 +6,7 @@ This module transforms RAPTOR from a fixed pipeline into an intelligent agent
 that makes decisions based on fuzzing state and learned knowledge.
 """
 
-import time
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -107,14 +107,24 @@ class FuzzingPlanner:
     4. Learns from successes and failures
     """
 
-    def __init__(self, memory=None):
+    def __init__(
+        self,
+        memory=None,
+        sage_planning_notes: Optional[str] = None,
+        sage_strategy_rows: Optional[List[Dict[str, Any]]] = None,
+    ):
         """
         Initialise the fuzzing planner.
 
         Args:
             memory: FuzzingMemory instance for learning (optional)
+            sage_planning_notes: Optional SAGE recall text (cross-run priors)
+            sage_strategy_rows: Raw SAGE recall rows for confidence-weighted defaults
         """
         self.memory = memory
+        self.sage_planning_notes = (sage_planning_notes or "").strip()
+        self.sage_strategy_rows: List[Dict[str, Any]] = list(sage_strategy_rows or [])
+        self._sage_notes_logged = False
         self.decision_history = []
         logger.info("Autonomous Fuzzing Planner initialised")
 
@@ -134,6 +144,12 @@ class FuzzingPlanner:
         logger.info("=" * 70)
         logger.info("AUTONOMOUS DECISION MAKING")
         logger.info("=" * 70)
+        if self.sage_planning_notes and not self._sage_notes_logged:
+            logger.info(
+                "SAGE cross-run strategy recall (planner bias):\n"
+                f"{self.sage_planning_notes[:4000]}",
+            )
+            self._sage_notes_logged = True
         logger.info(f"Elapsed time: {state.elapsed_time():.1f}s")
         logger.info(f"Total crashes: {state.total_crashes}")
         logger.info(f"Unique crashes: {state.unique_crashes}")
@@ -281,7 +297,7 @@ class FuzzingPlanner:
         crash_scores.sort(key=lambda x: x[1], reverse=True)
 
         # Log prioritisation
-        logger.info(f"Crash prioritisation (top 5):")
+        logger.info("Crash prioritisation (top 5):")
         for i, (crash, score, factors) in enumerate(crash_scores[:5], 1):
             logger.info(f"  {i}. {crash.crash_id} - Score: {score:.1f} - Factors: {', '.join(factors)}")
 
@@ -333,6 +349,35 @@ class FuzzingPlanner:
         if self.memory and state.current_strategy in state.successful_strategies:
             success_count = state.successful_strategies[state.current_strategy]
             logger.info(f"Current strategy has {success_count} past successes - continuing")
+
+        # High-confidence SAGE cross-run priors → mechanical AFL flag hints (reviewer value loop).
+        if (
+            self.sage_strategy_rows
+            and os.environ.get("RAPTOR_SAGE_AFL_PRIOR", "1").strip().lower()
+            not in ("0", "false", "no")
+        ):
+            try:
+                from core.sage.hooks import (
+                    infer_afl_fuzz_flags_from_sage_recall_row,
+                    pick_strongest_recall_row,
+                )
+
+                prior = pick_strongest_recall_row(
+                    self.sage_strategy_rows,
+                    min_confidence=0.85,
+                )
+                sage_flags = infer_afl_fuzz_flags_from_sage_recall_row(prior)
+                if sage_flags:
+                    strategy.setdefault("extra_flags", [])
+                    for tok in sage_flags:
+                        if tok not in strategy["extra_flags"]:
+                            strategy["extra_flags"].append(tok)
+                    logger.info(
+                        "SAGE mechanical prior (>=85%% confidence): appended AFL flags "
+                        f"{sage_flags}",
+                    )
+            except Exception as e:
+                logger.debug(f"SAGE AFL prior merge skipped: {e}")
 
         logger.info(f"Selected strategy: {strategy['name']}")
         return strategy

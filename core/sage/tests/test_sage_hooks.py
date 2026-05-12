@@ -37,6 +37,93 @@ class TestRecallContextForScan(unittest.TestCase):
         self.assertEqual(recall_context_for_scan("/path/to/repo"), [])
 
 
+class TestSageRecallPriors(unittest.TestCase):
+    def test_pick_strongest_respects_min_confidence(self):
+        from core.sage.hooks import pick_strongest_recall_row
+
+        rows = [
+            {"content": "low", "confidence": 0.5},
+            {"content": "high", "confidence": 0.9},
+        ]
+        self.assertIsNone(pick_strongest_recall_row(rows, min_confidence=0.95))
+        best = pick_strongest_recall_row(rows, min_confidence=0.85)
+        self.assertEqual(best["content"], "high")
+
+    def test_infer_afl_flags_mopt_and_deterministic(self):
+        from core.sage.hooks import infer_afl_fuzz_flags_from_sage_recall_row
+
+        self.assertEqual(
+            infer_afl_fuzz_flags_from_sage_recall_row(
+                {"content": "Prior run: enable MOpt for this target", "confidence": 0.9},
+            ),
+            ["-L", "0"],
+        )
+        flags = infer_afl_fuzz_flags_from_sage_recall_row(
+            {"content": "Use deterministic fuzzing schedule", "confidence": 0.9},
+        )
+        self.assertIn("-D", flags)
+
+    def test_infer_afl_flags_power_schedule_explore(self):
+        from core.sage.hooks import infer_afl_fuzz_flags_from_sage_recall_row
+
+        flags = infer_afl_fuzz_flags_from_sage_recall_row(
+            {
+                "content": "Prior campaign: AFL++ power schedule explore worked well",
+                "confidence": 0.9,
+            },
+        )
+        self.assertEqual(flags[:2], ["-p", "explore"])
+
+
+class TestMergeRecallRows(unittest.TestCase):
+    def test_dedupes_by_content_preserves_first_list_priority(self):
+        from core.sage.hooks import _merge_recall_rows
+
+        a = [{"content": "dup", "k": 1}]
+        b = [{"content": "dup", "k": 2}, {"content": "unique-b", "k": 3}]
+        merged = _merge_recall_rows(a, b, top_k=5)
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(merged[0]["k"], 1)
+        self.assertEqual(merged[1]["content"], "unique-b")
+
+    def test_top_k_truncates(self):
+        from core.sage.hooks import _merge_recall_rows
+
+        merged = _merge_recall_rows(
+            [{"content": "a"}, {"content": "b"}],
+            [{"content": "c"}],
+            top_k=2,
+        )
+        self.assertEqual(len(merged), 2)
+        self.assertEqual({m["content"] for m in merged}, {"a", "b"})
+
+
+class TestRecallContextForCrashAnalysis(unittest.TestCase):
+    @patch("core.sage.hooks._get_client")
+    def test_queries_repo_crashes_and_methodology(self, mock_get_client):
+        mock_client = MagicMock()
+        domains = []
+
+        def _q(**kwargs):
+            domains.append(kwargs.get("domain_tag", ""))
+            if "crashes" in kwargs.get("domain_tag", ""):
+                return [{"content": "heap uaf prior", "confidence": 0.8}]
+            return [{"content": "asan triage tip", "confidence": 0.75}]
+
+        mock_client.query.side_effect = _q
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import recall_context_for_crash_analysis
+        out = recall_context_for_crash_analysis(
+            "/path/to/repo", signal="SIGSEGV", function_name="parse",
+        )
+        self.assertEqual(mock_client.query.call_count, 2)
+        self.assertTrue(any("crashes" in d for d in domains))
+        self.assertIn("raptor-methodology", domains)
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[0]["content"], "heap uaf prior")
+
+
 class TestStoreScanResults(unittest.TestCase):
     """Test post-scan storage hook."""
 
@@ -83,10 +170,22 @@ class TestEnrichAnalysisPrompt(unittest.TestCase):
     @patch("core.sage.hooks._get_client")
     def test_returns_context_when_available(self, mock_get_client):
         mock_client = MagicMock()
-        mock_client.query.return_value = [
-            {"content": "SQL injection pattern", "confidence": 0.92,
-             "domain": "raptor-findings"}
-        ]
+
+        def _query_side_effect(**kwargs):
+            domain = kwargs.get("domain_tag", "")
+            if domain.startswith("raptor-findings"):
+                return [
+                    {"content": "SQL injection pattern", "confidence": 0.92,
+                     "domain": "raptor-findings"}
+                ]
+            if domain == "raptor-methodology":
+                return [
+                    {"content": "Check ORM layer", "confidence": 0.81,
+                     "domain": "raptor-methodology"}
+                ]
+            return []
+
+        mock_client.query.side_effect = _query_side_effect
         mock_get_client.return_value = mock_client
 
         from core.sage.hooks import enrich_analysis_prompt
@@ -95,6 +194,31 @@ class TestEnrichAnalysisPrompt(unittest.TestCase):
         )
         self.assertIn("Historical Context from SAGE", result)
         self.assertIn("SQL injection pattern", result)
+        self.assertIn("Methodology hints from SAGE", result)
+        self.assertIn("Check ORM layer", result)
+
+    @patch("core.sage.hooks._get_client")
+    def test_returns_methodology_only_when_findings_empty(self, mock_get_client):
+        mock_client = MagicMock()
+
+        def _query_side_effect(**kwargs):
+            domain = kwargs.get("domain_tag", "")
+            if domain.startswith("raptor-findings"):
+                return []
+            if domain == "raptor-methodology":
+                return [{"content": "Triage hint", "confidence": 0.88}]
+            return []
+
+        mock_client.query.side_effect = _query_side_effect
+        mock_get_client.return_value = mock_client
+
+        from core.sage.hooks import enrich_analysis_prompt
+        result = enrich_analysis_prompt(
+            "xss", "src/x.js", "javascript", repo_path="/path/to/repo"
+        )
+        self.assertIn("Methodology hints from SAGE", result)
+        self.assertIn("Triage hint", result)
+        self.assertNotIn("Historical Context from SAGE", result)
 
     @patch("core.sage.hooks._get_client")
     def test_returns_empty_on_no_results(self, mock_get_client):
@@ -156,14 +280,24 @@ class TestAdditionalSageHooks(unittest.TestCase):
     @patch("core.sage.hooks._get_client")
     def test_recall_context_for_codeql_build_returns_results(self, mock_get_client):
         mock_client = MagicMock()
-        mock_client.query.return_value = [
-            {"content": "build succeeded with autobuild", "confidence": 0.85, "domain": "raptor-methodology"}
-        ]
+
+        def _q(**kwargs):
+            domain = kwargs.get("domain_tag", "")
+            if domain.startswith("raptor-findings"):
+                return [{"content": "prior cpp sqli", "confidence": 0.72}]
+            return [
+                {"content": "build succeeded with autobuild", "confidence": 0.85,
+                 "domain": "raptor-methodology"}
+            ]
+
+        mock_client.query.side_effect = _q
         mock_get_client.return_value = mock_client
 
         from core.sage.hooks import recall_context_for_codeql_build
         results = recall_context_for_codeql_build("/repo", ["python"])
-        self.assertEqual(len(results), 1)
+        self.assertEqual(len(results), 2)
+        self.assertEqual(mock_client.query.call_count, 2)
+        self.assertEqual(results[0]["content"], "prior cpp sqli")
 
     @patch("core.sage.hooks._get_client")
     def test_recall_context_for_fuzzing_strategy_handles_failure(self, mock_get_client):
@@ -265,6 +399,22 @@ class TestGetClientThreadSafety(unittest.TestCase):
         # old code would cause when SAGE is down for the whole run.
         self.assertEqual(mock_cls.call_count, 1)
         self.assertEqual(mock_instance.is_available.call_count, 1)
+
+
+class TestFormatSageMemoriesForPrompt(unittest.TestCase):
+    def test_empty(self):
+        from core.sage.hooks import format_sage_memories_for_prompt
+        self.assertEqual(format_sage_memories_for_prompt([]), "")
+
+    def test_orders_by_confidence(self):
+        from core.sage.hooks import format_sage_memories_for_prompt
+        rows = [
+            {"content": "low", "confidence": 0.5},
+            {"content": "high", "confidence": 0.95, "domain": "raptor-methodology"},
+        ]
+        out = format_sage_memories_for_prompt(rows, max_items=5)
+        self.assertIn("high", out)
+        self.assertLess(out.index("high"), out.index("low"))
 
 
 if __name__ == "__main__":

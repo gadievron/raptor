@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
-"""JSON-backed fuzzing memory store."""
+"""
+Fuzzing Memory - Learning and Knowledge Persistence
+
+This module enables RAPTOR to learn from past fuzzing campaigns and
+improve over time through persistent knowledge storage.
+"""
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
-from core.json import load_json
+from core.json import load_json, save_json
+
 from core.logging import get_logger
-from core.json import save_json
 
 logger = get_logger()
 
@@ -65,57 +70,103 @@ class FuzzingKnowledge:
 
 
 class FuzzingMemory:
-    """Backwards-compatible fuzzing memory API."""
+    """
+    Persistent memory system for fuzzing knowledge.
+
+    Enables RAPTOR to:
+    - Remember what worked in past campaigns
+    - Learn from successes and failures
+    - Improve strategies over time
+    - Share knowledge between fuzzing sessions
+    """
 
     def __init__(self, memory_file: Optional[Path] = None):
         """
         Initialise fuzzing memory.
+        Right now we use json and ideally we should be using sqlite or similar for scalability.
 
         Args:
             memory_file: Path to JSON file for persistent storage
         """
-        self.memory_file = Path(memory_file or (Path.home() / ".raptor" / "fuzzing_memory.json"))
+        if memory_file is None:
+            memory_file = Path.home() / ".raptor" / "fuzzing_memory.json"
+
+        self.memory_file = Path(memory_file)
         self.memory_file.parent.mkdir(parents=True, exist_ok=True)
-        # Backwards-compat alias used by older callers.
-        self.memory = self
+
+        # In-memory knowledge store
         self.knowledge: Dict[str, FuzzingKnowledge] = {}
-        self.campaigns: List[Dict[str, Any]] = []
+
+        # Campaign history
+        self.campaigns: List[Dict] = []
+
+        # Load existing memory
         self.load()
-        logger.info("Fuzzing memory initialized via JSON backend")
+
+        logger.info(f"Fuzzing memory initialised: {len(self.knowledge)} knowledge entries loaded")
 
     def load(self):
         """Load memory from persistent storage."""
-        self.knowledge.clear()
-        self.campaigns = []
         if not self.memory_file.exists():
+            logger.info(f"No existing memory file at {self.memory_file}")
             return
-        data = load_json(self.memory_file)
-        if not data:
-            return
-        for key, k_data in data.get("knowledge", {}).items():
-            self.knowledge[key] = FuzzingKnowledge(**k_data)
-        self.campaigns = data.get("campaigns", [])
+
+        try:
+            data = load_json(self.memory_file)
+            if data is None:
+                logger.warning(f"Failed to parse memory file: {self.memory_file}")
+                return
+
+            # Load knowledge entries
+            for key, k_dict in data.get("knowledge", {}).items():
+                self.knowledge[key] = FuzzingKnowledge(
+                    knowledge_type=k_dict["knowledge_type"],
+                    key=k_dict["key"],
+                    value=k_dict["value"],
+                    confidence=k_dict.get("confidence", 0.5),
+                    success_count=k_dict.get("success_count", 0),
+                    failure_count=k_dict.get("failure_count", 0),
+                    last_updated=k_dict.get("last_updated", time.time()),
+                    binary_hash=k_dict.get("binary_hash"),
+                    campaign_id=k_dict.get("campaign_id"),
+                )
+
+            # Load campaign history
+            self.campaigns = data.get("campaigns", [])
+
+            logger.info(f"Loaded {len(self.knowledge)} knowledge entries, {len(self.campaigns)} past campaigns")
+
+        except Exception as e:
+            logger.error(f"Failed to load memory: {e}")
 
     def save(self):
         """Save memory to persistent storage."""
-        data = {
-            "knowledge": {
-                key: {
-                    "knowledge_type": k.knowledge_type,
-                    "key": k.key,
-                    "value": k.value,
-                    "confidence": k.confidence,
-                    "success_count": k.success_count,
-                    "failure_count": k.failure_count,
-                    "last_updated": k.last_updated,
-                    "binary_hash": k.binary_hash,
-                    "campaign_id": k.campaign_id,
-                }
-                for key, k in self.knowledge.items()
-            },
-            "campaigns": self.campaigns,
-        }
-        save_json(self.memory_file, data)
+        try:
+            data = {
+                "knowledge": {
+                    key: {
+                        "knowledge_type": k.knowledge_type,
+                        "key": k.key,
+                        "value": k.value,
+                        "confidence": k.confidence,
+                        "success_count": k.success_count,
+                        "failure_count": k.failure_count,
+                        "last_updated": k.last_updated,
+                        "binary_hash": k.binary_hash,
+                        "campaign_id": k.campaign_id,
+                    }
+                    for key, k in self.knowledge.items()
+                },
+                "campaigns": self.campaigns,
+                "last_saved": time.time(),
+            }
+
+            save_json(self.memory_file, data)
+
+            logger.debug(f"Memory saved to {self.memory_file}")
+
+        except Exception as e:
+            logger.error(f"Failed to save memory: {e}")
 
     def remember(self, knowledge: FuzzingKnowledge):
         """
@@ -125,7 +176,18 @@ class FuzzingMemory:
             knowledge: Knowledge to remember
         """
         key = f"{knowledge.knowledge_type}:{knowledge.key}"
-        self.knowledge[key] = knowledge
+
+        if key in self.knowledge:
+            # Update existing knowledge
+            existing = self.knowledge[key]
+            existing.value = knowledge.value
+            existing.last_updated = time.time()
+            logger.debug(f"Updated knowledge: {key}")
+        else:
+            # Store new knowledge
+            self.knowledge[key] = knowledge
+            logger.info(f"Learned new knowledge: {key}")
+
         self.save()
 
     def recall(self, knowledge_type: str, key: str) -> Optional[FuzzingKnowledge]:
@@ -363,7 +425,7 @@ class FuzzingMemory:
             "average_confidence": 0.0,
         }
 
-        self.load()
+        # Count by type
         for k in self.knowledge.values():
             k_type = k.knowledge_type
             if k_type not in stats["knowledge_by_type"]:
@@ -386,7 +448,12 @@ class FuzzingMemory:
             threshold: Minimum confidence to keep
         """
         before_count = len(self.knowledge)
-        self.knowledge = {key: k for key, k in self.knowledge.items() if k.confidence >= threshold}
+
+        self.knowledge = {
+            key: k for key, k in self.knowledge.items()
+            if k.confidence >= threshold
+        }
+
         pruned = before_count - len(self.knowledge)
         if pruned > 0:
             logger.info(f"Pruned {pruned} low-confidence knowledge entries")
