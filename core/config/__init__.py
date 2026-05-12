@@ -737,14 +737,31 @@ class RaptorConfig:
     )
 
     @staticmethod
-    def get_llm_env() -> dict:
+    def get_llm_env(
+        *,
+        include_python_user_base: bool = False,
+    ) -> dict:
         """Return get_safe_env() plus any LLM API keys present in the
         real environment.
 
         Use this for spawning RAPTOR's own analysis scripts that may call
         LLM providers.  Do NOT use for untrusted-code subprocesses.
+
+        ``include_python_user_base=True`` (F102b) forwards the opt-in
+        to the underlying ``get_safe_env()`` so PYTHONUSERBASE is
+        preserved on the returned env. Use at canonical-operator
+        spawn sites (``raptor.py:_run_script``) whose child script
+        in turn opts into the F102 restoration (e.g.
+        ``raptor_agentic.py``'s semgrep spawn at line 757). Without
+        this forwarding, the parent strips PYTHONUSERBASE before the
+        child can restore it, and the F102 fix is orphaned for
+        ``python raptor.py <mode>`` invocations. Mirrors the existing
+        ``include_python_user_base`` opt-in on ``get_safe_env`` —
+        same default-False, opt-in pattern as ``preserve_proxy``.
         """
-        env = RaptorConfig.get_safe_env()
+        env = RaptorConfig.get_safe_env(
+            include_python_user_base=include_python_user_base,
+        )
         for var in RaptorConfig.LLM_API_KEY_VARS:
             val = os.environ.get(var)
             if val:
