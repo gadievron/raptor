@@ -64,6 +64,47 @@ def _check_zip_entries(infolist) -> List[str]:
     return warnings
 
 
+# Cap on a project zip's entry count. A legitimate RAPTOR project zip
+# holds at most a few hundred output files (run dirs, findings, reports,
+# attachments). 10,000 is generous and far below the entry counts that
+# trigger zip-bomb-shaped resource exhaustion via infolist materialisation.
+_MAX_ENTRIES = 10_000
+
+
+class _ZipBombShapeError(Exception):
+    """Raised when an open zipfile exceeds `_MAX_ENTRIES`.
+
+    Distinct from `ValueError` so callers can render a single, consistent
+    bomb-shape rejection message regardless of which entry path they took
+    (validate_zip_contents return-tuple vs. import_project raise).
+    """
+
+
+def _collect_bounded_infolist(zf: zipfile.ZipFile) -> List[zipfile.ZipInfo]:
+    """Materialise `zf.infolist()` with the `_MAX_ENTRIES` cap enforced.
+
+    Pre-fix `zf.infolist()` materialised the FULL entry table before
+    `_check_zip_entries` could examine even the first one. A zip-bomb
+    shaped file with millions of entries (each pointing at the same
+    compressed blob) consumed multi-GB RSS just on the infolist
+    materialisation. Iterating short-circuits before the table is fully
+    built.
+
+    Raises `_ZipBombShapeError` on over-cap; callers translate per their
+    error model.
+    """
+    entries: List[zipfile.ZipInfo] = []
+    for i, info in enumerate(zf.infolist()):
+        if i >= _MAX_ENTRIES:
+            raise _ZipBombShapeError(
+                f"zip has more than {_MAX_ENTRIES} entries — "
+                f"refusing as zip-bomb shape (legitimate "
+                f"RAPTOR project exports have << 1000 entries)"
+            )
+        entries.append(info)
+    return entries
+
+
 def validate_zip_contents(zip_path: Path) -> Tuple[bool, List[str]]:
     """Check a zip file for path traversal, absolute paths, and symlinks.
 
@@ -80,29 +121,10 @@ def validate_zip_contents(zip_path: Path) -> Tuple[bool, List[str]]:
 
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
-            # Pre-fix `zf.infolist()` materialised the FULL entry
-            # table before `_check_zip_entries` could examine even
-            # the first one. A zip-bomb shaped file with millions
-            # of entries (each pointing at the same compressed
-            # blob) consumed multi-GB RSS just on the
-            # infolist materialisation — `validate_zip_contents`
-            # OOM'd before its safety checks ran.
-            #
-            # Cap the entry count: a legitimate RAPTOR project zip
-            # holds at most a few hundred output files (run dirs,
-            # findings, reports, attachments). 10,000 is generous
-            # and far below the entry counts that trigger
-            # bomb-shaped resource exhaustion. Refuse over-cap.
-            _MAX_ENTRIES = 10_000
-            entries = []
-            for i, info in enumerate(zf.infolist()):
-                if i >= _MAX_ENTRIES:
-                    return False, [
-                        f"zip has more than {_MAX_ENTRIES} entries — "
-                        f"refusing as zip-bomb shape (legitimate "
-                        f"RAPTOR project exports have << 1000 entries)"
-                    ]
-                entries.append(info)
+            try:
+                entries = _collect_bounded_infolist(zf)
+            except _ZipBombShapeError as e:
+                return False, [str(e)]
             warnings = _check_zip_entries(entries)
     except zipfile.BadZipFile:
         return False, ["Invalid zip file"]
@@ -234,7 +256,16 @@ def import_project(zip_path: Path, projects_dir: Path,
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
             # --- Security validation ---
-            warnings = _check_zip_entries(zf.infolist())
+            # Use the same entry-count cap that `validate_zip_contents`
+            # applies (F029: pre-fix `import_project` re-implemented the
+            # check inline by calling `_check_zip_entries(zf.infolist())`
+            # directly, which silently dropped the cap and was vulnerable
+            # to zip-bomb-shaped archives with millions of entries).
+            try:
+                bounded_entries = _collect_bounded_infolist(zf)
+            except _ZipBombShapeError as e:
+                raise ValueError(f"Unsafe zip file rejected: {e}") from e
+            warnings = _check_zip_entries(bounded_entries)
             if warnings:
                 raise ValueError(
                     f"Unsafe zip file rejected: {'; '.join(warnings)}"
@@ -259,7 +290,9 @@ def import_project(zip_path: Path, projects_dir: Path,
                 )
 
             # --- Fast-reject on declared size ---
-            declared_size = sum(info.file_size for info in zf.infolist())
+            # Reuse the already-bounded infolist from the cap check
+            # above (F029: avoids a second full infolist materialisation).
+            declared_size = sum(info.file_size for info in bounded_entries)
             max_size = 10 * 1024 * 1024 * 1024  # 10GB
             if declared_size > max_size:
                 raise ValueError(
@@ -327,7 +360,10 @@ def import_project(zip_path: Path, projects_dir: Path,
             chunk = 1024 * 1024  # 1 MiB
             bytes_extracted = 0
             try:
-                for info in zf.infolist():
+                # Reuse the bounded infolist captured during validation
+                # (F029): the cap check has already proven the count is
+                # ≤ _MAX_ENTRIES, no need to materialise again.
+                for info in bounded_entries:
                     if info.filename.endswith("/.project.json") or info.filename == ".project.json":
                         continue
                     if info.is_dir():
