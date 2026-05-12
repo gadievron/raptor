@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "finding_id": "webgoat_codeql_java-ssrf_4f67d0e92d32",
+  "producer": "codeql",
+  "rule_id": "java/ssrf",
+  "message": "@RequestParam url passed through stealTheCheese",
+  "source": {
+    "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/ssrf/SSRFTask1.java",
+    "line": 24,
+    "column": 0,
+    "snippet": "public AttackResult completed(@RequestParam String url) {",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/ssrf/SSRFTask1.java",
+    "line": 32,
+    "column": 0,
+    "snippet": "if (url.matches(\"images/tom\\\\.png\")) {",
+    "label": "sink"
+  },
+  "intermediate_steps": [
+    {
+      "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/ssrf/SSRFTask1.java",
+      "line": 25,
+      "column": 0,
+      "snippet": "return stealTheCheese(url);",
+      "label": "step"
+    },
+    {
+      "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/ssrf/SSRFTask1.java",
+      "line": 28,
+      "column": 0,
+      "snippet": "protected AttackResult stealTheCheese(String url) {",
+      "label": "step"
+    }
+  ],
+  "raw": {}
+}

@@ -630,7 +630,10 @@ def validate_dataflow_claims(
         metrics.setdefault("n_tier4_smt_refuted", 0)
         metrics.setdefault("n_tier4_smt_witness", 0)
         metrics.setdefault("n_tier4_smt_disagree", 0)
-        result, smt_outcome = _tier4_smt_refine(result, finding, analysis)
+        metrics.setdefault("n_smt_rejections_by_kind", {})
+        result, smt_outcome = _tier4_smt_refine(
+            result, finding, analysis, metrics=metrics,
+        )
         if smt_outcome and smt_outcome != "no_check":
             if smt_outcome == "smt_refuted":
                 metrics["n_tier4_smt_refuted"] += 1
@@ -1200,6 +1203,7 @@ def _tier4_smt_refine(
     result: "ValidationResult",
     finding: Dict,
     analysis: Dict,
+    metrics: Optional[Dict[str, Any]] = None,
 ) -> "tuple[ValidationResult, str]":
     """Tier 4: SMT path-feasibility refinement on a Tier 1/2/3 result.
 
@@ -1247,8 +1251,27 @@ def _tier4_smt_refine(
         logger.debug("Tier 4 SMT: substrate unavailable: %s", e)
         return result, "smt_unavailable"
 
+    # Per-CWE timeout tuning. The substrate default is 5s — fine
+    # for arithmetic wraparound (CWE-190/191) and null deref
+    # (CWE-476) which solve in milliseconds. CWE-125/787 (OOB
+    # read/write) can involve more complex array-index expressions
+    # and benefit from a longer ceiling. Operators can still hit
+    # the floor if a single finding becomes pathological; this is
+    # a SOFT bias, not a deadline contract. CWE-680 (integer
+    # overflow → buffer overflow) inherits CWE-787's longer
+    # ceiling because the chained-condition encoding is larger.
+    cwe = (finding.get("cwe_id") or "").upper().strip()
+    if cwe in ("CWE-125", "CWE-787", "CWE-680"):
+        smt_timeout_ms = 10_000
+    elif cwe in ("CWE-190", "CWE-191", "CWE-476"):
+        smt_timeout_ms = 2_000
+    else:
+        smt_timeout_ms = None  # let validate_path use its default
+
     try:
-        smt = validate_path(conditions, profile=profile_name)
+        smt = validate_path(
+            conditions, profile=profile_name, timeout_ms=smt_timeout_ms,
+        )
     except (ValueError, TypeError) as e:
         # Bad profile name / malformed condition — treat as no signal
         # rather than crashing the whole tier loop.
@@ -1257,6 +1280,20 @@ def _tier4_smt_refine(
     except Exception as e:
         logger.debug("Tier 4 SMT: check raised: %s", e)
         return result, "smt_error"
+
+    # Parse-rejection telemetry: count each unknown_reason's `kind`
+    # value into `metrics["n_smt_rejections_by_kind"]` so operators
+    # can see which path-condition shapes the parser keeps dropping.
+    # Surfaces parser limitations that erode SMT signal silently
+    # (without this metric, "feasible: null" results mix
+    # z3-unavailable, timeout, and parser-rejection causes
+    # indistinguishably). Skipped when caller didn't pass a metrics
+    # dict (verb path, tests, ad-hoc shim calls).
+    if metrics is not None:
+        rej_kinds = metrics.setdefault("n_smt_rejections_by_kind", {})
+        for r in (smt.get("unknown_reasons") or []):
+            kind = (r.get("kind") if isinstance(r, dict) else "") or "UNKNOWN"
+            rej_kinds[kind] = rej_kinds.get(kind, 0) + 1
 
     if not smt.get("smt_available"):
         return result, "smt_unavailable"

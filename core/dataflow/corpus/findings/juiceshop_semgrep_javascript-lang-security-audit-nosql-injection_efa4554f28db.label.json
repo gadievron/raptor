@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "juiceshop_semgrep_javascript-lang-security-audit-nosql-injection_efa4554f28db",
+  "verdict": "true_positive",
+  "fp_category": null,
+  "rationale": "req.params.id flows into a Mongo $where query \u2014 server-side JS evaluation of attacker-controlled string. CWE-943 (NoSQL injection).",
+  "labeler": "handlabel-juice-shop-webgoat",
+  "labeled_at": "2026-05-10"
+}

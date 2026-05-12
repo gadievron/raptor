@@ -10,7 +10,7 @@ requests==2.33.0
 # and to avoid the no_proxy bypass that stdlib urllib.request.ProxyHandler
 # silently performs. Already a transitive dep of `requests` but pinned
 # here too because we depend on it directly.
-urllib3==2.6.3
+urllib3==2.7.0
 pydantic==2.12.5
 typer==0.25.1
 

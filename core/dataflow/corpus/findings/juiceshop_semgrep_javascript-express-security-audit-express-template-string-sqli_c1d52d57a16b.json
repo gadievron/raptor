@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "finding_id": "juiceshop_semgrep_javascript-express-security-audit-express-template-string-sqli_c1d52d57a16b",
+  "producer": "semgrep",
+  "rule_id": "javascript.express.security.audit.express-template-string-sqli",
+  "message": "user input concatenated into Sequelize raw query",
+  "source": {
+    "file_path": "out/dataflow-corpus-fixtures/juice-shop/data/static/codefixes/dbSchemaChallenge_1.ts",
+    "line": 3,
+    "column": 0,
+    "snippet": "let criteria: any = req.query.q === 'undefined' ? '' : req.query.q ?? ''",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "out/dataflow-corpus-fixtures/juice-shop/data/static/codefixes/dbSchemaChallenge_1.ts",
+    "line": 5,
+    "column": 0,
+    "snippet": "models.sequelize.query(\"SELECT * FROM Products WHERE ((name LIKE '%\"+criteria+\"%' OR description LIKE '%\"+criteria+\"%') AND deletedAt IS NULL) ORDER BY name\")",
+    "label": "sink"
+  },
+  "intermediate_steps": [
+    {
+      "file_path": "out/dataflow-corpus-fixtures/juice-shop/data/static/codefixes/dbSchemaChallenge_1.ts",
+      "line": 4,
+      "column": 0,
+      "snippet": "criteria = (criteria.length <= 200) ? criteria : criteria.substring(0, 200)",
+      "label": "step"
+    }
+  ],
+  "raw": {}
+}

@@ -443,6 +443,20 @@ def load_understand_context(
     trace_stats = _import_flow_traces(understand_dir, validate_dir, stale_files)
     summary["flow_traces"] = trace_stats
 
+    # --- Import unchecked_flows with SMT path_conditions ---
+    # /understand --map's sink_details can carry optional
+    # `path_conditions` / `path_profile` for memory-corruption /
+    # arithmetic / bounds sinks. Forward each such unchecked_flow
+    # as an attack-paths.json entry so /validate Stage B's SMT
+    # pre-flight finds the conditions ready-made (saves the LLM
+    # re-extracting from source). Sinks without path_conditions
+    # are skipped — the existing priority_targets path covers
+    # them for non-SMT consumers.
+    map_smt_stats = _import_unchecked_flow_conditions(
+        context_map, validate_dir,
+    )
+    summary["map_smt_paths"] = map_smt_stats
+
     logger.info(
         "understand_bridge: loaded context map from %s — "
         "%d sources, %d sinks, %d trust boundaries, %d unchecked flows, "
@@ -1226,11 +1240,27 @@ def _trace_references_stale(trace: Dict[str, Any], stale_files: Set[str]) -> boo
         f = step.get("file", "")
         if f and f in stale_files:
             return True
-        # Embedded in action/result strings — extract filenames via regex
+        # Embedded in action/result strings — extract filenames via regex.
+        # Pre-fix the pattern was `[\w./+-]+\.\w+(?=:\d)` without
+        # bounds and without `re.ASCII`. Two issues:
+        #   * Unbounded greedy `+` quantifiers — pathological action /
+        #     result strings (operator pasted a base64 blob, an LLM
+        #     emitted a 100K-char identifier-shaped run, malformed
+        #     JSON serialiser concatenated huge run) burned CPU
+        #     scanning the regex engine for a "filename ending in
+        #     .ext: digit". Same ReDoS shape that the sister callsite
+        #     at understand_bridge.py:1034 was already hardened
+        #     against in batch RX66 (file-token findall).
+        #   * Unicode-default `\w` admits Cyrillic / CJK / Devanagari
+        #     "filenames" that never match the ASCII canonical form
+        #     in `stale_files`, so the staleness check silently
+        #     missed real matches when the upstream encoded glyphs.
+        # Apply the same bounds (`{1,1024}` for the path body,
+        # `{1,32}` for the extension) + `re.ASCII` for parity.
         for field in ("action", "result"):
             val = step.get(field, "")
             if val:
-                for match in re.findall(r'[\w./+-]+\.\w+(?=:\d)', val):
+                for match in re.findall(r'[\w./+-]{1,1024}\.\w{1,32}(?=:\d)', val, flags=re.ASCII):
                     if match in stale_files:
                         return True
     return False
@@ -1327,6 +1357,88 @@ def _import_flow_traces(
         save_json(paths_path, existing_paths)
 
     return {"count": len(trace_files), "imported_as_paths": imported, "skipped_stale": skipped_stale}
+
+
+def _import_unchecked_flow_conditions(
+    context_map: Dict[str, Any],
+    validate_dir: Path,
+) -> Dict[str, Any]:
+    """Import path_conditions from sink_details into attack-paths.json.
+
+    Walks `unchecked_flows`; for each flow whose referenced sink_detail
+    has `path_conditions` set, writes an attack-paths.json entry
+    carrying those conditions (+ optional `path_profile`). /validate
+    Stage B's SMT pre-flight then finds them ready-made instead of
+    re-extracting from source.
+
+    Skips flows whose sink_detail has no path_conditions — those stay
+    in priority_targets (existing path) without polluting attack-paths.
+
+    Returns {"count": <total>, "imported_as_paths": <with_conditions>,
+    "skipped_no_conditions": <without>}.
+    """
+    flows = _list_at(context_map, "unchecked_flows")
+    if not flows:
+        return {"count": 0, "imported_as_paths": 0, "skipped_no_conditions": 0}
+
+    _, sink_by_id = _index_entries_by_id(context_map)
+
+    paths_path = validate_dir / "attack-paths.json"
+    existing_paths: List[Dict[str, Any]] = []
+    if paths_path.exists():
+        loaded = load_json(paths_path)
+        if isinstance(loaded, list):
+            existing_paths = loaded
+    existing_ids = {p.get("id") for p in existing_paths if p.get("id")}
+
+    imported = 0
+    skipped = 0
+    for i, flow in enumerate(flows):
+        if not isinstance(flow, dict):
+            continue
+        sink_id = flow.get("sink")
+        sink = sink_by_id.get(sink_id) if isinstance(sink_id, str) else None
+        if not sink:
+            skipped += 1
+            continue
+        pc = _validate_path_conditions(
+            sink.get("path_conditions"), f"sink_detail:{sink_id}",
+        )
+        if pc is None:
+            skipped += 1
+            continue
+        path_id = f"map-flow-{i:03d}"
+        if path_id in existing_ids:
+            continue
+        entry: Dict[str, Any] = {
+            "id": path_id,
+            "name": f"Imported from /understand --map: {flow.get('entry_point')} → {sink_id}",
+            "finding": "",
+            "steps": [],
+            "proximity": 0,
+            "blockers": [],
+            "status": "uncertain",
+            "source": "understand:map",
+            "imported_at": datetime.now(timezone.utc).isoformat(),
+            "path_conditions": pc,
+        }
+        pp = _validate_path_profile(
+            sink.get("path_profile"), f"sink_detail:{sink_id}",
+        )
+        if pp is not None:
+            entry["path_profile"] = pp
+        existing_paths.append(entry)
+        existing_ids.add(path_id)
+        imported += 1
+
+    if imported > 0:
+        save_json(paths_path, existing_paths)
+
+    return {
+        "count": len(flows),
+        "imported_as_paths": imported,
+        "skipped_no_conditions": skipped,
+    }
 
 
 def _trace_to_attack_path(trace: Dict[str, Any], trace_file: Path) -> Dict[str, Any]:
@@ -1457,8 +1569,24 @@ def _merge_list_by_key(
 def _boundary_matches(boundary: Dict[str, Any], detail: Dict[str, Any]) -> bool:
     """Check whether a trust_boundaries entry corresponds to a boundary_details entry.
 
-    Uses normalised substring matching with a minimum length to avoid
-    short strings like "a" matching everything.
+    Pre-fix used a bare substring containment check
+    (`boundary_name in detail_id or detail_id in boundary_name`)
+    with only a 4-char minimum-length guard. That produced
+    false positives like:
+        boundary_name = "auth"
+        detail_id     = "author_handler"
+    `"auth" in "author_handler"` is True — but the two refer to
+    semantically-distinct boundaries. Operators saw bridged
+    `boundary_details` entries getting wrongly attributed to
+    auth boundaries (or any short-prefix-shared name pair).
+
+    Tokenise on non-alphanumeric separators and require
+    word-level equality OR full-string equality. `auth` only
+    matches `auth` as a token, not embedded inside `author`.
+    Two-token boundary names like `auth_check` still match
+    detail IDs containing `auth_check` as a contiguous token
+    sequence — preserves the legitimate match cases the
+    substring path was trying to capture.
     """
     boundary_name = boundary.get("boundary", "").lower().strip()
     detail_id = detail.get("id", "").lower().strip()
@@ -1466,10 +1594,22 @@ def _boundary_matches(boundary: Dict[str, Any], detail: Dict[str, Any]) -> bool:
     if not boundary_name or not detail_id:
         return False
 
-    # Require the shorter string to be at least 4 chars to avoid
-    # false positives from very short boundary names
-    shorter = min(len(boundary_name), len(detail_id))
-    if shorter < 4:
-        return boundary_name == detail_id
+    # Exact match: always wins regardless of length.
+    if boundary_name == detail_id:
+        return True
 
-    return boundary_name in detail_id or detail_id in boundary_name
+    # Token-level membership: split each on non-alphanumeric
+    # separators and require all of the SHORTER side's tokens
+    # to be present in the LONGER side's token list, in order
+    # (so `auth_check` matches `pre_auth_check_v2` but not
+    # `check_post_auth`).
+    import re as _re
+    a_tokens = [t for t in _re.split(r"[^a-z0-9]+", boundary_name, flags=_re.ASCII) if t]
+    b_tokens = [t for t in _re.split(r"[^a-z0-9]+", detail_id, flags=_re.ASCII) if t]
+    if not a_tokens or not b_tokens:
+        return False
+    short, long_ = (a_tokens, b_tokens) if len(a_tokens) <= len(b_tokens) else (b_tokens, a_tokens)
+    # Subsequence-of-contiguous-tokens check: short must appear
+    # as a contiguous slice of long.
+    n = len(short)
+    return any(long_[i:i + n] == short for i in range(len(long_) - n + 1))

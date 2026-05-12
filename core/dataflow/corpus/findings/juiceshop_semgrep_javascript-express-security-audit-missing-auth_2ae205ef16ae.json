@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "juiceshop_semgrep_javascript-express-security-audit-missing-auth_2ae205ef16ae",
+  "producer": "semgrep",
+  "rule_id": "javascript.express.security.audit.missing-auth",
+  "message": "admin route registered",
+  "source": {
+    "file_path": "out/dataflow-corpus-fixtures/juice-shop/data/static/codefixes/adminSectionChallenge_1_correct.ts",
+    "line": 2,
+    "column": 0,
+    "snippet": "/* TODO: Externalize admin functions into separate application",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "out/dataflow-corpus-fixtures/juice-shop/data/static/codefixes/adminSectionChallenge_1_correct.ts",
+    "line": 2,
+    "column": 0,
+    "snippet": "/* TODO: Externalize admin functions into separate application",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

@@ -44,6 +44,132 @@ def test_aliased_import():
     assert g.imports == {"str": "strings"}
 
 
+def test_versioned_module_binds_pre_v_segment():
+    """``import "github.com/foo/bar/v2"`` is a Go-modules
+    path-versioning convention. The package name is almost
+    always ``bar`` (callers write ``bar.X(...)``). Bind
+    BOTH ``v2`` (literal last segment) and ``bar`` (pre-version
+    segment) so the resolver finds calls under either name."""
+    g = extract_call_graph_go(
+        'package x\nimport "github.com/foo/bar/v2"\n'
+    )
+    assert g.imports == {
+        "v2": "github.com/foo/bar/v2",
+        "bar": "github.com/foo/bar/v2",
+    }
+
+
+def test_versioned_module_v3():
+    """Same convention for /v3, /v10, …"""
+    g = extract_call_graph_go(
+        'package x\nimport "github.com/foo/bar/v10"\n'
+    )
+    assert g.imports == {
+        "v10": "github.com/foo/bar/v10",
+        "bar": "github.com/foo/bar/v10",
+    }
+
+
+def test_hyphenated_dir_binds_collapsed():
+    """``github.com/foo/bar-utils`` — Go identifiers can't have
+    hyphens, so the package name strips them. Bind both the
+    literal last segment (harmless; not a legal Go identifier
+    so won't collide with real call sites) and a collapsed
+    form ``barutils``."""
+    g = extract_call_graph_go(
+        'package x\nimport "github.com/foo/bar-utils"\n'
+    )
+    assert g.imports == {
+        "bar-utils": "github.com/foo/bar-utils",
+        "barutils": "github.com/foo/bar-utils",
+    }
+
+
+def test_versioned_and_hyphenated_combo():
+    """Pre-version segment is itself hyphenated."""
+    g = extract_call_graph_go(
+        'package x\nimport "github.com/foo/my-pkg/v2"\n'
+    )
+    assert g.imports == {
+        "v2": "github.com/foo/my-pkg/v2",
+        "my-pkg": "github.com/foo/my-pkg/v2",
+        "mypkg": "github.com/foo/my-pkg/v2",
+    }
+
+
+def test_versioned_alias_takes_priority():
+    """Explicit alias still wins — alias goes in via the
+    PKG_IDENT_NODE branch BEFORE we hit the bare-binding code."""
+    g = extract_call_graph_go(
+        'package x\nimport b2 "github.com/foo/bar/v2"\n'
+    )
+    # Alias produces the only binding; convention-aware aliases
+    # only fire for bare imports (no explicit operator choice).
+    assert g.imports == {"b2": "github.com/foo/bar/v2"}
+
+
+def test_bare_binding_doesnt_overwrite():
+    """If two bare imports would alias to the same name, first
+    wins (matching Go's compile-time 'duplicate package name'
+    semantics — operator must have handled the collision via
+    an alias in real code)."""
+    g = extract_call_graph_go(
+        'package x\n'
+        'import (\n'
+        '\t"foo/bar"\n'
+        '\t"baz/bar/v2"\n'
+        ')\n'
+    )
+    # ``foo/bar`` binds ``bar`` first; ``baz/bar/v2`` would also
+    # want ``bar`` via the pre-v alias — refused, kept the first.
+    # ``v2`` from the second import still binds (no collision).
+    assert g.imports["bar"] == "foo/bar"
+    assert g.imports["v2"] == "baz/bar/v2"
+
+
+def test_resolver_matches_versioned_import_call():
+    """End-to-end: a call to ``bar.SomeFunc()`` in a file that
+    imports ``github.com/foo/bar/v2`` resolves to the qualified
+    name ``github.com/foo/bar/v2.SomeFunc``. Without this
+    heuristic, the call would resolve to nothing (``bar`` not in
+    imports map → unresolved)."""
+    from core.inventory.reachability import Verdict, function_called
+
+    cg = extract_call_graph_go(
+        'package x\n'
+        'import "github.com/foo/bar/v2"\n'
+        'func handler() { bar.SomeFunc() }\n'
+    ).to_dict()
+    inv = {
+        "files": [
+            {"path": "src/handler.go", "language": "go",
+             "call_graph": cg},
+        ],
+    }
+    r = function_called(inv, "github.com/foo/bar/v2.SomeFunc")
+    assert r.verdict == Verdict.CALLED
+
+
+def test_resolver_matches_hyphenated_import_call():
+    """End-to-end: call to ``barutils.X()`` in a file importing
+    ``github.com/foo/bar-utils`` resolves to ``bar-utils.X``."""
+    from core.inventory.reachability import Verdict, function_called
+
+    cg = extract_call_graph_go(
+        'package x\n'
+        'import "github.com/foo/bar-utils"\n'
+        'func handler() { barutils.Helper() }\n'
+    ).to_dict()
+    inv = {
+        "files": [
+            {"path": "src/handler.go", "language": "go",
+             "call_graph": cg},
+        ],
+    }
+    r = function_called(inv, "github.com/foo/bar-utils.Helper")
+    assert r.verdict == Verdict.CALLED
+
+
 def test_block_form_imports():
     g = extract_call_graph_go(
         "package x\n"

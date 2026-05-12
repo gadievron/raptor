@@ -92,13 +92,25 @@ def _clean_dest(dest: Path) -> None:
     """
     if not dest.is_absolute() or len(dest.parts) < 3:
         raise ValueError(f"_clean_dest refusing dangerous path: {dest!r}")
-    if dest.is_symlink():
+    # Single lstat() instead of three separate stat-class calls.
+    # Pre-fix `is_symlink()` + `exists()` + `is_dir()` was three
+    # syscalls with TOCTOU windows between each: a writer could
+    # swap the path between checks (file→symlink→dir) and slip
+    # past the safety gates. Single lstat collapses the window
+    # to one syscall (the residual race between lstat and `rm` is
+    # narrower and within `rm`'s own resolution semantics).
+    import stat as _stat
+    try:
+        st = dest.lstat()
+    except FileNotFoundError:
+        return  # No-op when dest doesn't exist
+    if _stat.S_ISLNK(st.st_mode):
         raise ValueError(f"_clean_dest refusing symlink: {dest!r}")
-    # `iterdir()` raises NotADirectoryError on regular files. Refuse
-    # explicitly so the error is structured rather than opaque.
-    if dest.exists() and not dest.is_dir():
+    if not _stat.S_ISDIR(st.st_mode):
+        # `iterdir()` raises NotADirectoryError on regular files.
+        # Refuse explicitly so the error is structured.
         raise ValueError(f"_clean_dest refusing non-directory: {dest!r}")
-    if dest.exists() and any(dest.iterdir()):
+    if any(dest.iterdir()):
         # Use absolute path + sanitised env. Pre-fix the bare `rm`
         # was resolved via PATH — a hostile PATH entry (a CI
         # environment with `.` early in PATH, an operator-poisoned

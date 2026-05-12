@@ -163,6 +163,17 @@ def main() -> int:
         nargs="*",
         help="Path-condition strings (each a single predicate).",
     )
+    p.add_argument(
+        "--timeout-ms",
+        type=int,
+        default=None,
+        metavar="MS",
+        help="Per-call Z3 timeout in milliseconds. Defaults to the "
+             "substrate default (5000ms). Increase to ~10000 for "
+             "complex CWE-125/787 array-index expressions; decrease "
+             "to ~2000 for CWE-190/191/476 to fail-fast on "
+             "pathological encodings. Clamped to [1, 2**31-1].",
+    )
     args = p.parse_args()
 
     # Mutually-exclusive input modes
@@ -195,7 +206,9 @@ def main() -> int:
     profile = args.profile or trace_profile or "uint64"
 
     try:
-        result = validate_path(conditions, profile=profile)
+        result = validate_path(
+            conditions, profile=profile, timeout_ms=args.timeout_ms,
+        )
     except (TypeError, ValueError) as e:
         return _err(str(e))
 

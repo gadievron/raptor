@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "finding_id": "webgoat_codeql_java-sql-injection_cafe969d4dc8",
+  "producer": "codeql",
+  "rule_id": "java/sql-injection",
+  "message": "@RequestParam values reach String.contains check",
+  "source": {
+    "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/sqlinjection/mitigation/SqlInjectionLesson10a.java",
+    "line": 32,
+    "column": 0,
+    "snippet": "@RequestParam String field1,",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/sqlinjection/mitigation/SqlInjectionLesson10a.java",
+    "line": 43,
+    "column": 0,
+    "snippet": "if (input.toLowerCase().contains(this.results[position].toLowerCase())) {",
+    "label": "sink"
+  },
+  "intermediate_steps": [
+    {
+      "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/sqlinjection/mitigation/SqlInjectionLesson10a.java",
+      "line": 39,
+      "column": 0,
+      "snippet": "String[] userInput = {field1, field2, field3, field4, field5, field6, field7};",
+      "label": "step"
+    },
+    {
+      "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/sqlinjection/mitigation/SqlInjectionLesson10a.java",
+      "line": 42,
+      "column": 0,
+      "snippet": "for (String input : userInput) {",
+      "label": "step"
+    }
+  ],
+  "raw": {}
+}

@@ -236,7 +236,20 @@ elif [ -d "$RAPTOR_CALLER_DIR" ]; then
     CHECK_TARGET="$RAPTOR_CALLER_DIR"
 fi
 
-# Pre-flight: target-repo trust check (core/security/cc_trust.py).
+# Clear the screen BEFORE pre-flight checks so any warning /
+# error output from `raptor-cc-trust-check` or
+# `raptor-startup-check` stays visible to the operator. Pre-fix
+# the `clear` call lived AFTER the pre-flight checks (just before
+# `exec claude`), wiping every line they emitted to stderr —
+# trust-check warnings about untrusted target repos, startup-check
+# diagnostics about API key configuration, project-mismatch
+# prompts. The operator launched what looked like a clean Claude
+# session unaware that the launcher had flagged a problem.
+# Moving `clear` here keeps the visual reset (legitimate UX —
+# operators expect a fresh screen on every `raptor` launch)
+# without erasing actionable diagnostics from the gates that
+# decide WHETHER to launch.
+clear
 # Same policy shared with raptor_agentic.py + build_detector.py.
 if [ -n "$CHECK_TARGET" ]; then
     set +e
@@ -273,7 +286,9 @@ if [ -d "$RAPTOR_DIR/plugins/coverage" ]; then
     PLUGIN_ARGS+=(--plugin-dir "$RAPTOR_DIR/plugins/coverage")
 fi
 
-clear
+# Clear was previously called here, but moved earlier (before
+# pre-flight checks) so trust-check / startup-check stderr stays
+# visible. See the `clear` comment above.
 # `env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS` defensively
 # strips a small set of shell-eval env vars at the exec boundary,
 # even if our earlier source of `_dangerous_env_strip.sh` missed

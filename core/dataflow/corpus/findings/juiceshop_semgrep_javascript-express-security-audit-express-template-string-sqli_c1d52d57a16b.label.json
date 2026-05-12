@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "juiceshop_semgrep_javascript-express-security-audit-express-template-string-sqli_c1d52d57a16b",
+  "verdict": "true_positive",
+  "fp_category": null,
+  "rationale": "req.query.q (line 3) flows through length-trim (line 4) to a SQL string built with + concatenation (line 5). Classic CWE-89; Sequelize's raw .query() with concatenated criteria is the textbook SQLi sink.",
+  "labeler": "handlabel-juice-shop-webgoat",
+  "labeled_at": "2026-05-10"
+}

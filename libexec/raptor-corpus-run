@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""Replay dataflow corpus findings through a validator and emit CSV.
+
+Usage:
+  raptor-corpus-run --output <csv> [--corpus-dir <dir>] [--validator <module:Cls>]
+
+Default validator is core.dataflow.validator:TrivialValidator (always
+exploitable) — the producer-only baseline. Pass --validator to plug in
+a real validator (e.g. PR1's LLM-backed sanitizer-evidence validator).
+"""
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+import os
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.dataflow.run_corpus import main
+
+sys.exit(main())

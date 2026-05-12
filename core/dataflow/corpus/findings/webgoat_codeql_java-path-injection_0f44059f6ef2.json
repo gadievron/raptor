@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "webgoat_codeql_java-path-injection_0f44059f6ef2",
+  "producer": "codeql",
+  "rule_id": "java/path-injection",
+  "message": "user-supplied fullName used in upload path with replace()",
+  "source": {
+    "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/pathtraversal/ProfileUploadFix.java",
+    "line": 41,
+    "column": 0,
+    "snippet": "@RequestParam(value = \"fullNameFix\", required = false) String fullName,",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/pathtraversal/ProfileUploadFix.java",
+    "line": 43,
+    "column": 0,
+    "snippet": "return super.execute(file, fullName != null ? fullName.replace(\"../\", \"\") : \"\", username);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}
