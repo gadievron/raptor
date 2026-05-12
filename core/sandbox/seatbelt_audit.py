@@ -517,8 +517,27 @@ class LogStreamer:
                     pass
             # Reader thread is daemon — if it's still draining stdout,
             # let it finish naturally; we don't block process exit on it.
+            #
+            # Pre-fix the join timeout was 0.5s. The kernel log
+            # streamer (`log show --predicate`) buffers messages in
+            # its stdout pipe; on stop, the proc.terminate above
+            # closes the pipe but bytes ALREADY in the buffer still
+            # need draining. Lines that arrived in the last ~500ms
+            # before stop didn't make it into the JSONL because the
+            # reader hadn't consumed them by the time the join
+            # timed out and the summary record fired (the lock
+            # below blocks further appends after summary, by
+            # design).
+            #
+            # Bump to 3s. Operators are willing to wait 3s for
+            # shutdown to fully drain the audit trail; missing
+            # the last few sandbox-denial events is a worse
+            # outcome than a 2.5s extra shutdown delay. Daemon
+            # status preserves the original "don't block exit
+            # forever" intent — a hung reader after 3s still
+            # gets killed by interpreter shutdown.
             if self._reader is not None and self._reader.is_alive():
-                self._reader.join(timeout=0.5)
+                self._reader.join(timeout=3.0)
         # Final summary record. Always emitted regardless of proc
         # state so operators see one of:
         #   - 0 records, 0 drops → audit ran cleanly, nothing to log
