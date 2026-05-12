@@ -75,7 +75,7 @@ class TestArgparse:
         # by saying observe log doesn't exist.
         with patch("core.sandbox.run", side_effect=fake_run), \
              patch("core.sandbox.parse_observe_log") as _parse:
-            rc = _cli_main(["--", "/usr/bin/true", "x"])
+            _cli_main(["--", "/usr/bin/true", "x"])
         # The spawn failed (no observe log), so rc is _SOFTWARE_EX.
         assert seen_cmd == [["/usr/bin/true", "x"]]
 

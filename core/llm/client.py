@@ -12,6 +12,7 @@ Manages multiple LLM providers with:
 
 import json
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Dict, Optional, Any, Tuple
@@ -270,7 +271,6 @@ class LLMClient:
     """Unified LLM client with multi-provider support and fallback."""
 
     def __init__(self, config: Optional[LLMConfig] = None):
-        import threading
         self.config = config or LLMConfig()
         self.providers: Dict[str, LLMProvider] = {}
         self.total_cost = 0.0
@@ -453,7 +453,6 @@ class LLMClient:
         only held briefly to insert into the dict; the per-key lock
         itself is acquired by the caller for the duration of the
         check-call-save sequence."""
-        import threading
         with self._key_locks_guard:
             lock = self._key_locks.get(cache_key)
             if lock is None:

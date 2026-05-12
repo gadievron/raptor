@@ -102,10 +102,6 @@ class AgentLoop:
     last_telemetry: dict[str, Any] | None = field(default=None, init=False, repr=False)
 
     def run(self, config: AgentConfig, ctx: AgentContext) -> AgentResult:
-        prompt_hash = hashlib.sha256(
-            (config.system_prompt + "\n" + config.user_message).encode("utf-8")
-        ).hexdigest()[:12]
-
         # ---- State tracked across the loop via closures ----
         tool_call_log: list[str] = []
         verified: list[tuple[str, str]] = []

@@ -184,8 +184,8 @@ class CorpusGenerator:
         corpus_dir.mkdir(parents=True, exist_ok=True)
         seeds_generated = 0
 
-        # Analyze binary first
-        analysis = self.analyze_binary()
+        # Analyze binary first (populates self.detected_commands etc as side effects)
+        self.analyze_binary()
 
         # 1. Generate basic seeds (always useful)
         logger.info("Generating basic seed corpus...")
@@ -421,7 +421,6 @@ class CorpusGenerator:
         logger.info("Optimizing corpus (removing redundant seeds)...")
 
         seeds = list(corpus_dir.glob("seed_*"))
-        initial_count = len(seeds)
 
         if not coverage_data:
             # Simple deduplication by content. Use hashlib.sha256

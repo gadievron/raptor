@@ -109,17 +109,6 @@ class MultiTurnAnalyser:
         logger.info("MULTI-TURN CRASH ANALYSIS")
         logger.info("=" * 70)
 
-        context = DialogueContext(
-            goal="analyse crash deeply",
-            crash_info={
-                "signal": crash_context.signal,
-                "function": crash_context.function_name,
-                "stack_trace": crash_context.stack_trace,
-                "registers": crash_context.registers,
-            },
-            max_turns=max_turns,
-        )
-
         messages = []
         analysis_result = {
             "vulnerability_type": "unknown",
@@ -214,13 +203,6 @@ class MultiTurnAnalyser:
         logger.info("ITERATIVE EXPLOIT REFINEMENT")
         logger.info("=" * 70)
 
-        context = DialogueContext(
-            goal="refine exploit",
-            crash_info={"signal": crash_context.signal, "function": crash_context.function_name},
-            exploit_code=exploit_code,
-            validation_results={"errors": validation_errors},
-            max_turns=max_iterations,
-        )
 
         messages = []
         current_code = exploit_code

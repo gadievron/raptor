@@ -31,7 +31,7 @@ class TestSageFuzzingMemoryInit(unittest.TestCase):
             mem_file = Path(tmpdir) / "subdir" / "memory.json"
             config = SageConfig(enabled=False)
 
-            memory = SageFuzzingMemory(memory_file=mem_file, sage_config=config)
+            SageFuzzingMemory(memory_file=mem_file, sage_config=config)
             self.assertTrue(mem_file.parent.exists())
 
 

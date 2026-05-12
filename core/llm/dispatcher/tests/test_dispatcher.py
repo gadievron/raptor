@@ -497,7 +497,7 @@ class TestRealAnthropicSDKThroughDispatcher:
         """Build the client via ``make_anthropic_client`` (the actual
         worker-side helper), call ``messages.create``, assert the SDK
         parsed the response and the dispatcher injected real creds."""
-        anthropic = pytest.importorskip("anthropic")
+        pytest.importorskip("anthropic")
         from core.llm.dispatcher.client import make_anthropic_client
 
         d, upstream = self._setup(fake_creds, tmp_path)
@@ -588,7 +588,7 @@ class TestSubprocessE2E:
     def test_subprocess_uses_dispatcher_with_no_keys_in_env(
         self, fake_creds, tmp_path
     ):
-        anthropic = pytest.importorskip("anthropic")
+        pytest.importorskip("anthropic")
         from core.llm.dispatcher.spawn import spawn_worker
 
         upstream = _CaptiveUpstream()

@@ -404,9 +404,9 @@ def import_project(zip_path: Path, projects_dir: Path,
     notes = embedded_meta.get("notes", "") if embedded_meta else ""
     created = embedded_meta.get("created") if embedded_meta else None
 
-    project = mgr.create(project_name, target, description=description,
-                         output_dir=str(output_dir), resolve_target=False,
-                         created=created)
+    mgr.create(project_name, target, description=description,
+               output_dir=str(output_dir), resolve_target=False,
+               created=created)
     if notes:
         mgr.update_notes(project_name, notes)
 

@@ -122,7 +122,7 @@ class TestExplicitLanguagesNormalised:
         # database_manager returns empty so workflow exits cleanly
         agent.database_manager.create_databases_parallel.return_value = {}
 
-        result = agent.run_autonomous_analysis(languages=["c"])
+        agent.run_autonomous_analysis(languages=["c"])
 
         # The agent should have passed "cpp" (canonical) to the
         # detector chain, NEVER the raw "c" string.

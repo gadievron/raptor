@@ -259,7 +259,7 @@ class TestFlowTrace:
         repo, out = understand_run
         _make_context_map(out)
         _make_flow_trace(out)
-        counts = synthesise_from_understand_output(out)
+        synthesise_from_understand_output(out)
         # Step 1 → query_handler (already has entry_point); step 2 →
         # run_query (already has sink); step 3 is external library,
         # skipped.

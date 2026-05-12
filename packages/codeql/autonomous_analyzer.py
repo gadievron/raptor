@@ -14,7 +14,7 @@ import sys
 from dataclasses import dataclass, asdict
 
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # Add parent directory to path for imports
 # packages/codeql/autonomous_analyzer.py -> repo root
