@@ -32,7 +32,6 @@ bytes upstream.
 
 from __future__ import annotations
 
-import errno
 import http.server
 import json
 import logging
