@@ -611,10 +611,24 @@ jobs:
   # is ~17 min/witness plus a one-time 6.2 GB circuit-artifact
   # download. Either belongs on the schedule/nightly tier, not a
   # PR gate. See docs/research/zkpox-phase0-findings.md.
+  #
+  # PR-event opt-out: this job is the long pole at ~16 min wall-clock
+  # (sweep 11 min + apt 2 min + cargo build 2 min) while every other
+  # job finishes in ~3 min — a 5× drag on every zkpox-touching PR.
+  # We skip it on `pull_request` and rely on:
+  #   * merge_group  — runs before the PR actually lands
+  #   * push to main — belt-and-braces after merge
+  #   * schedule     — nightly full-corpus catch-all
+  #   * workflow_dispatch — author can trigger manually for a PR
+  # Author-side fast loop: `cargo build --release --manifest-path
+  # core/zkpox/Cargo.toml && bash core/zkpox/test/run-tests.sh
+  # --ci-subset`. Equivalent to what CI runs on PR-tier, ~5 min on a
+  # warm local toolchain.
   zkpox-regression:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
+      github.event_name != 'pull_request' &&
       (needs.changes.outputs.force_full == 'true' ||
        needs.changes.outputs.zkpox == 'true')
     runs-on: ubuntu-latest
