@@ -62,6 +62,11 @@ struct Args {
 #[derive(Serialize)]
 struct Summary {
     version: String,
+    // Beta-feature marker. The Python producer always writes True;
+    // an absent field is treated as True so a future post-stable
+    // verifier looking at an old bundle doesn't silently drop the
+    // marker. See bundle.py for the producer-side rationale.
+    experimental: bool,
     target_kind: String,
     target_hash: String,
     target_url: Option<String>,
@@ -115,6 +120,26 @@ fn main() -> Result<()> {
         println!("{out}");
     } else {
         print_human(&summary);
+        if summary.experimental {
+            // Always-on beta marker — fires even with --strict so an
+            // operator running a strict pipeline still sees "this
+            // bundle was produced by an experimental version of the
+            // toolchain." Suppressed in --json so automated consumers
+            // parse the `experimental` field instead.
+            eprintln!();
+            eprintln!(
+                "  EXPERIMENTAL BUNDLE — produced by Phase 1.5 (beta) zkpox."
+            );
+            eprintln!(
+                "  Bundle format and verifier semantics are subject to change."
+            );
+            eprintln!(
+                "  Do NOT use this bundle for real CVE disclosure."
+            );
+            eprintln!(
+                "  Scope: docs/zkpox-scope.md"
+            );
+        }
         if !args.strict {
             // Loud banner so a casual reader doesn't mistake exit 0
             // for "the bundle is verified." Suppressed in --json so
@@ -231,8 +256,12 @@ fn inspect(map: &[(ciborium::Value, ciborium::Value)]) -> Result<Summary> {
         })
         .transpose()?;
 
+    // experimental: default True on absent (mirrors producer-side default).
+    let experimental = optional_bool_at(map, "experimental").unwrap_or(true);
+
     Ok(Summary {
         version,
+        experimental,
         target_kind: string_at(target, "kind")?,
         target_hash,
         target_url: optional_string_at(target, "url"),
@@ -255,7 +284,12 @@ fn inspect(map: &[(ciborium::Value, ciborium::Value)]) -> Result<Summary> {
 }
 
 fn print_human(s: &Summary) {
-    println!("zkpox bundle: version {} ({})", s.version, if s.structural_checks_passed { "OK" } else { "INVALID" });
+    println!(
+        "zkpox bundle: version {} ({}){}",
+        s.version,
+        if s.structural_checks_passed { "OK" } else { "INVALID" },
+        if s.experimental { " [EXPERIMENTAL]" } else { "" },
+    );
     println!("  target:        {} hash={}", s.target_kind, s.target_hash);
     if let Some(url) = &s.target_url {
         println!("                 {url}");
@@ -317,6 +351,20 @@ fn optional_string_at(
             if t == key {
                 if let ciborium::Value::Text(s) = v {
                     return Some(s.clone());
+                }
+                return None;
+            }
+        }
+    }
+    None
+}
+
+fn optional_bool_at(map: &[(ciborium::Value, ciborium::Value)], key: &str) -> Option<bool> {
+    for (k, v) in map {
+        if let ciborium::Value::Text(t) = k {
+            if t == key {
+                if let ciborium::Value::Bool(b) = v {
+                    return Some(*b);
                 }
                 return None;
             }

@@ -65,9 +65,34 @@ _PLACEHOLDER_WARNING = (
     "disclosure until Phase 1.5.x replaces them. See docs/zkpox-scope.md."
 )
 
+# Loud always-on banner. Distinct from the placeholder-hash warning
+# (which fires only when --allow-placeholder-hashes flips the gate);
+# this banner is the meta-level "the whole feature is beta" message so
+# an operator who skipped the slash-command help still sees it. Printed
+# to stderr so it doesn't pollute stdout JSON output.
+_EXPERIMENTAL_BANNER = (
+    "[zkpox] ============================================================\n"
+    "[zkpox] EXPERIMENTAL (beta) — Phase 1.5. Subject to change; the\n"
+    "[zkpox] proof system, bundle format, and verifier are NOT stable.\n"
+    "[zkpox] Bundles produced here are NOT for real CVE disclosure.\n"
+    "[zkpox] Scope statement: docs/zkpox-scope.md\n"
+    "[zkpox] ============================================================"
+)
+
+
+def _emit_experimental_banner() -> None:
+    """Print the always-on experimental banner to stderr.
+
+    Stderr, not stdout, so /prove-exploit's JSON summary on stdout
+    stays machine-parseable.
+    """
+    print(_EXPERIMENTAL_BANNER, file=sys.stderr)
+
 
 def cmd_prove(args: argparse.Namespace) -> int:
     """End-to-end prove → wrap → envelope → bundle → anchor."""
+    _emit_experimental_banner()
+
     out_dir = Path(args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -224,6 +249,7 @@ def _resolve_verifier_binary() -> Path:
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
+    _emit_experimental_banner()
     verifier = _resolve_verifier_binary()
     cmd = [str(verifier), args.bundle]
     if args.json:

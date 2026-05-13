@@ -236,3 +236,47 @@ def test_pre_anchor_hash_changes_when_proof_changes():
         researcher=a.researcher,
     )
     assert bundle_hash_pre_timestamp(a) != bundle_hash_pre_timestamp(b)
+
+
+# ---------------------------------------------------------------------------
+# Experimental marker (beta-feature flag in the bundle)
+# ---------------------------------------------------------------------------
+
+def test_experimental_default_true_on_construct():
+    """Every Bundle this code writes is marked experimental by default —
+    the Rust verifier reads the flag and prints a loud banner."""
+    assert _fresh_bundle().experimental is True
+
+
+def test_experimental_round_trip_true():
+    bundle = _fresh_bundle()
+    decoded = cbor2.loads(to_cbor(bundle))
+    assert decoded["experimental"] is True
+    assert from_cbor(to_cbor(bundle)).experimental is True
+
+
+def test_experimental_round_trip_false():
+    """Once the proof system / bundle format / verifier stabilise, the
+    producer will flip this to False. Round-trip must preserve it."""
+    bundle = Bundle(
+        version=_fresh_bundle().version,
+        target=_fresh_bundle().target,
+        vulnerability=_fresh_bundle().vulnerability,
+        proof=_fresh_bundle().proof,
+        harness=_fresh_bundle().harness,
+        vendor_envelope=_fresh_bundle().vendor_envelope,
+        experimental=False,
+    )
+    decoded = cbor2.loads(to_cbor(bundle))
+    assert decoded["experimental"] is False
+    assert from_cbor(to_cbor(bundle)).experimental is False
+
+
+def test_experimental_absent_field_defaults_to_true():
+    """A pre-marker bundle (no `experimental` key at all) is treated as
+    experimental on read — safer to false-warn than silently skip the
+    banner for an old producer."""
+    blob = cbor2.loads(to_cbor(_fresh_bundle()))
+    del blob["experimental"]
+    parsed = from_cbor(cbor2.dumps(blob))
+    assert parsed.experimental is True
