@@ -189,11 +189,15 @@ def record_denial(cmd_display: str, returncode: int,
         with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(line)
     except Exception:  # noqa: BLE001 — best-effort; never fail the sandbox call
-        # Debug-only log so a developer chasing "why is my summary empty?"
-        # can find it via RAPTOR_DEBUG / per-module level adjustment.
-        # INFO would be too noisy if the failure is recurrent (e.g., disk
-        # full); DEBUG keeps it findable without flooding normal output.
-        logger.debug("record_denial: failed to append JSONL", exc_info=True)
+        # WARNING (F071 W21 promote): operators rarely run with DEBUG
+        # enabled, so pre-fix this swallow meant every dropped sandbox-
+        # denial record was invisible — operator sees "no denials" with
+        # no way to distinguish "no events" from "writer failed". Mirrors
+        # the family-wide DEBUG -> WARNING convention from c5a4505
+        # (`fix(scorecard): promote producer-error logs ...`) and 8edf0f6
+        # (sibling F069 in core/sandbox/proxy.py).
+        logger.warning("record_denial: failed to append JSONL",
+                       exc_info=True)
 
 
 def _suggested_fix(denial_type: str, **details: Any) -> str:
@@ -332,7 +336,12 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
     try:
         _os.replace(str(jsonl), str(tmp))
     except OSError:
-        # Race lost (sibling already renamed) or jsonl disappeared.
+        # KEEP-SILENT (F071 per-site triage W21): the realistic
+        # branch here is "sibling summariser won the rename race and
+        # is producing the summary in our place", or "jsonl already
+        # vanished (operator deleted it)". Neither is data loss from
+        # our perspective — the contract caller observes via the None
+        # return. WARNING noise would obscure the actual outcome.
         return None
 
     denials = []
@@ -347,9 +356,20 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
                 except json.JSONDecodeError:
                     continue  # skip malformed lines, keep going
     except OSError:
+        # WARNING (F071 W21 promote): we successfully renamed the
+        # JSONL into our private tmp, then failed to read it. This
+        # silently drops the whole summary for the run. Operators
+        # must see it. Mirrors c5a4505 / 8edf0f6 family.
+        logger.warning(
+            "summarize_and_write: failed to read renamed JSONL",
+            exc_info=True,
+        )
         try:
             tmp.unlink(missing_ok=True)
         except OSError:
+            # KEEP-SILENT (F071 per-site triage W21): cleanup of a
+            # tmp we may already have lost; missing_ok=True already
+            # suppresses ENOENT.
             pass
         return None
 
@@ -357,6 +377,9 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
     try:
         tmp.unlink(missing_ok=True)
     except OSError:
+        # KEEP-SILENT (F071 per-site triage W21): housekeeping unlink
+        # of a file whose contents we've already drained. Failure
+        # leaves a leftover file but doesn't affect summary output.
         pass
 
     if not denials:
@@ -401,9 +424,20 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
                        encoding="utf-8")
         os.replace(tmp, summary_path)
     except OSError:
+        # WARNING (F071 W21 promote): the summary write is the run's
+        # final-output artifact. Silent loss = silent audit integrity
+        # gap. Return-None remains the correct contract signal (callers
+        # check); this promotion adds the operator visibility that was
+        # missing. Mirrors c5a4505 / 8edf0f6 family.
+        logger.warning(
+            "summarize_and_write: failed to write/replace summary.json",
+            exc_info=True,
+        )
         try:
             tmp.unlink()
         except OSError:
+            # KEEP-SILENT (F071 per-site triage W21): cleanup of the
+            # tmp we may not have created. Logging here would be noise.
             pass
         return None
 
