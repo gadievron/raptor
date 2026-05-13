@@ -26,9 +26,13 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-# raptor_zkpox.py lives at repo root.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Hard-lookup RAPTOR_DIR per the project's sys.path rule (CLAUDE.md):
+# the KeyError on an unset env is intentional — fail loudly rather than
+# silently falling back to a cwd or __file__-relative walk that breaks
+# under symlinks / non-repo cwd. The launcher always sets RAPTOR_DIR.
+sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
+from core.config import RaptorConfig
 from core.logging import get_logger
 from packages import zkpox
 
@@ -94,7 +98,13 @@ def cmd_prove(args: argparse.Namespace) -> int:
         "--tag", args.tag or f"zkpox-{args.wrap}",
     ]
     logger.info(f"[zkpox] proving via {prover.name} (--wrap={args.wrap})")
-    rc = subprocess.run(cmd, check=False).returncode
+    # Explicit get_safe_env() at the subprocess boundary even though
+    # raptor.py's lifecycle already sanitised the parent env — convention
+    # is "explicit at every spawn site" so a future direct caller can't
+    # accidentally leak a dirty env through.
+    rc = subprocess.run(
+        cmd, check=False, env=RaptorConfig.get_safe_env()
+    ).returncode
     if rc != 0:
         return rc
     record = json.loads(record_path.read_text())
@@ -218,7 +228,10 @@ def cmd_verify(args: argparse.Namespace) -> int:
     cmd = [str(verifier), args.bundle]
     if args.json:
         cmd.append("--json")
-    return subprocess.run(cmd, check=False).returncode
+    # Explicit get_safe_env() at the subprocess boundary (see cmd_prove).
+    return subprocess.run(
+        cmd, check=False, env=RaptorConfig.get_safe_env()
+    ).returncode
 
 
 # ---------------------------------------------------------------------------
