@@ -13,12 +13,14 @@ Usage:
     raptor.py <mode> [options]
 
 Available Modes:
-    scan        - Static code analysis (Semgrep + CodeQL)
-    fuzz        - Binary fuzzing with AFL++
-    web         - Web application security testing
-    agentic     - Full autonomous workflow
-    codeql      - CodeQL-only analysis
-    help        - Show detailed help for a specific mode
+    scan                  - Static code analysis (Semgrep + CodeQL)
+    fuzz                  - Binary fuzzing with AFL++
+    web                   - Web application security testing
+    agentic               - Full autonomous workflow
+    codeql                - CodeQL-only analysis
+    prove-exploit         - Generate a ZKPoX disclosure bundle (beta)
+    verify-exploit-proof  - Verify a ZKPoX disclosure bundle (beta)
+    help                  - Show detailed help for a specific mode
 
 Examples:
     # Full autonomous workflow
@@ -35,6 +37,10 @@ Examples:
 
     # CodeQL analysis
     python3 raptor.py codeql --repo /path/to/code --languages java
+
+    # ZKPoX disclosure bundle (Phase 1.5)
+    python3 raptor.py prove-exploit --witness path/to/poc --out bundle/
+    python3 raptor.py verify-exploit-proof bundle/bundle.cbor
 """
 
 import argparse
@@ -436,13 +442,42 @@ def mode_llm_analysis(args: list) -> int:
     """Run LLM-powered vulnerability analysis on existing SARIF files."""
     script_root = Path(__file__).parent
     llm_script = script_root / "packages/llm_analysis/agent.py"
-    
+
     if not llm_script.exists():
         print(f"✗ LLM analysis script not found: {llm_script}")
         return 1
-    
+
     print("\n[*] Running LLM-powered vulnerability analysis...\n")
     return _run_script(llm_script, args)
+
+
+def mode_prove_exploit(args: list) -> int:
+    """Generate a ZKPoX disclosure bundle for an exploit witness.
+
+    Prepends 'prove' so raptor_zkpox.py's subparser routes correctly.
+    Uses the run lifecycle so the bundle + prove-record land in a
+    project-scoped output directory.
+    """
+    script_root = Path(__file__).parent
+    zkpox_script = script_root / "raptor_zkpox.py"
+    if not zkpox_script.exists():
+        print(f"✗ ZKPoX script not found: {zkpox_script}")
+        return 1
+    return _run_with_lifecycle(
+        "prove-exploit", zkpox_script, ["prove"] + args,
+        "Generating ZKPoX disclosure bundle...",
+    )
+
+
+def mode_verify_exploit_proof(args: list) -> int:
+    """Verify a ZKPoX disclosure bundle. Read-only; bypasses lifecycle
+    since there's no new output to track."""
+    script_root = Path(__file__).parent
+    zkpox_script = script_root / "raptor_zkpox.py"
+    if not zkpox_script.exists():
+        print(f"✗ ZKPoX script not found: {zkpox_script}")
+        return 1
+    return _run_script(zkpox_script, ["verify"] + args)
 
 
 def show_mode_help(mode: str) -> None:
@@ -456,6 +491,8 @@ def show_mode_help(mode: str) -> None:
         'agentic': script_root / "raptor_agentic.py",
         'codeql': script_root / "raptor_codeql.py",
         'analyze': script_root / "packages/llm_analysis/agent.py",
+        'prove-exploit': script_root / "raptor_zkpox.py",
+        'verify-exploit-proof': script_root / "raptor_zkpox.py",
     }
     
     if mode not in mode_scripts:
@@ -496,12 +533,14 @@ def show_mode_help(mode: str) -> None:
 # preserves leading whitespace and newlines verbatim).
 _HELP_EPILOG = """
 Available Modes:
-  scan        - Static code analysis with Semgrep
-  fuzz        - Binary fuzzing with AFL++
-  web         - Web application security testing
-  agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
-  codeql      - CodeQL-only analysis
-  analyze     - LLM-powered vulnerability analysis (requires SARIF input)
+  scan                  - Static code analysis with Semgrep
+  fuzz                  - Binary fuzzing with AFL++
+  web                   - Web application security testing
+  agentic               - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
+  codeql                - CodeQL-only analysis
+  analyze               - LLM-powered vulnerability analysis (requires SARIF input)
+  prove-exploit         - Generate a ZKPoX disclosure bundle (beta)
+  verify-exploit-proof  - Verify a ZKPoX disclosure bundle (beta)
 
 Examples:
   # Full autonomous workflow
@@ -521,6 +560,10 @@ Examples:
 
   # LLM analysis of existing SARIF
   python3 raptor.py analyze --repo /path/to/code --sarif findings.sarif
+
+  # ZKPoX disclosure bundle
+  python3 raptor.py prove-exploit --witness /path/to/poc --out /tmp/disclosure
+  python3 raptor.py verify-exploit-proof /tmp/disclosure/bundle.cbor
 
 Sandbox isolation (available on all modes):
   --sandbox {full,debug,network-only,none}
@@ -597,6 +640,8 @@ def main():
         'agentic': mode_agentic,
         'codeql': mode_codeql,
         'analyze': mode_llm_analysis,
+        'prove-exploit': mode_prove_exploit,
+        'verify-exploit-proof': mode_verify_exploit_proof,
     }
     
     if mode not in mode_handlers:

@@ -87,6 +87,7 @@ jobs:
       fuzzing: ${{ steps.filter.outputs.fuzzing }}
       sage: ${{ steps.filter.outputs.sage }}
       orchestration: ${{ steps.filter.outputs.orchestration }}
+      zkpox: ${{ steps.filter.outputs.zkpox }}
       force_full: ${{ steps.force.outputs.force_full }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
@@ -596,4 +597,106 @@ jobs:
         run: |
           source $VENV_PATH/bin/activate
           python -m pytest core/orchestration/tests -n auto
+
+  # ZKPoX regression: build the SP1 guest + host prover, regenerate
+  # the witness corpus, and run the execute-mode sweep through every
+  # witness in core/zkpox/test/witnesses/. Catches the kind of
+  # breakage that only surfaces when the real SP1 cross-compile +
+  # gadget primitive actually run on a witness (e.g., a "crash"
+  # witness whose bytes interact with strcat semantics in a way the
+  # bug doesn't fire on).
+  #
+  # Scope: execute mode only. --prove --wrap=core is ~17 s/witness
+  # warm × 40 witnesses ≈ 11 min just for proves; --wrap=groth16
+  # is ~17 min/witness plus a one-time 6.2 GB circuit-artifact
+  # download. Either belongs on the schedule/nightly tier, not a
+  # PR gate. See docs/research/zkpox-phase0-findings.md.
+  #
+  # Wall-clock budget: sequential sweep, 4-witness PR-tier subset
+  # (~6 min sweep + 2 min build + ~1 min setup ≈ 9 min total job).
+  # Parallel sweep was attempted (ac14b53, fbec21b) and reverted — 4
+  # concurrent SP1 invocations OOM'd the runner's cgroup. Cold-cache
+  # builds still consume ~20 min so the 25-min timeout is the binding
+  # ceiling — keep PR-tier under that on a warm SP1 cache. The full
+  # 40-witness corpus runs on schedule / merge_group / workflow_dispatch
+  # (force_full=true) where wall-clock isn't capped the same way.
+  zkpox-regression:
+    needs: [pre_check, changes]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.zkpox == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install clang + lld + llvm + protoc + go
+        # clang/lld/llvm provide the RISC-V backend for guest C
+        # cross-compile (build.rs's `clang --target=riscv64-...`).
+        # protobuf-compiler is needed by sp1-prover-types' build.rs.
+        # golang-go is a transitive build-time dep via
+        # sp1-recursion-gnark-ffi (pulled even in execute-only flows);
+        # see docs/research/zkpox-phase0-findings.md "Issues discovered"
+        # row 1.
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm protobuf-compiler golang-go jq
+
+      - name: Cache SP1 toolchain + cargo + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.sp1
+            ~/.cargo/registry
+            ~/.cargo/git
+            core/zkpox/target
+          key: zkpox-${{ runner.os }}-${{ hashFiles('core/zkpox/Cargo.lock') }}
+          restore-keys: |
+            zkpox-${{ runner.os }}-
+
+      - name: Install SP1 (sp1up)
+        run: |
+          curl -L https://sp1up.succinct.xyz | bash
+          echo "$HOME/.sp1/bin" >> "$GITHUB_PATH"
+          "$HOME/.sp1/bin/sp1up"
+
+      - name: Build zkpox-prove (workspace bin used by the sweep)
+        # Build only `zkpox-prove`; the regression sweep does not
+        # exercise `zkpox-verify`, so skipping it shaves ~30-60 s of
+        # cold-cache compile (the SP1 dependency surface is the same
+        # for both binaries, but linking each one isn't free). The
+        # `python-unit-tests-fast` tier covers `packages/zkpox/`'s
+        # Python verifier wrapper; a zkpox-verify-only regression
+        # job is a follow-up if it ever needs first-class CI.
+        #
+        # sp1-build v6.1.0 emits two unconditional `cargo:warning=`
+        # info-notices on every build — the succinct rustc version and
+        # the guest's build timestamp. They are not actionable warnings
+        # (the upstream maintainers just chose `cargo:warning=` as the
+        # only build-script channel cargo surfaces to the user). Strip
+        # only those exact signatures so real warnings still show.
+        run: |
+          cargo build --release --bin zkpox-prove --manifest-path core/zkpox/Cargo.toml 2>&1 \
+            | awk '!/^warning: zkpox-prover@[0-9.]+: (rustc \+succinct --version:|zkpox-guest built at )/'
+
+      - name: Regenerate witness corpus
+        run: python3 core/zkpox/test/witnesses/generate.py
+
+      - name: Regression sweep (execute mode)
+        # PR-tier runs the --ci-subset (4 witnesses, ~6 min sweep).
+        # schedule / workflow_dispatch / merge_group sets force_full
+        # and runs the full 40-witness corpus (~10 min sweep). The
+        # 25-min timeout is the binding constraint; the build alone
+        # is ~20 min on cold cache, so PR-tier has to keep the sweep
+        # short. See the curated list + rationale in
+        # core/zkpox/test/run-tests.sh.
+        run: |
+          if [[ "${{ needs.changes.outputs.force_full }}" == "true" ]]; then
+            bash core/zkpox/test/run-tests.sh
+          else
+            bash core/zkpox/test/run-tests.sh --ci-subset
+          fi
 

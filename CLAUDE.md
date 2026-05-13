@@ -20,6 +20,7 @@ VERY IMPORTANT: follow these steps in order.
 /project - Project management: create, list, status, coverage, findings, diff, merge, report, clean, export
 /scan /fuzz /web /agentic /codeql /analyze - Security testing
 /exploit /patch - Generate PoCs and fixes (beta)
+/prove-exploit /verify-exploit-proof - ZKPoX disclosure bundles (beta — see ZKPOX below)
 /validate - Exploitability validation pipeline (see below)
 /understand - Code understanding: map attack surface, trace flows, hunt variants (see below)
 /diagram - Generate Mermaid visual maps from /understand or /validate output (see below)
@@ -282,6 +283,31 @@ The `/annotate` command attaches free-form prose to individual functions, stored
 **When errors occur:** Load `tiers/recovery.md` (recovery protocol)
 **When requested:** Load `tiers/personas/[name].md` (expert personas)
 **When running /understand:** Load `.claude/skills/code-understanding/SKILL.md` (gates, config) plus the relevant mode file: `map.md`, `trace.md`, `hunt.md`, or `teach.md`
+**When running /prove-exploit or /verify-exploit-proof:** Load `.claude/skills/zkpox/SKILL.md` (workflow, trust model) plus the relevant entry from `.claude/skills/zkpox/violation-gadgets/`. For advisory drafting, load `tiers/personas/disclosure_engineer.md`.
+
+---
+
+## ZKPOX
+
+The `/prove-exploit` command converts a working exploit witness into a publicly-verifiable disclosure bundle. The witness stays private; the proof is public; the vendor gets full details immediately (via age envelope); the public-witness-decrypt-time is enforced cryptographically (via Drand tlock).
+
+**Usage:** `python3 raptor.py prove-exploit --witness <path> --out <dir> [--vendor-pubkey AGE_PUBKEY] [--wrap groth16|core] [--no-anchor]`
+
+The `/verify-exploit-proof` command reads a bundle and confirms structural + (Phase 1.5.x) cryptographic invariants.
+
+**Skills** (`.claude/skills/zkpox/`):
+- `SKILL.md` — when to use, when not to use, full workflow.
+- `violation-gadgets/crash-only.md` — simplest gadget; baseline.
+- `violation-gadgets/memory-safety-oob-write.md` — position-varying redzone with structured outputs.
+
+**Persona:** `tiers/personas/disclosure_engineer.md` — CVD framework selection, advisory drafting, safe-harbor citations.
+
+**Substrate:**
+- `core/zkpox/` — Rust workspace (`guest/` SP1 program, `prover/` native CLI, `verifier/` standalone CLI).
+- `packages/zkpox/` — Python orchestration (`envelope.py`, `bundle.py`, `anchor.py`, `prove.py`).
+
+**Design proposal:** `docs/proposals/raptor-zkpox-design.md`
+**Phase 0 findings + Phase 1 bench numbers:** `docs/research/zkpox-phase0-findings.md`
 
 ---
 

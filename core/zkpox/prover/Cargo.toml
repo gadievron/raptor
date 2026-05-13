@@ -1,0 +1,24 @@
+[package]
+name = "zkpox-prover"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+default-run = "zkpox-prove"
+
+[[bin]]
+name = "zkpox-prove"
+path = "src/main.rs"
+
+[dependencies]
+sp1-sdk = { version = "6.0.1", features = ["blocking", "native-gnark"] }
+clap = { version = "4.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+# Tokio is only needed to drive sp1_sdk::install::try_install_circuit_artifacts
+# (an async fn) from our blocking prover. Single-thread runtime keeps overhead
+# minimal.
+tokio = { version = "1", features = ["rt", "macros"] }
+
+[build-dependencies]
+sp1-build = { version = "6.0.1" }

@@ -34,6 +34,14 @@ tabulate==0.10.0
 # check degrades to fail-safe block on any pack-bearing target.
 pyyaml==6.0.3
 
+# packages/zkpox: AES-256-GCM (envelope.py) and CBOR encoding for the
+# disclosure bundle (bundle.py). Both are imported eagerly by
+# packages/zkpox/__init__.py; the package degrades to ImportError if
+# either is missing. /prove-exploit and /verify-exploit-proof commands
+# require these.
+cryptography==45.0.4
+cbor2==6.0.1
+
 # Optional: For SMT-based constraint analysis (one-gadget feasibility, etc.)
 # z3-solver==4.16.0.0
 
