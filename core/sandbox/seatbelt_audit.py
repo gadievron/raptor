@@ -282,6 +282,11 @@ class LogStreamer:
             try:
                 self._proc.terminate()
             except OSError:
+                # KEEP-SILENT (F070 per-site triage W21): terminate()
+                # on an already-dead process is the only realistic
+                # OSError here. The outer `raise` re-raises the
+                # underlying cause; a WARNING about a cleanup attempt
+                # would be noise that obscures the real failure.
                 pass
             raise
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
@@ -330,6 +335,20 @@ class LogStreamer:
                 start_new_session=True,
             )
         except OSError:
+            # WARNING (F070 W21 promote): the warm-up gate failing to
+            # spawn its probe means we will silently fall back to
+            # best-effort mode and may miss early audit records. The
+            # operator must see this so they can triage (ENOENT means
+            # sandbox-exec is not where shutil.which claimed it was;
+            # EACCES means a profile/permissions regression). Mirrors
+            # the family-wide DEBUG -> WARNING promotion in c5a4505
+            # (`fix(scorecard): promote producer-error logs ...`) and
+            # 8edf0f6 (sibling F069 in core/sandbox/proxy.py).
+            logger.warning(
+                "seatbelt audit warm-up Popen failed; "
+                "proceeding without warm-up gate",
+                exc_info=True,
+            )
             return False
 
         target_pid = warm_up.pid
@@ -389,6 +408,12 @@ class LogStreamer:
                 try:
                     warm_up.terminate()
                 except OSError:
+                    # KEEP-SILENT (F070 per-site triage W21): we're in
+                    # the gate's finally-block cleanup. terminate() on
+                    # an already-dead process (sandbox-exec exits in
+                    # <50ms with deny-default) is the realistic case.
+                    # WARNING noise here would obscure the actual gate
+                    # outcome the caller cares about.
                     pass
                 try:
                     warm_up.wait(timeout=1.0)
@@ -448,11 +473,21 @@ class LogStreamer:
                     # Best-effort. Don't crash the reader thread on
                     # transient FS errors — a missed record is
                     # acceptable, a dead reader thread is not.
-                    logger.debug("seatbelt audit append failed",
-                                 exc_info=True)
+                    #
+                    # WARNING (F070 W21 promote): operators rarely run
+                    # with DEBUG enabled, so pre-fix every dropped
+                    # audit record was invisible. Mirrors the family-
+                    # wide DEBUG -> WARNING convention from c5a4505
+                    # and 8edf0f6 (sibling F069 in proxy.py).
+                    logger.warning("seatbelt audit append failed",
+                                   exc_info=True)
         except Exception:
-            logger.debug("seatbelt audit reader thread crashed",
-                         exc_info=True)
+            # WARNING (F070 W21 promote): a dead reader thread means
+            # ALL subsequent audit records for this run are lost. The
+            # operator MUST see this — same rationale as the L447
+            # append-failure promote above.
+            logger.warning("seatbelt audit reader thread crashed",
+                           exc_info=True)
 
     def _append_record(self, record: dict) -> None:
         """Append one record to the JSONL using the same O_NOFOLLOW
@@ -544,8 +579,13 @@ class LogStreamer:
                     summary["nonce"] = self._observe_nonce
                 self._append_record_locked(summary)
         except OSError:
-            logger.debug("seatbelt audit summary append failed",
-                         exc_info=True)
+            # WARNING (F070 W21 promote): the summary record is the
+            # last write of every audit-mode run and the only record
+            # operators rely on for "did the budget cap engage?"
+            # signal. Silent loss = silent audit integrity gap.
+            # Mirrors c5a4505 / 8edf0f6 promotion family.
+            logger.warning("seatbelt audit summary append failed",
+                           exc_info=True)
         # Close the cached dirfd. Best-effort — fd leaks on
         # daemon-thread paths are bounded by the per-process fd
         # limit, but keeping process exit clean here avoids
@@ -555,6 +595,11 @@ class LogStreamer:
                 try:
                     os.close(self._dirfd)
                 except OSError:
+                    # KEEP-SILENT (F070 per-site triage W21): closing
+                    # a (potentially already-closed) cached dirfd is
+                    # ResourceWarning-prevention housekeeping. EBADF
+                    # here is benign; OS will reclaim on process exit.
+                    # WARNING would be noise.
                     pass
                 self._dirfd = None
 
