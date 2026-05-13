@@ -33,6 +33,8 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from core.config import RaptorConfig
+
 
 # Wide associated data so an attacker can't take a ciphertext from a
 # different protocol and feed it to a zkpox verifier as if it were a
@@ -131,9 +133,12 @@ def gen_age_keypair() -> AgeKeypair:
     keygen = require(_which_age_keygen(), "age-keygen")
     tmpdir = Path(tempfile.mkdtemp(prefix="zkpox-age-"))
     sk_path = tmpdir / "secret.txt"
+    # Explicit get_safe_env() at the subprocess boundary — same posture
+    # as _run() below (see that function's comment).
     out = subprocess.run(
         [keygen, "-o", str(sk_path)],
         capture_output=True, check=True, text=True,
+        env=RaptorConfig.get_safe_env(),
     )
     pub = ""
     for line in out.stderr.splitlines():
@@ -211,6 +216,14 @@ def open_via_tlock(envelope: Envelope) -> bytes:
 # -----------------------------------------------------------------------------
 
 def _run(cmd: list[str], stdin_bytes: bytes | None = None) -> bytes:
+    # Explicit get_safe_env() at every subprocess boundary. age / tle
+    # are Go binaries that don't honour LD_PRELOAD-style hijacks the way
+    # native loaders do, but the convention is per-site explicit so a
+    # future caller invoking these helpers directly (tests, integration
+    # scripts) cannot accidentally leak a parent's untrusted env
+    # through. Sanitising costs nothing here — these binaries don't
+    # depend on the caller's env.
     return subprocess.run(
-        cmd, input=stdin_bytes, capture_output=True, check=True
+        cmd, input=stdin_bytes, capture_output=True, check=True,
+        env=RaptorConfig.get_safe_env(),
     ).stdout
