@@ -55,100 +55,47 @@ declare -a failures=()
 shopt -s nullglob
 if (( CI_SUBSET )); then
     # PR-tier CI subset — the *brutal* minimum that still validates
-    # each target's gadget story end-to-end. Each SP1 SDK startup is
-    # ~20-25 s in CI, so every witness here is paid for. Goal: keep
-    # the sweep portion under ~4 min so the cold-cache build (~20
-    # min) plus sweep fits inside the 25-min job timeout.
+    # each target's bug end-to-end. Each SP1 SDK startup is ~85 s in
+    # CI sequential, so every witness here is paid for. Goal: keep
+    # the sweep portion under ~6 min so the cold-cache build (~2
+    # min) plus sweep stays comfortably inside the 25-min timeout.
     #
     # The full 40-witness corpus runs on the schedule /
     # workflow_dispatch / merge_group tier (force_full=true) where
     # wall-clock isn't capped — see the workflow's `force_full`
-    # branching.
+    # branching. That tier covers the soundness probes (T03-no-prefix,
+    # T03-nul-prefix, T03-null-name) and the redundant T02 gadget-
+    # upgrade witness dropped from this PR subset.
     #
     # Coverage rationale (one line per witness):
     #   01-overflow1-crash         — T01 catches the canonical BOF
     #   01-canarymatch-deep-fn     — position-varying gadget catches
-    #                                 uniform-canary's blind spot (T01)
+    #                                 uniform-canary's blind spot (the
+    #                                 only -fn witness in PR-tier; if
+    #                                 oob_write regresses to uniform-
+    #                                 canary semantics, this is the
+    #                                 witness that catches it)
     #   02-overflow1-crash         — T02 catches the canonical off-by-one
-    #   02-canarymatch-fn          — same gadget-upgrade probe for T02
-    #   03-noprefix-benign         — T03 bug is inert without a prefix
     #   03-overflow1-crash         — T03 catches CVE-2017-9047
-    #   03-nulprefix-benign        — soundness probe: bug requires
-    #                                 non-NUL prefix (real CVE property)
-    #   03-nullname-crash          — bug fires with zero-name + non-NUL
-    #                                 prefix; covers a different byte
-    #                                 pattern than 03-overflow1
     witness_set=(
         witnesses/01-overflow1-crash.bin
         witnesses/01-canarymatch-deep-fn.bin
         witnesses/02-overflow1-crash.bin
-        witnesses/02-canarymatch-fn.bin
-        witnesses/03-noprefix-benign.bin
         witnesses/03-overflow1-crash.bin
-        witnesses/03-nulprefix-benign.bin
-        witnesses/03-nullname-crash.bin
     )
 else
     witness_set=(witnesses/*.bin)
 fi
 
-# Parallel sweep: the SP1 SDK startup is ~20-25 s per invocation, so a
-# sequential sweep of 8 witnesses is ~11 min wall-clock — the long pole
-# on CI. We fan out the SP1 invocations across N background jobs (cap
-# ZKPOX_TEST_PARALLEL, default 4), capture each witness's stdout and
-# exit code into a temp file, then walk the witness list in order to
-# print verdicts deterministically. Wall-clock drops to ~ceil(W/N) ×
-# per-witness, e.g. 8 witnesses @ N=4 → ~3 min.
-#
-# Throttling pattern is "batch wait" rather than `wait -n` so the script
-# stays compatible with bash 3.2 (macOS default). Slight efficiency hit
-# vs `wait -n` — we wait for the whole batch's slowest, not just any one
-# job — but on a homogeneous witness corpus the difference is small and
-# the portability win is real.
-#
-# RAYON_NUM_THREADS=1 (per-subshell): SP1's prover/executor uses rayon
-# internally for trace generation, defaulting to one OS thread per
-# core. Without this cap, 4 process-level parallel invocations on a
-# 4-core runner spawn 4×4 = 16 threads contending for 4 cores —
-# context-switch storm that runs SLOWER than sequential (observed in
-# CI run 25788383483: 19+ min for the same sweep that takes 11 min
-# sequentially). Pinning each SP1 invocation to a single rayon thread
-# means N processes × 1 thread = N threads on N cores — process-level
-# parallelism multiplies cleanly.
-PARALLEL="${ZKPOX_TEST_PARALLEL:-4}"
-TMPDIR=$(mktemp -d -t zkpox-regression-XXXXXX)
-trap "rm -rf '$TMPDIR'" EXIT
-
-# Phase 1: spawn all SP1 invocations in parallel (throttled), one
-# stdout + rc file per witness. Skip witnesses with no target prefix
-# entirely (no SP1 cost).
-batch=0
-for w in "${witness_set[@]}"; do
-    base=$(basename "$w" .bin)
-    target="${base:0:2}"
-    case "$target" in
-        01|02|03) ;;
-        *) continue ;;
-    esac
-
-    (
-        RAYON_NUM_THREADS=1 "$BIN" --witness "$w" "--target=$target" \
-                $MODE --tag "regression:$base" \
-            > "$TMPDIR/$base.out" 2>/dev/null
-        echo "$?" > "$TMPDIR/$base.rc"
-    ) &
-
-    batch=$((batch + 1))
-    if (( batch % PARALLEL == 0 )); then
-        wait
-    fi
-done
-wait
-
-# Phase 2: walk witnesses in deterministic order. Each iteration is
-# now cheap — just file reads + jq parses. Pass/fail counters live
-# here so the existing summary block at the bottom of the script
-# works unchanged.
+# Sequential sweep. The earlier parallel approach (ac14b53, fbec21b)
+# OOM'd the GitHub 4-core/16-GB runner: 4 concurrent SP1 invocations
+# pushed memory past the cgroup limit and systemd-oomd SIGTERM'd the
+# whole tree. RAYON_NUM_THREADS=1 didn't help because each SP1 process
+# pre-allocates several GB regardless of thread count. The win from
+# parallelism wasn't worth the OOM-risk surface — sequential is
+# predictable. To recover CI time we instead trim the PR-tier subset
+# (see --ci-subset above); the full corpus still runs on schedule /
+# workflow_dispatch / merge_group.
 for w in "${witness_set[@]}"; do
     base=$(basename "$w" .bin)
     # Filename schema: <NN>-<descriptor>-<verdict>.bin where NN is the
@@ -165,14 +112,12 @@ for w in "${witness_set[@]}"; do
         *) echo "skip: $base (no verdict suffix)"; continue ;;
     esac
 
-    rc=$(cat "$TMPDIR/$base.rc" 2>/dev/null || echo "missing")
-    if [[ "$rc" != "0" ]]; then
-        printf '  [ERROR]    %-40s harness exited %s\n' "$base" "$rc"
-        failures+=("$base (harness error rc=$rc)")
+    out=$("$BIN" --witness "$w" "--target=$target" $MODE --tag "regression:$base" 2>/dev/null) || {
+        printf '  [ERROR]    %-40s harness exited non-zero\n' "$base"
+        failures+=("$base (harness error)")
         fail=$((fail + 1))
         continue
-    fi
-    out=$(cat "$TMPDIR/$base.out")
+    }
 
     crash=$(echo "$out" | jq -r '.verdicts.crash_only_crashed')
     oob=$(echo "$out" | jq -r '.verdicts.oob_detected')

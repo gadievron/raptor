@@ -612,12 +612,14 @@ jobs:
   # download. Either belongs on the schedule/nightly tier, not a
   # PR gate. See docs/research/zkpox-phase0-findings.md.
   #
-  # Wall-clock budget: the sweep is parallelised over ZKPOX_TEST_PARALLEL
-  # cores (default 4 — see core/zkpox/test/run-tests.sh). On the 4-core
-  # ubuntu-latest runner the PR-tier 8-witness subset is ~3-4 min
-  # instead of ~11 min sequential; total job ~6-8 min instead of ~16.
-  # Cold-cache builds still consume ~20 min so the 25-min timeout is
-  # the binding ceiling — keep PR-tier under that on a warm SP1 cache.
+  # Wall-clock budget: sequential sweep, 4-witness PR-tier subset
+  # (~6 min sweep + 2 min build + ~1 min setup ≈ 9 min total job).
+  # Parallel sweep was attempted (ac14b53, fbec21b) and reverted — 4
+  # concurrent SP1 invocations OOM'd the runner's cgroup. Cold-cache
+  # builds still consume ~20 min so the 25-min timeout is the binding
+  # ceiling — keep PR-tier under that on a warm SP1 cache. The full
+  # 40-witness corpus runs on schedule / merge_group / workflow_dispatch
+  # (force_full=true) where wall-clock isn't capped the same way.
   zkpox-regression:
     needs: [pre_check, changes]
     if: |
@@ -684,7 +686,7 @@ jobs:
         run: python3 core/zkpox/test/witnesses/generate.py
 
       - name: Regression sweep (execute mode)
-        # PR-tier runs the --ci-subset (8 witnesses, ~4 min sweep).
+        # PR-tier runs the --ci-subset (4 witnesses, ~6 min sweep).
         # schedule / workflow_dispatch / merge_group sets force_full
         # and runs the full 40-witness corpus (~10 min sweep). The
         # 25-min timeout is the binding constraint; the build alone
