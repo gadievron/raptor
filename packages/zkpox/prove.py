@@ -18,6 +18,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.config import RaptorConfig
+
 
 # Repo root resolution. The Rust workspace lives at <repo>/core/zkpox/.
 # Fall back to walking up from this file's location so the package works
@@ -104,8 +106,13 @@ def run(
     if tag is not None:
         cmd += ["--tag", tag]
 
+    # Explicit get_safe_env() at the subprocess boundary. The prover
+    # binary is RAPTOR-built and trusted, but the convention is to be
+    # explicit at every spawn site so a direct caller (tests, integration
+    # scripts, future Python tooling) can't inherit a dirty env through.
     completed = subprocess.run(
         cmd, capture_output=True, text=True, timeout=timeout, check=False,
+        env=RaptorConfig.get_safe_env(),
     )
     if completed.returncode != 0:
         raise ProverError(
