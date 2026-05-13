@@ -205,6 +205,8 @@ FILTERS: dict[str, list[str]] = {
     "zkpox": [
         "core/zkpox/**",
         "packages/zkpox/**",
+        "core/config.py",
+        "core/config/**",
         ".github/workflows/tests.yml",
     ],
     # CodeQL per-language scoping. Each matrix entry in codeql.yml
