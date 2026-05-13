@@ -423,6 +423,47 @@ class ModelScorecard:
             return Policy.SHADOW
         return Policy.SHORT_CIRCUIT
 
+    def claim_tool_evidence_finding(
+        self,
+        decision_class: str,
+        model: str,
+        finding_id: str,
+    ) -> bool:
+        """Atomically check whether (decision_class, model, finding_id)
+        has already been recorded as TOOL_EVIDENCE; if not, claim the
+        key by adding it to the cell's persisted seen-set and return
+        True. If already claimed, return False.
+
+        F088 idempotency seam — used by
+        :func:`core.llm.scorecard.tool_evidence.record_tool_evidence_outcome`
+        to gate ``record_event`` on first-seen of a finding. Operators
+        re-running ``raptor-scorecard tool-evidence`` against the same
+        (analysis, validation) report pair across processes still see
+        a single event per finding because the seen-set is persisted
+        in the scorecard JSON alongside event counts.
+
+        Mirrors `ec7c14bf` (dict-lock TOCTOU dedup-by-key) in spirit —
+        the lock around the check-and-add gives single-writer guarantees
+        for the seen-set even if concurrent producers race.
+
+        Storage: ``cell["tool_evidence_finding_ids"]`` — a list (JSON
+        round-trips a list; we treat it as a set semantically). Capped
+        membership-check cost is O(N) per claim, acceptable because
+        per-cell finding-id counts are bounded by the analysis report
+        size (hundreds at most in practice).
+        """
+        if not finding_id:
+            # No key to dedup on; caller must fall back to the legacy
+            # always-record path.
+            raise ValueError("finding_id must be non-empty for idempotency")
+        with self._with_lock() as data:
+            cell = self._ensure_cell(data, model, decision_class)
+            seen = cell.setdefault("tool_evidence_finding_ids", [])
+            if finding_id in seen:
+                return False
+            seen.append(finding_id)
+            return True
+
     def set_policy_override(
         self,
         decision_class: str,

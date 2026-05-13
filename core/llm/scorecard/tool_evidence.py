@@ -72,6 +72,40 @@ def record_tool_evidence_outcome(
     if not model or not rule_id:
         return False
     decision_class = f"{decision_class_prefix}:{rule_id}"
+    # F088 idempotency gate (W21): when finding_id is provided, claim
+    # the (decision_class, model, finding_id) triple on the scorecard.
+    # If already claimed, this re-invocation would double-record (the
+    # CLI shim documents this as a footgun via a printed reminder; the
+    # gate closes the gap). When finding_id is absent we cannot dedup
+    # and fall back to the legacy always-record path — preserves
+    # behaviour for non-CLI callers that lack finding_id.
+    #
+    # Mirrors `ec7c14bf` (`fix(packages/cve_diff/discovery/distro_cache):
+    # lock _mem dict against TOCTOU`) — atomic check-and-mark under the
+    # substrate's existing lock gives single-writer guarantees against
+    # concurrent producers racing on the same finding.
+    if finding_id:
+        try:
+            claimed = scorecard.claim_tool_evidence_finding(
+                decision_class=decision_class,
+                model=str(model),
+                finding_id=str(finding_id),
+            )
+        except Exception as e:                          # noqa: BLE001
+            logger.warning(
+                "record_tool_evidence_outcome: idempotency claim "
+                "failed for %s/%s/%s: %s — falling back to legacy "
+                "record",
+                model, decision_class, finding_id, e,
+            )
+            claimed = True
+        if not claimed:
+            logger.debug(
+                "record_tool_evidence_outcome: %s/%s/%s already "
+                "recorded; skipping (F088 idempotency)",
+                model, decision_class, finding_id,
+            )
+            return False
     is_correct = (bool(analysis_verdict) == bool(validation_verdict))
     sample = None
     if not is_correct:
