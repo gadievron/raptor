@@ -105,6 +105,16 @@ fi
 # vs `wait -n` — we wait for the whole batch's slowest, not just any one
 # job — but on a homogeneous witness corpus the difference is small and
 # the portability win is real.
+#
+# RAYON_NUM_THREADS=1 (per-subshell): SP1's prover/executor uses rayon
+# internally for trace generation, defaulting to one OS thread per
+# core. Without this cap, 4 process-level parallel invocations on a
+# 4-core runner spawn 4×4 = 16 threads contending for 4 cores —
+# context-switch storm that runs SLOWER than sequential (observed in
+# CI run 25788383483: 19+ min for the same sweep that takes 11 min
+# sequentially). Pinning each SP1 invocation to a single rayon thread
+# means N processes × 1 thread = N threads on N cores — process-level
+# parallelism multiplies cleanly.
 PARALLEL="${ZKPOX_TEST_PARALLEL:-4}"
 TMPDIR=$(mktemp -d -t zkpox-regression-XXXXXX)
 trap "rm -rf '$TMPDIR'" EXIT
@@ -122,8 +132,8 @@ for w in "${witness_set[@]}"; do
     esac
 
     (
-        "$BIN" --witness "$w" "--target=$target" $MODE \
-                --tag "regression:$base" \
+        RAYON_NUM_THREADS=1 "$BIN" --witness "$w" "--target=$target" \
+                $MODE --tag "regression:$base" \
             > "$TMPDIR/$base.out" 2>/dev/null
         echo "$?" > "$TMPDIR/$base.rc"
     ) &
