@@ -107,6 +107,13 @@ class Bundle:
     vendor_envelope: VendorEnvelope
     researcher: Researcher | None = None
     timestamp: "Timestamp | None" = None
+    # Beta-feature marker. True for every bundle this code writes; the
+    # verifier prints a loud banner whenever it sees True. Once the
+    # proof system / bundle format / verifier all stabilise (Phase 1.6+)
+    # this flips to False at producer side. `_from_dict` defaults to
+    # True on absent so old bundles without the field still warn —
+    # better to false-warn than silently skip the marker.
+    experimental: bool = True
 
 
 @dataclass(frozen=True)
@@ -220,6 +227,7 @@ def _replace_timestamp(bundle: Bundle, ts: "Timestamp | None") -> Bundle:
         vendor_envelope=bundle.vendor_envelope,
         researcher=bundle.researcher,
         timestamp=ts,
+        experimental=bundle.experimental,
     )
 
 
@@ -232,6 +240,7 @@ def with_timestamp(bundle: Bundle, ts: "Timestamp") -> Bundle:
 def _to_dict(bundle: Bundle) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "version": bundle.version,
+        "experimental": bundle.experimental,
         "target": {
             "kind": bundle.target.kind,
             "hash": bundle.target.hash,
@@ -294,6 +303,10 @@ def _from_dict(d: dict[str, Any]) -> Bundle:
     researcher_d = d.get("researcher")
     timestamp_d = d.get("timestamp")
     return Bundle(
+        # Default True on absent: a bundle without the field is from an
+        # older pre-marker producer, treat it as experimental rather
+        # than silently dropping the warning.
+        experimental=bool(d.get("experimental", True)),
         version=d["version"],
         target=Target(
             kind=target_d["kind"],
