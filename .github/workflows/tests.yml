@@ -612,23 +612,16 @@ jobs:
   # download. Either belongs on the schedule/nightly tier, not a
   # PR gate. See docs/research/zkpox-phase0-findings.md.
   #
-  # PR-event opt-out: this job is the long pole at ~16 min wall-clock
-  # (sweep 11 min + apt 2 min + cargo build 2 min) while every other
-  # job finishes in ~3 min — a 5× drag on every zkpox-touching PR.
-  # We skip it on `pull_request` and rely on:
-  #   * merge_group  — runs before the PR actually lands
-  #   * push to main — belt-and-braces after merge
-  #   * schedule     — nightly full-corpus catch-all
-  #   * workflow_dispatch — author can trigger manually for a PR
-  # Author-side fast loop: `cargo build --release --manifest-path
-  # core/zkpox/Cargo.toml && bash core/zkpox/test/run-tests.sh
-  # --ci-subset`. Equivalent to what CI runs on PR-tier, ~5 min on a
-  # warm local toolchain.
+  # Wall-clock budget: the sweep is parallelised over ZKPOX_TEST_PARALLEL
+  # cores (default 4 — see core/zkpox/test/run-tests.sh). On the 4-core
+  # ubuntu-latest runner the PR-tier 8-witness subset is ~3-4 min
+  # instead of ~11 min sequential; total job ~6-8 min instead of ~16.
+  # Cold-cache builds still consume ~20 min so the 25-min timeout is
+  # the binding ceiling — keep PR-tier under that on a warm SP1 cache.
   zkpox-regression:
     needs: [pre_check, changes]
     if: |
       needs.pre_check.outputs.should_skip != 'true' &&
-      github.event_name != 'pull_request' &&
       (needs.changes.outputs.force_full == 'true' ||
        needs.changes.outputs.zkpox == 'true')
     runs-on: ubuntu-latest

@@ -92,6 +92,53 @@ else
     witness_set=(witnesses/*.bin)
 fi
 
+# Parallel sweep: the SP1 SDK startup is ~20-25 s per invocation, so a
+# sequential sweep of 8 witnesses is ~11 min wall-clock — the long pole
+# on CI. We fan out the SP1 invocations across N background jobs (cap
+# ZKPOX_TEST_PARALLEL, default 4), capture each witness's stdout and
+# exit code into a temp file, then walk the witness list in order to
+# print verdicts deterministically. Wall-clock drops to ~ceil(W/N) ×
+# per-witness, e.g. 8 witnesses @ N=4 → ~3 min.
+#
+# Throttling pattern is "batch wait" rather than `wait -n` so the script
+# stays compatible with bash 3.2 (macOS default). Slight efficiency hit
+# vs `wait -n` — we wait for the whole batch's slowest, not just any one
+# job — but on a homogeneous witness corpus the difference is small and
+# the portability win is real.
+PARALLEL="${ZKPOX_TEST_PARALLEL:-4}"
+TMPDIR=$(mktemp -d -t zkpox-regression-XXXXXX)
+trap "rm -rf '$TMPDIR'" EXIT
+
+# Phase 1: spawn all SP1 invocations in parallel (throttled), one
+# stdout + rc file per witness. Skip witnesses with no target prefix
+# entirely (no SP1 cost).
+batch=0
+for w in "${witness_set[@]}"; do
+    base=$(basename "$w" .bin)
+    target="${base:0:2}"
+    case "$target" in
+        01|02|03) ;;
+        *) continue ;;
+    esac
+
+    (
+        "$BIN" --witness "$w" "--target=$target" $MODE \
+                --tag "regression:$base" \
+            > "$TMPDIR/$base.out" 2>/dev/null
+        echo "$?" > "$TMPDIR/$base.rc"
+    ) &
+
+    batch=$((batch + 1))
+    if (( batch % PARALLEL == 0 )); then
+        wait
+    fi
+done
+wait
+
+# Phase 2: walk witnesses in deterministic order. Each iteration is
+# now cheap — just file reads + jq parses. Pass/fail counters live
+# here so the existing summary block at the bottom of the script
+# works unchanged.
 for w in "${witness_set[@]}"; do
     base=$(basename "$w" .bin)
     # Filename schema: <NN>-<descriptor>-<verdict>.bin where NN is the
@@ -108,12 +155,14 @@ for w in "${witness_set[@]}"; do
         *) echo "skip: $base (no verdict suffix)"; continue ;;
     esac
 
-    out=$("$BIN" --witness "$w" "--target=$target" $MODE --tag "regression:$base" 2>/dev/null) || {
-        printf '  [ERROR]    %-40s harness exited non-zero\n' "$base"
-        failures+=("$base (harness error)")
+    rc=$(cat "$TMPDIR/$base.rc" 2>/dev/null || echo "missing")
+    if [[ "$rc" != "0" ]]; then
+        printf '  [ERROR]    %-40s harness exited %s\n' "$base" "$rc"
+        failures+=("$base (harness error rc=$rc)")
         fail=$((fail + 1))
         continue
-    }
+    fi
+    out=$(cat "$TMPDIR/$base.out")
 
     crash=$(echo "$out" | jq -r '.verdicts.crash_only_crashed')
     oob=$(echo "$out" | jq -r '.verdicts.oob_detected')
