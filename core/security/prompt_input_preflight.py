@@ -121,6 +121,7 @@ def preflight(
     content: str,
     *,
     corpora: tuple[str, ...] | None = None,
+    strict: bool = False,
 ) -> PreflightResult:
     """Scan content for known injection-pattern indicators.
 
@@ -140,7 +141,20 @@ def preflight(
     iterated over zero patterns and returned the no-hit haircut — a
     fail-open misconfiguration the operator wouldn't see in normal logs.
     Failing fast surfaces the typo at the call site instead.
+
+    When ``strict=True``, raises ``RuntimeError`` if ``_PATTERNS`` is empty
+    (corpus directory missing or all files rejected at load time). Default
+    ``strict=False`` preserves the documented fail-open policy — an empty
+    corpus returns ``confidence_haircut=1.0`` rather than zeroing all
+    downstream confidence scores.
     """
+    if strict and not _PATTERNS:
+        raise RuntimeError(
+            f"preflight: strict=True but no corpora loaded from "
+            f"{_PATTERNS_DIR!r}; a missing or empty corpus directory "
+            f"would silently return confidence_haircut=1.0 (fail-open). "
+            f"Fix the corpus path or pass strict=False to allow fail-open."
+        )
     if corpora is not None:
         loaded = set(_PATTERNS)
         unknown = [c for c in corpora if c not in loaded]
