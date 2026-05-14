@@ -900,11 +900,12 @@ def run_sandboxed(
                 # bounded fork count via RLIMIT_NPROC (prlimit).
                 if nproc_limit and nproc_limit > 0:
                     import resource
+                    from ._fork_safe_warn import warn_post_fork
                     try:
                         resource.setrlimit(resource.RLIMIT_NPROC,
                                            (nproc_limit, nproc_limit))
                     except (ValueError, OSError):
-                        pass
+                        warn_post_fork(b"RAPTOR: _spawn grandchild RLIMIT_NPROC setrlimit failed -- fork-bomb bound not applied\n")
                 try:
                     os.execvpe(cmd[0], list(cmd), exec_env)
                 except FileNotFoundError:
