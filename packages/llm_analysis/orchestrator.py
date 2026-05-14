@@ -555,9 +555,15 @@ def orchestrate(
         for _probe_model in _models_to_probe:
             _pname = _probe_model.model_name if hasattr(_probe_model, "model_name") else str(_probe_model)
             _pprofile = get_profile_for(_pname)
-            probe_result = probe_envelope_compatibility(
-                _probe_model, _pprofile, dispatch_fn,
-            )
+            try:
+                probe_result = probe_envelope_compatibility(
+                    _probe_model, _pprofile, dispatch_fn, strict=True,
+                )
+            except RuntimeError as _probe_err:
+                defense_telemetry.set_probe_result(_pname, False)
+                _probe_failed = True
+                _failed_probe_models.append((_pname, str(_probe_err)))
+                continue
             defense_telemetry.set_probe_result(_pname, probe_result.compatible)
             if not probe_result.compatible:
                 _probe_failed = True
