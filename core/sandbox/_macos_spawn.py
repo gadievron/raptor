@@ -165,6 +165,7 @@ def run_sandboxed(cmd: List[str], *,
                   use_egress_proxy: bool = False,
                   proxy_port: Optional[int] = None,
                   fake_home: bool = False,
+                  strict_env: bool = False,
                   ) -> subprocess.CompletedProcess:
     """Run ``cmd`` under macOS sandbox-exec with an SBPL profile
     derived from the logical sandbox kwargs.
@@ -241,6 +242,10 @@ def run_sandboxed(cmd: List[str], *,
     #    so the child sees no dotfiles. Pre-populate the dir empty.
     if env is not None:
         child_env = dict(env)
+        if strict_env:
+            from core.config import RaptorConfig
+            _dangerous = set(RaptorConfig.DANGEROUS_ENV_VARS)
+            child_env = {k: v for k, v in child_env.items() if k not in _dangerous}
     else:
         from core.config import RaptorConfig
         child_env = RaptorConfig.get_safe_env()

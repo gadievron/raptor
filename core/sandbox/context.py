@@ -898,6 +898,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         # blocklist is belt-and-braces on the os.environ →
         # get_safe_env path (see core/config.py); the caller path
         # is "you know what you're doing".
+        strict_env = kwargs.pop("strict_env", False)
         if kwargs.get("env") is None:
             kwargs.pop("env", None)  # drop any explicit None
             kwargs["env"] = RaptorConfig.get_safe_env()
@@ -907,6 +908,16 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                 f"{' '.join(cmd[:_CMD_DISPLAY_MAX_ARGS]) or cmd!r} "
                 f"— get_safe_env() not applied; caller env passed through."
             )
+            if strict_env:
+                _dangerous = set(RaptorConfig.DANGEROUS_ENV_VARS)
+                _stripped = [k for k in kwargs["env"] if k in _dangerous]
+                if _stripped:
+                    kwargs["env"] = {k: v for k, v in kwargs["env"].items()
+                                     if k not in _dangerous}
+                    logger.info(
+                        f"Sandbox: strict_env=True — stripped DANGEROUS_ENV_VARS "
+                        f"from caller env: {sorted(_stripped)}"
+                    )
 
         # Egress-proxy env injection — overlays AFTER get_safe_env() so
         # the proxy vars aren't stripped by the PROXY_ENV_VARS blocklist
@@ -1385,6 +1396,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                     fake_home=fake_home,
                     map_root=map_root,
                     start_new_session=kwargs.get("start_new_session", True),
+                    strict_env=strict_env,
                 )
                 used_spawn = True
             elif spawn_eligible:
@@ -2154,6 +2166,7 @@ def run_untrusted(cmd: List[str], *, target: str = None, output: str = None,
                restrict_reads=restrict_reads,
                readable_paths=readable_paths,
                fake_home=fake_home,
+               strict_env=True,
                **kwargs)
 
 
