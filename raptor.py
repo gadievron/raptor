@@ -18,6 +18,7 @@ Available Modes:
     web         - Web application security testing
     agentic     - Full autonomous workflow
     codeql      - CodeQL-only analysis
+    doctor      - Local environment self-check
     help        - Show detailed help for a specific mode
 
 Examples:
@@ -247,7 +248,8 @@ def _get_or_start_dispatcher():
         return _active_dispatcher
     try:
         from core.llm.dispatcher.server import LLMDispatcher
-        import uuid, atexit
+        import atexit
+        import uuid
         _active_dispatcher = LLMDispatcher(run_id=f"raptor-{uuid.uuid4().hex[:8]}")
         atexit.register(_active_dispatcher.shutdown)
         return _active_dispatcher
@@ -445,8 +447,17 @@ def mode_llm_analysis(args: list) -> int:
     return _run_script(llm_script, args)
 
 
+def mode_doctor(args: list) -> int:
+    """Run local environment self-checks."""
+    from core.doctor import main as doctor_main
+
+    return doctor_main(args)
+
+
 def show_mode_help(mode: str) -> None:
     """Show detailed help for a specific mode."""
+    from core.config import RaptorConfig
+
     script_root = Path(__file__).parent
     
     mode_scripts = {
@@ -502,6 +513,7 @@ Available Modes:
   agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
   codeql      - CodeQL-only analysis
   analyze     - LLM-powered vulnerability analysis (requires SARIF input)
+  doctor      - Local environment self-check
 
 Examples:
   # Full autonomous workflow
@@ -521,6 +533,9 @@ Examples:
 
   # LLM analysis of existing SARIF
   python3 raptor.py analyze --repo /path/to/code --sarif findings.sarif
+
+  # Check local environment and optional tools
+  python3 raptor.py doctor
 
 Sandbox isolation (available on all modes):
   --sandbox {full,debug,network-only,none}
@@ -597,6 +612,7 @@ def main():
         'agentic': mode_agentic,
         'codeql': mode_codeql,
         'analyze': mode_llm_analysis,
+        'doctor': mode_doctor,
     }
     
     if mode not in mode_handlers:

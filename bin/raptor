@@ -82,6 +82,7 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || "${1:-}" == "help" ]]; then
 
 Usage: raptor [options] [target]
        raptor project <subcommand> [args]
+       raptor doctor
 
 Arguments:
   target             Path or URL to scan (optional)
@@ -117,6 +118,13 @@ if [[ "${1:-}" == "project" ]]; then
     shift
     cd "$RAPTOR_DIR" || exit 1
     exec "$RAPTOR_DIR/libexec/raptor-project-manager" "$@"
+fi
+
+# Route doctor directly (no Claude needed)
+if [[ "${1:-}" == "doctor" ]]; then
+    shift
+    cd "$RAPTOR_DIR" || exit 1
+    exec python3 "$RAPTOR_DIR/raptor.py" doctor "$@"
 fi
 
 # Claude required for everything else
