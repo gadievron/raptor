@@ -157,21 +157,31 @@ def _set_rlimits(limits: dict) -> None:
     designed to run before mount ops / Landlock / seccomp."""
     import resource
     from .preexec import _DEFAULT_LIMITS
+    from ._fork_safe_warn import warn_post_fork
     mem = limits.get("memory_mb", _DEFAULT_LIMITS["memory_mb"])
     file_mb = limits.get("max_file_mb", _DEFAULT_LIMITS["max_file_mb"])
     cpu = limits.get("cpu_seconds", _DEFAULT_LIMITS["cpu_seconds"])
     mem_bytes = mem * 1024 * 1024
     file_bytes = file_mb * 1024 * 1024
-    try:
-        if mem > 0:
+    if mem > 0:
+        try:
             resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
-        if file_mb > 0:
+        except (ValueError, OSError):
+            warn_post_fork(b"RAPTOR: _set_rlimits RLIMIT_AS setrlimit failed -- memory cap not applied\n")
+    if file_mb > 0:
+        try:
             resource.setrlimit(resource.RLIMIT_FSIZE, (file_bytes, file_bytes))
-        if cpu > 0:
+        except (ValueError, OSError):
+            warn_post_fork(b"RAPTOR: _set_rlimits RLIMIT_FSIZE setrlimit failed -- file-size cap not applied\n")
+    if cpu > 0:
+        try:
             resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
+        except (ValueError, OSError):
+            warn_post_fork(b"RAPTOR: _set_rlimits RLIMIT_CPU setrlimit failed -- cpu cap not applied\n")
+    try:
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     except (ValueError, OSError):
-        pass
+        warn_post_fork(b"RAPTOR: _set_rlimits RLIMIT_CORE setrlimit failed -- coredump suppression relies on kernel core_pattern\n")
 
 
 def _kill_and_reap(pid: int) -> None:
