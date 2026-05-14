@@ -47,6 +47,44 @@ class TestEscapeNonprintable(unittest.TestCase):
         # isprintable()-based check catches them.
         self.assertEqual(escape_nonprintable("\x9b[31m"), "\\x9b[31m")
 
+    def test_escape_osc8_hyperlink_sequence(self):
+        # OSC 8 can turn harmless-looking text into a clickable URL in
+        # supporting terminals. Both ESC and BEL must be rendered inert.
+        self.assertEqual(
+            escape_nonprintable("safe \x1b]8;;https://evil.example\x07click\x1b]8;;\x07"),
+            "safe \\x1b]8;;https://evil.example\\x07click\\x1b]8;;\\x07",
+        )
+
+    def test_escape_osc52_clipboard_sequence(self):
+        # OSC 52 writes to the operator clipboard in some terminals.
+        self.assertEqual(
+            escape_nonprintable("copy \x1b]52;c;c2VjcmV0\x07 done"),
+            "copy \\x1b]52;c;c2VjcmV0\\x07 done",
+        )
+
+    def test_escape_dcs_pm_and_apc_sequences(self):
+        # DCS, PM, and APC are less common than CSI/OSC but are still
+        # terminal control channels and should be neutralised at the ESC byte.
+        payload = "\x1bPqdata\x1b\\ \x1b^private\x1b\\ \x1b_app\x1b\\"
+        expected = "\\x1bPqdata\\x1b\\ \\x1b^private\\x1b\\ \\x1b_app\\x1b\\"
+        self.assertEqual(escape_nonprintable(payload), expected)
+
+    def test_escape_partial_escape_sequence(self):
+        # Truncated control sequences are still hostile because a later write
+        # could complete them on a live terminal.
+        self.assertEqual(
+            escape_nonprintable("prefix \x1b]8;;https://evil.example"),
+            "prefix \\x1b]8;;https://evil.example",
+        )
+
+    def test_escape_very_long_hostile_string(self):
+        payload = "A" * 4096 + "\x1b]52;c;c2VjcmV0\x07" + "B" * 4096
+        escaped = escape_nonprintable(payload)
+        self.assertNotIn("\x1b", escaped)
+        self.assertNotIn("\x07", escaped)
+        self.assertIn("\\x1b]52;c;c2VjcmV0\\x07", escaped)
+        self.assertEqual(len(escaped), len(payload) + len("\\x1b") - 1 + len("\\x07") - 1)
+
     def test_escape_unicode_line_separator(self):
         # U+2028 is a Unicode line separator — some JSON parsers and
         # terminals honour it as a newline. Not printable.
