@@ -5,7 +5,7 @@ globals, macros, classes), SHA-256 checksumming, SLOC counting, and
 cumulative coverage tracking.
 
 Usage:
-    from core.inventory import build_inventory, get_coverage_stats, get_items
+    from core.inventory import build_inventory, get_coverage_stats
 
     inventory = build_inventory("/path/to/repo", "/path/to/output")
     stats = get_coverage_stats(inventory)
@@ -46,7 +46,7 @@ from .diff import compare_inventories
 from .coverage import update_coverage, get_coverage_stats, format_coverage_summary
 
 
-def get_items(file_entry):
+def _get_items(file_entry):
     """Read code items from a file entry. Handles both old and new format.
 
     Old format: file_entry["functions"] (list of function dicts)
