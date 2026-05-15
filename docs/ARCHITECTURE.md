@@ -1086,7 +1086,7 @@ We think it useful to include such costings, just so people understand how much 
 ## Dependencies
 
 ### Core Dependencies (Required by All)
-- Python 3.9+
+- Python 3.10+ (PEP 604 union syntax used at function-definition time)
 - Standard library: pathlib, logging, json, subprocess, argparse
 
 ### Package-Specific Dependencies
