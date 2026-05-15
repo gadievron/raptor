@@ -17,6 +17,7 @@ import resource
 from pathlib import Path
 
 from . import state
+from ._fork_safe_warn import fail_post_fork, warn_post_fork
 from .landlock import check_landlock_available, _make_landlock_preexec
 from .seccomp import _make_seccomp_preexec
 
@@ -223,8 +224,19 @@ def _make_preexec_fn(limits: dict, writable_paths: list = None,
         # before the kernel writes it.
         try:
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-        except (ValueError, OSError):
-            pass
+        except (ValueError, OSError) as exc:
+            # See block-comment above: without RLIMIT_CORE=0 the kernel
+            # may write a core dump that contains the full address-space
+            # of a sandboxed process — including ~/.ssh, ~/.aws, or any
+            # other secret the process read under Landlock's permissive
+            # default read policy. That turns any crash into a
+            # credential-exfiltration primitive. The parent has no way
+            # to recover from this post-fork, so fail-closed.
+            fail_post_fork(
+                "preexec",
+                f"RLIMIT_CORE setrlimit failed (errno={getattr(exc, 'errno', '?')})",
+                99,
+            )
 
 
         # Apply Landlock filesystem restrictions after resource limits
