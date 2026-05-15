@@ -278,8 +278,21 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
             if not os.path.isdir(path) and not os.path.isfile(path):
                 continue
             inside = f"{root}{path}"
+            # _step names which sub-operation is running so the outer
+            # OSError handler can report the actual failing step
+            # ("makedirs" / "open mount-point" / "bind") instead of
+            # always saying "bind failed" — pre-fix `os.makedirs` /
+            # `os.open` failures (e.g. ENOENT on a malformed path)
+            # were reported as "bind failed (errno=2)", which an
+            # operator inspecting the kernel log could not match
+            # against the actual syscall that errored.
+            #
+            # ASCII-only short labels so the bytes concat in the
+            # except clause stays fork-safe + allocation-bounded.
+            _step = b"setup"
             try:
                 if os.path.isdir(path):
+                    _step = b"makedirs"
                     os.makedirs(inside, exist_ok=True)
                 else:
                     # File bind-mount: create an empty regular file to
@@ -295,13 +308,16 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
                     #     planted state we don't expect).
                     #   * mode 0o600 — the mount-point itself shouldn't
                     #     be world-readable (was 0o644 default via umask).
+                    _step = b"makedirs (parent)"
                     os.makedirs(os.path.dirname(inside), exist_ok=True)
+                    _step = b"create mount-point file"
                     fd = os.open(
                         inside,
                         os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW | os.O_EXCL,
                         0o600,
                     )
                     os.close(fd)
+                _step = b"bind"
                 _mount(path, inside, None, MS_BIND)
                 try:
                     _mount(path, inside, None, MS_REMOUNT | MS_BIND | MS_RDONLY)
@@ -340,7 +356,9 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
                 try:
                     os.write(
                         2,
-                        b"RAPTOR: mount_ns: extra_ro_paths bind failed for "
+                        b"RAPTOR: mount_ns: extra_ro_paths "
+                        + _step
+                        + b" failed for "
                         + _path_b
                         + b" (errno=%d), exiting\n" % (exc.errno or 0),
                     )
