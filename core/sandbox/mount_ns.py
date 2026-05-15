@@ -255,8 +255,12 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
         # flag is defence-in-depth rather than the primary control.
         try:
             _mount(target, inside, None, MS_REMOUNT | MS_BIND | MS_RDONLY)
-        except OSError:
-            pass
+        except OSError as exc:
+            warn_post_fork(
+                "mount_ns",
+                f"target remount-ro failed (errno={exc.errno}); "
+                f"relying on Landlock for read-only enforcement",
+            )
     if output and output != target and not _shadows_per_ns(output):
         inside = f"{root}{output}"
         os.makedirs(inside, exist_ok=True)
@@ -301,8 +305,12 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
                 _mount(path, inside, None, MS_BIND)
                 try:
                     _mount(path, inside, None, MS_REMOUNT | MS_BIND | MS_RDONLY)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    warn_post_fork(
+                        "mount_ns",
+                        f"extra_ro_paths remount-ro failed for {path} "
+                        f"(errno={exc.errno}); relying on Landlock",
+                    )
             except OSError as exc:
                 # Caller explicitly named this path via readable_paths
                 # in the public sandbox API — silently dropping it
