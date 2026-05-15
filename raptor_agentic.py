@@ -223,7 +223,17 @@ def _candidate_replay_binaries(binary_path: Path) -> list[str]:
 
 
 def _replay_fuzz_crashes(*, binary_path: Path, crash_files: list[Path], out_dir: Path) -> dict:
-    """Replay crash inputs against ASAN/debug sibling binaries and save logs."""
+    """Replay crash inputs against ASAN/debug sibling binaries and save logs.
+
+    Crash inputs are attacker-controlled by definition (the fuzzer searched
+    the input space for crashes); each candidate binary is run under
+    ``core.sandbox`` with ``block_network=True`` and ``restrict_reads=True``
+    so a malicious crash input that triggers code in the binary can't reach
+    the operator's credentials, network, or filesystem outside the replay
+    workspace. Mirrors the pattern used by ``packages/fuzzing/libfuzzer_runner.py``.
+    """
+    from core.sandbox import run as _sandbox_run
+
     out_dir.mkdir(parents=True, exist_ok=True)
     candidates = [Path(p) for p in _candidate_replay_binaries(binary_path)]
     results: dict[str, list[dict]] = {}
@@ -236,9 +246,7 @@ def _replay_fuzz_crashes(*, binary_path: Path, crash_files: list[Path], out_dir:
 
     for crash_file in crash_files:
         entries = []
-        try:
-            crash_input = crash_file.read_bytes()
-        except OSError:
+        if not crash_file.is_file():
             results[str(crash_file)] = entries
             continue
         for candidate in candidates:
@@ -246,13 +254,26 @@ def _replay_fuzz_crashes(*, binary_path: Path, crash_files: list[Path], out_dir:
             stdout_path = out_dir / f"{label}.stdout.log"
             stderr_path = out_dir / f"{label}.stderr.log"
             try:
-                proc = subprocess.run(
-                    [str(candidate)],
-                    input=crash_input,
-                    capture_output=True,
-                    timeout=15,
-                    env=env,
-                )
+                # block_network=True: a malicious replay binary cannot
+                # exfiltrate ASAN output or fingerprint metadata over
+                # the network. target+output give mount-ns something
+                # to bind-mount so the tracer can attach. We open the
+                # crash file as a file descriptor and pass stdin= —
+                # sandbox.run's mount-ns spawn doesn't plumb the
+                # input=<bytes> kwarg cleanly (see core/sandbox/
+                # context.py audit), but a real FD survives the
+                # fork+exec.
+                with open(crash_file, "rb") as crash_fh:
+                    proc = _sandbox_run(
+                        [str(candidate)],
+                        stdin=crash_fh,
+                        block_network=True,
+                        target=str(candidate.parent),
+                        output=str(out_dir),
+                        capture_output=True,
+                        timeout=15,
+                        env=env,
+                    )
                 stdout_path.write_bytes(proc.stdout or b"")
                 stderr_path.write_bytes(proc.stderr or b"")
                 entries.append({
