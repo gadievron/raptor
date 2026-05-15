@@ -325,9 +325,30 @@ def run_sandboxed(cmd: List[str], *,
                 observe_mode=bool(observe_mode),
                 observe_nonce=observe_nonce,
             )
-        except Exception:
-            logger.debug("seatbelt audit log streamer failed to start",
-                         exc_info=True)
+        except Exception as exc:
+            logger.warning(
+                "seatbelt audit log streamer failed to start: %s",
+                exc, exc_info=True,
+            )
+            # F064: write the audit-degraded marker so operators
+            # inspecting the run dir can distinguish "audit ran,
+            # found nothing" from "audit was requested but the log
+            # streamer failed to attach." Mirrors the Linux pattern
+            # at _spawn.py and the existing context.py:1328 wire.
+            from . import summary as _summary_mod
+            _summary_mod.record_audit_degraded(
+                Path(audit_run_dir),
+                reason=(
+                    f"audit_mode=True but seatbelt log streamer failed "
+                    f"to start: {type(exc).__name__}: {exc}"
+                ),
+                instructions=(
+                    "check the macOS unified log subsystem is reachable "
+                    "(log show / log stream); verify the user has rights "
+                    "to read kernel-sandbox events; or run without "
+                    "audit_mode on hosts where the streamer cannot attach"
+                ),
+            )
 
     # 6. Run.
     try:
