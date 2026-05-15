@@ -1428,9 +1428,20 @@ def get_proxy(allowed_hosts: Iterable[str]) -> EgressProxy:
                         or _os.environ.get("https_proxy"))
             no_proxy = (_os.environ.get("NO_PROXY")
                         or _os.environ.get("no_proxy"))
-            audit_enforce = bool(
-                _os.environ.get("RAPTOR_PROXY_AUDIT_ENFORCE", "")
-            )
+            # bool(env_var) treats any non-empty string as truthy,
+            # so RAPTOR_PROXY_AUDIT_ENFORCE=0 / false / no / off all
+            # accidentally enabled strict mode. That's the fail-SAFE
+            # direction (the operator gets MORE security than they
+            # asked for), but it contradicts the standard env-var
+            # convention and confuses anyone scripting against the
+            # documented "=1" example. Whitelist the truthy spellings
+            # explicitly; everything else (including "0" / "false" /
+            # the absent var) leaves audit-mode in its default log-
+            # only behaviour.
+            _enforce_raw = _os.environ.get(
+                "RAPTOR_PROXY_AUDIT_ENFORCE", "",
+            ).strip().lower()
+            audit_enforce = _enforce_raw in ("1", "true", "yes", "on")
             _instance = EgressProxy(allowed_hosts,
                                     upstream_proxy=upstream,
                                     no_proxy=no_proxy,
