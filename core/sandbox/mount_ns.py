@@ -36,6 +36,8 @@ import ctypes
 import os
 from typing import Iterable, Optional
 
+from ._fork_safe_warn import fail_post_fork, warn_post_fork
+
 # Linux mount(2) flag bits (from <linux/mount.h>). Values match the
 # kernel UAPI — do not "fix" without checking <sys/mount.h> on target.
 # In particular: MS_PRIVATE = 1<<18 (0x40000), NOT 1<<17 (0x20000 is
@@ -301,11 +303,20 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
                     _mount(path, inside, None, MS_REMOUNT | MS_BIND | MS_RDONLY)
                 except OSError:
                     pass
-            except OSError:
-                # Best-effort: skip any path that fails to bind. The
-                # caller's sandbox just won't see it — no harder than
-                # if the path didn't exist on the host.
-                continue
+            except OSError as exc:
+                # Caller explicitly named this path via readable_paths
+                # in the public sandbox API — silently dropping it
+                # leaves a hole the caller did not authorise (the path
+                # is either missing from the sandbox, or worse, still
+                # writable when the caller asked for read-only). Fail-
+                # closed so the parent observes the failed setup
+                # instead of getting a degraded sandbox masquerading
+                # as the requested one.
+                fail_post_fork(
+                    "mount_ns",
+                    f"extra_ro_paths bind failed for {path}: {exc.errno}",
+                    126,
+                )
 
     # 9. pivot_root. put_old must be a directory INSIDE new_root.
     os.chdir(root)
