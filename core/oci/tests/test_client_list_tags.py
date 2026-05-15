@@ -134,3 +134,79 @@ def test_list_tags_missing_tags_field_raises() -> None:
     client = OciRegistryClient(http)
     with pytest.raises(RegistryError):
         client.list_tags(ref)
+
+
+# ---------------------------------------------------------------------------
+# Link-header pagination — the ollama bug fix
+# ---------------------------------------------------------------------------
+
+def test_list_tags_follows_link_next_header() -> None:
+    """The bug this fixes: Docker Hub returns ``ollama/ollama``
+    tags in repository-internal index order (alphabetic-ish).
+    The first page is the ``0.1.x`` line; ``0.21.x`` lives on a
+    later page. Without Link-header pagination, ``latest_tag``
+    recommended a downgrade (0.21.0 → 0.1.45).
+    """
+    ref = parse_image_ref("docker.io/ollama/ollama:0.21.0")
+    page1 = _StubResponse(200, _ok_body({
+        "name": "ollama/ollama",
+        "tags": ["0.1.42", "0.1.43", "0.1.44", "0.1.45"],
+    }), headers={
+        "Link": '</v2/ollama/ollama/tags/list?n=100&last=0.1.45>; rel="next"',
+    })
+    page2 = _StubResponse(200, _ok_body({
+        "name": "ollama/ollama",
+        "tags": ["0.20.0", "0.21.0", "0.22.0"],
+    }))
+    http = _StubHttp({
+        "https://registry-1.docker.io/v2/ollama/ollama/tags/list?n=100": page1,
+        "https://registry-1.docker.io/v2/ollama/ollama/tags/list?n=100&last=0.1.45":
+            page2,
+    })
+    client = OciRegistryClient(http)
+    tags = client.list_tags(ref)
+    assert "0.21.0" in tags
+    assert "0.1.45" in tags
+    assert len(tags) == 7
+
+
+def test_list_tags_no_link_header_returns_single_page() -> None:
+    """No ``Link: rel=next`` → just one page. (Existing
+    behaviour preserved; this isn't a breaking change.)"""
+    ref = parse_image_ref("docker.io/library/python:3.12")
+    http = _StubHttp({
+        "https://registry-1.docker.io/v2/library/python/tags/list?n=100":
+            _ok({"name": "library/python",
+                 "tags": ["3.11", "3.12"]}),
+    })
+    client = OciRegistryClient(http)
+    assert client.list_tags(ref) == ["3.11", "3.12"]
+
+
+def test_list_tags_pagination_bounded_by_max_pages() -> None:
+    """A pathological infinite ``Link`` chain would never
+    terminate. ``max_pages`` (default 50) caps the walk so
+    misconfigured registries don't hang the bumper."""
+    # Build a Link header that points BACK to the same URL — a
+    # registry bug we should be defensive against.
+    bad_resp = _StubResponse(200, _ok_body({
+        "name": "ouroboros/loop",
+        "tags": ["a"],
+    }), headers={
+        "Link": '</v2/ouroboros/loop/tags/list?n=100>; rel="next"',
+    })
+    ref = parse_image_ref("docker.io/ouroboros/loop:a")
+    http = _StubHttp({
+        "https://registry-1.docker.io/v2/ouroboros/loop/tags/list?n=100":
+            bad_resp,
+    })
+    client = OciRegistryClient(http)
+    tags = client.list_tags(ref, max_pages=3)
+    # 3 pages × 1 tag each = 3 entries; doesn't loop forever.
+    assert len(tags) == 3
+
+
+# Helper for byte-encoding test bodies inline.
+def _ok_body(payload: dict) -> bytes:
+    import json as _json
+    return _json.dumps(payload).encode()
