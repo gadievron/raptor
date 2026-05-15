@@ -110,6 +110,44 @@ class PyPIClient:
             self._cache.put(cache_key, data, ttl_seconds=self._ttl)
         return data
 
+    def get_version_metadata(
+        self, name: str, version: str,
+    ) -> Optional[dict]:
+        """Return the version-specific PyPI JSON.
+
+        ``/pypi/<name>/<version>/json`` returns metadata as
+        published with THAT specific version — including the
+        version's actual ``requires_dist``, which the aggregate
+        ``/pypi/<name>/json`` only carries for the latest release.
+        Used by the transitive-drop detector to compare requires_dist
+        across versions (e.g. did this dep move behind an extras
+        marker between 1.14.x and 1.15.x?).
+
+        Cached separately from the aggregate metadata; same TTL.
+        """
+        canon = _canonical_name(name)
+        cache_key = f"pypi-meta:{canon}:{version}"
+        if self._cache is not None:
+            cached = self._cache.get(cache_key, ttl_seconds=self._ttl)
+            if cached is not None:
+                return cached
+        if self._offline:
+            return None
+        url = f"{self._build_url(canon).rsplit('/', 1)[0]}/{version}/json"
+        try:
+            data = self._http.get_json(
+                url, headers=self._request_headers(),
+            )
+        except Exception as e:                            # noqa: BLE001
+            logger.warning(
+                "sca.registries.pypi: version-meta fetch failed for "
+                "%r==%r: %s", canon, version, e,
+            )
+            return None
+        if self._cache is not None:
+            self._cache.put(cache_key, data, ttl_seconds=self._ttl)
+        return data
+
     def list_versions(self, name: str) -> List[str]:
         canon = _canonical_name(name)
         cache_key = f"{_CACHE_KEY_PREFIX}:{canon}"

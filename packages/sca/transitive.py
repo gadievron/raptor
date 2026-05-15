@@ -403,7 +403,24 @@ def _try_cascade_batch(
                 f"(unexpected format from resolver)",
             ))
             continue
-        tagged = [_with_cascade_source(d, host) for d in deps]
+        # PyPI cascade outputs (pip-compile) carry ``# via <parent>``
+        # annotations after each transitive; extract that map before
+        # parsing strips comments so we can record parent linkage in
+        # the Dependency's source_extra.
+        parents_by_name: Dict[str, List[str]] = {}
+        if ecosystem == "PyPI":
+            parents_by_name = _extract_pip_compile_via(
+                result.proposed_lockfile
+            )
+        tagged = [
+            _with_cascade_source(
+                d, host,
+                parents=parents_by_name.get(
+                    d.name.lower().replace("_", "-"), [],
+                ),
+            )
+            for d in deps
+        ]
         out.append((pd, host, tagged, None))
     return out
 
@@ -535,10 +552,87 @@ def _try_cascade(
     # and is gone before the report renders. Pointing operators at
     # the host manifest (the file they can actually edit) is more
     # useful than at a vanished temp.
+    # For pip-compile output specifically, the lockfile carries
+    # ``# via <parent>`` comments after each transitive — extract
+    # them BEFORE the requirements.txt parser strips comments, so
+    # the resulting Dependency rows can record who pulled each
+    # transitive in. The ``transitive_drop`` detector uses this to
+    # suggest bumps that drop CVE-bearing transitives.
+    parents_by_name: Dict[str, List[str]] = {}
+    if ecosystem == "PyPI":
+        parents_by_name = _extract_pip_compile_via(
+            result.proposed_lockfile
+        )
     tagged = [
-        _with_cascade_source(d, host_manifest_path) for d in deps
+        _with_cascade_source(
+            d, host_manifest_path,
+            parents=parents_by_name.get(d.name.lower(), []),
+        )
+        for d in deps
     ]
     return tagged, None
+
+
+def _extract_pip_compile_via(blob: bytes) -> Dict[str, List[str]]:
+    """Parse a pip-compile lockfile and return a name → [parents]
+    map from the ``# via <parent>`` annotations.
+
+    pip-compile emits two shapes:
+        diskcache==5.6.3
+            # via instructor
+    OR (multiple parents):
+        requests==2.31.0
+            # via
+            #   instructor
+            #   sphinx
+
+    We only need the parent list per package; downstream consumers
+    use it to ask "if I bump <parent>, does this transitive
+    disappear?". Returns lowercased package names (PEP 503
+    canonicalised at the call site)."""
+    import re as _re
+
+    text = blob.decode("utf-8", errors="replace")
+    # Match: ``<name>==<version>`` followed by indented ``# via``
+    # block, possibly continuing across lines as ``#   <parent>``.
+    pkg_re = _re.compile(
+        r"^([A-Za-z0-9][A-Za-z0-9._-]*)==[^\s]+\s*$",
+        _re.MULTILINE,
+    )
+    out: Dict[str, List[str]] = {}
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        m = pkg_re.match(line.strip())
+        if m is None:
+            continue
+        name = m.group(1).lower().replace("_", "-")
+        parents: List[str] = []
+        # Look at subsequent indented ``# via`` block.
+        j = i + 1
+        in_via = False
+        while j < len(lines):
+            sub = lines[j]
+            stripped = sub.lstrip()
+            if not stripped.startswith("#"):
+                break
+            content = stripped.lstrip("#").strip()
+            if content.startswith("via"):
+                rest = content[3:].strip()
+                if rest:
+                    # Single-line form: ``# via <parent>``
+                    for p in rest.split(","):
+                        p = p.strip()
+                        if p and not p.startswith("-"):
+                            parents.append(p.lower().replace("_", "-"))
+                in_via = True
+            elif in_via:
+                # Continuation: ``#   <parent>``
+                if content and not content.startswith("-"):
+                    parents.append(content.lower().replace("_", "-"))
+            j += 1
+        if parents:
+            out[name] = parents
+    return out
 
 
 def _parse_lockfile_bytes(
@@ -564,6 +658,7 @@ def _parse_lockfile_bytes(
 
 def _with_cascade_source(
     d: Dependency, host_manifest_path: Path,
+    *, parents: Optional[List[str]] = None,
 ) -> Dependency:
     """Re-tag a Dependency as cascade_resolver-sourced.
 
@@ -580,7 +675,16 @@ def _with_cascade_source(
         deleted before the report renders. The operator-actionable
         path is the host manifest that triggered the cascade — what
         they need to edit to change the resolution input.
+
+    ``parents`` (optional, PyPI-only today) records the direct
+    deps that pulled this transitive in, extracted from
+    pip-compile's ``# via <parent>`` annotations. Surfaces via
+    ``source_extra["via"]`` so the transitive-drop detector can
+    suggest parent bumps that drop CVE-bearing transitives.
     """
+    extra = dict(d.source_extra or {})
+    if parents:
+        extra["via"] = list(parents)
     return Dependency(
         ecosystem=d.ecosystem, name=d.name, version=d.version,
         declared_in=host_manifest_path, scope=d.scope,
@@ -591,6 +695,7 @@ def _with_cascade_source(
         declared_license=d.declared_license,
         commented_out=d.commented_out,
         source_kind="cascade_resolver",
+        source_extra=extra or None,
     )
 
 

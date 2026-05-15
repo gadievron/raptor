@@ -362,6 +362,9 @@ SupplyChainKind = Literal[
     "gha_action_outdated",
     "version_diff_anomaly",
     "sentinel_match",
+    "platform_compat_regression",
+    "platform_compat_improvement",
+    "transitive_now_optional",
 ]
 
 

@@ -565,6 +565,33 @@ def run_sca(
             )
     progress.done(f"{len(vuln_findings)} vuln · {kev_count} KEV")
 
+    # 7.5. Transitive-drop detector — for each finding on a
+    # cascade-sourced transitive dep, check whether bumping its
+    # parent direct dep would drop the transitive entirely (or
+    # move it behind an extras gate). The canonical case:
+    # instructor 1.14.5 pins diskcache unconditionally;
+    # instructor 1.15.1 makes it ``[diskcache]``-extra-only.
+    # Surface as supply-chain findings so the bump suggestion
+    # rides alongside the underlying CVE.
+    if (options.enable_supply_chain and not options.offline):
+        from .registries.pypi import PyPIClient as _PypiC
+        from .transitive_drop import detect_droppable_transitives
+        td_pypi = _PypiC(http, cache, offline=options.offline)
+        progress.stage("transitive-drop")
+        drop_findings = detect_droppable_transitives(
+            joined,
+            vuln_findings=vuln_findings,
+            supply_chain_findings=supply_chain_findings,
+            hygiene_findings=hygiene_findings,
+            pypi_client=td_pypi,
+        )
+        from .transitive_drop.adapter import to_supply_chain_findings
+        td_sc = to_supply_chain_findings(drop_findings)
+        supply_chain_findings.extend(td_sc)
+        progress.done(
+            f"{len(drop_findings)} parent-bump remediation(s)"
+        )
+
     # 7a. Apply operator suppression overlay (`.raptor-sca-suppress.yml`).
     suppressed_total = 0
     if options.enable_suppressions:
