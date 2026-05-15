@@ -6,6 +6,8 @@ from caller-supplied env= dicts, leaving a contract gap for future
 cc_dispatch-style migrations that build env from semi-trusted sources.
 """
 
+import pytest
+
 from core.sandbox import context as _ctx
 
 
@@ -46,3 +48,33 @@ def test_run_untrusted_networked_forwards_strict_env(monkeypatch):
     assert captured["kwargs"].get("use_egress_proxy") is True
     assert captured["kwargs"].get("allowed_tcp_ports") == [443]
     assert captured["kwargs"].get("proxy_hosts") == ["api.example.com"]
+
+
+def test_run_untrusted_rejects_caller_strict_env():
+    """Caller passing strict_env= must get the clean guard message, not
+    a confusing "multiple values for keyword argument" TypeError.
+
+    run_untrusted() hardcodes strict_env=True; allowing the caller to
+    override would either bypass DANGEROUS_ENV_VARS stripping (silent
+    misuse) or collide with the wire (TypeError that doesn't name the
+    real problem). The forbidden-kwargs guard surfaces the misuse.
+    """
+    with pytest.raises(TypeError, match="strict_env"):
+        _ctx.run_untrusted(
+            ["echo", "ok"],
+            target="/tmp/raptor-target",
+            output="/tmp/raptor-output",
+            strict_env=False,
+        )
+
+
+def test_run_untrusted_networked_rejects_caller_strict_env():
+    """Same defensive parity for the networked variant."""
+    with pytest.raises(TypeError, match="strict_env"):
+        _ctx.run_untrusted_networked(
+            ["echo", "ok"],
+            target="/tmp/raptor-target",
+            output="/tmp/raptor-output",
+            proxy_hosts=["api.example.com"],
+            strict_env=False,
+        )

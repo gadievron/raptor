@@ -2129,12 +2129,13 @@ def run_untrusted(cmd: List[str], *, target: str = None, output: str = None,
             "dir and/or a writable output dir."
         )
     # Guard against silent misuse — the contract fixes these.
-    for forbidden in ("block_network", "allowed_tcp_ports"):
+    for forbidden in ("block_network", "allowed_tcp_ports", "strict_env"):
         if forbidden in kwargs:
             raise TypeError(
                 f"run_untrusted() does not accept {forbidden}= — it always "
-                f"runs with block_network=True and no TCP allowlist. Use "
-                f"sandbox() directly for varied network policy."
+                f"runs with block_network=True, no TCP allowlist, and "
+                f"strict_env=True env-stripping. Use sandbox() directly "
+                f"for varied network or env policy."
             )
     # Default stdin to DEVNULL for untrusted code. If the parent's stdin
     # is the operator's TTY (common for interactive RAPTOR use) and the
@@ -2227,12 +2228,13 @@ def run_untrusted_networked(
             "the egress allowlist is mandatory; callers wanting unrestricted "
             "network should use sandbox() directly."
         )
-    for forbidden in ("block_network", "allowed_tcp_ports", "use_egress_proxy"):
+    for forbidden in ("block_network", "allowed_tcp_ports", "use_egress_proxy", "strict_env"):
         if forbidden in kwargs:
             raise TypeError(
                 f"run_untrusted_networked() does not accept {forbidden}= — "
                 f"the network policy is fixed to egress-proxy-only on port "
-                f"443. Use sandbox() directly for varied network policy."
+                f"443 and strict_env=True env-stripping is mandatory. Use "
+                f"sandbox() directly for varied network or env policy."
             )
     if "stdin" not in kwargs and "input" not in kwargs:
         kwargs["stdin"] = subprocess.DEVNULL
