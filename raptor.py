@@ -506,6 +506,8 @@ def mode_llm_analysis(args: list) -> int:
 
 def show_mode_help(mode: str) -> None:
     """Show detailed help for a specific mode."""
+    from core.config import RaptorConfig
+
     script_root = Path(__file__).parent
     
     mode_scripts = {

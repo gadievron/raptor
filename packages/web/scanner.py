@@ -34,6 +34,10 @@ from packages.web.discovery import Discoverer, DiscoveryResult
 from packages.web.models import WebFinding
 from packages.web.checks import registry
 from packages.web.checks.base import CheckResult
+from packages.web.research_landscape import (
+    assess_research_landscape,
+    high_priority_theme_ids,
+)
 
 logger = get_logger()
 
@@ -63,6 +67,9 @@ class WebScanner:
         reveal_secrets: bool = False,
         max_depth: int = 3,
         max_pages: int = 100,
+        max_fuzz_urls: int = 5,
+        max_fuzz_params: int = 12,
+        max_fuzz_forms: int = 5,
         run_understand: bool = False,
         run_validate: bool = False,
     ) -> None:
@@ -74,6 +81,9 @@ class WebScanner:
         self.auth_manager = auth_manager
         self.max_depth = max_depth
         self.max_pages = max_pages
+        self.max_fuzz_urls = max_fuzz_urls
+        self.max_fuzz_params = max_fuzz_params
+        self.max_fuzz_forms = max_fuzz_forms
 
         self.client = WebClient(
             base_url,
@@ -290,10 +300,16 @@ class WebScanner:
         params = self._prioritise_parameters(
             crawl_data.get("discovered_parameters", []),
             context_map=context_map,
-        )[:20]
+        )[:self.max_fuzz_params]
 
         # URL parameters. Test each discovered endpoint, not just the root URL.
-        for target_url in target_urls[:20]:
+        selected_urls = target_urls[:self.max_fuzz_urls]
+        logger.info(
+            f"Phase 6 budget: fuzzing {len(selected_urls)} URL(s), "
+            f"{len(params)} parameter(s), "
+            f"{min(len(crawl_data.get('discovered_forms', [])), self.max_fuzz_forms)} form(s)"
+        )
+        for target_url in selected_urls:
             for param in params:
                 for raw in fuzzer.fuzz_parameter(
                     target_url, param, vulnerability_types=vuln_types
@@ -301,7 +317,7 @@ class WebScanner:
                     _record(raw.get("url", target_url), param, raw)
 
         # Form fields
-        for form in crawl_data.get("discovered_forms", [])[:10]:
+        for form in crawl_data.get("discovered_forms", [])[:self.max_fuzz_forms]:
             endpoint = form.get("action", self.base_url)
             method = form.get("method", "GET")
             for field_name, field_info in form.get("inputs", {}).items():
@@ -407,6 +423,11 @@ class WebScanner:
         return findings
 
     def _build_web_context_map(self, crawl_data: dict, discovery: DiscoveryResult) -> dict:
+        research_landscape = assess_research_landscape(
+            discovery=discovery,
+            crawl_data=crawl_data,
+            registered_check_ids=(check.check_id for check in registry.all()),
+        )
         urls = list(dict.fromkeys(
             crawl_data.get("discovered_urls")
             or crawl_data.get("visited_urls")
@@ -447,7 +468,9 @@ class WebScanner:
                 "stats": discovery.stats(),
                 "forms": len(forms),
                 "parameters": len(parameters),
+                "research_priority_themes": high_priority_theme_ids(research_landscape),
             },
+            "research_landscape": research_landscape,
         }
         return context_map
 
@@ -493,6 +516,12 @@ class WebScanner:
         logger.info("Phase 7: Report")
         findings_dicts = [f.to_dict() for f in findings]
         save_json(self.out_dir / "web_findings.json", {"findings": findings_dicts})
+        research_landscape = assess_research_landscape(
+            discovery=discovery,
+            crawl_data=crawl_data,
+            registered_check_ids=(check.check_id for check in registry.all()),
+        )
+        save_json(self.out_dir / "research_landscape.json", research_landscape)
         try:
             from core.security.prompt_telemetry import defense_telemetry
             defense_telemetry.write_summary(self.out_dir)
@@ -514,6 +543,16 @@ class WebScanner:
             "crawl": crawl_data.get("stats", {}),
             "findings_by_severity": by_sev,
             "phases_completed": self._phases_completed,
+            "research_landscape": {
+                "source_archive": research_landscape["source_archive"],
+                "archive_years_reviewed": research_landscape["archive_years_reviewed"],
+                "curation_mode": research_landscape["curation_mode"],
+                "high_priority_themes": high_priority_theme_ids(research_landscape),
+                "coverage": {
+                    theme["id"]: theme["coverage"]
+                    for theme in research_landscape["themes"]
+                },
+            },
         }
         save_json(self.out_dir / "web_scan_report.json", result)
         logger.info(f"Scan complete. {len(findings)} findings. Report: {self.out_dir}")
@@ -577,6 +616,9 @@ Examples:
     parser.add_argument("--out")
     parser.add_argument("--max-depth", type=int, default=3)
     parser.add_argument("--max-pages", type=int, default=100)
+    parser.add_argument("--max-fuzz-urls", type=int, default=5)
+    parser.add_argument("--max-fuzz-params", type=int, default=12)
+    parser.add_argument("--max-fuzz-forms", type=int, default=5)
     parser.add_argument("--insecure", action="store_true")
     parser.add_argument("--reveal-secrets", action="store_true")
     parser.add_argument(
@@ -652,6 +694,9 @@ Examples:
         auth_manager=auth_manager, verify_ssl=not args.insecure,
         reveal_secrets=args.reveal_secrets,
         max_depth=args.max_depth, max_pages=args.max_pages,
+        max_fuzz_urls=args.max_fuzz_urls,
+        max_fuzz_params=args.max_fuzz_params,
+        max_fuzz_forms=args.max_fuzz_forms,
         run_understand=args.understand,
         run_validate=args.validate,
     )

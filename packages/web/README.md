@@ -10,6 +10,11 @@ A web application security scanner built into RAPTOR. It does two things: runs 3
 # Unauthenticated scan
 python3 raptor.py web --url https://target.example.com
 
+# Bounded smoke test against a lab target
+python3 raptor.py web --url https://target.example.com --no-llm \
+  --max-depth 1 --max-pages 10 \
+  --max-fuzz-urls 2 --max-fuzz-params 8 --max-fuzz-forms 1
+
 # With a project (results go into the project output directory)
 python3 raptor.py project create myapp --target https://target.example.com
 python3 raptor.py project use myapp
@@ -123,12 +128,18 @@ Findings are grouped by endpoint and vulnerability type. Fourteen vulnerable par
 
 Without an LLM, Phase 6 falls back to a small static payload list and the same evidence-based response analysis.
 
+Phase 6 has its own request budget because crawl limits and fuzzing limits are
+different things. `--max-pages` controls how much surface discovery visits;
+`--max-fuzz-urls`, `--max-fuzz-params`, and `--max-fuzz-forms` control the
+endpoint x parameter x payload cross-product used by injection testing.
+
 ### Phase 7: Report
 Output directory gets:
 - `web_findings.json` -- findings in RAPTOR's native schema
 - `web_scan_report.json` -- full summary
 - `discovery.json` -- discovered URLs, fingerprint, API specs
 - `crawl_results.json` -- pages, forms, parameters
+- `research_landscape.json` -- PortSwigger archive-derived coverage map and target-aware priorities
 - `defense-telemetry.json` -- LLM defense signals (injection hit rate, schema rejection rate)
 
 ---
@@ -140,6 +151,30 @@ Findings use RAPTOR's standard schema. Run `python3 raptor.py project findings` 
 Severity: `critical`, `high`, `medium`, `low`, `informational`.
 
 Injection findings from Phase 6 get `status: needs_review`. Pass `--validate` to run the validation pipeline on them.
+
+Every run also writes `research_landscape.json`. This is RAPTOR's explicit
+view of the modern web-testing landscape, distilled from the PortSwigger Top
+10 Web Hacking Techniques archive from 2006 through 2025. It maps recurring
+research themes to current scanner coverage, target-specific signals, and
+recommended follow-up assessments. The archive links are provenance links:
+RAPTOR does not fetch PortSwigger content during a scan, so scan behaviour is
+deterministic and not dependent on external site changes. The first version
+tracks:
+
+- Parser differentials, request smuggling, semantic ambiguity, and HTTP/2 or HTTP/3 downgrades
+- Cache poisoning, cache deception, and framework cache chains
+- SSRF visibility, redirect loops, metadata reachability, and non-HTTP backend pivots
+- Unicode, charset conversion, and normalisation abuse
+- Browser side channels, XS-Leaks, ETag length leaks, and timing oracles
+- Blind SSTI, error-based code injection, and polyglot server-side probes
+- ORM, search, join, and filtering data exposure
+- OAuth, cookie tossing, SAML, and non-happy-path authentication chains
+- Client-side parser stacks, mXSS, DOM sanitizers, and prototype pollution
+
+The field `research_landscape.high_priority_themes` in `web_scan_report.json`
+is target-aware. For example, a target with `redirect_uri`, `next`, and
+`callback` parameters will push SSRF and OAuth chain analysis higher, while
+Next.js/cache fingerprints push cache-chain assessment higher.
 
 ---
 
@@ -200,10 +235,11 @@ The check will only run in Phase 5 when a live session is present.
 ## Requirements
 
 ```
-beautifulsoup4>=4.12.0
-requests>=2.31.0
-PyYAML>=6.0
-cryptography>=42.0.0
+beautifulsoup4==4.14.3
+playwright==1.58.0
+requests==2.33.0
+pyyaml==6.0.3
+cryptography==46.0.3
 ```
 
 Set `ANTHROPIC_API_KEY` (or equivalent) for LLM payload generation. Without it, Phase 6 uses static fallback payloads.
