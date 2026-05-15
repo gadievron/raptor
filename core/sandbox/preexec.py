@@ -13,11 +13,12 @@ restrict_self.
 
 import json
 import logging
+import os as _os_mod  # for direct os.write/os._exit at fail-CLOSED sites
 import resource
 from pathlib import Path
 
 from . import state
-from ._fork_safe_warn import fail_post_fork, warn_post_fork
+from ._fork_safe_warn import warn_post_fork
 from .landlock import check_landlock_available, _make_landlock_preexec
 from .seccomp import _make_seccomp_preexec
 
@@ -198,19 +199,21 @@ def _make_preexec_fn(limits: dict, writable_paths: list = None,
             try:
                 resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
             except (ValueError, OSError) as exc:
+                _errno = getattr(exc, "errno", 0) or 0
                 warn_post_fork(
-                    "preexec",
-                    f"RLIMIT_AS setrlimit failed (errno={getattr(exc, 'errno', '?')}); "
-                    f"process may exceed requested virtual-address bound",
+                    b"preexec: RLIMIT_AS setrlimit failed (errno=%d); "
+                    b"process may exceed requested virtual-address bound\n"
+                    % _errno
                 )
         if file_mb > 0:
             try:
                 resource.setrlimit(resource.RLIMIT_FSIZE, (file_bytes, file_bytes))
             except (ValueError, OSError) as exc:
+                _errno = getattr(exc, "errno", 0) or 0
                 warn_post_fork(
-                    "preexec",
-                    f"RLIMIT_FSIZE setrlimit failed (errno={getattr(exc, 'errno', '?')}); "
-                    f"process may exceed requested max-file-size",
+                    b"preexec: RLIMIT_FSIZE setrlimit failed (errno=%d); "
+                    b"process may exceed requested max-file-size\n"
+                    % _errno
                 )
         if cpu > 0:
             try:
@@ -220,10 +223,11 @@ def _make_preexec_fn(limits: dict, writable_paths: list = None,
                 # wins — making resource_exceeded permanently False.
                 resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
             except (ValueError, OSError) as exc:
+                _errno = getattr(exc, "errno", 0) or 0
                 warn_post_fork(
-                    "preexec",
-                    f"RLIMIT_CPU setrlimit failed (errno={getattr(exc, 'errno', '?')}); "
-                    f"process may exceed requested CPU-time bound",
+                    b"preexec: RLIMIT_CPU setrlimit failed (errno=%d); "
+                    b"process may exceed requested CPU-time bound\n"
+                    % _errno
                 )
 
         # Core dumps off. A sandboxed process can read anywhere in the
@@ -244,11 +248,20 @@ def _make_preexec_fn(limits: dict, writable_paths: list = None,
             # default read policy. That turns any crash into a
             # credential-exfiltration primitive. The parent has no way
             # to recover from this post-fork, so fail-closed.
-            fail_post_fork(
-                "preexec",
-                f"RLIMIT_CORE setrlimit failed (errno={getattr(exc, 'errno', '?')})",
-                99,
-            )
+            # Per W35.C convention, fail-CLOSED sites use direct
+            # os.write(2, ...) + os._exit(N) rather than the
+            # warn_post_fork helper (helper is reserved for DiD
+            # warn-only sites).
+            _errno = getattr(exc, "errno", 0) or 0
+            try:
+                _os_mod.write(
+                    2,
+                    b"RAPTOR: preexec: RLIMIT_CORE setrlimit failed "
+                    b"(errno=%d), exiting\n" % _errno,
+                )
+            except OSError:
+                pass
+            _os_mod._exit(99)
 
 
         # Apply Landlock filesystem restrictions after resource limits
