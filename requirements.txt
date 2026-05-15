@@ -14,8 +14,13 @@ urllib3==2.7.0
 pydantic==2.12.5
 typer==0.25.1
 
-# Structured output (works with both OpenAI and Anthropic SDKs)
-instructor==1.14.5
+# Structured output (works with both OpenAI and Anthropic SDKs).
+# 1.15.1+ moves ``diskcache`` from an unconditional runtime dep
+# to the ``[diskcache]`` extra — this bump drops diskcache from
+# raptor's install set, which is exactly what we want
+# (CVE-2025-69872 was the trigger; raptor doesn't use the cache
+# layer).
+instructor==1.15.1
 
 # Optional: LLM provider SDKs (install for external LLM support)
 # pip install openai        # OpenAI, Gemini (via shim), Mistral, Ollama
