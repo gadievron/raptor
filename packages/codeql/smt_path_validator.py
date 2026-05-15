@@ -203,6 +203,22 @@ _PRECEDENCE: Dict[str, int] = {
 # far more than any real C condition would ever need.
 _MAX_PAREN_DEPTH = 64
 
+# Maximum length in characters of a single condition string.  Defends the
+# parser against pathological inputs whose runtime is linear in length but
+# whose total length is unboundedly large (e.g. a 1 MB string of operators).
+# Real path-conditions extracted from source rarely exceed a few hundred
+# characters even with verbose chained predicates; 2048 is generously above
+# any observed legitimate input.  Companion bound to ``_MAX_PAREN_DEPTH``
+# (depth) — together they cap both axes of parser cost.
+_MAX_CONDITION_CHARS = 2048
+
+# Maximum number of conditions accepted in a single ``check_path_feasibility``
+# call.  Real findings carry 1-10 conditions; tens of thousands signals
+# malformed upstream extraction or amplification.  When exceeded the call
+# degrades to ``feasible=None`` so partial answers can't be misread as
+# authoritative.
+_MAX_CONDITIONS_PER_CALL = 64
+
 # Operator-shaped tokens we recognise but don't accept as binary operators
 # inside ``_parse_expr`` — they belong to the relational or bitmask layer
 # and reaching ``_parse_expr`` with one in operand-trailing position is a
@@ -570,6 +586,19 @@ def _parse_condition(
     ``text`` (the original) is preserved for rejection messages so
     callers can match failures back to their input.
     """
+    # Hard cap on input size before any parsing work runs.  Defends the
+    # parser combinator against pathological inputs whose total length is
+    # unboundedly large.  See ``_MAX_CONDITION_CHARS`` for the rationale
+    # and tuning guidance.
+    if len(text) > _MAX_CONDITION_CHARS:
+        return Rejection(
+            text, RejectionKind.INPUT_TOO_LONG,
+            f"condition length {len(text)} exceeds limit {_MAX_CONDITION_CHARS}",
+            hint=(
+                f"shorten or split the predicate so each condition is at "
+                f"most {_MAX_CONDITION_CHARS} characters"
+            ),
+        )
     t = _substitute_calls(
         _canonicalise(text), vars_, profile=profile, anon_map=anon_map,
     )
@@ -948,6 +977,37 @@ def check_path_feasibility(
             unknown_reasons=[],
             model={}, smt_available=False,
             reasoning="z3 not available — install z3-solver for path feasibility analysis",
+        )
+
+    # Hard cap on number of conditions per call.  Caller mistakes
+    # (malformed upstream extraction, accidental amplification) can
+    # flood the parser with tens of thousands of items.  Refuse the
+    # whole call cleanly so partial parser progress isn't misread as
+    # an authoritative feasibility verdict.
+    if len(conditions) > _MAX_CONDITIONS_PER_CALL:
+        cap_reason = Rejection(
+            text="",
+            kind=RejectionKind.TOO_MANY_CONDITIONS,
+            detail=(
+                f"{len(conditions)} conditions exceeds per-call cap "
+                f"{_MAX_CONDITIONS_PER_CALL}"
+            ),
+            hint=(
+                "split the path into smaller condition batches or "
+                "deduplicate before calling check_path_feasibility"
+            ),
+        )
+        return PathSMTResult(
+            feasible=None,
+            satisfied=[], unsatisfied=[],
+            unknown=[c.text for c in conditions],
+            unknown_reasons=[cap_reason],
+            model={}, smt_available=True,
+            reasoning=(
+                f"refused: {len(conditions)} conditions exceeds the per-call "
+                f"cap of {_MAX_CONDITIONS_PER_CALL} — caller should split or "
+                f"deduplicate before retrying"
+            ),
         )
 
     if not conditions:
