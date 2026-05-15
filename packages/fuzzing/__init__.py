@@ -14,10 +14,11 @@ from .orchestrator import FuzzingOrchestrator, CampaignPlan
 from .libfuzzer_runner import LibFuzzerRunner, LibFuzzerResult, LibFuzzerStats
 from .harness_generator import HarnessGenerator, HarnessSpec, GeneratedHarness
 from .telemetry import FuzzingTelemetry, CampaignStats, FuzzEvent
-from .binary_understand import (
+from packages.binary_analysis import (
     BinaryUnderstand,
     BinaryContextMap,
     FunctionInfo as BinaryFunctionInfo,
+    analyse_binary_context,
 )
 
 __all__ = [
@@ -44,4 +45,5 @@ __all__ = [
     "BinaryUnderstand",
     "BinaryContextMap",
     "BinaryFunctionInfo",
+    "analyse_binary_context",
 ]

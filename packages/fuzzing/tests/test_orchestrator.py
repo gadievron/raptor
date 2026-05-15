@@ -87,6 +87,8 @@ class TestOrchestratorPlanning(unittest.TestCase):
                 plan = orch.plan(tmp)
             self.assertTrue(plan.needs_harness)
             self.assertEqual(plan.fuzzer, "libfuzzer")
+            self.assertFalse(plan.can_run)
+            self.assertTrue(any("compiled libFuzzer harness" in b for b in plan.blockers))
         finally:
             os.unlink(tmp)
 
@@ -104,20 +106,41 @@ class TestOrchestratorPlanning(unittest.TestCase):
         finally:
             os.unlink(tmp)
 
-    def test_macos_with_broken_afl_falls_back_to_libfuzzer(self):
-        if platform.system() != "Darwin":
-            self.skipTest("macOS-specific test")
+    def test_macos_with_broken_afl_does_not_run_plain_macho_as_libfuzzer(self):
         with tempfile.NamedTemporaryFile(suffix="", delete=False) as f:
             f.write(b"\xcf\xfa\xed\xfe" + b"\x00" * 1024)
             tmp = Path(f.name)
         try:
             tmp.chmod(0o755)
-            with patch("packages.fuzzing.orchestrator.probe_capabilities",
+            with patch("packages.fuzzing.target_detector.platform.system",
+                       return_value="Darwin"), \
+                 patch("packages.fuzzing.orchestrator.probe_capabilities",
                        return_value=_full_caps_macos()):
                 orch = FuzzingOrchestrator()
                 plan = orch.plan(tmp)
-            self.assertEqual(plan.fuzzer, "libfuzzer")
+            self.assertIsNone(plan.fuzzer)
+            self.assertFalse(plan.can_run)
             self.assertTrue(any("AFL++ shared memory" in h for h in plan.hints))
+            self.assertTrue(any("LLVMFuzzerTestOneInput" in b for b in plan.blockers))
+        finally:
+            os.unlink(tmp)
+
+    def test_instrumented_unix_binary_can_use_libfuzzer(self):
+        with tempfile.NamedTemporaryFile(suffix="", delete=False) as f:
+            f.write(b"\xcf\xfa\xed\xfe" + b"\x00" * 1024)
+            tmp = Path(f.name)
+        try:
+            tmp.chmod(0o755)
+            with patch("packages.fuzzing.target_detector.platform.system",
+                       return_value="Darwin"), \
+                 patch("packages.fuzzing.orchestrator.probe_capabilities",
+                       return_value=_full_caps_macos()), \
+                 patch.object(FuzzingOrchestrator, "_is_libfuzzer_instrumented",
+                              return_value=True):
+                orch = FuzzingOrchestrator()
+                plan = orch.plan(tmp)
+            self.assertEqual(plan.fuzzer, "libfuzzer")
+            self.assertTrue(plan.can_run)
         finally:
             os.unlink(tmp)
 

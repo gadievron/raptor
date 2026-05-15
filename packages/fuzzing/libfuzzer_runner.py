@@ -16,17 +16,17 @@ generated harnesses.
 
 from __future__ import annotations
 
-import logging
-import os
 import re
 import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
+from core.config import RaptorConfig
 from core.logging import get_logger
+from core.sandbox import run as _sandbox_run
 
 logger = get_logger()
 
@@ -88,19 +88,20 @@ class LibFuzzerRunner:
         if not self.harness.stat().st_mode & 0o111:
             raise PermissionError(f"Harness is not executable: {harness_path}")
 
-        self.corpus_dir = (
-            Path(corpus_dir).resolve()
-            if corpus_dir
-            else Path(f"out/libfuzzer_corpus_{self.harness.stem}").resolve()
-        )
-        self.corpus_dir.mkdir(parents=True, exist_ok=True)
-
         self.output_dir = (
             Path(output_dir).resolve()
             if output_dir
             else Path(f"out/libfuzzer_{self.harness.stem}_{int(time.time())}").resolve()
         )
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        self.source_corpus_dir = Path(corpus_dir).resolve() if corpus_dir else None
+        self.corpus_dir = self.output_dir / "corpus"
+        self.corpus_dir.mkdir(parents=True, exist_ok=True)
+        if self.source_corpus_dir:
+            if not self.source_corpus_dir.exists():
+                raise FileNotFoundError(f"Corpus directory not found: {corpus_dir}")
+            self._seed_working_corpus(self.source_corpus_dir, self.corpus_dir)
 
         self.dict_path = Path(dict_path).resolve() if dict_path else None
         if self.dict_path and not self.dict_path.exists():
@@ -120,17 +121,27 @@ class LibFuzzerRunner:
         logger.info(f"  corpus: {self.corpus_dir}")
         logger.info(f"  output: {self.output_dir}")
 
+    @staticmethod
+    def _seed_working_corpus(source: Path, destination: Path) -> None:
+        """Copy caller-provided seeds into the sandbox-writable corpus dir."""
+        for item in source.rglob("*"):
+            if not item.is_file():
+                continue
+            relative = item.relative_to(source)
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(item, target)
+
     def run(self, telemetry=None) -> LibFuzzerResult:
         """Run the campaign and return the result.
 
-        If telemetry is provided, libFuzzer's stderr is streamed line-by-line
-        and parsed in real time so the caller sees live progress rather than
-        waiting for the campaign to complete.
+        If telemetry is provided, libFuzzer's stderr is parsed into the same
+        event stream after the sandboxed campaign exits.
         """
         cmd = self._build_command()
         logger.info(f"libFuzzer command: {' '.join(cmd)}")
 
-        env = os.environ.copy()
+        env = RaptorConfig.get_safe_env()
         env.setdefault(
             "ASAN_OPTIONS",
             "abort_on_error=1:symbolize=1:detect_leaks=1:detect_stack_use_after_return=1",
@@ -138,71 +149,37 @@ class LibFuzzerRunner:
         env.setdefault("UBSAN_OPTIONS", "abort_on_error=1:symbolize=1:print_stacktrace=1")
 
         start = time.time()
-        stderr_lines = []
-        stdout_lines = []
-
-        # Stream stderr (libFuzzer writes its progress there) so the
-        # operator can see live telemetry rather than waiting for the
-        # process to exit.
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(self.output_dir),
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-        )
-
         try:
-            # Use a thread to read stdout in the background; main thread
-            # reads stderr (libFuzzer's progress) and updates telemetry.
-            import threading
-
-            def _drain_stdout():
-                if proc.stdout is None:
-                    return
-                for line in proc.stdout:
-                    stdout_lines.append(line)
-
-            stdout_thread = threading.Thread(target=_drain_stdout, daemon=True)
-            stdout_thread.start()
-
-            # Read stderr line-by-line and parse as we go
-            assert proc.stderr is not None
-            for line in proc.stderr:
-                stderr_lines.append(line)
-                if telemetry is not None:
-                    self._parse_progress_line(line, telemetry)
-
-            # Drain remaining stdout
-            stdout_thread.join(timeout=2)
-
-            # Wait for graceful exit; libFuzzer respects -max_total_time
-            try:
-                proc.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                logger.warning("libFuzzer did not exit after max_total_time + 30s; terminating")
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-
-            returncode = proc.returncode
-
+            completed = _sandbox_run(
+                cmd,
+                block_network=True,
+                target=str(self.harness.parent),
+                output=str(self.output_dir),
+                restrict_reads=True,
+                readable_paths=self._readable_paths(),
+                capture_output=True,
+                text=True,
+                timeout=self.max_total_time + max(30, self.timeout_seconds + 5),
+                cwd=str(self.output_dir),
+                env=env,
+            )
+            returncode = completed.returncode
+            stdout = completed.stdout or ""
+            stderr = completed.stderr or ""
+        except subprocess.TimeoutExpired as e:
+            logger.warning("libFuzzer exceeded campaign timeout; parsing partial output")
+            returncode = -1
+            stdout = self._coerce_output(e.stdout)
+            stderr = self._coerce_output(e.stderr)
         except KeyboardInterrupt:
-            logger.warning("Campaign interrupted by user; terminating libFuzzer")
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+            logger.warning("Campaign interrupted by user")
             raise
 
         elapsed = time.time() - start
-        stderr = "".join(stderr_lines)
-        stdout = "".join(stdout_lines)
+
+        if telemetry is not None:
+            for line in stderr.splitlines():
+                self._parse_progress_line(line, telemetry)
 
         # Persist raw output for debugging
         (self.output_dir / "stderr.log").write_text(stderr)
@@ -217,6 +194,22 @@ class LibFuzzerRunner:
             f"crashes={len(result.crashes)}"
         )
         return result
+
+    def _readable_paths(self) -> List[str]:
+        paths = [str(self.harness.parent), str(self.corpus_dir), str(self.output_dir)]
+        if self.source_corpus_dir:
+            paths.append(str(self.source_corpus_dir))
+        if self.dict_path:
+            paths.append(str(self.dict_path.parent))
+        return paths
+
+    @staticmethod
+    def _coerce_output(value) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode(errors="replace")
+        return str(value)
 
     def _parse_progress_line(self, line: str, telemetry) -> None:
         """Parse a single libFuzzer stderr line and forward to telemetry."""

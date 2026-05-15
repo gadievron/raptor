@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Generate a RAPTOR binary context map with radare2.
+
+Usage:
+  libexec/raptor-binary-understand <binary> <output-dir>
+
+The output is written as both:
+  - context-map.json        # canonical /understand bridge artifact
+  - binary-context-map.json # explicit binary-analysis alias
+"""
+
+from __future__ import annotations
+
+import shutil
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from core.json import save_json
+from packages.binary_analysis import analyse_binary_context
+
+
+def main() -> int:
+    if len(sys.argv) != 3:
+        print("Usage: raptor-binary-understand <binary> <output-dir>", file=sys.stderr)
+        return 2
+
+    binary = Path(sys.argv[1]).resolve()
+    out_dir = Path(sys.argv[2]).resolve()
+    if not binary.exists() or not binary.is_file():
+        print(f"ERROR: binary not found: {binary}", file=sys.stderr)
+        return 1
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    context_path = out_dir / "context-map.json"
+    binary_context_path = out_dir / "binary-context-map.json"
+
+    try:
+        context = analyse_binary_context(binary, out_path=context_path)
+    except Exception as e:
+        save_json(out_dir / "binary-understand-error.json", {
+            "binary": str(binary),
+            "error": str(e),
+        })
+        print(f"ERROR: binary understand failed: {e}", file=sys.stderr)
+        return 1
+
+    shutil.copyfile(context_path, binary_context_path)
+    print(f"context-map: {context_path}")
+    print(f"binary-context-map: {binary_context_path}")
+    print(f"entry_points: {len(context.entry_points)}")
+    print(f"dangerous_sinks: {len(context.dangerous_sinks)}")
+    print(f"fuzz_priorities: {len(context.fuzz_priorities)}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

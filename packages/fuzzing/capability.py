@@ -16,9 +16,13 @@ import logging
 import platform
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+
+from core.config import RaptorConfig
+from packages.binary_analysis.radare2_understand import probe_capability as _probe_radare2_capability
 
 logger = logging.getLogger(__name__)
 
@@ -201,24 +205,12 @@ def probe() -> CapabilityReport:
     report.gdb = shutil.which("gdb")
     report.rr = shutil.which("rr")
 
-    # radare2 binary analysis stack
-    report.radare2 = shutil.which("r2") or shutil.which("radare2")
-    try:
-        import r2pipe   # noqa: F401
-        report.has_r2pipe = True
-    except ImportError:
-        report.has_r2pipe = False
-    if report.radare2 and report.has_r2pipe:
-        try:
-            r2_check = subprocess.run(
-                [report.radare2, "-q", "-c", "Lc~ghidra", "/dev/null"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            report.has_r2ghidra = "ghidra" in (r2_check.stdout or "").lower()
-        except Exception:
-            report.has_r2ghidra = False
+    # radare2 binary analysis stack. The implementation lives in
+    # packages.binary_analysis so fuzzing is just one consumer.
+    r2_cap = _probe_radare2_capability()
+    report.radare2 = r2_cap.get("r2_bin")
+    report.has_r2pipe = bool(r2_cap.get("has_r2pipe"))
+    report.has_r2ghidra = bool(r2_cap.get("has_r2ghidra"))
 
     # AFL++ version probe
     if report.afl_fuzz:
@@ -379,16 +371,50 @@ def _probe_clang_sanitiser(clang: str, sanitizer: str) -> bool:
 
 
 def _check_macos_afl_shmem(afl_fuzz: str) -> bool:
-    """Run afl-fuzz --help and look for the macOS shmget warning."""
+    """Start a tiny AFL job and look for macOS shared-memory failures.
+
+    `afl-fuzz --help` does not initialise the shared-memory segment, so it
+    misses the real failure mode we care about. A one-second non-instrumented
+    `/bin/cat` run reaches AFL's shm setup without requiring a project binary.
+    """
+    cat = "/bin/cat"
+    if not Path(cat).exists():
+        return True
     try:
-        result = subprocess.run(
-            [afl_fuzz, "--help"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        stderr = result.stderr or ""
-        if "shmget" in stderr or "No space left on device" in stderr:
+        with tempfile.TemporaryDirectory(prefix="raptor-afl-probe-") as tmp:
+            tmp_path = Path(tmp)
+            seeds = tmp_path / "in"
+            out = tmp_path / "out"
+            seeds.mkdir()
+            (seeds / "seed").write_bytes(b"seed\n")
+            env = RaptorConfig.get_safe_env()
+            env.setdefault("AFL_SKIP_CPUFREQ", "1")
+            env.setdefault("AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES", "1")
+            result = subprocess.run(
+                [
+                    afl_fuzz,
+                    "-i", str(seeds),
+                    "-o", str(out),
+                    "-V", "1",
+                    "-n",
+                    "--",
+                    cat,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                env=env,
+            )
+        output = (result.stdout or "") + "\n" + (result.stderr or "")
+        lowered = output.lower()
+        if (
+            "shmget" in lowered
+            or "shmat" in lowered
+            or "shared memory" in lowered
+            or "afl-system-config" in lowered
+            or "cannot allocate memory" in lowered
+            or "operation not permitted" in lowered
+        ):
             return False
         return True
     except Exception:

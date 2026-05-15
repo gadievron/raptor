@@ -1,9 +1,16 @@
 """Tests for capability detection."""
 
+import subprocess
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from packages.fuzzing.capability import CapabilityReport, probe, select_fuzzer
+from packages.fuzzing.capability import (
+    CapabilityReport,
+    _check_macos_afl_shmem,
+    probe,
+    select_fuzzer,
+)
 
 
 class TestCapabilityReport(unittest.TestCase):
@@ -60,6 +67,30 @@ class TestProbe(unittest.TestCase):
             report = probe()
         self.assertFalse(report.has_any_fuzzer())
         self.assertTrue(any("No fuzzer available" in i for i in report.issues))
+
+    def test_macos_afl_shmem_probe_detects_runtime_failure(self):
+        completed = subprocess.CompletedProcess(
+            args=["afl-fuzz"],
+            returncode=1,
+            stdout="",
+            stderr="[-] SYSTEM ERROR : shmget() failed, try running afl-system-config",
+        )
+        with patch.object(Path, "exists", return_value=True), \
+             patch("packages.fuzzing.capability.subprocess.run",
+                   return_value=completed):
+            self.assertFalse(_check_macos_afl_shmem("/x/afl-fuzz"))
+
+    def test_macos_afl_shmem_probe_allows_clean_startup(self):
+        completed = subprocess.CompletedProcess(
+            args=["afl-fuzz"],
+            returncode=0,
+            stdout="fuzzing stopped by user",
+            stderr="",
+        )
+        with patch.object(Path, "exists", return_value=True), \
+             patch("packages.fuzzing.capability.subprocess.run",
+                   return_value=completed):
+            self.assertTrue(_check_macos_afl_shmem("/x/afl-fuzz"))
 
 
 class TestSelectFuzzer(unittest.TestCase):

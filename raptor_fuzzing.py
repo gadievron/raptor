@@ -132,6 +132,7 @@ def main() -> None:
                 duration_seconds=args.duration,
                 corpus_dir=corpus_dir,
                 dict_path=Path(args.dict) if args.dict else None,
+                source_context_dir=binary_path.parent,
             )
         except KeyboardInterrupt:
             print("\nCampaign interrupted by user.")
@@ -154,7 +155,7 @@ def main() -> None:
         if (out_dir / "binary-context-map.json").exists():
             print(f"  binary-context-map.json -- radare2 adversarial analysis")
         print("=" * 70)
-        sys.exit(0 if result.get("crashes", 0) == 0 else 1)
+        sys.exit(0)
 
     logger.info("=" * 70)
     logger.info("RAPTOR FUZZING WORKFLOW STARTED")

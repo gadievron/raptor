@@ -9,15 +9,19 @@ current host rather than crashing six commands deep into AFL++.
 from __future__ import annotations
 
 import json
-import logging
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from core.sandbox import run_trusted as _run_trusted
+from core.logging import get_logger
 from packages.fuzzing.capability import CapabilityReport, probe as probe_capabilities
 from packages.fuzzing.target_detector import TargetInfo, detect as detect_target
 
-logger = logging.getLogger(__name__)
+logger = get_logger()
+
+_EXECUTABLE_FUZZERS = {"afl", "libfuzzer"}
 
 
 @dataclass
@@ -48,6 +52,17 @@ class CampaignPlan:
             f"  Platform: {self.capabilities.platform} {self.capabilities.arch}",
             f"  AFL++:    {'yes' if self.capabilities.has_afl() else 'no'}",
             f"  libFuzzer:{'yes' if self.capabilities.has_clang_fuzzer() else 'no'}",
+            (
+                "  radare2:  "
+                f"{'yes' if self.capabilities.radare2 else 'no'}"
+                + (
+                    f" ({self.capabilities.radare2}, "
+                    f"{'r2ghidra' if self.capabilities.has_r2ghidra else 'pdc'})"
+                    if self.capabilities.radare2 and self.capabilities.has_r2pipe
+                    else ""
+                )
+            ),
+            f"  r2pipe:   {'yes' if self.capabilities.has_r2pipe else 'no'}",
             "",
         ]
         if self.fuzzer:
@@ -105,6 +120,11 @@ class FuzzingOrchestrator:
                     f"Windows PE binaries cannot be fuzzed on {caps.platform}. "
                     "Run RAPTOR on a Windows host with WinAFL installed."
                 )
+            else:
+                plan.blockers.append(
+                    "WinAFL target detection is available, but RAPTOR does "
+                    "not orchestrate WinAFL campaigns yet."
+                )
         elif kind == "pe-sys":
             plan.fuzzer = None
             plan.blockers.append(
@@ -120,18 +140,49 @@ class FuzzingOrchestrator:
                     "Source-level fuzzing needs clang with libFuzzer support. "
                     "Install clang and verify with 'clang -fsanitize=fuzzer test.c'."
                 )
+            else:
+                plan.blockers.append(
+                    "Source targets need a compiled libFuzzer harness before "
+                    "RAPTOR can run them. Generate/build a harness first, then "
+                    "pass the resulting executable to /fuzz."
+                )
         elif kind == "rust-crate":
             plan.fuzzer = "cargo-fuzz" if not target.blockers else None
+            if plan.fuzzer:
+                plan.blockers.append(
+                    "cargo-fuzz target detection is available, but RAPTOR does "
+                    "not orchestrate cargo-fuzz campaigns yet."
+                )
         elif kind == "python-pkg":
             plan.fuzzer = "atheris" if not target.blockers else None
+            if plan.fuzzer:
+                plan.blockers.append(
+                    "Atheris target detection is available, but RAPTOR does "
+                    "not orchestrate Atheris campaigns yet."
+                )
         else:
             plan.blockers.append(
                 "Could not identify target type. Pass an executable binary, a "
                 "C/C++ header, or a Cargo/Python project root."
             )
 
+        if plan.fuzzer is None and not plan.blockers:
+            if kind in ("elf-linux", "macho"):
+                plan.blockers.append(
+                    "No supported executable fuzzer is available for this binary. "
+                    "Install/configure AFL++, or pass a binary compiled as a "
+                    "libFuzzer harness with LLVMFuzzerTestOneInput."
+                )
+            else:
+                plan.blockers.append(
+                    "Target was detected, but no supported RAPTOR runner is "
+                    "available for it on this host."
+                )
+
         plan.can_run = (
-            plan.fuzzer is not None and not plan.blockers
+            plan.fuzzer in _EXECUTABLE_FUZZERS
+            and not plan.needs_harness
+            and not plan.blockers
         )
 
         # Add capability-driven hints
@@ -157,14 +208,13 @@ class FuzzingOrchestrator:
         LLVMFuzzerTestOneInput symbol), libFuzzer is the only correct
         choice -- AFL++ cannot drive a libFuzzer harness.
         """
-        if target_path and self._is_libfuzzer_instrumented(target_path):
+        is_libfuzzer_binary = bool(target_path and self._is_libfuzzer_instrumented(target_path))
+        if is_libfuzzer_binary:
             return "libfuzzer"
         if caps.has_afl() and caps.is_linux:
             return "afl"
         if caps.has_afl() and caps.is_macos and caps.afl_shmem_ok:
             return "afl"
-        if caps.has_clang_fuzzer():
-            return "libfuzzer"
         if caps.has_afl():
             return "afl"
         return None
@@ -181,15 +231,18 @@ class FuzzingOrchestrator:
         resort. macOS's default `strings` only scans __TEXT and misses
         symbols in other Mach-O sections, so the order matters.
         """
-        import subprocess
+        if not shutil.which("nm") and not shutil.which("strings"):
+            return False
 
         for cmd in (
             ["nm", str(target_path)],
             ["strings", "-a", str(target_path)],
             ["strings", str(target_path)],
         ):
+            if not shutil.which(cmd[0]):
+                continue
             try:
-                result = subprocess.run(
+                result = _run_trusted(
                     cmd, capture_output=True, text=True, timeout=15,
                 )
                 if (result.stdout or "") and "LLVMFuzzerTestOneInput" in result.stdout:
@@ -207,6 +260,7 @@ class FuzzingOrchestrator:
         corpus_dir: Optional[Path] = None,
         dict_path: Optional[Path] = None,
         binary_understand: bool = True,
+        source_context_dir: Optional[Path] = None,
     ) -> Dict[str, Any]:
         """Execute a planned campaign. Raises if plan.can_run is False.
 
@@ -241,33 +295,96 @@ class FuzzingOrchestrator:
 
         logger.info(plan.summary())
 
+        corpus_dir, generated_corpus_info = self._prepare_corpus(
+            plan,
+            out_dir=out_dir,
+            corpus_dir=corpus_dir,
+            source_context_dir=source_context_dir,
+        )
+
         # Optional pre-fuzz: binary-level adversarial analysis via radare2.
         # Mirrors what /understand --map does for source-level targets.
-        if (
-            binary_understand
-            and plan.target.kind in ("elf-linux", "macho", "pe-exe", "pe-dll")
-            and plan.capabilities.radare2
-            and plan.capabilities.has_r2pipe
-        ):
-            try:
-                from packages.fuzzing.binary_understand import BinaryUnderstand
-                logger.info("Running radare2 binary-level analysis...")
-                bu = BinaryUnderstand(plan.target.path, llm=self.llm)
-                ctx_map = bu.analyse()
-                ctx_map.write(out_dir / "binary-context-map.json")
-                logger.info(
-                    f"binary-context-map written: "
-                    f"{len(ctx_map.fuzz_priorities)} prioritised functions"
-                )
-            except Exception as e:
-                logger.warning(f"Binary understand failed (non-fatal): {e}")
+        if binary_understand and plan.target.kind in ("elf-linux", "macho", "pe-exe", "pe-dll"):
+            if not plan.capabilities.radare2:
+                logger.info("Skipping radare2 binary analysis: radare2 not found")
+            elif not plan.capabilities.has_r2pipe:
+                logger.info("Skipping radare2 binary analysis: Python r2pipe module not installed")
+            else:
+                try:
+                    from packages.binary_analysis import analyse_binary_context
+                    decompiler = "r2ghidra" if plan.capabilities.has_r2ghidra else "pdc"
+                    logger.info("=" * 70)
+                    logger.info("BINARY CONTEXT ANALYSIS (radare2)")
+                    logger.info("=" * 70)
+                    logger.info(f"radare2: {plan.capabilities.radare2}")
+                    logger.info(f"decompiler: {decompiler}")
+                    logger.info(f"output: {out_dir / 'binary-context-map.json'}")
+                    ctx_map = analyse_binary_context(
+                        plan.target.path,
+                        out_path=out_dir / "binary-context-map.json",
+                        llm=self.llm,
+                    )
+                    logger.info(
+                        "radare2 binary-context-map written: "
+                        f"{len(ctx_map.entry_points)} entry points, "
+                        f"{len(ctx_map.dangerous_sinks)} sinks, "
+                        f"{len(ctx_map.fuzz_priorities)} prioritised functions"
+                    )
+                except Exception as e:
+                    logger.warning(f"Binary understand failed (non-fatal): {e}")
 
         if plan.fuzzer == "afl":
-            return self._run_afl(plan, out_dir, duration_seconds, corpus_dir, dict_path)
+            result = self._run_afl(plan, out_dir, duration_seconds, corpus_dir, dict_path)
         elif plan.fuzzer == "libfuzzer":
-            return self._run_libfuzzer(plan, out_dir, duration_seconds, corpus_dir, dict_path)
+            result = self._run_libfuzzer(plan, out_dir, duration_seconds, corpus_dir, dict_path)
         else:
             raise RuntimeError(f"Fuzzer '{plan.fuzzer}' not yet wired into orchestrator.")
+        if generated_corpus_info:
+            result["generated_corpus"] = generated_corpus_info
+        return result
+
+    def _prepare_corpus(
+        self,
+        plan: CampaignPlan,
+        *,
+        out_dir: Path,
+        corpus_dir: Optional[Path],
+        source_context_dir: Optional[Path],
+    ) -> tuple[Optional[Path], Optional[Dict[str, Any]]]:
+        """Generate an agentic seed corpus when the caller did not provide one."""
+        if corpus_dir is not None:
+            return corpus_dir, None
+        try:
+            from packages.autonomous import CorpusGenerator
+
+            generated_dir = out_dir / "generated-corpus"
+            context_dir = source_context_dir or plan.target.path.parent
+            generator = CorpusGenerator(
+                plan.target.path,
+                source_dir=context_dir,
+            )
+        except Exception as e:
+            logger.warning(f"Autonomous corpus generator unavailable: {e}")
+            return corpus_dir, None
+
+        try:
+            seeds = generator.generate_autonomous_corpus(generated_dir, max_seeds=64)
+        except Exception as e:
+            logger.warning(f"Autonomous corpus generation failed: {e}")
+            return corpus_dir, None
+        if seeds <= 0:
+            return corpus_dir, None
+
+        info = {
+            "path": str(generated_dir),
+            "seeds": seeds,
+            "source_context_dir": str(context_dir),
+            "commands_detected": sorted(generator.detected_commands.keys()),
+            "formats_detected": sorted(generator.detected_formats),
+        }
+        (out_dir / "generated-corpus.json").write_text(json.dumps(info, indent=2))
+        logger.info(f"Generated agentic fuzz corpus: {seeds} seeds at {generated_dir}")
+        return generated_dir, info
 
     def _run_afl(
         self,

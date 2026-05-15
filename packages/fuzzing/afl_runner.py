@@ -5,7 +5,7 @@ RAPTOR AFL++ Runner
 Orchestrates AFL++ fuzzing campaigns with parallel workers.
 """
 
-import os
+import re
 import shutil
 import subprocess
 
@@ -18,9 +18,13 @@ import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from core.config import RaptorConfig
 from core.logging import get_logger
 
 logger = get_logger()
+
+_AFL_INT_RE = re.compile(r"^-?\d+")
+_AFL_CRASH_EXECS_RE = re.compile(r"(?:^|,)execs:(\d+)(?:,|$)")
 
 
 class AFLRunner:
@@ -203,8 +207,9 @@ class AFLRunner:
             text=True,
         )
 
-        has_asan = "asan" in result.stdout.lower() or "__asan" in result.stdout.lower()
-        has_ubsan = "ubsan" in result.stdout.lower() or "__ubsan" in result.stdout.lower()
+        strings_output = result.stdout.lower()
+        has_asan = self._has_runtime_sanitizer(strings_output, "asan")
+        has_ubsan = self._has_runtime_sanitizer(strings_output, "ubsan")
 
         if has_asan or has_ubsan:
             logger.info("✓ Binary appears to be compiled with sanitizers")
@@ -217,6 +222,33 @@ class AFLRunner:
             logger.warning("⚠ Binary does not appear to be compiled with sanitizers")
             logger.warning("  Consider recompiling with -fsanitize=address for better bug detection")
             return False
+
+    @staticmethod
+    def _has_runtime_sanitizer(strings_output: str, sanitizer: str) -> bool:
+        """Detect real sanitizer runtime linkage without AFL helper false positives."""
+        if sanitizer == "asan":
+            strong_markers = (
+                "__asan_init",
+                "__asan_report_",
+                "addresssanitizer",
+                "asan_options",
+            )
+            weak_only = ("__asan_region_is_poisoned",)
+        elif sanitizer == "ubsan":
+            strong_markers = (
+                "__ubsan_handle_",
+                "undefinedbehaviorsanitizer",
+                "ubsan_options",
+            )
+            weak_only = ()
+        else:
+            return False
+
+        if any(marker in strings_output for marker in strong_markers):
+            return True
+        if weak_only and any(marker in strings_output for marker in weak_only):
+            return False
+        return False
 
     def show_recompile_guide(self) -> None:
         """Show guide for recompiling binary with AFL instrumentation and sanitizers."""
@@ -292,6 +324,8 @@ class AFLRunner:
 
         # Start AFL instances
         processes = []
+        log_dir = self.output_dir / "raptor-logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
 
         for job_id in range(parallel_jobs):
             is_main = job_id == 0
@@ -315,20 +349,34 @@ class AFLRunner:
             # to tolerate both: we lose a small amount of speed and the
             # guarantee that external cores are captured (AFL still writes its
             # own crash artefacts under crashes/).
-            afl_env = os.environ.copy()
+            afl_env = RaptorConfig.get_safe_env()
             afl_env.setdefault("AFL_SKIP_CPUFREQ", "1")
             afl_env.setdefault("AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES", "1")
+            afl_env.setdefault("AFL_FORKSRV_INIT_TMOUT", "10000")
+
+            stdout_path = log_dir / f"{instance_name}.stdout.log"
+            stderr_path = log_dir / f"{instance_name}.stderr.log"
+            stdout_fp = stdout_path.open("w", encoding="utf-8", errors="replace")
+            stderr_fp = stderr_path.open("w", encoding="utf-8", errors="replace")
+            (log_dir / f"{instance_name}.cmdline").write_text(" ".join(cmd) + "\n")
 
             # Intentionally bare Popen — AFL fuzz daemon is long-running and
             # needs streaming output. Cannot use sandbox_run (blocks until exit).
             proc = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=stdout_fp,
+                stderr=stderr_fp,
                 text=True,
                 env=afl_env,
             )
-            processes.append((instance_name, proc))
+            processes.append({
+                "name": instance_name,
+                "proc": proc,
+                "stdout_path": stdout_path,
+                "stderr_path": stderr_path,
+                "stdout_fp": stdout_fp,
+                "stderr_fp": stderr_fp,
+            })
 
         # Monitor fuzzing
         start_time = time.time()
@@ -392,42 +440,29 @@ class AFLRunner:
 
                 # Check if all processes are still running
                 running_processes = []
-                for name, proc in processes:
+                for entry in processes:
+                    name = entry["name"]
+                    proc = entry["proc"]
                     if proc.poll() is not None:
-                        # Process has exited - capture error output
                         exit_code = proc.returncode
-                        try:
-                            stdout, stderr = proc.communicate(timeout=1)
-                            if stderr and stderr.strip():
-                                # stderr is already a string due to text=True in Popen
-                                stderr_str = stderr.strip()
-                                logger.error(f"AFL instance {name} exited with code {exit_code}")
-                                logger.error(f"AFL stderr: {stderr_str}")
-
-                                # Check for common AFL startup errors
-                                if "shmget() failed" in stderr_str or "No space left on device" in stderr_str or "Invalid argument" in stderr_str:
-                                    logger.error("=" * 70)
-                                    logger.error("AFL SHARED MEMORY CONFIGURATION ERROR")
-                                    logger.error("=" * 70)
-                                    logger.error("Your system's shared memory limits are too low for AFL++.")
-                                    logger.error("")
-                                    logger.error("To fix this, run:")
-                                    logger.error("  sudo afl-system-config")
-                                    logger.error("")
-                                    logger.error("Or manually configure with:")
-                                    logger.error("  sudo sysctl kern.sysv.shmmax=524288000")
-                                    logger.error("  sudo sysctl kern.sysv.shmall=131072000")
-                                    logger.error("  sudo sysctl kern.sysv.shmseg=48")
-                                    logger.error("")
-                                    logger.error("After running these commands, try fuzzing again.")
-                                    logger.error("=" * 70)
-
-                            else:
-                                logger.warning(f"AFL instance {name} exited unexpectedly with code {exit_code}")
-                        except subprocess.TimeoutExpired:
-                            logger.error(f"AFL instance {name} exited with code {exit_code} (could not read output)")
+                        self._close_process_logs(entry)
+                        stderr_str = self._tail_file(entry["stderr_path"])
+                        if stderr_str:
+                            logger.error(f"AFL instance {name} exited with code {exit_code}")
+                            logger.error(f"AFL stderr saved to: {entry['stderr_path']}")
+                            logger.error(f"AFL stderr tail:\n{stderr_str}")
+                            self._log_common_afl_startup_error(stderr_str)
+                            if self.telemetry:
+                                self.telemetry.record_error(
+                                    f"AFL {name} exited {exit_code}: {stderr_str[-500:]}"
+                                )
+                        else:
+                            logger.warning(
+                                f"AFL instance {name} exited unexpectedly with code {exit_code}; "
+                                f"stdout={entry['stdout_path']} stderr={entry['stderr_path']}"
+                            )
                     else:
-                        running_processes.append((name, proc))
+                        running_processes.append(entry)
                 
                 processes = running_processes
                 
@@ -439,13 +474,18 @@ class AFLRunner:
         finally:
             # Stop all AFL instances
             logger.info("Stopping AFL instances...")
-            for name, proc in processes:
+            for entry in processes:
+                name = entry["name"]
+                proc = entry["proc"]
                 proc.terminate()
                 try:
                     proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     logger.warning(f"Force killing {name}")
                     proc.kill()
+                    proc.wait(timeout=5)
+                finally:
+                    self._close_process_logs(entry)
 
         # Count final crashes
         total_crashes = 0
@@ -460,7 +500,7 @@ class AFLRunner:
         if final_stats:
             total_execs = final_stats.get('execs_done', 'N/A')
             execs_per_sec = final_stats.get('execs_per_sec', 'N/A')
-            paths_found = final_stats.get('paths_found', 'N/A')
+            paths_found = self._afl_paths_found(final_stats)
             stability = final_stats.get('stability', 'N/A')
             bitmap_cvg = final_stats.get('bitmap_cvg', 'N/A')
             
@@ -474,6 +514,20 @@ class AFLRunner:
             logger.info(f"Bitmap coverage: {bitmap_cvg}%")
             logger.info(f"Unique crashes: {total_crashes}")
             logger.info("=" * 70)
+
+            if self.telemetry:
+                max_crash_execs = self._max_crash_execs(crashes_dir)
+                self.telemetry.update_stats(
+                    total_executions=max(
+                        self._parse_afl_int(final_stats.get("execs_done")),
+                        max_crash_execs,
+                    ),
+                    executions_per_second=self._parse_afl_int(final_stats.get("execs_per_sec")),
+                    paths_found=self._afl_paths_found(final_stats),
+                    corpus_size=self._parse_afl_int(final_stats.get("corpus_count")),
+                    coverage_percent=self._parse_afl_percent(final_stats.get("bitmap_cvg")),
+                )
+                self.telemetry.stats.crashes = total_crashes
         logger.info("=" * 70)
         logger.info("FUZZING CAMPAIGN COMPLETE")
         logger.info("=" * 70)
@@ -493,6 +547,94 @@ class AFLRunner:
                     logger.info(f"  {key}: {value}")
 
         return total_crashes, crashes_dir
+
+    @staticmethod
+    def _close_process_logs(entry: dict) -> None:
+        for key in ("stdout_fp", "stderr_fp"):
+            fp = entry.get(key)
+            if fp and not fp.closed:
+                fp.flush()
+                fp.close()
+
+    @staticmethod
+    def _tail_file(path: Path, max_bytes: int = 4096) -> str:
+        try:
+            data = path.read_bytes()
+        except OSError:
+            return ""
+        return data[-max_bytes:].decode(errors="replace").strip()
+
+    @staticmethod
+    def _log_common_afl_startup_error(stderr_str: str) -> None:
+        lowered = stderr_str.lower()
+        if (
+            "shmget() failed" in lowered
+            or "shmat() failed" in lowered
+            or "no space left on device" in lowered
+            or "cannot allocate memory" in lowered
+        ):
+            logger.error("=" * 70)
+            logger.error("AFL SHARED MEMORY CONFIGURATION ERROR")
+            logger.error("=" * 70)
+            logger.error("Your system's shared memory limits are too low for AFL++.")
+            logger.error("To fix this, run: sudo afl-system-config")
+            logger.error("=" * 70)
+        elif "timeout while initializing fork server" in lowered:
+            logger.error("=" * 70)
+            logger.error("AFL FORKSERVER INITIALIZATION TIMEOUT")
+            logger.error("=" * 70)
+            logger.error(
+                "The target did not enter AFL's forkserver quickly enough. "
+                "Try a non-ASAN AFL build for discovery, increase "
+                "AFL_FORKSRV_INIT_TMOUT, or replay crashes under ASAN later."
+            )
+            logger.error("=" * 70)
+
+    @staticmethod
+    def _parse_afl_int(value) -> int:
+        """Parse AFL integer-ish fields, tolerating N/A, percents and decimals."""
+        if value is None:
+            return 0
+        text = str(value).strip().replace(",", "")
+        match = _AFL_INT_RE.match(text)
+        if not match:
+            return 0
+        try:
+            return int(match.group(0))
+        except ValueError:
+            return 0
+
+    @staticmethod
+    def _parse_afl_percent(value) -> float:
+        if value is None:
+            return 0.0
+        try:
+            return float(str(value).strip().rstrip("%") or 0)
+        except ValueError:
+            return 0.0
+
+    @classmethod
+    def _afl_paths_found(cls, stats: dict) -> int:
+        """Map current AFL++ stats to a useful path/corpus discovery count."""
+        for key in ("paths_found", "corpus_found", "queued_paths", "cur_path"):
+            value = cls._parse_afl_int(stats.get(key))
+            if value:
+                return value
+        return cls._parse_afl_int(stats.get("corpus_count"))
+
+    @staticmethod
+    def _max_crash_execs(crashes_dir: Path) -> int:
+        """Use AFL crash filenames as lower-bound exec count when stats lag."""
+        if not crashes_dir.exists():
+            return 0
+        max_execs = 0
+        for path in crashes_dir.iterdir():
+            if not path.is_file() or not path.name.startswith("id:"):
+                continue
+            match = _AFL_CRASH_EXECS_RE.search(path.name)
+            if match:
+                max_execs = max(max_execs, int(match.group(1)))
+        return max_execs
 
     def _build_afl_command(
         self,
