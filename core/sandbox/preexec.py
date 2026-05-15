@@ -197,13 +197,21 @@ def _make_preexec_fn(limits: dict, writable_paths: list = None,
         if mem > 0:
             try:
                 resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
-            except (ValueError, OSError):
-                pass
+            except (ValueError, OSError) as exc:
+                warn_post_fork(
+                    "preexec",
+                    f"RLIMIT_AS setrlimit failed (errno={getattr(exc, 'errno', '?')}); "
+                    f"process may exceed requested virtual-address bound",
+                )
         if file_mb > 0:
             try:
                 resource.setrlimit(resource.RLIMIT_FSIZE, (file_bytes, file_bytes))
-            except (ValueError, OSError):
-                pass
+            except (ValueError, OSError) as exc:
+                warn_post_fork(
+                    "preexec",
+                    f"RLIMIT_FSIZE setrlimit failed (errno={getattr(exc, 'errno', '?')}); "
+                    f"process may exceed requested max-file-size",
+                )
         if cpu > 0:
             try:
                 # Soft limit 1s before hard limit so the process gets SIGXCPU
@@ -211,8 +219,12 @@ def _make_preexec_fn(limits: dict, writable_paths: list = None,
                 # With soft==hard, kernel sends both simultaneously and SIGKILL
                 # wins — making resource_exceeded permanently False.
                 resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
-            except (ValueError, OSError):
-                pass
+            except (ValueError, OSError) as exc:
+                warn_post_fork(
+                    "preexec",
+                    f"RLIMIT_CPU setrlimit failed (errno={getattr(exc, 'errno', '?')}); "
+                    f"process may exceed requested CPU-time bound",
+                )
 
         # Core dumps off. A sandboxed process can read anywhere in the
         # filesystem (Landlock's read-everywhere default covers ~/.ssh,
