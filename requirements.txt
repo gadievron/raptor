@@ -35,7 +35,7 @@ tabulate==0.10.0
 pyyaml==6.0.3
 
 # Optional: For SMT-based constraint analysis (one-gadget feasibility, etc.)
-# z3-solver==4.16.0.0
+# z3-solver==4.15.4.0  # see requirements-dev.txt for bookworm/aarch64 cap
 
 # Optional: For web scanning package
 # beautifulsoup4>=4.12.0
