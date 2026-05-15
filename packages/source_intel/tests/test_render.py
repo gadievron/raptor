@@ -370,6 +370,116 @@ def test_no_caveat_when_unconditional():
     assert "CONDITIONAL" not in text
 
 
+def test_noreturn_renders_dos_only_phrasing():
+    """noreturn marks a function as a guaranteed abort — the rendered
+    line must say "DoS-only" so the LLM understands the implication
+    for exploitability."""
+    from packages.source_intel.analyze import KIND_NORETURN, AttributeEvidence
+    ev = AttributeEvidence(
+        kind=KIND_NORETURN,
+        function_name="panic_fn",
+        location=("a.c", 10),
+        match_source="literal",
+        raw_match="__attribute__((noreturn))",
+    )
+    r = SourceIntelResult(attributes=(ev,))
+    lines = derive_evidence_strings(r)
+    text = "\n".join(lines)
+    assert "panic_fn" in text
+    assert "noreturn" in text.lower()
+    assert "dos" in text.lower() or "aborts" in text.lower()
+
+
+def test_malloc_renders_allocator_signal():
+    from packages.source_intel.analyze import KIND_MALLOC, AttributeEvidence
+    ev = AttributeEvidence(
+        kind=KIND_MALLOC,
+        function_name="my_alloc",
+        location=("a.c", 5),
+        match_source="literal",
+        raw_match="__attribute__((malloc))",
+    )
+    r = SourceIntelResult(attributes=(ev,))
+    lines = derive_evidence_strings(r)
+    text = "\n".join(lines)
+    assert "my_alloc" in text
+    assert "allocator" in text.lower()
+
+
+def test_no_stack_protector_renders_hardening_hole():
+    """no_stack_protector is a hardening HOLE — the rendered line
+    must convey that signal so the LLM treats CWE-120 / CWE-787
+    findings in such functions as more exploitable."""
+    from packages.source_intel.analyze import (
+        KIND_NO_STACK_PROTECTOR, AttributeEvidence,
+    )
+    ev = AttributeEvidence(
+        kind=KIND_NO_STACK_PROTECTOR,
+        function_name="critical_fn",
+        location=("a.c", 20),
+        match_source="literal",
+        raw_match="__attribute__((no_stack_protector))",
+    )
+    r = SourceIntelResult(attributes=(ev,))
+    lines = derive_evidence_strings(r)
+    text = "\n".join(lines)
+    assert "critical_fn" in text
+    assert "canary" in text.lower() or "bypass" in text.lower()
+    assert ("hardening" in text.lower()
+            or "opts out" in text.lower()
+            or "opt out" in text.lower())
+
+
+def test_no_stack_protector_correlates_with_build_wide_strong():
+    """When the build was using -fstack-protector-strong, the per-
+    function opt-out matters MORE — the renderer notes the
+    build-wide protection state."""
+    bf = BuildFlagsContext(
+        source="compile_commands.json",
+        extraction_confidence="high",
+        stack_protector_level="strong",
+    )
+    from packages.source_intel.analyze import (
+        KIND_NO_STACK_PROTECTOR, AttributeEvidence,
+    )
+    ev = AttributeEvidence(
+        kind=KIND_NO_STACK_PROTECTOR,
+        function_name="critical_fn",
+        location=("a.c", 20),
+        match_source="literal",
+        raw_match="__attribute__((no_stack_protector))",
+    )
+    r = SourceIntelResult(attributes=(ev,))
+    lines = derive_evidence_strings(r, build_flags=bf)
+    text = "\n".join(lines)
+    assert "strong" in text.lower()
+
+
+def test_access_renders_with_fortify_correlation():
+    """access annotation declares parameter intent; with
+    FORTIFY_SOURCE=2 active, the runtime-bounds-check signal must
+    surface so the LLM correctly weighs CWE-120 findings."""
+    bf = BuildFlagsContext(
+        source="compile_commands.json",
+        extraction_confidence="high",
+        fortify_source_level=2,
+    )
+    from packages.source_intel.analyze import KIND_ACCESS, AttributeEvidence
+    ev = AttributeEvidence(
+        kind=KIND_ACCESS,
+        function_name="ro_fn",
+        location=("a.c", 30),
+        match_source="literal",
+        raw_match="__attribute__((access(read_only, 1)))",
+    )
+    r = SourceIntelResult(attributes=(ev,))
+    lines = derive_evidence_strings(r, build_flags=bf)
+    text = "\n".join(lines)
+    assert "ro_fn" in text
+    assert "access" in text.lower()
+    assert "runtime" in text.lower() or "bounds-check" in text.lower()
+
+
 def test_returns_nonnull_warns_when_delete_null_checks_on():
     """If the annotation is wrong AND -fdelete-null-pointer-checks is
     on, defensive caller null checks may be eliminated. The renderer

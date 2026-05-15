@@ -304,6 +304,47 @@ def test_e2e_real_spatch_detects_literal_returns_nonnull(tmp_path):
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
 )
+def test_e2e_real_spatch_detects_axis1_completion_kinds(tmp_path):
+    """End-to-end across the 4 axis-1-completion attribute rules
+    (noreturn, malloc, no_stack_protector, access). Pins the
+    multi-rule axis-dispatch loop + ALL_KINDS membership for the
+    expanded attribute set."""
+    src = tmp_path / "all_attrs.c"
+    src.write_text(
+        "__attribute__((noreturn)) void panic_fn(const char *m);\n"
+        "__attribute__((__noreturn__)) void exit_fn(int code);\n"
+        "__attribute__((malloc)) void *my_alloc(int sz);\n"
+        "__attribute__((__malloc__)) void *my_zalloc(int sz);\n"
+        "__attribute__((no_stack_protector)) void critical_fn(void);\n"
+        "__attribute__((__no_stack_protector__)) void other_crit(void);\n"
+        "__attribute__((access(read_only, 1))) int ro_fn(const int *p);\n"
+        "__attribute__((access(write_only, 1, 2))) int wo_fn(int *buf, int n);\n"
+    )
+
+    r = analyze(tmp_path)
+    from packages.source_intel.analyze import (
+        KIND_ACCESS, KIND_MALLOC, KIND_NO_STACK_PROTECTOR, KIND_NORETURN,
+    )
+
+    by_kind = {kind: set() for kind in (
+        KIND_NORETURN, KIND_MALLOC, KIND_NO_STACK_PROTECTOR, KIND_ACCESS,
+    )}
+    for ev in r.attributes:
+        if ev.match_source != "literal":
+            continue
+        if ev.kind in by_kind:
+            by_kind[ev.kind].add(ev.function_name)
+
+    assert by_kind[KIND_NORETURN] == {"panic_fn", "exit_fn"}
+    assert by_kind[KIND_MALLOC] == {"my_alloc", "my_zalloc"}
+    assert by_kind[KIND_NO_STACK_PROTECTOR] == {"critical_fn", "other_crit"}
+    assert by_kind[KIND_ACCESS] == {"ro_fn", "wo_fn"}
+
+
+@pytest.mark.skipif(
+    not shutil.which("spatch"),
+    reason="spatch not installed — skip real-spatch E2E",
+)
 def test_e2e_captures_conditional_on_for_ifdef_wrapped_attr(tmp_path):
     """A WUR-annotated function under #ifdef must surface ``conditional_on``.
 

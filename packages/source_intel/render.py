@@ -23,8 +23,12 @@ from typing import List, Optional
 
 from core.build.build_flags import BuildFlagsContext
 from packages.source_intel.analyze import (
+    KIND_ACCESS,
     KIND_ALLOC_SIZE,
+    KIND_MALLOC,
+    KIND_NO_STACK_PROTECTOR,
     KIND_NONNULL,
+    KIND_NORETURN,
     KIND_RETURNS_NONNULL,
     KIND_WUR,
     AttributeEvidence,
@@ -126,6 +130,14 @@ def _render_attribute_line(
         line = _render_alloc_size_line(ev, build_flags, style)
     elif ev.kind == KIND_RETURNS_NONNULL:
         line = _render_returns_nonnull_line(ev, build_flags, style)
+    elif ev.kind == KIND_NORETURN:
+        line = _render_noreturn_line(ev, build_flags, style)
+    elif ev.kind == KIND_MALLOC:
+        line = _render_malloc_line(ev, build_flags, style)
+    elif ev.kind == KIND_NO_STACK_PROTECTOR:
+        line = _render_no_stack_protector_line(ev, build_flags, style)
+    elif ev.kind == KIND_ACCESS:
+        line = _render_access_line(ev, build_flags, style)
     else:
         return None
     return _append_conditional_caveat(line, ev)
@@ -385,6 +397,204 @@ def _returns_nonnull_caveat_phrase(
     return (
         "Compiler-elimination status not pinned by observed flags — "
         "default depends on -O level and compiler version."
+    )
+
+
+def _render_noreturn_line(
+    ev: AttributeEvidence,
+    build_flags: Optional[BuildFlagsContext],
+    style: str,
+) -> str:
+    """Render noreturn evidence.
+
+    Marks the function as a guaranteed abort (panic, _Exit, BUG-style).
+    Strong DoS-vs-RCE discriminator: if the abort sits on the path
+    between source and bug primitive, exploitation collapses to DoS.
+    """
+    fn_text = (
+        f"function `{ev.function_name}`"
+        if ev.function_name
+        else f"function in {ev.location[0]} at line {ev.location[1]}"
+    )
+
+    if style == "stage_d":
+        prefix = "Control-flow signal — noreturn"
+    elif style == "exploit_plan":
+        prefix = "DoS-only constraint — noreturn function"
+    else:
+        prefix = "Variant hint — noreturn annotation"
+
+    return (
+        f"{prefix}: {fn_text} is declared noreturn. If this function "
+        f"is invoked on the path between source and the bug primitive, "
+        f"the program aborts before exploitation; the bug becomes DoS-only."
+    )
+
+
+def _render_malloc_line(
+    ev: AttributeEvidence,
+    build_flags: Optional[BuildFlagsContext],
+    style: str,
+) -> str:
+    """Render malloc evidence.
+
+    The annotation declares the function as an allocator — returned
+    pointer is fresh and unaliased. The gcc 11+ paramised form
+    `malloc(free_fn[, n])` pairs the allocator with its deallocator.
+    Source_intel records the annotation; combined with alloc_size,
+    the LLM can recognise allocator semantics even when the function
+    name doesn't say "malloc".
+    """
+    fn_text = (
+        f"function `{ev.function_name}`"
+        if ev.function_name
+        else f"function in {ev.location[0]} at line {ev.location[1]}"
+    )
+
+    if style == "stage_d":
+        prefix = "Allocator signal — malloc"
+    elif style == "exploit_plan":
+        prefix = "Constraint — function declared as allocator"
+    else:
+        prefix = "Variant hint — malloc annotation"
+
+    return (
+        f"{prefix}: {fn_text} declared as an allocator — returned "
+        f"pointer is fresh and unaliased per the annotation. May be "
+        f"paired with a deallocator on gcc 11+ (`malloc(free_fn)`)."
+    )
+
+
+def _render_no_stack_protector_line(
+    ev: AttributeEvidence,
+    build_flags: Optional[BuildFlagsContext],
+    style: str,
+) -> str:
+    """Render no_stack_protector evidence.
+
+    This is an explicit HARDENING HOLE — the function opts out of the
+    stack-canary insertion that -fstack-protector* would normally add.
+    A stack buffer overflow in such a function bypasses the canary
+    check entirely.
+    """
+    fn_text = (
+        f"function `{ev.function_name}`"
+        if ev.function_name
+        else f"function in {ev.location[0]} at line {ev.location[1]}"
+    )
+
+    sp_phrase = _stack_protector_phrase(build_flags)
+
+    if style == "stage_d":
+        prefix = "Hardening hole — no_stack_protector"
+    elif style == "exploit_plan":
+        prefix = "Constraint relaxed — no canary on this function"
+    else:
+        prefix = "Variant hint — no_stack_protector annotation"
+
+    return (
+        f"{prefix}: {fn_text} explicitly OPTS OUT of -fstack-protector. "
+        f"A stack buffer overflow in this function bypasses the canary "
+        f"check; saved return address reaches via overflow without "
+        f"defence. {sp_phrase}"
+    )
+
+
+def _stack_protector_phrase(build_flags: Optional[BuildFlagsContext]) -> str:
+    """Phrase describing what the build-wide stack protector level is —
+    the no_stack_protector attribute matters most when the build was
+    otherwise enabling canary insertion."""
+    if build_flags is None or build_flags.extraction_confidence == "absent":
+        return (
+            "Build-wide stack-protector level unknown; the opt-out "
+            "matters most when the rest of the binary was canary-"
+            "protected."
+        )
+    level = build_flags.stack_protector_level
+    if level in ("strong", "all"):
+        return (
+            f"Build flags include -fstack-protector-{level} — most of "
+            f"the binary has canary protection that this function "
+            f"explicitly disables."
+        )
+    if level == "weak":
+        return (
+            "Build flags include -fstack-protector (weak); the opt-out "
+            "matters for functions that would have qualified for "
+            "canary insertion."
+        )
+    if level == "none":
+        return (
+            "Build-wide stack-protector is disabled (-fno-stack-protector); "
+            "this function's opt-out is redundant — canary wasn't "
+            "present anyway."
+        )
+    return (
+        "Build-wide stack-protector status not pinned by observed flags."
+    )
+
+
+def _render_access_line(
+    ev: AttributeEvidence,
+    build_flags: Optional[BuildFlagsContext],
+    style: str,
+) -> str:
+    """Render access evidence.
+
+    Declares which pointer parameters are read-only / write-only /
+    read-write, and optionally ties access width to another parameter.
+    Combined with FORTIFY_SOURCE, this unlocks runtime bounds-checking
+    on the annotated parameters.
+    """
+    fn_text = (
+        f"function `{ev.function_name}`"
+        if ev.function_name
+        else f"function in {ev.location[0]} at line {ev.location[1]}"
+    )
+
+    fortify_phrase = _access_fortify_phrase(build_flags)
+
+    if style == "stage_d":
+        prefix = "Author intent + compiler signal — access"
+    elif style == "exploit_plan":
+        prefix = "Constraint — declared parameter access pattern"
+    else:
+        prefix = "Variant hint — access annotation"
+
+    return (
+        f"{prefix}: {fn_text} declares parameter access pattern "
+        f"(read_only / write_only / read_write, possibly tied to a size "
+        f"parameter). {fortify_phrase}"
+    )
+
+
+def _access_fortify_phrase(build_flags: Optional[BuildFlagsContext]) -> str:
+    """Same FORTIFY_SOURCE caveat shape as alloc_size — annotations
+    unlock runtime checks when fortified intrinsics are active."""
+    if build_flags is None or build_flags.extraction_confidence == "absent":
+        return (
+            "FORTIFY_SOURCE status unknown; whether the declared access "
+            "pattern triggers runtime bounds-checking depends on the "
+            "compile-time _FORTIFY_SOURCE level."
+        )
+    level = build_flags.fortify_source_level
+    if level is None:
+        return (
+            "FORTIFY_SOURCE not set in observed flags; access annotation "
+            "is static-analyzer-only, no runtime bounds-check enforcement."
+        )
+    if level >= 2:
+        return (
+            f"FORTIFY_SOURCE={level} — runtime bounds-checking active "
+            f"on the annotated parameters; caller overflows would be "
+            f"caught."
+        )
+    if level == 1:
+        return (
+            "FORTIFY_SOURCE=1 — limited runtime bounds-checking active."
+        )
+    return (
+        "_FORTIFY_SOURCE=0 — annotation is static-analyzer-only."
     )
 
 

@@ -33,8 +33,12 @@ from typing import Dict, Optional, Tuple
 from core.dataflow.finding import Finding
 from core.dataflow.validator import ValidatorVerdict
 from packages.source_intel.analyze import (
+    KIND_ACCESS,
     KIND_ALLOC_SIZE,
+    KIND_MALLOC,
+    KIND_NO_STACK_PROTECTOR,
     KIND_NONNULL,
+    KIND_NORETURN,
     KIND_RETURNS_NONNULL,
     KIND_WUR,
     AttributeEvidence,
@@ -76,6 +80,32 @@ _KIND_RELEVANT_RULE_PREFIXES: Dict[str, Tuple[str, ...]] = {
     KIND_RETURNS_NONNULL: (
         "cpp/null-dereference",
         "c/null-dereference",
+    ),
+    # noreturn is informational for the verdict policy — knowing a
+    # function aborts on the path SUPPORTS a not-exploitable verdict
+    # (DoS-only). But Phase 2-3 never emit NOT_EXPLOITABLE; we leave
+    # noreturn evidence to surface via render strings only, with no
+    # rule-id-relevance dispatch yet. Empty tuple → no verdict-relevant
+    # rule prefixes.
+    KIND_NORETURN: (),
+    # malloc by itself is informational (mostly co-applied with
+    # alloc_size). Leave verdict policy to alloc_size; malloc surfaces
+    # via render strings only.
+    KIND_MALLOC: (),
+    # no_stack_protector marks a hardening hole. Relevant verdict
+    # signal for stack-buffer-overflow CWE classes — finding gains
+    # support when the buggy function explicitly opts out of canary
+    # insertion.
+    KIND_NO_STACK_PROTECTOR: (
+        "cpp/unbounded-write",
+        "cpp/uncontrolled-",
+    ),
+    # access declares pointer-parameter intent; relevant for CWE-120
+    # / CWE-787 (the compiler may bounds-check operations against the
+    # annotated parameter under FORTIFY_SOURCE).
+    KIND_ACCESS: (
+        "cpp/unbounded-write",
+        "cpp/uncontrolled-",
     ),
 }
 

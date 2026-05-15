@@ -48,12 +48,20 @@ KIND_WUR = "wur"
 KIND_NONNULL = "nonnull"
 KIND_ALLOC_SIZE = "alloc_size"
 KIND_RETURNS_NONNULL = "returns_nonnull"
+KIND_NORETURN = "noreturn"
+KIND_MALLOC = "malloc"
+KIND_NO_STACK_PROTECTOR = "no_stack_protector"
+KIND_ACCESS = "access"
 
 ALL_KINDS: Tuple[str, ...] = (
     KIND_WUR,
     KIND_NONNULL,
     KIND_ALLOC_SIZE,
     KIND_RETURNS_NONNULL,
+    KIND_NORETURN,
+    KIND_MALLOC,
+    KIND_NO_STACK_PROTECTOR,
+    KIND_ACCESS,
 )
 
 
@@ -368,6 +376,10 @@ _KIND_TO_RAW_MATCH: Dict[str, str] = {
     KIND_NONNULL: "__attribute__((nonnull))",
     KIND_ALLOC_SIZE: "__attribute__((alloc_size(...)))",
     KIND_RETURNS_NONNULL: "__attribute__((returns_nonnull))",
+    KIND_NORETURN: "__attribute__((noreturn))",
+    KIND_MALLOC: "__attribute__((malloc))",
+    KIND_NO_STACK_PROTECTOR: "__attribute__((no_stack_protector))",
+    KIND_ACCESS: "__attribute__((access(...)))",
 }
 
 
