@@ -2249,5 +2249,6 @@ def run_untrusted_networked(
         use_egress_proxy=True,
         proxy_hosts=list(proxy_hosts),
         allowed_tcp_ports=[443],
+        strict_env=True,
         **kwargs,
     )
