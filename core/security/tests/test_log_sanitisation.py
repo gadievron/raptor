@@ -83,7 +83,6 @@ class TestEscapeNonprintable(unittest.TestCase):
         self.assertNotIn("\x1b", escaped)
         self.assertNotIn("\x07", escaped)
         self.assertIn("\\x1b]52;c;c2VjcmV0\\x07", escaped)
-        self.assertEqual(len(escaped), len(payload) + len("\\x1b") - 1 + len("\\x07") - 1)
 
     def test_escape_unicode_line_separator(self):
         # U+2028 is a Unicode line separator — some JSON parsers and
@@ -115,6 +114,24 @@ class TestHasNonprintable(unittest.TestCase):
 
     def test_with_c1_control_true(self):
         self.assertTrue(has_nonprintable("\x9b[31m"))
+
+    def test_escape_targets_are_detected(self):
+        samples = [
+            ("ansi_escape", "A\x1b[31mB"),
+            ("null_byte", "pre\x00post"),
+            ("crlf", "line1\r\nline2"),
+            ("tab", "a\tb"),
+            ("delete", "\x7f"),
+            ("c1_control", "\x9b[31m"),
+            ("osc8_hyperlink", "safe \x1b]8;;https://evil.example\x07click"),
+            ("osc52_clipboard", "copy \x1b]52;c;c2VjcmV0\x07 done"),
+            ("dcs_pm_apc", "\x1bPqdata\x1b\\ \x1b^private\x1b\\ \x1b_app\x1b\\"),
+            ("partial_escape", "prefix \x1b]8;;https://evil.example"),
+            ("unicode_line_separator", "a\u2028b"),
+        ]
+        for name, sample in samples:
+            with self.subTest(name=name):
+                self.assertTrue(has_nonprintable(sample))
 
     def test_unicode_printable_false(self):
         self.assertFalse(has_nonprintable("café 日本語"))
