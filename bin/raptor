@@ -119,6 +119,20 @@ if [[ "${1:-}" == "project" ]]; then
     exec "$RAPTOR_DIR/libexec/raptor-project-manager" "$@"
 fi
 
+# Route doctor directly (no Claude needed) — the doctor is a status
+# report on local setup, and `raptor doctor` is precisely the
+# command an operator runs when claude itself is missing.
+# Export RAPTOR_DIR + _RAPTOR_TRUSTED here because the main path's
+# `export RAPTOR_DIR` (below) hasn't run yet; doctor needs them
+# in the python subprocess env.
+if [[ "${1:-}" == "doctor" ]]; then
+    shift
+    cd "$RAPTOR_DIR" || exit 1
+    export RAPTOR_DIR
+    export _RAPTOR_TRUSTED=1
+    exec python3 -m core.startup.doctor "$@"
+fi
+
 # Claude required for everything else
 if ! command -v claude >/dev/null 2>&1; then
     echo "raptor: claude not found. Install Claude Code:" >&2
