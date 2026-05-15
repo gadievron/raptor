@@ -73,6 +73,13 @@ def parse_msbuild_project(path: Path) -> List[Dependency]:
 
     out: List[Dependency] = []
     seen_keys: set = set()
+    # Extract the project's target framework(s). Modern SDK-style
+    # csproj uses ``<TargetFramework>`` (singular) or
+    # ``<TargetFrameworks>`` (plural, semicolon-separated). The
+    # TFM list is shared by every PackageReference in the file
+    # and feeds the transitive-drop NuGet check (which compares
+    # per-TFM dep groups across versions).
+    tfms = _extract_target_frameworks(root)
     # MSBuild XML is namespaced (xmlns="http://schemas...") in some files
     # but namespace-less in modern SDK-style projects; iter both.
     for el in _findall_pkgref(root):
@@ -89,6 +96,7 @@ def parse_msbuild_project(path: Path) -> List[Dependency]:
             version = normalised
         purl = _build_purl(name, version)
         scope = _scope_from_msbuild(el)
+        source_extra = {"tfms": tfms} if tfms else None
         dep = Dependency(
             ecosystem=ECOSYSTEM,
             name=name,
@@ -104,12 +112,43 @@ def parse_msbuild_project(path: Path) -> List[Dependency]:
                 reason="MSBuild XML — deterministic structure",
             ),
             source_kind="manifest",
+            source_extra=source_extra,
         )
         if dep.key() in seen_keys:
             continue
         seen_keys.add(dep.key())
         out.append(dep)
     return out
+
+
+def _extract_target_frameworks(root) -> List[str]:
+    """Pull the project's target frameworks from ``<TargetFramework>``
+    or ``<TargetFrameworks>``. Returns a list of TFMs (e.g. ``["net6.0",
+    "net8.0"]``); empty if neither element is present.
+
+    Per-PackageReference TFM (`Condition="'$(TargetFramework)' == ..."`)
+    isn't handled — for v1 we treat all package refs as applying to
+    the full TFM set."""
+    out: List[str] = []
+    for elem in root.iter():
+        tag = elem.tag
+        if tag.endswith("}TargetFramework") or tag == "TargetFramework":
+            if elem.text and elem.text.strip():
+                out.append(elem.text.strip())
+        elif tag.endswith("}TargetFrameworks") or tag == "TargetFrameworks":
+            if elem.text:
+                for t in elem.text.split(";"):
+                    t = t.strip()
+                    if t:
+                        out.append(t)
+    # Deduplicate preserving order.
+    seen: set = set()
+    deduped: List[str] = []
+    for t in out:
+        if t not in seen:
+            seen.add(t)
+            deduped.append(t)
+    return deduped
 
 
 def _findall_pkgref(root):

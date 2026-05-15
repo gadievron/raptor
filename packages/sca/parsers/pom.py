@@ -148,7 +148,39 @@ def parse(path: Path) -> List[Dependency]:
             d.scope = "build"
             deps.append(d)
 
+    # 5) Resolve local <dependencyManagement> inheritance — top-level
+    # <dependency> entries that omit <version> inherit it from the
+    # matching <dependencyManagement> entry in the SAME POM. Parent-
+    # POM inheritance (fetching the parent from Maven Central) is a
+    # separate, network-dependent step; we handle the local case
+    # here because it's by far the most common shape and entirely
+    # offline-resolvable.
+    _resolve_local_dep_management(deps)
+
     return deps
+
+
+def _resolve_local_dep_management(deps: List[Dependency]) -> None:
+    """For any compile/runtime/test-scoped dep with version=None,
+    look up its (groupId:artifactId) in the import-scoped managed
+    deps and copy the version across. Mutates in place.
+
+    The managed entries themselves keep ``scope="build"`` — they
+    aren't installed; they only provide version pinning."""
+    managed_version: dict = {}
+    for d in deps:
+        if d.scope == "build" and d.version:
+            # Managed entries come in as scope="build" via the
+            # "import" scope_default in _SCOPE_MAP.
+            managed_version[d.name] = d.version
+    for d in deps:
+        if d.scope in ("build",):
+            continue
+        if d.version:
+            continue
+        inherited = managed_version.get(d.name)
+        if inherited:
+            d.version = inherited
 
 
 # ---------------------------------------------------------------------------

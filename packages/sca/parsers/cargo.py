@@ -185,6 +185,12 @@ def _build_dep(
     git_url: Optional[str] = None
     path_ref: Optional[str] = None
     is_workspace_inherit = False
+    # Feature-flag awareness: ``optional = true`` + ``features = [...]``.
+    # An ``optional = true`` dep is feature-gated — operators only get
+    # it installed if a ``[features]`` entry references it. CVEs in
+    # such deps may not apply unless the gating feature is active.
+    is_optional = False
+    declared_features: Optional[list] = None
 
     if isinstance(spec, str):
         version = spec
@@ -198,8 +204,6 @@ def _build_dep(
         elif "git" in spec:
             git_url = spec.get("git")
             pin_style = PinStyle.GIT
-            # Track the git ref hint for downstream supply-chain checks
-            # (rev / tag / branch). Version stays None.
         elif "path" in spec:
             path_ref = spec.get("path")
             pin_style = PinStyle.PATH
@@ -210,9 +214,21 @@ def _build_dep(
                 pin_style, normalised = _classify_version_spec(v)
                 if normalised is not None:
                     version = normalised
+        if spec.get("optional") is True:
+            is_optional = True
+        feats = spec.get("features")
+        if isinstance(feats, list):
+            declared_features = list(feats)
     else:
-        # Unsupported shape — skip but note in confidence.
         return None
+
+    source_extra = None
+    if is_optional or declared_features is not None:
+        source_extra = {}
+        if is_optional:
+            source_extra["cargo_optional"] = True
+        if declared_features is not None:
+            source_extra["cargo_features"] = declared_features
 
     purl = _build_purl(name, version)
     return Dependency(
@@ -233,6 +249,7 @@ def _build_dep(
                     else "Cargo.toml TOML — deterministic"),
         ),
         source_kind="manifest",
+        source_extra=source_extra,
     )
 
 
