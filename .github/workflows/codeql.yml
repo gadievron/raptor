@@ -1,14 +1,29 @@
-# For most projects, this workflow file will not need changing; you simply need
-# to commit it to your repository.
+# CodeQL Advanced — RAPTOR
 #
-# You may wish to alter this file to override the set of languages analyzed,
-# or to provide custom queries or build logic.
+# Restructured 2026-05-15 to eliminate the "1 configuration not found"
+# meta-check race:
 #
-# ******** NOTE ********
-# We have attempted to detect the languages in your repository. Please check
-# the `language` matrix defined below to confirm you have the correct set of
-# supported CodeQL languages.
+#   * Pre-fix: each matrix entry uploaded its own SARIF as soon as
+#     analyze finished. The c-cpp / actions stubs landed in ~12s,
+#     the python real analysis arrived ~60s later, and GitHub's
+#     `CodeQL` (github-advanced-security app) meta-check evaluated
+#     on first-upload arrival — well before python landed. Two of
+#     three configs visible → "1 configuration not found".
 #
+#   * Post-fix: matrix entries write SARIF to disk only
+#     (`upload: never`) and stash as artifacts. A barrier `upload`
+#     job depends on the whole matrix, downloads all three
+#     artifacts, merges them into a single multi-run SARIF
+#     (each run keeps its own automationDetails.id = category),
+#     and uploads via ONE `upload-sarif` call. GitHub processes
+#     the multi-run file as a single atomic delivery, so the
+#     meta-check fires with all three configs visible.
+#
+# Combining multi-run SARIFs with DIFFERENT categories is
+# explicitly supported by github/codeql-action (the 2025-07-21
+# changelog only deprecated combining runs with DUPLICATE
+# categories — see codeql-action/src/upload-lib.ts:65-95).
+
 name: "CodeQL Advanced"
 
 on:
@@ -21,18 +36,22 @@ on:
     - cron: '34 2 * * 5'
   workflow_dispatch:
 
+# Cancel superseded runs on the same PR. Pushes to main are NOT
+# cancelled — every main commit must be fully analysed for the
+# baseline. The conditional handles both correctly.
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # Default to least-privilege at the workflow level. Individual jobs
-# elevate as needed (e.g. ``analyze`` needs ``security-events: write``
+# elevate as needed (e.g. ``upload`` needs ``security-events: write``
 # to upload SARIF results).
 permissions:
   contents: read
 
 jobs:
-  # Skip the analyze job if a previous successful run already covered
-  # this exact commit SHA. Same homebrew dedup pattern as tests.yml.
-  # Uses job-level ``if:`` rather than top-level ``paths-ignore:`` so
-  # skipped jobs report as Skipped (= success) to branch protection
-  # rather than never starting and stalling required-check enforcement.
+  # Skip the analyze + upload jobs if a previous successful run already
+  # covered this exact commit SHA. Same homebrew dedup pattern as tests.yml.
   pre_check:
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -82,7 +101,9 @@ jobs:
       codeql_actions: ${{ steps.filter.outputs.codeql_actions }}
       force_full: ${{ steps.force.outputs.force_full }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6.0.2
+        with:
+          persist-credentials: false
       - id: force
         env:
           EVENT: ${{ github.event_name }}
@@ -132,28 +153,19 @@ jobs:
         run: |
           python3 .github/scripts/compute_filters.py
 
+  # Run analyses in parallel; SARIF stashed as artifacts. No upload
+  # happens here — the barrier job below collects all three and
+  # delivers them atomically.
   analyze:
     needs: [pre_check, changes]
-    # Job-level ``if:`` cannot reference ``matrix.*`` — the expression is
-    # evaluated before matrix expansion. Per-language path scoping is
-    # done at step level via the ``gate`` step below; only the dedup
-    # gate lives here.
     if: needs.pre_check.outputs.should_skip != 'true'
     name: Analyze (${{ matrix.language }})
-    # Runner size impacts CodeQL analysis time. To learn more, please see:
-    # - https://gh.io/recommended-hardware-resources-for-running-codeql
-    # - https://gh.io/supported-runners-and-hardware-resources
-    # - https://gh.io/using-larger-runners (GitHub.com only)
-    # Consider using larger runners or machines with greater resources for possible analysis time improvements.
     runs-on: ${{ (matrix.language == 'swift' && 'macos-latest') || 'ubuntu-latest' }}
+    timeout-minutes: 30
     permissions:
-      # required for all workflows
-      security-events: write
-
-      # required to fetch internal or private CodeQL packs
+      # security-events: write NOT needed here — only the upload job
+      # publishes SARIFs. Analyse just produces them.
       packages: read
-
-      # only required for workflows in private repositories
       actions: read
       contents: read
 
@@ -167,23 +179,8 @@ jobs:
             build-mode: none
           - language: python
             build-mode: none
-    # CodeQL supports the following values keywords for 'language': 'actions', 'c-cpp', 'csharp', 'go', 'java-kotlin', 'javascript-typescript', 'python', 'ruby', 'rust', 'swift'
-    # Use `c-cpp` to analyze code written in C, C++ or both
-    # Use 'java-kotlin' to analyze code written in Java, Kotlin or both
-    # Use 'javascript-typescript' to analyze code written in JavaScript, TypeScript or both
-    # To learn more about changing the languages that are analyzed or customizing the build mode for your analysis,
-    # see https://docs.github.com/en/code-security/code-scanning/creating-an-advanced-setup-for-code-scanning/customizing-your-advanced-setup-for-code-scanning.
-    # If you are analyzing a compiled language, you can modify the 'build-mode' for that language to customize how
-    # your codebase is analyzed, see https://docs.github.com/en/code-security/code-scanning/creating-an-advanced-setup-for-code-scanning/codeql-code-scanning-for-compiled-languages
+
     steps:
-      # Per-language path scoping. ``matrix.*`` is unavailable in the
-      # job-level ``if:`` (evaluated before matrix expansion) so the
-      # gate is implemented as a step. Subsequent steps run only when
-      # this matrix entry's filter matched, or when force_full is set
-      # (cron / merge_group / workflow_dispatch). Skipping at step
-      # level still pays the runner spin-up cost (~30 s) but avoids
-      # the expensive Initialize + Analyze work for unaffected
-      # languages.
       - name: Determine whether this matrix entry should run
         id: gate
         env:
@@ -198,7 +195,7 @@ jobs:
             python)  flag="$FILTER_PYTHON" ;;
             c-cpp)   flag="$FILTER_CPP" ;;
             actions) flag="$FILTER_ACTIONS" ;;
-            *)       flag="true" ;;  # unknown language → run by default
+            *)       flag="true" ;;
           esac
           if [[ "$FORCE" == "true" || "$flag" == "true" ]]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
@@ -209,101 +206,65 @@ jobs:
 
       - name: Checkout repository
         if: steps.gate.outputs.run == 'true'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
-
-      # Add any setup steps before running the `github/codeql-action/init` action.
-      # This includes steps like installing compilers or runtimes (`actions/setup-node`
-      # or others). This is typically only required for manual builds.
-      # - name: Setup runtime (example)
-      # uses: actions/setup-example@v1
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6.0.2
+        with:
+          persist-credentials: false
 
       # Initializes the CodeQL tools for scanning.
       - name: Initialize CodeQL
         if: steps.gate.outputs.run == 'true'
-        uses: github/codeql-action/init@68bde559dea0fdcac2102bfdf6230c5f70eb485e  # was v4
+        uses: github/codeql-action/init@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # was v4.35.5
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           config-file: ./.github/codeql/codeql-config.yml
-        # If you wish to specify custom queries, you can do so here or in a config file.
-        # By default, queries listed here will override any specified in a config file.
-        # Prefix the list here with "+" to use these queries and those in the config file.
 
-      # For more details on CodeQL's query packs, refer to: https://docs.github.com/en/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-code-scanning#using-queries-in-ql-packs
-      # queries: security-extended,security-and-quality
-
-      # If the analyze step fails for one of the languages you are analyzing with
-      # "We were unable to automatically build your code", modify the matrix above
-      # to set the build mode to "manual" for that language. Then modify this step
-      # to build your code.
-      # ℹ️ Command-line programs to run using the OS shell.
-      # 📚 See https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#jobsjob_idstepsrun
       - name: Run manual build steps
         if: steps.gate.outputs.run == 'true' && matrix.build-mode == 'manual'
         shell: bash
         run: |
-          echo 'If you are using a "manual" build mode for one or more of the' \
-          'languages you are analyzing, replace this with the commands to build' \
-          'your code, for example:'
-          echo '  make bootstrap'
-          echo '  make release'
+          echo 'If you are using a "manual" build mode, replace this with the build commands.' >&2
           exit 1
 
-      - name: Perform CodeQL Analysis
+      # ANALYSE only — do NOT upload from here. The barrier job
+      # below uploads all three matrix outputs atomically.
+      - name: Perform CodeQL Analysis (no upload — deferred to barrier job)
         if: steps.gate.outputs.run == 'true'
-        uses: github/codeql-action/analyze@68bde559dea0fdcac2102bfdf6230c5f70eb485e  # was v4
+        uses: github/codeql-action/analyze@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # was v4.35.5
         with:
           category: "/language:${{matrix.language}}"
+          upload: never
+          output: ./sarif-out
 
       # When the per-language gate skipped this matrix entry (no
-      # relevant changes), upload an empty SARIF stub for the same
-      # `category` so the CodeQL Advanced Security comparison
-      # engine doesn't flag "configuration not found" against the
-      # base branch's CodeQL results. Pre-fix the skipped languages
-      # produced no SARIF at all; the PR-side comparison saw `main`
-      # had alerts metadata for c-cpp / actions / python but only
-      # one matched on the PR side, surfacing as:
-      #
-      #   "Code scanning cannot determine the alerts introduced by
-      #    this pull request, because N configurations present on
-      #    refs/heads/main were not found"
-      #
-      # An empty SARIF (zero results) for the gated-out language
-      # tells the engine "this language was checked, no new alerts"
-      # — comparison runs to completion with no warning.
-      # Cost: ~10s per skipped language for the upload step;
-      # cheap relative to a real analyse pass (~5-30 min).
+      # relevant changes), write an empty stub SARIF for the same
+      # category so the merged multi-run upload below covers all
+      # three configs and the meta-check sees a complete baseline
+      # match.
       - name: Write empty SARIF for skipped language
         if: steps.gate.outputs.run != 'true'
         env:
           LANG_NAME: ${{ matrix.language }}
         run: |
-          # Mirror the field shape of a real CodeQL SARIF
-          # (`tool.driver.{organization,semanticVersion,notifications}`
-          # + `runs[0].{invocations,columnKind}`). The previous minimal
-          # stub uploaded successfully but the Code Scanning
-          # comparison engine still surfaced "configuration not
-          # found" because it keys on these fields when matching the
-          # PR-side run to the base-branch configuration. With the
-          # full shape in place the stub registers as the same
-          # configuration with zero results.
-          mkdir -p /tmp/empty-sarif
-          python3 - <<'PY' > /tmp/empty-sarif/empty.sarif
+          mkdir -p ./sarif-out
+          python3 - <<'PY' > ./sarif-out/empty.sarif
           import json, os
           from datetime import datetime, timezone
+          lang = os.environ["LANG_NAME"]
+          # automationDetails.id MUST match the category convention
+          # `/language:<lang>/` so the merged upload registers the
+          # same category as a real analyze would have.
           run = {
               "tool": {
                   "driver": {
                       "name": "CodeQL",
                       "organization": "GitHub",
-                      # Real CodeQL SARIF carries a semanticVersion;
-                      # the value here is best-effort and only needs to
-                      # be syntactically valid — Code Scanning matches
-                      # on its presence, not its value.
-                      "semanticVersion": "2.0.0",
                       "notifications": [],
                       "rules": [],
                   }
+              },
+              "automationDetails": {
+                  "id": f"/language:{lang}/",
               },
               "invocations": [{
                   "executionSuccessful": True,
@@ -314,8 +275,7 @@ jobs:
               "results": [],
               "columnKind": "utf16CodeUnits",
               "properties": {
-                  "semmle.formatSpecifier": "sarif-latest",
-                  "raptor.skipped_language": os.environ["LANG_NAME"],
+                  "raptor.skipped_language": lang,
                   "raptor.reason": "no relevant changes — gated out by compute_filters.py",
               },
           }
@@ -326,9 +286,94 @@ jobs:
           }
           print(json.dumps(doc))
           PY
-      - name: Upload empty SARIF for skipped language
-        if: steps.gate.outputs.run != 'true'
-        uses: github/codeql-action/upload-sarif@68bde559dea0fdcac2102bfdf6230c5f70eb485e  # was v4
+
+      - name: Stash SARIF as artifact for atomic upload
+        if: needs.pre_check.outputs.should_skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # was v7.0.1
         with:
-          sarif_file: /tmp/empty-sarif/empty.sarif
-          category: "/language:${{matrix.language}}"
+          name: sarif-${{ matrix.language }}
+          path: ./sarif-out/*.sarif
+          if-no-files-found: error
+          retention-days: 1
+
+  # Atomic multi-run upload. Combines all three matrix-emitted SARIFs
+  # into a single SARIF document and uploads in one POST so GitHub's
+  # CodeQL meta-check sees all configs in one shot.
+  upload:
+    needs: [pre_check, analyze]
+    if: needs.pre_check.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Required to upload SARIF results.
+      security-events: write
+      # Required by the codeql-action/upload-sarif action's internal
+      # provenance / status checks.
+      contents: read
+      actions: read
+      packages: read
+
+    steps:
+      - name: Checkout (needed by upload-sarif for repo metadata)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download all SARIF artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
+        with:
+          path: ./sarif-in
+          pattern: sarif-*
+
+      - name: Combine into single multi-run SARIF
+        env:
+          SHA: ${{ github.sha }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > combined.sarif
+          import json, glob, os, sys
+          from datetime import datetime, timezone
+
+          runs = []
+          for path in sorted(glob.glob("sarif-in/sarif-*/*.sarif")):
+              with open(path) as f:
+                  doc = json.load(f)
+              for run in doc.get("runs", []):
+                  # Defensive: ensure every run carries automationDetails.id.
+                  # `analyze@v4` writes it from `category:`; the stub writer
+                  # above sets it explicitly. Either path satisfies the
+                  # PR-vs-base correlator.
+                  if not run.get("automationDetails", {}).get("id"):
+                      print(
+                          f"::warning::SARIF run from {path} missing "
+                          f"automationDetails.id — skipping",
+                          file=sys.stderr,
+                      )
+                      continue
+                  runs.append(run)
+
+          if not runs:
+              print("::error::No valid SARIF runs to upload", file=sys.stderr)
+              sys.exit(1)
+
+          out = {
+              "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+              "version": "2.1.0",
+              "runs": runs,
+          }
+          print(json.dumps(out))
+          PY
+          echo "Combined $(jq '.runs | length' combined.sarif) runs:"
+          jq -r '.runs[] | "  - \(.automationDetails.id)  results=\(.results | length)"' combined.sarif
+
+      # Single upload, atomic delivery. The action sends one POST to
+      # `/code-scanning/sarifs` containing all runs; GitHub processes
+      # the multi-run file as one batch and the meta-check fires with
+      # all three configs visible.
+      - name: Upload combined SARIF
+        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # was v4.35.5
+        with:
+          sarif_file: combined.sarif
+          # No `category:` here — each run carries its own
+          # automationDetails.id which the action honours.
