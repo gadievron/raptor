@@ -35,6 +35,12 @@ or the file/id can't be resolved.
   int32   32-bit signed (signed-overflow UB reasoning)
   uint16  int16  uint8  int8
 
+``--prefer-witness max:VAR`` (or ``min:VAR``) drives the satisfying
+witness toward an extreme value of ``VAR`` instead of Z3's default
+smallest-model behaviour.  Common case is CWE-190 wraparound — pass
+``--prefer-witness max:count`` so the witness lands in the wraparound
+region instead of the trivial ``count=0`` Z3 returns by default.
+
 Output: JSON to stdout with keys
 
   feasible        true | false | null
@@ -174,6 +180,19 @@ def main() -> int:
              "to ~2000 for CWE-190/191/476 to fail-fast on "
              "pathological encodings. Clamped to [1, 2**31-1].",
     )
+    p.add_argument(
+        "--prefer-witness",
+        default=None,
+        metavar="DIR:VAR",
+        help="Drive the satisfying witness toward an extreme value of "
+             "a named variable instead of Z3's default smallest-model "
+             "behaviour. Format: 'max:<var>' or 'min:<var>'. Common "
+             "use case: CWE-190 wraparound — pass 'max:count' so the "
+             "witness lands in the wraparound region instead of the "
+             "trivial 'count=0' Z3 returns by default. When <var> is "
+             "absent from the parsed conditions the objective is "
+             "silently skipped.",
+    )
     args = p.parse_args()
 
     # Mutually-exclusive input modes
@@ -208,6 +227,7 @@ def main() -> int:
     try:
         result = validate_path(
             conditions, profile=profile, timeout_ms=args.timeout_ms,
+            prefer_witness=args.prefer_witness,
         )
     except (TypeError, ValueError) as e:
         return _err(str(e))

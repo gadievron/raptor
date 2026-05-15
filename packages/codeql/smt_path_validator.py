@@ -86,11 +86,14 @@ Other limitations (verdict still trustworthy, but with caveats):
     first-cut design; per-variable typing is the next step when a
     real case demands it.
   - **Z3 picks the smallest satisfying witness by default**, which is
-    often the trivial assignment (``x = 0``).  To find an *exploit*
-    witness, add a lower-bound condition that forces the dangerous
-    range (e.g. ``count > 0x10000000`` for CWE-190 wraparound at
-    uint32).  Will be addressed by Z3 Optimize integration in a
-    follow-up.
+    often the trivial assignment (``x = 0``).  To drive the witness
+    into the dangerous range, pass ``prefer_witness=("count", "max")``
+    (or the shim's ``--prefer-witness max:count``) and the encoder
+    swaps in a ``z3.Optimize`` backend with the corresponding
+    ``maximize`` objective.  Manual lower-bound hints (e.g.
+    ``count > 0x10000000``) still work and remain useful when the
+    caller wants to constrain the search to a specific subrange
+    rather than push to the extreme.
 
 Integration: packages/codeql/dataflow_validator.py :: DataflowValidator
 """
@@ -113,6 +116,7 @@ from core.smt_solver import (
     core_names as _core_names,
     mk_val as _mk_val,
     mk_var as _mk_var,
+    new_optimizer as _new_optimizer,
     new_solver as _new_solver,
     parse_literal_value as _parse_literal_value,
     propagate as _propagate,
@@ -752,6 +756,8 @@ def _solve_pending(
     *,
     profile: BVProfile,
     anon_map: Optional[Dict[str, str]] = None,
+    prefer_witness: Optional[Tuple[str, str]] = None,
+    vars_: Optional[Dict[str, Any]] = None,
 ) -> PathSMTResult:
     """Run the solver over pending predicates and produce a verdict.
 
@@ -760,8 +766,37 @@ def _solve_pending(
     each input as tautology/pending/unknown; this function turns the
     pending list into a sat/unsat/unknown verdict and packages the
     result.
+
+    When ``prefer_witness`` is set, ``solver`` is expected to be a
+    ``z3.Optimize`` instance (the caller is responsible for the
+    backend swap).  This function then adds the appropriate
+    ``maximize`` or ``minimize`` objective for the named variable.
+    ``vars_`` carries the parser's interned BitVec table so the
+    objective lookup uses the same variable instance the predicates
+    were built against — name collisions in z3's hash-cons would
+    otherwise produce an objective on a freshly-minted variable
+    decoupled from the path.
     """
     mode = profile.describe()
+
+    # Apply the witness-direction objective before solving.  Silently
+    # skip if the named variable doesn't appear in the parsed
+    # conditions — the caller can spot this by inspecting `model` to
+    # confirm the variable is present, and the unsat-core /
+    # smallest-model behaviour still produces a valid (just not
+    # extremal) witness.
+    if prefer_witness is not None and pending and vars_ is not None:
+        var_name, direction = prefer_witness
+        target = vars_.get(var_name)
+        if target is not None:
+            if direction == "max":
+                solver.maximize(target)
+            elif direction == "min":
+                solver.minimize(target)
+            # Any other direction value is silently ignored — the
+            # caller's API (validate_path / shim) is responsible for
+            # vetting; defensive ignore avoids partial-objective
+            # state if a stray string gets here.
 
     # Default to empty dict so the field is always present on the
     # PathSMTResult — downstream consumers never need to None-check.
@@ -948,6 +983,7 @@ def check_path_feasibility(
     *,
     profile: BVProfile = BV_C_UINT64,
     timeout_ms: Optional[int] = None,
+    prefer_witness: Optional[Tuple[str, str]] = None,
 ) -> PathSMTResult:
     """
     Check whether a set of path conditions are jointly satisfiable.
@@ -962,6 +998,20 @@ def check_path_feasibility(
                     rendering.  Defaults to BV_C_UINT64 (64-bit unsigned).
                     Use BV_C_UINT32 for CWE-190 32-bit wraparound paths;
                     BV_C_INT32 for signed-integer path conditions; etc.
+        prefer_witness: When set to ``(var_name, "max")`` or
+                    ``(var_name, "min")``, drive the satisfying witness
+                    toward an extreme value of ``var_name`` instead of
+                    Z3's default (smallest model).  Useful for CWE-190
+                    wraparound and similar bug classes where the
+                    *exploit* witness lives at the high end of a
+                    variable's domain — without ``prefer_witness`` Z3
+                    typically returns the trivial ``var=0`` model that
+                    technically satisfies the path but isn't a useful
+                    PoC seed.  When the named variable is absent from
+                    the parsed conditions (e.g. caller mistake or
+                    rejected via parser fall-through) the objective is
+                    silently skipped and the witness reverts to the
+                    default smallest-model behaviour.
 
     Returns:
         PathSMTResult.  feasible=None when Z3 is unavailable or every
@@ -1025,7 +1075,22 @@ def check_path_feasibility(
     # solving-cost profile (CWE-190 wraparound is fast; CWE-787
     # OOB with complex array indexing may need longer) can pass
     # a tuned value via _tier4_smt_refine or the libexec shims.
-    solver = _new_solver(timeout_ms) if timeout_ms is not None else _new_solver()
+    #
+    # When prefer_witness is set, swap z3.Solver for z3.Optimize so
+    # we can drive the witness toward a maximal/minimal value of a
+    # named variable.  Optimize shares the entire Solver interface
+    # (add/check/model/push/pop/assert_and_track/unsat_core) so the
+    # rest of the encoder is agnostic to which backend is in use.
+    if prefer_witness is not None:
+        solver = (
+            _new_optimizer(timeout_ms) if timeout_ms is not None
+            else _new_optimizer()
+        )
+    else:
+        solver = (
+            _new_solver(timeout_ms) if timeout_ms is not None
+            else _new_solver()
+        )
     # Per-check anon-var mapping. Populated by `_substitute_calls`
     # as it allocates `_anon_N` placeholders for function-call
     # subterms; threaded into the PathSMTResult so downstream
@@ -1055,4 +1120,5 @@ def check_path_feasibility(
     return _solve_pending(
         pending, solver, satisfied, unknown, unknown_reasons,
         profile=profile, anon_map=anon_map,
+        prefer_witness=prefer_witness, vars_=vars_,
     )

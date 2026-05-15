@@ -1230,3 +1230,123 @@ class TestInputLimits:
         assert huge in r.unknown
         rej = next(x for x in r.unknown_reasons if x.text == huge)
         assert rej.kind is RejectionKind.INPUT_TOO_LONG
+
+
+# ---------------------------------------------------------------------------
+# check_path_feasibility — prefer_witness (Z3 Optimize integration)
+# ---------------------------------------------------------------------------
+
+class TestPreferWitness:
+    """Driving the witness toward extreme values via z3.Optimize.
+
+    Without ``prefer_witness`` Z3 returns the smallest model that
+    satisfies the conditions — typically the trivial ``x=0``
+    assignment.  With ``prefer_witness=("var", "max")`` (or ``"min"``)
+    the encoder swaps in ``z3.Optimize`` and adds a maximize / minimize
+    objective on the named variable, producing an *exploit*-shape
+    witness instead.
+    """
+
+    def _cwe190_conds(self):
+        # Canonical CWE-190 32-bit wraparound shape.  Without a witness
+        # hint Z3 returns ``count=0``; with ``max:count`` it lands in
+        # the wraparound region (count * 16 > 2^32 - 1).
+        return [
+            PathCondition("alloc_size == count * 16", step_index=0),
+            PathCondition("alloc_size < 0x8000", step_index=1),
+        ]
+
+    @_requires_z3
+    def test_default_returns_trivial_witness(self):
+        """Sanity baseline: without prefer_witness, CWE-190 conditions
+        produce the trivial count=0 witness."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            self._cwe190_conds(), profile=BV_C_UINT32,
+        )
+        assert r.feasible is True
+        assert r.model.get("count") == 0
+
+    @_requires_z3
+    def test_max_drives_witness_into_wraparound_region(self):
+        """``max:count`` produces a witness where count * 16 exceeds
+        2^32 — confirming Z3 found a wraparound assignment."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            self._cwe190_conds(), profile=BV_C_UINT32,
+            prefer_witness=("count", "max"),
+        )
+        assert r.feasible is True
+        count = r.model.get("count")
+        assert count is not None and count > 0, (
+            f"prefer_witness max:count should produce non-trivial count, got {count}"
+        )
+        # On uint32, count * 16 in C semantics wraps; the test confirms
+        # the witness lands in a region where unwrapped multiplication
+        # would exceed UINT32_MAX.
+        assert count * 16 > 0xFFFFFFFF, (
+            f"witness count={count} does not lie in the wraparound region"
+        )
+
+    @_requires_z3
+    def test_min_drives_witness_to_floor(self):
+        """``min:count`` with a lower-bound condition returns the
+        smallest count above the bound."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            self._cwe190_conds() + [PathCondition("count > 1000", step_index=2)],
+            profile=BV_C_UINT32,
+            prefer_witness=("count", "min"),
+        )
+        assert r.feasible is True
+        # min above the floor of 1000 → 1001.
+        assert r.model.get("count") == 1001
+
+    @_requires_z3
+    def test_absent_variable_silent_skip(self):
+        """When the named variable doesn't appear in any condition the
+        objective is silently dropped and the witness reverts to the
+        default smallest-model behaviour.  No error — Z3 still returns
+        a valid (non-extremal) witness."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            self._cwe190_conds(), profile=BV_C_UINT32,
+            prefer_witness=("bogusvar", "max"),
+        )
+        assert r.feasible is True
+        # Default trivial witness comes back (count=0); no exception
+        # raised for the missing variable.
+        assert r.model.get("count") == 0
+        assert "bogusvar" not in r.model
+
+    @_requires_z3
+    def test_unsat_still_unsat_in_witness_mode(self):
+        """An unsat path remains unsat regardless of witness direction
+        — the objective only affects which sat witness is chosen, not
+        whether one exists.  unsat-core info must still surface."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            [PathCondition("x > 100", step_index=0),
+             PathCondition("x < 50", step_index=1)],
+            profile=BV_C_UINT32,
+            prefer_witness=("x", "max"),
+        )
+        assert r.feasible is False
+        # unsat-core info preserved across the Solver→Optimize swap.
+        assert "x > 100" in r.unsatisfied
+        assert "x < 50" in r.unsatisfied
+
+    @_requires_z3
+    def test_witness_mode_compatible_with_timeout(self):
+        """``timeout_ms`` is honoured by the Optimize backend the same
+        way it is by Solver — empty pending list short-circuits to
+        ``feasible=True`` without solver work, but the timeout config
+        threads through cleanly."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            self._cwe190_conds(), profile=BV_C_UINT32,
+            prefer_witness=("count", "max"),
+            timeout_ms=10000,
+        )
+        assert r.feasible is True
+        assert r.model.get("count") is not None
