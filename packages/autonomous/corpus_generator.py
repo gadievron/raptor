@@ -9,6 +9,7 @@ Instead of hardcoded seeds, this module:
 - Learns which seed patterns lead to coverage/crashes
 """
 
+import re
 from core.sandbox import run_trusted as _run_trusted  # read-only tools only (strings)
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
