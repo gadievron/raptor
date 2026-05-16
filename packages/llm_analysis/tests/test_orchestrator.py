@@ -894,3 +894,64 @@ class TestWeakenedDefenses:
         with patch("core.security.rule_of_two.is_interactive", return_value=False):
             result = self._run_with_failing_probe(tmp_path, accept=True)
         assert result is None
+
+    def _run_with_runtime_error_probe(self, tmp_path, accept=False):
+        # `strict=True` makes `probe_envelope_compatibility` raise
+        # `RuntimeError` on dispatch failure rather than returning a
+        # `ProbeResult`. The orchestrator catches the RuntimeError
+        # and `continue`s without binding `probe_result`. Pre-fix
+        # the post-loop branches referenced `probe_result.error`,
+        # raising `NameError` whenever every probed model hit this
+        # path. Post-fix the post-loop branches read from
+        # `_failed_probe_models`, which is always non-empty when
+        # `_probe_failed` is set.
+        report = _make_prep_report()
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(report))
+
+        fake_config, role_res = self._make_external_llm_mocks()
+        analysis_result = _make_cc_result("finding-001")
+
+        def mock_dispatch_task(task, findings, dispatch_fn, role_resolution,
+                               results_by_id, cost_tracker, max_parallel,
+                               prefilter_fn=None):
+            for f in findings:
+                fid = f.get("finding_id")
+                r = dict(analysis_result, finding_id=fid)
+                results_by_id[fid] = r
+            return [dict(analysis_result, finding_id=f.get("finding_id"))
+                    for f in findings]
+
+        with patch("core.llm.config.resolve_model_roles",
+                   return_value=role_res), \
+             patch("core.llm.client.LLMClient") as mock_cls, \
+             patch("packages.llm_analysis.dispatch.dispatch_task",
+                   side_effect=mock_dispatch_task), \
+             patch("core.security.envelope_probe.probe_envelope_compatibility",
+                   side_effect=RuntimeError("dispatch refused mid-probe")):
+            mock_cls.return_value = MagicMock()
+            return orchestrate(
+                prep_report_path=report_path,
+                repo_path=tmp_path,
+                out_dir=tmp_path / "orch",
+                llm_config=fake_config,
+                accept_weakened_defenses=accept,
+            )
+
+    def test_probe_runtime_error_aborts_without_flag(self, tmp_path):
+        # Without --accept-weakened-defenses, an all-models-raise
+        # RuntimeError must return None — NOT raise NameError on the
+        # unbound `probe_result` (pre-fix bug from #499 / Bugbot).
+        result = self._run_with_runtime_error_probe(tmp_path, accept=False)
+        assert result is None
+
+    def test_probe_runtime_error_continues_with_flag(self, tmp_path):
+        # With --accept-weakened-defenses + interactive, the
+        # PASSTHROUGH override fires; the `Reason:` message must use
+        # `_fail_summary` (built from `_failed_probe_models`) rather
+        # than `probe_result.error` which is unbound.
+        with patch("core.security.rule_of_two.is_interactive", return_value=True):
+            result = self._run_with_runtime_error_probe(tmp_path, accept=True)
+        assert result is not None
+        assert result["orchestration"]["defense_profile"] == "passthrough"
+        assert result["orchestration"]["weakened_defenses"] is True
