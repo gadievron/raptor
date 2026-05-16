@@ -258,3 +258,200 @@ def test_find_compatible_version_skips_pre_releases() -> None:
     matrix = ProjectPlatformMatrix()
     matrix.add(_pair("x86_64", "glibc", (2, 36)))
     assert find_compatible_version(pypi, "preview", matrix) == "1.0.0"
+
+
+# ---------------------------------------------------------------------------
+# Per-version recommendation cache
+# ---------------------------------------------------------------------------
+
+
+class _CountingStubPyPI:
+    """Stub that records how many times ``get_metadata`` is called.
+    Lets us verify the recommendation cache eliminates redundant
+    fetches when the same dep appears in multiple manifests."""
+
+    def __init__(self, packages: dict):
+        self._p = packages
+        self.metadata_calls = 0
+
+    def get_metadata(self, name: str):
+        self.metadata_calls += 1
+        return self._p.get(name)
+
+
+def test_recommendation_cache_hits_avoid_pypi_refetch():
+    """Two calls with the same (name, matrix-shape) only fetch
+    PyPI metadata once."""
+    from packages.sca.wheel_compat.compat import (
+        clear_recommendation_cache, find_compatible_version,
+    )
+
+    clear_recommendation_cache()
+    pypi = _CountingStubPyPI({
+        "z3-solver": {
+            "releases": {
+                "4.15.8.0": [
+                    {"filename":
+                     "z3_solver-4.15.8.0-py3-none-manylinux_2_34_aarch64.whl"},
+                ],
+            },
+        },
+    })
+    matrix = ProjectPlatformMatrix()
+    matrix.add(_pair("aarch64", "glibc", (2, 36)))
+
+    assert find_compatible_version(pypi, "z3-solver", matrix) == "4.15.8.0"
+    first_calls = pypi.metadata_calls
+    assert first_calls >= 1  # at least the get_metadata call
+    # Second call — identical inputs. No new PyPI fetch.
+    assert find_compatible_version(pypi, "z3-solver", matrix) == "4.15.8.0"
+    assert pypi.metadata_calls == first_calls, (
+        "cache miss on second call with identical (name, matrix)"
+    )
+
+
+def test_recommendation_cache_ignores_pair_source_field():
+    """``PlatformPair.source`` is operator-facing diagnostic text;
+    two matrices that differ only in source must share a cache
+    entry."""
+    from packages.sca.wheel_compat.compat import (
+        clear_recommendation_cache, find_compatible_version,
+    )
+
+    clear_recommendation_cache()
+    pypi = _CountingStubPyPI({
+        "z3-solver": {
+            "releases": {
+                "4.15.8.0": [
+                    {"filename":
+                     "z3_solver-4.15.8.0-py3-none-manylinux_2_34_aarch64.whl"},
+                ],
+            },
+        },
+    })
+    matrix_a = ProjectPlatformMatrix()
+    matrix_a.add(PlatformPair(
+        arch="aarch64", libc=LibcVersion("glibc", (2, 36)),
+        source="Dockerfile FROM python:3.13-bookworm",
+    ))
+    matrix_b = ProjectPlatformMatrix()
+    matrix_b.add(PlatformPair(
+        arch="aarch64", libc=LibcVersion("glibc", (2, 36)),
+        source="GHA runs-on: ubuntu-22.04",
+    ))
+
+    assert find_compatible_version(pypi, "z3-solver", matrix_a) == "4.15.8.0"
+    first_calls = pypi.metadata_calls
+    assert find_compatible_version(pypi, "z3-solver", matrix_b) == "4.15.8.0"
+    assert pypi.metadata_calls == first_calls, (
+        "cache key incorrectly varies by PlatformPair.source"
+    )
+
+
+def test_recommendation_cache_distinguishes_different_matrices():
+    """Two matrices with different (arch, libc) sets must NOT share
+    a cache entry — they'd produce different recommendations."""
+    from packages.sca.wheel_compat.compat import (
+        clear_recommendation_cache, find_compatible_version,
+    )
+
+    clear_recommendation_cache()
+    pypi = _CountingStubPyPI({
+        "z3-solver": {
+            "releases": {
+                "4.16.0.0": [
+                    {"filename":
+                     "z3_solver-4.16.0.0-py3-none-manylinux_2_38_aarch64.whl"},
+                    {"filename":
+                     "z3_solver-4.16.0.0-py3-none-manylinux_2_17_x86_64.whl"},
+                ],
+                "4.15.8.0": [
+                    {"filename":
+                     "z3_solver-4.15.8.0-py3-none-manylinux_2_34_aarch64.whl"},
+                ],
+            },
+        },
+    })
+
+    matrix_aarch_2_36 = ProjectPlatformMatrix()
+    matrix_aarch_2_36.add(_pair("aarch64", "glibc", (2, 36)))
+    matrix_x86 = ProjectPlatformMatrix()
+    matrix_x86.add(_pair("x86_64", "glibc", (2, 36)))
+
+    # x86_64 / glibc 2.36: 4.16.0.0 fits (manylinux_2_17_x86_64 covers it)
+    assert find_compatible_version(pypi, "z3-solver", matrix_x86) == "4.16.0.0"
+    first_calls = pypi.metadata_calls
+
+    # aarch64 / glibc 2.36: 4.16.0.0 doesn't fit; 4.15.8.0 does
+    assert find_compatible_version(
+        pypi, "z3-solver", matrix_aarch_2_36) == "4.15.8.0"
+    assert pypi.metadata_calls > first_calls, (
+        "cache incorrectly reused entry across different matrices"
+    )
+
+
+def test_recommendation_cache_caches_none_result():
+    """When no version is compatible, the negative result is cached
+    too — a second call shouldn't re-walk the exhausted history."""
+    from packages.sca.wheel_compat.compat import (
+        clear_recommendation_cache, find_compatible_version,
+    )
+
+    clear_recommendation_cache()
+    pypi = _CountingStubPyPI({
+        "newpkg": {
+            "releases": {
+                "2.0.0": [{"filename":
+                          "newpkg-2.0.0-py3-none-manylinux_2_38_aarch64.whl"}],
+                "1.0.0": [{"filename":
+                          "newpkg-1.0.0-py3-none-manylinux_2_39_aarch64.whl"}],
+            },
+        },
+    })
+    matrix = ProjectPlatformMatrix()
+    matrix.add(_pair("aarch64", "glibc", (2, 36)))
+
+    assert find_compatible_version(pypi, "newpkg", matrix) is None
+    first_calls = pypi.metadata_calls
+    assert find_compatible_version(pypi, "newpkg", matrix) is None
+    assert pypi.metadata_calls == first_calls, (
+        "negative result not cached — second call re-walked history"
+    )
+
+
+def test_recommendation_cache_does_not_cache_failure():
+    """A PyPI fetch exception is a transient signal — don't cache
+    None and lock future calls into a broken result."""
+    from packages.sca.wheel_compat.compat import (
+        clear_recommendation_cache, find_compatible_version,
+    )
+
+    clear_recommendation_cache()
+
+    class _FailThenSucceed:
+        def __init__(self):
+            self.calls = 0
+            self.payload = {
+                "z3-solver": {
+                    "releases": {
+                        "4.15.8.0": [
+                            {"filename":
+                             "z3_solver-4.15.8.0-py3-none-manylinux_2_34_aarch64.whl"},
+                        ],
+                    },
+                },
+            }
+
+        def get_metadata(self, name):
+            self.calls += 1
+            if self.calls == 1:
+                raise ConnectionError("transient")
+            return self.payload.get(name)
+
+    pypi = _FailThenSucceed()
+    matrix = ProjectPlatformMatrix()
+    matrix.add(_pair("aarch64", "glibc", (2, 36)))
+
+    assert find_compatible_version(pypi, "z3-solver", matrix) is None
+    # Second call retries (cache wasn't poisoned) and succeeds.
+    assert find_compatible_version(pypi, "z3-solver", matrix) == "4.15.8.0"

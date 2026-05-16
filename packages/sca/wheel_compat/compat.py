@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set
+from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from packages.sca.platform_matrix import PlatformPair, ProjectPlatformMatrix
 from packages.sca.platform_matrix.glibc_db import LibcVersion
@@ -257,6 +257,43 @@ def check_compat(
     return [_verdict_for_pair(pair, wm) for pair in matrix]
 
 
+# Per-process recommendation cache. ``find_compatible_version`` is
+# the priciest call in the wheel-compat scan path — walks up to 20
+# versions of PyPI release history, fetching wheel metadata for each.
+# When the same dep shows up in multiple manifests within one scan
+# (``requirements.txt`` + ``requirements-dev.txt`` + ``pyproject.toml``
+# all pinning ``numpy==1.x``), the second + third invocations recompute
+# the same answer. Key omits ``PlatformPair.source`` (diagnostic-only
+# text that varies between matrix builds but doesn't affect the
+# recommendation).
+_RECOMMENDATION_CACHE: Dict[
+    Tuple[str, FrozenSet[Tuple[str, Optional["LibcVersion"]]]],
+    Optional[str],
+] = {}
+
+
+def _matrix_cache_key(matrix: ProjectPlatformMatrix) -> FrozenSet[
+    Tuple[str, Optional[LibcVersion]]
+]:
+    """Build a cache key that ignores ``PlatformPair.source``.
+
+    Two matrices with the same ``{(arch, libc)}`` set produce the
+    same recommendation regardless of which Dockerfile / GHA / etc.
+    each pair was discovered from.
+    """
+    return frozenset((p.arch, p.libc) for p in matrix.pairs)
+
+
+def clear_recommendation_cache() -> None:
+    """Reset the per-process recommendation cache.
+
+    Test utility + escape hatch for long-running services that
+    refresh PyPI metadata mid-process. Not called by production
+    scan paths — the cache lifetime is correctly process-scoped.
+    """
+    _RECOMMENDATION_CACHE.clear()
+
+
 def find_compatible_version(
     pypi_client,
     name: str,
@@ -277,7 +314,15 @@ def find_compatible_version(
 
     Pre-release versions (``b1``, ``rc2``, ``dev``) are skipped —
     operators wanting a recommendation almost always want stable.
+
+    Cached per ``(name, matrix-shape)`` for the process lifetime;
+    a scan with the same dep pinned across multiple manifests pays
+    the PyPI walk once.
     """
+    cache_key = (name, _matrix_cache_key(matrix))
+    if cache_key in _RECOMMENDATION_CACHE:
+        return _RECOMMENDATION_CACHE[cache_key]
+
     try:
         meta = pypi_client.get_metadata(name)
     except Exception as e:                                  # noqa: BLE001
@@ -285,6 +330,8 @@ def find_compatible_version(
             "wheel_compat: find_compatible_version: PyPI fetch failed "
             "for %s: %s", name, e,
         )
+        # Don't cache the failure — a transient network error
+        # shouldn't pin the result for the rest of the process.
         return None
     if not isinstance(meta, dict):
         return None
@@ -304,7 +351,12 @@ def find_compatible_version(
             continue
         verdicts = check_compat(matrix, wm)
         if all(v.verdict == "ok" for v in verdicts):
+            _RECOMMENDATION_CACHE[cache_key] = version
             return version
+    # No compatible version found within the walk window. Cache the
+    # negative result too — the next caller would walk the same
+    # exhausted history.
+    _RECOMMENDATION_CACHE[cache_key] = None
     return None
 
 
