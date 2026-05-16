@@ -1,21 +1,25 @@
-"""Regression: defusedxml must be installed and active in the SCA agent.
+"""Regression: defusedxml must be installed and active for SCA XML parsing.
 
-`requirements.txt` pins defusedxml so `packages/sca/agent.py` parses
-target-repo pom.xml with the safe parser. These tests fail loudly if a
-future install accidentally drops the pin or if defusedxml's
-billion-laughs defense regresses.
+`requirements.txt` pins defusedxml so SCA pom.xml / .csproj parsing
+uses the safe parser. These tests fail loudly if a future install
+accidentally drops the pin or if defusedxml's billion-laughs defense
+regresses.
 """
 
-import importlib
 
+def test_defusedxml_is_pinned_and_importable():
+    """The dep must import cleanly — that's the structural pin check.
 
-def test_sca_agent_uses_defusedxml():
-    agent = importlib.import_module("packages.sca.agent")
-    assert agent._DEFUSED_XML, (
-        "packages.sca.agent fell back to xml.etree.ElementTree because "
-        "defusedxml is not installed. Pin `defusedxml==0.7.1` in "
-        "requirements.txt — billion-laughs payloads (CWE-776) expand on "
-        "the stdlib parser."
+    We deliberately don't probe a specific consumer module
+    (`packages.sca.agent`, `packages.sca.parsers.pom`, etc.) because
+    the SCA refactor in feat/sca migrates the defusedxml import from
+    the monolithic agent into per-ecosystem parsers. Testing the dep
+    itself is shape-agnostic and stays correct across that change.
+    """
+    import defusedxml  # noqa: F401
+    import defusedxml.ElementTree  # noqa: F401
+    assert defusedxml.__version__, (
+        "defusedxml imported but reports no version — install is broken."
     )
 
 
