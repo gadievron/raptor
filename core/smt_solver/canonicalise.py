@@ -104,7 +104,25 @@ _REWRITES: Tuple[Tuple[re.Pattern[str], str], ...] = (
     # ``up to N`` is read as inclusive (``<= N``) — the most common
     # convention in maths/CS, though some writers treat it as exclusive.
     # Document the choice rather than guess case-by-case.
-    (re.compile(r'\bup\s+to\b',                               re.IGNORECASE), ' <= '),
+    #
+    # Pre-fix the rewrite was `\bup\s+to\b` (no follow-on constraint).
+    # That fired on ANY `up to` in the input — including:
+    #   * `pointer scaled up to 8 bytes`  → `pointer scaled <= 8 bytes`
+    #     — the `up to` was DESCRIPTIVE, not relational.
+    #   * `it goes up to a function called X` → `it goes <= a
+    #     function called X`
+    #   * `the buffer is sized up to allow growth` → `the buffer is
+    #     sized <= allow growth`
+    # The relational rewrite ate narrative text and corrupted the
+    # downstream parser's view of the condition.
+    #
+    # Require a numeric literal (decimal or hex) AFTER `up to` so the
+    # rewrite only fires when the canonical form is unambiguous.
+    # Lookahead (`(?=...)`) keeps the literal AS the next token for
+    # the parser. Loses some legitimate non-numeric cases (`up to N`
+    # with `N` as a variable) — those callers should write `<= N`
+    # directly.
+    (re.compile(r'\bup\s+to(?=\s+(?:0x[0-9a-f]+|\d))',        re.IGNORECASE), ' <= '),
 )
 
 _WHITESPACE_RUN = re.compile(r'[ \t]+')

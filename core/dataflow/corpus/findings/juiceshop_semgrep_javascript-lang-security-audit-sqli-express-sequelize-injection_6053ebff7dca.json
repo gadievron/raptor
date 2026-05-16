@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "finding_id": "juiceshop_semgrep_javascript-lang-security-audit-sqli-express-sequelize-injection_6053ebff7dca",
+  "producer": "semgrep",
+  "rule_id": "javascript.lang.security.audit.sqli.express-sequelize-injection",
+  "message": "email/password concatenated into Sequelize template-string query",
+  "source": {
+    "file_path": "out/dataflow-corpus-fixtures/juice-shop/data/static/codefixes/loginAdminChallenge_1.ts",
+    "line": 15,
+    "column": 0,
+    "snippet": "if (req.body.email.match(/.*['-;].*/) || req.body.password.match(/.*['-;].*/)) {",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "out/dataflow-corpus-fixtures/juice-shop/data/static/codefixes/loginAdminChallenge_1.ts",
+    "line": 18,
+    "column": 0,
+    "snippet": "models.sequelize.query(`SELECT * FROM Users WHERE email = '${req.body.email || ''}' AND password = '${security.hash(req.body.password || '')}' AND deletedAt IS NULL`, { model: models.User, plain: true })",
+    "label": "sink"
+  },
+  "intermediate_steps": [
+    {
+      "file_path": "out/dataflow-corpus-fixtures/juice-shop/data/static/codefixes/loginAdminChallenge_1.ts",
+      "line": 16,
+      "column": 0,
+      "snippet": "res.status(451).send(res.__('SQL Injection detected.'))",
+      "label": "step"
+    }
+  ],
+  "raw": {}
+}

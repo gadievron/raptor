@@ -146,7 +146,7 @@ Claude:
 
 User: Y
 
-Claude: ✓ Created: tiers/specialists/custom/api_auth_priority.md
+Claude: ✓ Created: .claude/skills/api_auth_priority/SKILL.md
         Will auto-load when keywords match: API, authentication
 
         Test it now? Run /scan on API codebase
@@ -167,13 +167,18 @@ Before saving skill:
 
 ## Maintenance
 
-Skills are stored in: `tiers/specialists/custom/`
+Skills are stored in: `.claude/skills/`
 
 **Manage skills:**
-- List: `ls tiers/specialists/custom/`
-- Disable: Add `.disabled` suffix to filename
-- Remove: Delete file
-- Edit: Modify file directly
+- List: `ls .claude/skills/`
+- Disable: Add `.disabled` suffix to the skill directory or file
+- Remove: Delete the skill directory (or the bare `.md` file)
+- Edit: Modify the skill's `SKILL.md` (or single-file `.md`) directly
+
+(Pre-fix this section pointed at `tiers/specialists/custom/` —
+an earlier RAPTOR layout that predates Claude Code's skills
+mechanism. Files there aren't auto-loaded today, so saving
+new skills there made them invisible to the LLM.)
 
 **Quarterly review prompt** (if 5+ skills exist):
 ```

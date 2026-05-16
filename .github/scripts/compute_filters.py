@@ -87,6 +87,7 @@ FILTERS: dict[str, list[str]] = {
         "core/config.py",
         "core/config/**",
         "core/coverage/**",
+        "core/dataflow/**",
         "core/git/**",
         "core/hash/**",
         "core/inventory/**",

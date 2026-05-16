@@ -59,6 +59,7 @@ from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
 from . import state
+from ._fork_safe_warn import warn_post_fork
 from .landlock import _make_landlock_preexec
 from .mount_ns import setup_mount_ns
 from .seccomp import _make_seccomp_preexec
@@ -154,7 +155,12 @@ def _run_newuidmap(child_pid: int, binary: str, mapping_lines: Sequence[str]) ->
 
 def _set_rlimits(limits: dict) -> None:
     """Apply rlimits in the child. Mirrors preexec.py's _set_limits but
-    designed to run before mount ops / Landlock / seccomp."""
+    designed to run before mount ops / Landlock / seccomp.
+
+    Each rlimit applies independently — a single failure no longer
+    aborts the rest. Failures surface via fork-safe stderr warning so
+    operators can spot when a documented cap silently became a no-op.
+    """
     import resource
     from .preexec import _DEFAULT_LIMITS
     mem = limits.get("memory_mb", _DEFAULT_LIMITS["memory_mb"])
@@ -162,16 +168,29 @@ def _set_rlimits(limits: dict) -> None:
     cpu = limits.get("cpu_seconds", _DEFAULT_LIMITS["cpu_seconds"])
     mem_bytes = mem * 1024 * 1024
     file_bytes = file_mb * 1024 * 1024
-    try:
-        if mem > 0:
+    if mem > 0:
+        try:
             resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
-        if file_mb > 0:
+        except (ValueError, OSError):
+            warn_post_fork(b"RAPTOR: _set_rlimits RLIMIT_AS setrlimit failed -- memory cap not applied\n")
+    if file_mb > 0:
+        try:
             resource.setrlimit(resource.RLIMIT_FSIZE, (file_bytes, file_bytes))
-        if cpu > 0:
+        except (ValueError, OSError):
+            warn_post_fork(b"RAPTOR: _set_rlimits RLIMIT_FSIZE setrlimit failed -- file-size cap not applied\n")
+    if cpu > 0:
+        try:
             resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
+        except (ValueError, OSError):
+            warn_post_fork(b"RAPTOR: _set_rlimits RLIMIT_CPU setrlimit failed -- cpu cap not applied\n")
+    # RLIMIT_CORE is unconditional — coredumps are always suppressed
+    # (no operator-tunable equivalent of memory_mb/file_mb/cpu_seconds).
+    # No surrounding `if … > 0:` is needed; the structure differs from
+    # the three siblings above only because the input doesn't.
+    try:
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     except (ValueError, OSError):
-        pass
+        warn_post_fork(b"RAPTOR: _set_rlimits RLIMIT_CORE setrlimit failed -- coredump suppression relies on kernel core_pattern\n")
 
 
 def _kill_and_reap(pid: int) -> None:
@@ -894,7 +913,7 @@ def run_sandboxed(
                         resource.setrlimit(resource.RLIMIT_NPROC,
                                            (nproc_limit, nproc_limit))
                     except (ValueError, OSError):
-                        pass
+                        warn_post_fork(b"RAPTOR: _spawn grandchild RLIMIT_NPROC setrlimit failed -- fork-bomb bound not applied\n")
                 try:
                     os.execvpe(cmd[0], list(cmd), exec_env)
                 except FileNotFoundError:

@@ -9,6 +9,16 @@ exercised by the per-site fix tests.
 import os
 import subprocess
 import sys
+from pathlib import Path
+
+
+# Anchor the subprocess sys.path to the SAME tree these tests run from
+# rather than `os.environ["RAPTOR_DIR"]`. The env-var form silently
+# misbehaved when RAPTOR_DIR pointed at a different checkout — the
+# subprocess imported an unrelated version of core.sandbox._fork_safe_warn,
+# and the closed-fd-2 behaviour under test was attributed to the wrong
+# module.
+_REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
 
 def _read_fd(fd: int) -> bytes:
@@ -80,15 +90,16 @@ def test_warn_post_fork_no_double_prefix():
 
 def test_warn_post_fork_silent_when_fd2_closed():
     script = (
-        "import os, sys; "
-        "sys.path.insert(0, os.environ['RAPTOR_DIR']); "
+        "import sys; "
+        "sys.path.insert(0, sys.argv[1]); "
+        "import os; "
         "from core.sandbox._fork_safe_warn import warn_post_fork; "
         "os.close(2); "
         "warn_post_fork(b'should_not_raise\\n'); "
         "print('OK')"
     )
     proc = subprocess.run(
-        [sys.executable, "-c", script],
+        [sys.executable, "-c", script, _REPO_ROOT],
         env={**os.environ},
         capture_output=True,
         text=True,

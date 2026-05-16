@@ -612,6 +612,89 @@ class TestStructuralGrouping:
         groups = _structural_grouping(results)
         assert len(groups) == 0
 
+    def test_smt_shared_witness_groups_findings_with_same_model(self):
+        """Two findings whose Tier 4 SMT witness has the same
+        variable=value model end up in the same `smt_shared_witness`
+        group. Z3 has effectively said the same concrete attacker
+        input triggers both — single attack vector, operator should
+        test them together."""
+        results = [
+            {"finding_id": "f-001", "file_path": "a.c", "rule_id": "r1",
+             "smt_witness": {
+                 "model": {"count": 268435456, "total": 0},
+                 "anon_var_map": {},
+             }},
+            {"finding_id": "f-002", "file_path": "b.c", "rule_id": "r2",
+             "smt_witness": {
+                 "model": {"count": 268435456, "total": 0},
+                 "anon_var_map": {},
+             }},
+        ]
+        groups = _structural_grouping(results)
+        witness_groups = [g for g in groups if g["criterion"] == "smt_shared_witness"]
+        assert len(witness_groups) == 1
+        assert set(witness_groups[0]["finding_ids"]) == {"f-001", "f-002"}
+        # criterion_value must be human-readable (not just `tuple(...)`)
+        assert "count=268435456" in witness_groups[0]["criterion_value"]
+
+    def test_smt_shared_witness_skips_pure_anon_models(self):
+        """Two findings with the SAME `_anon_N` model but NO
+        anon_var_map decoder are NOT grouped — pure-opaque
+        witnesses are Z3 picking the smallest BV that satisfies the
+        condition (not a meaningful shared attacker input). Pre-
+        check that the spurious grouping doesn't fire."""
+        results = [
+            {"finding_id": "f-001", "file_path": "a.c", "rule_id": "r1",
+             "smt_witness": {
+                 "model": {"_anon_0": 32},
+                 "anon_var_map": {},  # NO decoding
+             }},
+            {"finding_id": "f-002", "file_path": "b.c", "rule_id": "r2",
+             "smt_witness": {
+                 "model": {"_anon_0": 32},
+                 "anon_var_map": {},
+             }},
+        ]
+        groups = _structural_grouping(results)
+        assert not any(g["criterion"] == "smt_shared_witness" for g in groups), (
+            "Pure-opaque _anon_N witness should not produce a shared-witness "
+            "group — the value is Z3's choice, not a real attacker input"
+        )
+
+    def test_smt_shared_witness_groups_decoded_anon_models(self):
+        """When the SAME `_anon_N` value DOES have a decoder
+        (anon_var_map), the witness describes a real attacker-
+        visible quantity (e.g. strlen(argv[1])=32). Group them."""
+        results = [
+            {"finding_id": "f-001", "file_path": "a.c", "rule_id": "r1",
+             "smt_witness": {
+                 "model": {"_anon_0": 32},
+                 "anon_var_map": {"_anon_0": "strlen(argv[1])"},
+             }},
+            {"finding_id": "f-002", "file_path": "b.c", "rule_id": "r2",
+             "smt_witness": {
+                 "model": {"_anon_0": 32},
+                 "anon_var_map": {"_anon_0": "strlen(argv[1])"},
+             }},
+        ]
+        groups = _structural_grouping(results)
+        witness_groups = [g for g in groups if g["criterion"] == "smt_shared_witness"]
+        assert len(witness_groups) == 1
+        assert set(witness_groups[0]["finding_ids"]) == {"f-001", "f-002"}
+
+    def test_smt_no_witness_no_group(self):
+        """No smt_witness field, or empty model, contributes no
+        grouping signal."""
+        results = [
+            {"finding_id": "f-001", "file_path": "a.c"},
+            {"finding_id": "f-002", "file_path": "b.c",
+             "smt_witness": {"model": {}}},
+            {"finding_id": "f-003", "file_path": "c.c",
+             "smt_witness": {}},
+        ]
+        groups = _structural_grouping(results)
+        assert not any(g["criterion"] == "smt_shared_witness" for g in groups)
+
     def test_shared_dataflow_source(self):
         results = [
             {"finding_id": "f-001", "file_path": "a.py", "rule_id": "sqli",

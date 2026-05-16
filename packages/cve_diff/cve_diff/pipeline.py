@@ -30,6 +30,8 @@ from pathlib import Path
 import time
 from typing import Any, Callable
 
+from core.http import HttpError as _HttpError
+
 from cve_diff.acquisition.layers import CascadingRepoAcquirer
 from cve_diff.agent.invariants import check_diff_shape, discover_validator
 from cve_diff.agent.loop import AgentConfig, AgentLoop
@@ -194,12 +196,23 @@ class Pipeline:
             # errors — both are recoverable by re-running the agent with
             # a different candidate, so they belong in the post-submit
             # retry path rather than being a hard pipeline crash.
+            #
+            # Pre-fix the catch list omitted `HttpError` from
+            # `core.http`. A transient HTTP failure during the
+            # acquisition layer (rate limit on cgit / GitHub raw
+            # mirror, intermittent 502 from a forge proxy) bubbled
+            # out of the pipeline as an unhandled exception even
+            # though the obvious recovery — re-prompt the agent for
+            # a different candidate — is the same as the other
+            # transient classes already in the list. `HttpError` is
+            # imported at module top.
             except (
                 AcquisitionError,
                 AnalysisError,
                 IdenticalCommitsError,
                 ValueError,
                 RuntimeError,
+                _HttpError,
             ) as exc:
                 if attempt == _MAX_POST_SUBMIT_RETRIES:
                     raise

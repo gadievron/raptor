@@ -28,6 +28,15 @@ logger = get_logger()
 _FS_ENCODING = "utf-8"
 _FS_ERRORS = "surrogateescape"
 
+# Sentinel threshold for "no per-file cap" semantics. Any
+# `max_file_size` value >= this magnitude (1 TiB) disables the
+# per-file size check inside `sha256_tree`. See call site for
+# the rationale (Optional[int] alone can't express "uncapped"
+# because None means "use config default"; a sentinel-by-
+# magnitude lets callers opt out via a huge value without
+# adding a separate bool param).
+_MAX_FILE_SIZE_NO_CAP_THRESHOLD = 10 ** 12
+
 
 def sha256_tree(
     root: Path,
@@ -154,8 +163,23 @@ def sha256_tree(
             continue
         try:
             st = __os.fstat(fd)
+            # The `< _MAX_FILE_SIZE_NO_CAP_THRESHOLD` test treats any
+            # value >= 1 TiB as the "no per-file cap" sentinel. Pre-fix
+            # this was a literal `10**12` inline — a magic threshold
+            # with no docstring or named constant. Extracted to a
+            # module-level name with a comment so future maintainers
+            # don't accidentally change a literal-looking 10**12 in
+            # one of these checks without realising it's a sentinel.
+            #
+            # Why a threshold rather than `None`-means-uncapped
+            # everywhere: the function defaults `max_file_size` to
+            # `RaptorConfig.MAX_FILE_SIZE_FOR_HASH` (a small finite
+            # value) when the caller passes None, so None alone
+            # can't express "no cap". A sentinel-by-magnitude lets
+            # callers opt out via a huge value without a separate
+            # bool param.
             if (max_file_size is not None
-                    and max_file_size < 10**12
+                    and max_file_size < _MAX_FILE_SIZE_NO_CAP_THRESHOLD
                     and st.st_size > max_file_size):
                 skipped.append(str(p.relative_to(root)))
                 continue

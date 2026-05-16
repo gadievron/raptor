@@ -132,6 +132,28 @@ def render_dataflow_validation_lines(
         else:
             out.append(f"{indent}  path_conditions populated: {n_pc_pop}")
 
+    # Parse-rejection telemetry — Tier 4 SMT's path-condition
+    # parser can reject malformed / out-of-grammar predicates and
+    # bin them as `unknown_reasons` (kind = LITERAL_OUT_OF_RANGE,
+    # UNRECOGNIZED_OPERAND, PARENS_NOT_SUPPORTED, etc. — see
+    # `core/smt_solver/rejection.py:RejectionKind`). Surfacing this
+    # tells operators when the parser is eroding SMT signal
+    # silently. Without it, "feasible: null" verdicts blur
+    # parser-rejection / z3-unavailable / timeout into one number.
+    # Render top 3 by count to keep the line tight.
+    rej_by_kind = dv.get("n_smt_rejections_by_kind", {}) or {}
+    if rej_by_kind:
+        total = sum(rej_by_kind.values())
+        sorted_kinds = sorted(
+            rej_by_kind.items(), key=lambda kv: -kv[1],
+        )[:3]
+        breakdown = ", ".join(f"{k}={n}" for k, n in sorted_kinds)
+        suffix = ("..." if len(rej_by_kind) > 3 else "")
+        out.append(
+            f"{indent}  SMT parse-rejections: {total} "
+            f"({breakdown}{suffix})"
+        )
+
     # Downgrade outcome: distinguish "recommended" from "applied"
     # (the latter is post-reconciliation with consensus/judge). Soft
     # downgrades = recommendation overruled by consensus/judge.

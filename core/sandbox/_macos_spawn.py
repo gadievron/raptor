@@ -100,6 +100,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional
 
 from . import seatbelt
+from ._fork_safe_warn import warn_post_fork
 from .preexec import _make_preexec_fn
 
 logger = logging.getLogger(__name__)
@@ -304,10 +305,11 @@ def run_sandboxed(cmd: List[str], *,
             except (ValueError, OSError):
                 # Best-effort. Some macOS versions cap NPROC via
                 # different sysctls and setrlimit may EPERM the
-                # call when NPROC > kern.maxproc/UID. Don't crash
-                # the launch on it; the rlimit failure is a
-                # documented soft posture.
-                pass
+                # call when NPROC > kern.maxproc/UID. The module
+                # docstring already documents this as soft posture;
+                # emit a fork-safe warning so operators can observe
+                # when the documented-soft bound becomes a silent no-op.
+                warn_post_fork(b"RAPTOR: _macos_spawn RLIMIT_NPROC setrlimit failed -- documented soft posture became silent no-op\n")
     else:
         preexec = base_preexec
 

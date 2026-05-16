@@ -23,11 +23,22 @@ import re
 # allowed owner/repo segment. The first char of each segment must be
 # alphanumeric or underscore — refuses leading ``-`` (which OpenSSH
 # would parse as an option after argv translation, CVE-2017-1000117).
+#
+# Repo-name body is `\w(?:[\w\-]|\.(?!\.))*` instead of `\w[\w.\-]*`.
+# Pre-fix the looser body accepted repo names ending in `..` (e.g.
+# `https://github.com/foo/bar..`) because the `[\w.\-]*` star
+# happily matched two consecutive dots. GitHub itself rejects `..`
+# in repo names — but our validator accepted them, then downstream
+# git operations and filesystem joins (`Path(target_dir) / repo`)
+# could be tricked into path-traversal-shaped behaviour. The
+# negative lookahead `(?!\.)` after a `.` forbids a SECOND dot
+# immediately, blocking `..` runs anywhere in the body while still
+# allowing single-dot positions (e.g. `repo.name`, `foo.bar.git`).
 _ALLOWED_PATTERNS = [
-    r"https://github\.com/\w[\w\-]*/\w[\w.\-]*/?",
-    r"https://gitlab\.com/\w[\w\-]*/\w[\w.\-]*/?",
-    r"git@github\.com:\w[\w\-]*/\w[\w.\-]*\.git",
-    r"git@gitlab\.com:\w[\w\-]*/\w[\w.\-]*\.git",
+    r"https://github\.com/\w[\w\-]*/\w(?:[\w\-]|\.(?!\.))*/?",
+    r"https://gitlab\.com/\w[\w\-]*/\w(?:[\w\-]|\.(?!\.))*/?",
+    r"git@github\.com:\w[\w\-]*/\w(?:[\w\-]|\.(?!\.))*\.git",
+    r"git@gitlab\.com:\w[\w\-]*/\w(?:[\w\-]|\.(?!\.))*\.git",
 ]
 
 

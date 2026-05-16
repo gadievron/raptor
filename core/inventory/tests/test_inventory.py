@@ -616,6 +616,24 @@ class TestExtractItems:
         if globals_:
             assert "MAX_SIZE" in names
 
+    def test_python_chained_assignment_yields_every_target(self):
+        """Regression for IJC-27: chained assignment `A = B = C = 1`
+        should yield every LHS target, not just the first."""
+        code = "MAX_RETRIES = MAX_ATTEMPTS = MAX_TRIES = 3\ndef foo(): pass\n"
+        items = extract_items("test.py", "python", code)
+        globals_ = [i for i in items if i.kind == KIND_GLOBAL]
+        names = [g.name for g in globals_]
+        # Skip if tree-sitter isn't available — the regression test
+        # only matters when the AST extractor is in use.
+        if not globals_:
+            import pytest
+            pytest.skip("tree-sitter not available — chained-assignment test n/a")
+        # All three constants should be captured. Pre-fix only the
+        # first identifier was emitted.
+        assert "MAX_RETRIES" in names
+        assert "MAX_ATTEMPTS" in names
+        assert "MAX_TRIES" in names
+
     def test_c_macros(self):
         code = "#define BUF_SIZE 1024\n#define MAX(a,b) ((a)>(b)?(a):(b))\nvoid foo() {}\n"
         items = extract_items("test.c", "c", code)

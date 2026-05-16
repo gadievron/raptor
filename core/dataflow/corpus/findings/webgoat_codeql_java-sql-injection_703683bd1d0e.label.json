@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "webgoat_codeql_java-sql-injection_703683bd1d0e",
+  "verdict": "true_positive",
+  "fp_category": null,
+  "rationale": "@RequestParam String query (line 42) is passed through createStatement and into executeQuery (line 49) without sanitisation. WebGoat's introductory SQLi lesson \u2014 textbook CWE-89.",
+  "labeler": "handlabel-juice-shop-webgoat",
+  "labeled_at": "2026-05-10"
+}

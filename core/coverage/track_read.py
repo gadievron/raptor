@@ -84,10 +84,20 @@ def _find_active_run():
                 meta = json.loads(meta_text)
             except (json.JSONDecodeError, ValueError):
                 continue
+            # Pre-fix `meta.get("status")` raised AttributeError if
+            # `meta` was not a dict (JSON file legitimately
+            # contained `null`, a list, a bare string, or a number).
+            # The outer except at line 90 didn't catch
+            # AttributeError or TypeError, so a malformed run-meta
+            # JSON crashed `_find_active_run` instead of falling
+            # through to "no active run found". isinstance-guard so
+            # malformed metas degrade gracefully.
+            if not isinstance(meta, dict):
+                continue
             if meta.get("status") == "running":
                 return str(d), target
 
-    except (OSError, json.JSONDecodeError, KeyError):
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, AttributeError):
         pass
 
     return None, None

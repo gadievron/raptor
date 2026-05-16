@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Tuple
 VALID_RUN_STATUSES = {"running", "completed", "failed", "cancelled"}
 
 
-def validate_project(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
+def _validate_project(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
     """Validate a project.json dict. Returns (valid, errors)."""
     errors = []
 
@@ -47,7 +47,7 @@ def validate_project(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
     return len(errors) == 0, errors
 
 
-def validate_run_metadata(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
+def _validate_run_metadata(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
     """Validate a .raptor-run.json dict. Returns (valid, errors)."""
     errors = []
 

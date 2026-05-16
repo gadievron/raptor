@@ -618,18 +618,25 @@ class EgressProxy:
             self._sandbox_buffers_snapshot = tuple(
                 self._sandbox_buffers.values()
             )
-        # Copy + stamp outside the lock. The snapshot has been refreshed
-        # so _record's hot-path readers won't pick up this buffer
-        # anymore. A late append from a tunnel handler that already
-        # snapshotted the OLD tuple may still land on `events`, but
-        # since the iteration below is the only consumer that sees this
-        # list, the late append is silently dropped from the caller's
-        # returned view (CPython list iteration tolerates concurrent
-        # appends without raising). Caller's audit trail remains
-        # consistent with the snapshot-at-unregister-time semantics.
-        if label is not None:
-            return [{**e, "caller": label} for e in events]
-        return [dict(e) for e in events]
+            # Pre-fix the copy `[{**e, "caller": label} for e in events]`
+            # happened OUTSIDE the lock. Per the docstring some event
+            # fields (bytes_c2u, bytes_u2c, duration) are mutated in
+            # place after the at-open record. If the recorder thread
+            # mid-mutated a dict during the spread (`{**e}` reads
+            # keys/values one at a time, not atomically), the copied
+            # dict captured a half-updated state — bytes_c2u updated
+            # but bytes_u2c stale, or duration updated but the bytes
+            # counters not yet. Operators reading the audit trail saw
+            # nonsensical inconsistencies they had to filter out.
+            #
+            # Move the copy inside the lock. The recorder's mutate
+            # path also takes `_buffer_lock` (see `_record`), so the
+            # spread now happens with the recorder serialised out.
+            # Cost: a few extra microseconds per event in unregister;
+            # benefit: consistent snapshots in the audit trail.
+            if label is not None:
+                return [{**e, "caller": label} for e in events]
+            return [dict(e) for e in events]
 
     def _record(self, event: dict) -> None:
         """Fan a tunnel event into every registered sandbox's buffer.
@@ -804,9 +811,47 @@ class EgressProxy:
                 if t is not None and not t.done():
                     t.cancel()
 
-    def stop(self) -> None:
-        """Close the server and stop the event loop. Safe to call twice."""
+    def stop(self, *, drain_timeout: float = 5.0) -> None:
+        """Close the server and stop the event loop. Safe to call twice.
+
+        Pre-fix `stop()` called `self._loop.stop` immediately, which
+        terminated in-flight CONNECT tunnels mid-stream. Tunnels that
+        had completed their TLS handshake but not yet finished proxying
+        bytes were dropped — clients saw connection-reset mid-request,
+        and the proxy's audit-log entries for those tunnels were
+        truncated.
+
+        With `drain_timeout > 0` we first stop ACCEPTING new connections
+        (close the server socket via `_server.close()`), then wait up to
+        `drain_timeout` seconds for existing tunnels to complete
+        naturally before stopping the event loop. New connections that
+        arrive during the drain window get connection-refused at the
+        OS level, which is the correct behaviour for a graceful
+        shutdown.
+
+        Set `drain_timeout=0` to preserve the legacy abrupt-stop
+        behaviour (callers that need synchronous teardown for tests).
+        """
         if self._loop is None:
+            return
+        if drain_timeout > 0 and self._server is not None and self._loop.is_running():
+            async def _graceful():
+                try:
+                    self._server.close()
+                    await asyncio.wait_for(
+                        self._server.wait_closed(),
+                        timeout=drain_timeout,
+                    )
+                except (asyncio.TimeoutError, RuntimeError):
+                    pass
+                self._loop.stop()
+            try:
+                asyncio.run_coroutine_threadsafe(_graceful(), self._loop)
+            except RuntimeError:
+                # Loop stopped between is_running() and submit. Close
+                # the unawaited coroutine to suppress the
+                # "never awaited" warning.
+                _graceful().close()
             return
         try:
             self._loop.call_soon_threadsafe(self._loop.stop)
@@ -860,13 +905,22 @@ class EgressProxy:
             self._ready.set()
             return
         finally:
-            if self._server is not None:
+            # Pre-fix `self._loop.close()` raised AttributeError if
+            # `new_event_loop()` itself raised at the top of the try
+            # (rare — under heavy fd pressure / sandbox configs that
+            # blocked the loop's internal pipe creation). `self._loop`
+            # was still None from the constructor, so `.close()` on
+            # None crashed the finally and masked the original error.
+            # Same for `_server` which is also None until `start_server`
+            # completes — guard both.
+            if self._server is not None and self._loop is not None:
                 self._server.close()
                 try:
                     self._loop.run_until_complete(self._server.wait_closed())
                 except Exception:
                     pass
-            self._loop.close()
+            if self._loop is not None:
+                self._loop.close()
 
     # ----- async CONNECT handler -----
 
@@ -1344,12 +1398,24 @@ class EgressProxy:
                 return
             if not chunk:
                 return
-            counters[counter_key] += len(chunk)
+            # Pre-fix the counter was bumped BEFORE `dst.drain()`. If
+            # drain raised (peer reset, broken pipe), the counter
+            # had already recorded the chunk as "delivered" even
+            # though the write never completed end-to-end. Audit
+            # logs over-reported bytes-relayed; capacity-planning
+            # off the bytes_c2u/bytes_u2c counters drifted up by
+            # the size of every aborted final chunk.
+            #
+            # Move the increment AFTER successful drain. The
+            # ConnectionResetError / BrokenPipeError branch returns
+            # early without bumping so the count reflects "bytes
+            # actually pushed through" rather than "bytes attempted".
             dst.write(chunk)
             try:
                 await dst.drain()
             except (ConnectionResetError, BrokenPipeError):
                 return
+            counters[counter_key] += len(chunk)
 
     async def _write_error(self, writer: asyncio.StreamWriter,
                            code: int, reason: str) -> None:

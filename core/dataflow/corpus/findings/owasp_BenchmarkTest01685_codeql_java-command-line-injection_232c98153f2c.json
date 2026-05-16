@@ -1,0 +1,633 @@
+{
+  "schema_version": 1,
+  "finding_id": "owasp_BenchmarkTest01685_codeql_java-command-line-injection_232c98153f2c",
+  "producer": "codeql",
+  "rule_id": "java/command-line-injection",
+  "message": "This command line depends on a [user-provided value](1).",
+  "source": {
+    "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+    "line": 43,
+    "column": 30,
+    "snippet": "String queryString = request.getQueryString();",
+    "label": "getQueryString(...) : String"
+  },
+  "sink": {
+    "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+    "line": 95,
+    "column": 32,
+    "snippet": "Process p = r.exec(args, argsEnv);",
+    "label": "args"
+  },
+  "intermediate_steps": [
+    {
+      "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+      "line": 57,
+      "column": 17,
+      "snippet": "queryString.substring(",
+      "label": "queryString : String"
+    },
+    {
+      "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+      "line": 57,
+      "column": 17,
+      "snippet": "queryString.substring(",
+      "label": "substring(...) : String"
+    },
+    {
+      "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+      "line": 68,
+      "column": 44,
+      "snippet": "param = java.net.URLDecoder.decode(param, \"UTF-8\");",
+      "label": "param : String"
+    },
+    {
+      "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+      "line": 68,
+      "column": 17,
+      "snippet": "param = java.net.URLDecoder.decode(param, \"UTF-8\");",
+      "label": "decode(...) : String"
+    },
+    {
+      "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+      "line": 70,
+      "column": 54,
+      "snippet": "String bar = new Test().doSomething(request, param);",
+      "label": "param : String"
+    },
+    {
+      "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+      "line": 107,
+      "column": 63,
+      "snippet": "public String doSomething(HttpServletRequest request, String param)",
+      "label": "param : String"
+    },
+    {
+      "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+      "line": 117,
+      "column": 20,
+      "snippet": "return bar;",
+      "label": "bar : String"
+    },
+    {
+      "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+      "line": 70,
+      "column": 22,
+      "snippet": "String bar = new Test().doSomething(request, param);",
+      "label": "doSomething(...) : String"
+    },
+    {
+      "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+      "line": 82,
+      "column": 47,
+      "snippet": "args = new String[] {a1, a2, cmd, bar};",
+      "label": "bar : String"
+    },
+    {
+      "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+      "line": 82,
+      "column": 20,
+      "snippet": "args = new String[] {a1, a2, cmd, bar};",
+      "label": "{...} : String[] [[]] : String"
+    }
+  ],
+  "raw": {
+    "ruleId": "java/command-line-injection",
+    "ruleIndex": 3,
+    "rule": {
+      "id": "java/command-line-injection",
+      "index": 3
+    },
+    "message": {
+      "text": "This command line depends on a [user-provided value](1)."
+    },
+    "locations": [
+      {
+        "physicalLocation": {
+          "artifactLocation": {
+            "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+            "uriBaseId": "%SRCROOT%",
+            "index": 135
+          },
+          "region": {
+            "startLine": 95,
+            "startColumn": 32,
+            "endColumn": 36
+          }
+        }
+      }
+    ],
+    "partialFingerprints": {
+      "primaryLocationLineHash": "ad7d0d1def737416:1",
+      "primaryLocationStartColumnFingerprint": "19"
+    },
+    "codeFlows": [
+      {
+        "threadFlows": [
+          {
+            "locations": [
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 43,
+                      "startColumn": 30,
+                      "endColumn": 54
+                    }
+                  },
+                  "message": {
+                    "text": "getQueryString(...) : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 57,
+                      "startColumn": 17,
+                      "endColumn": 28
+                    }
+                  },
+                  "message": {
+                    "text": "queryString : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 57,
+                      "startColumn": 17,
+                      "endLine": 60,
+                      "endColumn": 51
+                    }
+                  },
+                  "message": {
+                    "text": "substring(...) : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 68,
+                      "startColumn": 44,
+                      "endColumn": 49
+                    }
+                  },
+                  "message": {
+                    "text": "param : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 68,
+                      "startColumn": 17,
+                      "endColumn": 59
+                    }
+                  },
+                  "message": {
+                    "text": "decode(...) : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 70,
+                      "startColumn": 54,
+                      "endColumn": 59
+                    }
+                  },
+                  "message": {
+                    "text": "param : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 107,
+                      "startColumn": 63,
+                      "endColumn": 75
+                    }
+                  },
+                  "message": {
+                    "text": "param : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 117,
+                      "startColumn": 20,
+                      "endColumn": 23
+                    }
+                  },
+                  "message": {
+                    "text": "bar : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 70,
+                      "startColumn": 22,
+                      "endColumn": 60
+                    }
+                  },
+                  "message": {
+                    "text": "doSomething(...) : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 82,
+                      "startColumn": 47,
+                      "endColumn": 50
+                    }
+                  },
+                  "message": {
+                    "text": "bar : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 82,
+                      "startColumn": 20,
+                      "endColumn": 51
+                    }
+                  },
+                  "message": {
+                    "text": "{...} : String[] [[]] : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 95,
+                      "startColumn": 32,
+                      "endColumn": 36
+                    }
+                  },
+                  "message": {
+                    "text": "args"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "threadFlows": [
+          {
+            "locations": [
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 43,
+                      "startColumn": 30,
+                      "endColumn": 54
+                    }
+                  },
+                  "message": {
+                    "text": "getQueryString(...) : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 66,
+                      "startColumn": 21,
+                      "endColumn": 32
+                    }
+                  },
+                  "message": {
+                    "text": "queryString : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 66,
+                      "startColumn": 21,
+                      "endColumn": 86
+                    }
+                  },
+                  "message": {
+                    "text": "substring(...) : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 68,
+                      "startColumn": 44,
+                      "endColumn": 49
+                    }
+                  },
+                  "message": {
+                    "text": "param : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 68,
+                      "startColumn": 17,
+                      "endColumn": 59
+                    }
+                  },
+                  "message": {
+                    "text": "decode(...) : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 70,
+                      "startColumn": 54,
+                      "endColumn": 59
+                    }
+                  },
+                  "message": {
+                    "text": "param : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 107,
+                      "startColumn": 63,
+                      "endColumn": 75
+                    }
+                  },
+                  "message": {
+                    "text": "param : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 117,
+                      "startColumn": 20,
+                      "endColumn": 23
+                    }
+                  },
+                  "message": {
+                    "text": "bar : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 70,
+                      "startColumn": 22,
+                      "endColumn": 60
+                    }
+                  },
+                  "message": {
+                    "text": "doSomething(...) : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 87,
+                      "startColumn": 42,
+                      "endColumn": 51
+                    }
+                  },
+                  "message": {
+                    "text": "... + ... : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 87,
+                      "startColumn": 20,
+                      "endColumn": 52
+                    }
+                  },
+                  "message": {
+                    "text": "{...} : String[] [[]] : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 135
+                    },
+                    "region": {
+                      "startLine": 95,
+                      "startColumn": 32,
+                      "endColumn": 36
+                    }
+                  },
+                  "message": {
+                    "text": "args"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "relatedLocations": [
+      {
+        "id": 1,
+        "physicalLocation": {
+          "artifactLocation": {
+            "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+            "uriBaseId": "%SRCROOT%",
+            "index": 135
+          },
+          "region": {
+            "startLine": 43,
+            "startColumn": 30,
+            "endColumn": 54
+          }
+        },
+        "message": {
+          "text": "user-provided value"
+        }
+      },
+      {
+        "physicalLocation": {
+          "artifactLocation": {
+            "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest01685.java",
+            "uriBaseId": "%SRCROOT%",
+            "index": 135
+          },
+          "region": {
+            "startLine": 43,
+            "startColumn": 30,
+            "endColumn": 54
+          }
+        }
+      }
+    ]
+  }
+}

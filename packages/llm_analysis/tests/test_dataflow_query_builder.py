@@ -637,6 +637,62 @@ class TestBuildTemplateQuery:
             "import; TaintTracking already pulls it in transitively"
         )
 
+    def test_javascript_template_uses_iris_flow_pathgraph(self):
+        """The JS template must `import IrisFlow::PathGraph` (the local
+        TaintTracking::Global<IrisConfig> path graph), NOT the
+        deprecated language-wide `DataFlow::PathGraph`. Pre-fix the
+        template imported the deprecated one, which produced
+        "PathNode is incompatible with PathNode (the type of the edge
+        relation)" warnings AND deprecation notices on compile —
+        meaning the path graph types mismatched and the query
+        couldn't actually find paths. Verified by `codeql query
+        compile` 2026-05-11."""
+        q = build_template_query(
+            language="javascript",
+            source_predicate_body="x",
+            sink_predicate_body="y",
+        )
+        assert q is not None
+        # Must import the local path graph from the IrisFlow module.
+        assert "import IrisFlow::PathGraph" in q, (
+            "javascript template lost its `import IrisFlow::PathGraph` "
+            "line — query will compile with PathNode type-mismatch "
+            "warnings and produce wrong/empty results"
+        )
+        # And must NOT import the deprecated language-wide one.
+        assert "import DataFlow::PathGraph" not in q, (
+            "javascript template re-added the deprecated "
+            "`DataFlow::PathGraph` import; codeql warns on this and "
+            "the resulting PathNode type doesn't match the local "
+            "edge relation"
+        )
+
+    def test_all_templates_compile_shape(self):
+        """Smoke-test that each language template produces a query
+        with the structural pieces needed to compile: imports,
+        IrisConfig module, IrisFlow alias, PathGraph import, select
+        clause. Doesn't actually invoke codeql (too slow for unit
+        tests); just pins the textual contract. Real compile checks
+        were run 2026-05-11 for python/java/javascript/go — all
+        passed after the javascript fix."""
+        for lang in ("python", "java", "cpp", "javascript", "go"):
+            q = build_template_query(
+                language=lang,
+                source_predicate_body="x",
+                sink_predicate_body="y",
+            )
+            assert q is not None, f"{lang} template missing"
+            assert f"import {lang}" in q, f"{lang} template missing top-level import"
+            assert "module IrisConfig implements DataFlow::ConfigSig" in q, (
+                f"{lang} template missing IrisConfig module")
+            assert "module IrisFlow = TaintTracking::Global<IrisConfig>" in q, (
+                f"{lang} template missing IrisFlow alias")
+            assert "import IrisFlow::PathGraph" in q, (
+                f"{lang} template missing IrisFlow::PathGraph import — "
+                f"PathNode types won't match the edge relation")
+            assert "from IrisFlow::PathNode source, IrisFlow::PathNode sink" in q, (
+                f"{lang} template missing path-problem select preamble")
+
     def test_cpp_prompt_instructs_FS_prefix(self):
         """Companion to the template change: the LLM prompt for cpp
         predicates must mention the `FS::` prefix so the LLM doesn't

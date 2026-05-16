@@ -1074,23 +1074,36 @@ def _global_names(node, language: str):
                 None,
             )
         if target is not None and target.type == "assignment":
-            # Tree-sitter Python represents `a = b = 1` as:
-            #   assignment(identifier "a", "=", identifier "b", "=", integer "1")
-            # Yield every identifier child that appears BEFORE the
-            # last "=" — i.e. every LHS target. Same naming filter
-            # as `_global_name` (uppercase / TitleCase only) so we
-            # don't pollute the inventory with locals.
-            eq_indices = [
-                i for i, c in enumerate(target.children) if c.type == "="
-            ]
-            if eq_indices:
-                cutoff = eq_indices[-1]
-                for c in target.children[:cutoff]:
+            # Tree-sitter Python represents chained assignment
+            # `A = B = C = 1` as NESTED assignments (NOT flat):
+            #   assignment(identifier "A", "=",
+            #     assignment(identifier "B", "=",
+            #       assignment(identifier "C", "=", integer "1")))
+            #
+            # Pre-fix this code assumed a FLAT shape and only saw
+            # the FIRST identifier. Walk the chain recursively:
+            # at each nesting level, yield the leading identifier
+            # children (the LHS targets), then descend into the
+            # RHS if it's another assignment node. Stops when the
+            # RHS is the actual value (integer / call / etc.).
+            current = target
+            while current is not None and current.type == "assignment":
+                # Collect identifiers BEFORE the first `=` — these
+                # are the LHS targets at THIS nesting level.
+                # Apply the same uppercase/TitleCase filter as
+                # `_global_name` to avoid emitting locals.
+                next_assignment = None
+                for c in current.children:
                     if c.type == "identifier":
                         nm = c.text.decode()
                         if nm and (nm.isupper() or (nm[0].isupper() and not nm.islower())):
                             yield nm
-                return
+                    elif c.type == "assignment":
+                        # Found the nested chain RHS — descend.
+                        next_assignment = c
+                        break
+                current = next_assignment
+            return
 
     # Other languages: defer to the single-name function.
     name = _global_name(node, language)

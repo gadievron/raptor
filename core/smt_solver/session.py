@@ -49,6 +49,32 @@ def new_solver(timeout_ms: int = DEFAULT_TIMEOUT_MS) -> Any:
     return s
 
 
+def new_optimizer(timeout_ms: int = DEFAULT_TIMEOUT_MS) -> Any:
+    """Return a fresh ``z3.Optimize()`` with the given timeout applied.
+
+    Same clamping behaviour as :func:`new_solver`.  Use when the caller
+    wants to drive the witness toward a maximal or minimal value of some
+    variable (typically to produce an *exploit* witness rather than the
+    trivial smallest-model assignment that ``z3.Solver`` returns by
+    default).  Add objectives via ``opt.maximize(var)`` /
+    ``opt.minimize(var)`` after construction.
+
+    ``z3.Optimize`` shares the ``add``/``check``/``model``/``push``/
+    ``pop``/``assert_and_track``/``unsat_core`` interface with
+    ``z3.Solver`` so existing helpers (the explain.py unsat-core
+    tracker, the scoped context-manager, the witness formatter) all
+    work without modification — verified empirically on the Z3 builds
+    we ship.
+    """
+    if timeout_ms < 1:
+        timeout_ms = 1
+    elif timeout_ms > _MAX_TIMEOUT_MS:
+        timeout_ms = _MAX_TIMEOUT_MS
+    o = z3.Optimize()
+    o.set("timeout", timeout_ms)
+    return o
+
+
 @contextmanager
 def scoped(solver: Any) -> Iterator[Any]:
     """Push an assertion scope on ``solver`` for the duration of the block.

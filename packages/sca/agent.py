@@ -172,10 +172,34 @@ def _looks_like_real_sca_agent(text: str, resolved_path: Path) -> bool:
 
     Stronger discriminator: realpath inequality vs this file AND the
     string check. Both must hold.
+
+    Pre-fix the string check used a bare substring (`in text`),
+    which had two failure modes:
+      * Whitespace-fragile: a file with two spaces between
+        `import` and `SCA_ALLOWED_HOSTS` (legitimate Python,
+        formatter-rewritten by some tools) was rejected because
+        the literal substring didn't match.
+      * Matched COMMENTS too: a file with
+        `# from packages.sca import SCA_ALLOWED_HOSTS -- example`
+        was falsely classified as the real agent. A README-style
+        Python script next to the SCA tree could be mis-launched
+        as the agent.
+
+    Use a regex anchored to start-of-line with no leading `#`,
+    tolerating any whitespace between tokens. Multiline so the
+    match works across the file's full text.
     """
     if resolved_path.resolve() == _THIS_BRIDGE_FILE:
         return False
-    return "from packages.sca import SCA_ALLOWED_HOSTS" in text
+    import re as _re
+    # `(?m)^` line start, optional leading non-comment whitespace,
+    # then the import statement with flexible whitespace between
+    # tokens. `\b` after the symbol so `SCA_ALLOWED_HOSTSX` doesn't
+    # spuriously match.
+    return bool(_re.search(
+        r'(?m)^[ \t]*from[ \t]+packages\.sca[ \t]+import[ \t]+(?:[a-zA-Z_,\s]*\s)?SCA_ALLOWED_HOSTS\b',
+        text,
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -282,8 +306,46 @@ def run_sca_subprocess(
 # ---------------------------------------------------------------------------
 
 def get_out_dir() -> Path:
+    """Resolve RAPTOR_OUT_DIR (or default `./out`) and ensure it exists.
+
+    Pre-fix `get_out_dir` returned the resolved path WITHOUT creating
+    the directory. `main()` then called `safe_run_mkdir(out_dir)`
+    afterwards as a separate step. Other callers using
+    `get_out_dir()` directly (test helpers, ad-hoc subprocess
+    wrappers, future entry points) didn't run the mkdir and crashed
+    on the first `path.write_text(...)` / `open(..., 'w')` against a
+    non-existent directory.
+
+    Move the mkdir INTO `get_out_dir` so every caller sees a usable
+    directory. `parents=True, exist_ok=True` is idempotent — the
+    extra mkdir in `main()` becomes a no-op rather than a duplicate
+    side effect.
+
+    Best-effort: a permissions failure in mkdir surfaces as the
+    operator's underlying OSError so they get an actionable
+    diagnostic at first use rather than a confusing "file not found"
+    later.
+    """
     base = os.environ.get("RAPTOR_OUT_DIR")
-    return Path(base).resolve() if base else Path("out").resolve()
+    out = Path(base).resolve() if base else Path("out").resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    # Pre-fix this returned the path WITHOUT validating that the
+    # resolved location was actually writable. Operators setting
+    # RAPTOR_OUT_DIR to a path on a read-only mount, a directory
+    # owned by another user, or a stale symlink target got the
+    # resolved Path back and crashed on the first downstream
+    # write — confusing errors point at the write site, not the
+    # source-of-truth (the env var).
+    # `os.access` checks effective permissions for the running
+    # user. Failing here surfaces a clear "RAPTOR_OUT_DIR=...
+    # is not writable" error early.
+    if not os.access(str(out), os.W_OK):
+        raise OSError(
+            f"RAPTOR_OUT_DIR={out!s} resolves to a directory the current "
+            f"process cannot write to (permissions / read-only mount / "
+            f"wrong owner). Fix the env var or the directory perms."
+        )
+    return out
 
 
 # Vendored / cache / build directories whose dependency manifests
@@ -719,7 +781,18 @@ def main():
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     safe_run_mkdir(out_dir)
     save_json(out_dir / 'sca.json', out)
-    print(json.dumps({'status': 'ok', 'files_found': len(out['files'])}))
+    # Status summary goes to STDERR. Pre-fix the JSON status was
+    # printed to stdout AND the full results landed in
+    # `<out_dir>/sca.json`. Mixed protocol — a caller that
+    # parsed stdout expecting the full results saw only the
+    # summary; a caller redirecting stdout to a file got a status
+    # JSON instead of the rich output. Move to stderr so the
+    # stdout channel is silent and the file is the single source
+    # of truth for results. Status remains visible to operators
+    # tailing the agent output and to wrapping scripts that
+    # capture stderr separately.
+    print(json.dumps({'status': 'ok', 'files_found': len(out['files'])}),
+          file=sys.stderr)
 
 
 if __name__ == '__main__':

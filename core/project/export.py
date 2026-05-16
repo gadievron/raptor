@@ -342,9 +342,31 @@ def import_project(zip_path: Path, projects_dir: Path,
                         )
                     extract_dest = Path(output_base if has_common_root else output_dir)
                     target_path = extract_dest / info.filename
-                    # Resolve and re-check containment — _check_zip_entries
-                    # already guards path traversal, but defence in depth
-                    # against a future regression in that helper.
+                    # Resolve and re-check containment.
+                    # `_check_zip_entries` already vetted the
+                    # filenames upstream, but Python's traversal-
+                    # protection in zipfile is version-dependent
+                    # (3.6 had bugs around symlink-shaped entries,
+                    # 3.11 added stricter checks but still misses
+                    # NTFS-style alternate-data-stream filenames
+                    # and Windows drive-letter prefixes on POSIX).
+                    # Pre-fix this comment claimed "defence in
+                    # depth" but performed NO re-check — the
+                    # comment was a lie. Add the actual containment
+                    # check so any traversal that slipped past
+                    # _check_zip_entries (future regression, novel
+                    # filename shape, or a Python-version
+                    # behavioural difference) is caught here.
+                    extract_dest_resolved = extract_dest.resolve(strict=False)
+                    target_resolved = target_path.resolve(strict=False)
+                    try:
+                        target_resolved.relative_to(extract_dest_resolved)
+                    except ValueError:
+                        raise ValueError(
+                            f"Refusing to extract {info.filename!r}: "
+                            f"resolved target {target_resolved} escapes "
+                            f"destination {extract_dest_resolved}"
+                        )
                     target_path.parent.mkdir(parents=True, exist_ok=True)
                     actual_size = 0
                     with zf.open(info, "r") as src, open(target_path, "wb") as dst:
