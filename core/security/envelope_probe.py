@@ -190,9 +190,24 @@ def probe_envelope_compatibility(
     Returns a ProbeResult with .compatible indicating whether the model
     handled the envelope correctly.
 
-    When ``strict=True``, an incompatible probe result raises
-    ``RuntimeError`` instead of returning the failed ProbeResult, so
-    callers that do not check ``.compatible`` cannot silently continue.
+    When ``strict=True``, raises ``RuntimeError`` instead of returning a
+    failed ``ProbeResult``, so callers that do not check ``.compatible``
+    cannot silently continue. The strict contract applies UNIFORMLY to
+    both failure paths inside this function:
+
+    1. ``dispatch_fn(...)`` itself raises (e.g. ``TimeoutError``,
+       connection-refused, transient HTTP 5xx) — the underlying
+       exception is chained via ``raise ... from e`` so callers
+       introspecting the cause still see the original error.
+    2. ``dispatch_fn`` returns successfully but the response fails
+       envelope evaluation (probe canary leaked, tag forgery
+       detected, etc.) — raises with the evaluator's error message.
+
+    The original ``strict=True`` landed (W36.B / F058) covering only
+    path 2; path 1's coverage closed in W36.K.3 / F058-gap. A
+    ``strict=True`` caller can now treat the absence of an exception
+    as "envelope confirmed compatible" without separately checking
+    ``.compatible``.
     """
     system, user, nonce = build_canary_prompt(profile)
     model_name = getattr(analysis_model, "model_name", None) or str(analysis_model)

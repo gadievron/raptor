@@ -147,6 +147,14 @@ def preflight(
     ``strict=False`` preserves the documented fail-open policy — an empty
     corpus returns ``confidence_haircut=1.0`` rather than zeroing all
     downstream confidence scores.
+
+    The ``strict`` check evaluates ``_PATTERNS`` *at call time*, not at
+    module import time — so a corpus that loads asynchronously after
+    import (rare, but possible for callers that hot-reload pattern
+    files) still satisfies ``strict=True`` once populated. The check
+    fails only when ``_PATTERNS`` is still empty when this function is
+    invoked, which is the actual fail-open exposure window the kwarg
+    is designed to surface.
     """
     if strict and not _PATTERNS:
         raise RuntimeError(

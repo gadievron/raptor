@@ -15,6 +15,30 @@ Pipeline:
     8. Aggregator runs once over (merged, correlation), if configured.
     9. Cost gating: each reviewer/aggregator's cutoff_ratio is checked
        against cost_gate.budget_ratio() before invocation.
+
+Cost-gate failure semantics (W36.B / F090):
+
+  - **Transient failure** (``budget_ratio()`` raises an exception):
+    gating is *suspended* for ``_GATE_RETRY_SECONDS`` (60s by default)
+    then re-probed automatically. Subsequent invocations during the
+    cooldown skip the gate (return ``False, None``). Recovery is
+    announced via:
+
+        logger.info("cost_gate: retrying budget_ratio() after %.0fs "
+                    "transient-failure cooldown", ...)
+
+    Operators monitoring cost-gate health should grep run logs for
+    this string to detect cost-gate flapping.
+
+  - **Permanent failure** (``budget_ratio()`` returns a non-numeric
+    value — type-contract violation): gating is disabled for the rest
+    of the run with a single ``logger.warning`` at the moment of
+    disable. A wrong return type is a code bug, not a network
+    hiccup, so automatic retry would not help.
+
+  Transient exceptions are recoverable (network glitch, transient DB
+  error in a backing CostGate impl); type-contract violations are
+  not. The distinction lives at ``over_budget()`` below.
 """
 
 import logging
