@@ -7,9 +7,11 @@ on:
     branches: [ main ]
   merge_group:
   schedule:
-    # Daily catches lint regressions sneaked in via cherry-picks or
-    # ruff-version drifts that path-filtered PRs would miss.
-    - cron: '0 6 * * *'
+    # Weekly full-tree audit catches lint regressions sneaked in via
+    # cherry-picks, ruff-version drifts, or cross-file refactors the
+    # PR diff-only gate cannot see (the gate inspects only files the
+    # PR touches — see ``ruff-pr`` job below).
+    - cron: '0 6 * * 1'
   workflow_dispatch:
 
 concurrency:
@@ -63,14 +65,26 @@ jobs:
           fi
           echo "should_skip=${should_skip}" >> "$GITHUB_OUTPUT"
 
-  ruff:
+  # PR diff gate (blocking). Lints ONLY the .py files the PR touches.
+  # This is the required-status-check used by branch protection. A
+  # pre-existing violation in unrelated tree files never blocks an
+  # unrelated PR; only what the PR adds/modifies is judged.
+  #
+  # Runs on ``pull_request`` and ``merge_group`` so the same job name
+  # satisfies branch-protection's "required status check" both at PR
+  # review time and at merge-queue commit time.
+  ruff-pr:
     needs: pre_check
-    if: needs.pre_check.outputs.should_skip != 'true'
+    if: needs.pre_check.outputs.should_skip != 'true' && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          # Need merge-base history for ``git diff origin/main...HEAD``.
+          # Depth 200 covers any sane PR; shallower clones miss the base.
+          fetch-depth: 200
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
@@ -78,7 +92,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # was v3
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # was v8.1.0
         with:
           enable-cache: true
           cache-dependency-glob: "requirements*.txt"
@@ -93,18 +107,88 @@ jobs:
           source $VENV_PATH/bin/activate
           uv pip install "$(grep -E '^ruff==' requirements-dev.txt)"
 
-      - name: Run ruff (F401, F811, F821, F841)
+      - name: Compute changed Python files
+        id: changed
+        run: |
+          set -euo pipefail
+          # Fetch main's tip — needed for the merge-base diff. Best-
+          # effort; ``fetch-depth: 200`` above usually already covers it.
+          git fetch origin main:refs/remotes/origin/main --depth=200 2>/dev/null \
+            || git fetch origin main --depth=200 2>/dev/null \
+            || true
+          # Compute changed .py files vs the merge base with origin/main.
+          # Single source for both pull_request and merge_group events —
+          # avoids event-shape branching (pull_request.base.sha vs
+          # merge_group.base_sha).
+          BASE_SHA=$(git merge-base HEAD origin/main 2>/dev/null || echo "")
+          if [[ -z "$BASE_SHA" ]]; then
+            # Shouldn't happen with fetch-depth: 200, but degrade
+            # gracefully by linting the whole touched-by-HEAD tree.
+            echo "WARN: no merge-base found; linting all .py files in HEAD" >&2
+            CHANGED="."
+          else
+            CHANGED=$(git diff --name-only --diff-filter=ACMR "$BASE_SHA"...HEAD -- '*.py' | tr '\n' ' ')
+          fi
+          echo "files=${CHANGED}" >> "$GITHUB_OUTPUT"
+          echo "Changed .py files vs origin/main: ${CHANGED:-<none>}"
+
+      - name: Run ruff (PR diff only)
+        if: steps.changed.outputs.files != ''
         run: |
           source $VENV_PATH/bin/activate
-          # DEEP-1b widens the gate from F401 (set by DEEP-1a) to the
-          # full name-correctness set: F811 (redefinition of unused
-          # name), F821 (undefined name), F841 (unused local variable).
-          # The manual fixes for these — including class renames in
-          # core/llm/tests/test_llm_callbacks_providers.py, missing
-          # typing imports across the codebase, and 88 unused-local
-          # cleanups — land in this PR. E501 (3,204 default-88
-          # violations) deferred until a separate line-length-policy
-          # decision per notes/_judge/W14-E1-lint-ci-gate-design.md.
+          # Same rule set as the full-tree audit below — F401 (unused
+          # import), F811 (redef of unused name), F821 (undefined name),
+          # F841 (unused local variable). Limited to the .py files the
+          # PR touches so pre-existing violations elsewhere don't block
+          # unrelated PRs. The weekly ``ruff-tree`` audit (below) is the
+          # safety net for tree-wide drift.
+          ruff check --select F401,F811,F821,F841 \
+            --output-format=github \
+            ${{ steps.changed.outputs.files }}
+
+  # Full-tree audit (informational). Runs on ``push: main``,
+  # ``schedule`` (weekly), and ``workflow_dispatch``. Catches drift the
+  # PR-diff gate cannot see — cross-file impact (PR-A removes a symbol,
+  # PR-B uses it in a file PR-A didn't touch), ruff-version pin bumps
+  # surfacing new categories, hand-merged cherry-picks bypassing the
+  # PR gate, etc.
+  #
+  # NOT a required status check — failure here means "drift, fix when
+  # convenient" rather than "this PR is broken." Branch protection
+  # gates on ``ruff-pr`` only.
+  ruff-tree:
+    needs: pre_check
+    if: needs.pre_check.outputs.should_skip != 'true' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # was v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "requirements*.txt"
+
+      - name: Install ruff
+        run: |
+          uv venv $VENV_PATH
+          source $VENV_PATH/bin/activate
+          uv pip install "$(grep -E '^ruff==' requirements-dev.txt)"
+
+      - name: Run ruff (full tree)
+        run: |
+          source $VENV_PATH/bin/activate
+          # Full-tree pass. F401,F811,F821,F841 matches the PR-diff
+          # gate's rule selection. E501 (3,204 default-88 violations)
+          # deferred until a separate line-length-policy decision per
+          # notes/_judge/W14-E1-lint-ci-gate-design.md.
           ruff check --select F401,F811,F821,F841 \
             --output-format=github \
             .

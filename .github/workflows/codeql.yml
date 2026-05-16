@@ -164,7 +164,16 @@ jobs:
     timeout-minutes: 30
     permissions:
       # security-events: write NOT needed here — only the upload job
-      # publishes SARIFs. Analyse just produces them.
+      # publishes SARIFs. Analyse just produces them. But read IS
+      # needed: the CodeQL Action queries the CodeQL API to fetch
+      # prior analysis results (for diff-based analysis scoping +
+      # metadata reporting). Without read, GitHub Actions emits the
+      # "Resource not accessible by integration" warning and the
+      # action falls back to full analysis. For fork PRs GitHub's
+      # security model restricts the GITHUB_TOKEN regardless, so the
+      # warning persists there — but for same-repo PRs the read grant
+      # silences it cleanly.
+      security-events: read
       packages: read
       actions: read
       contents: read
@@ -228,12 +237,22 @@ jobs:
 
       # ANALYSE only — do NOT upload from here. The barrier job
       # below uploads all three matrix outputs atomically.
+      #
+      # ``upload: never`` defers the SARIF upload to the barrier
+      # job. ``upload-database: false`` separately disables the
+      # CodeQL database upload (a distinct default that's true
+      # on ``push`` events and silently tries to upload to
+      # security-events: write, which this job lacks — produces
+      # "Maximum retry attempts exhausted, aborting database
+      # upload" + "Resource not accessible by integration" if
+      # left default-on).
       - name: Perform CodeQL Analysis (no upload — deferred to barrier job)
         if: steps.gate.outputs.run == 'true'
         uses: github/codeql-action/analyze@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # was v4.35.5
         with:
           category: "/language:${{matrix.language}}"
           upload: never
+          upload-database: false
           output: ./sarif-out
 
       # When the per-language gate skipped this matrix entry (no

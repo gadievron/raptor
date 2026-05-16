@@ -36,6 +36,11 @@ permissions:
   # Needed by the pre_check job to query prior workflow runs at the
   # current SHA via ``gh api repos/.../actions/runs``.
   actions: read
+  # Needed by the ``changes`` job's ``gh api repos/.../pulls/.../files``
+  # query to compute the changed-file list for path filtering. Covered
+  # implicitly by ``contents: read`` on public repos; explicit grant
+  # makes the workflow privacy-portable.
+  pull-requests: read
 
 jobs:
   # Skip the workflow if a previous successful run of this same workflow
