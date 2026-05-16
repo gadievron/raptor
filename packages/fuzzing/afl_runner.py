@@ -18,7 +18,6 @@ import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from core.config import RaptorConfig
 from core.logging import get_logger
 
 logger = get_logger()

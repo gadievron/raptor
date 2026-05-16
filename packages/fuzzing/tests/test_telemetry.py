@@ -9,7 +9,6 @@ from pathlib import Path
 
 from packages.fuzzing.telemetry import (
     CampaignStats,
-    FuzzEvent,
     FuzzingTelemetry,
     StatusLineReporter,
     _fmt_count,

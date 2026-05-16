@@ -22,7 +22,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, TextIO
+from typing import Any, Callable, Dict, Optional, TextIO
 
 logger = logging.getLogger(__name__)
 

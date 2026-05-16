@@ -8,8 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from packages.fuzzing.capability import CapabilityReport
-from packages.fuzzing.orchestrator import FuzzingOrchestrator, CampaignPlan
-from packages.fuzzing.target_detector import TargetInfo
+from packages.fuzzing.orchestrator import FuzzingOrchestrator
 
 
 def _full_caps_linux():

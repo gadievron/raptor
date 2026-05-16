@@ -134,8 +134,6 @@ class HarnessGenerator:
         header_text = spec.header_path.read_text(errors="replace")
         signature = _extract_target_signature(header_text, spec.target_function)
 
-        suggested_name = f"fuzz_{spec.target_function.replace('::', '_')}.cc"
-
         if self.llm is None:
             logger.warning("No LLM configured, returning fallback harness")
             source = _FALLBACK_HARNESS_C.format(

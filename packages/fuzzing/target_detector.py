@@ -234,13 +234,11 @@ def _detect_pe(
     kind = "pe-exe"
     description = "Windows PE executable"
     fuzzer = "winafl"
-    fuzzer_blurb = "WinAFL"
 
     if suffix == ".sys":
         kind = "pe-sys"
         description = "Windows kernel driver (.sys)"
         fuzzer = "kafl-or-snapchange"
-        fuzzer_blurb = "kAFL or Snapchange (snapshot fuzzers)"
     elif suffix == ".dll":
         kind = "pe-dll"
         description = "Windows DLL"
