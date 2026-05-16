@@ -524,7 +524,7 @@ class ToolUseLoop:
                 #   3. Emit ToolCallReturned with the RAW result.
                 #   4. Wrap (or refuse) for the message copy.
                 raw_content = result.content
-                pf = preflight(raw_content)
+                pf = preflight(raw_content, strict=True)
                 if pf.has_injection_indicators:
                     self._emit(ToolResultPreflight(
                         iteration=iteration,

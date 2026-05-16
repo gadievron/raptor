@@ -15,9 +15,34 @@ Pipeline:
     8. Aggregator runs once over (merged, correlation), if configured.
     9. Cost gating: each reviewer/aggregator's cutoff_ratio is checked
        against cost_gate.budget_ratio() before invocation.
+
+Cost-gate failure semantics (W36.B / F090):
+
+  - **Transient failure** (``budget_ratio()`` raises an exception):
+    gating is *suspended* for ``_GATE_RETRY_SECONDS`` (60s by default)
+    then re-probed automatically. Subsequent invocations during the
+    cooldown skip the gate (return ``False, None``). Recovery is
+    announced via:
+
+        logger.info("cost_gate: retrying budget_ratio() after %.0fs "
+                    "transient-failure cooldown", ...)
+
+    Operators monitoring cost-gate health should grep run logs for
+    this string to detect cost-gate flapping.
+
+  - **Permanent failure** (``budget_ratio()`` returns a non-numeric
+    value — type-contract violation): gating is disabled for the rest
+    of the run with a single ``logger.warning`` at the moment of
+    disable. A wrong return type is a code bug, not a network
+    hiccup, so automatic retry would not help.
+
+  Transient exceptions are recoverable (network glitch, transient DB
+  error in a backing CostGate impl); type-contract violations are
+  not. The distinction lives at ``over_budget()`` below.
 """
 
 import logging
+import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, Iterable, List, Optional, Sequence
@@ -34,6 +59,8 @@ from core.llm.multi_model.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+_GATE_RETRY_SECONDS = 60.0
 
 
 def run_multi_model(
@@ -124,36 +151,51 @@ def run_multi_model(
             f"{type(correlation).__name__}. Adapter is buggy."
         )
 
-    # Local gate state — never mutate the external cost_gate. If gate
-    # raises, we disable budget checks for the rest of THIS run only.
-    gate_alive = [cost_gate is not None]
+    # Local gate state — never mutate the external cost_gate.
+    # Transient exceptions from budget_ratio() suspend gating for
+    # _GATE_RETRY_SECONDS, then re-probe automatically (circuit-breaker).
+    # Type-contract violations (non-float return) permanently disable
+    # gating for the run — a wrong return type is a code bug, not a
+    # network hiccup, and recovery would not help.
+    _gate_permanent_off = [cost_gate is None]
+    _gate_disabled_at: list = [None]  # None or monotonic timestamp of last transient fail
 
     def over_budget(cutoff_ratio: float) -> tuple[bool, Optional[float]]:
         """Return (skip, current_ratio). ratio is None when gating is off."""
-        if not gate_alive[0]:
+        if _gate_permanent_off[0]:
             return False, None
         if cutoff_ratio >= 1.0:
             return False, None
+        if _gate_disabled_at[0] is not None:
+            elapsed = time.monotonic() - _gate_disabled_at[0]
+            if elapsed < _GATE_RETRY_SECONDS:
+                return False, None
+            _gate_disabled_at[0] = None
+            logger.info(
+                "cost_gate: retrying budget_ratio() after %.0fs transient-failure cooldown",
+                elapsed,
+            )
         try:
             ratio = cost_gate.budget_ratio()  # type: ignore[union-attr]
         except Exception as exc:
             logger.warning(
                 f"cost_gate.budget_ratio() raised {type(exc).__name__}: {exc} — "
-                f"disabling cost gating for the rest of this run",
+                f"suspending cost gating for {_GATE_RETRY_SECONDS:.0f}s",
                 exc_info=True,
             )
-            gate_alive[0] = False
+            _gate_disabled_at[0] = time.monotonic()
             return False, None
         # Defensive: protocol says budget_ratio returns float, but
         # @runtime_checkable doesn't enforce return types. A non-numeric
         # value would crash the comparison below with a confusing error.
+        # Type-contract violation → permanent disable (not transient).
         if isinstance(ratio, bool) or not isinstance(ratio, (int, float)):
             logger.warning(
                 f"cost_gate.budget_ratio() returned {type(ratio).__name__} "
-                f"({ratio!r}), expected float — disabling cost gating "
-                f"for the rest of this run"
+                f"({ratio!r}), expected float — permanently disabling cost "
+                f"gating for the rest of this run"
             )
-            gate_alive[0] = False
+            _gate_permanent_off[0] = True
             return False, None
         return ratio >= cutoff_ratio, ratio
 

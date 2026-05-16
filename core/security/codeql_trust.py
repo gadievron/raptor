@@ -40,6 +40,8 @@ system; trust must come from explicit operator intent).
 
 from __future__ import annotations
 
+import os
+import stat
 import unicodedata
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -143,18 +145,47 @@ def _path_present(p: Path) -> bool:
 
 
 def _read_capped(path: Path) -> Optional[bytes]:
-    """Read up to ``_MAX_CONFIG_BYTES`` bytes. Returns None on
-    oversized, non-regular, or unreadable."""
+    """Read up to ``_MAX_CONFIG_BYTES+1`` bytes. Returns None on
+    oversized, non-regular, or unreadable.
+
+    O_NONBLOCK + fstat(S_ISREG) closes the FIFO-DoS and stat-vs-open
+    TOCTOU holes. O_NOFOLLOW closes the symlink-redirect hole — the
+    caller's recursive pack walk records symlinks as findings without
+    reading them, but a TOCTOU race could swap a regular file for a
+    symlink between the symlink check and the open here. With
+    O_NOFOLLOW the open fails with ELOOP and we fail-closed (return
+    None). Broad except for any I/O surprise — fail-closed is the
+    safe stance.
+
+    Mirrors core/security/cc_trust.py:177-214 (commit eb18aa6 — the
+    same hardening for the parallel CC-side trust scanner).
+    """
     try:
-        if not path.is_file():
-            return None
-        size = path.stat().st_size
-        if size > _MAX_CONFIG_BYTES:
-            return None
-        with open(path, "rb") as f:
-            return f.read(_MAX_CONFIG_BYTES + 1)
-    except OSError:
+        fd = os.open(
+            str(path),
+            os.O_RDONLY
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except Exception:
         return None
+    data: Optional[bytes] = None
+    try:
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return None
+            with os.fdopen(fd, "rb", closefd=False) as f:
+                data = f.read(_MAX_CONFIG_BYTES + 1)
+        except Exception:
+            return None
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    if data is None or len(data) > _MAX_CONFIG_BYTES:
+        return None
+    return data
 
 
 # ---------------------------------------------------------------------------

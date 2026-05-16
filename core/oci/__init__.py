@@ -1,8 +1,14 @@
 """OCI / Docker registry primitives — image references, manifests,
 blob streaming, and per-image SBOM extraction.
 
-This is shared substrate. Several raptor consumers want to inspect
-container images:
+This is shared substrate, shipped + tested but **not yet wired into
+any `packages/*` consumer.** The primitives — pulling manifests,
+streaming layer blobs, extracting package-manager state, mapping into
+existing OSV ecosystem strings — mirror the pattern that ``core/http``,
+``core/llm``, ``core/inventory`` already follow, so when consumers
+land they share one substrate rather than reinventing.
+
+Planned consumers (aspirational, none currently import ``core.oci.*``):
 
   * ``packages/sca`` — base-image SBOM as a Dependency source for
     CVE matching
@@ -10,16 +16,14 @@ container images:
     advisories
   * ``packages/llm_analysis`` (``/scan``, ``/agentic``) — surface
     base-image context for analysis prompts
-  * ``packages/oss_forensics`` — registry attestations (cosign, in-
-    toto) for supply-chain investigation
   * ``packages/code_understanding`` (``/audit``) — include base-image
     SBOMs in code review
 
-Each consumer's needs map to the same primitives — pulling
-manifests, streaming layer blobs, extracting package-manager state,
-mapping into our existing OSV ecosystem strings. Building those
-primitives once under ``core/oci/`` mirrors the pattern that
-``core/http``, ``core/llm``, ``core/inventory`` already follow.
+A docstring-vs-reality regression test
+(``core/oci/tests/test_package_docstring_consumers.py``, F057) keeps
+this list honest: any name appearing above "Planned consumers:" must
+exist as a directory under ``packages/`` AND contain a real ``core.oci``
+import.
 
 Module map:
 

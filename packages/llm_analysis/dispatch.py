@@ -354,7 +354,7 @@ def dispatch_task(
                     iid = task.get_item_id(it)
                     with _nonces_lock:
                         _nonces[(iid, _model_key(m))] = nonce
-                pf = preflight(prompt, corpora=_DISPATCH_CORPORA)
+                pf = preflight(prompt, corpora=_DISPATCH_CORPORA, strict=True)
                 defense_telemetry.record_preflight(hit=pf.has_injection_indicators)
                 schema = task.get_schema(it)
                 return dispatch_fn(prompt, schema, system_prompt, task.temperature, m)

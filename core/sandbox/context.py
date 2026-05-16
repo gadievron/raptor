@@ -898,6 +898,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         # blocklist is belt-and-braces on the os.environ →
         # get_safe_env path (see core/config.py); the caller path
         # is "you know what you're doing".
+        strict_env = kwargs.pop("strict_env", False)
         if kwargs.get("env") is None:
             kwargs.pop("env", None)  # drop any explicit None
             kwargs["env"] = RaptorConfig.get_safe_env()
@@ -907,6 +908,16 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                 f"{' '.join(cmd[:_CMD_DISPLAY_MAX_ARGS]) or cmd!r} "
                 f"— get_safe_env() not applied; caller env passed through."
             )
+            if strict_env:
+                _dangerous = set(RaptorConfig.DANGEROUS_ENV_VARS)
+                _stripped = [k for k in kwargs["env"] if k in _dangerous]
+                if _stripped:
+                    kwargs["env"] = {k: v for k, v in kwargs["env"].items()
+                                     if k not in _dangerous}
+                    logger.info(
+                        f"Sandbox: strict_env=True — stripped DANGEROUS_ENV_VARS "
+                        f"from caller env: {sorted(_stripped)}"
+                    )
 
         # Egress-proxy env injection — overlays AFTER get_safe_env() so
         # the proxy vars aren't stripped by the PROXY_ENV_VARS blocklist
@@ -1385,6 +1396,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                     fake_home=fake_home,
                     map_root=map_root,
                     start_new_session=kwargs.get("start_new_session", True),
+                    strict_env=strict_env,
                 )
                 used_spawn = True
             elif spawn_eligible:
@@ -1446,6 +1458,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                                            if observe and nonlocal_audit_mode
                                            else None),
                             restrict_reads=restrict_reads,
+                            strict_env=strict_env,
                             # Default True here even though subprocess.run
                             # defaults to False — _spawn's historical
                             # behaviour was unconditional os.setsid() and
@@ -2116,12 +2129,13 @@ def run_untrusted(cmd: List[str], *, target: str = None, output: str = None,
             "dir and/or a writable output dir."
         )
     # Guard against silent misuse — the contract fixes these.
-    for forbidden in ("block_network", "allowed_tcp_ports"):
+    for forbidden in ("block_network", "allowed_tcp_ports", "strict_env"):
         if forbidden in kwargs:
             raise TypeError(
                 f"run_untrusted() does not accept {forbidden}= — it always "
-                f"runs with block_network=True and no TCP allowlist. Use "
-                f"sandbox() directly for varied network policy."
+                f"runs with block_network=True, no TCP allowlist, and "
+                f"strict_env=True env-stripping. Use sandbox() directly "
+                f"for varied network or env policy."
             )
     # Default stdin to DEVNULL for untrusted code. If the parent's stdin
     # is the operator's TTY (common for interactive RAPTOR use) and the
@@ -2153,6 +2167,7 @@ def run_untrusted(cmd: List[str], *, target: str = None, output: str = None,
                restrict_reads=restrict_reads,
                readable_paths=readable_paths,
                fake_home=fake_home,
+               strict_env=True,
                **kwargs)
 
 
@@ -2213,12 +2228,13 @@ def run_untrusted_networked(
             "the egress allowlist is mandatory; callers wanting unrestricted "
             "network should use sandbox() directly."
         )
-    for forbidden in ("block_network", "allowed_tcp_ports", "use_egress_proxy"):
+    for forbidden in ("block_network", "allowed_tcp_ports", "use_egress_proxy", "strict_env"):
         if forbidden in kwargs:
             raise TypeError(
                 f"run_untrusted_networked() does not accept {forbidden}= — "
                 f"the network policy is fixed to egress-proxy-only on port "
-                f"443. Use sandbox() directly for varied network policy."
+                f"443 and strict_env=True env-stripping is mandatory. Use "
+                f"sandbox() directly for varied network or env policy."
             )
     if "stdin" not in kwargs and "input" not in kwargs:
         kwargs["stdin"] = subprocess.DEVNULL
@@ -2235,5 +2251,6 @@ def run_untrusted_networked(
         use_egress_proxy=True,
         proxy_hosts=list(proxy_hosts),
         allowed_tcp_ports=[443],
+        strict_env=True,
         **kwargs,
     )

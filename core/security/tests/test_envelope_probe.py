@@ -220,6 +220,45 @@ class TestProbeEnvelopeCompatibility:
         assert not result.compatible
         assert "timed out" in result.error
 
+    def test_strict_true_raises_on_dispatch_failure(self):
+        """F058 strict-contract gap (W36.J.2):
+
+        Under strict=True the existing post-evaluate path already
+        raised RuntimeError when probe_result.compatible was False.
+        But the dispatch-exception path used to early-return a
+        compatible=False ProbeResult, so a strict=True caller that
+        had registered the dispatch exception would NOT see the
+        documented "strict raises on failure" contract — exactly
+        the silent-fallback the kwarg was added to prevent.
+
+        After the fix, the dispatch-exception path raises uniformly
+        under strict=True. The original exception is chained via
+        `raise ... from e` so callers can introspect the root cause.
+        """
+        import pytest
+
+        dispatch = _make_dispatch_fn(
+            raise_error=RuntimeError("connection refused"),
+        )
+        with pytest.raises(RuntimeError, match="dispatch failed"):
+            probe_envelope_compatibility(
+                "phi-3", CONSERVATIVE, dispatch, strict=True,
+            )
+
+    def test_strict_false_default_still_returns_failed_result(self):
+        """Backward-compat: with strict=False (the default),
+        dispatch failures still return a failed ProbeResult so
+        existing callers (orchestrator.py:558 + any future caller
+        that opts out of strict) keep their current behaviour."""
+        dispatch = _make_dispatch_fn(
+            raise_error=RuntimeError("connection refused"),
+        )
+        result = probe_envelope_compatibility(
+            "phi-3", CONSERVATIVE, dispatch,
+        )
+        assert not result.compatible
+        assert "connection refused" in result.error
+
     def test_passes_analysis_model_object_to_dispatch_fn(self):
         """The probe must forward its ``analysis_model`` argument
         unchanged to dispatch_fn. Production dispatch_fn (in

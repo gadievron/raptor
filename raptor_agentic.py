@@ -747,7 +747,14 @@ Examples:
         semgrep_proc = subprocess.Popen(
             semgrep_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             bufsize=1,  # Line-buffered, see main-Popen comment.
-            env=RaptorConfig.get_safe_env(),
+            # F102: semgrep is typically installed via
+            # ``pip install --user``; without PYTHONUSERBASE flowing
+            # through, an operator with a non-default user-base sees
+            # ``ModuleNotFoundError: No module named 'semgrep'`` here.
+            # PYTHONUSERBASE remains stripped by default (it is a real
+            # RCE vector via .pth files); the opt-in restores it only
+            # for this scanner spawn.
+            env=RaptorConfig.get_safe_env(include_python_user_base=True),
             start_new_session=True,  # See main-Popen comment.
         )
 
@@ -1437,7 +1444,15 @@ Examples:
 
     print("\n" + "=" * 70)
     print("RAPTOR has autonomously:")
-    if not args.codeql_only:
+    # Gate the green-tick "Scanned with Semgrep" line on actual scan
+    # success — `semgrep_metrics` is a truthy dict only when the
+    # subprocess ran, didn't time out, returned rc in {0, 1}, and
+    # produced a scan_metrics.json the loader could parse. Pre-fix the
+    # tick fired solely on `not args.codeql_only`, so timed-out and
+    # errored scans showed a misleading "✓" alongside the CodeQL line
+    # below — which already gates on `codeql_metrics` for exactly this
+    # reason. Mirror that asymmetry away.
+    if not args.codeql_only and semgrep_metrics:
         print("   ✓ Scanned with Semgrep")
     if codeql_metrics:
         print("   ✓ Scanned with CodeQL")
