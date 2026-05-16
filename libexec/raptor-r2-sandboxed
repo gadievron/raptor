@@ -65,21 +65,33 @@ import os
 import sys
 from pathlib import Path
 
-# Trust-marker check — same pattern as the other libexec/raptor-*
-# dispatch scripts (raptor-run-sandboxed, raptor-binary-understand).
-# This script is invoked indirectly via R2PIPE_R2; only RAPTOR's own
-# r2pipe-using code should set that env var. A user manually running
-# this script gets a clear error rather than a confusing sandbox
-# attempt.
+# Wrapper-side exit codes — distinguishable from r2's own exit codes
+# (which typically range 0-127 for normal exits). Using 100+ for
+# wrapper-side failures so callers can tell "r2 exited 2 because
+# its input was malformed" from "the wrapper refused to start"
+# without parsing stderr.
+_RC_WRAPPER_ARGV_REFUSED   = 100
+_RC_WRAPPER_SANDBOX_FAILED = 101
+_RC_WRAPPER_TRUST_MISSING  = 102
+_RC_WRAPPER_ENV_INVALID    = 103
+_RC_WRAPPER_BINARY_MISSING = 104
+
+# ─── trust-marker check (libexec convention) ───────────────
+# Inline before any RAPTOR import (matches raptor-run-sandboxed,
+# raptor-binary-understand) so a malicious PYTHONPATH can't hijack
+# core.* imports before the check fires. This script is invoked
+# indirectly by r2pipe (via R2PIPE_R2 env), not by humans directly;
+# unguarded invocation typically means a caller misconfiguration.
 if not (os.environ.get("CLAUDECODE")
         or os.environ.get("_RAPTOR_TRUSTED")):
     sys.stderr.write(
         f"{sys.argv[0]}: internal dispatch script.\n"
         "  Set R2PIPE_R2 to this script's path and r2pipe will invoke "
-        "it transparently.\n"
+        "it transparently (radare2_understand.analyse does this).\n"
         "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
     )
-    sys.exit(3)
+    sys.exit(_RC_WRAPPER_TRUST_MISSING)
+# ─── end trust-marker check ────────────────────────────────
 
 # Resolve RAPTOR root via this script's path — libexec/<script>, so
 # parents[1] is the RAPTOR install dir. core/sandbox lives there.
@@ -87,7 +99,7 @@ _RAPTOR_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_RAPTOR_DIR))
 
 
-def _die(msg: str, code: int = 3) -> None:
+def _die(msg: str, code: int = _RC_WRAPPER_SANDBOX_FAILED) -> None:
     sys.stderr.write(f"[r2-sandbox] {msg}\n")
     sys.exit(code)
 
@@ -122,7 +134,7 @@ def _parse_and_validate_argv(argv: list[str]) -> tuple[list[str], str]:
     ~/.radare2rc auto-exec vector independent of $HOME masking.
     """
     if len(argv) < 2:
-        _die(f"refused argv (too short): {argv!r}", code=2)
+        _die(f"refused argv (too short): {argv!r}", code=_RC_WRAPPER_ARGV_REFUSED)
 
     # Last arg = binary path. Everything else = flag.
     binary = argv[-1]
@@ -134,7 +146,25 @@ def _parse_and_validate_argv(argv: list[str]) -> tuple[list[str], str]:
     # here would indicate a caller bug or attempted injection.
     if not binary.startswith("/"):
         _die(f"refused argv (binary must be absolute path): {binary!r}",
-             code=2)
+             code=_RC_WRAPPER_ARGV_REFUSED)
+
+    # Canonicalise via realpath — closes the symlink residual where a
+    # binary at /tmp/X/target → /etc/passwd would otherwise have
+    # R2_TARGET_DIR bound at /tmp/X (containing only a symlink) while
+    # r2 reads the symlink target /etc/passwd. After realpath, the
+    # binary path's parent dir IS the dir containing the actual file
+    # r2 will read, so mount_ns binds the right tree. Realpath also
+    # collapses "/tmp/X/../etc/passwd"-style traversal in the input.
+    binary = os.path.realpath(binary)
+
+    # Fast-fail on missing / non-file. The sandbox bootstrap costs
+    # ~100-500ms (mount-ns, Landlock, seccomp); checking the file
+    # exists here saves that cost when the caller has the wrong path.
+    # Also gives a clearer error than r2's own "Cannot open binary"
+    # which surfaces inside the sandbox and gets buried.
+    if not os.path.isfile(binary):
+        _die(f"refused: binary not found or not a regular file: {binary!r}",
+             code=_RC_WRAPPER_BINARY_MISSING)
 
     # Validate every flag is in the whitelist.
     for f in flags:
@@ -142,7 +172,7 @@ def _parse_and_validate_argv(argv: list[str]) -> tuple[list[str], str]:
             _die(
                 f"refused argv (flag not in whitelist "
                 f"{sorted(_ALLOWED_FLAGS)}): {f!r}",
-                code=2,
+                code=_RC_WRAPPER_ARGV_REFUSED,
             )
 
     # Prepend -N if not already present — disables ~/.radare2rc
@@ -162,7 +192,8 @@ flags, binary = _parse_and_validate_argv(argv)
 
 output_dir = os.environ.get("OUTPUT_DIR")
 if not output_dir:
-    _die("OUTPUT_DIR env var required (writable scratch dir)")
+    _die("OUTPUT_DIR env var required (writable scratch dir)",
+         code=_RC_WRAPPER_ENV_INVALID)
 
 target_dir = os.environ.get("R2_TARGET_DIR")
 if not target_dir:
@@ -226,6 +257,7 @@ try:
             strict_env=True,
         )
 except (OSError, RuntimeError, ValueError) as e:
-    _die(f"sandbox invocation failed: {e.__class__.__name__}: {e}")
+    _die(f"sandbox invocation failed: {e.__class__.__name__}: {e}",
+         code=_RC_WRAPPER_SANDBOX_FAILED)
 
 sys.exit(result.returncode)

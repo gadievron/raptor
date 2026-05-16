@@ -262,6 +262,72 @@ class BinaryUnderstand:
                 "Then: 'pip install r2pipe'."
             )
 
+    @staticmethod
+    def _cmd_t(r2, command: str, timeout_s: float) -> str:
+        """Run r2.cmd with a hard per-command timeout.
+
+        r2pipe.cmd() reads until a NULL byte on r2's stdout pipe — if r2
+        wedges (parser infinite loop on malicious input, decompiler
+        stuck on pathological CFG), the read blocks forever and the
+        analysis hangs. The 30-min sandbox-wrapper timeout (PR3) is the
+        worst-case backstop; per-command timeouts here give the operator
+        a "this binary is being weird, abort" signal in seconds-to-
+        minutes rather than 30 minutes wasted.
+
+        On timeout the r2 subprocess is killed via r2pipe's `process`
+        handle, the pipe read unblocks with EOF, and TimeoutError
+        propagates. After timeout r2 is dead; the analyse() try/finally
+        skips r2.quit() (already gone) and cleans up env/scratch.
+
+        Threaded rather than signal-based because signals can only fire
+        in the main thread, and radare2_understand may be called from
+        worker threads.
+        """
+        import threading
+        result_holder: list = [None]
+        exc_holder: list = [None]
+
+        def _run():
+            try:
+                result_holder[0] = r2.cmd(command)
+            except BaseException as e:  # noqa: BLE001 — propagate any error
+                exc_holder[0] = e
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        t.join(timeout_s)
+        if t.is_alive():
+            # Kill the r2 subprocess to unblock the pipe read.
+            proc = getattr(r2, "process", None)
+            if proc is not None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            # Give kill time to land; the worker thread is daemon so
+            # an extra-stubborn r2 won't keep the Python interpreter
+            # alive past process exit.
+            t.join(2)
+            raise TimeoutError(
+                f"r2 command {command!r} exceeded {timeout_s}s — likely "
+                f"a malicious binary or r2 parser bug; analysis aborted."
+            )
+        if exc_holder[0] is not None:
+            raise exc_holder[0]
+        return result_holder[0]
+
+    # Per-command timeout budgets. Real `aaa` on typical binaries
+    # completes in seconds to a couple of minutes; 10 min is generous.
+    # Decompilation per function is bounded by r2's own complexity
+    # heuristics but a 2-min cap catches pathological CFGs. Everything
+    # else is metadata-shaped (JSON dumps from in-memory state) and
+    # should be sub-second; 60s catches r2 wedges without false-
+    # positing slow IO on large binaries.
+    _T_AAA = 600.0          # full auto-analysis
+    _T_DECOMPILE = 120.0    # pdc / pdg per function
+    _T_QUERY = 60.0         # ij / iij / iEj / aflj / izj
+    _T_XREF = 30.0          # axffj per function (cheap in-memory lookup)
+
     def analyse(
         self,
         max_decompile: int = 20,
@@ -340,7 +406,7 @@ class BinaryUnderstand:
                     else:
                         _os.environ[k] = v
                 _saved_env = {}  # already restored — finally skips re-restore
-            r2.cmd("aaa")    # full auto-analysis
+            self._cmd_t(r2, "aaa", self._T_AAA)    # full auto-analysis
             self._extract_metadata(r2, ctx)
             self._extract_imports_exports(r2, ctx)
             self._extract_functions(r2, ctx)
@@ -387,7 +453,7 @@ class BinaryUnderstand:
 
     def _extract_metadata(self, r2, ctx: BinaryContextMap) -> None:
         try:
-            info = json.loads(r2.cmd("ij") or "{}")
+            info = json.loads(self._cmd_t(r2, "ij", self._T_QUERY) or "{}")
             bin_info = info.get("bin", {})
             ctx.arch = str(bin_info.get("arch", ""))
             ctx.bits = int(bin_info.get("bits", 0) or 0)
@@ -398,7 +464,7 @@ class BinaryUnderstand:
 
     def _extract_imports_exports(self, r2, ctx: BinaryContextMap) -> None:
         try:
-            imports_raw = json.loads(r2.cmd("iij") or "[]")
+            imports_raw = json.loads(self._cmd_t(r2, "iij", self._T_QUERY) or "[]")
             ctx.imports = [
                 str(i.get("name", "")) for i in imports_raw if i.get("name")
             ]
@@ -407,7 +473,7 @@ class BinaryUnderstand:
             ctx.imports = []
 
         try:
-            exports_raw = json.loads(r2.cmd("iEj") or "[]")
+            exports_raw = json.loads(self._cmd_t(r2, "iEj", self._T_QUERY) or "[]")
             ctx.exports = [
                 str(e.get("name", "")) for e in exports_raw if e.get("name")
             ]
@@ -417,7 +483,7 @@ class BinaryUnderstand:
 
     def _extract_functions(self, r2, ctx: BinaryContextMap) -> None:
         try:
-            fns = json.loads(r2.cmd("aflj") or "[]")
+            fns = json.loads(self._cmd_t(r2, "aflj", self._T_QUERY) or "[]")
         except Exception as e:
             logger.debug(f"function list failed: {e}")
             return
@@ -457,7 +523,7 @@ class BinaryUnderstand:
 
     def _extract_strings(self, r2, ctx: BinaryContextMap, limit: int) -> None:
         try:
-            strings_raw = json.loads(r2.cmd("izj") or "[]")
+            strings_raw = json.loads(self._cmd_t(r2, "izj", self._T_QUERY) or "[]")
         except Exception:
             strings_raw = []
         strings = []
@@ -503,7 +569,8 @@ class BinaryUnderstand:
                 continue
             try:
                 refs = json.loads(
-                    r2.cmd(f"axffj @ {fn.address}") or "[]"
+                    self._cmd_t(r2, f"axffj @ {fn.address}", self._T_XREF)
+                    or "[]"
                 )
             except Exception:
                 refs = []
@@ -566,7 +633,9 @@ class BinaryUnderstand:
 
         for fn in candidates[:limit]:
             try:
-                src = r2.cmd(f"{decompile_cmd} @ {fn.address}") or ""
+                src = self._cmd_t(
+                    r2, f"{decompile_cmd} @ {fn.address}", self._T_DECOMPILE,
+                ) or ""
                 fn.decompiled = src.strip()[:8192]
             except Exception as e:
                 logger.debug(f"decompile {fn.name} failed: {e}")

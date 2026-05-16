@@ -70,43 +70,54 @@ def _run_wrapper(args, env=None, stdin=None, timeout=30):
 
 # === Layer 1: argv + env validation (no r2 needed) ===
 
+# Wrapper exit codes — must match libexec/raptor-r2-sandboxed.
+# Disambiguated from r2's own exit codes (0-127 typical) by using 100+.
+_RC_ARGV_REFUSED   = 100
+_RC_SANDBOX_FAILED = 101
+_RC_TRUST_MISSING  = 102
+_RC_ENV_INVALID    = 103
+_RC_BINARY_MISSING = 104
+
+
 class TestArgvWhitelist:
     """The wrapper refuses argv outside the r2pipe-spawn shape."""
 
     def test_no_args_refuses(self, tmp_path):
         env = _trusted_env(OUTPUT_DIR=str(tmp_path))
         r = _run_wrapper([], env=env)
-        assert r.returncode == 2, r.stderr
+        assert r.returncode == _RC_ARGV_REFUSED, r.stderr
         assert "refused argv" in r.stderr
 
     def test_relative_binary_path_refuses(self, tmp_path):
         env = _trusted_env(OUTPUT_DIR=str(tmp_path))
         r = _run_wrapper(["-2", "relative/path"], env=env)
-        assert r.returncode == 2, r.stderr
+        assert r.returncode == _RC_ARGV_REFUSED, r.stderr
         assert "must be absolute" in r.stderr
 
     def test_unknown_flag_refuses(self, tmp_path):
         """A flag that smuggles arbitrary r2 command, e.g. -c 'cmd', or
-        opens a file with attacker-controlled mode (-w) — must refuse."""
+        opens a file with attacker-controlled mode (-w) — must refuse.
+        Binary is /bin/ls (real file) so we exercise the flag-whitelist
+        path, not the missing-binary check."""
         env = _trusted_env(OUTPUT_DIR=str(tmp_path))
-        r = _run_wrapper(["-c", "system('id')", "/tmp/binary"], env=env)
-        assert r.returncode == 2, r.stderr
+        r = _run_wrapper(["-c", "system('id')", "/bin/ls"], env=env)
+        assert r.returncode == _RC_ARGV_REFUSED, r.stderr
         assert "not in whitelist" in r.stderr
 
     def test_write_mode_flag_refuses(self, tmp_path):
         """`-w` puts r2 in write mode — could modify the target binary
         on disk. Not in the whitelist."""
         env = _trusted_env(OUTPUT_DIR=str(tmp_path))
-        r = _run_wrapper(["-w", "/tmp/binary"], env=env)
-        assert r.returncode == 2, r.stderr
+        r = _run_wrapper(["-w", "/bin/ls"], env=env)
+        assert r.returncode == _RC_ARGV_REFUSED, r.stderr
 
     def test_eval_flag_refuses(self, tmp_path):
         """`-e` evaluates r2 config strings — attacker-controlled
         could enable shell escapes (`scr.html`, etc.)."""
         env = _trusted_env(OUTPUT_DIR=str(tmp_path))
-        r = _run_wrapper(["-e", "cfg.sandbox=false", "/tmp/binary"],
+        r = _run_wrapper(["-e", "cfg.sandbox=false", "/bin/ls"],
                          env=env)
-        assert r.returncode == 2, r.stderr
+        assert r.returncode == _RC_ARGV_REFUSED, r.stderr
 
 
 class TestTrustMarker:
@@ -118,7 +129,7 @@ class TestTrustMarker:
         env.pop("CLAUDECODE", None)
         env["OUTPUT_DIR"] = str(tmp_path)
         r = _run_wrapper(["-2", "/bin/ls"], env=env)
-        assert r.returncode == 3
+        assert r.returncode == _RC_TRUST_MISSING
         assert "internal dispatch script" in r.stderr
 
 
@@ -129,8 +140,61 @@ class TestEnvValidation:
         env = _trusted_env()
         env.pop("OUTPUT_DIR", None)
         r = _run_wrapper(["-2", "/bin/ls"], env=env)
-        assert r.returncode == 3, r.stderr
+        assert r.returncode == _RC_ENV_INVALID, r.stderr
         assert "OUTPUT_DIR" in r.stderr
+
+
+class TestFastFailMissingBinary:
+    """The wrapper checks the binary exists BEFORE spending ~100-500ms
+    on sandbox bootstrap — saves cost on operator typos and surfaces
+    the error clearly (clearer than r2's own 'Cannot open binary'
+    which gets buried inside the sandbox)."""
+
+    def test_nonexistent_binary_fast_fails(self, tmp_path):
+        env = _trusted_env(OUTPUT_DIR=str(tmp_path))
+        r = _run_wrapper(["-2", "/tmp/definitely-not-a-real-binary-XYZ"],
+                         env=env)
+        assert r.returncode == _RC_BINARY_MISSING, r.stderr
+        assert "not found" in r.stderr.lower()
+
+    def test_directory_not_file_refuses(self, tmp_path):
+        """A path to a directory (not a regular file) is not a valid
+        binary — refuse rather than letting r2 fail confusingly."""
+        env = _trusted_env(OUTPUT_DIR=str(tmp_path))
+        r = _run_wrapper(["-2", str(tmp_path)], env=env)
+        assert r.returncode == _RC_BINARY_MISSING, r.stderr
+
+
+class TestSymlinkResolution:
+    """Realpath collapses symlinks BEFORE the wrapper proceeds. Closes
+    the residual where a binary at /tmp/X/target → /etc/passwd would
+    have R2_TARGET_DIR bound at /tmp/X (containing only a symlink)
+    while r2 actually reads the symlink's target."""
+
+    def test_symlink_resolved_before_validation(self, tmp_path):
+        """Create a symlink at /tmp/X/target → /bin/ls, invoke wrapper
+        with the symlink path. The wrapper should accept (resolved
+        path /bin/ls is a real file) and the sandbox-side path passed
+        to r2 reflects the realpath."""
+        link = tmp_path / "target-symlink"
+        link.symlink_to("/bin/ls")
+        env = _trusted_env(OUTPUT_DIR=str(tmp_path))
+        # We don't actually wait for r2 to fully run — just confirm
+        # the wrapper got past validation. Short timeout, ignore rc.
+        try:
+            r = subprocess.run(
+                [str(WRAPPER), "-2", str(link)],
+                env=env, input="q\n", capture_output=True, text=True,
+                timeout=5,
+            )
+        except subprocess.TimeoutExpired:
+            # Took too long — but didn't fast-fail with BINARY_MISSING,
+            # which is what we wanted to assert.
+            return
+        # If it returned within 5s, must NOT be a fast-fail rc.
+        assert r.returncode != _RC_BINARY_MISSING, (
+            f"symlink was incorrectly rejected as missing: stderr={r.stderr!r}"
+        )
 
 
 # === Layer 2: integration — wrapper spawns r2 successfully ===
