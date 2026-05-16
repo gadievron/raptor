@@ -343,5 +343,64 @@ class TestSandboxWiring(unittest.TestCase):
         )
 
 
+class TestCmdTimeout(unittest.TestCase):
+    """BinaryUnderstand._cmd_t — per-command timeout helper. Drives
+    r2.cmd() in a worker thread; on timeout, kills the r2 subprocess
+    via r2pipe's `process` handle and raises TimeoutError."""
+
+    def test_normal_command_returns_result(self):
+        """Fast r2 response → result returned, no timeout."""
+        r2 = MagicMock()
+        r2.cmd.return_value = '{"bin": "elf"}'
+        result = BinaryUnderstand._cmd_t(r2, "ij", timeout_s=5.0)
+        self.assertEqual(result, '{"bin": "elf"}')
+        r2.cmd.assert_called_once_with("ij")
+
+    def test_timeout_raises_timeouterror(self):
+        """r2.cmd() blocks > timeout → TimeoutError raised, r2 killed."""
+        import time
+        r2 = MagicMock()
+        # Simulate r2 hanging: cmd() never returns.
+        r2.cmd.side_effect = lambda c: time.sleep(10)
+        r2.process = MagicMock()
+        with self.assertRaises(TimeoutError) as ctx:
+            BinaryUnderstand._cmd_t(r2, "aaa", timeout_s=0.5)
+        self.assertIn("aaa", str(ctx.exception))
+        self.assertIn("0.5s", str(ctx.exception))
+        # On timeout, r2.process.kill() must have been called to
+        # unblock the pipe read.
+        r2.process.kill.assert_called()
+
+    def test_timeout_handles_missing_process_handle(self):
+        """If r2pipe doesn't expose `process` (older versions, custom
+        subclass), _cmd_t must still raise TimeoutError without
+        crashing on the missing attribute."""
+        import time
+        r2 = MagicMock(spec=["cmd"])  # no `process` attr
+        r2.cmd.side_effect = lambda c: time.sleep(10)
+        with self.assertRaises(TimeoutError):
+            BinaryUnderstand._cmd_t(r2, "aaa", timeout_s=0.3)
+
+    def test_cmd_exception_propagates(self):
+        """Exceptions from r2.cmd() (e.g. ConnectionError if pipe
+        broke) must propagate up to the caller, not be swallowed."""
+        r2 = MagicMock()
+        r2.cmd.side_effect = ConnectionError("pipe broken")
+        with self.assertRaises(ConnectionError):
+            BinaryUnderstand._cmd_t(r2, "ij", timeout_s=5.0)
+
+    def test_per_command_timeout_budgets_are_reasonable(self):
+        """Sanity-check the class-level _T_* timeouts haven't drifted
+        to silly values (zero, negative, decade-long)."""
+        self.assertGreater(BinaryUnderstand._T_AAA, 60)        # > 1 min
+        self.assertLess(BinaryUnderstand._T_AAA, 3600)         # < 1 hour
+        self.assertGreater(BinaryUnderstand._T_DECOMPILE, 10)
+        self.assertLess(BinaryUnderstand._T_DECOMPILE, 600)
+        self.assertGreater(BinaryUnderstand._T_QUERY, 1)
+        self.assertLess(BinaryUnderstand._T_QUERY, 300)
+        self.assertGreater(BinaryUnderstand._T_XREF, 1)
+        self.assertLess(BinaryUnderstand._T_XREF, 300)
+
+
 if __name__ == "__main__":
     unittest.main()
