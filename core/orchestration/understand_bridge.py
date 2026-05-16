@@ -779,8 +779,20 @@ def enrich_checklist(checklist: Dict[str, Any], context_map: Dict[str, Any],
     # retain that marker even after a refreshed context-map no longer
     # references it (stale data leak across re-runs). Re-running should
     # always reflect the current context-map's reasons exactly.
-    # enrich_checklist is the sole writer of these fields, so the clear
-    # is safe — verified by grep across the codebase.
+    #
+    # Writers of ``priority`` / ``priority_reason``: there are TWO —
+    #   1. ``enrich_checklist`` (this function): UPGRADES to "high".
+    #   2. ``core.orchestration.reachability_enrichment.``
+    #      ``mark_unreachable_low_priority``: DOWNGRADES to "low".
+    # The blanket clear here is SAFE because the orchestration call
+    # order (see ``agentic_passes._enrich_agentic_checklist`` →
+    # ``_mark_unreachable_low_priority``) guarantees ``enrich_checklist``
+    # runs FIRST and the reachability downgrade pass runs SECOND. Any
+    # prior "low" mark we clear here would be re-stamped on the next
+    # reachability pass; any prior "high" we clear is exactly what we
+    # need to clear so a refreshed context-map can re-stamp accurately.
+    # Reordering those two passes would re-introduce the stale-marker
+    # leak this clear is defending against.
     _clear_prior_priority_markers(checklist)
 
     # Build lookup: (relative_path, function_name_or_None) → set of reasons.
