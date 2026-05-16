@@ -28,8 +28,16 @@ logger = get_logger()
 class WebScanner:
     """Fully autonomous web application security scanner."""
 
-    def __init__(self, base_url: str, llm: Optional[LLMProvider], out_dir: Path,
-                 verify_ssl: bool = True, reveal_secrets: bool = False):
+    def __init__(
+        self,
+        base_url: str,
+        llm: Optional[LLMProvider],
+        out_dir: Path,
+        verify_ssl: bool = True,
+        reveal_secrets: bool = False,
+        max_depth: int = 3,
+        max_pages: int = 100,
+    ):
         self.base_url = base_url
         self.llm = llm
         self.out_dir = out_dir
@@ -37,10 +45,13 @@ class WebScanner:
 
         # Initialize components
         self.client = WebClient(base_url, verify_ssl=verify_ssl, reveal_secrets=reveal_secrets)
-        self.crawler = WebCrawler(self.client)
+        self.crawler = WebCrawler(self.client, max_depth=max_depth, max_pages=max_pages)
         self.fuzzer = WebFuzzer(self.client, llm) if llm else None
 
-        logger.info(f"Web scanner initialized for {base_url} (verify_ssl={verify_ssl})")
+        logger.info(
+            f"Web scanner initialized for {base_url} "
+            f"(verify_ssl={verify_ssl}, max_depth={max_depth}, max_pages={max_pages})"
+        )
 
     def scan(self) -> Dict[str, Any]:
         """
@@ -185,6 +196,8 @@ Examples:
         out_dir,
         verify_ssl=verify_ssl,
         reveal_secrets=True if args.reveal_secrets else False,
+        max_depth=args.max_depth,
+        max_pages=args.max_pages,
     )
 
     try:
