@@ -93,18 +93,18 @@ jobs:
           source $VENV_PATH/bin/activate
           uv pip install "$(grep -E '^ruff==' requirements-dev.txt)"
 
-      - name: Run ruff (F401)
+      - name: Run ruff (F401, F811, F821, F841)
         run: |
           source $VENV_PATH/bin/activate
-          # Conservative starting rule set: unused-import only. F811 is
-          # widened in the follow-up DEEP-1b PR (it requires manual
-          # class-rename in core/llm/tests/test_llm_callbacks_providers.py
-          # — autofix is unsafe). F821 + F841 also land in DEEP-1b.
-          # __init__.py `__all__` declarations land in this PR (DEEP-1a)
-          # so the F401 gate passes on the re-export hubs out of the box.
-          # E501 (3,204 default-88 violations) deferred until a separate
-          # line-length-policy decision per
-          # notes/_judge/W14-E1-lint-ci-gate-design.md.
-          ruff check --select F401 \
+          # DEEP-1b widens the gate from F401 (set by DEEP-1a) to the
+          # full name-correctness set: F811 (redefinition of unused
+          # name), F821 (undefined name), F841 (unused local variable).
+          # The manual fixes for these — including class renames in
+          # core/llm/tests/test_llm_callbacks_providers.py, missing
+          # typing imports across the codebase, and 88 unused-local
+          # cleanups — land in this PR. E501 (3,204 default-88
+          # violations) deferred until a separate line-length-policy
+          # decision per notes/_judge/W14-E1-lint-ci-gate-design.md.
+          ruff check --select F401,F811,F821,F841 \
             --output-format=github \
             .

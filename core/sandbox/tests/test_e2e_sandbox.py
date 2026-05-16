@@ -164,7 +164,7 @@ class TestE2ELandlockWriteBlocking(unittest.TestCase):
             # Create a symlink inside output pointing to /var/tmp
             evil_link = Path(output) / "escape"
             evil_link.symlink_to("/var/tmp")
-            result = sandbox_run(
+            sandbox_run(
                 ["sh", "-c", f"echo pwned > {output}/escape/raptor_test 2>&1"],
                 target=target, output=output,
                 capture_output=True, text=True, timeout=5,
@@ -182,7 +182,7 @@ class TestE2ELandlockWriteBlocking(unittest.TestCase):
         with TemporaryDirectory() as target, TemporaryDirectory() as output:
             victim = Path(output) / "source.txt"
             victim.write_text("hello")
-            result = sandbox_run(
+            sandbox_run(
                 ["sh", "-c", f"mv {output}/source.txt {sentinel} 2>&1"],
                 target=target, output=output,
                 capture_output=True, text=True, timeout=5,
@@ -346,7 +346,7 @@ class TestE2EResourceLimits(unittest.TestCase):
     def test_file_size_limit(self):
         """File size limit prevents large writes."""
         with TemporaryDirectory() as d:
-            result = sandbox_run(
+            sandbox_run(
                 ["python3", "-c",
                  f"f=open('{d}/big','wb'); f.write(b'A'*200*1024*1024); f.close()"],
                 block_network=True,

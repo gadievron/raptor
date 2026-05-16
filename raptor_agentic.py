@@ -808,7 +808,6 @@ Examples:
         )
 
     # ---- Collect Semgrep results ----
-    semgrep_timed_out = False
     if semgrep_proc:
         try:
             semgrep_stdout, semgrep_stderr = semgrep_proc.communicate(timeout=1800)
@@ -817,7 +816,6 @@ Examples:
             semgrep_proc.kill()
             semgrep_proc.communicate()
             rc = -1
-            semgrep_timed_out = True
             print("❌ Semgrep scan timed out (30m)")
             logger.error("Semgrep scan timed out")
             # Surface the timeout in the agentic-run summary even when

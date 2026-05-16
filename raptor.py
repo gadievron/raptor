@@ -507,6 +507,7 @@ def show_mode_help(mode: str) -> None:
     # blocks at import time would hang the operator's terminal)
     # doesn't pin the shell.
     try:
+        from core.config import RaptorConfig
         subprocess.run(
             [sys.executable, str(script_path), "--help"],
             env=RaptorConfig.get_safe_env(),

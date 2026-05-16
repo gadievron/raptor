@@ -224,7 +224,7 @@ class TestFpContextPropagation:
                         "rationale": "tightened"}
             raise AssertionError("unexpected extra LLM call")
 
-        result = synthesise_with_refinement(
+        synthesise_with_refinement(
             seed, tmp_path, tmp_path / "out", llm,
             max_iterations=3,
         )
@@ -338,7 +338,7 @@ class TestFpDedup:
                 return {"rule_body": "rules: r", "rationale": "x"}
             return {"status": "false_positive", "reasoning": "fp"}
 
-        result = synthesise_with_refinement(
+        synthesise_with_refinement(
             seed, tmp_path, tmp_path / "out", llm,
             max_iterations=3,
         )

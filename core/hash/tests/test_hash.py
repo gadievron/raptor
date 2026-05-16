@@ -94,7 +94,6 @@ class TestSha256Tree:
         (tmp_path / "file2.txt").write_text("content2")
 
         hash_no_limit = sha256_tree(tmp_path, max_file_size=10**12)  # Effectively no limit
-        hash_with_limit = sha256_tree(tmp_path, max_file_size=100)
 
         # With no limit, all files included; with limit, might skip
         # Just verify no_limit produces a hash

@@ -109,13 +109,11 @@ class ResilientLLMClient:
         # `backoff_factor` but the original implementation called
         # provider.generate exactly once. Wire them up for real.
         attempt = 0
-        last_exc: Exception | None = None
         while True:
             try:
                 resp = provider.generate(prompt, system_prompt=system, **kwargs)
                 break
             except Exception as exc:
-                last_exc = exc
                 if attempt >= self.max_retries:
                     raise LLMCallFailed(
                         f"LLM call ({model_id}) failed after "

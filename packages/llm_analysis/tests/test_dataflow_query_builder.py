@@ -327,7 +327,7 @@ class TestMultiRoot:
         the RAPTOR-shipped raptor-python-queries pack via the default
         EXTRA_CODEQL_PACK_ROOTS without any monkeypatching."""
         # No monkeypatch — use real RaptorConfig defaults
-        out = discover_prebuilt_queries()
+        discover_prebuilt_queries()
         # CWE-78 must resolve to the in-repo LocalFlowSource query
         # (extras win over the stdlib CommandInjection.ql on collision).
         path = discover_prebuilt_query("python", "CWE-78")

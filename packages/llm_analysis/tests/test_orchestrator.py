@@ -913,11 +913,6 @@ class TestWeakenedDefenses:
             return [dict(analysis_result, finding_id=f.get("finding_id"))
                     for f in findings]
 
-        mock_dispatch_fn = MagicMock(return_value=MagicMock(
-            result=analysis_result, cost=0, tokens=0, model="ollama/llama3",
-            duration=0,
-        ))
-
         with patch("core.llm.config.resolve_model_roles",
                    return_value=role_res), \
              patch("core.llm.client.LLMClient") as mock_cls, \

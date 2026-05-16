@@ -921,7 +921,7 @@ def test_xsource_blocks_hallucinated_discovered_field() -> None:
     ])
     events: list[LoopEvent] = []
     loop = ToolUseLoop(fp, [_discovered_tool()], events=events.append)
-    result = loop.run("Analyze CVE-2024-1234")
+    loop.run("Analyze CVE-2024-1234")
 
     blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
     assert len(blocked) == 1
@@ -941,7 +941,7 @@ def test_xsource_passes_value_from_prompt() -> None:
     ])
     events: list[LoopEvent] = []
     loop = ToolUseLoop(fp, [_discovered_tool()], events=events.append)
-    result = loop.run("Check openssl/openssl for CVE-2024-1234")
+    loop.run("Check openssl/openssl for CVE-2024-1234")
 
     blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
     assert len(blocked) == 0
@@ -968,7 +968,7 @@ def test_xsource_passes_value_from_prior_tool_output() -> None:
     loop = ToolUseLoop(
         fp, [source_tool, _discovered_tool()], events=events.append,
     )
-    result = loop.run("Analyze CVE-2024-1234")
+    loop.run("Analyze CVE-2024-1234")
 
     blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
     assert len(blocked) == 0
@@ -993,7 +993,7 @@ def test_xsource_blocks_value_not_from_prior_output() -> None:
     loop = ToolUseLoop(
         fp, [source_tool, _discovered_tool()], events=events.append,
     )
-    result = loop.run("Analyze CVE-2024-1234")
+    loop.run("Analyze CVE-2024-1234")
 
     blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
     assert len(blocked) == 1
@@ -1008,7 +1008,7 @@ def test_xsource_prompt_field_not_validated() -> None:
     ])
     events: list[LoopEvent] = []
     loop = ToolUseLoop(fp, [_prompt_tool()], events=events.append)
-    result = loop.run("go")
+    loop.run("go")
 
     blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
     assert len(blocked) == 0
@@ -1022,7 +1022,7 @@ def test_xsource_no_annotations_means_no_validation() -> None:
     ])
     events: list[LoopEvent] = []
     loop = ToolUseLoop(fp, [_echo_tool()], events=events.append)
-    result = loop.run("go")
+    loop.run("go")
 
     blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
     assert len(blocked) == 0
@@ -1042,7 +1042,7 @@ def test_xsource_mixed_tool_blocks_only_discovered() -> None:
     ])
     events: list[LoopEvent] = []
     loop = ToolUseLoop(fp, [_mixed_tool()], events=events.append)
-    result = loop.run("Analyze CVE-2024-1234")
+    loop.run("Analyze CVE-2024-1234")
 
     blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
     assert len(blocked) == 1
@@ -1070,7 +1070,7 @@ def test_xsource_known_values_grow_across_turns() -> None:
     ])
     events: list[LoopEvent] = []
     loop = ToolUseLoop(fp, [tool_a, tool_b], events=events.append)
-    result = loop.run("Analyze CVE-2024-1234")
+    loop.run("Analyze CVE-2024-1234")
 
     blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
     assert len(blocked) == 0
@@ -1084,7 +1084,7 @@ def test_xsource_slash_split_matches_components() -> None:
     ])
     events: list[LoopEvent] = []
     loop = ToolUseLoop(fp, [_discovered_tool()], events=events.append)
-    result = loop.run("Check openssl/openssl")
+    loop.run("Check openssl/openssl")
 
     blocked = [e for e in events if isinstance(e, ToolCallBlocked)]
     assert len(blocked) == 0

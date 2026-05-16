@@ -20,10 +20,13 @@ from __future__ import annotations
 
 import functools
 import re
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from urllib.parse import quote as _urlquote
 
 from core.http import HttpError
+
+if TYPE_CHECKING:
+    from core.http.egress_backend import EgressClient
 
 from cve_diff.core.exceptions import AnalysisError
 from cve_diff.core.models import CommitSha, DiffBundle, FileChange, RepoRef

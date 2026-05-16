@@ -184,7 +184,7 @@ def test_optional_region_fields_omitted_when_zero(tmp_path):
                     column=0, line_end=0, column_end=0,
                     message="m"),
     ])
-    region = _run0(doc := results_to_sarif([result], tmp_path))[
+    region = _run0(results_to_sarif([result], tmp_path))[
         "results"][0]["locations"][0]["physicalLocation"]["region"]
     assert region["startLine"] == 5
     assert "endLine" not in region

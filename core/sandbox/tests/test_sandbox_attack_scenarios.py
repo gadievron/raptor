@@ -962,7 +962,7 @@ class TestProxyIsGlobalScreen(unittest.TestCase):
             output=self.tmp.name, caller_label="is-global-test",
         ) as run:
             # Any CONNECT through the proxy to localhost forces the is_global path
-            r = run(
+            run(
                 ["curl", "-s", "-o", "/dev/null", "--max-time", "2",
                  "https://localhost/"],
                 capture_output=True, text=True, timeout=8,

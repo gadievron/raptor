@@ -103,6 +103,7 @@ __all__ = [
 ]
 
 
+
 def _get_items(file_entry):
     """Read code items from a file entry. Handles both old and new format.
 

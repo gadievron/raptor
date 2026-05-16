@@ -317,12 +317,15 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list = None,
     # — reads were never restricted (READ_FILE was miscoded as EXECUTE)
     # and MAKE_SYM was never restricted (shifted off the end of the
     # write mask). Verified against the uapi header on kernel 6.x.
-    EXECUTE = 1 << 0
+    # EXECUTE, REMOVE_DIR, REMOVE_FILE retained as comments to document
+    # the bit positions even though we don't restrict them (see note
+    # below about unshare and importlib needing remove ops).
+    EXECUTE = 1 << 0  # noqa: F841 — kernel-ABI doc, not used
     WRITE_FILE = 1 << 1
     READ_FILE = 1 << 2
     READ_DIR = 1 << 3
-    REMOVE_DIR = 1 << 4
-    REMOVE_FILE = 1 << 5
+    REMOVE_DIR = 1 << 4  # noqa: F841 — kernel-ABI doc, not used
+    REMOVE_FILE = 1 << 5  # noqa: F841 — kernel-ABI doc, not used
     MAKE_CHAR = 1 << 6
     MAKE_DIR = 1 << 7
     MAKE_REG = 1 << 8

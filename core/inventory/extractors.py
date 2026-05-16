@@ -500,7 +500,7 @@ class GoExtractor:
         for i, line in enumerate(content.split('\n'), 1):
             match = re.match(self.PATTERN, line)
             if match:
-                receiver_name = match.group(1)  # e.g. "s"
+                # match.group(1) is the receiver variable name (e.g. "s"); unused
                 receiver_type = match.group(2)  # e.g. "*Server"
                 name = match.group(3)
                 class_name = receiver_type.lstrip("*") if receiver_type else None

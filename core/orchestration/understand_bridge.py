@@ -1086,9 +1086,7 @@ def _filter_context_map(context_map: Dict[str, Any], stale_files: Set[str]) -> i
 
     # Filter unchecked_flows — references entry_points/sinks by ID, so
     # resolve IDs to files first, then drop flows touching stale files.
-    stale_ep_ids: Set[str] = set()
-    stale_sink_ids: Set[str] = set()
-
+    #
     # We need the original entry_points/sink_details to know which IDs
     # were removed. But we already filtered those lists above. Instead,
     # collect IDs from the entries we kept and drop flows referencing
@@ -1293,7 +1291,6 @@ def _import_flow_traces(
 
     paths_path = validate_dir / "attack-paths.json"
     existing_paths: List[Dict[str, Any]] = []
-    paths_was_malformed = False
     if paths_path.exists():
         loaded = load_json(paths_path)
         if isinstance(loaded, list):
@@ -1317,7 +1314,6 @@ def _import_flow_traces(
             # sibling so the operator can inspect / recover it,
             # and warn loudly. Then proceed as if paths_path didn't
             # exist (existing_paths stays []).
-            paths_was_malformed = True
             ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             quarantine = paths_path.with_suffix(
                 paths_path.suffix + f".malformed-{ts}"

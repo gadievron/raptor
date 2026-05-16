@@ -14,8 +14,11 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from inspect import isclass
-from typing import Dict, Optional, Any, Tuple, Type, Union
+from typing import Dict, Optional, Any, Tuple, Type, Union, TYPE_CHECKING
 from dataclasses import dataclass
+
+if TYPE_CHECKING:
+    from pydantic import BaseModel
 
 from core.logging import get_logger
 from .config import ModelConfig
