@@ -555,9 +555,15 @@ def orchestrate(
         for _probe_model in _models_to_probe:
             _pname = _probe_model.model_name if hasattr(_probe_model, "model_name") else str(_probe_model)
             _pprofile = get_profile_for(_pname)
-            probe_result = probe_envelope_compatibility(
-                _probe_model, _pprofile, dispatch_fn,
-            )
+            try:
+                probe_result = probe_envelope_compatibility(
+                    _probe_model, _pprofile, dispatch_fn, strict=True,
+                )
+            except RuntimeError as _probe_err:
+                defense_telemetry.set_probe_result(_pname, False)
+                _probe_failed = True
+                _failed_probe_models.append((_pname, str(_probe_err)))
+                continue
             defense_telemetry.set_probe_result(_pname, probe_result.compatible)
             if not probe_result.compatible:
                 _probe_failed = True
@@ -573,8 +579,18 @@ def orchestrate(
         if not _probe_failed and _probed_profiles:
             profile = _intersect_profiles(_probed_profiles)
         if _probe_failed:
+            # `_failed_probe_models` is guaranteed non-empty here:
+            # both code paths that set `_probe_failed=True` (the
+            # `except RuntimeError` branch and the
+            # `not probe_result.compatible` branch) also append to
+            # this list. `probe_result` itself may be unbound when
+            # every model raised RuntimeError (the strict-mode
+            # path), so refer to `_failed_probe_models` instead.
+            _fail_summary = "; ".join(
+                f"{_m}={_e}" for _m, _e in _failed_probe_models
+            )
             if not accept_weakened_defenses:
-                print(f"\n  Envelope probe failed for {model_label}: {probe_result.error}")
+                print(f"\n  Envelope probe failed for {model_label}: {_fail_summary}")
                 print(f"  The model cannot honour the defense envelope — aborting.")
                 print(f"  To proceed with weakened defenses, re-run with --accept-weakened-defenses")
                 return None
@@ -592,8 +608,7 @@ def orchestrate(
             # whatever happened to be the last probe_result.
             # Multi-model runs where a secondary failed now show
             # the secondary in the scorecard, matching reality.
-            for _fmname, _ferr in (_failed_probe_models
-                                   or [(analysis_model_name, probe_result.error)]):
+            for _fmname, _ferr in _failed_probe_models:
                 defense_telemetry.record_weakened_override(_fmname, _ferr)
                 logger.warning(
                     "Operator accepted weakened defenses for %s (probe error: %s)",
@@ -601,7 +616,7 @@ def orchestrate(
                 )
             print(f"\n  *** DEFENSE WARNING: envelope probe failed for {model_label} ***")
             print(f"  Running with reduced defences (--accept-weakened-defenses)")
-            print(f"  Reason: {probe_result.error}")
+            print(f"  Reason: {_fail_summary}")
             print(f"  Model-independent floor still applies (autofetch redaction,"
                   f" control-char sanitisation, role separation)\n")
 

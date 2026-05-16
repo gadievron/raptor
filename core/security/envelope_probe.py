@@ -168,6 +168,8 @@ def probe_envelope_compatibility(
     analysis_model: Any,
     profile: ModelDefenseProfile,
     dispatch_fn,
+    *,
+    strict: bool = False,
 ) -> ProbeResult:
     """Send a canary probe through the dispatch path.
 
@@ -187,6 +189,10 @@ def probe_envelope_compatibility(
 
     Returns a ProbeResult with .compatible indicating whether the model
     handled the envelope correctly.
+
+    When ``strict=True``, an incompatible probe result raises
+    ``RuntimeError`` instead of returning the failed ProbeResult, so
+    callers that do not check ``.compatible`` cannot silently continue.
     """
     system, user, nonce = build_canary_prompt(profile)
     model_name = getattr(analysis_model, "model_name", None) or str(analysis_model)
@@ -226,5 +232,10 @@ def probe_envelope_compatibility(
             "applies.",
             model_name, profile.name, probe_result.error,
         )
+        if strict:
+            raise RuntimeError(
+                f"Envelope probe failed for {model_name} (profile: {profile.name}): "
+                f"{probe_result.error}"
+            )
 
     return probe_result
