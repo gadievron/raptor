@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""Structured per-function AST view.
+
+Usage:
+  raptor-ast --file <path> --function <name> [--at-line <n>] [--language <lang>] [--json|--text]
+
+Returns a structured view of one function (signature, calls made, returns,
+inline-asm flag). See ``core.ast`` package docstring for the full schema.
+
+Exit codes:
+  0   view emitted
+  1   function not found / file unreadable / language unknown
+  2   usage error
+
+Language coverage at this revision:
+  Calls + returns + asm:  c, cpp
+  Calls + returns:        python, javascript, java, go
+  Calls only:             rust, ruby, csharp, php, typescript
+
+The view is computed by ``core.ast.view`` — a composition over the
+inventory substrate. See the ``core/ast/`` package for the API.
+"""
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+import os
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import argparse
+import json
+
+from core.ast import view, FunctionView
+
+
+def _render_text(fv: FunctionView) -> str:
+    """Human-friendly rendering for operator inspection.
+
+    JSON is the default for machine consumers (``/understand``,
+    ``/audit``); --text is the alternate when an operator runs the
+    shim directly and wants to skim the structure.
+    """
+    out = [
+        f"function:  {fv.function}",
+        f"file:      {fv.file}",
+        f"language:  {fv.language}",
+        f"lines:     {fv.lines[0]}-{fv.lines[1]}",
+        f"signature: {fv.signature}",
+        f"inline asm: {'yes' if fv.has_inline_asm else 'no'}",
+    ]
+    if fv.calls_made:
+        out.append("")
+        out.append("calls made:")
+        for c in fv.calls_made:
+            chain = ".".join(c.chain) if c.chain else "?"
+            tag = f"  (in class: {c.receiver_class})" if c.receiver_class else ""
+            out.append(f"  L{c.line:<5}  {chain}{tag}")
+    else:
+        out.append("")
+        out.append("calls made: (none statically resolvable)")
+    if fv.returns:
+        out.append("")
+        out.append("returns:")
+        for r in fv.returns:
+            val = r.value_text if r.value_text else "(bare)"
+            out.append(f"  L{r.line:<5}  return {val}")
+    else:
+        out.append("")
+        out.append("returns: (none explicit)")
+    return "\n".join(out)
+
+
+def main(argv) -> int:
+    parser = argparse.ArgumentParser(
+        prog="raptor-ast",
+        description=(
+            "Structured per-function view (signature, calls, returns, "
+            "inline-asm flag). JSON by default; --text for operator "
+            "inspection."
+        ),
+    )
+    parser.add_argument(
+        "--file", required=True,
+        help="Path to the source file containing the function.",
+    )
+    parser.add_argument(
+        "--function", required=True,
+        help="Function name. Disambiguate name collisions with --at-line.",
+    )
+    parser.add_argument(
+        "--at-line", type=int, default=None,
+        help=(
+            "Line number that falls inside the desired function. Used "
+            "to disambiguate when multiple functions in the file share "
+            "the same name (e.g. methods on different classes)."
+        ),
+    )
+    parser.add_argument(
+        "--language", default=None,
+        help=(
+            "Override language detection (defaults to file-extension "
+            "lookup via core.inventory.languages.detect_language)."
+        ),
+    )
+    out_format = parser.add_mutually_exclusive_group()
+    out_format.add_argument(
+        "--json", dest="fmt", action="store_const", const="json",
+        help="Emit JSON (default).",
+    )
+    out_format.add_argument(
+        "--text", dest="fmt", action="store_const", const="text",
+        help="Emit human-readable text.",
+    )
+    parser.set_defaults(fmt="json")
+
+    args = parser.parse_args(argv)
+
+    fv = view(
+        Path(args.file),
+        args.function,
+        at_line=args.at_line,
+        language=args.language,
+    )
+    if fv is None:
+        sys.stderr.write(
+            f"raptor-ast: no view available for {args.function!r} in "
+            f"{args.file!r} "
+            f"(check that the file exists, the language is supported, "
+            f"and the function name + --at-line resolves to a known "
+            f"function)\n",
+        )
+        return 1
+
+    if args.fmt == "json":
+        print(json.dumps(fv.to_dict(), indent=2))
+    else:
+        print(_render_text(fv))
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main(sys.argv[1:]))

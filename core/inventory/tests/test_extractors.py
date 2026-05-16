@@ -265,3 +265,87 @@ class TestTreeSitter:
     def test_ts_languages_available(self):
         langs = _get_ts_languages()
         assert "python" in langs
+
+
+class TestCppTreeSitter:
+    """Pin the C++ extraction fixes landed alongside ``core.ast`` (PR
+    ``feat/core-ast``):
+
+      * ``_ts_language("cpp")`` now loads ``tree_sitter_cpp`` (was
+        loading ``tree_sitter_c``, which can't parse class / method
+        / template / namespace shapes).
+      * ``_get_name`` handles the C++ declarator shapes the cpp
+        grammar produces: ``qualified_identifier`` (out-of-line
+        methods), ``destructor_name`` (``~Foo``),
+        ``pointer_declarator`` / ``parenthesized_declarator`` wraps.
+
+    Direct extractor coverage (the ``core.ast`` view tests cover
+    this indirectly; pinning here makes the contract explicit at the
+    layer where it lives)."""
+
+    def test_inline_class_method_extracted(self):
+        # Previously emitted only the class name because the C
+        # grammar couldn't parse the class body. Now: the inline
+        # method ``m`` should be in the output.
+        src = "class A { public: void m() { foo(); } };\n"
+        funcs = extract_functions("t.cpp", "cpp", src)
+        names = [f.name for f in funcs]
+        assert "m" in names, names
+
+    def test_inline_class_methods_with_name_collision(self):
+        # Two classes, both with a method called ``m``. Both must
+        # appear as separate entries so callers can disambiguate by
+        # line range.
+        src = (
+            "class A { public: void m() {} };\n"
+            "class B { public: void m() {} };\n"
+        )
+        funcs = extract_functions("t.cpp", "cpp", src)
+        m_entries = [f for f in funcs if f.name == "m"]
+        assert len(m_entries) == 2
+        # The two ``m`` entries occupy different line ranges.
+        assert m_entries[0].line_start != m_entries[1].line_start
+
+    def test_out_of_line_method_keeps_bare_name(self):
+        # ``void W::setup() {...}`` — the function declarator's name
+        # is a qualified_identifier. _get_name walks to the trailing
+        # ``setup`` and returns the bare name (matches the C-side
+        # convention of caller-tracking by bare name).
+        src = (
+            "class W { public: void setup(); };\n"
+            "void W::setup() { helper(); }\n"
+        )
+        funcs = extract_functions("t.cpp", "cpp", src)
+        names = [f.name for f in funcs]
+        assert "setup" in names
+
+    def test_out_of_line_destructor_named_with_tilde(self):
+        # ``W::~W() {...}`` — destructor_name (`~W`) is the inner
+        # child of the qualified_identifier. _get_name returns the
+        # destructor name verbatim, including the tilde.
+        src = (
+            "class W { public: ~W(); };\n"
+            "W::~W() { cleanup(); }\n"
+        )
+        funcs = extract_functions("t.cpp", "cpp", src)
+        names = [f.name for f in funcs]
+        assert "~W" in names
+
+    def test_namespaced_function_definition(self):
+        # ``namespace ns { void f() {...} }`` — the function inside
+        # the namespace is extracted with its bare name. We don't
+        # qualify with the namespace (matches the inventory's
+        # name-resolution convention).
+        src = "namespace ns { void f() { helper(); } }\n"
+        funcs = extract_functions("t.cpp", "cpp", src)
+        names = [f.name for f in funcs]
+        assert "f" in names
+
+    def test_pointer_return_type_function_name(self):
+        # ``char *strdup(...) {...}`` — the declarator is wrapped in
+        # a pointer_declarator. _get_name recurses through and finds
+        # the inner name.
+        src = "char *upper(char *s) { return s; }\n"
+        funcs = extract_functions("t.cpp", "cpp", src)
+        names = [f.name for f in funcs]
+        assert "upper" in names
