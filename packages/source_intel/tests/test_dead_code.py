@@ -233,8 +233,17 @@ def test_validator_verdict_dead_code_emits_not_exploitable(tmp_path):
 )
 def test_validator_verdict_skips_dead_code_for_non_static(tmp_path):
     """A non-static unsafe function with no observed calls in the
-    fixture — verdict must NOT be NOT_EXPLOITABLE (drops to UNCERTAIN
-    when no other axis fires)."""
+    fixture — verdict must NOT be NOT_EXPLOITABLE.
+
+    Note: after axis-7 hazards shipped (deprecated functions
+    including strcpy), the unbounded-strcpy in this fixture
+    correctly fires axis-7 EXPLOITABLE. The original intent of
+    the test (dead-code doesn't fire on non-static) is still
+    enforced: any verdict OTHER than NOT_EXPLOITABLE confirms
+    dead-code is skipped. The use of `do_copy` instead of
+    `strcpy` would yield UNCERTAIN, but keeping `strcpy` is
+    more representative of real kernel code.
+    """
     f = tmp_path / "live.c"
     f.write_text(
         "extern int strcpy(char *d, const char *s);\n"
@@ -246,4 +255,7 @@ def test_validator_verdict_skips_dead_code_for_non_static(tmp_path):
     )
     finding = _finding(str(f), 4, "cpp/unbounded-write")
     v = SourceIntelValidator(repo_root=tmp_path)
-    assert v.validate(finding) == ValidatorVerdict.UNCERTAIN
+    verdict = v.validate(finding)
+    assert verdict != ValidatorVerdict.NOT_EXPLOITABLE, (
+        f"dead-code MUST NOT fire on non-static fn; got {verdict}"
+    )

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis7_negative-strcpy-uaf",
+  "producer": "codeql",
+  "rule_id": "cpp/double-free",
+  "message": "source_intel_axis7_negative-strcpy-uaf",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis7_negative_strcpy_for_uaf.c",
+    "line": 8,
+    "column": 2,
+    "snippet": "free(buf);",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis7_negative_strcpy_for_uaf.c",
+    "line": 8,
+    "column": 2,
+    "snippet": "free(buf);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

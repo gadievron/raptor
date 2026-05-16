@@ -128,6 +128,33 @@ class AbortEvidence:
 
 
 @dataclass(frozen=True)
+class HazardEvidence:
+    """A single observation of an axis-7 hazardous code pattern.
+
+    Hazard kinds:
+      * ``deprecated_func`` — call to a historically-unsafe libc
+        function (gets/strcpy/strcat/sprintf/scanf). When CodeQL
+        flags a cpp/unbounded-write at one of these call sites, the
+        EXPLOITABLE verdict is supported: the function family
+        doesn't carry its own bounds, so the caller must have
+        established them.
+      * ``signed_alloc`` — `int sgnvar; alloc_fn(sgnvar * sizeof(T),
+        ...)` pattern. The signed multiplication is the classic
+        CWE-190 → CWE-122 source. Direct structural evidence for an
+        uncontrolled-allocation-size finding.
+
+    The ``detail`` field carries the kind-specific extra info:
+    function name for ``deprecated_func``, allocator-var pair for
+    ``signed_alloc``.
+    """
+
+    kind: str  # "deprecated_func" | "signed_alloc"
+    detail: str
+    location: Tuple[str, int]
+    enclosing_function: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class CheckedAllocationEvidence:
     """A single observation of a CHECKED allocator call site —
     `local = alloc_fn(...); if (!local) ...` shape. Complement to
@@ -263,6 +290,11 @@ class SourceIntelResult:
     #: ``allocations`` (which is unchecked-only). Ratio of checked
     #: to total is exposed via ``variant_ratio()``.
     checked_allocations: Tuple[CheckedAllocationEvidence, ...] = ()
+
+    #: Axis 7: hazardous code patterns (deprecated functions,
+    #: signed-into-allocator). Empty before axis-7 ships; populated
+    #: from engine/coccinelle/source_intel/hazards/ output.
+    hazards: Tuple[HazardEvidence, ...] = ()
 
     #: Axis 6 consumer: build-hardening flags observed in the target's
     #: build configuration. Populated from core.build.build_flags when
@@ -474,6 +506,7 @@ def analyze(
     allocation_observations: List[AllocationEvidence] = []
     capability_observations: List[CapabilityEvidence] = []
     checked_allocation_observations: List[CheckedAllocationEvidence] = []
+    hazard_observations: List[HazardEvidence] = []
 
     # spatch invocation per axis. ``no_includes=True`` matches the
     # existing PR-3 scan + PR-4 prereqs untrusted-target posture;
@@ -507,6 +540,9 @@ def analyze(
                 )
                 checked_allocation_observations.extend(
                     _parse_match_to_checked_allocation(match)
+                )
+                hazard_observations.extend(
+                    _parse_match_to_hazard(match)
                 )
 
     # Project-specific alias discovery: walk target headers, classify
@@ -544,6 +580,7 @@ def analyze(
         allocations=tuple(allocation_observations),
         capabilities=tuple(capability_observations),
         checked_allocations=tuple(checked_allocation_observations),
+        hazards=tuple(hazard_observations),
         build_flags=extract_flags(target),
     )
 
@@ -699,6 +736,40 @@ def _parse_match_to_capability(match: Any) -> List[CapabilityEvidence]:
         grade=GRADE_SAME_FUNCTION,
         enclosing_function=enclosing_fn,
         conditional_on=cond,
+    )]
+
+
+def _parse_match_to_hazard(match: Any) -> List[HazardEvidence]:
+    """Convert a cocci :class:`SpatchMatch` from
+    engine/coccinelle/source_intel/hazards/ into a
+    :class:`HazardEvidence` record.
+
+    Message prefix is ``hazard:<kind>:<detail>``. Currently kinds
+    are ``deprecated_func`` and ``signed_alloc``. New hazard kinds
+    just need a new cocci rule emitting the same prefix shape and
+    the parser will pick them up.
+    """
+    msg = (getattr(match, "message", "") or "").strip()
+    if not msg.startswith("hazard:"):
+        return []
+    parts = msg.split(":", 2)
+    if len(parts) < 3:
+        return []
+    _hazard, kind, detail = parts
+    kind = kind.strip()
+    detail = detail.strip()
+    if not kind:
+        return []
+    file_path = getattr(match, "file", "")
+    line_no = int(getattr(match, "line", 0))
+    enclosing_fn = (
+        _enclosing_function(file_path, line_no) if file_path else None
+    )
+    return [HazardEvidence(
+        kind=kind,
+        detail=detail,
+        location=(file_path, line_no),
+        enclosing_function=enclosing_fn,
     )]
 
 

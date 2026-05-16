@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis7_negative-strcpy-uaf",
+  "verdict": "true_positive",
+  "rationale": "Double-free TP. Function also contains strcpy (axis-7 hazard), but axis-7 deprecated_func relevance is unbounded-write / uncontrolled-* only \u2014 NOT use-after-free / double-free. Tests CWE-relevance filter. Verdict UNCERTAIN.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

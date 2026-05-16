@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis7_hazard-sprintf",
+  "verdict": "true_positive",
+  "rationale": "Variable-output sprintf into fixed buffer. Axis-7 fires.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

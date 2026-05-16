@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis7_hazard-gets",
+  "verdict": "true_positive",
+  "rationale": "gets() \u2014 removed from C11 due to fundamental buffer-size-unawareness. Axis-7 detects, EXPLOITABLE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

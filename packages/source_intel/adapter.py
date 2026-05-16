@@ -49,6 +49,7 @@ from packages.source_intel.analyze import (
     AllocationEvidence,
     AttributeEvidence,
     CapabilityEvidence,
+    HazardEvidence,
     SourceIntelResult,
     analyze,
 )
@@ -259,6 +260,9 @@ class SourceIntelValidator:
             return ValidatorVerdict.NOT_EXPLOITABLE
 
         if _unchecked_alloc_supports_finding(finding, result):
+            return ValidatorVerdict.EXPLOITABLE
+
+        if _hazard_supports_finding(finding, result):
             return ValidatorVerdict.EXPLOITABLE
 
         snippet = (
@@ -1148,3 +1152,68 @@ def _downstream_check_suppresses_finding(finding: Finding) -> bool:
 
 _COMMENT_STRIP_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 _LINE_COMMENT_STRIP_RE = re.compile(r"//.*$", re.MULTILINE)
+
+
+# =====================================================================
+# Axis 7 — hazardous code patterns
+# =====================================================================
+
+
+# Hazard-kind → relevant CWE rule_id prefixes. Each kind only
+# strengthens findings whose CWE class matches the hazard's
+# threat-model fit.
+_HAZARD_KIND_RELEVANT_RULES: Dict[str, Tuple[str, ...]] = {
+    "deprecated_func": (
+        "cpp/unbounded-write",
+        "cpp/uncontrolled-",
+        "c/unbounded-write",
+    ),
+    "signed_alloc": (
+        "cpp/uncontrolled-allocation-size",
+        "cpp/uncontrolled-",
+        "c/uncontrolled-",
+    ),
+}
+
+
+def _hazard_supports_finding(
+    finding: Finding,
+    result: SourceIntelResult,
+) -> bool:
+    """Return True iff axis-7 hazard evidence directly supports an
+    EXPLOITABLE verdict on this finding.
+
+    Required: a hazard call site at (or within ±3 lines of) the
+    finding's sink AND the finding's rule_id is in the hazard
+    kind's relevance set.
+
+    Tight tolerance — the structural-hazard-then-bug-finding
+    coincidence is strongest when both point to the same line; ±3
+    line tolerance covers multi-line snippet shifts.
+    """
+    if not result.hazards:
+        return False
+
+    sink_path = finding.sink.file_path or ""
+    sink_line = finding.sink.line or 0
+    if not sink_path or not sink_line:
+        return False
+
+    sink_path_abs = sink_path
+    if not Path(sink_path).is_absolute():
+        sink_path_abs = str((_DEFAULT_REPO_ROOT / sink_path).resolve())
+
+    rid = finding.rule_id or ""
+
+    for hz in result.hazards:
+        relevant = _HAZARD_KIND_RELEVANT_RULES.get(hz.kind, ())
+        if not relevant or not any(rid.startswith(p) for p in relevant):
+            continue
+        hz_path, hz_line = hz.location
+        if hz_path != sink_path_abs:
+            continue
+        if abs(hz_line - sink_line) > 3:
+            continue
+        return True
+
+    return False
