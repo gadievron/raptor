@@ -24,10 +24,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from core.hash import sha256_file
 from core.json import save_json
 
-from core.config import RaptorConfig
 from core.logging import get_logger
 from core.run.safe_io import safe_run_mkdir
-from packages.fuzzing import AFLRunner, CrashCollector, CorpusManager
+from packages.fuzzing import AFLRunner, CrashCollector
 from packages.binary_analysis import CrashAnalyser
 from packages.llm_analysis.crash_agent import CrashAnalysisAgent
 from packages.autonomous import (

@@ -25,9 +25,6 @@ import pytest
 
 from core.security.prompt_envelope import (
     PromptBundle,
-    TaintedString,
-    UntrustedBlock,
-    build_prompt,
     system_with_priming,
 )
 from core.security.prompt_defense_profiles import (
@@ -37,8 +34,6 @@ from core.security.prompt_defense_profiles import (
     OPENAI_GPT,
 )
 from packages.llm_analysis.prompts.analysis import (
-    ANALYSIS_SYSTEM_PROMPT,
-    ANALYSIS_TASK_INSTRUCTIONS,
     build_analysis_prompt_bundle,
     build_analysis_prompt_bundle_from_finding,
 )

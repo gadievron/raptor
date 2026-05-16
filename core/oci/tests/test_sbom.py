@@ -13,7 +13,6 @@ import struct
 from pathlib import Path
 
 from core.oci.sbom import (
-    InstalledPackage,
     LAYER_FILE_PATHS,
     packages_from_layer_files,
     parse_apk_installed,

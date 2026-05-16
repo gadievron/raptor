@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from core.security.prompt_input_preflight import (
-    PreflightResult,
     loaded_corpora,
     preflight,
 )

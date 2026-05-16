@@ -10,16 +10,13 @@ Covers:
 import os
 from unittest.mock import patch
 
-import pytest
 
 from core.llm.config import ModelConfig
 from core.security.llm_family import (
-    Family,
     family_of,
     same_family,
     select_cross_family_checker,
 )
-from core.security.prompt_defense_profiles import CONSERVATIVE
 from packages.llm_analysis.dispatch import DispatchResult
 from packages.llm_analysis.tasks import CrossFamilyCheckTask
 

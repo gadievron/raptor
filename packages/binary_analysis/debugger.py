@@ -82,7 +82,6 @@ class GDBDebugger:
         # leaks. Place the script next to the binary so it
         # inherits the binary's directory permissions, which
         # we control.
-        import tempfile
         # binary_dir resolves to the analyser's binary working
         # area — same dir we already pass to landlock as a
         # writable path (line 81 below).

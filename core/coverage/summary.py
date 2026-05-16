@@ -5,7 +5,7 @@ coverage-*.json records. Supports single-run and project-wide aggregation.
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from core.json import load_json
 from .record import load_records, write_record

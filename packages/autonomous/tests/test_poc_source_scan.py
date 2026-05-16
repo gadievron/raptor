@@ -11,7 +11,6 @@ descending-only quoted includes).
 from __future__ import annotations
 
 from packages.autonomous.poc_source_scan import (
-    SourceScanViolation,
     format_violations,
     scan,
 )

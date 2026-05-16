@@ -14,7 +14,6 @@ from core.dataflow import Finding, Step
 from core.dataflow.validator import Validator, ValidatorVerdict
 from packages.codeql.dataflow_validator import (
     DataflowPath,
-    DataflowStep,
     DataflowValidation,
 )
 from packages.codeql.evidence_validator import (

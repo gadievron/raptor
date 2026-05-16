@@ -1515,7 +1515,6 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                             # — held for microseconds.
                             _resolved_cmd0 = (shutil.which(cmd[0])
                                               or cmd[0])
-                            import threading as _threading
                             with state._cache_lock:
                                 _first_seen = (
                                     _resolved_cmd0

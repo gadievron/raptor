@@ -1,7 +1,5 @@
 """Tests for project export/import with security validation."""
 
-import json
-import os
 import unittest
 import zipfile
 from pathlib import Path

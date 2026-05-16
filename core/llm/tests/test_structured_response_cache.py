@@ -15,9 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, Tuple
-from unittest.mock import patch
 
-import pytest
 
 from core.llm.client import LLMClient
 from core.llm.config import LLMConfig, ModelConfig
@@ -421,7 +419,7 @@ def test_ttl_unset_keeps_entries_indefinitely(tmp_path: Path) -> None:
     """No TTL configured → an entry from epoch 0 still serves a hit.
     Defends the no-TTL path so operators aren't surprised by hidden
     expiry."""
-    import json, time
+    import json
     client = _client(tmp_path, cache_ttl_seconds=None)
     fake = _FakeProvider({"k": "v"})
     _install_provider(client, fake)

@@ -14,18 +14,15 @@ import json
 import os
 import socket
 import stat
-import struct
 import sys
 import threading
 import time
-from pathlib import Path
 
 import httpx
 import pytest
 
 from core.llm.dispatcher.auth import CredentialStore
 from core.llm.dispatcher.server import (
-    AuditEvent,
     LLMDispatcher,
     _TOKEN_HEADER,
     _peer_uid,
@@ -328,7 +325,7 @@ class _CaptiveUpstream:
     send to the actual provider."""
 
     def __init__(self):
-        import http.server, threading
+        import http.server
 
         self.captured: dict = {}
         self_outer = self

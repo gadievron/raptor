@@ -24,7 +24,6 @@ import inspect
 import sys
 from pathlib import Path
 
-import pytest
 
 # packages/llm_analysis/tests/... → repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))

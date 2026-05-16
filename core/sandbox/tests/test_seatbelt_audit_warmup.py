@@ -15,11 +15,8 @@ from __future__ import annotations
 
 import io
 import json
-import subprocess
-import threading
 from unittest import mock
 
-import pytest
 
 from core.sandbox import seatbelt_audit
 from core.sandbox.seatbelt import SANDBOX_KEXT_SENDER

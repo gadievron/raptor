@@ -4,7 +4,6 @@ import pytest
 import sys
 import os
 import logging
-from io import StringIO
 from pathlib import Path
 
 # Add parent directories to path for imports

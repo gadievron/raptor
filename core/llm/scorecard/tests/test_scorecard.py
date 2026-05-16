@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import multiprocessing
-import os
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -567,7 +566,6 @@ def _backdate_cell(sc, model: str, decision_class: str,
     GC sees the full set in one pass rather than firing per call.
     """
     from datetime import datetime, timezone
-    import time
     target = datetime.fromtimestamp(
         time.time() - days_ago * 86400, tz=timezone.utc,
     ).replace(microsecond=0).isoformat()
@@ -717,7 +715,6 @@ class TestAutoGc:
         # Backdate WITHOUT clearing last_gc_at this time so the
         # interval gate is the thing under test.
         from datetime import datetime, timezone
-        import time
         with sc2._with_lock() as data:
             old_iso = datetime.fromtimestamp(
                 time.time() - 200 * 86400, tz=timezone.utc,

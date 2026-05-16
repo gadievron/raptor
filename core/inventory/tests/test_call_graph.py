@@ -8,7 +8,6 @@ verdicts silently, so the data layer needs explicit coverage.
 from __future__ import annotations
 
 from core.inventory.call_graph import (
-    CallSite,
     FileCallGraph,
     INDIRECTION_DUNDER_IMPORT,
     INDIRECTION_GETATTR,

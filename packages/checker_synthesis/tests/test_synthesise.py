@@ -8,14 +8,11 @@ semgrep / coccinelle binaries on the test runner.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
 
-import pytest
 
 from packages.checker_synthesis import (
     Match,
     SeedBug,
-    SynthesisedRule,
     synthesise_and_run,
 )
 from packages.checker_synthesis import synthesise as synth_mod

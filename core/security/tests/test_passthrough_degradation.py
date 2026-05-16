@@ -9,7 +9,6 @@ or base64 that confuse the model. Saves tokens, avoids confusion.
 
 from __future__ import annotations
 
-import re
 
 import pytest
 

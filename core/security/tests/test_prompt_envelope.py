@@ -9,9 +9,7 @@ import re
 import pytest
 
 from core.security.prompt_envelope import (
-    MessagePart,
     ModelDefenseProfile,
-    PromptBundle,
     TaintedString,
     UntrustedBlock,
     build_prompt,
@@ -670,7 +668,6 @@ class TestPreflightWiring:
     def test_preflight_called_during_dispatch(self):
         """preflight() is imported and called in the dispatch loop."""
         import importlib
-        import packages.llm_analysis.dispatch as dispatch_mod
         source = importlib.util.find_spec("packages.llm_analysis.dispatch")
         text = open(source.origin).read()
         assert "from core.security.prompt_input_preflight import preflight" in text

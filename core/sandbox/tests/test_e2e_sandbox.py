@@ -15,7 +15,6 @@ pytestmark = _pytest.mark.skipif(
 
 
 import os
-import platform
 import subprocess
 import unittest
 from pathlib import Path
@@ -999,7 +998,7 @@ class TestE2EEgressProxy(unittest.TestCase):
         or cursor-movement to overwrite prior lines with forged "allowed"
         entries. The proxy rejects these at CONNECT-parse time.
         """
-        import socket as _socket, time as _time, threading
+        import socket as _socket
         from core.sandbox.proxy import get_proxy, _reset_for_tests
         try:
             _reset_for_tests()
@@ -1452,7 +1451,6 @@ class TestE2ELandlockReadRestriction(unittest.TestCase):
         (restrict_reads blocks them even by absolute path), and tools
         expanding `~` land inside the fake home.
         """
-        import os as _os
         from core.sandbox import run_untrusted
         restricted_file = Path.home() / ".raptor_fake_home_regression.txt"
         restricted_file.write_text("REAL-HOME-SECRET\n")
@@ -1493,7 +1491,6 @@ class TestE2ELandlockReadRestriction(unittest.TestCase):
     def test_fake_home_requires_output(self):
         """fake_home=True without output= is a config error — raise
         rather than silently skipping the feature."""
-        from core.sandbox import sandbox
         with self.assertRaises(ValueError) as cm:
             with sandbox(fake_home=True):
                 pass

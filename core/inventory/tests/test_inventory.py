@@ -1,10 +1,8 @@
 """Tests for core.inventory — shared source inventory."""
 
 import json
-import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -27,9 +25,7 @@ from core.inventory import (
     is_binary_file,
     is_generated_file,
     match_exclusion_reason,
-    LANGUAGE_MAP,
     DEFAULT_EXCLUDES,
-    GENERATED_MARKERS,
     CodeItem,
     FunctionInfo,
     KIND_FUNCTION,

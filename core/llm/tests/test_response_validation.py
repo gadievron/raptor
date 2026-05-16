@@ -1,9 +1,7 @@
 """Tests for core.llm.response_validation — per-field LLM response validation."""
 
-import pytest
 
 from core.llm.response_validation import (
-    FieldResult,
     ValidatedResponse,
     attempt_quality_retry,
     validate_structured_response,
@@ -675,7 +673,6 @@ class TestAttemptQualityRetry:
         return llm
 
     def test_no_retry_when_quality_above_threshold(self):
-        from core.llm.response_validation import attempt_quality_retry, ValidatedResponse
         from unittest.mock import MagicMock
         validated = ValidatedResponse(
             data={"is_true_positive": True, "is_exploitable": True,
@@ -692,7 +689,6 @@ class TestAttemptQualityRetry:
     def test_no_retry_when_no_actionable_problems(self):
         """Below-threshold but no incomplete/coerced fields → no
         retry (no actionable corrective prompt to build)."""
-        from core.llm.response_validation import attempt_quality_retry, ValidatedResponse
         from unittest.mock import MagicMock
         validated = ValidatedResponse(
             data={}, quality=0.2, incomplete=[], coerced=[], fields={}, raw={},
@@ -706,7 +702,6 @@ class TestAttemptQualityRetry:
 
     def test_retry_used_when_better(self):
         """Retry response with higher quality replaces the original."""
-        from core.llm.response_validation import attempt_quality_retry, ValidatedResponse
         original = ValidatedResponse(
             data={"is_true_positive": True}, quality=0.3,
             incomplete=["reasoning", "vuln_type"], coerced=[], fields={}, raw={},
@@ -730,7 +725,6 @@ class TestAttemptQualityRetry:
 
     def test_retry_kept_original_when_not_better(self):
         """Retry returns equal-or-worse quality → keep original."""
-        from core.llm.response_validation import attempt_quality_retry, ValidatedResponse
         original = ValidatedResponse(
             data={"is_true_positive": True, "is_exploitable": True,
                   "reasoning": "x", "vuln_type": "sql_injection"},
@@ -748,7 +742,6 @@ class TestAttemptQualityRetry:
     def test_retry_swallows_llm_exception(self):
         """LLM raises on retry → fall back to original (production
         caller's existing low-quality warning still fires)."""
-        from core.llm.response_validation import attempt_quality_retry, ValidatedResponse
         from unittest.mock import MagicMock
         original = ValidatedResponse(
             data={}, quality=0.3, incomplete=["reasoning"], coerced=[],
@@ -763,7 +756,6 @@ class TestAttemptQualityRetry:
 
     def test_retry_handles_none_response(self):
         """LLM returns (None, None) → fall back to original."""
-        from core.llm.response_validation import attempt_quality_retry, ValidatedResponse
         from unittest.mock import MagicMock
         original = ValidatedResponse(
             data={}, quality=0.3, incomplete=["reasoning"], coerced=[],
@@ -779,7 +771,6 @@ class TestAttemptQualityRetry:
     def test_retry_forwards_system_prompt_and_task_type(self):
         """The retry call must carry the same system_prompt + task_type
         so the LLM has the same context as the original call."""
-        from core.llm.response_validation import attempt_quality_retry, ValidatedResponse
         from unittest.mock import MagicMock
         original = ValidatedResponse(
             data={}, quality=0.3, incomplete=["reasoning"], coerced=[],

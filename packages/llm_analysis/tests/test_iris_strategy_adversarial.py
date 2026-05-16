@@ -9,14 +9,10 @@ happy-path picks).
 
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import patch
 
-import pytest
 
 from packages.llm_analysis.dataflow_validation import (
     _build_hypothesis,
-    _build_strategy_block,
 )
 
 

@@ -3,9 +3,7 @@ Common schema definitions for GitHub Evidence Kit.
 """
 from __future__ import annotations
 
-from datetime import datetime
 from enum import Enum
-from typing import Literal
 
 from pydantic import BaseModel, HttpUrl, model_validator
 

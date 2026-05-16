@@ -9,7 +9,6 @@ those concerns are tested in the provider-specific test files.
 from __future__ import annotations
 
 import time
-from collections.abc import Sequence
 from typing import Any
 
 import pytest
@@ -25,7 +24,6 @@ from core.llm.tool_use import (
     StopReason,
     TextBlock,
     ToolCall,
-    ToolCallDispatched,
     ToolCallReturned,
     ToolDef,
     TurnCompleted,

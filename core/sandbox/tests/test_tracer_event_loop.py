@@ -29,7 +29,6 @@ pytestmark = _pytest.mark.skipif(
 
 import platform
 import signal
-import struct
 from pathlib import Path
 
 import pytest

@@ -10,7 +10,6 @@ from packages.osv.types import OsvRecord
 from packages.osv.verify import verify
 from packages.osv.verdicts import Verdict
 
-from packages.osv.client import OsvClient
 
 
 class _FakeOsvClient:

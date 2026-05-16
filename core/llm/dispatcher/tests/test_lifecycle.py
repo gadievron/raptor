@@ -10,7 +10,6 @@ Confirms:
 
 from __future__ import annotations
 
-import os
 import pytest
 
 from core.llm.dispatcher.auth import CredentialStore

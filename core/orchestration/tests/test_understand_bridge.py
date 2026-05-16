@@ -8,7 +8,6 @@ import time
 import unittest.mock
 from pathlib import Path
 
-import pytest
 
 # core/orchestration/tests/ -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
@@ -435,7 +434,6 @@ class TestHashFreshness:
 
     def test_rank_returns_stale_set(self, tmp_path):
         """When best candidate has stale files, they are returned."""
-        import hashlib
         target = tmp_path / "target"
         target.mkdir()
         (target / "a.py").write_text("current")

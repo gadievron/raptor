@@ -25,7 +25,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from core.json import save_json
 
-from core.config import RaptorConfig
 from core.logging import get_logger
 from core.sarif.parser import load_sarif
 from packages.codeql.agent import CodeQLAgent

@@ -706,7 +706,7 @@ class TestBuildTemplateQuery:
         )
         from packages.hypothesis_validation.hypothesis import Hypothesis
         from pathlib import Path
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         h = Hypothesis(
             claim="dummy",

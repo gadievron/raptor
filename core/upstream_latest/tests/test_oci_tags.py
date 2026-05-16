@@ -12,7 +12,6 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from core.oci.client import OciRegistryClient
 from core.upstream_latest.github_releases import (
     NoStableVersionsFound,
     UpstreamLookupError,
