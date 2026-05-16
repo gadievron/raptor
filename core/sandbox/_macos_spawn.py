@@ -165,6 +165,17 @@ def run_sandboxed(cmd: List[str], *,
                   proxy_port: Optional[int] = None,
                   fake_home: bool = False,
                   strict_env: bool = False,
+                  # persona: host-fingerprint sanitisation is Linux-only
+                  # (bind-mount + UTS-ns + sched_setaffinity primitives).
+                  # macOS lacks unprivileged equivalents; most host-
+                  # identity reads there are sysctlbyname/IOKit-based,
+                  # not file-based, so file substitution wouldn't catch
+                  # them anyway. Accepted for signature parity and
+                  # silently ignored — context.py already gates on
+                  # fingerprint.is_supported() so the value reaches us
+                  # only as None when sanitisation was requested but
+                  # platform unsupported.
+                  persona=None,  # noqa: ARG001
                   ) -> subprocess.CompletedProcess:
     """Run ``cmd`` under macOS sandbox-exec with an SBPL profile
     derived from the logical sandbox kwargs.
