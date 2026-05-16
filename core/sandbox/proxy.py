@@ -236,8 +236,16 @@ def _record_proxy_denial(host: str, port: int, resolved_ip: Optional[str],
         # if a future change makes it raise SystemExit, the gate-2 deny
         # path's `await self._write_error(...)` would be skipped because
         # the exception escapes this helper. Don't introduce that path.
-        logger.debug("_record_proxy_denial: record_denial failed",
-                     exc_info=True)
+        #
+        # WARNING (not DEBUG): operators rarely run with DEBUG enabled in
+        # production, so a regressed summary writer was effectively
+        # invisible — the audit-mode would-deny never lands in
+        # sandbox-summary.json and nobody knows. Mirrors the family-wide
+        # convention established in c5a4505 ("fix(scorecard): promote
+        # producer-error logs DEBUG -> WARNING") — same shape (best-
+        # effort recorder), same rationale (default-log visibility).
+        logger.warning("_record_proxy_denial: record_denial failed",
+                       exc_info=True)
 
 
 def _ip_is_blocked(ip_str: str) -> bool:

@@ -1439,7 +1439,15 @@ Examples:
 
     print("\n" + "=" * 70)
     print("RAPTOR has autonomously:")
-    if not args.codeql_only:
+    # Gate the green-tick "Scanned with Semgrep" line on actual scan
+    # success — `semgrep_metrics` is a truthy dict only when the
+    # subprocess ran, didn't time out, returned rc in {0, 1}, and
+    # produced a scan_metrics.json the loader could parse. Pre-fix the
+    # tick fired solely on `not args.codeql_only`, so timed-out and
+    # errored scans showed a misleading "✓" alongside the CodeQL line
+    # below — which already gates on `codeql_metrics` for exactly this
+    # reason. Mirror that asymmetry away.
+    if not args.codeql_only and semgrep_metrics:
         print("   ✓ Scanned with Semgrep")
     if codeql_metrics:
         print("   ✓ Scanned with CodeQL")

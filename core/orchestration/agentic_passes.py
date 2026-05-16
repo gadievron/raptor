@@ -42,7 +42,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from core.json import load_json, save_json
 from core.sandbox import run_untrusted_networked
