@@ -13,6 +13,7 @@ import stat
 import subprocess
 import sys
 from contextlib import contextmanager
+from pathlib import Path
 from typing import List, Optional
 
 from . import landlock as _landlock
@@ -204,7 +205,10 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             audit: bool = False, audit_verbose: bool = False,
             audit_run_dir: Optional[str] = None,
             observe: bool = False,
-            writable_paths: Optional[list] = None):
+            writable_paths: Optional[list] = None,
+            sanitise_host_fingerprint: bool = False,
+            cpu_count: Optional[int] = None,
+            require_sanitisation: bool = False):
     """Context manager for sandboxed subprocess execution.
 
     Each run() call inside the context runs the target command with the
@@ -806,6 +810,78 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                                seccomp_block_udp=seccomp_block_udp,
                                readable_paths=effective_read_paths)
 
+    # Host-fingerprint persona — opt-in. Built once per sandbox() context
+    # and reused across every run() call inside it. Cleanup happens in
+    # the finally block at the end of sandbox().
+    #
+    # Three failure modes, each with explicit behaviour so operators can
+    # see what's actually engaged:
+    #
+    #   1. is_supported() == False (macOS, etc.): persona stays None,
+    #      a one-shot WARNING tells the operator. require_sanitisation
+    #      raises RuntimeError instead.
+    #
+    #   2. mount-ns probe returns False (no uidmap, apparmor sysctl,
+    #      Landlock-only mode): persona stays None, one-shot WARNING.
+    #      require_sanitisation raises.
+    #
+    #   3. cpu_count > host's available CPUs: persona builds with the
+    #      requested count; set_cpu_affinity clamps at apply time and
+    #      logs INFO (the persona's cpuinfo still claims cpu_count,
+    #      creating a paranoid-cross-check tell — documented residual).
+    _persona = None
+    _persona_tmpdir = None
+    if sanitise_host_fingerprint:
+        from .fingerprint import build_persona, is_supported
+        from ._spawn import mount_ns_available
+        _fp_unsupported_reason = None
+        if not is_supported():
+            _fp_unsupported_reason = (
+                "platform unsupported (Linux required; macOS lacks "
+                "bind-mount + UTS-namespace primitives — run RAPTOR "
+                "in a Linux VM for untrusted-binary analysis)"
+            )
+        elif not mount_ns_available():
+            _fp_unsupported_reason = (
+                "mount-ns unavailable (needs `uidmap` package + "
+                "kernel.apparmor_restrict_unprivileged_userns=0); "
+                "see startup banner for the exact sysctl"
+            )
+        elif not (target or output):
+            # mount-ns engagement requires at least one of target/output
+            # — _spawn.run_sandboxed skips setup_mount_ns when both are
+            # falsy. Without mount-ns, the persona's file bind-mounts
+            # never apply; UTS + affinity would partially engage, which
+            # is a confusing half-state that lets the caller think they
+            # got sanitisation when they didn't.
+            _fp_unsupported_reason = (
+                "sandbox has no target/output set — mount-ns is skipped "
+                "in that case, so persona file overlays can't apply. "
+                "Pass at least one of target= or output= to engage "
+                "sanitisation"
+            )
+        if _fp_unsupported_reason:
+            msg = (
+                f"sanitise_host_fingerprint requested but {_fp_unsupported_reason}"
+            )
+            if require_sanitisation:
+                raise RuntimeError(msg + " (require_sanitisation=True)")
+            logger.warning("Sandbox: %s; identity surfaces will be host-real.", msg)
+        else:
+            import tempfile as _tf
+            _persona_tmpdir = _tf.mkdtemp(prefix="raptor-persona-")
+            _effective_cpu_count = cpu_count if cpu_count is not None else 4
+            _persona = build_persona(
+                Path(_persona_tmpdir), cpu_count=_effective_cpu_count,
+            )
+    elif cpu_count is not None:
+        # cpu_count without the master switch is a caller mistake — the
+        # CPU-mask change is part of the fingerprint persona, not an
+        # independent knob. Don't silently engage it.
+        logger.warning(
+            "Sandbox: cpu_count=%d ignored because sanitise_host_fingerprint=False",
+            cpu_count,
+        )
 
     # Cumulative proxy-event list spanning every run() call in this
     # sandbox() context. Per-run slices live on each result.sandbox_info;
@@ -1459,6 +1535,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                                            else None),
                             restrict_reads=restrict_reads,
                             strict_env=strict_env,
+                            persona=_persona,
                             # Default True here even though subprocess.run
                             # defaults to False — _spawn's historical
                             # behaviour was unconditional os.setsid() and
@@ -1996,6 +2073,22 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                     "this recurs.",
                     exc_info=True,
                 )
+        # Persona tmpdir lifecycle: created in build_persona above; the
+        # source files were bind-mounted into the sandbox children but
+        # bind sources can be unlinked after the bind is established —
+        # the kernel keeps the inode alive for the lifetime of the mount.
+        # Cleanup now is safe even mid-run (rare: with sandbox() used as
+        # a long-lived context wrapping many run() calls). For simplicity
+        # we only clean up at __exit__; the file count is small.
+        if _persona_tmpdir is not None:
+            import shutil as _shutil
+            try:
+                _shutil.rmtree(_persona_tmpdir, ignore_errors=True)
+            except Exception:
+                logger.debug(
+                    "persona tmpdir cleanup failed for %s",
+                    _persona_tmpdir, exc_info=True,
+                )
 
 
 # Convenience: standalone run function for one-off sandboxed commands
@@ -2012,6 +2105,9 @@ def run(cmd: List[str], block_network: bool = False, target: str = None,
         audit_run_dir: Optional[str] = None,
         observe: bool = False,
         writable_paths: Optional[list] = None,
+        sanitise_host_fingerprint: bool = False,
+        cpu_count: Optional[int] = None,
+        require_sanitisation: bool = False,
         **kwargs) -> subprocess.CompletedProcess:
     """Run a single command in a sandbox. Convenience wrapper.
 
@@ -2035,7 +2131,10 @@ def run(cmd: List[str], block_network: bool = False, target: str = None,
                  audit=audit, audit_verbose=audit_verbose,
                  audit_run_dir=audit_run_dir,
                  observe=observe,
-                 writable_paths=writable_paths) as _run:
+                 writable_paths=writable_paths,
+                 sanitise_host_fingerprint=sanitise_host_fingerprint,
+                 cpu_count=cpu_count,
+                 require_sanitisation=require_sanitisation) as _run:
         return _run(cmd, **kwargs)
 
 

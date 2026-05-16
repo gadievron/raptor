@@ -56,13 +56,19 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Iterable, Optional, Sequence
+from typing import TYPE_CHECKING, Iterable, Optional, Sequence
 
 from . import state
 from ._fork_safe_warn import warn_post_fork
 from .landlock import _make_landlock_preexec
 from .mount_ns import setup_mount_ns
 from .seccomp import _make_seccomp_preexec
+
+if TYPE_CHECKING:
+    # Persona referenced by run_sandboxed's signature only; lazily
+    # imported in the child branch to keep module-load cost the same
+    # for callers that never engage fingerprint sanitisation.
+    from .fingerprint import Persona
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +78,7 @@ logger = logging.getLogger(__name__)
 # hardcoded copy. Requires Python 3.12+ (already enforced by the
 # os.unshare() call below, which was also new in 3.12).
 CLONE_NEWNS   = getattr(os, "CLONE_NEWNS",   0x00020000)
+CLONE_NEWUTS  = getattr(os, "CLONE_NEWUTS",  0x04000000)
 CLONE_NEWIPC  = getattr(os, "CLONE_NEWIPC",  0x08000000)
 CLONE_NEWUSER = getattr(os, "CLONE_NEWUSER", 0x10000000)
 CLONE_NEWPID  = getattr(os, "CLONE_NEWPID",  0x20000000)
@@ -359,6 +366,7 @@ def run_sandboxed(
     observe_nonce: Optional[str] = None,
     restrict_reads: bool = False,
     strict_env: bool = False,
+    persona: Optional["Persona"] = None,
 ) -> subprocess.CompletedProcess:
     """Run `cmd` inside a fully-isolated sandbox.
 
@@ -830,6 +838,12 @@ def run_sandboxed(
             ns_flags = CLONE_NEWUSER | CLONE_NEWNS | CLONE_NEWIPC
             if block_network:
                 ns_flags |= CLONE_NEWNET
+            if persona is not None:
+                # Fresh UTS namespace so sethostname/setdomainname only
+                # affect us, not the host. We have CAP_SYS_ADMIN in this
+                # UTS-ns post-newuidmap (we own it as ns-uid-0) — the
+                # actual sethostname call lives after step 7.
+                ns_flags |= CLONE_NEWUTS
             os.unshare(ns_flags)
 
             # Step 4.5 (audit mode): declare PR_SET_PTRACER_ANY so the
@@ -885,6 +899,27 @@ def run_sandboxed(
             # rlimits as early as possible so later setup is constrained.
             _set_rlimits(limits)
 
+            # Step 8.5 (fingerprint sanitisation): sethostname /
+            # setdomainname inside our fresh UTS namespace. Done before
+            # mount-ns so the persona's /etc/hostname (bind-mounted in
+            # step 9) and uname()'s nodename agree (gethostname() reads
+            # the UTS field, not /etc/hostname — both must be set
+            # consistently or a cross-check is a sandbox tell).
+            if persona is not None:
+                from .fingerprint import set_uts
+                try:
+                    set_uts(persona.hostname, persona.domainname)
+                except OSError as e:
+                    # Degrade silently — caller (context.py) already
+                    # gated on platform support; an unexpected runtime
+                    # failure here shouldn't take down the whole
+                    # sandbox, just leak hostname/domainname.
+                    warn_post_fork(
+                        b"sandbox: fingerprint set_uts failed (errno=%d)"
+                        b"; hostname/domainname remain host-real\n"
+                        % (e.errno or 0)
+                    )
+
             # Step 9: mount-ns pivot_root if target/output supplied.
             # readable_paths from the caller also get bind-mounted at
             # their original paths so they exist inside the pivoted
@@ -893,7 +928,31 @@ def run_sandboxed(
             if target or output:
                 setup_mount_ns(target, output,
                                extra_ro_paths=readable_paths,
-                               root_path=_root_dir)
+                               root_path=_root_dir,
+                               persona=persona)
+
+            # Step 9.5 (fingerprint sanitisation): pin sched_setaffinity
+            # to a mask of size persona.cpu_count. The persona's
+            # /proc/cpuinfo and /sys/devices/system/cpu/online already
+            # claim cpu_count processors; pinning the affinity mask to
+            # match means sched_getaffinity / os.cpu_count() /
+            # nproc / Go GOMAXPROCS / Rust num_cpus all agree with the
+            # cpuinfo view — no cross-check tell.
+            #
+            # Done AFTER mount_ns (no ordering dependency, but keeps the
+            # fingerprint-related calls grouped) and BEFORE Landlock
+            # (sched_setaffinity is allowed under seccomp/Landlock but
+            # grouping makes the audit trail clearer).
+            if persona is not None:
+                from .fingerprint import set_cpu_affinity
+                try:
+                    set_cpu_affinity(persona.cpu_count)
+                except (OSError, ValueError) as e:
+                    warn_post_fork(
+                        b"sandbox: fingerprint set_cpu_affinity failed "
+                        b"(errno=%d); affinity unchanged\n"
+                        % (getattr(e, "errno", 0) or 0)
+                    )
 
             # cwd — only now, after pivot_root. Match subprocess.run
             # semantics: if the caller specified a cwd that doesn't

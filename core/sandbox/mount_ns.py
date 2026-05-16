@@ -34,10 +34,17 @@ skipped — the per-ns mount already serves them.
 
 import ctypes
 import os
-from typing import Iterable, Optional
+from typing import TYPE_CHECKING, Iterable, Optional
 
 from ._fork_safe_warn import warn_post_fork
 from .exit_codes import SANDBOX_EXIT_MOUNT_NS_BIND_FAIL
+
+if TYPE_CHECKING:
+    # Avoid runtime circular import: fingerprint.apply_overlay imports
+    # _mount + MS_BIND from this module, so we keep the Persona
+    # annotation as a forward reference and import apply_overlay
+    # lazily inside setup_mount_ns when a persona is provided.
+    from .fingerprint import Persona
 
 # Linux mount(2) flag bits (from <linux/mount.h>). Values match the
 # kernel UAPI — do not "fix" without checking <sys/mount.h> on target.
@@ -163,13 +170,22 @@ def _shadows_per_ns(path: str) -> bool:
 
 def setup_mount_ns(target: Optional[str], output: Optional[str],
                    extra_ro_paths: Optional[Iterable[str]] = None,
-                   root_path: Optional[str] = None) -> None:
+                   root_path: Optional[str] = None,
+                   persona: Optional["Persona"] = None) -> None:
     """Establish pivot_root'd tmpfs sandbox root.
 
     Must be called AFTER the child has entered the new user-ns and acquired
     CAP_SYS_ADMIN (via the parent's newuidmap setup), and BEFORE
     landlock_restrict_self() — Landlock blocks mount operations on kernel
     6.15+.
+
+    `persona` (Optional[Persona]): when provided, after pivot_root completes
+    every persona.files[target] is bind-mounted over its target path
+    (/proc/cpuinfo, /etc/os-release, ...). Built by
+    `core.sandbox.fingerprint.build_persona()` when the caller passed
+    `sanitise_host_fingerprint=True`. Imported lazily to avoid a circular
+    import (fingerprint.apply_overlay imports _mount/MS_BIND from this
+    module).
     """
     # Absolutize target/output BEFORE any bind-mount work. A relative
     # path here produces a malformed bind-target like
@@ -366,6 +382,19 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
                 except OSError:
                     pass
                 os._exit(SANDBOX_EXIT_MOUNT_NS_BIND_FAIL)
+
+    # 8c. Host-fingerprint overlay (opt-in via sanitise_host_fingerprint).
+    # MUST happen BEFORE pivot_root — the persona's source files live
+    # in the parent's /tmp, which becomes inaccessible after pivot_root
+    # (the per-sandbox tmpfs at {root}/tmp shadows it). The overlay
+    # targets `{root}{target}` paths (e.g. `{root}/proc/cpuinfo`),
+    # which exist because /proc, /etc, /sys have already been bind-
+    # mounted into {root} in steps 5-6. After pivot_root, those binds
+    # are visible at the unprefixed path (`/proc/cpuinfo`) — same
+    # mechanism as the system-dir bind-mounts in step 4.
+    if persona is not None:
+        from .fingerprint import apply_overlay
+        apply_overlay(persona, root_prefix=root)
 
     # 9. pivot_root. put_old must be a directory INSIDE new_root.
     os.chdir(root)

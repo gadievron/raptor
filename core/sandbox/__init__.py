@@ -101,6 +101,78 @@ Fake HOME (fake_home=True):
   this, os.makedirs would resolve the symlink and create subdirs
   inside the attacker-chosen location outside `output`.
 
+Sanitised host fingerprint (sanitise_host_fingerprint=True):
+  Opt-in identity-surface masking. When engaged, the child sees
+  canonical "boring Debian 12 cloud VM on QEMU/KVM with Intel Xeon"
+  values for hostname (`localhost`), `/etc/os-release` (Debian 12
+  stub), `/etc/machine-id` (deterministic pseudo-random — looks
+  real, identical across operators), `/sys/class/dmi/id/*` (QEMU),
+  `/proc/cpuinfo` (canonical Xeon model + microcode + cache,
+  configurable processor count via cpu_count=N defaulting to 4),
+  `/proc/version` (trimmed to `Linux version <host-release>`), and
+  uname() nodename / domainname (via CLONE_NEWUTS + sethostname).
+  All hide-intent values — no "sandbox" / "raptor" / "Generic CPU"
+  / all-zero sentinels that anti-analysis-aware binaries can
+  trivially detect. Implemented in core/sandbox/fingerprint.py.
+
+  Preserved (capability surface, NOT identity):
+  - /proc/cpuinfo `flags` line — host-real. SMEP/SMAP detection in
+    packages/exploit_feasibility, SIMD dispatch in ASAN / glibc /
+    JITs, and pwntools all key off these.
+  - uname `release` and `machine` — host-real. exploit_feasibility's
+    `uname -r`, pwntools' context.arch, shellcode dispatch all
+    depend on the real values.
+  - /proc/sys/kernel/* (randomize_va_space, kptr_restrict,
+    yama/ptrace_scope) and /proc/sys/vm/mmap_min_addr — untouched.
+    exploit_feasibility's mitigation reads depend on accuracy.
+  - /proc/self/* (maps, exe, status, auxv) — untouched. ASAN, GDB,
+    pwntools context.aslr all depend on real values.
+
+  cpu_count=N (default 4 when sanitisation engaged) sets a
+  consistent N across /proc/cpuinfo blocks, /sys/devices/system/cpu/
+  {online,possible}, /proc/stat per-cpu lines, AND
+  sched_setaffinity (the kernel mask underlying os.cpu_count() /
+  sysconf(_SC_NPROCESSORS_ONLN) / Go GOMAXPROCS / Rust num_cpus).
+  Defaulting to 4 (typical cloud-VM size) rather than 1 avoids the
+  "exactly 1 CPU is an analysis sandbox" detection heuristic.
+
+  Soft-degrade with one-shot WARNING when prerequisites are missing
+  (Landlock-only mode, missing uidmap, apparmor_restrict_unpriv_
+  userns=1, macOS). `require_sanitisation=True` flips degradation
+  to hard-fail (RuntimeError at sandbox entry) for paranoid
+  callers. macOS has no functional equivalent — bind-mount and
+  UTS-namespace are Linux-only primitives, and most macOS host-
+  identity reads are sysctlbyname/IOKit-based (not file-based).
+
+  Residuals (documented; not addressed):
+  - CPUID asm bypass — direct cpuid execution reads real CPU.
+    Fix would need ptrace-based syscall rewriting + userspace
+    cpuid emulator (out of scope).
+  - AT_HWCAP auxiliary vector — kernel-supplied at exec; not
+    file-based. Side effect: glibc/Rust dispatch keeps working
+    even where flags-line is masked, but pure-asm fingerprinters
+    bypass our overlay.
+  - Vendor leakage via flags-line — Intel vs AMD distinguishable
+    by flag-set differences. Trade-off accepted for SIMD compat.
+  - /proc/meminfo, /sys/firmware/*, /dev/mem — host-real. UEFI/BIOS
+    + RAM size leakage. Out of v1 scope; meminfo masking deserves
+    its own audit (JVM heap auto-sizing, Postgres shared_buffers
+    consumers).
+  - /sys/class/dmi/id/{board_serial, product_uuid, chassis_*} —
+    only `sys_vendor` and `product_name` are bind-masked. Defended
+    by `restrict_reads=True`'s allowlist (DMI not on default
+    readable set); pass `restrict_reads=False` and the omitted
+    DMI identity files become host-real.
+  - sanitise_host_fingerprint=True with `target=None` AND
+    `output=None` produces partial coverage: UTS-ns + affinity
+    still apply (no mount-ns needed for those), but the file
+    overlays don't (mount-ns is skipped when neither target nor
+    output is set). Most callers pass at least one; pure
+    capability probes that don't would see this.
+
+  Default off everywhere; opt-in per caller. Once stable and
+  proven, `run_untrusted()` is a candidate to default-on.
+
 Log-output hygiene:
   RAPTOR logs attacker-influenced strings in several places (argv
   filenames from scanned repos, subprocess stderr / ASAN bug_type,
@@ -283,9 +355,15 @@ What the sandbox does NOT protect against:
   hostname-allowlisted outbound use `use_egress_proxy=True` which
   also blocks UDP via seccomp.
 - Host fingerprinting via /proc/version, /etc/os-release, /proc/cpuinfo,
-  /etc/machine-id, /sys/class/dmi/id/*. Tightening these would break
-  real PoCs (glibc CPU-feature detection, ASAN's /proc/self/maps,
-  dynamic linker's /etc/ld.so.cache). Accepted residual.
+  /etc/machine-id, /sys/class/dmi/id/* — accepted residual by default.
+  Opt-in masking via `sanitise_host_fingerprint=True`: presents a
+  canonical "Debian 12 cloud VM on QEMU/KVM with Intel Xeon" persona
+  while preserving capability surfaces (cpuinfo flags line, uname
+  release/machine, kernel mitigation sysctls). See the "Sanitised
+  host fingerprint" section above for the full surface list and
+  preserved-vs-masked policy. Two residuals remain even with the
+  flag on: CPUID asm reads bypass the file overlay; AT_HWCAP from
+  the kernel-supplied auxiliary vector at exec is not file-based.
 - Cross-PID-ns `/proc/<host_pid>/{cmdline,comm,status,stat}` —
   `/proc` stays host-shared under Landlock-only mode (no mount-ns);
   PID-ns isolation applies the kernel's ptrace-gated protection
