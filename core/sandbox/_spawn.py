@@ -59,6 +59,7 @@ from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
 from . import state
+from ._fork_safe_warn import warn_post_fork
 from .landlock import _make_landlock_preexec
 from .mount_ns import setup_mount_ns
 from .seccomp import _make_seccomp_preexec
@@ -154,10 +155,14 @@ def _run_newuidmap(child_pid: int, binary: str, mapping_lines: Sequence[str]) ->
 
 def _set_rlimits(limits: dict) -> None:
     """Apply rlimits in the child. Mirrors preexec.py's _set_limits but
-    designed to run before mount ops / Landlock / seccomp."""
+    designed to run before mount ops / Landlock / seccomp.
+
+    Each rlimit applies independently — a single failure no longer
+    aborts the rest. Failures surface via fork-safe stderr warning so
+    operators can spot when a documented cap silently became a no-op.
+    """
     import resource
     from .preexec import _DEFAULT_LIMITS
-    from ._fork_safe_warn import warn_post_fork
     mem = limits.get("memory_mb", _DEFAULT_LIMITS["memory_mb"])
     file_mb = limits.get("max_file_mb", _DEFAULT_LIMITS["max_file_mb"])
     cpu = limits.get("cpu_seconds", _DEFAULT_LIMITS["cpu_seconds"])
@@ -178,6 +183,10 @@ def _set_rlimits(limits: dict) -> None:
             resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
         except (ValueError, OSError):
             warn_post_fork(b"RAPTOR: _set_rlimits RLIMIT_CPU setrlimit failed -- cpu cap not applied\n")
+    # RLIMIT_CORE is unconditional — coredumps are always suppressed
+    # (no operator-tunable equivalent of memory_mb/file_mb/cpu_seconds).
+    # No surrounding `if … > 0:` is needed; the structure differs from
+    # the three siblings above only because the input doesn't.
     try:
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     except (ValueError, OSError):
@@ -900,7 +909,6 @@ def run_sandboxed(
                 # bounded fork count via RLIMIT_NPROC (prlimit).
                 if nproc_limit and nproc_limit > 0:
                     import resource
-                    from ._fork_safe_warn import warn_post_fork
                     try:
                         resource.setrlimit(resource.RLIMIT_NPROC,
                                            (nproc_limit, nproc_limit))

@@ -4,6 +4,13 @@ import os
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
+
+
+# Anchor the repo root via the test file's path rather than ``..``
+# arithmetic embedded in each subprocess. Refactoring the test layout
+# would otherwise silently drift the relative path.
+_REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
 
 def test_writes_prefixed_message_to_stderr(capfd):
@@ -33,8 +40,7 @@ def test_silent_when_fd2_closed():
         print("OK")
         """
     )
-    env = {**os.environ, "RAPTOR_DIR": os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", ".."))}
+    env = {**os.environ, "RAPTOR_DIR": _REPO_ROOT}
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True, env=env,
     )
@@ -56,8 +62,7 @@ def test_callable_from_preexec_fn():
         )
         """
     )
-    env = {**os.environ, "RAPTOR_DIR": os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", ".."))}
+    env = {**os.environ, "RAPTOR_DIR": _REPO_ROOT}
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True, env=env,
     )
