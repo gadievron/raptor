@@ -302,8 +302,8 @@ class TestAtomicClaimAndRecord:
     ):
         # Verify the user-facing record_tool_evidence_outcome now
         # routes through claim_and_record_tool_evidence (one lock)
-        # and not through the two-call sequence (two locks).
-        calls = {"claim_and_record": 0, "record_event": 0, "claim": 0}
+        # and not through a separate record_event call.
+        calls = {"claim_and_record": 0, "record_event": 0}
 
         original_claim_and_record = scorecard.claim_and_record_tool_evidence
 
@@ -314,19 +314,12 @@ class TestAtomicClaimAndRecord:
         def counting_record_event(*a, **kw):
             calls["record_event"] += 1
 
-        def counting_claim(*a, **kw):
-            calls["claim"] += 1
-            return True
-
         monkeypatch.setattr(
             scorecard, "claim_and_record_tool_evidence",
             counting_claim_and_record,
         )
         monkeypatch.setattr(
             scorecard, "record_event", counting_record_event,
-        )
-        monkeypatch.setattr(
-            scorecard, "claim_tool_evidence_finding", counting_claim,
         )
 
         record_tool_evidence_outcome(
@@ -341,9 +334,6 @@ class TestAtomicClaimAndRecord:
         )
         assert calls["record_event"] == 0, (
             "separate record_event must NOT be called on the atomic path"
-        )
-        assert calls["claim"] == 0, (
-            "separate claim must NOT be called on the atomic path"
         )
 
 
