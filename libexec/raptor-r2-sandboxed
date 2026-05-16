@@ -1,0 +1,231 @@
+#!/usr/bin/env python3
+"""raptor-r2-sandboxed — spawn radare2 under the host-fingerprint
+sandbox, transparently to r2pipe.
+
+USAGE (via R2PIPE_R2):
+    R2PIPE_R2=/abs/path/to/raptor-r2-sandboxed \
+    OUTPUT_DIR=/some/writable/dir \
+    R2_TARGET_DIR=/parent/of/binary \
+        python -c 'import r2pipe; r2 = r2pipe.open("/path/to/binary", flags=["-2"]); ...'
+
+r2pipe sees the env var R2PIPE_R2 and execs this script in place of
+the `radare2` binary. r2pipe expects argv shape:
+    [<r2>, "-2", "-q0", <binary>]
+We accept only that shape (plus an optional `-N` we prepend ourselves)
+and refuse anything else — closes the shell-escape vector where
+attacker-influenced argv could carry malicious r2 flags through.
+
+Why a wrapper rather than wrapping core.sandbox.run() directly: r2pipe
+spawns r2 as a long-lived child and talks NULL-byte-delimited messages
+over its stdin/stdout pipes. The pipes flow:
+
+    r2pipe.parent_w  -->  wrapper.fd0  -->  r2.fd0
+    r2.fd1           -->  wrapper.fd1  -->  r2pipe.parent_r
+
+The wrapper's Python process sits in core.sandbox.run() waiting for r2
+to exit; pipe traffic flows DIRECTLY between r2pipe and r2 through the
+inherited stdin/stdout fds. capture_output=False is essential — any
+buffering by the wrapper would break r2pipe's async protocol.
+
+Sandbox posture: block_network=True, restrict_reads=True, fake_home=
+True (so r2 sees an empty $HOME, can't read ~/.r2/* or ~/.config/
+radare2/*), sanitise_host_fingerprint=True (canonical persona — anti-
+analysis-aware binaries that decide whether to detonate based on
+host identity see "boring Debian 12 cloud VM" not "researcher's
+workstation").
+
+`-N` is unconditionally prepended to r2's argv — skips ~/.radare2rc
+parsing and disables plugin auto-load. Closes the "attacker-planted
+rc file silently runs RAPTOR-uid code at every r2 invocation" vector.
+fake_home would have masked the operator's real ~/.radare2rc, but
+-N belt-and-braces in case a future plugin path escapes the home
+masking.
+
+Env:
+- R2PIPE_R2 (set by the radare2_understand caller): the path to THIS
+  script. r2pipe reads it; the wrapper itself doesn't.
+- OUTPUT_DIR (required): writable dir bind-mounted at its original
+  absolute path inside the sandbox. r2 uses it for any scratch files
+  (in practice r2 doesn't write much; the binding is mostly to
+  satisfy the sandbox's "must have either target or output" gate
+  that triggers fingerprint sanitisation).
+- R2_TARGET_DIR (required): parent dir of the binary being analysed.
+  Bind-mounted read-only at its original absolute path so r2 can
+  resolve the binary path as-passed.
+
+Exit codes:
+- r2's returncode on successful invocation
+- 2 on argv whitelist refusal
+- 3 on missing env or sandbox-setup failure
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+# Trust-marker check — same pattern as the other libexec/raptor-*
+# dispatch scripts (raptor-run-sandboxed, raptor-binary-understand).
+# This script is invoked indirectly via R2PIPE_R2; only RAPTOR's own
+# r2pipe-using code should set that env var. A user manually running
+# this script gets a clear error rather than a confusing sandbox
+# attempt.
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Set R2PIPE_R2 to this script's path and r2pipe will invoke "
+        "it transparently.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(3)
+
+# Resolve RAPTOR root via this script's path — libexec/<script>, so
+# parents[1] is the RAPTOR install dir. core/sandbox lives there.
+_RAPTOR_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_RAPTOR_DIR))
+
+
+def _die(msg: str, code: int = 3) -> None:
+    sys.stderr.write(f"[r2-sandbox] {msg}\n")
+    sys.exit(code)
+
+
+# === argv validation ===
+# r2pipe's spawn shape: [<r2>, "-2", "-q0", <binary>]. The "-2" is
+# whatever flags= the caller passed to r2pipe.open(); "-q0" is added
+# unconditionally by r2pipe for its async pipe protocol; last arg is
+# the binary path. We accept this exactly plus an optional pre-
+# existing "-N" (in case the caller already set it; we'd add it
+# anyway in the prepend below).
+#
+# COUPLING NOTE: this whitelist is intentionally narrow — it matches
+# what packages/binary_analysis/radare2_understand.py passes today
+# (`flags=["-2"]`) plus r2pipe's own spawn-time additions. If a future
+# r2pipe version adds a NEW default flag we don't know about, the
+# wrapper will refuse with `_die("refused argv (flag not in
+# whitelist...)")` and the operator will see a clear diagnostic. Add
+# the new flag here AFTER confirming it doesn't enable a shell escape
+# or change r2's analysis posture. Likewise for any new flag that
+# radare2_understand wants to pass — must be reviewed for safety and
+# explicitly whitelisted here.
+_ALLOWED_FLAGS = frozenset({"-2", "-q0", "-N"})
+
+
+def _parse_and_validate_argv(argv: list[str]) -> tuple[list[str], str]:
+    """Return (flags, binary_path). Raises SystemExit on refusal.
+
+    argv shape from r2pipe is [-2, -q0, <binary>]. The binary path is
+    the LAST element; everything before must be a flag in
+    _ALLOWED_FLAGS. We prepend `-N` if absent — closes the
+    ~/.radare2rc auto-exec vector independent of $HOME masking.
+    """
+    if len(argv) < 2:
+        _die(f"refused argv (too short): {argv!r}", code=2)
+
+    # Last arg = binary path. Everything else = flag.
+    binary = argv[-1]
+    flags = argv[:-1]
+
+    # binary must be an absolute path; reject relative-path shell
+    # tricks (".", "../etc/passwd", "-some-flag-disguised-as-path").
+    # r2pipe's open() always passes an absolute path; relative paths
+    # here would indicate a caller bug or attempted injection.
+    if not binary.startswith("/"):
+        _die(f"refused argv (binary must be absolute path): {binary!r}",
+             code=2)
+
+    # Validate every flag is in the whitelist.
+    for f in flags:
+        if f not in _ALLOWED_FLAGS:
+            _die(
+                f"refused argv (flag not in whitelist "
+                f"{sorted(_ALLOWED_FLAGS)}): {f!r}",
+                code=2,
+            )
+
+    # Prepend -N if not already present — disables ~/.radare2rc
+    # auto-load + plugin auto-load. Belt-and-braces with fake_home;
+    # if a future plugin discovery path escapes the home masking we
+    # still don't auto-run code.
+    if "-N" not in flags:
+        flags = ["-N"] + flags
+
+    return flags, binary
+
+
+# === main ===
+
+argv = sys.argv[1:]
+flags, binary = _parse_and_validate_argv(argv)
+
+output_dir = os.environ.get("OUTPUT_DIR")
+if not output_dir:
+    _die("OUTPUT_DIR env var required (writable scratch dir)")
+
+target_dir = os.environ.get("R2_TARGET_DIR")
+if not target_dir:
+    # Default to the binary's parent dir if caller forgot to set it.
+    # This is the common case — binary path is fully qualified, parent
+    # is the natural target.
+    target_dir = os.path.dirname(binary) or "/"
+
+# Note: mount_ns.setup_mount_ns already handles target paths that are
+# exact shadow paths (/tmp, /usr, etc.) via its _shadows_per_ns check —
+# bind is skipped in that case so we don't fight per-ns mounts. Target
+# paths UNDER those (/tmp/some-tempdir, /usr/local/something) are bound
+# normally and stack correctly on top of the per-ns mounts. So we pass
+# target_dir through unmodified and let mount_ns make the decision.
+
+from core.sandbox import sandbox  # noqa: E402
+
+try:
+    with sandbox(
+        target=target_dir,
+        output=output_dir,
+        block_network=True,
+        restrict_reads=True,
+        fake_home=True,
+        sanitise_host_fingerprint=True,
+        # Include PID so concurrent wrapper invocations from sibling
+        # RAPTOR processes are distinguishable in sandbox audit /
+        # event tracking. Within a single Python process, the caller
+        # (radare2_understand) serialises spawns via a lock — so PID
+        # alone is sufficient, no thread-id suffix needed.
+        caller_label=f"r2-sandboxed-{os.getpid()}",
+    ) as run:
+        # capture_output=False: stdout/stderr pass through to wrapper's
+        # inherited fds, which are r2pipe's pipes. ANY capture here
+        # breaks the async pipe protocol.
+        # stdin=0: explicit pass-through of wrapper's fd 0 (r2pipe's
+        # write pipe). Without this the sandbox would dup2 /dev/null
+        # onto fd 0 (its tty-injection defence default) and r2 would
+        # see EOF on every read.
+        #
+        # timeout=1800s (30 min) is a generous backstop against r2
+        # hanging on a malicious binary (parser infinite loop, etc.).
+        # Real `aaa` analyses on typical binaries finish in seconds
+        # to minutes; 30 min is well beyond legitimate worst-case.
+        # Caller-side per-command timeouts (r2.cmd_with_timeout) are
+        # the right place for finer control; this is a last-resort
+        # DoS limit.
+        # strict_env=True engages get_safe_env's allowlist on the
+        # child env. Without it, operator env vars like LD_PRELOAD /
+        # LD_LIBRARY_PATH / PYTHON* would reach r2 when the wrapper
+        # is invoked outside bin/raptor's launcher chain (test
+        # harness, operator running r2pipe directly with R2PIPE_R2
+        # set). r2 with -N doesn't load plugins so doesn't normally
+        # exec children, but defence-in-depth — any future r2 path
+        # that does exec gets a clean env.
+        result = run(
+            ["radare2", *flags, binary],
+            capture_output=False,
+            stdin=0,
+            timeout=1800,
+            strict_env=True,
+        )
+except (OSError, RuntimeError, ValueError) as e:
+    _die(f"sandbox invocation failed: {e.__class__.__name__}: {e}")
+
+sys.exit(result.returncode)
