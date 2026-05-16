@@ -267,6 +267,18 @@ class TestTreeSitter:
         assert "python" in langs
 
 
+def _has_tree_sitter_cpp() -> bool:
+    try:
+        import tree_sitter_cpp  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+@pytest.mark.skipif(
+    not _has_tree_sitter_cpp(),
+    reason="tree_sitter_cpp grammar not installed",
+)
 class TestCppTreeSitter:
     """Pin the C++ extraction fixes landed alongside ``core.ast`` (PR
     ``feat/core-ast``):

@@ -24,6 +24,25 @@ from core.ast.model import SCHEMA_VERSION
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+def _has_grammar(module_name: str) -> bool:
+    """True iff the given tree-sitter grammar package is importable.
+
+    Tree-sitter grammars are optional dependencies in RAPTOR; the
+    walkers degrade to empty graphs without them. CI environments
+    that don't install the grammars must skip these tests rather
+    than fail with empty-result assertions."""
+    try:
+        __import__(module_name)
+        return True
+    except ImportError:
+        return False
+
+
+_HAS_TS_C = _has_grammar("tree_sitter_c")
+_HAS_TS_CPP = _has_grammar("tree_sitter_cpp")
+_HAS_TS_GO = _has_grammar("tree_sitter_go")
+
+
 # ---------------------------------------------------------------------------
 # Per-language end-to-end
 # ---------------------------------------------------------------------------
@@ -34,9 +53,14 @@ class TestC:
     bearing language for the /audit Phase A kernel CVE benchmark
     list, so the basic shape gets pinned here."""
 
-    pytestmark = pytest.mark.skipif(
-        not (FIXTURES / "sample.c").exists(), reason="fixture missing",
-    )
+    pytestmark = [
+        pytest.mark.skipif(
+            not (FIXTURES / "sample.c").exists(), reason="fixture missing",
+        ),
+        pytest.mark.skipif(
+            not _HAS_TS_C, reason="tree_sitter_c grammar not installed",
+        ),
+    ]
 
     def test_main_view(self):
         fv = view(FIXTURES / "sample.c", "main")
@@ -70,9 +94,14 @@ class TestCpp:
     ``run`` method exercises out-of-line definition + receiver_class
     tagging at once."""
 
-    pytestmark = pytest.mark.skipif(
-        not (FIXTURES / "sample.cpp").exists(), reason="fixture missing",
-    )
+    pytestmark = [
+        pytest.mark.skipif(
+            not (FIXTURES / "sample.cpp").exists(), reason="fixture missing",
+        ),
+        pytest.mark.skipif(
+            not _HAS_TS_CPP, reason="tree_sitter_cpp grammar not installed",
+        ),
+    ]
 
     def test_run_method_this_arrow(self):
         # Use --at-line equivalent because ``run`` might collide
@@ -159,22 +188,25 @@ class TestPython:
 
 
 class TestGo:
-    pytestmark = pytest.mark.skipif(
-        not (FIXTURES / "sample.go").exists(), reason="fixture missing",
-    )
+    pytestmark = [
+        pytest.mark.skipif(
+            not (FIXTURES / "sample.go").exists(), reason="fixture missing",
+        ),
+        pytest.mark.skipif(
+            not _HAS_TS_GO, reason="tree_sitter_go grammar not installed",
+        ),
+    ]
 
     def test_main_view(self):
         fv = view(FIXTURES / "sample.go", "main")
-        if fv is None:
-            pytest.skip("go grammar not installed")
+        assert fv is not None
         # fmt.Println called twice in main.
         println = [c for c in fv.calls_made if c.chain[-1] == "Println"]
         assert len(println) >= 1
 
     def test_go_no_inline_asm(self):
         fv = view(FIXTURES / "sample.go", "main")
-        if fv is None:
-            pytest.skip("go grammar not installed")
+        assert fv is not None
         assert fv.has_inline_asm is False
 
 
@@ -236,9 +268,14 @@ class TestEdgeCases:
 
 
 class TestSchema:
-    pytestmark = pytest.mark.skipif(
-        not (FIXTURES / "sample.c").exists(), reason="fixture missing",
-    )
+    pytestmark = [
+        pytest.mark.skipif(
+            not (FIXTURES / "sample.c").exists(), reason="fixture missing",
+        ),
+        pytest.mark.skipif(
+            not _HAS_TS_C, reason="tree_sitter_c grammar not installed",
+        ),
+    ]
 
     def test_to_dict_carries_full_schema(self):
         fv = view(FIXTURES / "sample.c", "main")
