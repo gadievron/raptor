@@ -5,7 +5,6 @@ import os
 import platform
 import pytest
 import sys
-import tempfile
 from pathlib import Path
 
 # core/hash/tests/test_hash.py -> repo root

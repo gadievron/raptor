@@ -14,7 +14,6 @@ parse SARIF and JSON output. Callers add their own concerns on top:
     convenience run_rules() that runs sequentially.
 """
 
-import json
 import shutil
 import subprocess
 import time

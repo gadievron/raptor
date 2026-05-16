@@ -1,6 +1,5 @@
 """Tests for convert_validated_to_agent_format and _load_validated_findings."""
 
-import pytest
 from packages.llm_analysis.agent import convert_validated_to_agent_format
 
 

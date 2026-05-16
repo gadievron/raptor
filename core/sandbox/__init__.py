@@ -522,7 +522,16 @@ __all__ = [
     # Availability probes (exposed for the startup banner)
     "check_sandbox_available", "check_net_available",
     "check_mount_available", "check_landlock_available",
+    "check_seatbelt_available",
     "check_seccomp_available",
     # Named profiles
-    "PROFILES", "DEFAULT_PROFILE",
+    "PROFILES", "DEFAULT_PROFILE", "_SANDBOX_KWARGS",
+    # Private re-exports kept for backward compatibility — see the
+    # block comment above; tests + a few internal callers reach into
+    # these names directly so the public name stays stable.
+    "_get_landlock_abi",
+    "_BLOCKED_PATTERNS", "_check_blocked", "_interpret_result", "_path_within",
+    "OBSERVE_FILENAME", "ConnectTarget", "ObserveProfile", "parse_observe_log",
+    "_DEFAULT_LIMITS", "_load_user_limits", "_make_preexec_fn",
+    "_build_mount_script",
 ]

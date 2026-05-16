@@ -8,10 +8,8 @@ doesn't silently relax the check.
 
 from __future__ import annotations
 
-import sys
 import tarfile
 
-import pytest
 
 from core.tar import (
     DEFAULT_MAX_MEMBER_BYTES,

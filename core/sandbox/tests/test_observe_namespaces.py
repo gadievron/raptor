@@ -22,7 +22,6 @@ All tests are Linux-only and skip when the relevant prerequisite
 
 from __future__ import annotations
 
-import os
 import sys
 import unittest
 from pathlib import Path
@@ -255,7 +254,6 @@ class TestObserveMultiProcess(unittest.TestCase):
 
     def test_child_processes_traced_too(self):
         from core.sandbox import run as sandbox_run
-        from core.sandbox.observe_profile import parse_observe_log
 
         # bash → /usr/bin/true && /usr/bin/cat </dev/null. cat opens
         # /dev/null; true opens nothing extra. Both load libc + ld.so

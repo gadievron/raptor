@@ -16,17 +16,16 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from core.hash import sha256_bytes
-from core.json import load_json, save_json
+from core.json import load_json
 
 from .languages import LANGUAGE_MAP, detect_language
 from .exclusions import (
     DEFAULT_EXCLUDES,
     is_binary_file,
     is_generated_file,
-    should_exclude,
     match_exclusion_reason,
 )
-from .extractors import extract_functions, extract_items, count_sloc
+from .extractors import extract_items, count_sloc
 from .call_graph import (
     extract_call_graph_csharp,
     extract_call_graph_go,

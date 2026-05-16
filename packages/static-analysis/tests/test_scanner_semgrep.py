@@ -20,7 +20,6 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
 # packages/static-analysis has a hyphen — load via importlib.
 _SCANNER_PATH = Path(__file__).parent.parent / "scanner.py"

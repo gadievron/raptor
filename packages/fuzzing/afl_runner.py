@@ -5,7 +5,6 @@ RAPTOR AFL++ Runner
 Orchestrates AFL++ fuzzing campaigns with parallel workers.
 """
 
-import os
 import shutil
 import subprocess
 

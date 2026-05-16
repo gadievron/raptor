@@ -25,7 +25,6 @@ import functools
 import re
 
 from core.http import HttpError
-from core.http.urllib_backend import UrllibClient
 
 from cve_diff.core.models import CommitSha, DiffBundle, FileChange, RepoRef
 from cve_diff.core.path_classifier import is_test_path

@@ -8,7 +8,6 @@ into a seamless automated pipeline.
 """
 
 import argparse
-import json
 import sys
 import time
 from dataclasses import dataclass, asdict

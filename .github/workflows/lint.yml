@@ -1,0 +1,110 @@
+name: Lint
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+  merge_group:
+  schedule:
+    # Daily catches lint regressions sneaked in via cherry-picks or
+    # ruff-version drifts that path-filtered PRs would miss.
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.12'
+  VENV_PATH: .venv
+
+permissions:
+  contents: read
+  # Needed by the pre_check job to query prior workflow runs at the
+  # current SHA via ``gh api repos/.../actions/runs``.
+  actions: read
+
+jobs:
+  # Same dedup pattern as tests.yml — skip a duplicate run of the same
+  # SHA. Inlined rather than refactored into a reusable composite so
+  # each workflow stays self-contained (raptor convention).
+  pre_check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      should_skip: ${{ steps.dup.outputs.should_skip }}
+    steps:
+      - id: dup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW: ${{ github.workflow }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          should_skip=false
+          # Never dedup forced-full events: the operator triggered them
+          # deliberately (cron, manual dispatch) or the merge queue needs
+          # an authoritative pass.
+          if [[ "$EVENT" != "schedule" && "$EVENT" != "workflow_dispatch" \
+             && "$EVENT" != "merge_group" ]]; then
+            dup=$(gh api -X GET "repos/${REPO}/actions/runs" \
+                    -f "head_sha=${SHA}" -f "status=success" \
+                    --jq ".workflow_runs[] | select(.name==\"${WORKFLOW}\" and .id != ${RUN_ID}) | .id" \
+                  | head -n1 || true)
+            if [[ -n "${dup:-}" ]]; then
+              should_skip=true
+              echo "Skipping: prior successful run ${dup} already covered SHA ${SHA}"
+            fi
+          fi
+          echo "should_skip=${should_skip}" >> "$GITHUB_OUTPUT"
+
+  ruff:
+    needs: pre_check
+    if: needs.pre_check.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # was v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "requirements*.txt"
+
+      - name: Install ruff
+        run: |
+          # Install only ruff (not full requirements-dev.txt) to keep
+          # this job fast and to avoid pulling pytest et al. just to
+          # lint. ruff is pinned to 0.15.12 in requirements-dev.txt —
+          # grep + uv pip install keeps a single source of truth.
+          uv venv $VENV_PATH
+          source $VENV_PATH/bin/activate
+          uv pip install "$(grep -E '^ruff==' requirements-dev.txt)"
+
+      - name: Run ruff (F401)
+        run: |
+          source $VENV_PATH/bin/activate
+          # Conservative starting rule set: unused-import only. F811 is
+          # widened in the follow-up DEEP-1b PR (it requires manual
+          # class-rename in core/llm/tests/test_llm_callbacks_providers.py
+          # — autofix is unsafe). F821 + F841 also land in DEEP-1b.
+          # __init__.py `__all__` declarations land in this PR (DEEP-1a)
+          # so the F401 gate passes on the re-export hubs out of the box.
+          # E501 (3,204 default-88 violations) deferred until a separate
+          # line-length-policy decision per
+          # notes/_judge/W14-E1-lint-ci-gate-design.md.
+          ruff check --select F401 \
+            --output-format=github \
+            .

@@ -11,11 +11,9 @@ Availability detection (SDK flags, Ollama, Claude Code) lives in detection.py.
 """
 
 import os
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-import json
 
 from core.logging import get_logger
 
@@ -25,8 +23,7 @@ from .model_data import (
     MODEL_COSTS, MODEL_LIMITS, PROVIDER_ENV_KEYS,
 )
 from .detection import (
-    OPENAI_SDK_AVAILABLE, ANTHROPIC_SDK_AVAILABLE,
-    LLMAvailability, detect_llm_availability,
+    OPENAI_SDK_AVAILABLE, detect_llm_availability,
     _get_available_ollama_models, _validate_ollama_url,
     _read_config_models,
 )
@@ -241,7 +238,6 @@ def _build_openai_compat_config(provider_name: str) -> Optional['ModelConfig']:
     # the resolver falls through to the next candidate (Ollama,
     # ClaudeCode) instead of detecting a usable API key, advertising
     # the model to the operator, then crashing the next LLM call.
-    from .detection import OPENAI_SDK_AVAILABLE
     if not OPENAI_SDK_AVAILABLE:
         logger.debug(
             "Skipping %s config: %s key present but openai SDK not "

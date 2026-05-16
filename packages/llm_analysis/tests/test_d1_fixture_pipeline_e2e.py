@@ -26,7 +26,6 @@ focuses on /agentic).
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -34,7 +33,6 @@ import pytest
 from core.annotations import read_annotation
 from packages.llm_analysis.agent import (
     AutonomousSecurityAgentV2,
-    VulnerabilityContext,
 )
 
 

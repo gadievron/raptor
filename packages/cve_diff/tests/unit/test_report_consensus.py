@@ -1,7 +1,6 @@
 """Tests for cve_diff/report/consensus.py — aggregation logic (2 methods)."""
 from __future__ import annotations
 
-import pytest
 
 from cve_diff.report.consensus import (
     ConsensusReport,

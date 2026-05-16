@@ -21,7 +21,7 @@ from core.security.prompt_envelope import (
 )
 from core.security.prompt_defense_profiles import CONSERVATIVE
 
-from .schemas import ANALYSIS_SCHEMA, DATAFLOW_SCHEMA_FIELDS, DATAFLOW_VALIDATION_SCHEMA
+from .schemas import ANALYSIS_SCHEMA, DATAFLOW_SCHEMA_FIELDS
 
 ANALYSIS_SYSTEM_PROMPT = """You are a security vulnerability validator and analyst.
 

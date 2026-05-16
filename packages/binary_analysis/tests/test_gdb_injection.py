@@ -1,7 +1,5 @@
 """Tests for debugger/crash_analyser security mitigations (CWE-78, CWE-59)."""
 
-import os
-import glob
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 

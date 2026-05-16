@@ -11,7 +11,6 @@ import os
 import shutil
 import socket
 import subprocess
-import tempfile
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory

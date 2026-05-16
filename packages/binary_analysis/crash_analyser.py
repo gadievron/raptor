@@ -14,7 +14,6 @@ from core.sandbox import run as _sandbox_run, run_trusted as _run_trusted
 # - GDB / LLDB: need ptrace → profile='debug' (keeps net/Landlock/most seccomp).
 # - ASAN binary: no ptrace needed → default full sandbox via _sandbox_run.
 # Each call site specifies target+output for Landlock engagement.
-import os
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path

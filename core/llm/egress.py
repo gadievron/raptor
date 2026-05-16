@@ -81,7 +81,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import TYPE_CHECKING, Iterable, Set
+from typing import TYPE_CHECKING, Set
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:

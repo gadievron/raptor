@@ -9,7 +9,6 @@ trace content, and pin helper purity.
 
 from __future__ import annotations
 
-import json
 from typing import List
 from unittest.mock import patch
 

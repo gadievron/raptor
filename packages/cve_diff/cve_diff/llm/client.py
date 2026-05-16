@@ -15,8 +15,6 @@ preserves the public surface that the analyzer and agent loop depend on:
 
 from __future__ import annotations
 
-import os
-import sys
 import time
 from dataclasses import dataclass, field
 

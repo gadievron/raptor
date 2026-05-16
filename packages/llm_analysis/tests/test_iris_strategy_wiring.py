@@ -10,10 +10,8 @@ decision.
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
 from packages.llm_analysis.dataflow_validation import (
     _build_hypothesis,
@@ -135,7 +133,6 @@ class TestRobustness:
             assert h.target == tmp_path
 
     def test_picker_exception_doesnt_break_validator(self, tmp_path):
-        from packages.llm_analysis import dataflow_validation as mod
 
         def boom(**kwargs):
             raise RuntimeError("simulated picker failure")

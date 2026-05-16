@@ -9,7 +9,6 @@ unbounded growth in prompt size.
 
 from __future__ import annotations
 
-import pytest
 
 from packages.llm_analysis.prompts.analysis import (
     build_analysis_prompt_bundle,

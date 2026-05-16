@@ -16,7 +16,6 @@ Coverage focus matches the spike-validated facts in seatbelt.py:
 from __future__ import annotations
 
 import os
-import tempfile
 
 from core.sandbox import seatbelt
 

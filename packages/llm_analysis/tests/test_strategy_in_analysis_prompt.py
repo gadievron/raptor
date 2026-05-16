@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
 
 from packages.llm_analysis.prompts.analysis import (
     build_analysis_prompt_bundle,
@@ -189,7 +188,6 @@ class TestRobustness:
         """If the picker raises for any reason, the prompt builder
         must still produce a usable bundle — strategy block is
         best-effort."""
-        from packages.llm_analysis.prompts import analysis as mod
 
         def boom(**kwargs):
             raise RuntimeError("simulated picker failure")

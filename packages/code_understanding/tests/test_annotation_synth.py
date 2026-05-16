@@ -19,11 +19,9 @@ from core.annotations import (
     Annotation,
     iter_all_annotations,
     read_annotation,
-    read_file_annotations,
     write_annotation,
 )
 from packages.code_understanding.annotation_synth import (
-    SynthCounts,
     _parse_definition,
     synthesise_from_understand_output,
 )

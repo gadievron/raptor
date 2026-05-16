@@ -2,7 +2,7 @@
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -12,7 +12,6 @@ sys.path.insert(0, str(Path(__file__).parents[3]))
 from core.smt_solver import RejectionKind, z3_available
 from packages.codeql.smt_path_validator import (
     PathCondition,
-    PathSMTResult,
     check_path_feasibility,
 )
 
