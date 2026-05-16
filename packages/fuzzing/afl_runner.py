@@ -718,6 +718,7 @@ class AFLRunner:
                 cwd=str(self.output_dir),
                 env=env,
                 timeout=300,
+                sanitise_host_fingerprint=True,
             )
 
             # Parse output for coverage info

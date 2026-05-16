@@ -139,6 +139,7 @@ class GDBDebugger:
                         capture_output=True,
                         text=True,
                         timeout=timeout,
+                        sanitise_host_fingerprint=True,
                     )
             else:
                 result = _sandbox_run(
@@ -147,6 +148,7 @@ class GDBDebugger:
                     capture_output=True,
                     text=True,
                     timeout=timeout,
+                    sanitise_host_fingerprint=True,
                 )
 
             return result.stdout

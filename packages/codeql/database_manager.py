@@ -787,6 +787,7 @@ class DatabaseManager:
         # Execute database creation in sandbox (network blocked — packs pre-fetched)
         try:
             from core.sandbox import run as sandbox_run
+            from core.sandbox.fingerprint import HOST_CPU_COUNT
             result = sandbox_run(
                 cmd,
                 block_network=True,
@@ -802,6 +803,19 @@ class DatabaseManager:
                 capture_output=True,
                 text=True,
                 timeout=RaptorConfig.CODEQL_TIMEOUT,
+                # `codeql database create` invokes the target repo's
+                # autobuild / --command build, which is where target-
+                # supplied build scripts execute. Sanitise identity
+                # surfaces so anti-analysis-aware build tooling can't
+                # detect the analysis environment.
+                #
+                # cpu_count=HOST_CPU_COUNT preserves real parallelism
+                # for Make/Maven/Gradle — the default cpu_count=4 would
+                # serialise to 4 threads regardless of host count and
+                # cause ~8x build slowdown on 32-core CI hosts,
+                # pushing long builds past CODEQL_TIMEOUT.
+                sanitise_host_fingerprint=True,
+                cpu_count=HOST_CPU_COUNT,
             )
 
             success = result.returncode == 0
