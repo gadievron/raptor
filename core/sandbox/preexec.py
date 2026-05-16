@@ -13,12 +13,13 @@ restrict_self.
 
 import json
 import logging
-import os as _os_mod  # for direct os.write/os._exit at fail-CLOSED sites
+import os
 import resource
 from pathlib import Path
 
 from . import state
 from ._fork_safe_warn import warn_post_fork
+from .exit_codes import SANDBOX_EXIT_RLIMIT_CORE_FAIL
 from .landlock import check_landlock_available, _make_landlock_preexec
 from .seccomp import _make_seccomp_preexec
 
@@ -254,14 +255,14 @@ def _make_preexec_fn(limits: dict, writable_paths: list = None,
             # warn-only sites).
             _errno = getattr(exc, "errno", 0) or 0
             try:
-                _os_mod.write(
+                os.write(
                     2,
                     b"RAPTOR: preexec: RLIMIT_CORE setrlimit failed "
                     b"(errno=%d), exiting\n" % _errno,
                 )
             except OSError:
                 pass
-            _os_mod._exit(99)
+            os._exit(SANDBOX_EXIT_RLIMIT_CORE_FAIL)
 
 
         # Apply Landlock filesystem restrictions after resource limits

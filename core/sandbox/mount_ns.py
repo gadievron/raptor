@@ -37,6 +37,7 @@ import os
 from typing import Iterable, Optional
 
 from ._fork_safe_warn import warn_post_fork
+from .exit_codes import SANDBOX_EXIT_MOUNT_NS_BIND_FAIL
 
 # Linux mount(2) flag bits (from <linux/mount.h>). Values match the
 # kernel UAPI — do not "fix" without checking <sys/mount.h> on target.
@@ -346,7 +347,7 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
                     )
                 except OSError:
                     pass
-                os._exit(126)
+                os._exit(SANDBOX_EXIT_MOUNT_NS_BIND_FAIL)
 
     # 9. pivot_root. put_old must be a directory INSIDE new_root.
     os.chdir(root)
