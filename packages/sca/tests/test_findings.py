@@ -237,3 +237,73 @@ def test_severity_rank_helper() -> None:
     assert severity_rank("high") > severity_rank("medium")
     assert severity_rank("medium") > severity_rank("low")
     assert severity_rank("low") > severity_rank("info")
+
+
+# ---------------------------------------------------------------------------
+# Commented-out dep handling — extends the existing vuln-side behaviour
+# to hygiene / supply_chain / license findings.
+# ---------------------------------------------------------------------------
+
+def test_hygiene_finding_downgraded_to_info_when_commented() -> None:
+    """A `# pkg==X` line that surfaces via --include-commented
+    should produce hygiene findings at ``info`` severity (the
+    operator doesn't want CI gated on commented hints).
+    Mirrors the vuln-finding downgrade in _vuln_finding_to_row."""
+    from packages.sca.models import HygieneFinding
+    from packages.sca.findings import _hygiene_finding_to_row
+    d = _dep()
+    d.commented_out = True
+    f = HygieneFinding(
+        finding_id="x", kind="loose_pin", dependency=d,
+        detail="t", severity="low",
+        confidence=Confidence("high", reason="t"),
+    )
+    row = _hygiene_finding_to_row(f)
+    assert row["severity"] == "info"
+    assert row["sca"]["commented_out"] is True
+
+
+def test_hygiene_finding_retains_severity_when_uncommented() -> None:
+    """Non-commented entries keep their original severity."""
+    from packages.sca.models import HygieneFinding
+    from packages.sca.findings import _hygiene_finding_to_row
+    d = _dep()
+    assert not d.commented_out
+    f = HygieneFinding(
+        finding_id="x", kind="loose_pin", dependency=d,
+        detail="t", severity="medium",
+        confidence=Confidence("high", reason="t"),
+    )
+    row = _hygiene_finding_to_row(f)
+    assert row["severity"] == "medium"
+    assert row["sca"]["commented_out"] is False
+
+
+def test_vuln_row_includes_commented_out_in_sca_block() -> None:
+    """The vuln-finding's ``sca`` sub-dict now surfaces
+    ``commented_out`` so JSON consumers see the same signal
+    the SBOM properties already carry."""
+    from packages.sca.findings import _vuln_finding_to_row
+    from packages.sca.models import VulnFinding
+    d = _dep()
+    d.commented_out = True
+    from packages.sca.models import Reachability
+    f = VulnFinding(
+        finding_id="x", dependency=d, advisories=[],
+        severity="high", in_kev=False, epss=None,
+        fixed_version=None,
+        reachability=Reachability(
+            verdict="not_evaluated",
+            confidence=Confidence("low", reason="t"),
+            evidence=(),
+        ),
+        cvss_score=None, cvss_vector=None,
+        version_match_confidence=Confidence("high", reason="t"),
+        exposure_factor=1.0, transitive_depth=0,
+    )
+    row = _vuln_finding_to_row(f)
+    assert row["sca"]["commented_out"] is True
+    # Note: the vuln-side severity downgrade happens at
+    # ``build_vuln_findings`` time (not at row emission), so
+    # this row-builder test passes through whatever severity
+    # the VulnFinding already carries.

@@ -385,6 +385,7 @@ def _vuln_finding_to_row(f: VulnFinding) -> Dict[str, Any]:
             "is_lockfile": f.dependency.is_lockfile,
             "direct": f.dependency.direct,
             "pin_style": f.dependency.pin_style.value,
+            "commented_out": f.dependency.commented_out,
             "declared_in": str(f.dependency.declared_in)
                             if f.dependency.declared_in else None,
             "source_kind": f.dependency.source_kind,
@@ -428,7 +429,23 @@ def _exploit_evidence_summary(ev) -> Optional[Dict[str, Any]]:
     }
 
 
+def _commented_severity(dep: Dependency, severity: str) -> str:
+    """Downgrade hygiene / supply-chain / license severities on
+    commented-out dep lines.
+
+    Mirrors the vuln-finding downgrade in ``_vuln_finding_to_row``:
+    a ``# pkg==X`` comment is documentation, not an active dep, so
+    operators don't want CI gated on it. Floor at ``info``; the
+    operator can opt back in with ``--fail-on-info`` when they
+    want commented hints to fail the build.
+    """
+    if dep.commented_out and severity not in ("info",):
+        return "info"
+    return severity
+
+
 def _hygiene_finding_to_row(f: HygieneFinding) -> Dict[str, Any]:
+    severity = _commented_severity(f.dependency, f.severity)
     return {
         "id": f.finding_id,
         "finding_id": f.finding_id,
@@ -437,7 +454,7 @@ def _hygiene_finding_to_row(f: HygieneFinding) -> Dict[str, Any]:
         "file": str(f.dependency.declared_in),
         "function": f.dependency.name,
         "line": 0,
-        "severity": f.severity,
+        "severity": severity,
         "suppressed": f.suppressed,
         "suppression_reason": f.suppression_reason,
         "title": _kind_title(f.kind, f.dependency.name),
@@ -451,12 +468,14 @@ def _hygiene_finding_to_row(f: HygieneFinding) -> Dict[str, Any]:
             "scope": f.dependency.scope,
             "is_lockfile": f.dependency.is_lockfile,
             "pin_style": f.dependency.pin_style.value,
+            "commented_out": f.dependency.commented_out,
             "confidence": _confidence_summary(f.confidence),
         },
     }
 
 
 def _supply_chain_finding_to_row(f: SupplyChainFinding) -> Dict[str, Any]:
+    severity = _commented_severity(f.dependency, f.severity)
     return {
         "id": f.finding_id,
         "finding_id": f.finding_id,
@@ -465,7 +484,7 @@ def _supply_chain_finding_to_row(f: SupplyChainFinding) -> Dict[str, Any]:
         "file": str(f.dependency.declared_in),
         "function": f.dependency.name,
         "line": 0,
-        "severity": f.severity,
+        "severity": severity,
         "suppressed": f.suppressed,
         "suppression_reason": f.suppression_reason,
         "title": _kind_title(f.kind, f.dependency.name),
@@ -475,6 +494,7 @@ def _supply_chain_finding_to_row(f: SupplyChainFinding) -> Dict[str, Any]:
             "ecosystem": f.dependency.ecosystem,
             "name": f.dependency.name,
             "version": f.dependency.version,
+            "commented_out": f.dependency.commented_out,
             "evidence": dict(f.evidence),
             "confidence": _confidence_summary(f.confidence),
         },
@@ -483,6 +503,7 @@ def _supply_chain_finding_to_row(f: SupplyChainFinding) -> Dict[str, Any]:
 
 def _license_finding_to_row(f: Any) -> Dict[str, Any]:
     kind_short = f.kind.replace('license_', '')
+    severity = _commented_severity(f.dependency, f.severity)
     return {
         "id": f.finding_id,
         "finding_id": f.finding_id,
@@ -491,7 +512,7 @@ def _license_finding_to_row(f: Any) -> Dict[str, Any]:
         "file": str(f.dependency.declared_in),
         "function": f.dependency.name,
         "line": 0,
-        "severity": f.severity,
+        "severity": severity,
         "suppressed": f.suppressed,
         "suppression_reason": f.suppression_reason,
         "title": _kind_title(kind_short, f.dependency.name),
@@ -503,6 +524,7 @@ def _license_finding_to_row(f: Any) -> Dict[str, Any]:
             "version": f.dependency.version,
             "spdx": f.spdx,
             "purl": f.dependency.purl,
+            "commented_out": f.dependency.commented_out,
             "confidence": _confidence_summary(f.confidence),
         },
     }
