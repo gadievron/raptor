@@ -18,6 +18,7 @@ guard is sufficient: it catches silent regressions of the step
 diagnostic itself, which is the contract this commit added.
 """
 
+import re
 from pathlib import Path
 
 
@@ -56,7 +57,7 @@ def test_step_assignments_cover_all_failure_sites():
     required_labels = [
         b'_step = b"makedirs"',
         b'_step = b"makedirs (parent)"',
-        b'_step = b"create mount-point file"',
+        b'_step = b"open mount-point"',
         b'_step = b"bind"',
     ]
     block_b = block.encode()
@@ -72,19 +73,47 @@ def test_outer_except_diagnostic_uses_step_variable():
     """The outer OSError handler must compose its stderr bytes using
     the _step variable rather than a hardcoded 'bind failed' literal.
     Pre-fix the handler always said 'bind failed' regardless of which
-    step actually raised."""
+    step actually raised.
+
+    Shape-agnostic check: find the ``os.write(2, ...)`` call inside
+    the outer except and confirm ``_step`` appears anywhere in its
+    argument expression. This tolerates future refactors that swap
+    the bytes-concat shape (``b'...' + _step + b'...'``,
+    ``b'... %s ...' % _step``, ``b' '.join([..., _step, ...])``,
+    f-string-then-encode, ...) as long as the contract — "the
+    diagnostic includes the failing step's name" — is preserved.
+    """
     block = _read_extra_ro_block()
-    # The fix replaces the literal "bind failed for" with bytes
-    # concatenation that includes _step. Confirm neither the old
-    # literal NOR a substring of it survives where the new pattern
-    # should be — and confirm the new pattern is present.
-    assert b"b\"RAPTOR: mount_ns: extra_ro_paths bind failed for \"" not in block.encode(), (
+
+    # The pre-fix literal must NOT appear — its presence would mean
+    # the step-aware diagnostic was reverted to the original
+    # always-says-bind form.
+    assert (
+        'b"RAPTOR: mount_ns: extra_ro_paths bind failed for "' not in block
+    ), (
         "outer OSError handler still uses the pre-fix 'bind failed' "
         "literal; the step-aware diagnostic was reverted"
     )
-    assert b"+ _step\n" in block.encode() or b"+ _step +" in block.encode(), (
-        "outer OSError handler must include `_step` in the bytes "
-        "concat composing the diagnostic message"
+
+    # Find every os.write(2, ...) call in the block and confirm at
+    # least one has `_step` in its argument expression. The block
+    # contains both real calls (in warn-only and fail-CLOSED handlers)
+    # and bare `os.write(2, ...)` mentions in comments — succeed if
+    # any of the real call sites references _step. DOTALL so the
+    # args can span lines; non-greedy so we don't span multiple calls.
+    write_calls = re.findall(
+        r"os\.write\s*\(\s*2\s*,(.*?)\)",
+        block,
+        flags=re.DOTALL,
+    )
+    assert write_calls, (
+        "outer OSError handler must contain an `os.write(2, ...)` "
+        "call to surface the diagnostic"
+    )
+    assert any("_step" in args for args in write_calls), (
+        "outer OSError handler's os.write(2, ...) call must reference "
+        "`_step` somewhere in its argument expression so the diagnostic "
+        "names the failing step (any bytes-concat shape is fine)"
     )
 
 
@@ -98,7 +127,6 @@ def test_step_labels_are_bytes_not_str():
     # The b"..." prefix on each _step assignment is what makes this
     # fork-safe. Search for any str-form _step assignment as a
     # regression marker.
-    import re
     str_assignments = re.findall(r'_step\s*=\s*"[^"]+"', block)
     assert not str_assignments, (
         f"_step assignments must be bytes (b\"...\") for fork-safety, "

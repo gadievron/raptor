@@ -311,7 +311,7 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
                     #     be world-readable (was 0o644 default via umask).
                     _step = b"makedirs (parent)"
                     os.makedirs(os.path.dirname(inside), exist_ok=True)
-                    _step = b"create mount-point file"
+                    _step = b"open mount-point"
                     fd = os.open(
                         inside,
                         os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW | os.O_EXCL,
