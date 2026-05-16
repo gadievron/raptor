@@ -144,7 +144,7 @@ Examples:
     parser.add_argument("--url", required=True, help="Target web application URL")
     parser.add_argument("--out", help="Output directory for results")
     parser.add_argument("--max-depth", type=int, default=3, help="Maximum crawl depth (default: 3)")
-    parser.add_argument("--max-pages", type=int, default=50, help="Maximum pages to crawl (default: 50)")
+    parser.add_argument("--max-pages", type=int, default=100, help="Maximum pages to crawl (default: 100)")
     parser.add_argument("--insecure", action="store_true", help="Skip SSL/TLS certificate verification (INSECURE but you know what you are doing, right?)")
     parser.add_argument(
         "--reveal-secrets",
