@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "juiceshop_semgrep_javascript-lang-security-audit-sqli-express-sequelize-injection_6053ebff7dca",
+  "verdict": "true_positive",
+  "fp_category": null,
+  "rationale": "req.body.email and req.body.password flow into a template-literal SQL on line 18. The regex blocklist on line 15 attempts to filter SQLi metachars but is documented in dbSchemaChallenge.info.yml as bypassable \u2014 'custom-built blocklist mechanism is doomed to fail.' Real CWE-89.",
+  "labeler": "handlabel-juice-shop-webgoat",
+  "labeled_at": "2026-05-10"
+}

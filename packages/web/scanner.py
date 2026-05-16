@@ -28,8 +28,16 @@ logger = get_logger()
 class WebScanner:
     """Fully autonomous web application security scanner."""
 
-    def __init__(self, base_url: str, llm: Optional[LLMProvider], out_dir: Path,
-                 verify_ssl: bool = True, reveal_secrets: bool = False):
+    def __init__(
+        self,
+        base_url: str,
+        llm: Optional[LLMProvider],
+        out_dir: Path,
+        verify_ssl: bool = True,
+        reveal_secrets: bool = False,
+        max_depth: int = 3,
+        max_pages: int = 100,
+    ):
         self.base_url = base_url
         self.llm = llm
         self.out_dir = out_dir
@@ -37,10 +45,13 @@ class WebScanner:
 
         # Initialize components
         self.client = WebClient(base_url, verify_ssl=verify_ssl, reveal_secrets=reveal_secrets)
-        self.crawler = WebCrawler(self.client)
+        self.crawler = WebCrawler(self.client, max_depth=max_depth, max_pages=max_pages)
         self.fuzzer = WebFuzzer(self.client, llm) if llm else None
 
-        logger.info(f"Web scanner initialized for {base_url} (verify_ssl={verify_ssl})")
+        logger.info(
+            f"Web scanner initialized for {base_url} "
+            f"(verify_ssl={verify_ssl}, max_depth={max_depth}, max_pages={max_pages})"
+        )
 
     def scan(self) -> Dict[str, Any]:
         """
@@ -133,7 +144,7 @@ Examples:
     parser.add_argument("--url", required=True, help="Target web application URL")
     parser.add_argument("--out", help="Output directory for results")
     parser.add_argument("--max-depth", type=int, default=3, help="Maximum crawl depth (default: 3)")
-    parser.add_argument("--max-pages", type=int, default=50, help="Maximum pages to crawl (default: 50)")
+    parser.add_argument("--max-pages", type=int, default=100, help="Maximum pages to crawl (default: 100)")
     parser.add_argument("--insecure", action="store_true", help="Skip SSL/TLS certificate verification (INSECURE but you know what you are doing, right?)")
     parser.add_argument(
         "--reveal-secrets",
@@ -185,6 +196,8 @@ Examples:
         out_dir,
         verify_ssl=verify_ssl,
         reveal_secrets=True if args.reveal_secrets else False,
+        max_depth=args.max_depth,
+        max_pages=args.max_pages,
     )
 
     try:

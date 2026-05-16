@@ -612,6 +612,89 @@ class TestStructuralGrouping:
         groups = _structural_grouping(results)
         assert len(groups) == 0
 
+    def test_smt_shared_witness_groups_findings_with_same_model(self):
+        """Two findings whose Tier 4 SMT witness has the same
+        variable=value model end up in the same `smt_shared_witness`
+        group. Z3 has effectively said the same concrete attacker
+        input triggers both — single attack vector, operator should
+        test them together."""
+        results = [
+            {"finding_id": "f-001", "file_path": "a.c", "rule_id": "r1",
+             "smt_witness": {
+                 "model": {"count": 268435456, "total": 0},
+                 "anon_var_map": {},
+             }},
+            {"finding_id": "f-002", "file_path": "b.c", "rule_id": "r2",
+             "smt_witness": {
+                 "model": {"count": 268435456, "total": 0},
+                 "anon_var_map": {},
+             }},
+        ]
+        groups = _structural_grouping(results)
+        witness_groups = [g for g in groups if g["criterion"] == "smt_shared_witness"]
+        assert len(witness_groups) == 1
+        assert set(witness_groups[0]["finding_ids"]) == {"f-001", "f-002"}
+        # criterion_value must be human-readable (not just `tuple(...)`)
+        assert "count=268435456" in witness_groups[0]["criterion_value"]
+
+    def test_smt_shared_witness_skips_pure_anon_models(self):
+        """Two findings with the SAME `_anon_N` model but NO
+        anon_var_map decoder are NOT grouped — pure-opaque
+        witnesses are Z3 picking the smallest BV that satisfies the
+        condition (not a meaningful shared attacker input). Pre-
+        check that the spurious grouping doesn't fire."""
+        results = [
+            {"finding_id": "f-001", "file_path": "a.c", "rule_id": "r1",
+             "smt_witness": {
+                 "model": {"_anon_0": 32},
+                 "anon_var_map": {},  # NO decoding
+             }},
+            {"finding_id": "f-002", "file_path": "b.c", "rule_id": "r2",
+             "smt_witness": {
+                 "model": {"_anon_0": 32},
+                 "anon_var_map": {},
+             }},
+        ]
+        groups = _structural_grouping(results)
+        assert not any(g["criterion"] == "smt_shared_witness" for g in groups), (
+            "Pure-opaque _anon_N witness should not produce a shared-witness "
+            "group — the value is Z3's choice, not a real attacker input"
+        )
+
+    def test_smt_shared_witness_groups_decoded_anon_models(self):
+        """When the SAME `_anon_N` value DOES have a decoder
+        (anon_var_map), the witness describes a real attacker-
+        visible quantity (e.g. strlen(argv[1])=32). Group them."""
+        results = [
+            {"finding_id": "f-001", "file_path": "a.c", "rule_id": "r1",
+             "smt_witness": {
+                 "model": {"_anon_0": 32},
+                 "anon_var_map": {"_anon_0": "strlen(argv[1])"},
+             }},
+            {"finding_id": "f-002", "file_path": "b.c", "rule_id": "r2",
+             "smt_witness": {
+                 "model": {"_anon_0": 32},
+                 "anon_var_map": {"_anon_0": "strlen(argv[1])"},
+             }},
+        ]
+        groups = _structural_grouping(results)
+        witness_groups = [g for g in groups if g["criterion"] == "smt_shared_witness"]
+        assert len(witness_groups) == 1
+        assert set(witness_groups[0]["finding_ids"]) == {"f-001", "f-002"}
+
+    def test_smt_no_witness_no_group(self):
+        """No smt_witness field, or empty model, contributes no
+        grouping signal."""
+        results = [
+            {"finding_id": "f-001", "file_path": "a.c"},
+            {"finding_id": "f-002", "file_path": "b.c",
+             "smt_witness": {"model": {}}},
+            {"finding_id": "f-003", "file_path": "c.c",
+             "smt_witness": {}},
+        ]
+        groups = _structural_grouping(results)
+        assert not any(g["criterion"] == "smt_shared_witness" for g in groups)
+
     def test_shared_dataflow_source(self):
         results = [
             {"finding_id": "f-001", "file_path": "a.py", "rule_id": "sqli",
@@ -894,3 +977,64 @@ class TestWeakenedDefenses:
         with patch("core.security.rule_of_two.is_interactive", return_value=False):
             result = self._run_with_failing_probe(tmp_path, accept=True)
         assert result is None
+
+    def _run_with_runtime_error_probe(self, tmp_path, accept=False):
+        # `strict=True` makes `probe_envelope_compatibility` raise
+        # `RuntimeError` on dispatch failure rather than returning a
+        # `ProbeResult`. The orchestrator catches the RuntimeError
+        # and `continue`s without binding `probe_result`. Pre-fix
+        # the post-loop branches referenced `probe_result.error`,
+        # raising `NameError` whenever every probed model hit this
+        # path. Post-fix the post-loop branches read from
+        # `_failed_probe_models`, which is always non-empty when
+        # `_probe_failed` is set.
+        report = _make_prep_report()
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(report))
+
+        fake_config, role_res = self._make_external_llm_mocks()
+        analysis_result = _make_cc_result("finding-001")
+
+        def mock_dispatch_task(task, findings, dispatch_fn, role_resolution,
+                               results_by_id, cost_tracker, max_parallel,
+                               prefilter_fn=None):
+            for f in findings:
+                fid = f.get("finding_id")
+                r = dict(analysis_result, finding_id=fid)
+                results_by_id[fid] = r
+            return [dict(analysis_result, finding_id=f.get("finding_id"))
+                    for f in findings]
+
+        with patch("core.llm.config.resolve_model_roles",
+                   return_value=role_res), \
+             patch("core.llm.client.LLMClient") as mock_cls, \
+             patch("packages.llm_analysis.dispatch.dispatch_task",
+                   side_effect=mock_dispatch_task), \
+             patch("core.security.envelope_probe.probe_envelope_compatibility",
+                   side_effect=RuntimeError("dispatch refused mid-probe")):
+            mock_cls.return_value = MagicMock()
+            return orchestrate(
+                prep_report_path=report_path,
+                repo_path=tmp_path,
+                out_dir=tmp_path / "orch",
+                llm_config=fake_config,
+                accept_weakened_defenses=accept,
+            )
+
+    def test_probe_runtime_error_aborts_without_flag(self, tmp_path):
+        # Without --accept-weakened-defenses, an all-models-raise
+        # RuntimeError must return None — NOT raise NameError on the
+        # unbound `probe_result` (pre-fix bug from #499 / Bugbot).
+        result = self._run_with_runtime_error_probe(tmp_path, accept=False)
+        assert result is None
+
+    def test_probe_runtime_error_continues_with_flag(self, tmp_path):
+        # With --accept-weakened-defenses + interactive, the
+        # PASSTHROUGH override fires; the `Reason:` message must use
+        # `_fail_summary` (built from `_failed_probe_models`) rather
+        # than `probe_result.error` which is unbound.
+        with patch("core.security.rule_of_two.is_interactive", return_value=True):
+            result = self._run_with_runtime_error_probe(tmp_path, accept=True)
+        assert result is not None
+        assert result["orchestration"]["defense_profile"] == "passthrough"
+        assert result["orchestration"]["weakened_defenses"] is True

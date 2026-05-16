@@ -579,8 +579,18 @@ def orchestrate(
         if not _probe_failed and _probed_profiles:
             profile = _intersect_profiles(_probed_profiles)
         if _probe_failed:
+            # `_failed_probe_models` is guaranteed non-empty here:
+            # both code paths that set `_probe_failed=True` (the
+            # `except RuntimeError` branch and the
+            # `not probe_result.compatible` branch) also append to
+            # this list. `probe_result` itself may be unbound when
+            # every model raised RuntimeError (the strict-mode
+            # path), so refer to `_failed_probe_models` instead.
+            _fail_summary = "; ".join(
+                f"{_m}={_e}" for _m, _e in _failed_probe_models
+            )
             if not accept_weakened_defenses:
-                print(f"\n  Envelope probe failed for {model_label}: {probe_result.error}")
+                print(f"\n  Envelope probe failed for {model_label}: {_fail_summary}")
                 print(f"  The model cannot honour the defense envelope — aborting.")
                 print(f"  To proceed with weakened defenses, re-run with --accept-weakened-defenses")
                 return None
@@ -598,8 +608,7 @@ def orchestrate(
             # whatever happened to be the last probe_result.
             # Multi-model runs where a secondary failed now show
             # the secondary in the scorecard, matching reality.
-            for _fmname, _ferr in (_failed_probe_models
-                                   or [(analysis_model_name, probe_result.error)]):
+            for _fmname, _ferr in _failed_probe_models:
                 defense_telemetry.record_weakened_override(_fmname, _ferr)
                 logger.warning(
                     "Operator accepted weakened defenses for %s (probe error: %s)",
@@ -607,7 +616,7 @@ def orchestrate(
                 )
             print(f"\n  *** DEFENSE WARNING: envelope probe failed for {model_label} ***")
             print(f"  Running with reduced defences (--accept-weakened-defenses)")
-            print(f"  Reason: {probe_result.error}")
+            print(f"  Reason: {_fail_summary}")
             print(f"  Model-independent floor still applies (autofetch redaction,"
                   f" control-char sanitisation, role separation)\n")
 
@@ -1770,5 +1779,49 @@ def _structural_grouping(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
     for ref, fids_set in ref_to_fids.items():
         _add_group("shared_dataflow_ref", ref, list(fids_set))
+
+    # Group by shared SMT witness model. When two findings have
+    # identical witness models (same variable=value assignment that
+    # satisfies their path conditions), Z3 has effectively said
+    # "the SAME concrete attacker input drives both findings". That
+    # makes the pair a single attack vector rather than two
+    # independent bugs — operator should test them together. The
+    # fingerprint is a sorted-tuple of (variable, integer-value)
+    # pairs derived from `smt_witness.model`. Skip witnesses where
+    # ALL keys are `_anon_*` placeholders — those are over-
+    # approximating (Z3 picked the smallest BV satisfying the
+    # condition, not a meaningful attacker input), so the "shared
+    # witness" signal becomes spurious. Anon vars with concrete
+    # decoded names (via anon_var_map) DO count as named because
+    # the witness then describes a real attacker-visible quantity
+    # (e.g. strlen(argv[1])=32).
+    by_witness: Dict[Tuple, List[str]] = {}
+    for fid, r in findings_by_id.items():
+        witness = r.get("smt_witness") or {}
+        model = witness.get("model") or {}
+        if not model:
+            continue
+        anon_map = witness.get("anon_var_map") or {}
+        # Skip when EVERY model key is an undecoded _anon_N — pure
+        # opaque-placeholder witnesses don't describe a real shared
+        # attacker input.
+        if model and all(
+            k.startswith("_anon_") and k not in anon_map
+            for k in model
+        ):
+            continue
+        fingerprint = tuple(sorted(
+            (k, v if not isinstance(v, int) else int(v))
+            for k, v in model.items()
+        ))
+        by_witness.setdefault(fingerprint, []).append(fid)
+    for fingerprint, fids in by_witness.items():
+        # Render the fingerprint as a comma-separated `var=val`
+        # string for the criterion_value field; truncate to keep
+        # report lines readable.
+        rendered = ", ".join(f"{k}={v}" for k, v in fingerprint)
+        if len(rendered) > 80:
+            rendered = rendered[:77] + "..."
+        _add_group("smt_shared_witness", rendered, fids)
 
     return groups

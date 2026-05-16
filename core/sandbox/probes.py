@@ -182,8 +182,22 @@ def check_mount_available() -> bool:
         # enable mount-ns if they want the stronger isolation (read-only
         # root bind, per-sandbox /tmp tmpfs, /dev/shm isolation).
         try:
+            # Same TOCTOU rationale as the unprivileged_userns_clone
+            # check above: pre-fix `sysctl.exists() and
+            # sysctl.read_text() == "1"` raced — the file could be
+            # remounted between exists() and read_text(). Single-step
+            # via attempt-read + FileNotFoundError-as-"no sysctl"
+            # fallback. The default behaviour when the sysctl is
+            # absent is "AppArmor restriction not in force" → no
+            # warning needed (the fallback is the safe path).
             sysctl = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
-            if sysctl.exists() and sysctl.read_text().strip() == "1":
+            try:
+                _restrict_value = sysctl.read_text().strip()
+            except FileNotFoundError:
+                _restrict_value = ""
+            except OSError:
+                _restrict_value = ""
+            if _restrict_value == "1":
                 if state.warn_once("_mount_unavailable_warned"):
                     logger.info(
                         "Sandbox: mount-namespace isolation UNAVAILABLE — "

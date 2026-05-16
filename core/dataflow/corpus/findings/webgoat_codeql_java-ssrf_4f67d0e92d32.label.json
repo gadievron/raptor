@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "webgoat_codeql_java-ssrf_4f67d0e92d32",
+  "verdict": "false_positive",
+  "fp_category": "dead_code",
+  "rationale": "@RequestParam url is passed to stealTheCheese which does NOT fetch the URL \u2014 line 32 only does `url.matches(\"images/tom\\\\.png\")` regex matching against hardcoded strings, then returns hardcoded HTML. Producers seeing @RequestParam-named-url + 'stealTheCheese' might flag SSRF; the actual sink isn't a network call. No CWE-918 here.",
+  "labeler": "handlabel-juice-shop-webgoat",
+  "labeled_at": "2026-05-10"
+}

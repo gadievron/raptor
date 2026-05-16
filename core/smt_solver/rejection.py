@@ -114,6 +114,23 @@ class RejectionKind(str, Enum):
     """Z3 returned ``unknown`` for some other reason (incomplete tactic,
     construct outside the decidable bitvector fragment)."""
 
+    INPUT_TOO_LONG = "input_too_long"
+    """A single condition string exceeded the configured character cap.
+    Pre-parse bound on input size — defends the parser combinator against
+    pathological inputs whose runtime is linear in length but whose total
+    length is unboundedly large (e.g. a 1 MB string of operators).  The
+    cap lives in the encoder (``smt_path_validator._MAX_CONDITION_CHARS``)
+    so it can be tuned per call site if a real-target condition ever
+    legitimately exceeds it."""
+
+    TOO_MANY_CONDITIONS = "too_many_conditions"
+    """The caller passed more conditions to ``check_path_feasibility``
+    than the configured per-call cap.  Pre-parse bound on call shape —
+    real findings have 1-10 conditions; tens of thousands is a signal of
+    malformed upstream extraction or amplification.  The whole call
+    degrades to ``feasible=None``; the rejection appears once in
+    ``unknown_reasons``."""
+
 
 # RejectionKinds that no encoder emits any more but that we've kept in
 # the enum for back-compat with downstream consumers that match on the

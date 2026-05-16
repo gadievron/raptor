@@ -7,8 +7,16 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g. v3.1.0)'
+        description: 'Tag to release (must match v<major>.<minor>.<patch>[-prerelease])'
         required: true
+        type: string
+
+# Don't cancel in-flight releases — two concurrent releases racing on
+# the same artifact upload would corrupt the GitHub Release record.
+# Queue instead, so concurrent dispatches serialize cleanly.
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -16,13 +24,34 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
+      # Validate workflow_dispatch input BEFORE checkout. Catches
+      # operator typos and refuses arbitrary ref strings — pre-fix a
+      # typo'd input flowed straight into checkout's `ref:` field
+      # and silently fetched whatever the operator typed.
+      - name: Validate dispatch tag input
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$INPUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::tag must match v<major>.<minor>.<patch>[-prerelease], got '${INPUT_TAG}'" >&2
+            exit 1
+          fi
+
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6.0.2
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.tag || github.ref }}
+          # Don't leave the GITHUB_TOKEN in .git/config for the rest
+          # of the run. The "Commit version stamp" step below uses
+          # an explicit, request-scoped Authorization header instead
+          # (see its run block).
+          persist-credentials: false
 
       - name: Resolve tag
         id: tag
@@ -40,8 +69,8 @@ jobs:
         env:
           TAG: ${{ steps.tag.outputs.name }}
         run: |
-          if ! echo "${TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "::error::Tag '${TAG}' does not match vX.Y.Z format"
+          if ! echo "${TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+            echo "::error::Tag '${TAG}' does not match v<major>.<minor>.<patch>[-prerelease]"
             exit 1
           fi
           if ! git merge-base --is-ancestor HEAD origin/main 2>/dev/null; then
@@ -149,17 +178,30 @@ jobs:
           grep 'VERSION = ' core/config.py | head -1
           grep "Based on Claude Code" README.md
 
+      # Push the version-stamp commit and re-tag using a request-scoped
+      # Authorization header. Pre-fix this step relied on the embedded
+      # credential left behind by `actions/checkout` (persist-credentials
+      # default true). Now that we set `persist-credentials: false`,
+      # inject the token via `-c http.<base>.extraheader=...` for THIS
+      # one `git push` invocation only — no on-disk persistence.
       - name: Commit version stamp and update tag
         env:
           TAG: ${{ steps.tag.outputs.name }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add raptor-offset core/config.py README.md
           if ! git diff --cached --quiet; then
             git commit -m "release: stamp ${TAG}"
             git tag -a -f "${TAG}" -m "Release ${TAG}"
-            git push --force origin "refs/tags/${TAG}"
+            # Request-scoped Basic auth — base64('x-access-token:${GH_TOKEN}').
+            # GH-recommended pattern when persist-credentials is disabled.
+            AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${AUTH}" \
+              push --force "https://github.com/${REPO}" "refs/tags/${TAG}"
           fi
 
       - name: Build release archives

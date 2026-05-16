@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "juiceshop_semgrep_javascript-lang-security-audit-sqli-express-sequelize-injection_c15229d22e57",
+  "verdict": "false_positive",
+  "fp_category": "framework_mitigation",
+  "rationale": "req.body.email and req.body.password flow into Sequelize bind: [...] (line 16) \u2014 parameterised query. Sequelize binds values before substitution. Pattern matchers see the template-literal SQL and miss that the values come from bind, not interpolation.",
+  "labeler": "handlabel-juice-shop-webgoat",
+  "labeled_at": "2026-05-10"
+}

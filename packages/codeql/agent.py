@@ -26,6 +26,7 @@ from core.json import save_json
 from core.config import RaptorConfig
 from core.logging import get_logger
 from core.run.safe_io import safe_run_mkdir
+from core.run.output import unique_run_suffix as _unique_run_suffix
 from packages.codeql.language_detector import LanguageDetector, LanguageInfo
 from packages.codeql.build_detector import BuildDetector, BuildSystem
 from packages.codeql.database_manager import DatabaseManager, DatabaseResult
@@ -174,9 +175,15 @@ class CodeQLAgent:
             self.out_dir = Path(out_dir)
         else:
             # Collision-prevention via unique_run_suffix — see core/run/output.py.
-            from core.run.output import unique_run_suffix
+            # Pre-fix the import was lazy (inside this branch), so a
+            # missing-symbol failure (renamed function, removed module,
+            # broken stdlib stub) didn't surface until SOMEONE actually
+            # constructed CodeQLAgent without `out_dir` — could be
+            # weeks after the change shipped. Hoisted to module-top
+            # so the ImportError fires at agent.py import time, where
+            # operators expect import-time failures to manifest.
             repo_name = self.repo_path.name
-            self.out_dir = RaptorConfig.BASE_OUT_DIR / f"codeql_{repo_name}_{unique_run_suffix('_')}"
+            self.out_dir = RaptorConfig.BASE_OUT_DIR / f"codeql_{repo_name}_{_unique_run_suffix('_')}"
 
         self.out_dir.parent.mkdir(parents=True, exist_ok=True)
         safe_run_mkdir(self.out_dir)
@@ -487,14 +494,47 @@ class CodeQLAgent:
             )
 
     def _save_report(self, result: CodeQLWorkflowResult):
-        """Save workflow report to JSON."""
+        """Save workflow report to JSON.
+
+        Pre-fix `save_json(..., result.to_dict())` failed entirely if
+        `to_dict()` raised mid-serialization (a finding with a nested
+        dataclass that had a broken `__repr__`, a non-serialisable
+        type leaking past the converter, an LLM-augmented field that
+        ended up holding a Path object instead of a str). The except
+        logged the error and returned — leaving NO report file on
+        disk. Operators reading the run dir saw the missing file and
+        had no breadcrumb pointing at "to_dict raised" vs "the run
+        crashed entirely".
+
+        Two-stage save: try the full to_dict; on failure, fall back
+        to a minimal report carrying just the high-level stats and
+        an explicit `error` field naming the failure. Operators get
+        SOMETHING on disk + a clear "the rich report couldn't be
+        serialised" diagnostic.
+        """
         report_path = self.out_dir / "codeql_report.json"
 
         try:
             save_json(report_path, result.to_dict())
             logger.info(f"✓ Report saved: {report_path}")
+            return
         except Exception as e:
-            logger.error(f"Failed to save report: {e}")
+            logger.error(f"Failed to save full report: {e}")
+        # Fallback: minimal report with stats we know are JSON-safe.
+        try:
+            minimal = {
+                "schema_version": "minimal-fallback",
+                "repo_path": str(getattr(result, "repo_path", "")),
+                "duration_seconds": float(getattr(result, "duration_seconds", 0.0)),
+                "success": bool(getattr(result, "success", False)),
+                "total_findings": int(getattr(result, "total_findings", 0)),
+                "sarif_files": [str(p) for p in getattr(result, "sarif_files", [])],
+                "error": "to_dict() raised mid-serialization; see raptor.log",
+            }
+            save_json(report_path, minimal)
+            logger.info(f"✓ Minimal-fallback report saved: {report_path}")
+        except Exception as e2:
+            logger.error(f"Minimal report also failed: {e2}")
 
     def print_summary(self, result: CodeQLWorkflowResult):
         """Print workflow summary."""
@@ -516,14 +556,27 @@ class CodeQLAgent:
         dataflow_examples = []
 
         if result.sarif_files:
+            from core.sarif.parser import load_sarif as _load_sarif
             for sarif_path in result.sarif_files:
-                summary = self.query_runner.get_sarif_summary(Path(sarif_path))
+                # Load once, share between get_sarif_summary AND
+                # _extract_dataflow_examples. Pre-fix each helper
+                # re-parsed the SARIF independently — multi-MB files
+                # from C++/Java analyses paid the parse cost twice.
+                _sarif_path = Path(sarif_path)
+                _sarif_data = _load_sarif(_sarif_path)
+                summary = self.query_runner.get_sarif_summary(
+                    _sarif_path, sarif_data=_sarif_data,
+                )
                 total_dataflow_paths += summary.get("dataflow_paths", 0)
                 total_dataflow_steps += summary.get("total_dataflow_steps", 0)
 
                 # Collect example dataflow paths for visualization
                 if total_dataflow_paths > 0 and len(dataflow_examples) < 5:
-                    examples = self._extract_dataflow_examples(Path(sarif_path), limit=5 - len(dataflow_examples))
+                    examples = self._extract_dataflow_examples(
+                        _sarif_path,
+                        limit=5 - len(dataflow_examples),
+                        sarif_data=_sarif_data,
+                    )
                     dataflow_examples.extend(examples)
 
         if total_dataflow_paths > 0:
@@ -549,12 +602,27 @@ class CodeQLAgent:
         print(f"\nOutput directory: {self.out_dir}")
         print(f"{'=' * 70}\n")
 
-    def _extract_dataflow_examples(self, sarif_path: Path, limit: int = 5) -> list:
-        """Extract example dataflow paths from SARIF for visualization."""
+    def _extract_dataflow_examples(self, sarif_path: Path, limit: int = 5,
+                                    *, sarif_data: Optional[Dict] = None) -> list:
+        """Extract example dataflow paths from SARIF for visualization.
+
+        Pre-fix this always called `load_sarif(sarif_path)`. The
+        adjacent `get_sarif_summary` (called immediately before in
+        `print_summary`) had ALREADY loaded the same file. For a
+        run with N SARIF files, that doubled the JSON parse work
+        — multi-MB SARIFs from C++/Java analyses paid the parse
+        cost twice per `print_summary` call.
+
+        Accept optional pre-loaded `sarif_data` so the caller can
+        share the parse result across both helpers. Falls back to
+        `load_sarif` when the caller doesn't provide it (preserves
+        the standalone-call API).
+        """
         examples = []
         try:
-            from core.sarif.parser import load_sarif
-            sarif_data = load_sarif(sarif_path)
+            if sarif_data is None:
+                from core.sarif.parser import load_sarif
+                sarif_data = load_sarif(sarif_path)
             if not sarif_data:
                 return examples
 
@@ -591,11 +659,27 @@ class CodeQLAgent:
                     sink_file = sink_loc.get("physicalLocation", {}).get("artifactLocation", {}).get("uri", "")
                     sink_line = sink_loc.get("physicalLocation", {}).get("region", {}).get("startLine", 0)
 
+                    # Pre-fix `Path(source_file).name` on Linux
+                    # treated `\` as a regular char, not a separator.
+                    # A SARIF emitted on Windows can carry URIs like
+                    # `src\foo\bar.c`. `Path(...).name` then returned
+                    # the WHOLE string `"src\foo\bar.c"` instead of
+                    # the basename `"bar.c"` — operator-facing
+                    # examples were unreadably long. SARIF's spec
+                    # says URIs use `/` but real-world emitters from
+                    # MSBuild + some Windows toolchains break this.
+                    # Split on BOTH `/` and `\` to handle either
+                    # convention without depending on the running
+                    # OS's path semantics.
+                    def _basename(p: str) -> str:
+                        if not p:
+                            return ""
+                        return p.replace("\\", "/").rsplit("/", 1)[-1]
                     examples.append({
                         "rule": rule_id.split("/")[-1] if "/" in rule_id else rule_id,
                         "message": message[:60] + "..." if len(message) > 60 else message,
-                        "source": f"{Path(source_file).name}:{source_line}",
-                        "sink": f"{Path(sink_file).name}:{sink_line}",
+                        "source": f"{_basename(source_file)}:{source_line}",
+                        "sink": f"{_basename(sink_file)}:{sink_line}",
                         "steps": len(locations)
                     })
 
@@ -708,23 +792,44 @@ Examples:
         build_commands = {languages[0]: args.build_command}
 
     try:
-        # Initialize agent
+        # Pre-compute out_dir BEFORE constructing the agent so we
+        # can call set_active_run_dir FIRST. Pre-fix the order was:
+        #   1. agent = CodeQLAgent(...)        # init components
+        #   2. set_active_run_dir(agent.out_dir)
+        # Step 1's component constructors (DatabaseManager,
+        # QueryRunner, LanguageDetector, BuildDetector) shell out
+        # to detect codeql binaries, probe the sandbox profile,
+        # walk the repo. Each subprocess / probe can fire sandbox
+        # events (proxy connections, Landlock denials, audit-log
+        # entries). Until set_active_run_dir is called, the
+        # event-router has no destination — events are silently
+        # dropped. Operators reading sandbox-summary.json saw a
+        # mysterious gap covering the constructor window.
+        #
+        # Compute the same `out_dir` the constructor would compute,
+        # call set_active_run_dir, THEN construct the agent
+        # passing the path explicitly so the constructor uses
+        # OUR computed value (no second computation, no path drift).
+        from core.sandbox.summary import set_active_run_dir
+        if args.out:
+            _precomputed_out_dir = Path(args.out)
+        else:
+            _repo_name = Path(args.repo).resolve().name
+            _precomputed_out_dir = (
+                RaptorConfig.BASE_OUT_DIR
+                / f"codeql_{_repo_name}_{_unique_run_suffix('_')}"
+            )
+        _precomputed_out_dir.parent.mkdir(parents=True, exist_ok=True)
+        safe_run_mkdir(_precomputed_out_dir)
+        set_active_run_dir(_precomputed_out_dir)
+
+        # Initialize agent — sandbox events from constructor probes
+        # now route to _precomputed_out_dir.
         agent = CodeQLAgent(
             repo_path=Path(args.repo),
-            out_dir=Path(args.out) if args.out else None,
+            out_dir=_precomputed_out_dir,
             codeql_cli=args.codeql_cli
         )
-
-        # Make record_denial calls (proxy events, generic Landlock
-        # denials) write to THIS subprocess's out_dir. Without this,
-        # active_run_dir is None → record_denial is no-op → events
-        # are silently dropped. The lifecycle hook in raptor.py /
-        # raptor_codeql.py wires this for top-level invocations;
-        # for the agentic flow, codeql/agent.py runs as a subprocess
-        # and must wire it itself. summarize_and_write at end-of-
-        # main converts the JSONL to sandbox-summary.json.
-        from core.sandbox.summary import set_active_run_dir
-        set_active_run_dir(agent.out_dir)
 
         # Run analysis
         result = agent.run_autonomous_analysis(

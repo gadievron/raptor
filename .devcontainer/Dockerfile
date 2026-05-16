@@ -6,9 +6,12 @@
 
 FROM mcr.microsoft.com/devcontainers/python:1-3.12-bookworm
 
-# The base image ships a stale yarn apt source without its GPG key,
-# which breaks apt-get update (NO_PUBKEY 62D54FD4003F6525).
-RUN rm -f /etc/apt/sources.list.d/yarn.list
+# The base image's `node` devcontainer-feature install path added a stale
+# yarn apt source (NO_PUBKEY 62D54FD4003F6525, breaks apt-get update) AND
+# the yarn 1.x package itself (/usr/bin/yarn). Remove both so the later
+# `npm install -g yarn` step doesn't collide on aarch64 builds.
+RUN rm -f /etc/apt/sources.list.d/yarn.list \
+    && (apt-get -y remove yarn || echo "yarn not installed - skipping removal")
 
 # ============================================================================
 # SYSTEM DEPENDENCIES
@@ -141,7 +144,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource_setup.sh
     && npm install -g @anthropic-ai/claude-code@2.1.119
 
 # ============================================================================
-# JS PACKAGE MANAGERS (yarn replaced apt source removed above)
+# JS PACKAGE MANAGERS (npm-managed yarn — apt source + package removed above)
 # ============================================================================
 
 RUN npm install -g yarn pnpm
@@ -155,7 +158,7 @@ ENV GIT_TERMINAL_PROMPT=0
 ENV PYTHONUNBUFFERED=1
 # Ensure python can import repo packages when container runs
 # Adds repo root and `packages/` so `import core`, `import binary_analysis`, etc. work
-ENV PYTHONPATH="/workspaces/raptor:/workspaces/raptor/packages:${PYTHONPATH}"
+ENV PYTHONPATH="/workspaces/raptor:/workspaces/raptor/packages"
 
 # ============================================================================
 # WORKSPACE

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "finding_id": "juiceshop_semgrep_javascript-angular-security-audit-angular-bypass-sanitizer_243b1fd97788",
+  "producer": "semgrep",
+  "rule_id": "javascript.angular.security.audit.angular-bypass-sanitizer",
+  "message": "user input passed to bypassSecurityTrustResourceUrl",
+  "source": {
+    "file_path": "out/dataflow-corpus-fixtures/juice-shop/data/static/codefixes/localXssChallenge_1.ts",
+    "line": 2,
+    "column": 0,
+    "snippet": "let queryParam: string = this.route.snapshot.queryParams.q",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "out/dataflow-corpus-fixtures/juice-shop/data/static/codefixes/localXssChallenge_1.ts",
+    "line": 6,
+    "column": 0,
+    "snippet": "this.searchValue = this.sanitizer.bypassSecurityTrustResourceUrl(queryParam)",
+    "label": "sink"
+  },
+  "intermediate_steps": [
+    {
+      "file_path": "out/dataflow-corpus-fixtures/juice-shop/data/static/codefixes/localXssChallenge_1.ts",
+      "line": 4,
+      "column": 0,
+      "snippet": "queryParam = queryParam.trim()",
+      "label": "step"
+    },
+    {
+      "file_path": "out/dataflow-corpus-fixtures/juice-shop/data/static/codefixes/localXssChallenge_1.ts",
+      "line": 5,
+      "column": 0,
+      "snippet": "this.dataSource.filter = queryParam.toLowerCase()",
+      "label": "step"
+    }
+  ],
+  "raw": {}
+}

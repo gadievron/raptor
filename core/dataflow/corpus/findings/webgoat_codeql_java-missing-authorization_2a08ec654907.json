@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "finding_id": "webgoat_codeql_java-missing-authorization_2a08ec654907",
+  "producer": "codeql",
+  "rule_id": "java/missing-authorization",
+  "message": "userId path variable used to view profile",
+  "source": {
+    "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/idor/IDORViewOtherProfile.java",
+    "line": 43,
+    "column": 0,
+    "snippet": "public AttackResult completed(@PathVariable(\"userId\") String userId) {",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/idor/IDORViewOtherProfile.java",
+    "line": 51,
+    "column": 0,
+    "snippet": "UserProfile requestedProfile = new UserProfile(userId);",
+    "label": "sink"
+  },
+  "intermediate_steps": [
+    {
+      "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/idor/IDORViewOtherProfile.java",
+      "line": 49,
+      "column": 0,
+      "snippet": "if (userId != null && !userId.equals(authUserId)) {",
+      "label": "step"
+    }
+  ],
+  "raw": {}
+}

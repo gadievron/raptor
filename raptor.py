@@ -18,6 +18,7 @@ Available Modes:
     web         - Web application security testing
     agentic     - Full autonomous workflow
     codeql      - CodeQL-only analysis
+    doctor      - Status report for local setup (no claude needed)
     help        - Show detailed help for a specific mode
 
 Examples:
@@ -339,8 +340,20 @@ def _run_script(script_path: Path, args: list) -> int:
             pass
         return 130
     except Exception as e:
-        print(f"\n✗ Error running {script_path.name}: {e}")
-        return 1
+        # Pre-fix the blanket `return 1` collapsed every internal
+        # exception (FileNotFoundError, ValueError, RuntimeError,
+        # OSError, etc.) into the same exit code as a child process
+        # that legitimately exited 1. Operators reading the rc had
+        # no signal whether the child had failed or whether the
+        # launcher itself had crashed before/after spawning.
+        #
+        # Distinguish via exit code 2 (launcher-internal failure)
+        # from rc=1 (child returned 1). Print the exception CLASS
+        # alongside the message so logs show the failure shape
+        # without needing a traceback.
+        print(f"\n✗ Error running {script_path.name}: "
+              f"{type(e).__name__}: {e}")
+        return 2
 
 
 def mode_scan(args: list) -> int:
@@ -424,13 +437,24 @@ def mode_llm_analysis(args: list) -> int:
     """Run LLM-powered vulnerability analysis on existing SARIF files."""
     script_root = Path(__file__).parent
     llm_script = script_root / "packages/llm_analysis/agent.py"
-    
+
     if not llm_script.exists():
         print(f"✗ LLM analysis script not found: {llm_script}")
         return 1
-    
+
     print("\n[*] Running LLM-powered vulnerability analysis...\n")
     return _run_script(llm_script, args)
+
+
+def mode_doctor(args: list) -> int:
+    """Run the on-demand status report.
+
+    Wraps :mod:`core.startup.doctor` — see its docstring for the
+    contract (no logo, failures-first, non-zero exit on real
+    failure). All flags pass through to ``doctor.main``.
+    """
+    from core.startup.doctor import main as doctor_main
+    return doctor_main(args)
 
 
 def show_mode_help(mode: str) -> None:
@@ -490,6 +514,7 @@ Available Modes:
   agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
   codeql      - CodeQL-only analysis
   analyze     - LLM-powered vulnerability analysis (requires SARIF input)
+  doctor      - Status report for local setup (no claude needed)
 
 Examples:
   # Full autonomous workflow
@@ -585,6 +610,7 @@ def main():
         'agentic': mode_agentic,
         'codeql': mode_codeql,
         'analyze': mode_llm_analysis,
+        'doctor': mode_doctor,
     }
     
     if mode not in mode_handlers:

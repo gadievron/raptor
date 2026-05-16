@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "webgoat_codeql_java-path-injection_d351ea5e0cab",
+  "producer": "codeql",
+  "rule_id": "java/path-injection",
+  "message": "MultipartFile filename used as profile filename",
+  "source": {
+    "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/pathtraversal/ProfileUploadRemoveUserInput.java",
+    "line": 39,
+    "column": 0,
+    "snippet": "@RequestParam(\"uploadedFileRemoveUserInput\") MultipartFile file,",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/pathtraversal/ProfileUploadRemoveUserInput.java",
+    "line": 41,
+    "column": 0,
+    "snippet": "return super.execute(file, file.getOriginalFilename(), username);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "webgoat_codeql_java-sql-injection_2f489964e20a",
+  "verdict": "true_positive",
+  "fp_category": null,
+  "rationale": "@RequestParam userId (line 31) is checked only for whitespace (line 32 \u2014 `userId.contains(\" \")`) and then handed to lesson6a.injectableQuery (line 35), a known-vulnerable executeQuery sink. The lesson is explicitly designed to show that input validation alone is insufficient \u2014 bypasses don't need spaces.",
+  "labeler": "handlabel-juice-shop-webgoat",
+  "labeled_at": "2026-05-10"
+}

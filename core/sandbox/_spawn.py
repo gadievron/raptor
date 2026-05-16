@@ -59,6 +59,7 @@ from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
 from . import state
+from ._fork_safe_warn import warn_post_fork
 from .landlock import _make_landlock_preexec
 from .mount_ns import setup_mount_ns
 from .seccomp import _make_seccomp_preexec
@@ -154,7 +155,12 @@ def _run_newuidmap(child_pid: int, binary: str, mapping_lines: Sequence[str]) ->
 
 def _set_rlimits(limits: dict) -> None:
     """Apply rlimits in the child. Mirrors preexec.py's _set_limits but
-    designed to run before mount ops / Landlock / seccomp."""
+    designed to run before mount ops / Landlock / seccomp.
+
+    Each rlimit applies independently — a single failure no longer
+    aborts the rest. Failures surface via fork-safe stderr warning so
+    operators can spot when a documented cap silently became a no-op.
+    """
     import resource
     from .preexec import _DEFAULT_LIMITS
     mem = limits.get("memory_mb", _DEFAULT_LIMITS["memory_mb"])
@@ -162,16 +168,29 @@ def _set_rlimits(limits: dict) -> None:
     cpu = limits.get("cpu_seconds", _DEFAULT_LIMITS["cpu_seconds"])
     mem_bytes = mem * 1024 * 1024
     file_bytes = file_mb * 1024 * 1024
-    try:
-        if mem > 0:
+    if mem > 0:
+        try:
             resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
-        if file_mb > 0:
+        except (ValueError, OSError):
+            warn_post_fork(b"RAPTOR: _set_rlimits RLIMIT_AS setrlimit failed -- memory cap not applied\n")
+    if file_mb > 0:
+        try:
             resource.setrlimit(resource.RLIMIT_FSIZE, (file_bytes, file_bytes))
-        if cpu > 0:
+        except (ValueError, OSError):
+            warn_post_fork(b"RAPTOR: _set_rlimits RLIMIT_FSIZE setrlimit failed -- file-size cap not applied\n")
+    if cpu > 0:
+        try:
             resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
+        except (ValueError, OSError):
+            warn_post_fork(b"RAPTOR: _set_rlimits RLIMIT_CPU setrlimit failed -- cpu cap not applied\n")
+    # RLIMIT_CORE is unconditional — coredumps are always suppressed
+    # (no operator-tunable equivalent of memory_mb/file_mb/cpu_seconds).
+    # No surrounding `if … > 0:` is needed; the structure differs from
+    # the three siblings above only because the input doesn't.
+    try:
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     except (ValueError, OSError):
-        pass
+        warn_post_fork(b"RAPTOR: _set_rlimits RLIMIT_CORE setrlimit failed -- coredump suppression relies on kernel core_pattern\n")
 
 
 def _kill_and_reap(pid: int) -> None:
@@ -408,11 +427,24 @@ def run_sandboxed(
         # operator visibility.
         from .ptrace_probe import check_ptrace_available
         from .seccomp import check_seccomp_available
+        from . import summary as _summary_mod
         if not seccomp_profile:
             logger.debug(
                 "audit_mode=True but no seccomp filter active; "
                 "skipping tracer (b2/b3 audit are no-ops without "
                 "seccomp). Network audit (b1) is configured separately."
+            )
+            # F063a: surface the silent degrade to operators. Without
+            # this marker, the empty run dir is indistinguishable
+            # from "audit ran, found nothing."
+            _summary_mod.record_audit_degraded(
+                Path(audit_run_dir),
+                reason="audit_mode=True but no seccomp filter is active",
+                instructions=(
+                    "pass seccomp_profile= (e.g. \"full\") so b2/b3 "
+                    "audit can install SCMP_ACT_TRACE; or run without "
+                    "audit_mode if seccomp is intentionally disabled"
+                ),
             )
         elif not check_seccomp_available():
             # libseccomp missing — tracer would attach but never
@@ -421,6 +453,19 @@ def run_sandboxed(
             logger.debug(
                 "audit_mode=True but libseccomp unavailable; "
                 "skipping tracer (no filter would be installed)."
+            )
+            # F063b: same operator-visibility gap as F063a; the
+            # tracer is correctly skipped, but the run dir contains
+            # nothing to signal that fact.
+            _summary_mod.record_audit_degraded(
+                Path(audit_run_dir),
+                reason="audit_mode=True but libseccomp is unavailable on this host",
+                instructions=(
+                    "install libseccomp (Debian/Ubuntu: apt install "
+                    "libseccomp2; Alpine: apk add libseccomp), or run "
+                    "without audit_mode on hosts where libseccomp is "
+                    "intentionally absent"
+                ),
             )
         elif check_ptrace_available():
             _audit_engaged = True
@@ -584,7 +629,20 @@ def run_sandboxed(
             # Probe already logged the once-per-process warning with
             # workaround pointers; nothing more to say here. Workflow
             # continues, just without b2/b3 audit signal.
-            pass
+            # F063c: per-run marker so operators inspecting the
+            # specific run dir see "audit didn't engage" rather than
+            # an empty (and ambiguous) audit output. Distinct from the
+            # process-wide warn-once; both are useful.
+            _summary_mod.record_audit_degraded(
+                Path(audit_run_dir),
+                reason="audit_mode=True but ptrace is blocked on this host",
+                instructions=(
+                    "lower Yama scope (sysctl kernel.yama.ptrace_scope=1) "
+                    "or run with CAP_SYS_PTRACE; on container hosts ensure "
+                    "AppArmor / Yama policy permits PTRACE_SEIZE; or run "
+                    "without audit_mode"
+                ),
+            )
 
     # Track every fd we hold in the parent so a failure ANYWHERE from
     # pipe()/fork() through the newuidmap handshake closes the lot.
@@ -894,7 +952,7 @@ def run_sandboxed(
                         resource.setrlimit(resource.RLIMIT_NPROC,
                                            (nproc_limit, nproc_limit))
                     except (ValueError, OSError):
-                        pass
+                        warn_post_fork(b"RAPTOR: _spawn grandchild RLIMIT_NPROC setrlimit failed -- fork-bomb bound not applied\n")
                 try:
                     os.execvpe(cmd[0], list(cmd), exec_env)
                 except FileNotFoundError:

@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Iterator, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from core.http import HttpClient
 
@@ -60,6 +60,33 @@ _MANIFEST_ACCEPT = ", ".join([
     # Docker Manifest List v2 (multi-arch — schema 2's index)
     "application/vnd.docker.distribution.manifest.list.v2+json",
 ])
+
+
+def _parse_link_next(link_header: Optional[str]) -> Optional[str]:
+    """Pull the ``<url>`` of the ``rel="next"`` entry out of an
+    RFC-5988 ``Link:`` header. Returns None if no next link, or
+    the header is absent / malformed.
+
+    The OCI Distribution Spec lets registries paginate
+    ``/tags/list`` via this header; URLs may be relative (path
+    only) or absolute. We strip leading whitespace + the angle
+    brackets but otherwise pass the value through verbatim — the
+    HTTP client below treats both shapes.
+    """
+    if not link_header:
+        return None
+    # Header may carry multiple comma-separated link entries.
+    # Split on commas that aren't inside angle-brackets — RFC 5988
+    # lets the URL portion contain commas. Use a lenient parser:
+    # for each ``<...>; rel=next`` entry, return the URL.
+    import re
+    for part in link_header.split(","):
+        m = re.match(
+            r"\s*<([^>]+)>\s*;\s*rel\s*=\s*\"?next\"?", part,
+        )
+        if m:
+            return m.group(1).strip()
+    return None
 
 
 @dataclass
@@ -166,6 +193,75 @@ class OciRegistryClient:
             content_type=content_type.split(";", 1)[0].strip(),
             digest=digest,
         )
+
+    def list_tags(
+        self, ref: ImageRef, *, per_page: int = 100,
+        max_pages: int = 50,
+    ) -> List[str]:
+        """Return the full tag list for ``ref.repository`` on its
+        registry, following ``Link`` headers across pages.
+
+        Hits ``GET /v2/<repo>/tags/list?n=<per_page>``. The OCI
+        Distribution Spec ``/tags/list`` endpoint returns
+        ``{"name": "<repo>", "tags": [...]}`` and signals
+        pagination via an RFC-5988 ``Link: <url>; rel="next"``
+        response header.
+
+        Docker Hub's ordering quirk drives the need for pagination:
+        tags come back in repository-internal index order (often
+        alphabetic), so for a repo like ``ollama/ollama`` the
+        first 100 tags are the ``0.1.x`` line — never reaching the
+        actual ``0.21.x`` latest. Without pagination, ``latest_tag``
+        recommends a downgrade.
+
+        ``max_pages`` bounds the walk (default 50 — 5000 tags at
+        the default page size). Repos with more tags than that are
+        rare; the cap prevents an unbounded walk from a
+        misconfigured Link chain.
+
+        Raises :class:`RegistryError` on non-200 or malformed
+        response.
+        """
+        all_tags: List[str] = []
+        next_url: Optional[str] = (
+            f"/v2/{ref.repository}/tags/list?n={per_page}"
+        )
+        for _ in range(max_pages):
+            if next_url is None:
+                break
+            resp = self._authed_request("GET", ref.registry, next_url)
+            if resp.status_code != 200:
+                raise RegistryError(
+                    resp.status_code,
+                    f"tags/list failed for {ref.repository} on "
+                    f"{ref.registry}: {resp.text[:200]}",
+                )
+            try:
+                data = json.loads(resp.content)
+            except (ValueError, TypeError) as e:
+                raise RegistryError(
+                    resp.status_code,
+                    f"tags/list JSON parse failed for "
+                    f"{ref.repository}: {e}",
+                )
+            tags = data.get("tags") if isinstance(data, dict) else None
+            if not isinstance(tags, list):
+                raise RegistryError(
+                    resp.status_code,
+                    f"tags/list response missing 'tags' array "
+                    f"for {ref.repository}",
+                )
+            # Filter to non-empty strings — registries occasionally
+            # include nulls for in-progress pushes.
+            all_tags.extend(t for t in tags if isinstance(t, str) and t)
+
+            # Follow ``Link: <url>; rel="next"`` if present. The
+            # URL is relative to the registry root, but some
+            # registries return absolute URLs — normalise.
+            next_url = _parse_link_next(
+                resp.headers.get("Link") or resp.headers.get("link"),
+            )
+        return all_tags
 
     def stream_blob(
         self, ref: ImageRef, digest: str,
