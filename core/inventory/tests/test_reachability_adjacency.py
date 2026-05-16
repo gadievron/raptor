@@ -43,6 +43,7 @@ from core.inventory.reachability import (
     call_lines_of,
     callees_of,
     callers_of,
+    is_framework_callable,
 )
 
 
@@ -162,11 +163,11 @@ def test_internal_callers_via_local_bare_call():
     assert r.definitive == (InternalFunction("src/a.py", "main", 3),)
 
 
-def test_internal_callers_method_match_overinclusive():
-    """``self.foo()`` is over-inclusive: any project function with
-    body containing an unresolved-head ``...foo()`` is listed under
-    ``method_match_overinclusive`` for every project-internal target
-    named ``foo``."""
+def test_internal_callers_method_match_class_aware_narrowing():
+    """``self.foo()`` inside ``class A`` cannot resolve to
+    ``class B.foo`` when A and B are unrelated. The class-aware
+    narrowing in ``callers_of`` drops the cross-class entry; same-
+    class entries survive."""
     inv = _inv(
         _file("src/a.py",
             "class A:\n"
@@ -186,13 +187,96 @@ def test_internal_callers_method_match_overinclusive():
     r_a = callers_of(inv, target_a)
     r_b = callers_of(inv, target_b)
     main_fn = InternalFunction("src/a.py", "main", 4)
-    # `main` shows up over-inclusively for both targets.
+    # ``main`` survives narrowing for A.foo — same class.
     assert main_fn in r_a.method_match_overinclusive
-    assert main_fn in r_b.method_match_overinclusive
-    # And NOT in either's definitive — we don't know which `foo`
-    # `self.foo()` resolved to.
+    # And is correctly dropped from B.foo — different hierarchy.
+    assert main_fn not in r_b.method_match_overinclusive
+    # Definitive is empty for both: the substrate doesn't statically
+    # resolve self.foo() to a definitive callee; it only narrows
+    # the over-inclusive candidate pool.
     assert main_fn not in r_a.definitive
     assert main_fn not in r_b.definitive
+
+
+def test_internal_callers_method_match_inheritance_keeps_parent():
+    """When ``class B(A)`` and ``A.foo`` exists, ``self.foo()``
+    inside ``class B`` may resolve to the inherited ``A.foo`` —
+    narrowing must keep the entry on ``A.foo``'s caller list."""
+    inv = _inv(
+        _file("src/a.py",
+            "class A:\n"
+            "    def foo(self):\n"
+            "        pass\n"
+            "class B(A):\n"
+            "    def main(self):\n"
+            "        self.foo()\n"
+        ),
+    )
+    a_foo = InternalFunction("src/a.py", "foo", 2)
+    main_fn = InternalFunction("src/a.py", "main", 5)
+    r = callers_of(inv, a_foo)
+    assert main_fn in r.method_match_overinclusive
+
+
+def test_internal_callers_method_match_cross_file_inheritance_stays_inclusive():
+    """When ``class B(SomeImported)`` and the base is imported from
+    another file, the resolver can't compute the full ancestor
+    chain. Stays over-inclusive (prefers reporting an extra caller
+    over dropping a real one)."""
+    inv = _inv(
+        _file("src/base.py",
+            "class Base:\n"
+            "    def foo(self):\n"
+            "        pass\n"
+        ),
+        _file("src/sub.py",
+            "from .base import Base\n"
+            "class Sub(Base):\n"
+            "    def main(self):\n"
+            "        self.foo()\n"
+        ),
+        # An unrelated class with its own ``foo`` — under strict
+        # narrowing this would be dropped, but because Sub's base
+        # is unresolvable (imported), we stay over-inclusive.
+        _file("src/other.py",
+            "class Other:\n"
+            "    def foo(self):\n"
+            "        pass\n"
+        ),
+    )
+    other_foo = InternalFunction("src/other.py", "foo", 2)
+    main_fn = InternalFunction("src/sub.py", "main", 3)
+    r = callers_of(inv, other_foo)
+    # Cross-file inheritance means we can't safely narrow.
+    # main_fn IS kept (over-inclusive), even though in reality the
+    # call resolves to Base.foo.
+    assert main_fn in r.method_match_overinclusive
+
+
+def test_internal_callers_method_match_object_base_narrows():
+    """``class A(object)`` should narrow the same as ``class A`` —
+    ``object`` is a safe builtin base that adds nothing to the
+    dispatch set."""
+    inv = _inv(
+        _file("src/a.py",
+            "class A(object):\n"
+            "    def foo(self):\n"
+            "        pass\n"
+            "    def main(self):\n"
+            "        self.foo()\n"
+        ),
+        _file("src/b.py",
+            "class B:\n"
+            "    def foo(self):\n"
+            "        pass\n"
+        ),
+    )
+    b_foo = InternalFunction("src/b.py", "foo", 2)
+    main_fn = InternalFunction("src/a.py", "main", 4)
+    r = callers_of(inv, b_foo)
+    # Same as bare ``class A`` — main_fn correctly excluded from
+    # B.foo's callers.
+    assert main_fn not in r.method_match_overinclusive
 
 
 def test_internal_callers_method_match_skipped_for_external_target():
@@ -928,3 +1012,143 @@ def test_call_lines_dedups_same_line():
     _record_call_line(idx, fn, callee, 7)
     _record_call_line(idx, fn, callee, 3)
     assert idx.call_lines[(fn, callee)] == (3, 5, 7)
+
+
+# ---------------------------------------------------------------------------
+# Framework-callable detection (decorator-dispatched entry points)
+# ---------------------------------------------------------------------------
+
+
+def test_inventory_with_none_entries_does_not_crash():
+    """Malformed inventory with ``None`` in the files list shouldn't
+    crash — every loop must guard with ``isinstance(file_record, dict)``."""
+    inv = {"files": [None, {"path": "a.py", "items": []}]}
+    # Any query against any target should return cleanly.
+    target = InternalFunction("a.py", "f", 1)
+    r = callers_of(inv, target)
+    assert r.definitive == ()
+    assert is_framework_callable(inv, target) is False
+
+
+def test_framework_callable_flask_route():
+    inv = _inv(_file("src/api.py",
+        "@app.route('/users')\n"
+        "def list_users():\n"
+        "    return []\n"
+    ))
+    target = InternalFunction("src/api.py", "list_users", 2)
+    assert is_framework_callable(inv, target) is True
+
+
+def test_framework_callable_click_command():
+    inv = _inv(_file("src/cli.py",
+        "@cli.command()\n"
+        "def deploy():\n"
+        "    pass\n"
+    ))
+    target = InternalFunction("src/cli.py", "deploy", 2)
+    assert is_framework_callable(inv, target) is True
+
+
+def test_framework_callable_pytest_fixture():
+    inv = _inv(_file("src/conftest.py",
+        "@pytest.fixture\n"
+        "def db():\n"
+        "    yield None\n"
+    ))
+    target = InternalFunction("src/conftest.py", "db", 2)
+    # ``conftest.py`` is a test path — exclude_test_files defaults
+    # to True but is_framework_callable preserves the flag through
+    # to _get_or_build_index. The framework_callable set is built
+    # regardless of test classification (it doesn't filter); the
+    # consumer is asking "did this carry a registration decorator?"
+    # and the answer is yes.
+    assert is_framework_callable(inv, target, exclude_test_files=False) is True
+
+
+def test_framework_callable_fastapi_router_get():
+    inv = _inv(_file("src/routes.py",
+        "@router.get('/items')\n"
+        "def list_items():\n"
+        "    return []\n"
+    ))
+    target = InternalFunction("src/routes.py", "list_items", 2)
+    assert is_framework_callable(inv, target) is True
+
+
+def test_framework_callable_celery_task():
+    inv = _inv(_file("src/tasks.py",
+        "@app.task\n"
+        "def send_email(addr):\n"
+        "    pass\n"
+    ))
+    target = InternalFunction("src/tasks.py", "send_email", 2)
+    assert is_framework_callable(inv, target) is True
+
+
+def test_passthrough_decorator_not_framework_callable():
+    """``@functools.cache`` is a pass-through — wraps the function
+    but doesn't register it with a dispatcher. Should NOT be flagged."""
+    inv = _inv(_file("src/a.py",
+        "@functools.cache\n"
+        "def fib(n):\n"
+        "    return n\n"
+    ))
+    target = InternalFunction("src/a.py", "fib", 2)
+    assert is_framework_callable(inv, target) is False
+
+
+def test_bare_decorator_not_framework_callable():
+    """``@property``, ``@staticmethod``, ``@classmethod`` are bare
+    decorators with chain length 1. Never flagged."""
+    inv = _inv(_file("src/a.py",
+        "class A:\n"
+        "    @property\n"
+        "    def name(self):\n"
+        "        return 'x'\n"
+    ))
+    target = InternalFunction("src/a.py", "name", 3)
+    assert is_framework_callable(inv, target) is False
+
+
+def test_undecorated_function_not_framework_callable():
+    inv = _inv(_file("src/a.py",
+        "def helper():\n"
+        "    return 1\n"
+    ))
+    target = InternalFunction("src/a.py", "helper", 1)
+    assert is_framework_callable(inv, target) is False
+
+
+def test_framework_callable_class_method():
+    """``@router.get`` on a class method also fires."""
+    inv = _inv(_file("src/api.py",
+        "class API:\n"
+        "    @router.get('/items')\n"
+        "    def list_items(self):\n"
+        "        return []\n"
+    ))
+    target = InternalFunction("src/api.py", "list_items", 3)
+    assert is_framework_callable(inv, target) is True
+
+
+def test_decorator_call_not_attributed_to_decorated_fn():
+    """The pre-#7 extractor mis-attributed the call inside
+    ``@app.route('/x')`` to the decorated function. After the fix
+    the call site is attributed to the enclosing scope (module-
+    level) — caller=None. Regression check."""
+    from core.inventory.call_graph import extract_call_graph_python
+    src = (
+        "@app.route('/users')\n"
+        "def list_users():\n"
+        "    pass\n"
+    )
+    g = extract_call_graph_python(src)
+    # The decorator expression IS a call: ``app.route('/users')``.
+    deco_call = next(
+        (c for c in g.calls if c.chain == ["app", "route"]), None,
+    )
+    assert deco_call is not None
+    # Must NOT be attributed to ``list_users`` (which would falsely
+    # imply ``list_users`` calls ``app.route``).
+    assert deco_call.caller is None

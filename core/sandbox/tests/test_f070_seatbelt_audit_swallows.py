@@ -48,8 +48,6 @@ import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from core.sandbox import seatbelt_audit
 
 
