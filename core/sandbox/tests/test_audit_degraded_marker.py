@@ -18,7 +18,9 @@ F063 tests are Linux-only (the silent-degrade paths only run inside the
 (seatbelt log streamer only attaches there).
 """
 
+import ast
 import json
+import re
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -34,6 +36,63 @@ macos_only = pytest.mark.skipif(
     sys.platform != "darwin",
     reason="F064 seatbelt log streamer only runs on macOS",
 )
+
+
+_SANDBOX_DIR = Path(__file__).resolve().parent.parent
+_SPAWN_PATH = _SANDBOX_DIR / "_spawn.py"
+_MACOS_SPAWN_PATH = _SANDBOX_DIR / "_macos_spawn.py"
+
+
+def _extract_marker_calls(source_path: Path) -> dict[str, tuple[str, str]]:
+    """Find every ``record_audit_degraded(...)`` call in ``source_path``.
+
+    Returns a dict mapping the F063x / F064 anchor (taken from a
+    comment on a line preceding the call) to a ``(reason,
+    instructions)`` tuple of the kwarg expressions, normalised via
+    ``ast.unparse`` so f-strings, multiline-concatenated literals and
+    plain strings all compare alike. Lets the keyword tests below
+    operate on actual production source — wording rewrites that
+    preserve the keyword still pass, but a silent removal or a drift
+    that strips the keyword fails loudly.
+    """
+    src = source_path.read_text()
+    src_lines = src.splitlines()
+    tree = ast.parse(src)
+    out: dict[str, tuple[str, str]] = {}
+
+    def _is_marker_call(func: ast.AST) -> bool:
+        if isinstance(func, ast.Name):
+            return func.id == "record_audit_degraded"
+        if isinstance(func, ast.Attribute):
+            return func.attr == "record_audit_degraded"
+        return False
+
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and _is_marker_call(node.func)):
+            continue
+        # Walk back up to 12 source lines looking for an F063a / F063b /
+        # F063c / F064 anchor comment. 12 covers the longest preceding
+        # block-comment in the production files.
+        anchor = None
+        for back in range(1, 13):
+            idx = node.lineno - 1 - back
+            if idx < 0:
+                break
+            m = re.search(r"\b(F063[abc]|F064)\b", src_lines[idx])
+            if m:
+                anchor = m.group(1)
+                break
+        if anchor is None:
+            continue
+        reason = instructions = None
+        for kw in node.keywords:
+            if kw.arg == "reason":
+                reason = ast.unparse(kw.value)
+            elif kw.arg == "instructions":
+                instructions = ast.unparse(kw.value)
+        if reason is not None and instructions is not None:
+            out[anchor] = (reason, instructions)
+    return out
 
 
 def _read_marker(audit_run_dir: Path) -> dict:
@@ -147,41 +206,97 @@ def test_record_audit_degraded_is_idempotent(tmp_path):
     assert "first call" in second
 
 
-def test_spawn_audit_mode_block_wires_three_marker_calls():
-    """Static guard against silent removal of any F063 marker call.
+def test_spawn_audit_block_wires_marker_per_site():
+    """Static guard against silent removal OR text drift of any F063
+    marker call in ``core/sandbox/_spawn.py``.
 
-    The above tests verify each marker's reason+instructions text, but
-    they call ``record_audit_degraded`` directly and would still pass if
-    a future refactor dropped the production calls. This test reads
-    ``_spawn.py`` and asserts that the audit_mode setup block contains
-    exactly three ``record_audit_degraded(`` invocations — one per F063
-    site. Lesson learned from W36.I C-2 (tautological mount_ns test).
+    Replaces an earlier ``== 3`` count assertion (brittle to legitimate
+    additions of an F063d site) and the implicit reliance on the per-
+    site Linux tests above to catch text drift (those call
+    ``record_audit_degraded`` directly with text hardcoded in the test
+    file, so a future maintainer rewording the production reason but
+    forgetting to update the test copy would silently regress).
+
+    New shape: AST-extract the reason/instructions strings from the
+    production source per-anchor, then assert each contains its
+    expected operator-facing keyword. Tolerates wording rewrites that
+    preserve the keyword; catches silent removal of any anchor; catches
+    text drift that strips the keyword; tolerates future F063d
+    additions (no ``== N`` count).
     """
-    src = (Path(__file__).resolve().parent.parent / "_spawn.py").read_text()
-    # The block stretches from the audit_mode pre-flight through the
-    # close of the ptrace-blocked else branch. Use the audit_mode
-    # comment as the anchor; the block ends before "# Track every fd".
-    block_start = src.index("Audit-mode pre-flight: probe ptrace availability")
-    block_end = src.index("Track every fd we hold in the parent")
-    audit_block = src[block_start:block_end]
-    call_count = audit_block.count("record_audit_degraded(")
-    assert call_count == 3, (
-        f"core/sandbox/_spawn.py audit_mode block should wire exactly "
-        f"three record_audit_degraded() calls (F063a no-seccomp, F063b "
-        f"libseccomp-unavailable, F063c ptrace-blocked); found {call_count}"
+    calls = _extract_marker_calls(_SPAWN_PATH)
+
+    for anchor in ("F063a", "F063b", "F063c"):
+        assert anchor in calls, (
+            f"_spawn.py audit_mode block must contain a "
+            f"record_audit_degraded() call near a `# {anchor}:` "
+            f"comment; the silent-degrade signal for that site was "
+            f"removed or its anchor comment was renamed away from "
+            f"`{anchor}`"
+        )
+
+    f063a_reason, f063a_instr = calls["F063a"]
+    assert "seccomp" in f063a_reason.lower(), (
+        f"F063a reason must reference seccomp (no-filter degrade); "
+        f"production text drifted to {f063a_reason!r}"
+    )
+    assert "seccomp_profile" in f063a_instr, (
+        f"F063a instructions must point at seccomp_profile= "
+        f"remediation; got {f063a_instr!r}"
+    )
+
+    f063b_reason, f063b_instr = calls["F063b"]
+    assert "libseccomp" in f063b_reason.lower(), (
+        f"F063b reason must reference libseccomp; got {f063b_reason!r}"
+    )
+    assert "libseccomp" in f063b_instr.lower(), (
+        f"F063b instructions must reference libseccomp install "
+        f"remediation; got {f063b_instr!r}"
+    )
+
+    f063c_reason, f063c_instr = calls["F063c"]
+    assert "ptrace" in f063c_reason.lower(), (
+        f"F063c reason must reference ptrace; got {f063c_reason!r}"
+    )
+    assert any(
+        kw in f063c_instr.lower()
+        for kw in ("yama", "ptrace_scope", "cap_sys_ptrace")
+    ), (
+        f"F063c instructions must reference at least one ptrace "
+        f"remediation surface (yama / ptrace_scope / CAP_SYS_PTRACE); "
+        f"got {f063c_instr!r}"
     )
 
 
-def test_macos_spawn_streamer_except_wires_marker_call():
-    """Static guard against silent removal of the F064 marker call."""
-    src = (Path(__file__).resolve().parent.parent / "_macos_spawn.py").read_text()
-    # The streamer-start try/except block is short; isolate around it.
-    streamer_start = src.index("start_log_streamer")
-    block = src[streamer_start:streamer_start + 1500]
-    assert "record_audit_degraded(" in block, (
-        "core/sandbox/_macos_spawn.py streamer-exception handler should "
-        "call record_audit_degraded() so operators see audit degrade in "
-        "the run dir; the call was missing or moved"
+def test_macos_spawn_streamer_marker_call_has_expected_keywords():
+    """Static guard against silent removal OR text drift of the F064
+    marker call in ``core/sandbox/_macos_spawn.py``.
+
+    Same shape as the F063 test above — AST-extracts the production
+    reason/instructions and asserts the operator-facing keywords are
+    present. Replaces an earlier substring check that only verified
+    ``record_audit_degraded(`` appeared in the first 1500 chars after
+    ``start_log_streamer`` — brittle to source reshuffles and blind to
+    text drift inside the call.
+    """
+    calls = _extract_marker_calls(_MACOS_SPAWN_PATH)
+
+    assert "F064" in calls, (
+        "_macos_spawn.py streamer-exception handler must contain a "
+        "record_audit_degraded() call near a `# F064:` comment; the "
+        "F064 silent-degrade signal was removed or its anchor comment "
+        "was renamed"
+    )
+
+    reason, instructions = calls["F064"]
+    assert "streamer" in reason.lower(), (
+        f"F064 reason must reference the seatbelt log streamer; "
+        f"production text drifted to {reason!r}"
+    )
+    assert "log show" in instructions or "log stream" in instructions, (
+        f"F064 instructions must reference the macOS unified-log "
+        f"remediation surface (`log show` / `log stream`); "
+        f"got {instructions!r}"
     )
 
 
