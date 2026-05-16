@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis3_vmalloc-unchecked",
+  "verdict": "true_positive",
+  "rationale": "Same shape with vmalloc allocator.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "lifecycle_precondition": {
+    "field": "vmalloc return into local p",
+    "write_site_guard": "vmalloc must succeed (returns non-NULL)",
+    "read_site_lacks_guard": true,
+    "notes": "CWE-476 unchecked-vmalloc pattern; precondition is allocator-success."
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis3_goto-check-suppress",
+  "verdict": "false_positive",
+  "rationale": "Interprocedural check: `if (validate(p)) goto out;` between alloc and use. Python-side guard `_has_interprocedural_check` scans for `if (...p...)` + early-exit (goto IS in early_exit pattern) within 2 lines. Suppresses axis-3 EXPLOITABLE \u2192 UNCERTAIN.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "fp_category": "infeasible_branch"
+}

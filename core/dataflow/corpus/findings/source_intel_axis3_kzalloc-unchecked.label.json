@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis3_kzalloc-unchecked",
+  "verdict": "true_positive",
+  "rationale": "Same shape with kzalloc allocator.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "lifecycle_precondition": {
+    "field": "kzalloc return into local p",
+    "write_site_guard": "kzalloc must succeed (returns non-NULL)",
+    "read_site_lacks_guard": true,
+    "notes": "CWE-476 unchecked-kzalloc pattern; precondition is allocator-success."
+  }
+}

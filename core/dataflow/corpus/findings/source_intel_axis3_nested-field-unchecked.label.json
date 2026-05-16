@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis3_nested-field-unchecked",
+  "verdict": "true_positive",
+  "rationale": "Nested-field shape `o->sub.name = kmalloc(...)`. Axis-3 unchecked_alloc_local rule matches `expression local` which binds nested-field expressions. Verdict EXPLOITABLE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "lifecycle_precondition": {
+    "field": "kmalloc return into local p",
+    "write_site_guard": "kmalloc must succeed (returns non-NULL)",
+    "read_site_lacks_guard": true,
+    "notes": "CWE-476 unchecked-kmalloc pattern; precondition is allocator-success."
+  }
+}

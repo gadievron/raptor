@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis3_separate-err-leak",
+  "verdict": "false_positive",
+  "rationale": "Interprocedural check via separate `err` variable: `err = probe(p); if (err) return;`. Current guard requires `if (...p...)` \u2014 but the if-condition contains `err`, not `p`. Documents axis-3 known limit: indirect error-propagation isn't recognized. FP-leak shape recorded.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16",
+  "fp_category": "infeasible_branch"
+}

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis3_kzalloc-unchecked",
+  "producer": "codeql",
+  "rule_id": "cpp/null-dereference",
+  "message": "source_intel_axis3_kzalloc-unchecked",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis3_alloc_breadth.c",
+    "line": 35,
+    "column": 2,
+    "snippet": "p = kzalloc(n, 0);",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/source_intel/axis3_alloc_breadth.c",
+    "line": 36,
+    "column": 2,
+    "snippet": "use_buf(p);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}
