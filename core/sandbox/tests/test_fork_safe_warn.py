@@ -1,65 +1,110 @@
-"""Tests for fork-safe degraded-mode warning helper."""
+"""Tests for the fork-safe post-fork warn helper.
+
+Single entry point — ``warn_post_fork(message: bytes)`` — matching
+the W35.C precedent. Fail-CLOSED sites at landlock / mount_ns /
+preexec use direct ``os.write(2, ...) + os._exit(N)`` and are
+exercised by the per-site fix tests.
+"""
 
 import os
 import subprocess
 import sys
-import textwrap
 
 
-def test_writes_prefixed_message_to_stderr(capfd):
+def _read_fd(fd: int) -> bytes:
+    chunks: list[bytes] = []
+    while True:
+        try:
+            data = os.read(fd, 4096)
+        except OSError:
+            break
+        if not data:
+            break
+        chunks.append(data)
+    return b"".join(chunks)
+
+
+def test_warn_post_fork_writes_prefixed_line():
     from core.sandbox._fork_safe_warn import warn_post_fork
 
-    warn_post_fork(b"RAPTOR: unit_test\n")
-    captured = capfd.readouterr()
-    assert "RAPTOR: unit_test" in captured.err
+    r, w = os.pipe()
+    saved = os.dup(2)
+    try:
+        os.dup2(w, 2)
+        os.close(w)
+        warn_post_fork(b"RAPTOR: landlock: SYS_create returned -1\n")
+    finally:
+        os.dup2(saved, 2)
+        os.close(saved)
+
+    out = _read_fd(r)
+    os.close(r)
+    assert out == b"RAPTOR: landlock: SYS_create returned -1\n"
 
 
-def test_auto_prepends_prefix_when_missing(capfd):
+def test_warn_post_fork_auto_prepends_prefix_when_missing():
     from core.sandbox._fork_safe_warn import warn_post_fork
 
-    warn_post_fork(b"bare_event\n")
-    captured = capfd.readouterr()
-    assert "RAPTOR: bare_event" in captured.err
+    r, w = os.pipe()
+    saved = os.dup(2)
+    try:
+        os.dup2(w, 2)
+        os.close(w)
+        warn_post_fork(b"bare_event\n")
+    finally:
+        os.dup2(saved, 2)
+        os.close(saved)
+
+    out = _read_fd(r)
+    os.close(r)
+    assert out == b"RAPTOR: bare_event\n"
 
 
-def test_silent_when_fd2_closed():
-    script = textwrap.dedent(
-        """
-        import os, sys
-        sys.path.insert(0, os.environ["RAPTOR_DIR"])
+def test_warn_post_fork_no_double_prefix():
+    from core.sandbox._fork_safe_warn import warn_post_fork
+
+    r, w = os.pipe()
+    saved = os.dup(2)
+    try:
+        os.dup2(w, 2)
+        os.close(w)
+        warn_post_fork(b"RAPTOR: already_prefixed\n")
+    finally:
+        os.dup2(saved, 2)
+        os.close(saved)
+
+    out = _read_fd(r)
+    os.close(r)
+    assert out.count(b"RAPTOR: ") == 1
+
+
+def test_warn_post_fork_silent_when_fd2_closed():
+    script = (
+        "import os, sys; "
+        "sys.path.insert(0, os.environ['RAPTOR_DIR']); "
+        "from core.sandbox._fork_safe_warn import warn_post_fork; "
+        "os.close(2); "
+        "warn_post_fork(b'should_not_raise\\n'); "
+        "print('OK')"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**os.environ},
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+    assert "OK" in proc.stdout
+
+
+def test_warn_post_fork_callable_from_preexec_fn():
+    def preexec():
         from core.sandbox._fork_safe_warn import warn_post_fork
-        os.close(2)
-        warn_post_fork(b"should_not_raise\\n")
-        print("OK")
-        """
-    )
-    env = {**os.environ, "RAPTOR_DIR": os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", ".."))}
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, env=env,
-    )
-    assert result.returncode == 0
-    assert "OK" in result.stdout
+        warn_post_fork(b"RAPTOR: preexec_test: from forked child\n")
 
-
-def test_callable_from_preexec_fn():
-    script = textwrap.dedent(
-        """
-        import os, sys
-        sys.path.insert(0, os.environ["RAPTOR_DIR"])
-        from core.sandbox._fork_safe_warn import warn_post_fork
-        import subprocess
-        subprocess.run(
-            ["true"],
-            preexec_fn=lambda: warn_post_fork(b"RAPTOR: preexec_test\\n"),
-            check=True,
-        )
-        """
+    proc = subprocess.run(
+        [sys.executable, "-c", "pass"],
+        preexec_fn=preexec,
+        capture_output=True,
     )
-    env = {**os.environ, "RAPTOR_DIR": os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", ".."))}
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, env=env,
-    )
-    assert result.returncode == 0
-    assert "RAPTOR: preexec_test" in result.stderr
+    assert proc.returncode == 0
