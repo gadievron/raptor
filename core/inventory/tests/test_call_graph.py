@@ -224,3 +224,21 @@ def test_round_trip_through_dict():
         tuple(c.chain) for c in g.calls
     }
     assert g2.indirection == g.indirection
+
+
+def test_pep695_type_param_bound_call_captured():
+    """PEP 695 (Python 3.12+): ``def f[T: get_base()](...)`` —
+    the bound call evaluates in the enclosing scope and must be
+    captured. Regression guard against ``type_params`` being
+    missing from the function-def explicit child walk."""
+    import sys
+    if sys.version_info < (3, 12):
+        import pytest
+        pytest.skip("PEP 695 syntax requires Python 3.12+")
+    from core.inventory.call_graph import extract_call_graph_python
+    src = "def f[T: get_base()](x: T) -> T:\n    return x\n"
+    g = extract_call_graph_python(src)
+    chains = [tuple(c.chain) for c in g.calls]
+    assert ("get_base",) in chains, (
+        f"PEP 695 type-bound call missed; saw chains={chains}"
+    )

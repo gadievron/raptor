@@ -85,10 +85,67 @@ class CallSite:
     method, or ``None`` for module-level calls. The resolver doesn't
     use this today, but it's cheap to capture and useful for future
     "transitively reachable from entry-point X" queries.
+
+    ``receiver_class`` is the name of the enclosing class when this
+    call site is a ``self.X()`` or ``cls.X()`` call and the chain is
+    length-2 (e.g. ``["self", "foo"]``). The reachability resolver
+    uses this to narrow ``method_match`` candidates by class
+    hierarchy: a ``self.foo()`` inside ``class B`` can't be calling
+    ``class C.foo`` if B and C are unrelated. ``None`` everywhere
+    else — module-level call, non-self chain, longer chain than the
+    safe-narrow case.
     """
     line: int
     chain: List[str]
     caller: Optional[str] = None
+    receiver_class: Optional[str] = None
+
+
+@dataclass
+class DecoratedFunction:
+    """One ``def`` (sync or async) that carries one or more
+    decorators. Methods of classes are tracked the same way —
+    the reachability resolver doesn't differentiate framework-
+    decorated module-level functions from framework-decorated
+    methods when surfacing framework-callable entry points.
+
+    ``decorators`` is a list of attribute chains, one per
+    ``@decorator`` line. ``@functools.cache`` →
+    ``[["functools", "cache"]]``. ``@app.route("/x")`` →
+    ``[["app", "route"]]`` (the call arguments aren't stored;
+    only the chain that names the decorator). Decorators that
+    aren't a plain name/attribute chain (e.g. ``@make_deco()``)
+    are NOT recorded — we have no qualified name to match.
+    """
+    name: str
+    line: int
+    decorators: List[List[str]] = field(default_factory=list)
+
+
+@dataclass
+class ClassDef:
+    """One ``class`` definition in a file.
+
+    ``bases`` is the raw base-name list as it appears in the source
+    (``class B(A, mixins.M)`` → ``["A", "mixins.M"]``). The
+    reachability resolver tries to resolve each base against
+    same-file class names for narrowing; unresolved bases (imported
+    classes, dynamic bases) signal "don't narrow" — stay over-
+    inclusive rather than drop a real caller.
+
+    ``methods`` lists the methods defined at depth 1 inside the
+    class body — i.e. methods of the class itself, not methods of
+    nested classes. Each entry is ``(method_name, line)``.
+
+    ``nested`` is True when this class is itself nested inside
+    another class or function. The resolver currently treats nested
+    classes as opaque — same as no class context.
+    """
+    name: str
+    line: int
+    bases: List[str] = field(default_factory=list)
+    methods: List[Tuple[str, int]] = field(default_factory=list)
+    nested: bool = False
 
 
 @dataclass
@@ -106,6 +163,8 @@ class FileCallGraph:
     calls: List[CallSite] = field(default_factory=list)
     indirection: Set[str] = field(default_factory=set)
     getattr_targets: Set[str] = field(default_factory=set)
+    classes: List[ClassDef] = field(default_factory=list)
+    decorated_functions: List[DecoratedFunction] = field(default_factory=list)
     # Relative imports (Python ``from . import x`` /
     # ``from ..pkg import y``). Stored as
     # ``(level, module_or_empty, name, asname_or_None)`` quads. Not
@@ -123,11 +182,24 @@ class FileCallGraph:
             "imports": dict(self.imports),
             "calls": [
                 {"line": c.line, "chain": list(c.chain),
-                 "caller": c.caller}
+                 "caller": c.caller,
+                 "receiver_class": c.receiver_class}
                 for c in self.calls
             ],
             "indirection": sorted(self.indirection),
             "getattr_targets": sorted(self.getattr_targets),
+            "classes": [
+                {"name": k.name, "line": k.line,
+                 "bases": list(k.bases),
+                 "methods": [list(m) for m in k.methods],
+                 "nested": bool(k.nested)}
+                for k in self.classes
+            ],
+            "decorated_functions": [
+                {"name": d.name, "line": d.line,
+                 "decorators": [list(ch) for ch in d.decorators]}
+                for d in self.decorated_functions
+            ],
             "relative_imports": [list(ri) for ri in self.relative_imports],
         }
 
@@ -141,11 +213,37 @@ class FileCallGraph:
                     line=int(c.get("line", 0)),
                     chain=list(c.get("chain") or []),
                     caller=c.get("caller"),
+                    receiver_class=c.get("receiver_class"),
                 )
                 for c in (d.get("calls") or [])
             ],
             indirection=set(d.get("indirection") or []),
             getattr_targets=set(d.get("getattr_targets") or []),
+            classes=[
+                ClassDef(
+                    name=str(k.get("name", "")),
+                    line=int(k.get("line", 0)),
+                    bases=list(k.get("bases") or []),
+                    methods=[
+                        (str(m[0]), int(m[1]))
+                        for m in (k.get("methods") or [])
+                        if isinstance(m, (list, tuple)) and len(m) >= 2
+                    ],
+                    nested=bool(k.get("nested", False)),
+                )
+                for k in (d.get("classes") or [])
+            ],
+            decorated_functions=[
+                DecoratedFunction(
+                    name=str(df.get("name", "")),
+                    line=int(df.get("line", 0)),
+                    decorators=[
+                        list(ch) for ch in (df.get("decorators") or [])
+                        if isinstance(ch, (list, tuple))
+                    ],
+                )
+                for df in (d.get("decorated_functions") or [])
+            ],
             relative_imports=[
                 (int(r[0]), str(r[1] or ""), str(r[2] or ""),
                  r[3] if len(r) > 3 else None)
@@ -185,6 +283,12 @@ class _PythonCallGraph(ast.NodeVisitor):
         self.graph = FileCallGraph()
         # Stack of enclosing function names, top is innermost.
         self._enclosing: List[str] = []
+        # Stack of enclosing ClassDefs, top is innermost. Used to
+        # tag CallSite.receiver_class for ``self.X()`` calls and to
+        # register methods on their owning class. The stack supports
+        # nested classes; we only consider the innermost element
+        # when tagging calls.
+        self._class_stack: List[ClassDef] = []
 
     # ------------------------------------------------------------------
     # Imports
@@ -238,18 +342,101 @@ class _PythonCallGraph(ast.NodeVisitor):
     # ------------------------------------------------------------------
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._handle_function_def(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._handle_function_def(node)
+
+    def _handle_function_def(self, node) -> None:
+        # Register as a method on the immediately-enclosing class
+        # only when this def is at depth 1 inside the class body.
+        # ``_enclosing`` being empty AND ``_class_stack`` non-empty
+        # is the "method of current class" case; if ``_enclosing``
+        # is non-empty we're a function inside another function /
+        # method, not a method of the class.
+        if self._class_stack and not self._enclosing:
+            self._class_stack[-1].methods.append(
+                (node.name, getattr(node, "lineno", 0)),
+            )
+        # Decorators are evaluated in the ENCLOSING scope (where
+        # the def statement appears), not inside the function body.
+        # Visit them BEFORE pushing the function name onto
+        # ``_enclosing``, otherwise ``@app.route(...)`` looks like
+        # a call from inside the decorated function — wrong scope.
+        decorator_chains: List[List[str]] = []
+        for deco in getattr(node, "decorator_list", []) or []:
+            # ``@foo`` → name node
+            # ``@foo.bar`` → attribute chain
+            # ``@foo(...)`` → Call whose ``.func`` is the chain
+            # ``@foo.bar(...)`` → Call whose ``.func`` is the chain
+            chain = _decorator_chain(deco)
+            if chain is not None:
+                decorator_chains.append(chain)
+            # Walk the decorator expression in the OUTER scope so
+            # any nested calls inside the decorator (e.g.
+            # ``@app.route(rule_for("x"))``) attribute to the
+            # enclosing function, not the decorated one.
+            self.visit(deco)
+        # Record decorator chains for this def. The reachability
+        # resolver inspects this to flag framework-callable
+        # entry points.
+        if decorator_chains:
+            self.graph.decorated_functions.append(
+                DecoratedFunction(
+                    name=node.name,
+                    line=getattr(node, "lineno", 0),
+                    decorators=decorator_chains,
+                ),
+            )
+        # Now push the function name and walk the body. Skip the
+        # decorator_list this time — already handled above.
         self._enclosing.append(node.name)
         try:
-            self.generic_visit(node)
+            # generic_visit walks ``args`` + ``body`` + ``returns``.
+            # ``decorator_list`` is also iterated by generic_visit;
+            # to avoid double-visit we walk the non-decorator
+            # children explicitly.
+            #
+            # ``type_params`` is PEP 695 (Python 3.12+) — covers
+            # ``def f[T: bound_call()](...)``. The bound expression
+            # is evaluated in the enclosing scope; if we don't walk
+            # it, ``bound_call()`` becomes an invisible call site.
+            # ``getattr`` with a default keeps the code working on
+            # 3.10/3.11 where the field doesn't exist.
+            for child_name in (
+                "args", "body", "returns", "type_comment", "type_params",
+            ):
+                child = getattr(node, child_name, None)
+                if isinstance(child, list):
+                    for item in child:
+                        self.visit(item)
+                elif child is not None and hasattr(child, "_fields"):
+                    self.visit(child)
         finally:
             self._enclosing.pop()
 
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        self._enclosing.append(node.name)
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        bases = []
+        for b in node.bases:
+            base_chain = _attribute_chain(b)
+            if base_chain is not None:
+                bases.append(".".join(base_chain))
+            # Bases that aren't plain name / attribute chains
+            # (e.g. ``class X(metaclass_fn())``) are dropped — we
+            # can't resolve them and the resolver's narrowing
+            # already treats partial/missing bases conservatively.
+        cdef = ClassDef(
+            name=node.name,
+            line=getattr(node, "lineno", 0),
+            bases=bases,
+            nested=bool(self._class_stack) or bool(self._enclosing),
+        )
+        self.graph.classes.append(cdef)
+        self._class_stack.append(cdef)
         try:
             self.generic_visit(node)
         finally:
-            self._enclosing.pop()
+            self._class_stack.pop()
 
     # ------------------------------------------------------------------
     # Calls + indirection
@@ -284,12 +471,38 @@ class _PythonCallGraph(ast.NodeVisitor):
             self.graph.indirection.add(INDIRECTION_DUNDER_IMPORT)
 
         caller = self._enclosing[-1] if self._enclosing else None
+        # ``self.foo()`` / ``cls.foo()`` inside a class body — tag
+        # with the enclosing class name so the reachability resolver
+        # can narrow method_match candidates. Only the length-2
+        # case is safe (``self.foo`` resolves on ``self``); longer
+        # chains like ``self.x.foo`` route through an attribute of
+        # unknown type and shouldn't drive narrowing.
+        receiver_class = None
+        if (self._class_stack and not self._class_stack[-1].nested
+                and len(chain) == 2 and chain[0] in ("self", "cls")):
+            receiver_class = self._class_stack[-1].name
         self.graph.calls.append(CallSite(
             line=getattr(node, "lineno", 0),
             chain=chain,
             caller=caller,
+            receiver_class=receiver_class,
         ))
         self.generic_visit(node)
+
+
+def _decorator_chain(deco: ast.AST) -> Optional[List[str]]:
+    """Return the attribute chain naming a decorator, or ``None``.
+
+    ``@foo``                → ``["foo"]``
+    ``@foo.bar``            → ``["foo", "bar"]``
+    ``@foo(...)``           → ``["foo"]`` (peel off the call)
+    ``@foo.bar(...)``       → ``["foo", "bar"]``
+    ``@make_deco()(...)``   → ``None``  (decorator is a call result)
+    ``@foo[0]``             → ``None``  (subscript, no name)
+    """
+    if isinstance(deco, ast.Call):
+        return _attribute_chain(deco.func)
+    return _attribute_chain(deco)
 
 
 def _attribute_chain(node: ast.AST) -> Optional[List[str]]:

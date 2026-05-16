@@ -1156,12 +1156,16 @@ class DatabaseManager:
     def _count_database_files(self, db_path: Path) -> int:
         """Count files in database (for statistics)."""
         try:
-            # Count files in src.zip if it exists
+            # Count files in src.zip if it exists. Use the substrate's
+            # EOCD pre-flight rather than opening the archive — for a
+            # typical CodeQL DB the result is the same as
+            # ``len(zf.namelist())`` but we avoid the central-directory
+            # materialisation cost and the implicit bomb-shape risk.
             src_zip = db_path / "src.zip"
             if src_zip.exists():
-                import zipfile
-                with zipfile.ZipFile(src_zip) as zf:
-                    return len(zf.namelist())
+                from core.zip import peek_total_entries
+                count = peek_total_entries(src_zip)
+                return count if count is not None else 0
             return 0
         except Exception:
             return 0

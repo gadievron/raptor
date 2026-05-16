@@ -177,7 +177,7 @@ class TestZipBombEOCDPreflight(unittest.TestCase):
         path.write_bytes(eocd)
 
     def test_peek_returns_total_entries_for_real_zip(self):
-        from core.project.export import _peek_zip_total_entries
+        from core.zip import peek_total_entries as _peek_zip_total_entries
         with TemporaryDirectory() as d:
             zpath = Path(d) / "small.zip"
             with zipfile.ZipFile(zpath, "w") as zf:
@@ -186,14 +186,14 @@ class TestZipBombEOCDPreflight(unittest.TestCase):
             self.assertEqual(_peek_zip_total_entries(zpath), 2)
 
     def test_peek_returns_none_for_missing_eocd(self):
-        from core.project.export import _peek_zip_total_entries
+        from core.zip import peek_total_entries as _peek_zip_total_entries
         with TemporaryDirectory() as d:
             zpath = Path(d) / "not-a-zip.bin"
             zpath.write_bytes(b"PK\x03\x04" + b"\x00" * 100)
             self.assertIsNone(_peek_zip_total_entries(zpath))
 
     def test_peek_reads_synthesized_large_eocd(self):
-        from core.project.export import _peek_zip_total_entries
+        from core.zip import peek_total_entries as _peek_zip_total_entries
         with TemporaryDirectory() as d:
             zpath = Path(d) / "fake-large.zip"
             self._write_eocd_with_entry_count(zpath, 50_000)
@@ -229,7 +229,7 @@ class TestZipBombEOCDPreflight(unittest.TestCase):
             self.assertIn("zip-bomb shape", str(ctx.exception))
 
     def test_peek_handles_short_file_under_22_bytes(self):
-        from core.project.export import _peek_zip_total_entries
+        from core.zip import peek_total_entries as _peek_zip_total_entries
         with TemporaryDirectory() as d:
             tiny = Path(d) / "tiny.bin"
             tiny.write_bytes(b"PK\x05")
