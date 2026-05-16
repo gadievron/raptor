@@ -366,6 +366,47 @@ Startup banner shows which layers are available:
   sandbox ✓ (landlock)            — container without user namespaces
   sandbox ✗                       — no isolation available
 
+W36.B strict-mode controls (added W36.B, fully landed by W36.K.3):
+Four opt-in mechanisms turn previously-fail-OPEN security paths into
+fail-CLOSED contracts. All default-off — existing callers see no
+behaviour change. Operators wanting a hardened posture opt in.
+
+  - ``run_untrusted(strict_env=True)`` — default ON for this helper
+    (the security-sensitive entry point). Strips
+    ``RaptorConfig.DANGEROUS_ENV_VARS`` (LD_PRELOAD, AWS_*, GH_TOKEN,
+    etc.) from caller-supplied ``env=`` dicts even when the caller
+    didn't go through ``get_safe_env()``. The lower-level
+    ``sandbox()`` accepts ``strict_env=`` too; default off there.
+    Both Linux (``_spawn``) and macOS (``_macos_spawn``) backends
+    apply the strip as defense-in-depth.
+
+  - ``EgressProxy(audit_enforce=True)`` / env var
+    ``RAPTOR_PROXY_AUDIT_ENFORCE`` set to ``"1"`` / ``"true"`` /
+    ``"yes"`` / ``"on"`` (case-insensitive, whitespace-stripped) —
+    switches gate 1 (hostname allowlist) in audit mode from
+    log-and-allow to log-AND-deny. Default off preserves the
+    documented audit-permissive semantics for operators still
+    building their allowlist.
+
+  - ``probe_envelope_compatibility(strict=True)`` (core/security) —
+    raises ``RuntimeError`` instead of returning a failed
+    ``ProbeResult`` when the LLM cannot honour the defense envelope.
+    Covers BOTH failure paths uniformly: ``dispatch_fn`` raising,
+    AND the post-evaluate ``compatible=False`` branch. Used by the
+    orchestrator to refuse to silently downgrade defenses.
+
+  - ``preflight(strict=True)`` (core/security) — raises
+    ``RuntimeError`` when the injection-pattern corpus is empty at
+    call time. Default fail-open (returns ``confidence_haircut=1.0``)
+    is preserved by ``strict=False``; strict mode surfaces the
+    misconfiguration the operator wouldn't otherwise notice.
+
+The cost-gating circuit-breaker in
+``core/llm/multi_model/dispatch.py`` (F090) shipped alongside these
+under the same W36.B umbrella but is not operator-tunable — see that
+module's docstring for the transient-vs-permanent disable semantics
+and the "cost_gate: retrying budget_ratio()" recovery log signal.
+
 Sandboxing by tool type:
 - PoC execution, LLM-generated code: `run_untrusted()` — full sandbox
   with restrict_reads=True + fake_home=True by default.

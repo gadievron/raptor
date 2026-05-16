@@ -393,8 +393,14 @@ class EgressProxy:
         # Default False preserves the documented audit-permissive semantics
         # (gate 1 audit mode is for diagnosis while building an allowlist;
         # once the allowlist is mature, operators can set audit_enforce=True
-        # or RAPTOR_PROXY_AUDIT_ENFORCE=1 to harden gate 1). Gate 2 is
-        # always enforcing regardless of this flag.
+        # or set the RAPTOR_PROXY_AUDIT_ENFORCE env var to one of the
+        # accepted truthy spellings — case-insensitive, whitespace-stripped:
+        #     "1" / "true" / "yes" / "on"
+        # Any other value (including "0" / "false" / "no" / "off" / "" /
+        # the unset variable) leaves audit-mode in its default log-only
+        # behaviour. The env-var parse lives at the `get_proxy()` read
+        # below; this kwarg accepts the already-parsed bool.
+        # Gate 2 is always enforcing regardless of this flag.
         self._audit_enforce = audit_enforce
         # Ref-count for concurrent acquire/release. Each audit-mode
         # sandbox via use_egress_proxy=True acquires on entry, releases
