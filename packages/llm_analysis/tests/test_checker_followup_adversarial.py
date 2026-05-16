@@ -8,11 +8,9 @@ unbounded growth.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
-import pytest
 
 from packages.llm_analysis.checker_followup import (
     emit_variant_annotations_for_finding,
@@ -89,7 +87,6 @@ class TestHostileSnippet:
         the IMMEDIATE write+read works — anything stronger is
         out of scope for this layer."""
         from packages.checker_synthesis import Match, SynthesisedRule
-        from core.annotations import iter_all_annotations
 
         v = StubVuln(metadata={"name": "login"})
         rule = SynthesisedRule(engine="semgrep", rule_id="x", body="r")
@@ -191,7 +188,7 @@ class TestVariantRelationships:
         ``synthesise_and_run`` filters via ``_is_seed_match`` —
         verify that path is hit when the synthesis result reflects
         the substrate's filtering."""
-        from packages.checker_synthesis import Match, SynthesisedRule
+        from packages.checker_synthesis import SynthesisedRule
 
         v = StubVuln(metadata={"name": "login"})
         rule = SynthesisedRule(engine="semgrep", rule_id="x", body="r")

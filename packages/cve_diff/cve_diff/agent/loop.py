@@ -30,7 +30,6 @@ from core.llm.tool_use.types import (
     ToolCallDispatched,
     ToolCallReturned,
     ToolDef,
-    ToolLoopResult,
     TurnCompleted,
 )
 

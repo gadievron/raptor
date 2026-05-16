@@ -24,7 +24,6 @@ from typing import Optional
 from urllib.parse import quote as _urlquote
 
 from core.http import HttpError
-from core.http.urllib_backend import UrllibClient
 
 from cve_diff.core.exceptions import AnalysisError
 from cve_diff.core.models import CommitSha, DiffBundle, FileChange, RepoRef

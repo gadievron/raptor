@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from core.dataflow.evidence_renderer import render_evidence_for_prompt
 from core.dataflow.sanitizer_evidence import (

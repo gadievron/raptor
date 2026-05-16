@@ -1,12 +1,11 @@
 """Tests for project add and remove operations."""
 
-import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from core.project.project import ProjectManager
-from core.run import RUN_METADATA_FILE, start_run
+from core.run import RUN_METADATA_FILE
 
 
 class TestAddDirectory(unittest.TestCase):

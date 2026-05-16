@@ -14,7 +14,6 @@ If external LLM fails entirely, falls back to CC dispatch automatically.
 """
 
 import copy
-import json
 import logging
 import shutil
 import threading

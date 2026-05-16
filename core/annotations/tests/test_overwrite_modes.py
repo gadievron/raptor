@@ -15,7 +15,6 @@ Plus the per-function source-line hash used by ``/annotate stale``:
 
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 

@@ -31,7 +31,7 @@ only — judge events do NOT shift the prefilter gate.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 from .scorecard import EventType, ModelScorecard
 

@@ -9,10 +9,9 @@ position in the system message.
 
 from __future__ import annotations
 
-from core.security.prompt_envelope import PromptBundle, MessagePart
+from core.security.prompt_envelope import PromptBundle
 from core.security.prompt_defense_profiles import (
     ANTHROPIC_CLAUDE,
-    CONSERVATIVE,
     OPENAI_GPT,
 )
 

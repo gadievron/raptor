@@ -2,7 +2,6 @@
 
 import importlib.machinery
 import importlib.util
-import json
 import os
 import subprocess
 import sys
@@ -14,7 +13,6 @@ from unittest.mock import patch
 from core.json import load_json, save_json
 from core.run.metadata import (
     RUN_METADATA_FILE, STATUS_RUNNING, STATUS_COMPLETED, STATUS_FAILED,
-    start_run,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]  # core/run/tests/ → raptor/

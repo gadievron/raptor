@@ -8,9 +8,7 @@ before any pack work happens. Symmetric to the kill-switch test in
 
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 

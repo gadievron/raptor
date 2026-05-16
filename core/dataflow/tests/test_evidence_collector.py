@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 from typing import List, Optional
 
-import pytest
 
 from core.dataflow import Finding, Step
 from core.dataflow.evidence_collector import (

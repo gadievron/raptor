@@ -6,12 +6,11 @@ Executes CodeQL queries and suites against databases,
 producing SARIF output for vulnerability analysis.
 """
 
-import json
 import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 

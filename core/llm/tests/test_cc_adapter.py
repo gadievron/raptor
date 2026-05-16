@@ -2,7 +2,6 @@
 
 import json
 
-import pytest
 
 from core.llm.cc_adapter import (
     CCDispatchConfig,

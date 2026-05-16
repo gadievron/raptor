@@ -12,7 +12,6 @@ import os
 import sys
 from pathlib import Path
 
-import pytest
 
 _RAPTOR_DIR = os.environ["RAPTOR_DIR"]
 if _RAPTOR_DIR not in sys.path:

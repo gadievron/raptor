@@ -14,9 +14,8 @@ Both behaviours close ergonomic footguns in the CodeQL agent:
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
 
 # packages/codeql/tests/test_language_normalisation.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))

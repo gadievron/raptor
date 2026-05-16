@@ -13,15 +13,12 @@ LLM upstream could plausibly produce.
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from core.annotations import iter_all_annotations, read_annotation
 from packages.code_understanding.annotation_synth import (
-    SynthCounts,
     synthesise_from_understand_output,
 )
 

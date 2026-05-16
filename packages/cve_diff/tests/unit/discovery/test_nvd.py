@@ -7,7 +7,7 @@ HTTP round-trip is mocked at the ``_client()`` boundary.
 from __future__ import annotations
 
 import json as _json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import pytest

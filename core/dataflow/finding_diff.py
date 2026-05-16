@@ -19,7 +19,7 @@ This module does NOT run CodeQL. PR2b-2 wires the subprocess.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Set, Tuple
 

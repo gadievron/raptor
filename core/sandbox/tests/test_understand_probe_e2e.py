@@ -59,7 +59,7 @@ class TestUnderstandProbeFlowE2E(unittest.TestCase):
     def test_full_probe_flow_correlates_entry_points(self):
         from core.sandbox import run as sandbox_run
         from core.sandbox.observe_profile import (
-            OBSERVE_FILENAME, parse_observe_log,
+            parse_observe_log,
         )
         from core.sandbox.observe_context_merge import (
             RUNTIME_OBSERVATION_KEY,

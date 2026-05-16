@@ -5,7 +5,7 @@ import os
 import pytest
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # packages/llm_analysis/tests/test_config_file.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))

@@ -47,7 +47,6 @@ def hash_password(password):
 
 # VULNERABLE: Command injection
 import subprocess
-import os
 
 @app.route('/convert', methods=['POST'])
 def convert_file():

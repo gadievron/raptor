@@ -17,12 +17,10 @@ from core.security.prompt_envelope import build_prompt, UntrustedBlock
 from core.security.prompt_defense_profiles import (
     ANTHROPIC_CLAUDE,
     CONSERVATIVE,
-    GOOGLE_GEMINI,
     OLLAMA_SMALL,
     PASSTHROUGH,
 )
 from core.security.envelope_probe import (
-    ProbeResult,
     build_canary_prompt,
     evaluate_probe_response,
     probe_envelope_compatibility,

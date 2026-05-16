@@ -1,7 +1,6 @@
 """Basic smoke tests for the project CLI."""
 
 import os
-import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory

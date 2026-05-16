@@ -21,7 +21,6 @@ import json
 import logging
 import shutil
 import subprocess
-import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, List, Optional, Set

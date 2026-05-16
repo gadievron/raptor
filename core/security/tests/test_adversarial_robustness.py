@@ -10,9 +10,7 @@ No LLM calls — purely mechanical verification of defence properties.
 
 from __future__ import annotations
 
-import base64
 import re
-import string
 
 import pytest
 
@@ -26,7 +24,6 @@ from core.security.prompt_envelope import (
 from core.security.prompt_defense_profiles import (
     ANTHROPIC_CLAUDE,
     CONSERVATIVE,
-    GOOGLE_GEMINI,
     META_LLAMA,
     OLLAMA_SMALL,
     OPENAI_GPT,

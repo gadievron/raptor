@@ -9,16 +9,13 @@ JSON-in-prompt fallback for providers that lack native structured support.
 """
 
 import json
-import logging
 import os
-import sys
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from inspect import isclass
 from typing import Dict, Optional, Any, Tuple, Type, Union
 from dataclasses import dataclass
-from pathlib import Path
 
 from core.logging import get_logger
 from .config import ModelConfig
@@ -715,8 +712,7 @@ def _dict_schema_to_pydantic(schema: Union[Dict[str, Any], Type['BaseModel']]):
     Raises:
         ValueError: If schema is invalid or empty
     """
-    from pydantic import BaseModel, Field, create_model
-    from typing import get_type_hints
+    from pydantic import BaseModel, create_model
 
     # Check if already a Pydantic model class
     if isclass(schema) and issubclass(schema, BaseModel):

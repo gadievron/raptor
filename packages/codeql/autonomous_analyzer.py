@@ -10,7 +10,6 @@ Fully autonomous analysis of CodeQL findings with:
 - Exploit validation and refinement
 """
 
-import json
 import sys
 from dataclasses import dataclass, asdict
 
@@ -620,7 +619,6 @@ class AutonomousCodeQLAnalyzer:
             prefilter_decision,
             record_prefilter_outcome,
         )
-        from core.llm.config import PROVIDER_FAST_MODELS
 
         decision_class = f"codeql:{finding.rule_id}"
         # Resolve the fast model name from the config — the cheap

@@ -10,14 +10,12 @@ Stub LLM + stub engine adapters keep tests deterministic.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import List
 
-import pytest
 
 from packages.checker_synthesis import (
     Match,
     SeedBug,
-    SynthesisedRule,
     synthesise_with_refinement,
 )
 from packages.checker_synthesis import synthesise as synth_mod

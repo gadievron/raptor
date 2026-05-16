@@ -12,7 +12,6 @@ import pytest
 
 from core.inventory.call_graph import (
     FileCallGraph,
-    INDIRECTION_DYNAMIC_IMPORT,
     INDIRECTION_EVAL,
     INDIRECTION_IMPORTLIB,
     INDIRECTION_REFLECT,

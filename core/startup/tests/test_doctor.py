@@ -9,10 +9,7 @@ classification + exit code.
 
 from __future__ import annotations
 
-from typing import List
-from unittest.mock import patch
 
-import pytest
 
 from core.startup import doctor
 from core.startup.doctor import _render, main

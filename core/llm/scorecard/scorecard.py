@@ -46,15 +46,14 @@ from __future__ import annotations
 
 import fcntl
 import math
-import os
 import random
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterator, List, Literal, Optional, Set, Tuple
+from typing import Dict, List, Literal, Optional, Set, Tuple
 
-from core.json import load_json, save_json
+from core.json import save_json
 from core.logging import get_logger
 
 logger = get_logger()

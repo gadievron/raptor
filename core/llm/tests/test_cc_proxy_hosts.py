@@ -13,9 +13,7 @@ The module resolves cc_dispatch sandbox policy via four layers
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
