@@ -23,8 +23,17 @@ import os
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 import pytest
+
+# Anchor the subprocess sys.path to the SAME tree these tests run from
+# rather than `os.environ["RAPTOR_DIR"]`. The env-var form failed when
+# RAPTOR_DIR pointed at a checkout that did not yet have the fail-CLOSED
+# handlers under test — subprocess would import the pre-PR version, the
+# mocked failure would silently pass through, and the test would print
+# "BUG: preexec returned instead of exiting" with returncode 0.
+_REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
 linux_only = pytest.mark.skipif(
     sys.platform != "linux",
@@ -33,7 +42,7 @@ linux_only = pytest.mark.skipif(
 
 
 def _run_child(body: str) -> subprocess.CompletedProcess:
-    """Run a child Python with sys.path bootstrapped to RAPTOR_DIR."""
+    """Run a child Python with sys.path bootstrapped to the repo root."""
     script = textwrap.dedent(
         """
         import sys
@@ -41,7 +50,7 @@ def _run_child(body: str) -> subprocess.CompletedProcess:
         """
     ) + textwrap.dedent(body)
     return subprocess.run(
-        [sys.executable, "-c", script, os.environ["RAPTOR_DIR"]],
+        [sys.executable, "-c", script, _REPO_ROOT],
         capture_output=True,
         env={**os.environ},
     )

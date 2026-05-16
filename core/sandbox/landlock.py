@@ -21,6 +21,7 @@ import os
 import platform
 
 from . import state
+from .exit_codes import SANDBOX_EXIT_LANDLOCK_DOWNGRADE
 
 logger = logging.getLogger(__name__)
 
@@ -428,7 +429,7 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list = None,
                 # restrictions. Fail-closed: the parent expected an enforced
                 # sandbox, so silently downgrading is a contract violation.
                 _os_write(2, b"RAPTOR: landlock: SYS_landlock_create_ruleset failed post-fork\n")
-                os._exit(126)
+                os._exit(SANDBOX_EXIT_LANDLOCK_DOWNGRADE)
 
             try:
                 # Filesystem rules: allow writes (and if restrict_reads
