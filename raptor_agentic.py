@@ -747,7 +747,14 @@ Examples:
         semgrep_proc = subprocess.Popen(
             semgrep_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             bufsize=1,  # Line-buffered, see main-Popen comment.
-            env=RaptorConfig.get_safe_env(),
+            # F102: semgrep is typically installed via
+            # ``pip install --user``; without PYTHONUSERBASE flowing
+            # through, an operator with a non-default user-base sees
+            # ``ModuleNotFoundError: No module named 'semgrep'`` here.
+            # PYTHONUSERBASE remains stripped by default (it is a real
+            # RCE vector via .pth files); the opt-in restores it only
+            # for this scanner spawn.
+            env=RaptorConfig.get_safe_env(include_python_user_base=True),
             start_new_session=True,  # See main-Popen comment.
         )
 
