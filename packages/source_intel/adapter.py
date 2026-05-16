@@ -27,6 +27,7 @@ Wire via:
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Dict, FrozenSet, Optional, Tuple
 
@@ -474,14 +475,96 @@ def _unchecked_alloc_supports_finding(
     # via the path-resolution above.
     _SRC_LINE_TOLERANCE = 3
 
+    sink_line = finding.sink.line or 0
+
     for ae in result.allocations:
         alloc_path, alloc_line = ae.location
         if alloc_path != src_path_abs:
             continue
         if abs(alloc_line - src_line) > _SRC_LINE_TOLERANCE:
             continue
+        # Interprocedural-NULL-check guard: between the alloc line and
+        # the deref line, look for `if (... <varname> ...)` that
+        # branches out before the deref. Cocci's intraprocedural
+        # `when != !local` clauses miss this shape (the check is via
+        # a helper function, not a direct comparison). Suppress the
+        # axis-3 EXPLOITABLE claim when we see it.
+        var_name = _extract_local_var_from_snippet(finding.source.snippet)
+        if var_name and sink_line > alloc_line + 1:
+            if _has_interprocedural_check(
+                alloc_path, alloc_line, sink_line, var_name,
+            ):
+                continue
         return True
 
+    return False
+
+
+_LOCAL_ASSIGN_RE = re.compile(
+    r"^\s*(?:[A-Za-z_][A-Za-z0-9_*\s]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*="
+)
+
+
+def _extract_local_var_from_snippet(snippet: Optional[str]) -> Optional[str]:
+    """Best-effort: from `p = kstrdup(s, 0);` return `p`."""
+    if not snippet:
+        return None
+    m = _LOCAL_ASSIGN_RE.match(snippet)
+    return m.group(1) if m else None
+
+
+def _has_interprocedural_check(
+    file_path: str,
+    alloc_line: int,
+    sink_line: int,
+    var_name: str,
+) -> bool:
+    """Best-effort: scan lines (alloc_line, sink_line) for
+    `if (<expr involving var_name>)` followed by an early-exit
+    statement (return/continue/break/goto) within 2 lines.
+
+    This catches the interprocedural-NULL-check shape that cocci's
+    intraprocedural `when !=` clauses miss:
+
+        p = kstrdup(...);
+        if (validate(p) < 0) return;   ← here
+        use(p);
+
+    AND the direct-check shape that survives cocci's `when` clauses
+    in unusual layouts:
+
+        p = kstrdup(...);
+        if (something(p)) goto out;
+        use(p);
+
+    Conservative: only suppresses when the if-condition references
+    ``var_name`` AND an early-exit follows within 2 lines. Pure data
+    passes (printf(p), strlen(p)) don't match the if-condition
+    constraint, so they don't trigger suppression.
+    """
+    if not file_path or sink_line <= alloc_line + 1:
+        return False
+    try:
+        with open(file_path, "r", errors="replace") as f:
+            lines = f.readlines()
+    except OSError:
+        return False
+
+    var_in_if = re.compile(
+        r"\bif\s*\([^)]*\b" + re.escape(var_name) + r"\b"
+    )
+    early_exit = re.compile(r"\b(?:return\b|continue\b|break\b|goto\b)")
+
+    # Lines are 0-indexed in the array; alloc_line/sink_line are 1-indexed.
+    start_idx = alloc_line  # first line AFTER the alloc
+    end_idx = min(sink_line - 1, len(lines))
+    for i in range(start_idx, end_idx):
+        if not var_in_if.search(lines[i]):
+            continue
+        # Found an if (... var ...) — look for early-exit within 2 lines.
+        for j in range(i, min(i + 3, len(lines))):
+            if early_exit.search(lines[j]):
+                return True
     return False
 
 
@@ -608,19 +691,27 @@ _PRIVILEGED_CAP_FUNCTIONS: FrozenSet[str] = frozenset({
 # Capability constants that grant root-equivalent power. Cocci emits
 # the cap_function name only — the constant lives in the source line
 # itself. We grep the abort site's source line for one of these
-# constants. (CAP_SYS_ADMIN is the canonical one; CAP_SYS_MODULE,
-# CAP_DAC_OVERRIDE, CAP_DAC_READ_SEARCH all grant system-wide effects
-# that subsume most memory-corruption primitives.)
+# constants.
+#
+# Membership criterion: hitting this cap MUST already let the attacker
+# do arbitrary memory write / arbitrary code execution / kernel module
+# load — i.e., subsume the memory-corruption primitive the finding
+# claims. Bounded caps (CAP_NET_ADMIN, CAP_MAC_*, CAP_SYS_TIME, …) do
+# NOT qualify — a memory-corruption primitive reachable from a bounded
+# cap IS a privilege escalation that the finding correctly flags.
+#
+# Bug-survey lesson 2026-05-16: CAP_NET_ADMIN was originally in this
+# set; removed after corpus fixture `cap_net_admin-gated-overflow`
+# leaked as NOT_EXPLOITABLE when it should have stayed UNCERTAIN.
+# CAP_NET_ADMIN grants network-stack admin only; doesn't let you
+# load kernel modules or write arbitrary kmem.
 _PRIVILEGED_CAP_CONSTANTS: FrozenSet[str] = frozenset({
-    "CAP_SYS_ADMIN",
-    "CAP_SYS_MODULE",
-    "CAP_SYS_RAWIO",
-    "CAP_SYS_BOOT",
-    "CAP_DAC_OVERRIDE",
-    "CAP_DAC_READ_SEARCH",
-    "CAP_NET_ADMIN",
-    "CAP_MAC_ADMIN",
-    "CAP_MAC_OVERRIDE",
+    "CAP_SYS_ADMIN",      # nearly all FS / mount / namespace control
+    "CAP_SYS_MODULE",     # arbitrary kernel-module load → arbitrary code
+    "CAP_SYS_RAWIO",      # arbitrary device-mem access via /dev/mem
+    "CAP_SYS_BOOT",       # kexec → arbitrary kernel boot
+    "CAP_DAC_OVERRIDE",   # bypass file DAC — root-equivalent in practice
+    "CAP_DAC_READ_SEARCH",  # similar bypass for reads
 })
 
 

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_axis3-negative-loop-check",
+  "verdict": "false_positive",
+  "fp_category": "infeasible_branch",
+  "rationale": "Surface shape is a CWE-476 unchecked-kstrdup-then-deref inside a `for (i = 0; i < n; i++)` loop. The NULL check `if (!p) continue;` IS present and correctly skips the deref on alloc failure. If axis-3 unchecked_alloc_local.cocci leaks this as EXPLOITABLE → known gap with loop-continue patterns. If axis-3 correctly suppresses → confirms `when != !local` handles the loop/continue case. Fixture documents the edge so corpus measurement reveals empirically which path cocci takes here. Crafted, not a real CVE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_cap_sys_admin-gated-overflow",
+  "verdict": "false_positive",
+  "fp_category": "framework_mitigation",
+  "rationale": "Surface shape is a CWE-787 unbounded-write into a fixed-size stack buffer. Bug primitive is real (the memcpy IS unchecked), but the enclosing function is gated by `if (!capable(CAP_SYS_ADMIN)) return -EPERM;` at line 35. An attacker with CAP_SYS_ADMIN already holds root-equivalent power that subsumes the memory-corruption primitive — the bug grants no additional capability. Source_intel axis 4 (capability_check) should emit `capability:capable` at line 35 with grade=dominates; the line carries `CAP_SYS_ADMIN` which is in _PRIVILEGED_CAP_CONSTANTS, so the verdict policy emits NOT_EXPLOITABLE. Inspired by the gating shape of CVE-2022-0185 and other CAP_SYS_ADMIN-gated fs/mount bugs; crafted, not the actual CVE code.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "finding_id": "source_intel_fortify-skips-custom-helper",
+  "verdict": "true_positive",
+  "rationale": "Surface shape is a CWE-787 unbounded-write into a 128-byte stack buffer through a CUSTOM `my_memcpy()` helper. The build IS FORTIFY_SOURCE=2, but FORTIFY only intercepts glibc names (memcpy / strcpy / sprintf / etc.) — not user-defined wrappers. Source_intel axis 6 (build_flags) reads `fortify_source_level=2`, but `_fortify_source_blocks_finding()` token-scans the snippet and finds `my_memcpy` (not in _FORTIFIED_WRITE_CALLS). The boundary check (substring match suppressed) correctly returns False. Verdict falls through to UNCERTAIN (no other axis fires). This is the FP-boundary test for axis 6 — presence of FORTIFY does not blanket-suppress unbounded-write findings. Crafted fixture, not a real CVE.",
+  "labeler": "claude",
+  "labeled_at": "2026-05-16"
+}
