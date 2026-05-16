@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "finding_id": "webgoat_codeql_java-sql-injection_703683bd1d0e",
+  "producer": "codeql",
+  "rule_id": "java/sql-injection",
+  "message": "user-controlled query passed to Statement.executeQuery",
+  "source": {
+    "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/sqlinjection/introduction/SqlInjectionLesson2.java",
+    "line": 42,
+    "column": 0,
+    "snippet": "public AttackResult completed(@RequestParam String query) {",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/sqlinjection/introduction/SqlInjectionLesson2.java",
+    "line": 49,
+    "column": 0,
+    "snippet": "ResultSet results = statement.executeQuery(query);",
+    "label": "sink"
+  },
+  "intermediate_steps": [
+    {
+      "file_path": "out/dataflow-corpus-fixtures/webgoat/src/main/java/org/owasp/webgoat/lessons/sqlinjection/introduction/SqlInjectionLesson2.java",
+      "line": 48,
+      "column": 0,
+      "snippet": "Statement statement = connection.createStatement(TYPE_SCROLL_INSENSITIVE, CONCUR_READ_ONLY);",
+      "label": "step"
+    }
+  ],
+  "raw": {}
+}

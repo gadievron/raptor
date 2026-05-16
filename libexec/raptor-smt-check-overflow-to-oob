@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Stage E SMT verb: CWE-680 integer overflow → buffer overflow.
+
+Usage:
+  raptor-smt-check-overflow-to-oob --count COUNT --element-size SIZE
+                                    --index INDEX
+                                    [--profile NAME] [--guard 'cond' ...]
+
+The canonical CWE-680 pattern:
+
+  size_t alloc_size = count * element_size;  // overflows on uint32
+  buf = malloc(alloc_size);                  // undersized due to wrap
+  for (i = 0; i < count; i++) buf[i] = ...;  // OOB write past wrap
+
+The verb composes ``check_overflow``'s wrap predicate with ``check_oob``'s
+bound-violation predicate into a single check — saves operators from
+running both verbs separately and reconciling the verdicts.
+
+``--profile`` defaults to ``uint32`` (most CWE-680 findings involve
+32-bit unsigned arithmetic). Override to match the C type of
+``alloc_size`` (the wrapped result).
+
+``--guard`` is repeatable. Pass any visible guards (e.g.
+``--guard 'count > 0'`` to exclude the degenerate count=0 case).
+
+Output: JSON to stdout matching :func:`validate_path`'s shape.
+
+  feasible=true   CWE-680 IS reachable; ``model`` shows a concrete
+                  (count, element_size, index) triple satisfying both
+                  the wrap AND the OOB write
+  feasible=false  guards rule out either the wrap or the OOB
+  feasible=null   Z3 unavailable / unencodable
+"""
+import argparse
+import json
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+import os
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from packages.exploit_feasibility.smt_verbs import check_overflow_to_oob
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(
+        prog="raptor-smt-check-overflow-to-oob",
+        description="Stage E SMT verb for CWE-680 (overflow → buffer overflow).",
+    )
+    p.add_argument("--count", required=True,
+                   help="Identifier/literal naming the count operand")
+    p.add_argument("--element-size", required=True, dest="element_size",
+                   help="Identifier/literal naming the per-element size")
+    p.add_argument("--index", required=True,
+                   help="Identifier naming the loop index at the write site")
+    p.add_argument("--profile", default="uint32",
+                   help="Bitvector profile name (default: uint32)")
+    p.add_argument("--guard", action="append", default=[],
+                   help="Visible bounds-check / path condition (repeat)")
+    args = p.parse_args()
+
+    try:
+        result = check_overflow_to_oob(
+            args.count,
+            args.element_size,
+            args.index,
+            profile=args.profile,
+            guards=args.guard,
+        )
+    except (TypeError, ValueError) as e:
+        print(f"raptor-smt-check-overflow-to-oob: {e}", file=sys.stderr)
+        return 2
+
+    json.dump(result, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

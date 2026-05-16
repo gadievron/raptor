@@ -216,9 +216,24 @@ def parse_cc_freeform(stdout: str, stderr: str = "") -> dict[str, Any]:
     """
     content = stdout.strip()
     if not content:
+        # Pre-fix the error string only ran the stderr through
+        # `redact_secrets`. That covers credential leaks but NOT
+        # control bytes / ANSI escape sequences / BIDI overrides.
+        # Stderr from `claude` (or any subprocess we exec under
+        # cc_dispatch) can carry terminal-formatting bytes that —
+        # when interpolated into a log line and rendered to an
+        # operator's TTY — let an attacker forge log entries,
+        # repaint terminal output, or smuggle right-to-left
+        # mark / bidi-override sequences past audit displays.
+        # Defang via `escape_nonprintable` after the secret
+        # redaction so both classes of harm are neutralised.
+        from core.security.prompt_output_sanitise import escape_nonprintable
+        stderr_clean = escape_nonprintable(
+            redact_secrets((stderr or "")[:500])
+        )
         return {
             "content": "",
-            "error": f"empty output: {redact_secrets((stderr or '')[:500])}",
+            "error": f"empty output: {stderr_clean}",
         }
 
     try:

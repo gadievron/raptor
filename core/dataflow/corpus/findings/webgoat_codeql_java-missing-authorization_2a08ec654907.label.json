@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "webgoat_codeql_java-missing-authorization_2a08ec654907",
+  "verdict": "true_positive",
+  "fp_category": null,
+  "rationale": "@PathVariable userId (line 43) flows into UserProfile construction (line 51). The auth check on line 49 \u2014 `if (userId != null && !userId.equals(authUserId))` \u2014 is INVERTED: it proceeds only when the supplied userId is *different* from the authenticated user, so a user can view another user's profile. WebGoat's intentional IDOR (CWE-639) demo.",
+  "labeler": "handlabel-juice-shop-webgoat",
+  "labeled_at": "2026-05-10"
+}

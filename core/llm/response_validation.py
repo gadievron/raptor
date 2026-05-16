@@ -445,7 +445,28 @@ def validate_structured_response(
             fields[field_name] = FieldResult(status="ok", original=original)
             weighted_score += weight
 
-    quality = weighted_score / total_weight if total_weight > 0 else 0.0
+    # Pre-fix the no-data branch (`total_weight == 0`) silently
+    # returned `quality=0.0`, identical to "we have data and every
+    # field scored 0". Downstream consumers that gate on quality
+    # (consensus, retry decisions) can't tell whether:
+    #   * The response had fields and they all failed (quality=0
+    #     because every check returned 0) — operator should
+    #     investigate the response.
+    #   * The response had NO scorable fields (quality=0 because
+    #     no data went in) — operator should investigate the
+    #     SCHEMA / field-selection logic.
+    # Both look the same in the output. Log a debug line on the
+    # no-data path so the operator can grep for it when a quality
+    # value is suspicious. Behaviour-equivalent (still returns 0).
+    if total_weight > 0:
+        quality = weighted_score / total_weight
+    else:
+        import logging
+        logging.getLogger(__name__).debug(
+            "response_validation: no scorable fields (total_weight=0); "
+            "quality defaulting to 0 — verify schema / field-selection"
+        )
+        quality = 0.0
     quality = max(0.0, min(1.0, quality))
 
     # Deep-copy `raw` so a downstream caller mutating

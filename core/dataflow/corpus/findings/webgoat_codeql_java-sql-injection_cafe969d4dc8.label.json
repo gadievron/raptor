@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "webgoat_codeql_java-sql-injection_cafe969d4dc8",
+  "verdict": "false_positive",
+  "fp_category": "dead_code",
+  "rationale": "The @RequestParam strings are never used as SQL \u2014 line 43 is a String.contains() check against a hardcoded keyword list ('getConnection', 'PreparedStatement', etc.), part of a teaching exercise verifying the user typed the right Java keywords. No database query, no taint sink. From a CWE-89 perspective the entire 'sink' is dead.",
+  "labeler": "handlabel-juice-shop-webgoat",
+  "labeled_at": "2026-05-10"
+}

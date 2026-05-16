@@ -71,33 +71,68 @@ def test_finding_loads_and_label_matches(finding_path: Path):
     )
 
 
+_OPTIONAL_FIXTURE_PREFIXES = ("out/dataflow-corpus-fixtures/",)
+
+
+def _is_optional_fixture(rel_path: str) -> bool:
+    """``out/dataflow-corpus-fixtures/`` is gitignored — fresh
+    checkouts don't have it. Tests that need it skip cleanly when the
+    referenced file is missing; in-tree fixtures (under ``packages/``)
+    must always exist."""
+    return rel_path.startswith(_OPTIONAL_FIXTURE_PREFIXES)
+
+
 @pytest.mark.parametrize("finding_path", _finding_paths(), ids=lambda p: p.stem)
 def test_finding_fixture_paths_exist(finding_path: Path):
     finding = _load_finding(finding_path)
     referenced = {finding.source.file_path, finding.sink.file_path}
     referenced.update(s.file_path for s in finding.intermediate_steps)
     for rel in referenced:
-        assert (_REPO_ROOT / rel).exists(), (
-            f"finding {finding.finding_id} references missing fixture: {rel}"
-        )
+        full = _REPO_ROOT / rel
+        if not full.exists():
+            if _is_optional_fixture(rel):
+                pytest.skip(
+                    f"optional fixture not cloned: {rel} "
+                    f"(see core/dataflow/corpus/SOURCES.md)"
+                )
+            pytest.fail(
+                f"finding {finding.finding_id} references missing fixture: {rel}"
+            )
 
 
 @pytest.mark.parametrize("finding_path", _finding_paths(), ids=lambda p: p.stem)
 def test_finding_snippets_match_fixture_content(finding_path: Path):
     """Every (file_path, line, snippet) triple must correspond to the
     actual content of the fixture file at that line. Catches silent
-    drift when iris_e2e fixtures change upstream without corpus updates."""
+    drift when fixtures change upstream without corpus updates.
+
+    Empty snippets fail this test: ``"" in actual`` is always True,
+    which would let drift slip through silently. Producers that emit
+    no snippet text (some CodeQL paths) must be backfilled from
+    source by the importer (see ``owasp_corpus_generator``).
+    """
     finding = _load_finding(finding_path)
 
     def _check(step, role: str) -> None:
+        claimed = step.snippet.strip()
+        assert claimed, (
+            f"{finding.finding_id} {role} L{step.line}: empty snippet "
+            f"({step.file_path}); importer must backfill from source"
+        )
         path = _REPO_ROOT / step.file_path
+        if not path.exists():
+            if _is_optional_fixture(step.file_path):
+                pytest.skip(
+                    f"optional fixture not cloned: {step.file_path} "
+                    f"(see core/dataflow/corpus/SOURCES.md)"
+                )
+            pytest.fail(f"missing fixture: {step.file_path}")
         lines = path.read_text().splitlines()
         assert step.line <= len(lines), (
             f"{finding.finding_id} {role}: line {step.line} > "
             f"file len {len(lines)} ({step.file_path})"
         )
         actual = lines[step.line - 1].strip()
-        claimed = step.snippet.strip()
         assert claimed in actual or actual in claimed, (
             f"{finding.finding_id} {role} L{step.line} drift "
             f"({step.file_path}):\n"

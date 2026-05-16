@@ -32,10 +32,10 @@ _PREFIX = b"RAPTOR: "
 def warn_post_fork(message: bytes) -> None:
     """Emit a fork-safe degraded-mode warning to stderr.
 
-    ``message`` must be ``bytes`` (already encoded; no f-strings). The
-    ``RAPTOR: `` prefix is prepended automatically unless ``message``
+    `message` must be `bytes` (already encoded; no f-strings). The
+    `RAPTOR: ` prefix is prepended automatically unless `message`
     already starts with it. The caller should include a trailing
-    ``\\n`` in ``message``.
+    `\\n` in `message`.
 
     Errors are swallowed — stderr may be closed/redirected in a
     sandboxed child; the alternative is letting preexec_fn raise,

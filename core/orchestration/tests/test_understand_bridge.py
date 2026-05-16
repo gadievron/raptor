@@ -293,6 +293,82 @@ class TestHashFreshness:
         hashes = _extract_hashes(MINIMAL_CHECKLIST)
         assert hashes == {"src/routes/query.py": "aaa", "src/db/query.py": "bbb"}
 
+    def test_extract_hashes_guards_missing_path(self):
+        """File entry with sha256 but no path key skipped silently
+        (regression for R25 guard against KeyError in older
+        understand outputs that recorded synthesised pseudo-files
+        with hash-only entries)."""
+        checklist = {
+            "files": [
+                {"path": "good.py", "sha256": "111"},
+                {"sha256": "222"},  # missing path
+                {"path": "also_good.py", "sha256": "333"},
+            ]
+        }
+        # Pre-fix this raised KeyError mid-comprehension. Now skips
+        # the path-less entry and returns the good ones.
+        assert _extract_hashes(checklist) == {
+            "good.py": "111",
+            "also_good.py": "333",
+        }
+
+    def test_extract_hashes_guards_missing_sha(self):
+        """File entry with path but no sha256 key skipped silently
+        (the existing `if f.get('sha256')` guard, still validates
+        the post-R25 isinstance shape)."""
+        checklist = {
+            "files": [
+                {"path": "with_sha.py", "sha256": "abc"},
+                {"path": "no_sha.py"},  # missing sha256
+                {"path": "also_no_sha.py", "sha256": ""},  # empty
+                {"path": "good.py", "sha256": "def"},
+            ]
+        }
+        assert _extract_hashes(checklist) == {
+            "with_sha.py": "abc",
+            "good.py": "def",
+        }
+
+    def test_extract_hashes_guards_non_dict_entry(self):
+        """Non-dict element in `files` list skipped silently
+        (regression for R25 isinstance guard against AttributeError
+        when a corrupt-list-element snuck in)."""
+        checklist = {
+            "files": [
+                {"path": "good.py", "sha256": "111"},
+                "this_is_not_a_dict",  # corrupt element
+                None,
+                42,
+                ["nested", "list"],
+                {"path": "also_good.py", "sha256": "222"},
+            ]
+        }
+        # Pre-fix the string / list entries raised AttributeError on
+        # `.get('sha256')`. Now isinstance(f, dict) skips them.
+        assert _extract_hashes(checklist) == {
+            "good.py": "111",
+            "also_good.py": "222",
+        }
+
+    def test_extract_hashes_guards_non_string_values(self):
+        """File entry with non-string path/sha256 skipped silently
+        (the post-R25 isinstance(str) guard rejects int/None/list
+        values that would otherwise contaminate the dict and break
+        downstream filename-comparison logic)."""
+        checklist = {
+            "files": [
+                {"path": "good.py", "sha256": "111"},
+                {"path": 42, "sha256": "222"},  # non-string path
+                {"path": "x.py", "sha256": None},  # non-string sha
+                {"path": "y.py", "sha256": ["list", "value"]},
+                {"path": "also_good.py", "sha256": "333"},
+            ]
+        }
+        assert _extract_hashes(checklist) == {
+            "good.py": "111",
+            "also_good.py": "333",
+        }
+
     def test_stale_empty_when_matching(self, tmp_path):
         """On-disk files matching understand hashes → no stale files."""
         import hashlib
@@ -749,6 +825,73 @@ class TestPathConditionsForwarding:
 # ---------------------------------------------------------------------------
 # normalize_context_map
 # ---------------------------------------------------------------------------
+
+class TestUncheckedFlowPathConditionsImport:
+    """A4: /understand --map's sink_details may carry optional
+    `path_conditions` / `path_profile` for memory-corruption /
+    arithmetic / bounds sinks. The bridge propagates each such
+    unchecked_flow as an attack-paths.json entry so Stage B's SMT
+    pre-flight ([B-3.1.5]) finds the conditions ready-made instead
+    of re-extracting from source."""
+
+    def _build_context_map(self, sink_extras=None):
+        """Build a context_map with one unchecked_flow + sink_detail.
+        `sink_extras` overrides on the sink_detail (e.g. add
+        path_conditions / path_profile)."""
+        cm = copy.deepcopy(MINIMAL_CONTEXT_MAP)
+        if sink_extras:
+            cm["sink_details"][0].update(sink_extras)
+        return cm
+
+    def _import_and_get_paths(self, tmp_path, sink_extras=None):
+        understand_dir = tmp_path / "understand"
+        validate_dir = tmp_path / "validate"
+        understand_dir.mkdir()
+        validate_dir.mkdir()
+        _write_json(
+            understand_dir / "context-map.json",
+            self._build_context_map(sink_extras),
+        )
+        load_understand_context(understand_dir, validate_dir)
+        paths_path = validate_dir / "attack-paths.json"
+        if not paths_path.exists():
+            return []
+        return json.loads(paths_path.read_text())
+
+    def test_no_conditions_no_attack_path(self, tmp_path):
+        """sink_detail without path_conditions → no attack-paths
+        entry. The existing priority_targets path covers this case
+        without polluting attack-paths.json."""
+        paths = self._import_and_get_paths(tmp_path)
+        # No path_conditions on the sink, no path-with-source=map
+        assert not any(p.get("source") == "understand:map" for p in paths)
+
+    def test_with_conditions_emits_attack_path(self, tmp_path):
+        """sink_detail with path_conditions → attack-paths entry
+        carrying the conditions + understand:map source label."""
+        paths = self._import_and_get_paths(tmp_path, sink_extras={
+            "path_conditions": ["strlen(argv[1]) >= 16"],
+            "path_profile": "uint64",
+        })
+        map_paths = [p for p in paths if p.get("source") == "understand:map"]
+        assert len(map_paths) == 1
+        entry = map_paths[0]
+        assert entry["path_conditions"] == ["strlen(argv[1]) >= 16"]
+        assert entry["path_profile"] == "uint64"
+
+    def test_malformed_conditions_dropped(self, tmp_path):
+        """Same validation as the trace path: malformed path_conditions
+        (not a list) drop the field rather than poison downstream."""
+        paths = self._import_and_get_paths(tmp_path, sink_extras={
+            "path_conditions": "not a list",
+        })
+        # Either no entry written (no valid conditions) or entry
+        # without path_conditions — both are acceptable, the key
+        # is malformed data doesn't propagate
+        for p in paths:
+            if p.get("source") == "understand:map":
+                assert "path_conditions" not in p
+
 
 class TestNormalizeContextMap:
     def _checklist(self, files):

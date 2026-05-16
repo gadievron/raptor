@@ -1091,3 +1091,262 @@ class TestParensGrouping:
         rej = next(x for x in r.unknown_reasons if x.text == f"{inner} > 0")
         assert rej.kind is RejectionKind.UNRECOGNIZED_FORM
         assert "depth" in rej.detail
+
+
+# ---------------------------------------------------------------------------
+# check_path_feasibility — input hardening caps
+# ---------------------------------------------------------------------------
+
+class TestInputLimits:
+    """Pre-parse caps on input size and call shape (C4 parser hardening).
+
+    These caps defend the parser against pathological inputs without
+    relying on Z3's per-call timeout — they fire before any solver work
+    runs, so even a malformed extraction or amplification attack costs
+    only the cap-check, not parser walk + Z3 round-trip.
+    """
+
+    @_requires_z3
+    def test_condition_length_within_cap_accepted(self):
+        """A condition just under ``_MAX_CONDITION_CHARS`` parses normally."""
+        from packages.codeql.smt_path_validator import _MAX_CONDITION_CHARS
+        # Build a condition of length _MAX_CONDITION_CHARS that the parser
+        # accepts: ``x + x + x + ... > 0``.  Each ``x + `` token is 4 chars.
+        prefix = "x + " * ((_MAX_CONDITION_CHARS - len("x > 0")) // 4)
+        cond = prefix + "x > 0"
+        assert len(cond) <= _MAX_CONDITION_CHARS
+        r = check_path_feasibility([PathCondition(cond, step_index=0)])
+        # Either feasible or rejected for non-length reasons — must NOT
+        # carry INPUT_TOO_LONG.
+        kinds = {rej.kind for rej in r.unknown_reasons}
+        assert RejectionKind.INPUT_TOO_LONG not in kinds
+
+    @_requires_z3
+    def test_condition_length_over_cap_rejected(self):
+        """A condition exceeding ``_MAX_CONDITION_CHARS`` is rejected with
+        ``INPUT_TOO_LONG`` before any parser work runs."""
+        from packages.codeql.smt_path_validator import _MAX_CONDITION_CHARS
+        huge = "x" + ("=" * _MAX_CONDITION_CHARS) + "y"
+        assert len(huge) > _MAX_CONDITION_CHARS
+        r = check_path_feasibility([PathCondition(huge, step_index=0)])
+        assert huge in r.unknown
+        rej = next(x for x in r.unknown_reasons if x.text == huge)
+        assert rej.kind is RejectionKind.INPUT_TOO_LONG
+        # Detail mentions the observed length and the cap.
+        assert str(len(huge)) in rej.detail
+        assert str(_MAX_CONDITION_CHARS) in rej.detail
+        # Hint guides the caller to a fix.
+        assert "shorten" in rej.hint or "split" in rej.hint
+
+    @_requires_z3
+    def test_condition_count_within_cap_accepted(self):
+        """A call with ``_MAX_CONDITIONS_PER_CALL`` items runs normally."""
+        from packages.codeql.smt_path_validator import _MAX_CONDITIONS_PER_CALL
+        # Use distinct variable names per condition so they trivially
+        # satisfy together — focus the test on the count check, not on
+        # condition semantics.
+        conds = [
+            PathCondition(f"x{i} > 0", step_index=i)
+            for i in range(_MAX_CONDITIONS_PER_CALL)
+        ]
+        r = check_path_feasibility(conds)
+        # Either feasible or rejected for non-count reasons — must NOT
+        # carry TOO_MANY_CONDITIONS.
+        kinds = {rej.kind for rej in r.unknown_reasons}
+        assert RejectionKind.TOO_MANY_CONDITIONS not in kinds
+
+    @_requires_z3
+    def test_condition_count_over_cap_refused(self):
+        """A call with more than ``_MAX_CONDITIONS_PER_CALL`` items refuses
+        the whole call with ``feasible=None`` and a single
+        ``TOO_MANY_CONDITIONS`` rejection."""
+        from packages.codeql.smt_path_validator import _MAX_CONDITIONS_PER_CALL
+        n = _MAX_CONDITIONS_PER_CALL + 1
+        conds = [
+            PathCondition(f"x{i} > 0", step_index=i) for i in range(n)
+        ]
+        r = check_path_feasibility(conds)
+        # Whole call refused — no partial verdict.
+        assert r.feasible is None
+        # Every input condition is in unknown (caller can match them back).
+        assert len(r.unknown) == n
+        # Exactly one TOO_MANY_CONDITIONS rejection — not one per condition,
+        # because the cap is a call-shape issue, not a per-condition issue.
+        too_many = [
+            rej for rej in r.unknown_reasons
+            if rej.kind is RejectionKind.TOO_MANY_CONDITIONS
+        ]
+        assert len(too_many) == 1
+        rej = too_many[0]
+        assert str(n) in rej.detail
+        assert str(_MAX_CONDITIONS_PER_CALL) in rej.detail
+        # Reasoning surfaces the cap so log readers understand the refusal.
+        assert "refused" in r.reasoning.lower()
+        assert str(_MAX_CONDITIONS_PER_CALL) in r.reasoning
+
+    @_requires_z3
+    def test_length_cap_fires_before_paren_depth(self):
+        """When BOTH limits would fire, INPUT_TOO_LONG should reach the
+        caller first — the length check runs at the very top of
+        _parse_condition, before any structural inspection.
+
+        This matters because the length check is cheap (one comparison)
+        while paren-depth detection runs the early-balance scan over the
+        whole input.  An adversarial input that's both very long AND has
+        deep nesting must short-circuit on length so the balance scan
+        never executes."""
+        from packages.codeql.smt_path_validator import (
+            _MAX_CONDITION_CHARS, _MAX_PAREN_DEPTH,
+        )
+        # Build a string that's BOTH over the char cap AND has deeper
+        # nesting than _MAX_PAREN_DEPTH.
+        inner = "x"
+        for _ in range(_MAX_PAREN_DEPTH + 1):
+            inner = f"({inner})"
+        # Pad with extra chars to exceed the char cap.
+        pad = "z" * (_MAX_CONDITION_CHARS + 10)
+        cond = f"{inner} == {pad}"
+        assert len(cond) > _MAX_CONDITION_CHARS
+        r = check_path_feasibility([PathCondition(cond, step_index=0)])
+        rej = next(x for x in r.unknown_reasons if x.text == cond)
+        # Length cap fires first.
+        assert rej.kind is RejectionKind.INPUT_TOO_LONG
+
+    @_requires_z3
+    def test_oversize_condition_among_normal_ones(self):
+        """One oversize condition is rejected without poisoning the rest
+        of the call — the other conditions still parse and contribute to
+        the joint feasibility verdict."""
+        from packages.codeql.smt_path_validator import _MAX_CONDITION_CHARS
+        huge = "y" + ("=" * _MAX_CONDITION_CHARS) + "0"
+        r = check_path_feasibility([
+            PathCondition("x > 0", step_index=0),
+            PathCondition(huge, step_index=1),
+            PathCondition("x < 100", step_index=2),
+        ])
+        # The two well-formed conditions are jointly satisfiable.
+        assert r.feasible is True
+        # The oversize one is rejected with INPUT_TOO_LONG.
+        assert huge in r.unknown
+        rej = next(x for x in r.unknown_reasons if x.text == huge)
+        assert rej.kind is RejectionKind.INPUT_TOO_LONG
+
+
+# ---------------------------------------------------------------------------
+# check_path_feasibility — prefer_witness (Z3 Optimize integration)
+# ---------------------------------------------------------------------------
+
+class TestPreferWitness:
+    """Driving the witness toward extreme values via z3.Optimize.
+
+    Without ``prefer_witness`` Z3 returns the smallest model that
+    satisfies the conditions — typically the trivial ``x=0``
+    assignment.  With ``prefer_witness=("var", "max")`` (or ``"min"``)
+    the encoder swaps in ``z3.Optimize`` and adds a maximize / minimize
+    objective on the named variable, producing an *exploit*-shape
+    witness instead.
+    """
+
+    def _cwe190_conds(self):
+        # Canonical CWE-190 32-bit wraparound shape.  Without a witness
+        # hint Z3 returns ``count=0``; with ``max:count`` it lands in
+        # the wraparound region (count * 16 > 2^32 - 1).
+        return [
+            PathCondition("alloc_size == count * 16", step_index=0),
+            PathCondition("alloc_size < 0x8000", step_index=1),
+        ]
+
+    @_requires_z3
+    def test_default_returns_trivial_witness(self):
+        """Sanity baseline: without prefer_witness, CWE-190 conditions
+        produce the trivial count=0 witness."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            self._cwe190_conds(), profile=BV_C_UINT32,
+        )
+        assert r.feasible is True
+        assert r.model.get("count") == 0
+
+    @_requires_z3
+    def test_max_drives_witness_into_wraparound_region(self):
+        """``max:count`` produces a witness where count * 16 exceeds
+        2^32 — confirming Z3 found a wraparound assignment."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            self._cwe190_conds(), profile=BV_C_UINT32,
+            prefer_witness=("count", "max"),
+        )
+        assert r.feasible is True
+        count = r.model.get("count")
+        assert count is not None and count > 0, (
+            f"prefer_witness max:count should produce non-trivial count, got {count}"
+        )
+        # On uint32, count * 16 in C semantics wraps; the test confirms
+        # the witness lands in a region where unwrapped multiplication
+        # would exceed UINT32_MAX.
+        assert count * 16 > 0xFFFFFFFF, (
+            f"witness count={count} does not lie in the wraparound region"
+        )
+
+    @_requires_z3
+    def test_min_drives_witness_to_floor(self):
+        """``min:count`` with a lower-bound condition returns the
+        smallest count above the bound."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            self._cwe190_conds() + [PathCondition("count > 1000", step_index=2)],
+            profile=BV_C_UINT32,
+            prefer_witness=("count", "min"),
+        )
+        assert r.feasible is True
+        # min above the floor of 1000 → 1001.
+        assert r.model.get("count") == 1001
+
+    @_requires_z3
+    def test_absent_variable_silent_skip(self):
+        """When the named variable doesn't appear in any condition the
+        objective is silently dropped and the witness reverts to the
+        default smallest-model behaviour.  No error — Z3 still returns
+        a valid (non-extremal) witness."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            self._cwe190_conds(), profile=BV_C_UINT32,
+            prefer_witness=("bogusvar", "max"),
+        )
+        assert r.feasible is True
+        # Default trivial witness comes back (count=0); no exception
+        # raised for the missing variable.
+        assert r.model.get("count") == 0
+        assert "bogusvar" not in r.model
+
+    @_requires_z3
+    def test_unsat_still_unsat_in_witness_mode(self):
+        """An unsat path remains unsat regardless of witness direction
+        — the objective only affects which sat witness is chosen, not
+        whether one exists.  unsat-core info must still surface."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            [PathCondition("x > 100", step_index=0),
+             PathCondition("x < 50", step_index=1)],
+            profile=BV_C_UINT32,
+            prefer_witness=("x", "max"),
+        )
+        assert r.feasible is False
+        # unsat-core info preserved across the Solver→Optimize swap.
+        assert "x > 100" in r.unsatisfied
+        assert "x < 50" in r.unsatisfied
+
+    @_requires_z3
+    def test_witness_mode_compatible_with_timeout(self):
+        """``timeout_ms`` is honoured by the Optimize backend the same
+        way it is by Solver — empty pending list short-circuits to
+        ``feasible=True`` without solver work, but the timeout config
+        threads through cleanly."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            self._cwe190_conds(), profile=BV_C_UINT32,
+            prefer_witness=("count", "max"),
+            timeout_ms=10000,
+        )
+        assert r.feasible is True
+        assert r.model.get("count") is not None

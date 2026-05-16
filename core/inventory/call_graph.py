@@ -737,6 +737,60 @@ class _JsCallGraph:
 INDIRECTION_REFLECT = "reflect"
 
 
+def _go_bare_binding_names(path: str) -> List[str]:
+    """Binding names a bare Go ``import "<path>"`` makes available.
+
+    Go's nominal rule is "the last path segment is the package
+    identifier", but two well-known conventions make that wrong
+    often enough to bite SCA's function-level reachability on
+    real-world Go code:
+
+      * **Versioned modules.** ``github.com/foo/bar/v2`` is a Go-
+        modules path-versioning convention. The package name is
+        almost always ``bar`` (the pre-version segment), not ``v2``
+        — callers write ``bar.SomeFunc(...)``. Bare-last-segment
+        binding misses every call to such a package.
+      * **Hyphenated dir names.** Go identifiers can't contain
+        hyphens, so a package at ``github.com/foo/bar-utils``
+        declares its package name without the hyphen (usually
+        ``barutils``, sometimes a shorter form). Bare-last-segment
+        gives ``"bar-utils"`` which no real Go call site uses.
+
+    Both conventions are common — versioned modules grow with
+    every major release post-2019; hyphenated dirs hit any
+    multi-word package name. Adding the convention-aware aliases
+    converts MISSED call edges into resolved ones without false
+    positives (the aliases coexist with the literal last-segment
+    binding; the resolver only matches what's actually called).
+
+    Returns a list (LAST segment first, then aliases). Caller
+    binds in order without overwriting existing entries — first
+    import wins, matching Go's compile-time duplicate-name rule.
+    """
+    names: List[str] = []
+    last = path.rsplit("/", 1)[-1]
+    if not last:
+        return names
+
+    names.append(last)
+
+    # Versioned module suffix: also bind the pre-version segment.
+    if last.startswith("v") and len(last) > 1 and last[1:].isdigit():
+        stripped = path.rsplit("/", 1)[0]
+        if stripped:
+            pre_v_last = stripped.rsplit("/", 1)[-1]
+            if pre_v_last:
+                names.append(pre_v_last)
+                if "-" in pre_v_last:
+                    names.append(pre_v_last.replace("-", ""))
+
+    # Hyphenated last segment: also bind a hyphen-collapsed form.
+    if "-" in last:
+        names.append(last.replace("-", ""))
+
+    return names
+
+
 def extract_call_graph_go(content: str) -> FileCallGraph:
     """Walk a Go source string via tree-sitter and return its
     :class:`FileCallGraph`.
@@ -908,10 +962,13 @@ class _GoCallGraph:
                 self.graph.imports[binding.text.decode()] = path
                 return
 
-        # Bare import: bind the LAST segment of the path.
-        last_segment = path.rsplit("/", 1)[-1]
-        if last_segment:
-            self.graph.imports[last_segment] = path
+        # Bare import: bind the LAST segment plus convention-aware
+        # aliases (versioned modules / hyphenated dirs). Don't
+        # overwrite existing bindings — Go's "first import wins"
+        # semantics handle real collisions via explicit aliasing.
+        for name in _go_bare_binding_names(path):
+            if name and name not in self.graph.imports:
+                self.graph.imports[name] = path
 
     def _import_path(self, spec) -> Optional[str]:
         """Pull the string literal out of an import_spec."""

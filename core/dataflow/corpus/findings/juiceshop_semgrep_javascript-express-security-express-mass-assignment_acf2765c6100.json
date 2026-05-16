@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "finding_id": "juiceshop_semgrep_javascript-express-security-express-mass-assignment_acf2765c6100",
+  "producer": "semgrep",
+  "rule_id": "javascript.express.security.express-mass-assignment",
+  "message": "user-controlled review id used in update",
+  "source": {
+    "file_path": "out/dataflow-corpus-fixtures/juice-shop/data/static/codefixes/forgedReviewChallenge_2_correct.ts",
+    "line": 2,
+    "column": 0,
+    "snippet": "return (req: Request, res: Response, next: NextFunction) => {",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "out/dataflow-corpus-fixtures/juice-shop/data/static/codefixes/forgedReviewChallenge_2_correct.ts",
+    "line": 4,
+    "column": 0,
+    "snippet": "db.reviewsCollection.update(",
+    "label": "sink"
+  },
+  "intermediate_steps": [
+    {
+      "file_path": "out/dataflow-corpus-fixtures/juice-shop/data/static/codefixes/forgedReviewChallenge_2_correct.ts",
+      "line": 3,
+      "column": 0,
+      "snippet": "const user = security.authenticatedUsers.from(req)",
+      "label": "step"
+    }
+  ],
+  "raw": {}
+}

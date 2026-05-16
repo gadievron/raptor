@@ -119,6 +119,20 @@ if [[ "${1:-}" == "project" ]]; then
     exec "$RAPTOR_DIR/libexec/raptor-project-manager" "$@"
 fi
 
+# Route doctor directly (no Claude needed) — the doctor is a status
+# report on local setup, and `raptor doctor` is precisely the
+# command an operator runs when claude itself is missing.
+# Export RAPTOR_DIR + _RAPTOR_TRUSTED here because the main path's
+# `export RAPTOR_DIR` (below) hasn't run yet; doctor needs them
+# in the python subprocess env.
+if [[ "${1:-}" == "doctor" ]]; then
+    shift
+    cd "$RAPTOR_DIR" || exit 1
+    export RAPTOR_DIR
+    export _RAPTOR_TRUSTED=1
+    exec python3 -m core.startup.doctor "$@"
+fi
+
 # Claude required for everything else
 if ! command -v claude >/dev/null 2>&1; then
     echo "raptor: claude not found. Install Claude Code:" >&2
@@ -161,6 +175,23 @@ while [[ $# -gt 0 ]]; do
             [[ $# -ge 2 ]] || { echo "raptor: $1 requires a value" >&2; exit 1; }
             STARTUP_ARGS+=("-p" "$2")
             shift 2
+            ;;
+        --project=*)
+            # `--project=foo` form. Pre-fix only `--project foo`
+            # (separate args) was accepted — the `--project=foo`
+            # convention is standard for GNU long-options and
+            # operators familiar with it (gcc, find, grep) hit
+            # "unknown option" on the launcher when they used it.
+            # Strip the `--project=` prefix and route through the
+            # same STARTUP_ARGS path.
+            _proj_value="${1#--project=}"
+            if [ -z "$_proj_value" ]; then
+                echo "raptor: --project= requires a value" >&2
+                exit 1
+            fi
+            STARTUP_ARGS+=("-p" "$_proj_value")
+            unset _proj_value
+            shift
             ;;
         -c|--continue)
             CLAUDE_ARGS+=("--continue")
@@ -236,7 +267,20 @@ elif [ -d "$RAPTOR_CALLER_DIR" ]; then
     CHECK_TARGET="$RAPTOR_CALLER_DIR"
 fi
 
-# Pre-flight: target-repo trust check (core/security/cc_trust.py).
+# Clear the screen BEFORE pre-flight checks so any warning /
+# error output from `raptor-cc-trust-check` or
+# `raptor-startup-check` stays visible to the operator. Pre-fix
+# the `clear` call lived AFTER the pre-flight checks (just before
+# `exec claude`), wiping every line they emitted to stderr —
+# trust-check warnings about untrusted target repos, startup-check
+# diagnostics about API key configuration, project-mismatch
+# prompts. The operator launched what looked like a clean Claude
+# session unaware that the launcher had flagged a problem.
+# Moving `clear` here keeps the visual reset (legitimate UX —
+# operators expect a fresh screen on every `raptor` launch)
+# without erasing actionable diagnostics from the gates that
+# decide WHETHER to launch.
+clear
 # Same policy shared with raptor_agentic.py + build_detector.py.
 if [ -n "$CHECK_TARGET" ]; then
     set +e
@@ -273,7 +317,9 @@ if [ -d "$RAPTOR_DIR/plugins/coverage" ]; then
     PLUGIN_ARGS+=(--plugin-dir "$RAPTOR_DIR/plugins/coverage")
 fi
 
-clear
+# Clear was previously called here, but moved earlier (before
+# pre-flight checks) so trust-check / startup-check stderr stays
+# visible. See the `clear` comment above.
 # `env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS` defensively
 # strips a small set of shell-eval env vars at the exec boundary,
 # even if our earlier source of `_dangerous_env_strip.sh` missed

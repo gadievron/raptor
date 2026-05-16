@@ -86,11 +86,14 @@ Other limitations (verdict still trustworthy, but with caveats):
     first-cut design; per-variable typing is the next step when a
     real case demands it.
   - **Z3 picks the smallest satisfying witness by default**, which is
-    often the trivial assignment (``x = 0``).  To find an *exploit*
-    witness, add a lower-bound condition that forces the dangerous
-    range (e.g. ``count > 0x10000000`` for CWE-190 wraparound at
-    uint32).  Will be addressed by Z3 Optimize integration in a
-    follow-up.
+    often the trivial assignment (``x = 0``).  To drive the witness
+    into the dangerous range, pass ``prefer_witness=("count", "max")``
+    (or the shim's ``--prefer-witness max:count``) and the encoder
+    swaps in a ``z3.Optimize`` backend with the corresponding
+    ``maximize`` objective.  Manual lower-bound hints (e.g.
+    ``count > 0x10000000``) still work and remain useful when the
+    caller wants to constrain the search to a specific subrange
+    rather than push to the extreme.
 
 Integration: packages/codeql/dataflow_validator.py :: DataflowValidator
 """
@@ -113,6 +116,7 @@ from core.smt_solver import (
     core_names as _core_names,
     mk_val as _mk_val,
     mk_var as _mk_var,
+    new_optimizer as _new_optimizer,
     new_solver as _new_solver,
     parse_literal_value as _parse_literal_value,
     propagate as _propagate,
@@ -202,6 +206,22 @@ _PRECEDENCE: Dict[str, int] = {
 # input with deep nesting can blow the Python call stack.  64 levels is
 # far more than any real C condition would ever need.
 _MAX_PAREN_DEPTH = 64
+
+# Maximum length in characters of a single condition string.  Defends the
+# parser against pathological inputs whose runtime is linear in length but
+# whose total length is unboundedly large (e.g. a 1 MB string of operators).
+# Real path-conditions extracted from source rarely exceed a few hundred
+# characters even with verbose chained predicates; 2048 is generously above
+# any observed legitimate input.  Companion bound to ``_MAX_PAREN_DEPTH``
+# (depth) — together they cap both axes of parser cost.
+_MAX_CONDITION_CHARS = 2048
+
+# Maximum number of conditions accepted in a single ``check_path_feasibility``
+# call.  Real findings carry 1-10 conditions; tens of thousands signals
+# malformed upstream extraction or amplification.  When exceeded the call
+# degrades to ``feasible=None`` so partial answers can't be misread as
+# authoritative.
+_MAX_CONDITIONS_PER_CALL = 64
 
 # Operator-shaped tokens we recognise but don't accept as binary operators
 # inside ``_parse_expr`` — they belong to the relational or bitmask layer
@@ -332,26 +352,50 @@ def _parse_expr(
         # input.  Raise so the invariant survives under ``python -O``.
         raise RuntimeError(f"unhandled operator {op!r}")
 
+    # Recursion depth bound for `_climb`. Pre-fix the recursive
+    # precedence-climber unwound through Python's call stack one
+    # frame per nested operator. A long flat chain like
+    # `a+a+a+a+...+a` (1000+ ops) crossed Python's default
+    # recursion limit (~1000) and raised RecursionError, which
+    # bypassed every Rejection-shaped error path the parser
+    # relied on. Bound depth explicitly + return a Rejection
+    # rather than crashing. 256 is well above any realistic
+    # human-or-LLM-emitted condition (deeply-nested constraints
+    # in real RAPTOR runs top out at <20 ops).
+    _MAX_CLIMB_DEPTH = 256
+    _climb_depth = [0]
+
     def _climb(min_prec: int) -> Union[Any, Rejection]:
-        lhs = _atom()
-        if isinstance(lhs, Rejection):
-            return lhs
-        while pos[0] < len(tokens):
-            tok = tokens[pos[0]]
-            if tok not in _PRECEDENCE:
-                # Anything else — ``)``, a relational op, an extra atom —
-                # ends this climb level.  The outer dispatcher classifies
-                # the leftover (paren imbalance, unsupported operator, or
-                # plain trailing token).
-                break
-            prec = _PRECEDENCE[tok]
-            if prec < min_prec:
-                break
-            pos[0] += 1
-            rhs = _climb(prec + 1)  # left-associative
-            if isinstance(rhs, Rejection):
-                return rhs
-            lhs = _apply(tok, lhs, rhs)
+        if _climb_depth[0] >= _MAX_CLIMB_DEPTH:
+            return Rejection(
+                ' '.join(tokens),
+                RejectionKind.UNRECOGNIZED_FORM,
+                f"expression nesting exceeded depth {_MAX_CLIMB_DEPTH}; "
+                f"refusing to recurse further",
+            )
+        _climb_depth[0] += 1
+        try:
+            lhs = _atom()
+            if isinstance(lhs, Rejection):
+                return lhs
+            while pos[0] < len(tokens):
+                tok = tokens[pos[0]]
+                if tok not in _PRECEDENCE:
+                    # Anything else — ``)``, a relational op, an extra atom —
+                    # ends this climb level.  The outer dispatcher classifies
+                    # the leftover (paren imbalance, unsupported operator, or
+                    # plain trailing token).
+                    break
+                prec = _PRECEDENCE[tok]
+                if prec < min_prec:
+                    break
+                pos[0] += 1
+                rhs = _climb(prec + 1)  # left-associative
+                if isinstance(rhs, Rejection):
+                    return rhs
+                lhs = _apply(tok, lhs, rhs)
+        finally:
+            _climb_depth[0] -= 1
         return lhs
 
     result = _climb(0)
@@ -500,6 +544,21 @@ def _substitute_calls(
                 continue
             # Unbalanced: fall through and copy the head char-by-char so
             # the parens-check can flag it.
+        # Pre-fix the no-match path always did `i += 1`, even when
+        # `_CALL_HEAD_RE.match` returned an identifier-shaped match
+        # that just wasn't followed by `(`. That meant for an
+        # identifier-heavy input (100k chars of `foo bar baz qux ...`
+        # / large macro-expanded condition text), each character
+        # position re-scanned the identifier from scratch — O(N) per
+        # position × N positions = O(N²) wallclock.
+        # When we matched an identifier but it wasn't a call, jump
+        # past the identifier in one step instead of one char at a
+        # time. Append the matched substring as-is. Reduces O(N²)
+        # to O(N) for identifier-heavy text.
+        if m:
+            out.append(text[i:m.end()])
+            i = m.end()
+            continue
         out.append(text[i])
         i += 1
     return ''.join(out)
@@ -531,6 +590,19 @@ def _parse_condition(
     ``text`` (the original) is preserved for rejection messages so
     callers can match failures back to their input.
     """
+    # Hard cap on input size before any parsing work runs.  Defends the
+    # parser combinator against pathological inputs whose total length is
+    # unboundedly large.  See ``_MAX_CONDITION_CHARS`` for the rationale
+    # and tuning guidance.
+    if len(text) > _MAX_CONDITION_CHARS:
+        return Rejection(
+            text, RejectionKind.INPUT_TOO_LONG,
+            f"condition length {len(text)} exceeds limit {_MAX_CONDITION_CHARS}",
+            hint=(
+                f"shorten or split the predicate so each condition is at "
+                f"most {_MAX_CONDITION_CHARS} characters"
+            ),
+        )
     t = _substitute_calls(
         _canonicalise(text), vars_, profile=profile, anon_map=anon_map,
     )
@@ -558,9 +630,19 @@ def _parse_condition(
             f"{depth} unmatched '(' at end of input",
         )
 
-    # Bitmask: lhs & mask (==|!=) val
+    # Bitmask: lhs & mask (==|!=) val.
+    #
+    # Pre-fix the LHS was `(.+?)` — a lazy unbounded quantifier
+    # over ANY character, including `&`. On a non-bitmask input
+    # the regex engine had to expand `.+?` greedily one character
+    # at a time, hunting for a `&` separator that never arrived;
+    # for an N-character input that's O(N) failed-match cost per
+    # invocation. Same ReDoS shape that `_parse_atom` was already
+    # hardened against by switching to `[^&]+?` (negated class so
+    # the lazy quantifier short-circuits at the first `&`).
+    # Apply the same fix here for parity.
     m = re.fullmatch(
-        r'(.+?)\s*&\s*(0x[0-9a-f]+|\d+)\s*(==|!=)\s*(0x[0-9a-f]+|\d+)',
+        r'([^&]+?)\s*&\s*(0x[0-9a-f]+|\d+)\s*(==|!=)\s*(0x[0-9a-f]+|\d+)',
         t, re.IGNORECASE,
     )
     if m:
@@ -674,6 +756,8 @@ def _solve_pending(
     *,
     profile: BVProfile,
     anon_map: Optional[Dict[str, str]] = None,
+    prefer_witness: Optional[Tuple[str, str]] = None,
+    vars_: Optional[Dict[str, Any]] = None,
 ) -> PathSMTResult:
     """Run the solver over pending predicates and produce a verdict.
 
@@ -682,8 +766,37 @@ def _solve_pending(
     each input as tautology/pending/unknown; this function turns the
     pending list into a sat/unsat/unknown verdict and packages the
     result.
+
+    When ``prefer_witness`` is set, ``solver`` is expected to be a
+    ``z3.Optimize`` instance (the caller is responsible for the
+    backend swap).  This function then adds the appropriate
+    ``maximize`` or ``minimize`` objective for the named variable.
+    ``vars_`` carries the parser's interned BitVec table so the
+    objective lookup uses the same variable instance the predicates
+    were built against — name collisions in z3's hash-cons would
+    otherwise produce an objective on a freshly-minted variable
+    decoupled from the path.
     """
     mode = profile.describe()
+
+    # Apply the witness-direction objective before solving.  Silently
+    # skip if the named variable doesn't appear in the parsed
+    # conditions — the caller can spot this by inspecting `model` to
+    # confirm the variable is present, and the unsat-core /
+    # smallest-model behaviour still produces a valid (just not
+    # extremal) witness.
+    if prefer_witness is not None and pending and vars_ is not None:
+        var_name, direction = prefer_witness
+        target = vars_.get(var_name)
+        if target is not None:
+            if direction == "max":
+                solver.maximize(target)
+            elif direction == "min":
+                solver.minimize(target)
+            # Any other direction value is silently ignored — the
+            # caller's API (validate_path / shim) is responsible for
+            # vetting; defensive ignore avoids partial-objective
+            # state if a stray string gets here.
 
     # Default to empty dict so the field is always present on the
     # PathSMTResult — downstream consumers never need to None-check.
@@ -869,6 +982,8 @@ def check_path_feasibility(
     conditions: List[PathCondition],
     *,
     profile: BVProfile = BV_C_UINT64,
+    timeout_ms: Optional[int] = None,
+    prefer_witness: Optional[Tuple[str, str]] = None,
 ) -> PathSMTResult:
     """
     Check whether a set of path conditions are jointly satisfiable.
@@ -883,6 +998,20 @@ def check_path_feasibility(
                     rendering.  Defaults to BV_C_UINT64 (64-bit unsigned).
                     Use BV_C_UINT32 for CWE-190 32-bit wraparound paths;
                     BV_C_INT32 for signed-integer path conditions; etc.
+        prefer_witness: When set to ``(var_name, "max")`` or
+                    ``(var_name, "min")``, drive the satisfying witness
+                    toward an extreme value of ``var_name`` instead of
+                    Z3's default (smallest model).  Useful for CWE-190
+                    wraparound and similar bug classes where the
+                    *exploit* witness lives at the high end of a
+                    variable's domain — without ``prefer_witness`` Z3
+                    typically returns the trivial ``var=0`` model that
+                    technically satisfies the path but isn't a useful
+                    PoC seed.  When the named variable is absent from
+                    the parsed conditions (e.g. caller mistake or
+                    rejected via parser fall-through) the objective is
+                    silently skipped and the witness reverts to the
+                    default smallest-model behaviour.
 
     Returns:
         PathSMTResult.  feasible=None when Z3 is unavailable or every
@@ -900,6 +1029,37 @@ def check_path_feasibility(
             reasoning="z3 not available — install z3-solver for path feasibility analysis",
         )
 
+    # Hard cap on number of conditions per call.  Caller mistakes
+    # (malformed upstream extraction, accidental amplification) can
+    # flood the parser with tens of thousands of items.  Refuse the
+    # whole call cleanly so partial parser progress isn't misread as
+    # an authoritative feasibility verdict.
+    if len(conditions) > _MAX_CONDITIONS_PER_CALL:
+        cap_reason = Rejection(
+            text="",
+            kind=RejectionKind.TOO_MANY_CONDITIONS,
+            detail=(
+                f"{len(conditions)} conditions exceeds per-call cap "
+                f"{_MAX_CONDITIONS_PER_CALL}"
+            ),
+            hint=(
+                "split the path into smaller condition batches or "
+                "deduplicate before calling check_path_feasibility"
+            ),
+        )
+        return PathSMTResult(
+            feasible=None,
+            satisfied=[], unsatisfied=[],
+            unknown=[c.text for c in conditions],
+            unknown_reasons=[cap_reason],
+            model={}, smt_available=True,
+            reasoning=(
+                f"refused: {len(conditions)} conditions exceeds the per-call "
+                f"cap of {_MAX_CONDITIONS_PER_CALL} — caller should split or "
+                f"deduplicate before retrying"
+            ),
+        )
+
     if not conditions:
         return PathSMTResult(
             feasible=True,
@@ -910,7 +1070,27 @@ def check_path_feasibility(
         )
 
     vars_: Dict[str, Any] = {}
-    solver = _new_solver()
+    # Per-call timeout override. Default to the substrate's
+    # DEFAULT_TIMEOUT_MS (5s). Callers that know their CWE-class
+    # solving-cost profile (CWE-190 wraparound is fast; CWE-787
+    # OOB with complex array indexing may need longer) can pass
+    # a tuned value via _tier4_smt_refine or the libexec shims.
+    #
+    # When prefer_witness is set, swap z3.Solver for z3.Optimize so
+    # we can drive the witness toward a maximal/minimal value of a
+    # named variable.  Optimize shares the entire Solver interface
+    # (add/check/model/push/pop/assert_and_track/unsat_core) so the
+    # rest of the encoder is agnostic to which backend is in use.
+    if prefer_witness is not None:
+        solver = (
+            _new_optimizer(timeout_ms) if timeout_ms is not None
+            else _new_optimizer()
+        )
+    else:
+        solver = (
+            _new_solver(timeout_ms) if timeout_ms is not None
+            else _new_solver()
+        )
     # Per-check anon-var mapping. Populated by `_substitute_calls`
     # as it allocates `_anon_N` placeholders for function-call
     # subterms; threaded into the PathSMTResult so downstream
@@ -940,4 +1120,5 @@ def check_path_feasibility(
     return _solve_pending(
         pending, solver, satisfied, unknown, unknown_reasons,
         profile=profile, anon_map=anon_map,
+        prefer_witness=prefer_witness, vars_=vars_,
     )

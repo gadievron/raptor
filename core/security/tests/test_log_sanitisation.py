@@ -47,6 +47,43 @@ class TestEscapeNonprintable(unittest.TestCase):
         # isprintable()-based check catches them.
         self.assertEqual(escape_nonprintable("\x9b[31m"), "\\x9b[31m")
 
+    def test_escape_osc8_hyperlink_sequence(self):
+        # OSC 8 can turn harmless-looking text into a clickable URL in
+        # supporting terminals. Both ESC and BEL must be rendered inert.
+        self.assertEqual(
+            escape_nonprintable("safe \x1b]8;;https://evil.example\x07click\x1b]8;;\x07"),
+            "safe \\x1b]8;;https://evil.example\\x07click\\x1b]8;;\\x07",
+        )
+
+    def test_escape_osc52_clipboard_sequence(self):
+        # OSC 52 writes to the operator clipboard in some terminals.
+        self.assertEqual(
+            escape_nonprintable("copy \x1b]52;c;c2VjcmV0\x07 done"),
+            "copy \\x1b]52;c;c2VjcmV0\\x07 done",
+        )
+
+    def test_escape_dcs_pm_and_apc_sequences(self):
+        # DCS, PM, and APC are less common than CSI/OSC but are still
+        # terminal control channels and should be neutralised at the ESC byte.
+        payload = "\x1bPqdata\x1b\\ \x1b^private\x1b\\ \x1b_app\x1b\\"
+        expected = "\\x1bPqdata\\x1b\\ \\x1b^private\\x1b\\ \\x1b_app\\x1b\\"
+        self.assertEqual(escape_nonprintable(payload), expected)
+
+    def test_escape_partial_escape_sequence(self):
+        # Truncated control sequences are still hostile because a later write
+        # could complete them on a live terminal.
+        self.assertEqual(
+            escape_nonprintable("prefix \x1b]8;;https://evil.example"),
+            "prefix \\x1b]8;;https://evil.example",
+        )
+
+    def test_escape_very_long_hostile_string(self):
+        payload = "A" * 4096 + "\x1b]52;c;c2VjcmV0\x07" + "B" * 4096
+        escaped = escape_nonprintable(payload)
+        self.assertNotIn("\x1b", escaped)
+        self.assertNotIn("\x07", escaped)
+        self.assertIn("\\x1b]52;c;c2VjcmV0\\x07", escaped)
+
     def test_escape_unicode_line_separator(self):
         # U+2028 is a Unicode line separator — some JSON parsers and
         # terminals honour it as a newline. Not printable.
@@ -77,6 +114,24 @@ class TestHasNonprintable(unittest.TestCase):
 
     def test_with_c1_control_true(self):
         self.assertTrue(has_nonprintable("\x9b[31m"))
+
+    def test_escape_targets_are_detected(self):
+        samples = [
+            ("ansi_escape", "A\x1b[31mB"),
+            ("null_byte", "pre\x00post"),
+            ("crlf", "line1\r\nline2"),
+            ("tab", "a\tb"),
+            ("delete", "\x7f"),
+            ("c1_control", "\x9b[31m"),
+            ("osc8_hyperlink", "safe \x1b]8;;https://evil.example\x07click"),
+            ("osc52_clipboard", "copy \x1b]52;c;c2VjcmV0\x07 done"),
+            ("dcs_pm_apc", "\x1bPqdata\x1b\\ \x1b^private\x1b\\ \x1b_app\x1b\\"),
+            ("partial_escape", "prefix \x1b]8;;https://evil.example"),
+            ("unicode_line_separator", "a\u2028b"),
+        ]
+        for name, sample in samples:
+            with self.subTest(name=name):
+                self.assertTrue(has_nonprintable(sample))
 
     def test_unicode_printable_false(self):
         self.assertFalse(has_nonprintable("café 日本語"))

@@ -660,7 +660,28 @@ def bench(
         )
         raise typer.Exit(code=1)
     payload = json.loads(_sample_text)
-    cves = [c["cve_id"] for c in payload["cves"]]
+    # Pre-fix `payload["cves"]` and `c["cve_id"]` raised KeyError
+    # / TypeError on malformed sample files — the operator saw an
+    # opaque traceback instead of a structured "sample is missing
+    # the cves key" diagnostic. Validate shape before iterating
+    # so the error message points at the file format problem.
+    if not isinstance(payload, dict) or not isinstance(payload.get("cves"), list):
+        typer.echo(
+            f"bench: sample {sample} must be a JSON object with a "
+            f"'cves' list (got {type(payload).__name__})",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    cves = []
+    for c in payload["cves"]:
+        if not isinstance(c, dict) or not isinstance(c.get("cve_id"), str):
+            typer.echo(
+                f"bench: sample {sample} has a 'cves' entry without a "
+                f"string 'cve_id' field — skipping",
+                err=True,
+            )
+            continue
+        cves.append(c["cve_id"])
     if limit > 0:
         cves = cves[:limit]
 

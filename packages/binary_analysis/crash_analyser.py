@@ -548,13 +548,20 @@ class CrashAnalyser:
                 except OSError:
                     pass
 
-        # Debug: save GDB output for inspection (using proper temp file)
-        with tempfile.NamedTemporaryFile(mode='w', suffix='_gdb_output.txt', delete=False) as debug_f:
-            debug_file = Path(debug_f.name)
-            debug_f.write(result.stdout + "\n--- STDERR ---\n" + result.stderr)
-
-        # Log a summary of what we got
-        logger.debug(f"GDB output saved to {debug_file}")
+        # Pre-fix this branch wrote the GDB output to a
+        # `tempfile.NamedTemporaryFile(delete=False)` debug
+        # sidecar then logged the path at debug. Two problems:
+        #   * The temp file was NEVER cleaned up — every crash
+        #     analysis run leaked one `_gdb_output.txt` under
+        #     `$TMPDIR`. Long-lived agentic runs accumulated
+        #     hundreds of these.
+        #   * The "save GDB output for inspection" payload was
+        #     duplicated in the returned `result.stdout` which the
+        #     caller already passes to its own logging surfaces —
+        #     the temp file added no information.
+        # Drop the file write entirely; keep the debug-level log
+        # lines that summarise stdout/stderr lengths so operators
+        # who care about diagnostics still see the size signal.
         if result.stdout:
             logger.debug(f"GDB stdout length: {len(result.stdout)} chars")
         if result.stderr:
@@ -622,13 +629,13 @@ class CrashAnalyser:
                     pass
                 return self._run_lldb_fallback(input_file)
 
-            # Debug: save LLDB output for inspection
-            with tempfile.NamedTemporaryFile(mode='w', suffix=f'_lldb_{input_file.name}.txt', delete=False) as debug_f:
-                debug_file = Path(debug_f.name)
-                debug_f.write(result.stdout + "\n--- STDERR ---\n" + result.stderr)
-
-            # Log a summary of what we got
-            logger.debug(f"LLDB output saved to {debug_file}")
+            # Pre-fix this branch wrote LLDB output to a
+            # `tempfile.NamedTemporaryFile(delete=False)` debug
+            # sidecar that was never cleaned up — same leak as
+            # the GDB path above. The file's contents duplicated
+            # `result.stdout` which we already return to the
+            # caller; the operator's logging surfaces capture the
+            # data without the temp-file sidecar.
             if result.stdout:
                 logger.debug(f"LLDB stdout length: {len(result.stdout)} chars")
             if result.stderr:

@@ -282,15 +282,49 @@ class LLMProvider(ABC):
 
         Thinking/reasoning tokens are billed at the output rate on all
         providers (OpenAI, Google, Anthropic).
+
+        Pre-fix the unknown-model fallback returned 0.0 silently when
+        `cost_per_1k_tokens` was also 0 (the dataclass default). For
+        a model name absent from `MODEL_COSTS` AND no caller-supplied
+        rate, every call recorded $0 cost. Budget caps that depended
+        on cumulative cost were silently defeated — the model burned
+        tokens forever without tripping the cap. Operators saw
+        "current cost: $0.00" and assumed nothing was being spent.
+
+        Warn-once per model when the fallback rate is 0 so the
+        operator gets ONE log line per unknown model, not a flood.
+        Use a class-level set so the warn-once persists across
+        instances of the same provider.
         """
         from .model_data import MODEL_COSTS
         rates = MODEL_COSTS.get(self.config.model_name)
         if not rates:
             rate = self.config.cost_per_1k_tokens or 0.0
+            if rate == 0.0:
+                self._warn_unknown_model_once(self.config.model_name)
             return ((input_tokens + output_tokens + thinking_tokens) / 1000) * rate
         return (
             (input_tokens / 1000) * rates["input"]
             + ((output_tokens + thinking_tokens) / 1000) * rates["output"]
+        )
+
+    # Class-level (NOT instance-level) so we warn once per model name
+    # across the whole process, even when callers create fresh
+    # provider instances per request (a common pattern in the agentic
+    # dispatch path).
+    _warned_unknown_models: set = set()
+
+    @classmethod
+    def _warn_unknown_model_once(cls, model_name: str) -> None:
+        if model_name in cls._warned_unknown_models:
+            return
+        cls._warned_unknown_models.add(model_name)
+        logger.warning(
+            f"cost tracking: model {model_name!r} not in MODEL_COSTS "
+            f"and no cost_per_1k_tokens set — every call records $0. "
+            f"Budget caps based on cumulative cost are NOT enforced "
+            f"for this model. Add a rate to model_data.MODEL_COSTS "
+            f"or pass cost_per_1k_tokens to the LLMConfig."
         )
 
     def _structured_fallback(self, prompt: str, schema: Dict[str, Any],
@@ -324,7 +358,26 @@ class LLMProvider(ABC):
             result_dict = validated.model_dump()
             return result_dict, json.dumps(result_dict, indent=2)
         except Exception as e:
-            logger.error(f"Structured fallback failed (JSON parse or validation): {e}")
+            # Pre-fix the logger interpolated `e` directly into the
+            # log line. For `pydantic.ValidationError` (the typical
+            # failure here), the exception message embeds the
+            # offending input value — which IS the LLM's raw
+            # content. That content can carry prompt-injection
+            # markers, ANSI escape sequences, BIDI overrides, or
+            # control bytes that — when the log line renders to an
+            # operator's TTY or a downstream log aggregator — let
+            # an attacker forge log entries / smuggle terminal
+            # repaints / bypass audit displays.
+            #
+            # Defang the rendered exception text via
+            # `escape_nonprintable` before logging. The exception
+            # itself is still re-raised unchanged so caller error
+            # handling sees the same type and propagated message.
+            from core.security.prompt_output_sanitise import escape_nonprintable
+            _safe_msg = escape_nonprintable(str(e))[:1024]
+            logger.error(
+                f"Structured fallback failed (JSON parse or validation): {_safe_msg}"
+            )
             raise
 
     # ------------------------------------------------------------------
