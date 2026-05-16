@@ -427,11 +427,24 @@ def run_sandboxed(
         # operator visibility.
         from .ptrace_probe import check_ptrace_available
         from .seccomp import check_seccomp_available
+        from . import summary as _summary_mod
         if not seccomp_profile:
             logger.debug(
                 "audit_mode=True but no seccomp filter active; "
                 "skipping tracer (b2/b3 audit are no-ops without "
                 "seccomp). Network audit (b1) is configured separately."
+            )
+            # F063a: surface the silent degrade to operators. Without
+            # this marker, the empty run dir is indistinguishable
+            # from "audit ran, found nothing."
+            _summary_mod.record_audit_degraded(
+                Path(audit_run_dir),
+                reason="audit_mode=True but no seccomp filter is active",
+                instructions=(
+                    "pass seccomp_profile= (e.g. \"full\") so b2/b3 "
+                    "audit can install SCMP_ACT_TRACE; or run without "
+                    "audit_mode if seccomp is intentionally disabled"
+                ),
             )
         elif not check_seccomp_available():
             # libseccomp missing — tracer would attach but never
@@ -440,6 +453,19 @@ def run_sandboxed(
             logger.debug(
                 "audit_mode=True but libseccomp unavailable; "
                 "skipping tracer (no filter would be installed)."
+            )
+            # F063b: same operator-visibility gap as F063a; the
+            # tracer is correctly skipped, but the run dir contains
+            # nothing to signal that fact.
+            _summary_mod.record_audit_degraded(
+                Path(audit_run_dir),
+                reason="audit_mode=True but libseccomp is unavailable on this host",
+                instructions=(
+                    "install libseccomp (Debian/Ubuntu: apt install "
+                    "libseccomp2; Alpine: apk add libseccomp), or run "
+                    "without audit_mode on hosts where libseccomp is "
+                    "intentionally absent"
+                ),
             )
         elif check_ptrace_available():
             _audit_engaged = True
@@ -603,7 +629,20 @@ def run_sandboxed(
             # Probe already logged the once-per-process warning with
             # workaround pointers; nothing more to say here. Workflow
             # continues, just without b2/b3 audit signal.
-            pass
+            # F063c: per-run marker so operators inspecting the
+            # specific run dir see "audit didn't engage" rather than
+            # an empty (and ambiguous) audit output. Distinct from the
+            # process-wide warn-once; both are useful.
+            _summary_mod.record_audit_degraded(
+                Path(audit_run_dir),
+                reason="audit_mode=True but ptrace is blocked on this host",
+                instructions=(
+                    "lower Yama scope (sysctl kernel.yama.ptrace_scope=1) "
+                    "or run with CAP_SYS_PTRACE; on container hosts ensure "
+                    "AppArmor / Yama policy permits PTRACE_SEIZE; or run "
+                    "without audit_mode"
+                ),
+            )
 
     # Track every fd we hold in the parent so a failure ANYWHERE from
     # pipe()/fork() through the newuidmap handshake closes the lot.
