@@ -39,6 +39,13 @@ tabulate==0.10.0
 # check degrades to fail-safe block on any pack-bearing target.
 pyyaml==6.0.3
 
+# Required by packages/sca/agent.py to parse target-repo pom.xml. Stdlib
+# xml.etree.ElementTree expands internal entities (CWE-776 / billion-laughs),
+# so the agent imports defusedxml.ElementTree when available; pinning here
+# makes the safe parser the default on a fresh install and restricts the
+# ImportError fallback to operator-stripped environments.
+defusedxml==0.7.1
+
 # Optional: For SMT-based constraint analysis (one-gadget feasibility, etc.)
 # z3-solver==4.15.4.0  # see requirements-dev.txt for bookworm/aarch64 cap
 

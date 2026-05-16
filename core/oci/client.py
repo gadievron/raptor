@@ -35,7 +35,6 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 from core.http import HttpClient
 
 from .auth import (
-    BasicCredentials,
     lookup_credentials,
     parse_www_authenticate,
 )

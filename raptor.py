@@ -311,11 +311,26 @@ def _run_script(script_path: Path, args: list) -> int:
                 dispatcher,
                 cmd=cmd,
                 label=script_path.name,
-                env=RaptorConfig.get_llm_env(),
+                # F102b: preserve PYTHONUSERBASE for the child
+                # ``raptor_<mode>.py`` subprocess so its own opt-in
+                # at ``get_safe_env(include_python_user_base=True)``
+                # (e.g. ``raptor_agentic.py:757`` semgrep spawn)
+                # has the value to restore. Without this flag the
+                # parent strips PYTHONUSERBASE here, leaving the
+                # child's restoration a no-op for the canonical
+                # operator path. See W14-E3 §F102b.
+                env=RaptorConfig.get_llm_env(include_python_user_base=True),
             )
             return proc.wait()
         # Fallback: pre-Phase-B behaviour, env-direct.
-        result = subprocess.run(cmd, env=RaptorConfig.get_llm_env())
+        # F102b: same opt-in as the dispatcher path above — the
+        # canonical operator entry point must preserve
+        # PYTHONUSERBASE for the spawned ``raptor_<mode>.py``
+        # subprocess. See comment at the spawn_worker call site.
+        result = subprocess.run(
+            cmd,
+            env=RaptorConfig.get_llm_env(include_python_user_base=True),
+        )
         return result.returncode
     except KeyboardInterrupt:
         print("\n\nInterrupted by user")
@@ -492,6 +507,7 @@ def show_mode_help(mode: str) -> None:
     # blocks at import time would hang the operator's terminal)
     # doesn't pin the shell.
     try:
+        from core.config import RaptorConfig
         subprocess.run(
             [sys.executable, str(script_path), "--help"],
             env=RaptorConfig.get_safe_env(),

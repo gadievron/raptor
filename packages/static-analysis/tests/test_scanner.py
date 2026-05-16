@@ -1,13 +1,10 @@
 """Tests for packages/static-analysis/scanner.py."""
 
 import importlib.util
-import json
-import shutil
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
-import pytest
 
 # static-analysis has a hyphen — load via importlib
 _SCANNER_PATH = Path(__file__).parent.parent / "scanner.py"

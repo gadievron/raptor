@@ -12,7 +12,6 @@ import base64
 import json
 from pathlib import Path
 
-import pytest
 
 from core.oci.auth import (
     BasicCredentials,

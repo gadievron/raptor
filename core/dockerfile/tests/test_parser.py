@@ -8,7 +8,6 @@ comments, unknown directives) plus a few real-world fixtures."""
 from __future__ import annotations
 
 from core.dockerfile.parser import (
-    Instruction,
     parse_dockerfile,
 )
 

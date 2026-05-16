@@ -21,12 +21,26 @@ concurrency:
 env:
   PYTHON_VERSION: '3.12'
   VENV_PATH: .venv
+  # Opt the runner into Node.js 24 for JavaScript actions.
+  # GitHub deprecated Node.js 20 on 2025-09-19; runners enforce
+  # Node 24 by default from 2026-06-02 and remove Node 20 on
+  # 2026-09-16. astral-sh/setup-uv@v8.1.0 (and several others
+  # pinned in this workflow) still declares ``runs.using: node20``
+  # in its action.yml, so without this opt-in the runner emits a
+  # deprecation warning for every JS-action step. Lift this once
+  # all pinned JS actions ship a Node 24 release.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   contents: read
   # Needed by the pre_check job to query prior workflow runs at the
   # current SHA via ``gh api repos/.../actions/runs``.
   actions: read
+  # Needed by the ``changes`` job's ``gh api repos/.../pulls/.../files``
+  # query to compute the changed-file list for path filtering. Covered
+  # implicitly by ``contents: read`` on public repos; explicit grant
+  # makes the workflow privacy-portable.
+  pull-requests: read
 
 jobs:
   # Skip the workflow if a previous successful run of this same workflow

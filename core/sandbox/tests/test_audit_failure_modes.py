@@ -12,8 +12,6 @@ from __future__ import annotations
 import json
 import os
 import platform
-import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -604,7 +602,7 @@ class TestAuditMissingOutputBehaviour:
         # Ref-count observation tests construct sandbox without
         # calling run() — must keep working.
         from core.sandbox.context import sandbox
-        with sandbox(audit=True) as run:
+        with sandbox(audit=True):
             pass
 
     def test_audit_kwarg_with_output_run_succeeds_validation(self, tmp_path):
@@ -855,10 +853,6 @@ class TestAuditAcquireOrdering:
             i for i, line in enumerate(lines)
             if line.strip() == "yield run"
         ]
-        try_lines = [
-            i for i, line in enumerate(lines)
-            if line.strip() == "try:"
-        ]
         finally_lines = [
             i for i, line in enumerate(lines)
             if line.strip() == "finally:"
@@ -1011,7 +1005,7 @@ class TestAuditWithExistingSandboxFlows:
                 audit=True, disabled=True,
                 use_egress_proxy=True,
                 proxy_hosts=["api.example.com"],
-            ) as run:
+            ):
                 # disabled=True wins; audit silently no-ops; no acquire.
                 assert proxy_inst._audit_count == 0, (
                     f"audit-mode wrongly engaged with disabled=True: "
@@ -1032,7 +1026,7 @@ class TestAuditWithExistingSandboxFlows:
                 audit=True, profile="none",
                 use_egress_proxy=True,
                 proxy_hosts=["api.example.com"],
-            ) as run:
+            ):
                 assert proxy_inst._audit_count == 0
             assert proxy_inst._audit_count == 0
         finally:
@@ -1048,7 +1042,7 @@ class TestAuditWithExistingSandboxFlows:
             proxy_inst = proxy_mod.get_proxy(["api.example.com"])
             assert proxy_inst._audit_count == 0
 
-            with sandbox(audit=True, use_egress_proxy=False) as run:
+            with sandbox(audit=True, use_egress_proxy=False):
                 # Proxy not engaged by THIS sandbox; count unchanged.
                 assert proxy_inst._audit_count == 0
 
@@ -1073,7 +1067,7 @@ class TestProxyAuditAcquireReleaseIntegration:
                 audit=True,
                 use_egress_proxy=True,
                 proxy_hosts=["api.example.com"],
-            ) as run:
+            ):
                 assert proxy_inst._audit_count == 1
                 assert proxy_inst._audit_log_only is True
 
@@ -1092,7 +1086,7 @@ class TestProxyAuditAcquireReleaseIntegration:
                     audit=True,
                     use_egress_proxy=True,
                     proxy_hosts=["api.example.com"],
-                ) as run:
+                ):
                     assert proxy_inst._audit_count == 1
                     raise RuntimeError("simulated workflow failure")
 

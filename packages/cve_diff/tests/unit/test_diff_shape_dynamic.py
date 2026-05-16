@@ -125,7 +125,6 @@ class TestExtensionParsing:
         )
 
     def test_dotfile_no_extension(self) -> None:
-        payloads = {"x/y": {"Python": 100}}
         assert shape_dynamic._ext(".gitignore") == ""
 
     def test_extension_case_insensitive(self) -> None:

@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional
 
-import pytest
 
 
 @dataclass
@@ -216,7 +215,6 @@ class TestCrashAdversarialContent:
         input_file.write_bytes(self._OVERRIDE.encode())
         ctx = FakeCrashContext(input_file=input_file)
         bundle = _build_crash_analysis_bundle(ctx, _signal_name, _format_registers)
-        user = _usr(bundle)
         system = _sys(bundle)
         assert "IGNORE ALL PREVIOUS" not in system
 

@@ -4,7 +4,6 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 
 class TestSageFuzzingMemoryInit(unittest.TestCase):
@@ -32,7 +31,7 @@ class TestSageFuzzingMemoryInit(unittest.TestCase):
             mem_file = Path(tmpdir) / "subdir" / "memory.json"
             config = SageConfig(enabled=False)
 
-            memory = SageFuzzingMemory(memory_file=mem_file, sage_config=config)
+            SageFuzzingMemory(memory_file=mem_file, sage_config=config)
             self.assertTrue(mem_file.parent.exists())
 
 

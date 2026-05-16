@@ -779,8 +779,20 @@ def enrich_checklist(checklist: Dict[str, Any], context_map: Dict[str, Any],
     # retain that marker even after a refreshed context-map no longer
     # references it (stale data leak across re-runs). Re-running should
     # always reflect the current context-map's reasons exactly.
-    # enrich_checklist is the sole writer of these fields, so the clear
-    # is safe — verified by grep across the codebase.
+    #
+    # Writers of ``priority`` / ``priority_reason``: there are TWO —
+    #   1. ``enrich_checklist`` (this function): UPGRADES to "high".
+    #   2. ``core.orchestration.reachability_enrichment.``
+    #      ``mark_unreachable_low_priority``: DOWNGRADES to "low".
+    # The blanket clear here is SAFE because the orchestration call
+    # order (see ``agentic_passes._enrich_agentic_checklist`` →
+    # ``_mark_unreachable_low_priority``) guarantees ``enrich_checklist``
+    # runs FIRST and the reachability downgrade pass runs SECOND. Any
+    # prior "low" mark we clear here would be re-stamped on the next
+    # reachability pass; any prior "high" we clear is exactly what we
+    # need to clear so a refreshed context-map can re-stamp accurately.
+    # Reordering those two passes would re-introduce the stale-marker
+    # leak this clear is defending against.
     _clear_prior_priority_markers(checklist)
 
     # Build lookup: (relative_path, function_name_or_None) → set of reasons.
@@ -1074,9 +1086,7 @@ def _filter_context_map(context_map: Dict[str, Any], stale_files: Set[str]) -> i
 
     # Filter unchecked_flows — references entry_points/sinks by ID, so
     # resolve IDs to files first, then drop flows touching stale files.
-    stale_ep_ids: Set[str] = set()
-    stale_sink_ids: Set[str] = set()
-
+    #
     # We need the original entry_points/sink_details to know which IDs
     # were removed. But we already filtered those lists above. Instead,
     # collect IDs from the entries we kept and drop flows referencing
@@ -1281,7 +1291,6 @@ def _import_flow_traces(
 
     paths_path = validate_dir / "attack-paths.json"
     existing_paths: List[Dict[str, Any]] = []
-    paths_was_malformed = False
     if paths_path.exists():
         loaded = load_json(paths_path)
         if isinstance(loaded, list):
@@ -1305,7 +1314,6 @@ def _import_flow_traces(
             # sibling so the operator can inspect / recover it,
             # and warn loudly. Then proceed as if paths_path didn't
             # exist (existing_paths stays []).
-            paths_was_malformed = True
             ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             quarantine = paths_path.with_suffix(
                 paths_path.suffix + f".malformed-{ts}"

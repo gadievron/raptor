@@ -1,7 +1,6 @@
 """Basic smoke tests for the project CLI."""
 
 import os
-import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -21,7 +20,6 @@ class TestCLI(unittest.TestCase):
     def test_create(self):
         """Create subcommand creates a project file."""
         with TemporaryDirectory() as d:
-            projects_dir = Path(d) / "projects"
             output_dir = Path(d) / "output"
             with patch("core.project.cli.ProjectManager") as MockMgr:
                 instance = MockMgr.return_value

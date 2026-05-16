@@ -94,12 +94,11 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-import sys
-import threading
 from pathlib import Path
 from typing import Iterable, List, Optional
 
 from . import seatbelt
+from ._fork_safe_warn import warn_post_fork
 from .preexec import _make_preexec_fn
 
 logger = logging.getLogger(__name__)
@@ -165,6 +164,18 @@ def run_sandboxed(cmd: List[str], *,
                   use_egress_proxy: bool = False,
                   proxy_port: Optional[int] = None,
                   fake_home: bool = False,
+                  strict_env: bool = False,
+                  # persona: host-fingerprint sanitisation is Linux-only
+                  # (bind-mount + UTS-ns + sched_setaffinity primitives).
+                  # macOS lacks unprivileged equivalents; most host-
+                  # identity reads there are sysctlbyname/IOKit-based,
+                  # not file-based, so file substitution wouldn't catch
+                  # them anyway. Accepted for signature parity and
+                  # silently ignored — context.py already gates on
+                  # fingerprint.is_supported() so the value reaches us
+                  # only as None when sanitisation was requested but
+                  # platform unsupported.
+                  persona=None,  # noqa: ARG001
                   ) -> subprocess.CompletedProcess:
     """Run ``cmd`` under macOS sandbox-exec with an SBPL profile
     derived from the logical sandbox kwargs.
@@ -241,6 +252,10 @@ def run_sandboxed(cmd: List[str], *,
     #    so the child sees no dotfiles. Pre-populate the dir empty.
     if env is not None:
         child_env = dict(env)
+        if strict_env:
+            from core.config import RaptorConfig
+            _dangerous = set(RaptorConfig.DANGEROUS_ENV_VARS)
+            child_env = {k: v for k, v in child_env.items() if k not in _dangerous}
     else:
         from core.config import RaptorConfig
         child_env = RaptorConfig.get_safe_env()
@@ -304,10 +319,11 @@ def run_sandboxed(cmd: List[str], *,
             except (ValueError, OSError):
                 # Best-effort. Some macOS versions cap NPROC via
                 # different sysctls and setrlimit may EPERM the
-                # call when NPROC > kern.maxproc/UID. Don't crash
-                # the launch on it; the rlimit failure is a
-                # documented soft posture.
-                pass
+                # call when NPROC > kern.maxproc/UID. The module
+                # docstring already documents this as soft posture;
+                # emit a fork-safe warning so operators can observe
+                # when the documented-soft bound becomes a silent no-op.
+                warn_post_fork(b"RAPTOR: _macos_spawn RLIMIT_NPROC setrlimit failed -- documented soft posture became silent no-op\n")
     else:
         preexec = base_preexec
 
@@ -325,9 +341,30 @@ def run_sandboxed(cmd: List[str], *,
                 observe_mode=bool(observe_mode),
                 observe_nonce=observe_nonce,
             )
-        except Exception:
-            logger.debug("seatbelt audit log streamer failed to start",
-                         exc_info=True)
+        except Exception as exc:
+            logger.warning(
+                "seatbelt audit log streamer failed to start: %s",
+                exc, exc_info=True,
+            )
+            # F064: write the audit-degraded marker so operators
+            # inspecting the run dir can distinguish "audit ran,
+            # found nothing" from "audit was requested but the log
+            # streamer failed to attach." Mirrors the Linux pattern
+            # at _spawn.py and the existing context.py:1328 wire.
+            from . import summary as _summary_mod
+            _summary_mod.record_audit_degraded(
+                Path(audit_run_dir),
+                reason=(
+                    f"audit_mode=True but seatbelt log streamer failed "
+                    f"to start: {type(exc).__name__}: {exc}"
+                ),
+                instructions=(
+                    "check the macOS unified log subsystem is reachable "
+                    "(log show / log stream); verify the user has rights "
+                    "to read kernel-sandbox events; or run without "
+                    "audit_mode on hosts where the streamer cannot attach"
+                ),
+            )
 
     # 6. Run.
     try:

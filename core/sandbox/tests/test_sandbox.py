@@ -29,7 +29,7 @@ class TestAvailabilityCheck(unittest.TestCase):
 
     def test_cached(self):
         """Second call returns same result without re-testing."""
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        from core.sandbox import state as mod_state
         mod_state._net_available_cache = None
         first = check_sandbox_available()
         second = check_sandbox_available()
@@ -44,7 +44,7 @@ class TestAvailabilityCheck(unittest.TestCase):
         exactly the system where PATH-hijack matters). check_net_available
         catches the exception and returns False.
         """
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        from core.sandbox import state as mod_state
         mod_state._net_available_cache = None
         mod_state._unshare_path_cache = None
         with patch("os.path.isfile", return_value=False):
@@ -998,7 +998,7 @@ class TestSanitizerStderrBytes(unittest.TestCase):
         stderr was bytes, losing all enforcement detection while
         _interpret_result (sibling call) still decoded correctly.
         """
-        import subprocess, tempfile
+        import tempfile
         from core.sandbox import sandbox
         # Use a sandbox with Landlock engaged and a write to a non-writable
         # path so Landlock produces "Permission denied" stderr in bytes.
@@ -1177,7 +1177,7 @@ class TestCacheLockReentrant(unittest.TestCase):
     """check_mount_available nests a call to check_net_available — must not deadlock."""
 
     def test_nested_check_does_not_deadlock(self):
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        from core.sandbox import state as mod_state
         mod_state._net_available_cache = None
         mod_state._mount_available_cache = None
         # Should return without hanging
@@ -1288,12 +1288,12 @@ class TestCliProfile(unittest.TestCase):
     """--sandbox <profile> / --no-sandbox CLI surface."""
 
     def setUp(self):
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        from core.sandbox import state as mod_state
         self._saved_disabled = mod_state._cli_sandbox_disabled
         self._saved_profile = mod_state._cli_sandbox_profile
 
     def tearDown(self):
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        from core.sandbox import state as mod_state
         mod_state._cli_sandbox_disabled = self._saved_disabled
         mod_state._cli_sandbox_profile = self._saved_profile
 
@@ -1305,7 +1305,7 @@ class TestCliProfile(unittest.TestCase):
     def test_set_cli_profile_none_also_disables(self):
         """profile='none' must set both _cli_sandbox_profile and _cli_sandbox_disabled
         so existing disabled-checks continue to work."""
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        from core.sandbox import state as mod_state
         from core.sandbox import set_cli_profile
         set_cli_profile("none")
         self.assertEqual(mod_state._cli_sandbox_profile, "none")
@@ -1313,7 +1313,7 @@ class TestCliProfile(unittest.TestCase):
 
     def test_set_cli_profile_switches_coherently(self):
         """Switching profile='none' → 'full' must un-stick the disabled flag."""
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        from core.sandbox import state as mod_state
         from core.sandbox import set_cli_profile
         set_cli_profile("none")
         self.assertTrue(mod_state._cli_sandbox_disabled)
@@ -1324,7 +1324,7 @@ class TestCliProfile(unittest.TestCase):
     def test_disable_from_cli_coherent_after_profile_full(self):
         """disable_from_cli() after set_cli_profile('full') must disable — it
         used to leave _cli_sandbox_profile='full' and silently win."""
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        from core.sandbox import state as mod_state
         from core.sandbox import set_cli_profile, disable_from_cli
         set_cli_profile("full")
         self.assertEqual(mod_state._cli_sandbox_profile, "full")
@@ -1381,7 +1381,7 @@ class TestCliProfile(unittest.TestCase):
     def test_apply_cli_args_no_sandbox_alone(self):
         """--no-sandbox sets BOTH flags coherently via shared _set_cli_state."""
         import argparse
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        from core.sandbox import state as mod_state
         from core.sandbox import add_cli_args, apply_cli_args
         parser = argparse.ArgumentParser()
         add_cli_args(parser)
@@ -1393,7 +1393,7 @@ class TestCliProfile(unittest.TestCase):
     def test_apply_cli_args_sandbox_network_only(self):
         """--sandbox network-only sets profile, does NOT set disabled."""
         import argparse
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        from core.sandbox import state as mod_state
         from core.sandbox import add_cli_args, apply_cli_args
         parser = argparse.ArgumentParser()
         add_cli_args(parser)
@@ -1404,7 +1404,7 @@ class TestCliProfile(unittest.TestCase):
 
     def test_apply_cli_args_noop_when_neither_flag(self):
         import argparse
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        from core.sandbox import state as mod_state
         from core.sandbox import add_cli_args, apply_cli_args
         parser = argparse.ArgumentParser()
         add_cli_args(parser)
@@ -1426,19 +1426,19 @@ class TestLandlockDegradationWarnings(unittest.TestCase):
 
     def setUp(self):
         # Reset the once-per-process warning flags so each test starts clean.
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        from core.sandbox import state as mod_state
         self._saved_unav = mod_state._landlock_warned_unavailable
         self._saved_abi = mod_state._landlock_warned_abi_v4
         mod_state._landlock_warned_unavailable = False
         mod_state._landlock_warned_abi_v4 = False
 
     def tearDown(self):
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        from core.sandbox import state as mod_state
         mod_state._landlock_warned_unavailable = self._saved_unav
         mod_state._landlock_warned_abi_v4 = self._saved_abi
 
     def test_warns_when_landlock_unavailable_but_target_set(self):
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        import core.sandbox as mod; 
         from unittest.mock import patch
         with TemporaryDirectory() as d:
             # Force check_landlock_available → False regardless of host kernel.
@@ -1452,7 +1452,7 @@ class TestLandlockDegradationWarnings(unittest.TestCase):
         self.assertTrue(any("Landlock is unavailable" in m for m in cm.output))
 
     def test_warns_when_tcp_allowlist_on_abi_lt_4(self):
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        import core.sandbox as mod; 
         from unittest.mock import patch
         # Simulate ABI v3 kernel: Landlock available for fs, not for net.
         with patch.object(mod.landlock, "check_landlock_available", return_value=True):
@@ -1465,7 +1465,7 @@ class TestLandlockDegradationWarnings(unittest.TestCase):
 
     def test_degradation_warning_throttled(self):
         """Opening many sandbox contexts on a degraded kernel warns ONCE."""
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        import core.sandbox as mod; 
         from unittest.mock import patch
         with TemporaryDirectory() as d:
             with patch.object(mod.landlock, "check_landlock_available", return_value=False), \
@@ -1481,7 +1481,7 @@ class TestLandlockDegradationWarnings(unittest.TestCase):
     def test_warns_on_old_landlock_abi_v2(self):
         """Pre-5.19 kernels lack REFER — rename-across-dirs isn't blocked.
         Operator should see a WARNING so the gap is visible."""
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        import core.sandbox as mod; 
         with patch.object(mod.landlock, "check_landlock_available", return_value=True):
             with patch.object(mod.landlock, "_get_landlock_abi", return_value=1):
                 with patch.object(mod.probes, "check_mount_available", return_value=False):
@@ -1495,7 +1495,7 @@ class TestLandlockDegradationWarnings(unittest.TestCase):
 
     def test_warns_on_old_landlock_abi_v3_only(self):
         """Pre-6.2 kernels lack TRUNCATE but have REFER (ABI 2)."""
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        import core.sandbox as mod; 
         with patch.object(mod.landlock, "check_landlock_available", return_value=True):
             with patch.object(mod.landlock, "_get_landlock_abi", return_value=2):
                 with patch.object(mod.probes, "check_mount_available", return_value=False):
@@ -1518,7 +1518,7 @@ class TestLandlockDegradationWarnings(unittest.TestCase):
 
     def test_no_warning_on_abi_v4_with_tcp_allowlist(self):
         """On ABI v4+, allowed_tcp_ports is enforceable — no degradation warning."""
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        import core.sandbox as mod; 
         from unittest.mock import patch
         with patch.object(mod.landlock, "check_landlock_available", return_value=True):
             with patch.object(mod.landlock, "_get_landlock_abi", return_value=4):
@@ -1537,19 +1537,19 @@ class TestCliProfileAuthoritative(unittest.TestCase):
     """CLI --sandbox must override library-level disabled=True."""
 
     def setUp(self):
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        from core.sandbox import state as mod_state
         self._saved_disabled = mod_state._cli_sandbox_disabled
         self._saved_profile = mod_state._cli_sandbox_profile
 
     def tearDown(self):
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        from core.sandbox import state as mod_state
         mod_state._cli_sandbox_disabled = self._saved_disabled
         mod_state._cli_sandbox_profile = self._saved_profile
 
     def test_cli_full_beats_library_disabled(self):
         """User passed --sandbox full; library code passes disabled=True.
         CLI must win — sandbox should actually run."""
-        import core.sandbox as mod; from core.sandbox import state as mod_state
+        from core.sandbox import state as mod_state
         from core.sandbox import set_cli_profile
         set_cli_profile("full")
         # With disabled=True + CLI='full', we expect CLI to override —
@@ -1655,7 +1655,7 @@ class TestToolPathsKwarg(unittest.TestCase):
 
     def test_tool_paths_accepted_by_sandbox(self):
         from core.sandbox import sandbox
-        with sandbox(tool_paths=["/opt/foo/bin"]) as run:
+        with sandbox(tool_paths=["/opt/foo/bin"]):
             pass
 
     def test_tool_paths_accepted_by_top_level_run(self):

@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 from src.collectors.api import GitHubAPICollector
 from src.collectors.archive import GHArchiveCollector
 from src.collectors.local import LocalGitCollector
-from src.schema.common import EvidenceSource, IOCType
+from src.schema.common import EvidenceSource
 
 
 # Mark all tests in this module as integration tests

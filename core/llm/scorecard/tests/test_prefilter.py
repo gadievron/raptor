@@ -8,9 +8,7 @@ substrate's ``ModelScorecard`` is exercised separately.
 
 from __future__ import annotations
 
-from pathlib import Path
 
-import pytest
 
 from core.llm.scorecard import (
     EventType,
@@ -19,7 +17,6 @@ from core.llm.scorecard import (
     prefilter_decision,
     record_prefilter_outcome,
 )
-from core.llm.scorecard.scorecard import _wilson_upper_bound
 
 
 # ---------------------------------------------------------------------------

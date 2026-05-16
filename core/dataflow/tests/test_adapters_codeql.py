@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List
 
 import pytest
 
-from core.dataflow import Finding, Step
+from core.dataflow import Step
 from core.dataflow.adapters.codeql import (
     PRODUCER,
     from_dataflow_path,

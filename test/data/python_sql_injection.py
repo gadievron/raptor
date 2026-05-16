@@ -28,7 +28,7 @@ DATABASE_PASSWORD = "admin123!SuperSecret"
 @app.route('/login', methods=['POST'])
 def login():
     """Login endpoint - VULNERABLE to hardcoded password"""
-    username = request.form.get('username')
+    username = request.form.get('username')  # noqa: F841 — intentional fixture
     password = request.form.get('password')
 
     # Hardcoded password comparison
@@ -47,7 +47,6 @@ def hash_password(password):
 
 # VULNERABLE: Command injection
 import subprocess
-import os
 
 @app.route('/convert', methods=['POST'])
 def convert_file():
@@ -55,7 +54,7 @@ def convert_file():
     filename = request.form.get('filename')
 
     # Direct command execution - command injection vulnerability
-    result = subprocess.run(f"convert {filename} output.jpg", shell=True)
+    result = subprocess.run(f"convert {filename} output.jpg", shell=True)  # noqa: F841 — intentional fixture
 
     return "Conversion complete"
 

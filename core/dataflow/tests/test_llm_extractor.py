@@ -20,7 +20,6 @@ from core.dataflow.sanitizer_evidence import (
     SCHEMA_VERSION,
     SEMANTICS_OTHER,
     SEMANTICS_SQL_ESCAPE,
-    CandidateValidator,
 )
 from core.security.prompt_envelope import PromptBundle
 

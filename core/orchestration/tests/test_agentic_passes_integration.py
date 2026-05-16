@@ -17,8 +17,6 @@ from unittest.mock import MagicMock, patch
 from core.orchestration.agentic_passes import (
     run_understand_prepass,
     run_validate_postpass,
-    _RAPTOR_DIR,
-    _LIFECYCLE,
 )
 from core.orchestration.understand_bridge import find_understand_output, load_understand_context
 

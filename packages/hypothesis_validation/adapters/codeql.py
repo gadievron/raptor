@@ -21,7 +21,6 @@ import json
 import logging
 import shutil
 import subprocess
-import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, List, Optional, Set
@@ -400,7 +399,7 @@ class CodeQLAdapter(ToolAdapter):
                         capture_output=True, text=True,
                         timeout=120, env=env,
                     )
-                except Exception as e:
+                except Exception:
                     # Pack install is best-effort. If the query has no
                     # external imports it will still compile.
                     pass

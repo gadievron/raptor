@@ -13,7 +13,7 @@ documentation — the LLM sees them, so the output shape is explicit.
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Iterable
 
 from .models import SeedBug, SynthesisedRule, Match
 

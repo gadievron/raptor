@@ -1,12 +1,11 @@
 """Tests for project add and remove operations."""
 
-import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from core.project.project import ProjectManager
-from core.run import RUN_METADATA_FILE, start_run
+from core.run import RUN_METADATA_FILE
 
 
 class TestAddDirectory(unittest.TestCase):
@@ -79,7 +78,6 @@ class TestAddDirectory(unittest.TestCase):
             run_dir.mkdir()
             (run_dir / "findings.json").write_text("[]")
 
-        runs_parent = Path(self.tmpdir.name)
         # Add all at once — they're in tmpdir alongside projects dir
         # Create a subdirectory with just the runs
         runs = Path(self.tmpdir.name) / "batch"

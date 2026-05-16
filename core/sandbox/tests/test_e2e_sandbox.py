@@ -15,7 +15,6 @@ pytestmark = _pytest.mark.skipif(
 
 
 import os
-import platform
 import subprocess
 import unittest
 from pathlib import Path
@@ -165,7 +164,7 @@ class TestE2ELandlockWriteBlocking(unittest.TestCase):
             # Create a symlink inside output pointing to /var/tmp
             evil_link = Path(output) / "escape"
             evil_link.symlink_to("/var/tmp")
-            result = sandbox_run(
+            sandbox_run(
                 ["sh", "-c", f"echo pwned > {output}/escape/raptor_test 2>&1"],
                 target=target, output=output,
                 capture_output=True, text=True, timeout=5,
@@ -183,7 +182,7 @@ class TestE2ELandlockWriteBlocking(unittest.TestCase):
         with TemporaryDirectory() as target, TemporaryDirectory() as output:
             victim = Path(output) / "source.txt"
             victim.write_text("hello")
-            result = sandbox_run(
+            sandbox_run(
                 ["sh", "-c", f"mv {output}/source.txt {sentinel} 2>&1"],
                 target=target, output=output,
                 capture_output=True, text=True, timeout=5,
@@ -347,7 +346,7 @@ class TestE2EResourceLimits(unittest.TestCase):
     def test_file_size_limit(self):
         """File size limit prevents large writes."""
         with TemporaryDirectory() as d:
-            result = sandbox_run(
+            sandbox_run(
                 ["python3", "-c",
                  f"f=open('{d}/big','wb'); f.write(b'A'*200*1024*1024); f.close()"],
                 block_network=True,
@@ -999,7 +998,7 @@ class TestE2EEgressProxy(unittest.TestCase):
         or cursor-movement to overwrite prior lines with forged "allowed"
         entries. The proxy rejects these at CONNECT-parse time.
         """
-        import socket as _socket, time as _time, threading
+        import socket as _socket
         from core.sandbox.proxy import get_proxy, _reset_for_tests
         try:
             _reset_for_tests()
@@ -1452,7 +1451,6 @@ class TestE2ELandlockReadRestriction(unittest.TestCase):
         (restrict_reads blocks them even by absolute path), and tools
         expanding `~` land inside the fake home.
         """
-        import os as _os
         from core.sandbox import run_untrusted
         restricted_file = Path.home() / ".raptor_fake_home_regression.txt"
         restricted_file.write_text("REAL-HOME-SECRET\n")
@@ -1493,7 +1491,6 @@ class TestE2ELandlockReadRestriction(unittest.TestCase):
     def test_fake_home_requires_output(self):
         """fake_home=True without output= is a config error — raise
         rather than silently skipping the feature."""
-        from core.sandbox import sandbox
         with self.assertRaises(ValueError) as cm:
             with sandbox(fake_home=True):
                 pass

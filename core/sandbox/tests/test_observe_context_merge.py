@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 
-import pytest
 
 from core.sandbox.observe_context_merge import (
     RUNTIME_OBSERVATION_KEY,

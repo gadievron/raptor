@@ -231,110 +231,24 @@ class TestCalculateCostSplit:
         actual_cost = provider._calculate_cost_split(0, 0)
         assert actual_cost == 0.0
 
-class TestThinkingModelFallback:
-    """Verify reasoning_content fallback for Ollama thinking models."""
-
-    def _make_ollama_provider(self):
-        """Create an OpenAICompatibleProvider configured for Ollama."""
-        mock_openai, cleanup = _ensure_mock_sdk(_providers_module, 'OpenAI')
-        with patch("core.llm.providers.OPENAI_SDK_AVAILABLE", True), \
-             patch("core.llm.providers.INSTRUCTOR_AVAILABLE", False):
-            from core.llm.providers import OpenAICompatibleProvider
-            config = ModelConfig(
-                provider="ollama", model_name="qwen3:8b",
-                api_base="http://localhost:11434/v1",
-            )
-            provider = OpenAICompatibleProvider(config)
-        return provider, mock_openai, cleanup
-
-    def test_reasoning_content_used_when_content_empty(self):
-        """Thinking models with empty content fall back to reasoning_content."""
-        provider, mock_openai, cleanup = self._make_ollama_provider()
-        try:
-            response = MagicMock()
-            response.choices = [MagicMock()]
-            response.choices[0].message.content = ""
-            response.choices[0].message.reasoning_content = "The answer is 42"
-            response.choices[0].message.refusal = None
-            response.choices[0].finish_reason = "stop"
-            response.usage = MagicMock()
-            response.usage.prompt_tokens = 50
-            response.usage.completion_tokens = 10
-            response.usage.completion_tokens_details = None
-            mock_openai.return_value.chat.completions.create.return_value = response
-
-            result = provider.generate("What is the answer?")
-            assert result.content == "The answer is 42"
-        finally:
-            cleanup()
-
-    def test_content_preferred_over_reasoning_content(self):
-        """When content is present, reasoning_content is not used."""
-        provider, mock_openai, cleanup = self._make_ollama_provider()
-        try:
-            response = MagicMock()
-            response.choices = [MagicMock()]
-            response.choices[0].message.content = "Normal response"
-            response.choices[0].message.reasoning_content = "Thinking process..."
-            response.choices[0].message.refusal = None
-            response.choices[0].finish_reason = "stop"
-            response.usage = MagicMock()
-            response.usage.prompt_tokens = 50
-            response.usage.completion_tokens = 10
-            response.usage.completion_tokens_details = None
-            mock_openai.return_value.chat.completions.create.return_value = response
-
-            result = provider.generate("test")
-            assert result.content == "Normal response"
-        finally:
-            cleanup()
-
-    def test_both_empty_returns_empty(self):
-        """When both content and reasoning_content are empty, returns empty."""
-        provider, mock_openai, cleanup = self._make_ollama_provider()
-        try:
-            response = MagicMock()
-            response.choices = [MagicMock()]
-            response.choices[0].message.content = ""
-            response.choices[0].message.reasoning_content = ""
-            response.choices[0].message.refusal = None
-            response.choices[0].finish_reason = "stop"
-            response.usage = MagicMock()
-            response.usage.prompt_tokens = 50
-            response.usage.completion_tokens = 0
-            response.usage.completion_tokens_details = None
-            mock_openai.return_value.chat.completions.create.return_value = response
-
-            result = provider.generate("test")
-            assert result.content == ""
-        finally:
-            cleanup()
-
-    def test_no_reasoning_content_attr(self):
-        """Models without reasoning_content attribute work normally."""
-        provider, mock_openai, cleanup = self._make_ollama_provider()
-        try:
-            response = MagicMock()
-            response.choices = [MagicMock()]
-            response.choices[0].message.content = "Normal response"
-            # No reasoning_content attribute
-            del response.choices[0].message.reasoning_content
-            response.choices[0].message.refusal = None
-            response.choices[0].finish_reason = "stop"
-            response.usage = MagicMock()
-            response.usage.prompt_tokens = 50
-            response.usage.completion_tokens = 10
-            response.usage.completion_tokens_details = None
-            mock_openai.return_value.chat.completions.create.return_value = response
-
-            result = provider.generate("test")
-            assert result.content == "Normal response"
-        finally:
-            cleanup()
+# NOTE: A duplicate ``TestThinkingModelFallback`` class previously
+# lived here. Python silently discarded it when the same-named class
+# at line ~334 was parsed at module scope (F811 hazard). The two defs
+# were near-identical (one comment line of difference); the
+# downstream copy is the one that actually ran and was being
+# maintained. Removed the upstream duplicate as part of W14-E1
+# DEEP-1b to make the F811 gate enforceable.
 
 
-class TestCalculateCostSplit:
-    """Verify _calculate_cost_split uses MODEL_COSTS for known models."""
+class TestModelCostsShape:
+    """Verify the MODEL_COSTS table itself has the right shape.
+
+    Was previously named ``TestCalculateCostSplit`` and silently
+    shadowed the earlier class of the same name at line 159 — Python
+    discards the first def when a second def at module scope shares the
+    name, so the 4 tests in the first class never ran. Renamed to its
+    actual purpose so both classes' tests now execute. See W14-E1
+    DEEP-1b narrative."""
 
     def test_all_model_costs_have_input_output(self):
         """Every entry in MODEL_COSTS has both 'input' and 'output' keys."""

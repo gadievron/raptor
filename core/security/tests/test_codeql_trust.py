@@ -325,11 +325,9 @@ class TestStructural:
         """Operator running RAPTOR against RAPTOR itself isn't an
         attack — RAPTOR ships its own codeql packs under
         packages/llm_analysis/codeql_packs/."""
-        raptor_dir = Path(__file__).resolve().parents[2]
-        # parents[2] = core/security/.. = repo root? actually parents[2]
-        # of test file = core/, parents[3] = repo root. The module's
-        # _RAPTOR_DIR = parents[2] of the module file (core/security/
-        # codeql_trust.py), which is the repo root. Use the same.
+        # The module's _RAPTOR_DIR = parents[2] of the module file
+        # (core/security/codeql_trust.py), which is the repo root.
+        # Use the same.
         from core.security.codeql_trust import _RAPTOR_DIR
         assert _check(str(_RAPTOR_DIR)) is False
         assert capsys.readouterr().out == ""

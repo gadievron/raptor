@@ -14,8 +14,6 @@ from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
 from core.orchestration.agentic_passes import (
-    PostpassResult,
-    PrepassResult,
     _enrich_agentic_checklist,
     _select_findings_for_validate,
     run_understand_prepass,
@@ -1022,7 +1020,6 @@ class AdversarialBugsTests(unittest.TestCase):
         # If the helper failed internally (e.g. couldn't write metadata),
         # we'd never know — the run dir stays in "running" state.
         from core.orchestration.agentic_passes import _complete_lifecycle
-        import logging
         with patch("core.orchestration.agentic_passes.subprocess.run",
                    return_value=_ok(returncode=1, stderr="permission denied")):
             with self.assertLogs(
@@ -1194,7 +1191,6 @@ class EnrichmentTests(unittest.TestCase):
         # Context map with 1 entry point against a checklist that has the
         # same logical file under a different path (absolute vs relative)
         # should fire the "0 marked despite N entry-points" warning.
-        import logging
         with TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             (tmp / "checklist.json").write_text(json.dumps({

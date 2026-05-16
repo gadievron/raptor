@@ -1165,7 +1165,6 @@ def _do_clean(project, keep, dry_run, yes):
 def _do_merge(project, merge_type, yes):
     """Merge runs per command type."""
     import shutil
-    import time
     from datetime import datetime, timezone
     from .merge import merge_runs
     from core.json import save_json

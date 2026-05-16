@@ -9,8 +9,6 @@ Instead of hardcoded seeds, this module:
 - Learns which seed patterns lead to coverage/crashes
 """
 
-import json
-import re
 from core.sandbox import run_trusted as _run_trusted  # read-only tools only (strings)
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -238,8 +236,8 @@ class CorpusGenerator:
             seeds_generated += 1
             return True
 
-        # Analyze binary first
-        analysis = self.analyze_binary()
+        # Analyze binary first (populates self.detected_commands etc as side effects)
+        self.analyze_binary()
 
         command_seeds = self._generate_command_seeds()
         before = seeds_generated
@@ -497,7 +495,6 @@ class CorpusGenerator:
         logger.info("Optimizing corpus (removing redundant seeds)...")
 
         seeds = list(corpus_dir.glob("seed_*"))
-        initial_count = len(seeds)
 
         if not coverage_data:
             # Simple deduplication by content. Use hashlib.sha256

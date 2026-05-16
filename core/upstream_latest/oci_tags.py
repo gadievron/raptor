@@ -37,7 +37,7 @@ from typing import List, Optional
 from core.http import HttpClient
 from core.json import JsonCache
 from core.oci.client import OciRegistryClient, RegistryError
-from core.oci.image_ref import ImageRef, parse_image_ref
+from core.oci.image_ref import parse_image_ref
 
 from ._version_filter import highest_stable
 from .github_releases import (

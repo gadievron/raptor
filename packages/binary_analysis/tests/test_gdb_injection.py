@@ -1,7 +1,5 @@
 """Tests for debugger/crash_analyser security mitigations (CWE-78, CWE-59)."""
 
-import os
-import glob
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -252,8 +250,6 @@ class TestDebuggerTempFile:
         and asserts the file is gone afterwards.
         """
         import subprocess as sp
-
-        script_paths = []
 
         # Verify cleanup behavior directly via filesystem
         # inspection — pre-fix this test had no assertions.

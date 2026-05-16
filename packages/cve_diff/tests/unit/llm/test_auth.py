@@ -16,7 +16,7 @@ import os
 
 import pytest
 
-from cve_diff.llm.auth import AuthDecision, resolve_auth
+from cve_diff.llm.auth import resolve_auth
 
 
 @pytest.fixture(autouse=True)

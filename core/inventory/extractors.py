@@ -500,7 +500,7 @@ class GoExtractor:
         for i, line in enumerate(content.split('\n'), 1):
             match = re.match(self.PATTERN, line)
             if match:
-                receiver_name = match.group(1)  # e.g. "s"
+                # match.group(1) is the receiver variable name (e.g. "s"); unused
                 receiver_type = match.group(2)  # e.g. "*Server"
                 name = match.group(3)
                 class_name = receiver_type.lstrip("*") if receiver_type else None
@@ -561,8 +561,17 @@ def _ts_language(lang: str):
             import tree_sitter_java as ts
         elif lang in ("javascript", "typescript"):
             import tree_sitter_javascript as ts
-        elif lang in ("c", "cpp"):
+        elif lang == "c":
             import tree_sitter_c as ts
+        elif lang == "cpp":
+            # Pre-2026-05-16 this branch loaded ``tree_sitter_c``,
+            # which can't parse class / method / template / namespace
+            # / qualified-id shapes. Inline class methods and
+            # out-of-line destructors were silently dropped from
+            # ``extract_functions`` output. Using the cpp-specific
+            # grammar gives the extractor the right node types
+            # (``class_specifier``, ``destructor_name``, etc.).
+            import tree_sitter_cpp as ts
         elif lang == "go":
             import tree_sitter_go as ts
         else:
@@ -760,9 +769,49 @@ class TreeSitterExtractor:
             # C/C++: name is inside function_declarator
             if child.type == "function_declarator":
                 return self._get_name(child)
-            # Go: name is inside field_identifier for methods
+            # Go: name is inside field_identifier for methods.
+            # C++: same node type covers in-class method declarations
+            # (``void f();`` inside a class body has its name as
+            # field_identifier rather than identifier).
             if child.type == "field_identifier":
                 return child.text.decode()
+            # C++: out-of-line method definitions wrap the name in a
+            # ``qualified_identifier`` (``Foo::bar``); return the
+            # trailing component.
+            if child.type == "qualified_identifier":
+                # Walk to the rightmost name token. The grammar models
+                # nested qualified_identifier with a trailing
+                # identifier / field_identifier / destructor_name.
+                last_name = None
+                cur = child
+                while cur is not None:
+                    found_nested = False
+                    for c in cur.children:
+                        if c.type in ("identifier", "field_identifier"):
+                            last_name = c.text.decode()
+                        elif c.type == "destructor_name":
+                            last_name = c.text.decode()
+                        elif c.type == "qualified_identifier":
+                            cur = c
+                            found_nested = True
+                            break
+                    if not found_nested:
+                        break
+                if last_name:
+                    return last_name
+            # C++: destructor declaration / definition. ``~Foo()`` —
+            # the declarator's child is a ``destructor_name`` whose
+            # text includes the tilde.
+            if child.type == "destructor_name":
+                return child.text.decode()
+            # C/C++: pointer return types wrap the declarator in
+            # ``pointer_declarator``. Recurse to find the inner name.
+            # Same for parenthesized_declarator used in some
+            # complex C declarations.
+            if child.type in ("pointer_declarator", "parenthesized_declarator"):
+                inner = self._get_name(child)
+                if inner:
+                    return inner
         return None
 
     def _find_child(self, node, types: tuple):

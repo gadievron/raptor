@@ -1,7 +1,6 @@
 """Tests for core/url_patterns — slug + commit URL parsing."""
 from __future__ import annotations
 
-import pytest
 
 from core.url_patterns import (
     GITHUB_COMMIT_URL_RE,
@@ -9,7 +8,6 @@ from core.url_patterns import (
     is_github_url,
     is_gitlab_url,
     is_kernel_org_url,
-    normalize_slug,
 )
 
 

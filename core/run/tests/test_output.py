@@ -1,7 +1,6 @@
 """Tests for output directory resolution."""
 
 import os
-import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory

@@ -3,7 +3,6 @@
 import sys
 from pathlib import Path
 
-import pytest
 
 # packages/codeql/tests/test_build_synthesis.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
@@ -118,21 +117,21 @@ class TestSynthesiseCpp:
     def test_uses_gpp_for_cpp_files(self, tmp_path):
         (tmp_path / "main.cpp").write_text("int main() {}")
         bd = BuildDetector(tmp_path)
-        result = bd.synthesise_build_command("cpp")
+        bd.synthesise_build_command("cpp")
         script = _find_script(tmp_path).read_text()
         assert "g++" in script
 
     def test_uses_gcc_for_c_files(self, tmp_path):
         (tmp_path / "main.c").write_text("int main() { return 0; }")
         bd = BuildDetector(tmp_path)
-        result = bd.synthesise_build_command("cpp")
+        bd.synthesise_build_command("cpp")
         script = _find_script(tmp_path).read_text()
         assert "'gcc'" in script
 
     def test_build_dir_is_temp(self, tmp_path):
         (tmp_path / "main.c").write_text("int main() { return 0; }")
         bd = BuildDetector(tmp_path)
-        result = bd.synthesise_build_command("cpp")
+        bd.synthesise_build_command("cpp")
         script = _find_script(tmp_path).read_text()
         assert ".raptor_build_" in script
 

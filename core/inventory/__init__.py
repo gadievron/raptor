@@ -5,7 +5,7 @@ globals, macros, classes), SHA-256 checksumming, SLOC counting, and
 cumulative coverage tracking.
 
 Usage:
-    from core.inventory import build_inventory, get_coverage_stats, get_items
+    from core.inventory import build_inventory, get_coverage_stats
 
     inventory = build_inventory("/path/to/repo", "/path/to/output")
     stats = get_coverage_stats(inventory)
@@ -45,8 +45,66 @@ from .lookup import lookup_function, normalise_path
 from .diff import compare_inventories
 from .coverage import update_coverage, get_coverage_stats, format_coverage_summary
 
+# Public re-export surface. Each name below is imported above purely
+# to make `from core.inventory import X` work for downstream callers
+# (build_inventory.py, packages/exploitability_validation, the
+# validation tests). Without `__all__`, ruff F401 flags them all as
+# "unused import"; with it, ruff recognises the re-export intent and
+# `from core.inventory import *` exposes exactly this list.
+# Order follows the import statements above (grouped by submodule)
+# rather than strict alphabetical, to keep the audit trail between
+# import-site and re-export-list trivial. `save_checklist` /
+# `get_items` are module-level functions defined below — included
+# here because they're part of the public surface too.
+__all__ = [
+    # .builder
+    "build_inventory",
+    # .languages
+    "LANGUAGE_MAP",
+    "detect_language",
+    # .exclusions
+    "DEFAULT_EXCLUDES",
+    "GENERATED_MARKERS",
+    "is_binary_file",
+    "is_generated_file",
+    "should_exclude",
+    "match_exclusion_reason",
+    # .extractors
+    "CodeItem",
+    "FunctionInfo",
+    "FunctionMetadata",
+    "KIND_FUNCTION",
+    "KIND_GLOBAL",
+    "KIND_MACRO",
+    "KIND_CLASS",
+    "extract_functions",
+    "extract_items",
+    "count_sloc",
+    "PythonExtractor",
+    "JavaScriptExtractor",
+    "CExtractor",
+    "JavaExtractor",
+    "GoExtractor",
+    "GenericExtractor",
+    "EXTRACTORS",
+    "_get_ts_languages",
+    # .lookup
+    "lookup_function",
+    "normalise_path",
+    # .diff
+    "compare_inventories",
+    # .coverage
+    "update_coverage",
+    "get_coverage_stats",
+    "format_coverage_summary",
+    # module-level functions defined below
+    "save_checklist",
+    "get_items",
+]
 
-def get_items(file_entry):
+
+
+def _get_items(file_entry):
     """Read code items from a file entry. Handles both old and new format.
 
     Old format: file_entry["functions"] (list of function dicts)

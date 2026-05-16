@@ -5,7 +5,7 @@ import os
 import pytest
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # packages/llm_analysis/tests/test_config_file.py -> repo root
 sys.path.insert(0, str(Path(__file__).parents[3]))
@@ -276,7 +276,7 @@ class TestMigrationDetection:
 
 
 try:
-    import yaml
+    import yaml  # noqa: F401 — availability probe for the @skipif gate below
     HAS_PYYAML = True
 except ImportError:
     HAS_PYYAML = False

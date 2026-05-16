@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict
 
-import pytest
 
 from core.cve.kev import KEV_URL, KevClient
 from core.http import HttpError

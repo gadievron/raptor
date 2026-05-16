@@ -17,7 +17,6 @@ from core.coverage.record import (
     load_records,
     cleanup_manifest,
     READS_MANIFEST,
-    COVERAGE_RECORD_FILE,
 )
 from core.coverage.track_read import main as track_read_main
 

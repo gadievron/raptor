@@ -23,7 +23,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-import pytest
 
 from core.inventory.call_graph import extract_call_graph_python
 from core.inventory.reachability import (
@@ -503,7 +502,7 @@ def test_closure_paths_are_valid_edges():
     """Every adjacent pair in a closure path must correspond to an
     actual call edge in the index."""
     from core.inventory.reachability import (
-        _get_or_build_index, callers_of, callees_of,
+        callees_of,
     )
     inv = _inv(_file("src/a.py",
         "import json\n"

@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -17,7 +16,6 @@ from packages.hypothesis_validation.adapters import (
     CodeQLAdapter,
     CoccinelleAdapter,
     SemgrepAdapter,
-    SMTAdapter,
 )
 from packages.hypothesis_validation.adapters.coccinelle import (
     _contains_forbidden_blocks,
@@ -253,7 +251,6 @@ class TestMakeSandboxRunner:
 
     def test_falls_back_to_subprocess_run_when_sandbox_unavailable(self, tmp_path):
         # Force the import of core.sandbox to fail
-        import importlib
         import sys
 
         from packages.hypothesis_validation.adapters import base as base_mod
