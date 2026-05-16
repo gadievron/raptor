@@ -87,7 +87,13 @@ class MultiTurnAnalyser:
         self.dialogue_history: List[List[Message]] = []
         logger.info("Multi-turn analyser initialised")
 
-    def analyse_crash_deeply(self, crash_context, max_turns: int = 5) -> Dict:
+    def analyse_crash_deeply(
+        self,
+        crash_context,
+        max_turns: int = 5,
+        *,
+        sage_prior_recall: Optional[str] = None,
+    ) -> Dict:
         """
         Perform deep, multi-turn analysis of a crash.
 
@@ -130,7 +136,9 @@ class MultiTurnAnalyser:
 
         # Turn 1: Initial analysis
         logger.info("Turn 1: Initial analysis")
-        initial_bundle = self._build_initial_crash_prompt(crash_context)
+        initial_bundle = self._build_initial_crash_prompt(
+            crash_context, sage_prior_recall=sage_prior_recall,
+        )
         initial_prompt, initial_sys = _extract_roles(initial_bundle)
         messages.append(Message(role="user", content=initial_prompt))
 
@@ -326,7 +334,12 @@ class MultiTurnAnalyser:
 
         return response
 
-    def _build_initial_crash_prompt(self, crash_context) -> PromptBundle:
+    def _build_initial_crash_prompt(
+        self,
+        crash_context,
+        *,
+        sage_prior_recall: Optional[str] = None,
+    ) -> PromptBundle:
         """Build initial crash analysis prompt."""
         system = (
             "You are an expert vulnerability researcher analysing a crash.\n\n"
@@ -352,6 +365,12 @@ class MultiTurnAnalyser:
                 content=crash_context.registers,
                 kind="register-dump",
                 origin="crash-analysis",
+            ))
+        if sage_prior_recall and sage_prior_recall.strip():
+            blocks.append(UntrustedBlock(
+                content=sage_prior_recall.strip(),
+                kind="sage-crash-pattern-recall",
+                origin="sage:crashes",
             ))
         slots = {
             "signal": TaintedString(value=str(crash_context.signal), trust="untrusted"),

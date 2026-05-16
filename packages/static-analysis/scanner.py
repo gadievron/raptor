@@ -1127,6 +1127,19 @@ def main():
         from core.sandbox.summary import set_active_run_dir
         set_active_run_dir(out_dir)
 
+        precall = out_dir / "sage_precall_scan.json"
+        if precall.exists():
+            try:
+                from core.json import load_json
+                from core.sage.hooks import format_sage_memories_for_prompt
+                raw = load_json(precall) or {}
+                mems = raw.get("memories") or []
+                formatted = format_sage_memories_for_prompt(mems)
+                if formatted:
+                    logger.info("SAGE pre-scan recall (from pipeline):\n%s", formatted[:4000])
+            except Exception as e:
+                logger.debug("SAGE precall file present but unreadable: %s", e)
+
         # Manifest
         logger.info("Computing repository hash...")
         repo_hash = sha256_tree(repo_path)

@@ -357,6 +357,19 @@ def orchestrate(
     for f in findings:
         f.setdefault("repo_path", str(repo_path))
 
+    precall_path = Path(out_dir) / "sage_precall_scan.json"
+    if precall_path.is_file():
+        try:
+            precall_raw = load_json(precall_path)
+            mems = (precall_raw or {}).get("memories") or []
+            from core.sage.hooks import format_sage_memories_for_prompt
+            precall_txt = format_sage_memories_for_prompt(mems)
+            if precall_txt:
+                for f in findings:
+                    f.setdefault("_sage_precall_scan_context", precall_txt)
+        except Exception as e:
+            logger.debug("SAGE precall for orchestration skipped: %s", e)
+
     if max_findings > 0 and len(findings) > max_findings:
         logger.info(f"Capping at {max_findings} findings (of {len(findings)})")
         findings = findings[:max_findings]

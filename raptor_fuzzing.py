@@ -14,6 +14,7 @@ This is very much a work-in-progress!
 """
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -24,10 +25,18 @@ sys.path.insert(0, str(Path(__file__).parent))
 from core.hash import sha256_file
 from core.json import save_json
 
-from core.config import RaptorConfig
 from core.logging import get_logger
 from core.run.safe_io import safe_run_mkdir
-from packages.fuzzing import AFLRunner, CrashCollector, CorpusManager
+from core.sage.hooks import (
+    format_sage_memories_for_prompt,
+    infer_afl_fuzz_flags_from_sage_recall_row,
+    pick_strongest_recall_row,
+    recall_context_for_crash_analysis,
+    recall_context_for_fuzzing_strategy,
+    store_crash_analysis_pattern,
+    store_fuzzing_strategy_outcome,
+)
+from packages.fuzzing import AFLRunner, CrashCollector
 from packages.binary_analysis import CrashAnalyser
 from packages.llm_analysis.crash_agent import CrashAnalysisAgent
 from packages.autonomous import (
@@ -129,6 +138,31 @@ def main() -> None:
     exploit_validator = None
     goal_planner = None
 
+    binary_hash = sha256_file(binary_path)[:16]
+    sage_strategy_rows: list = []
+    try:
+        sage_strategy_rows = recall_context_for_fuzzing_strategy(
+            repo_path=str(binary_path.parent),
+            binary_fingerprint=binary_hash,
+            strategy_id="default",
+        )
+    except Exception as e:
+        logger.debug("SAGE fuzzing strategy recall skipped: %s", e)
+
+    sage_afl_flags: list = []
+    if os.environ.get("RAPTOR_SAGE_AFL_PRIOR", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+    ):
+        prior = pick_strongest_recall_row(sage_strategy_rows, min_confidence=0.85)
+        sage_afl_flags = infer_afl_fuzz_flags_from_sage_recall_row(prior)
+        if sage_afl_flags:
+            logger.info(
+                "Applying SAGE-derived AFL++ flags (mechanical prior): %s",
+                sage_afl_flags,
+            )
+
     if args.autonomous:
         logger.info("=" * 70)
         logger.info("AUTONOMOUS MODE ENABLED")
@@ -137,9 +171,6 @@ def main() -> None:
         # Initialize fuzzing memory for learning
         memory_file = Path(args.memory_file) if args.memory_file else None
         memory = FuzzingMemory(memory_file)
-
-        # Initialize autonomous planner
-        planner = FuzzingPlanner(memory=memory)
 
         # Initialize exploit validator
         exploit_validator = ExploitValidator(work_dir=out_dir / "validation")
@@ -158,11 +189,30 @@ def main() -> None:
         if stats['total_knowledge'] > 0:
             logger.info(f"Average confidence: {stats['average_confidence']:.2f}")
 
-        # Check for past strategies for this binary
-        binary_hash = sha256_file(binary_path)[:16]
+        # Check for past strategies for this binary + SAGE cross-run priors
+        sage_strategy_text = format_sage_memories_for_prompt(sage_strategy_rows)
+        if sage_strategy_rows:
+            top = pick_strongest_recall_row(sage_strategy_rows, min_confidence=0.0)
+            top_c = float(top.get("confidence") or 0) if top else 0.0
+            if top_c >= 0.85:
+                logger.info(
+                    "SAGE high-confidence fuzzing prior (%.0f%%): %s",
+                    top_c * 100,
+                    str(top.get("content", ""))[:400],
+                )
         best_strategy = memory.get_best_strategy(binary_hash)
         if best_strategy:
             logger.info(f"✨ Found best strategy from memory: {best_strategy}")
+        elif sage_strategy_text:
+            logger.info(
+                "No local FuzzingMemory strategy entry; using SAGE recall as planning context."
+            )
+
+        planner = FuzzingPlanner(
+            memory=memory,
+            sage_planning_notes=sage_strategy_text or None,
+            sage_strategy_rows=sage_strategy_rows,
+        )
 
         # Generate autonomous corpus if no corpus provided
         if not corpus_dir:
@@ -200,6 +250,7 @@ def main() -> None:
             check_sanitizers=args.check_sanitizers,
             recompile_guide=args.recompile_guide,
             use_showmap=args.use_showmap,
+            extra_afl_flags=sage_afl_flags or None,
         )
 
         num_crashes, crashes_dir = afl_runner.run_fuzzing(
@@ -209,7 +260,7 @@ def main() -> None:
             max_crashes=args.max_crashes,
         )
 
-        print(f"\n✓ Fuzzing complete:")
+        print("\n✓ Fuzzing complete:")
         print(f"  - Duration: {args.duration}s")
         print(f"  - Unique crashes: {num_crashes}")
         print(f"  - Crashes dir: {crashes_dir}")
@@ -314,11 +365,18 @@ def main() -> None:
                 input_file=crash.input_file,
                 signal=crash.signal or "unknown",
             )
+            sage_crash_rows = recall_context_for_crash_analysis(
+                repo_path=str(binary_path.parent),
+                binary_fingerprint=binary_hash,
+                signal=crash_context.signal,
+                function_name=crash_context.function_name,
+            )
+            sage_crash_text = format_sage_memories_for_prompt(sage_crash_rows)
 
             # Deduplicate by stack hash
             if crash_context.stack_hash and crash_context.stack_hash in seen_stack_hashes:
                 logger.info(f"⊘ Skipping duplicate crash (stack hash: {crash_context.stack_hash})")
-                print(f"⊘ Duplicate crash - same stack trace as previous crash")
+                print("⊘ Duplicate crash - same stack trace as previous crash")
                 skipped_duplicates += 1
                 continue
 
@@ -328,11 +386,26 @@ def main() -> None:
             # Classify crash type
             crash_context.crash_type = crash_analyser.classify_crash_type(crash_context)
             logger.info(f"Crash type (heuristic): {crash_context.crash_type}")
+            # Persist coarse crash pattern outcome into SAGE for cross-run recall.
+            store_crash_analysis_pattern(
+                repo_path=str(binary_path.parent),
+                binary_path=str(binary_path),
+                signal=crash_context.signal,
+                function_name=crash_context.function_name or "unknown",
+                crash_type=crash_context.crash_type,
+                source_location=crash_context.source_location,
+                stack_hash=crash_context.stack_hash,
+                exploitability_hint=crash_context.exploitability,
+            )
 
             # LLM analysis - use multi-turn if autonomous mode
             if args.autonomous and multi_turn:
                 # Deep multi-turn analysis
-                deep_analysis = multi_turn.analyse_crash_deeply(crash_context, max_turns=3)
+                deep_analysis = multi_turn.analyse_crash_deeply(
+                    crash_context,
+                    max_turns=3,
+                    sage_prior_recall=sage_crash_text or None,
+                )
                 logger.info(f"Multi-turn analysis confidence: {deep_analysis['confidence']:.2f}")
 
                 # Update crash context with deep analysis
@@ -355,7 +428,10 @@ def main() -> None:
                     )
             else:
                 # Standard single-shot analysis
-                if llm_agent.analyse_crash(crash_context):
+                if llm_agent.analyse_crash(
+                    crash_context,
+                    sage_prior_recall=sage_crash_text or None,
+                ):
                     analysed += 1
 
             # Generate exploit if exploitable
@@ -453,13 +529,13 @@ def main() -> None:
     print("\n" + "=" * 70)
     print("RAPTOR FUZZING COMPLETE")
     print("=" * 70)
-    print(f"\n Summary:")
+    print("\n Summary:")
     print(f"   Total crashes: {num_crashes}")
     print(f"   analysed: {analysed}")
     print(f"   Exploitable: {exploitable}")
     print(f"   Exploits generated: {exploits_generated}")
 
-    print(f"\n Outputs:")
+    print("\n Outputs:")
     print(f"   AFL output: {out_dir / 'afl_output'}")
     print(f"   Crashes: {crashes_dir}")
     print(f"   Analysis: {out_dir / 'analysis'}")
@@ -487,7 +563,6 @@ def main() -> None:
 
         # Record this campaign in memory for future learning
         if memory:
-            binary_hash = sha256_file(binary_path)[:16]
             memory.record_campaign({
                 "binary_name": binary_path.name,
                 "binary_hash": binary_hash,
@@ -509,11 +584,22 @@ def main() -> None:
 
     report_file = out_dir / "fuzzing_report.json"
     save_json(report_file, report)
+    # Store end-of-run strategy outcome through the canonical SAGE path.
+    store_fuzzing_strategy_outcome(
+        repo_path=str(binary_path.parent),
+        binary_fingerprint=sha256_file(binary_path)[:16],
+        strategy_id="default",
+        duration_s=args.duration,
+        execs=0,
+        unique_crashes=num_crashes,
+        hangs=0,
+        exploitable_crashes=exploitable,
+    )
 
     print(f"   Report: {report_file}")
 
     if args.autonomous and memory:
-        print(f"\n Autonomous Learning:")
+        print("\n Autonomous Learning:")
         stats = memory.get_statistics()
         print(f"   Knowledge entries: {stats['total_knowledge']}")
         print(f"   Average confidence: {stats['average_confidence']:.2f}")

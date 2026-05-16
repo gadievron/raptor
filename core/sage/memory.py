@@ -20,6 +20,37 @@ logger = get_logger()
 from packages.autonomous.memory import FuzzingMemory, FuzzingKnowledge
 
 
+def _domain_tag_for_knowledge(k: FuzzingKnowledge) -> str:
+    """Route fuzzing knowledge to the SAGE domain that matches its semantics.
+
+    ``exploit_technique`` and ``binary_characteristic`` generalize across
+    binaries and campaigns (methodology). ``strategy`` and ``crash_pattern``
+    stay under fuzzing/campaign-specific recall.
+    """
+    if k.knowledge_type in ("exploit_technique", "binary_characteristic"):
+        return "raptor-methodology"
+    return "raptor-fuzzing"
+
+
+def _merge_query_hits(
+    hit_lists: List[List[Dict[str, Any]]],
+    top_k: int,
+) -> List[Dict[str, Any]]:
+    """Merge SAGE query rows from multiple domains, de-duped by content."""
+    seen: set = set()
+    out: List[Dict[str, Any]] = []
+    for lst in hit_lists:
+        for r in lst:
+            c = (r.get("content") or "").strip()
+            if not c or c in seen:
+                continue
+            seen.add(c)
+            out.append(r)
+            if len(out) >= top_k:
+                return out
+    return out
+
+
 def _knowledge_to_natural_language(k: FuzzingKnowledge) -> str:
     """Convert a FuzzingKnowledge entry to natural language for SAGE embedding."""
     parts = [
@@ -100,7 +131,7 @@ class SageFuzzingMemory(FuzzingMemory):
                 if self._sage_client.propose(
                     content=_knowledge_to_natural_language(k),
                     memory_type="observation",
-                    domain_tag="raptor-fuzzing",
+                    domain_tag=_domain_tag_for_knowledge(k),
                     confidence=k.confidence,
                 ):
                     stored += 1
@@ -122,7 +153,7 @@ class SageFuzzingMemory(FuzzingMemory):
             self._sage_client.propose(
                 content=_knowledge_to_natural_language(knowledge),
                 memory_type="observation",
-                domain_tag="raptor-fuzzing",
+                domain_tag=_domain_tag_for_knowledge(knowledge),
                 confidence=knowledge.confidence,
             )
         except Exception as e:
@@ -155,15 +186,36 @@ class SageFuzzingMemory(FuzzingMemory):
         domain: str = "raptor-fuzzing",
         top_k: int = 5,
     ) -> List[Dict[str, Any]]:
-        """Recall semantically similar fuzzing knowledge from SAGE."""
+        """Recall semantically similar fuzzing knowledge from SAGE.
+
+        When ``domain`` is not ``raptor-methodology``, also queries the
+        methodology domain and merges (de-duplicated), so exploit-adjacent
+        recall still picks up generalised lessons.
+        """
         if not self._sage_available:
             return []
 
-        return self._sage_client.query(
+        if domain == "raptor-methodology":
+            return self._sage_client.query(
+                text=query_text,
+                domain_tag=domain,
+                top_k=top_k,
+            )
+
+        primary = self._sage_client.query(
             text=query_text,
             domain_tag=domain,
             top_k=top_k,
         )
+        methodology = self._sage_client.query(
+            text=(
+                "Security fuzzing and exploitation methodology related to: "
+                f"{query_text}"
+            ),
+            domain_tag="raptor-methodology",
+            top_k=max(2, min(3, top_k)),
+        )
+        return _merge_query_hits([primary, methodology], top_k)
 
     def recall_exploit_patterns(
         self,
@@ -181,11 +233,18 @@ class SageFuzzingMemory(FuzzingMemory):
             if active:
                 mitigations = f" with mitigations: {', '.join(active)}"
 
-        return self._sage_client.query(
-            text=f"exploit techniques for {crash_type}{mitigations}",
+        text = f"exploit techniques for {crash_type}{mitigations}"
+        methodology = self._sage_client.query(
+            text=text,
+            domain_tag="raptor-methodology",
+            top_k=top_k,
+        )
+        fuzzing = self._sage_client.query(
+            text=text,
             domain_tag="raptor-fuzzing",
             top_k=top_k,
         )
+        return _merge_query_hits([methodology, fuzzing], top_k)
 
     def get_statistics(self) -> Dict:
         """Get memory statistics including SAGE status."""

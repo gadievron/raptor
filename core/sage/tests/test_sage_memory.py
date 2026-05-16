@@ -268,9 +268,47 @@ class TestSageRecallMethods(unittest.TestCase):
                 memory_file=Path(tmpdir) / "mem.json",
                 sage_config=SageConfig(enabled=False),
             )
-            self.assertEqual(
-                memory.recall_exploit_patterns("heap_overflow", {"aslr": True}), []
-            )
+        self.assertEqual(
+            memory.recall_exploit_patterns("heap_overflow", {"aslr": True}), []
+        )
+
+
+class TestSageKnowledgeDomainRouting(unittest.TestCase):
+    """Belt-and-suspenders: methodology vs fuzzing SAGE domains."""
+
+    def test_domain_tag_exploit_technique_is_methodology(self):
+        from packages.autonomous.memory import FuzzingKnowledge
+        from core.sage.memory import _domain_tag_for_knowledge
+
+        k = FuzzingKnowledge(
+            knowledge_type="exploit_technique",
+            key="ROP_heap",
+            value={"ok": True},
+            confidence=0.9,
+        )
+        self.assertEqual(_domain_tag_for_knowledge(k), "raptor-methodology")
+
+    def test_domain_tag_strategy_is_fuzzing(self):
+        from packages.autonomous.memory import FuzzingKnowledge
+        from core.sage.memory import _domain_tag_for_knowledge
+
+        k = FuzzingKnowledge(
+            knowledge_type="strategy",
+            key="s",
+            value={"name": "AFL"},
+            confidence=0.8,
+        )
+        self.assertEqual(_domain_tag_for_knowledge(k), "raptor-fuzzing")
+
+    def test_merge_query_hits_dedupes_and_caps(self):
+        from core.sage.memory import _merge_query_hits
+
+        a = [{"content": "same", "confidence": 0.9}]
+        b = [{"content": "same", "confidence": 0.5}, {"content": "other", "confidence": 0.7}]
+        merged = _merge_query_hits([a, b], top_k=2)
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(merged[0]["content"], "same")
+        self.assertEqual(merged[1]["content"], "other")
 
 
 if __name__ == "__main__":

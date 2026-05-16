@@ -300,5 +300,63 @@ class TestSageClientEgressProxyRegistration(unittest.TestCase):
                 mock_get.assert_not_called()
 
 
+class TestSageClientWithFakeSdk(unittest.TestCase):
+    """Coverage without mock objects: deterministic fake SDK."""
+
+    def test_propose_and_query_with_fake_sdk(self):
+        import core.sage.client as client_mod
+
+        snapshot = _snapshot_sdk(client_mod)
+        try:
+            class _FakeIdentity:
+                @staticmethod
+                def default():
+                    return object()
+
+            class _FakeRecord:
+                def __init__(self, content, confidence_score, domain_tag):
+                    self.content = content
+                    self.confidence_score = confidence_score
+                    self.domain_tag = domain_tag
+
+            class _FakeClient:
+                def __init__(self, **_kwargs):
+                    self.last_proposed = None
+
+                def embed(self, text):
+                    # Deterministic pseudo-embedding for testability.
+                    return [float(len(text) % 7), 0.5, 1.0]
+
+                def propose(self, **kwargs):
+                    self.last_proposed = kwargs
+
+                def query(self, embedding, domain_tag, top_k):
+                    content = f"embedded={embedding[0]} domain={domain_tag} top_k={top_k}"
+                    return SimpleNamespace(
+                        results=[_FakeRecord(content, 0.88, domain_tag)]
+                    )
+
+            client_mod._SAGE_SDK_AVAILABLE = True
+            client_mod._SyncSageClient = _FakeClient
+            client_mod._AgentIdentity = _FakeIdentity
+            client_mod._MemoryType = SimpleNamespace(
+                observation="observation", fact="fact", inference="inference"
+            )
+
+            from core.sage.config import SageConfig
+            from core.sage.client import SageClient
+
+            sc = SageClient(SageConfig(enabled=True))
+            self.assertTrue(
+                sc.propose("seed content", memory_type="observation", domain_tag="raptor-findings")
+            )
+            rows = sc.query("seed content", "raptor-findings", top_k=2)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["domain"], "raptor-findings")
+            self.assertGreater(rows[0]["confidence"], 0.8)
+        finally:
+            _restore_sdk(client_mod, snapshot)
+
+
 if __name__ == "__main__":
     unittest.main()
