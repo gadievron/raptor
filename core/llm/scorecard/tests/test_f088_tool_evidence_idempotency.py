@@ -195,6 +195,158 @@ class TestIdempotency:
         assert _stat(sc2, "agentic:py/sql", "claude-opus") == (1, 0)
 
 
+class TestAtomicClaimAndRecord:
+    # Bugbot PR #515: the prior split-call sequence (claim → record_event)
+    # used TWO separate _with_lock cycles. Between them, a process kill
+    # or I/O error could leave finding_id persisted in the seen-set with
+    # zero events recorded — the finding_id was then permanently "seen"
+    # so retries returned False without ever recording.
+    #
+    # The fix introduces claim_and_record_tool_evidence, which does both
+    # operations under a single lock-and-persist cycle. The tests below
+    # exercise the atomicity guarantee directly on the substrate.
+
+    def test_claim_and_record_persists_both_seen_set_and_event(
+        self, scorecard,
+    ):
+        # Single call records both the seen-set claim and the event.
+        ok = scorecard.claim_and_record_tool_evidence(
+            decision_class="agentic:py/sql",
+            model="claude-opus",
+            finding_id="f-200",
+            outcome="correct",
+        )
+        assert ok is True
+        # Event landed.
+        assert _stat(scorecard, "agentic:py/sql", "claude-opus") == (1, 0)
+        # Seen-set persisted.
+        raw = json.loads(scorecard.path.read_text())
+        cell = raw["models"]["claude-opus"]["agentic:py/sql"]
+        assert "f-200" in cell["tool_evidence_finding_ids"]
+
+    def test_claim_and_record_returns_false_on_duplicate_no_event(
+        self, scorecard,
+    ):
+        # First call records.
+        first = scorecard.claim_and_record_tool_evidence(
+            decision_class="agentic:py/sql",
+            model="claude-opus",
+            finding_id="f-201",
+            outcome="correct",
+        )
+        # Second call with same finding_id is a no-op; event count
+        # stays at 1.
+        second = scorecard.claim_and_record_tool_evidence(
+            decision_class="agentic:py/sql",
+            model="claude-opus",
+            finding_id="f-201",
+            outcome="correct",
+        )
+        assert first is True
+        assert second is False
+        assert _stat(scorecard, "agentic:py/sql", "claude-opus") == (1, 0)
+
+    def test_claim_and_record_persist_failure_rolls_back_both(
+        self, tmp_path, monkeypatch,
+    ):
+        # If save_json fails (e.g. disk full mid-persist), the
+        # _with_lock context exits via exception → the context does NOT
+        # persist. Both the seen-set claim AND the event increment must
+        # roll back: on retry the next claim_and_record_tool_evidence
+        # call must succeed (NOT find finding_id already in seen-set).
+        from core.llm.scorecard import scorecard as scorecard_mod
+
+        path = tmp_path / "scorecard.json"
+        sc = ModelScorecard(path)
+
+        # Make the first attempt's persist fail.
+        original_save_json = scorecard_mod.save_json
+        attempts = {"n": 0}
+
+        def flaky_save_json(p, data):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise OSError("simulated disk failure")
+            return original_save_json(p, data)
+
+        monkeypatch.setattr(scorecard_mod, "save_json", flaky_save_json)
+
+        # First call: raises (the failure propagates out of _with_lock).
+        with pytest.raises(OSError, match="simulated disk failure"):
+            sc.claim_and_record_tool_evidence(
+                decision_class="agentic:py/sql",
+                model="claude-opus",
+                finding_id="f-202",
+                outcome="correct",
+            )
+
+        # Second call (with save_json now working): MUST succeed
+        # — the seen-set + event from the failed first attempt MUST
+        # have been rolled back by the _with_lock exception path.
+        # Fresh ModelScorecard reads from disk to prove persistence.
+        sc2 = ModelScorecard(path)
+        ok = sc2.claim_and_record_tool_evidence(
+            decision_class="agentic:py/sql",
+            model="claude-opus",
+            finding_id="f-202",
+            outcome="correct",
+        )
+        assert ok is True, (
+            "first call's persist failed; finding_id must NOT be in "
+            "seen-set on retry (else the F088 atomicity bug recurs)"
+        )
+        assert _stat(sc2, "agentic:py/sql", "claude-opus") == (1, 0)
+
+    def test_record_tool_evidence_outcome_uses_atomic_path(
+        self, scorecard, monkeypatch,
+    ):
+        # Verify the user-facing record_tool_evidence_outcome now
+        # routes through claim_and_record_tool_evidence (one lock)
+        # and not through the two-call sequence (two locks).
+        calls = {"claim_and_record": 0, "record_event": 0, "claim": 0}
+
+        original_claim_and_record = scorecard.claim_and_record_tool_evidence
+
+        def counting_claim_and_record(*a, **kw):
+            calls["claim_and_record"] += 1
+            return original_claim_and_record(*a, **kw)
+
+        def counting_record_event(*a, **kw):
+            calls["record_event"] += 1
+
+        def counting_claim(*a, **kw):
+            calls["claim"] += 1
+            return True
+
+        monkeypatch.setattr(
+            scorecard, "claim_and_record_tool_evidence",
+            counting_claim_and_record,
+        )
+        monkeypatch.setattr(
+            scorecard, "record_event", counting_record_event,
+        )
+        monkeypatch.setattr(
+            scorecard, "claim_tool_evidence_finding", counting_claim,
+        )
+
+        record_tool_evidence_outcome(
+            scorecard,
+            model="claude-opus", rule_id="py/sql",
+            analysis_verdict=True, validation_verdict=True,
+            finding_id="f-203",
+        )
+
+        assert calls["claim_and_record"] == 1, (
+            "atomic path should fire exactly once when finding_id given"
+        )
+        assert calls["record_event"] == 0, (
+            "separate record_event must NOT be called on the atomic path"
+        )
+        assert calls["claim"] == 0, (
+            "separate claim must NOT be called on the atomic path"
+        )
+
+
 class TestBulkIdempotency:
     """The bulk variant must inherit idempotency via the single-record
     path it delegates to."""

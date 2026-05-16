@@ -464,6 +464,70 @@ class ModelScorecard:
             seen.append(finding_id)
             return True
 
+    def claim_and_record_tool_evidence(
+        self,
+        decision_class: str,
+        model: str,
+        finding_id: str,
+        outcome: Outcome,
+        *,
+        model_version: Optional[str] = None,
+        sample: Optional[Dict[str, str]] = None,
+    ) -> bool:
+        """Atomic check-and-record for (decision_class, model,
+        finding_id) — F088 atomicity closure.
+
+        Combines the seen-set claim and the TOOL_EVIDENCE event
+        record under a SINGLE ``_with_lock()`` cycle. Both writes
+        persist together via the context's atomic save-on-exit, or
+        neither does (the context's ``__exit__`` only persists when
+        ``exc_type is None``).
+
+        Replaces the prior pattern of calling
+        :meth:`claim_tool_evidence_finding` then :meth:`record_event`
+        as TWO separate lock-and-persist cycles. That pattern was
+        non-atomic: a process kill / I/O error between the two
+        persists could leave ``finding_id`` permanently marked as
+        seen with zero events recorded — subsequent retries would
+        find the claim already present and return False, losing the
+        event for good (Bugbot finding on PR #515).
+
+        Returns ``True`` when the finding was claimed AND its event
+        was recorded under this call. Returns ``False`` when
+        ``finding_id`` was already in the seen-set (no event
+        recorded — idempotent no-op).
+        """
+        if not finding_id:
+            raise ValueError("finding_id must be non-empty for idempotency")
+        if outcome not in ("correct", "incorrect"):
+            raise ValueError(
+                f"outcome must be 'correct' or 'incorrect', got {outcome!r}"
+            )
+        with self._with_lock() as data:
+            cell = self._ensure_cell(data, model, decision_class)
+            seen = cell.setdefault("tool_evidence_finding_ids", [])
+            if finding_id in seen:
+                return False
+            seen.append(finding_id)
+            cell["events"][EventType.TOOL_EVIDENCE][outcome] += 1
+            cell["last_seen_at"] = _now_iso()
+            if model_version:
+                cell["model_version"] = model_version
+            if (outcome == "incorrect"
+                    and self.retain_samples
+                    and sample is not None):
+                samples = cell.setdefault("disagreement_samples", [])
+                samples.append({
+                    "ts": _now_iso(),
+                    "event_type": EventType.TOOL_EVIDENCE,
+                    **sample,
+                })
+                if len(samples) > MAX_DISAGREEMENT_SAMPLES:
+                    cell["disagreement_samples"] = (
+                        samples[-MAX_DISAGREEMENT_SAMPLES:]
+                    )
+            return True
+
     def set_policy_override(
         self,
         decision_class: str,
