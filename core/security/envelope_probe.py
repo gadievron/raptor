@@ -207,6 +207,19 @@ def probe_envelope_compatibility(
         else:
             raw = str(result)
     except Exception as e:
+        # F058 strict-contract gap: under strict=True the caller's
+        # contract is "envelope-probe failure raises so silent fallback
+        # cannot happen." The post-evaluate path (below) already raises
+        # when probe_result.compatible is False; the dispatch-failure
+        # path used to early-return a compatible=False ProbeResult,
+        # leaving strict=True callers with the SAME failed-but-non-
+        # raising outcome they were trying to opt out of. Honour the
+        # contract uniformly here.
+        if strict:
+            raise RuntimeError(
+                f"Envelope probe dispatch failed for {model_name} "
+                f"(profile: {profile.name}): {e}"
+            ) from e
         return ProbeResult(
             compatible=False,
             valid_json=False,
