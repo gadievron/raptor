@@ -96,7 +96,13 @@ class TestCollectCrashes:
             _make_crash_file(tmp_path, f"id:{i:06d},sig:11", f"crash {i}".encode())
         collector = CrashCollector(tmp_path)
         crashes = collector.collect_crashes(max_crashes=2)
-        assert len(crashes) <= 2
+        # Use `==` not `<=`. Pre-fix `assert len(crashes) <= 2`
+        # passed even when collect_crashes returned 0 (the cap
+        # was working AT BEST, but a regression that returned
+        # zero would also pass). The contract is "exactly N
+        # crashes when at least N are available", not "at most
+        # N" — so equality is the right check.
+        assert len(crashes) == 2
 
     def test_parses_crash_id_from_filename(self, tmp_path):
         _make_crash_file(tmp_path, "id:000042,sig:11,src:000000,op:havoc,rep:4")

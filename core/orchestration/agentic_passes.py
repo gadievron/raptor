@@ -45,7 +45,15 @@ from pathlib import Path
 from typing import Optional
 
 from core.json import load_json, save_json
+from core.sandbox import run_untrusted_networked
+from core.llm.cc_proxy_hosts import (
+    readable_paths_for_cc_dispatch as _readable_paths_for_cc_dispatch,
+)
+from core.llm.cc_proxy_hosts import (
+    proxy_hosts_for_cc_dispatch as _proxy_hosts_for_cc_dispatch,
+)
 from core.schema_constants import CONFIDENCE_LEVELS
+from core.security.log_sanitisation import escape_nonprintable
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +105,22 @@ class PostpassResult:
     duration_s: float = 0.0
 
 
+@dataclass
+class ReachabilityPrepassResult:
+    """Outcome of run_reachability_prepass().
+
+    ``inventory`` is the (possibly cached) inventory dict the
+    prepass built. The agentic launcher threads it through to
+    downstream consumers (codeql analyzer, /validate Stage B)
+    so they don't re-walk the source tree.
+    """
+    ran: bool
+    skipped_reason: Optional[str] = None
+    marked_count: int = 0          # functions marked priority=low
+    inventory: Optional[Any] = None
+    duration_s: float = 0.0
+
+
 def run_understand_prepass(
     target: Path,
     agentic_out_dir: Path,
@@ -128,6 +152,14 @@ def _run_understand_prepass_unsafe(
     if block_cc_dispatch:
         return PrepassResult(ran=False, skipped_reason="cc_trust blocked dispatch (untrusted target)")
 
+    from core.security.rule_of_two import (
+        NonInteractiveError, require_interactive_for_agentic_pass,
+    )
+    try:
+        require_interactive_for_agentic_pass("understand")
+    except NonInteractiveError as e:
+        return PrepassResult(ran=False, skipped_reason=str(e))
+
     claude_bin = claude_bin or shutil.which("claude")
     if not claude_bin:
         return PrepassResult(ran=False, skipped_reason="claude not on PATH")
@@ -154,44 +186,65 @@ def _run_understand_prepass_unsafe(
         # second time. Falls back to a fresh build if the agentic checklist
         # isn't present (e.g. when build_inventory failed earlier).
         if not _provision_understand_checklist(target, agentic_out_dir, understand_dir):
-            _fail_lifecycle(understand_dir, "checklist build failed")
+            # Mark settled BEFORE the call so that if _fail_lifecycle
+            # itself raises, the `finally` block's "interrupted"
+            # fallback doesn't overwrite the real failure reason.
+            # Same pattern at every other _fail_lifecycle call site
+            # in this function.
             lifecycle_settled = True
+            _fail_lifecycle(understand_dir, "checklist build failed")
             return PrepassResult(ran=False, skipped_reason="checklist build failed",
                                  understand_dir=understand_dir,
                                  duration_s=time.time() - t0)
 
         prompt = _build_understand_prompt(target, understand_dir)
         try:
-            # Stream stdout/stderr — pre-pass can take 15 min.
-            proc = subprocess.run(
-                [claude_bin, "-p",
-                 "--no-session-persistence",
-                 "--allowed-tools", _UNDERSTAND_TOOLS,
-                 "--add-dir", str(_RAPTOR_DIR),
-                 "--add-dir", str(target),
-                 "--add-dir", str(understand_dir),
-                 "--max-budget-usd", _PREPASS_BUDGET_USD],
+            from core.llm.cc_adapter import CCDispatchConfig, build_cc_command
+            prepass_config = CCDispatchConfig(
+                claude_bin=claude_bin,
+                tools=_UNDERSTAND_TOOLS,
+                add_dirs=(str(_RAPTOR_DIR), str(target), str(understand_dir)),
+                budget_usd=_PREPASS_BUDGET_USD,
+                timeout_s=_PREPASS_TIMEOUT_S,
+                capture_json_envelope=False,
+            )
+            # Sandboxed Claude Code dispatch with restrict_reads=True.
+            # See cc_dispatch.py for rationale; this site adds
+            # str(_RAPTOR_DIR) on top of the calibrated/default
+            # readable_paths so the LLM-directed Bash tool can invoke
+            # libexec/raptor-normalize-context-map (MAP-5) and
+            # libexec/raptor-coverage-summary --mark (MAP-6) — those
+            # scripts live under RAPTOR_DIR. target+understand_dir
+            # auto-allowlisted via target=/output= positional args.
+            proc = run_untrusted_networked(
+                build_cc_command(prepass_config),
                 input=prompt, text=True,
                 timeout=_PREPASS_TIMEOUT_S,
+                target=str(target), output=str(understand_dir),
+                readable_paths=(
+                    [str(_RAPTOR_DIR)] + _readable_paths_for_cc_dispatch(claude_bin)
+                ),
+                proxy_hosts=_proxy_hosts_for_cc_dispatch(claude_bin),
+                caller_label="agentic-understand",
             )
         except subprocess.TimeoutExpired:
-            _fail_lifecycle(understand_dir, f"timeout after {_PREPASS_TIMEOUT_S}s")
             lifecycle_settled = True
+            _fail_lifecycle(understand_dir, f"timeout after {_PREPASS_TIMEOUT_S}s")
             logger.warning("understand pre-pass timed out after %ds", _PREPASS_TIMEOUT_S)
             return PrepassResult(ran=False, skipped_reason=f"timeout after {_PREPASS_TIMEOUT_S}s",
                                  understand_dir=understand_dir,
                                  duration_s=time.time() - t0)
         except OSError as e:
-            _fail_lifecycle(understand_dir, f"launch failed: {e}")
             lifecycle_settled = True
+            _fail_lifecycle(understand_dir, f"launch failed: {e}")
             logger.warning("understand pre-pass failed to launch: %s", e)
             return PrepassResult(ran=False, skipped_reason=f"launch failed: {e}",
                                  understand_dir=understand_dir,
                                  duration_s=time.time() - t0)
 
         if proc.returncode != 0:
-            _fail_lifecycle(understand_dir, f"subprocess returned {proc.returncode}")
             lifecycle_settled = True
+            _fail_lifecycle(understand_dir, f"subprocess returned {proc.returncode}")
             logger.warning("understand pre-pass returned %d", proc.returncode)
             return PrepassResult(ran=False, skipped_reason=f"subprocess returned {proc.returncode}",
                                  understand_dir=understand_dir,
@@ -199,8 +252,8 @@ def _run_understand_prepass_unsafe(
 
         context_map = understand_dir / "context-map.json"
         if not context_map.exists():
-            _fail_lifecycle(understand_dir, "context-map.json missing after run")
             lifecycle_settled = True
+            _fail_lifecycle(understand_dir, "context-map.json missing after run")
             logger.warning("understand pre-pass completed but context-map.json was not written")
             return PrepassResult(ran=False, skipped_reason="context-map.json missing after run",
                                  understand_dir=understand_dir,
@@ -215,8 +268,8 @@ def _run_understand_prepass_unsafe(
         parsed = load_json(context_map)
         shape_error = _validate_context_map_shape(parsed)
         if shape_error is not None:
-            _fail_lifecycle(understand_dir, f"context-map.json invalid: {shape_error}")
             lifecycle_settled = True
+            _fail_lifecycle(understand_dir, f"context-map.json invalid: {shape_error}")
             logger.warning("understand pre-pass: context-map.json failed shape check (%s)",
                            shape_error)
             return PrepassResult(ran=False, skipped_reason=f"context-map.json invalid: {shape_error}",
@@ -233,6 +286,14 @@ def _run_understand_prepass_unsafe(
         # any later /validate.
         enriched = _enrich_agentic_checklist(agentic_out_dir, context_map)
 
+        # NOTE: the reachability low-priority marking previously
+        # lived here (under the --understand-only branch) but is
+        # now hoisted to ``run_reachability_prepass`` so it fires
+        # regardless of whether --understand was passed.
+        # Operators not using --understand still get the dead-
+        # code priority signal in their checklist, which
+        # benefits the agentic LLM budget allocation.
+
         return PrepassResult(
             ran=True,
             understand_dir=understand_dir,
@@ -243,8 +304,8 @@ def _run_understand_prepass_unsafe(
 
     except Exception:
         # Make sure the lifecycle is marked failed before propagating.
-        _fail_lifecycle(understand_dir, "unexpected exception")
         lifecycle_settled = True
+        _fail_lifecycle(understand_dir, "unexpected exception")
         raise
     finally:
         # KeyboardInterrupt / SystemExit / any other BaseException bypasses
@@ -286,6 +347,14 @@ def _run_validate_postpass_unsafe(
 ) -> PostpassResult:
     if block_cc_dispatch:
         return PostpassResult(ran=False, skipped_reason="cc_trust blocked dispatch (untrusted target)")
+
+    from core.security.rule_of_two import (
+        NonInteractiveError, require_interactive_for_agentic_pass,
+    )
+    try:
+        require_interactive_for_agentic_pass("validate")
+    except NonInteractiveError as e:
+        return PostpassResult(ran=False, skipped_reason=str(e))
 
     claude_bin = claude_bin or shutil.which("claude")
     if not claude_bin:
@@ -358,22 +427,67 @@ def _run_validate_postpass_unsafe(
         save_json(selection_file,
                   convert_agentic_to_validate(selected, str(target)))
 
+        # Drop a pointer to the parent /agentic checklist so /validate's
+        # Stage 0 can reuse it instead of rebuilding the inventory from
+        # scratch. The reachability prepass already built one; pointing
+        # at it saves a full source-tree walk + AST parse (~30-60s on
+        # typical large repos). /validate's Stage 0 reads
+        # ``parent-checklist-pointer.json`` and falls through to a fresh
+        # build when the pointer is missing / stale / mistargeted /
+        # outside the expected root.
+        #
+        # ``expected_root_dir`` is the agentic_out_dir; /validate
+        # rejects pointers whose ``checklist_path`` resolves outside
+        # this root (defense against a buggy or malicious pointer
+        # pointing at arbitrary file paths). Same defensive principle
+        # as the /understand bridge's path validation. The mtime-based
+        # TTL on the validate side rejects checklists older than 1h
+        # (stale source drift).
+        agentic_checklist = agentic_out_dir / "checklist.json"
+        if agentic_checklist.is_file():
+            save_json(
+                validate_dir / "parent-checklist-pointer.json",
+                {
+                    "checklist_path": str(agentic_checklist.resolve()),
+                    "expected_target_path": str(target),
+                    "expected_root_dir": str(agentic_out_dir.resolve()),
+                },
+            )
+
         prompt = _build_validate_prompt(target, agentic_out_dir, validate_dir,
                                         analysis_report, selection_file, len(selected))
 
         try:
-            # Stream output — multi-stage validate over many findings can run 30 min.
-            proc = subprocess.run(
-                [claude_bin, "-p",
-                 "--no-session-persistence",
-                 "--allowed-tools", _VALIDATE_TOOLS,
-                 "--add-dir", str(_RAPTOR_DIR),
-                 "--add-dir", str(target),
-                 "--add-dir", str(agentic_out_dir),
-                 "--add-dir", str(validate_dir),
-                 "--max-budget-usd", _POSTPASS_BUDGET_USD],
+            from core.llm.cc_adapter import CCDispatchConfig, build_cc_command
+            postpass_config = CCDispatchConfig(
+                claude_bin=claude_bin,
+                tools=_VALIDATE_TOOLS,
+                add_dirs=(str(_RAPTOR_DIR), str(target), str(agentic_out_dir), str(validate_dir)),
+                budget_usd=_POSTPASS_BUDGET_USD,
+                timeout_s=_POSTPASS_TIMEOUT_S,
+                capture_json_envelope=False,
+            )
+            # Same restrict_reads=True posture as /understand prepass —
+            # see that site for rationale. /validate's tool list is
+            # broader (Bash for sandbox prep, SMT, feasibility helpers),
+            # all of which run from RAPTOR_DIR/libexec; agentic_out_dir
+            # holds the prior phases' artefacts the LLM reads back.
+            # restrict_reads still applies — those paths are in
+            # readable_paths; $HOME secrets stay denied. Calibrated
+            # paths (when available) carry the per-binary install
+            # layout; site-specific extras (RAPTOR_DIR, agentic_out_dir)
+            # are prepended.
+            proc = run_untrusted_networked(
+                build_cc_command(postpass_config),
                 input=prompt, text=True,
                 timeout=_POSTPASS_TIMEOUT_S,
+                target=str(target), output=str(validate_dir),
+                readable_paths=(
+                    [str(_RAPTOR_DIR), str(agentic_out_dir)]
+                    + _readable_paths_for_cc_dispatch(claude_bin)
+                ),
+                proxy_hosts=_proxy_hosts_for_cc_dispatch(claude_bin),
+                caller_label="agentic-validate",
             )
         except subprocess.TimeoutExpired:
             _fail_lifecycle(validate_dir, f"timeout after {_POSTPASS_TIMEOUT_S}s")
@@ -429,11 +543,31 @@ def _start_lifecycle(command: str, target: Path) -> Optional[Path]:
 
     Returns the OUTPUT_DIR path on success, or None if the helper failed
     or its output couldn't be parsed.
+
+    Pre-fix the four lifecycle helpers (start/complete/fail
+    + _build_checklist) called subprocess.run WITHOUT
+    `env=`, inheriting the parent process's full
+    environment. When /agentic runs against an untrusted
+    target — operator points RAPTOR at a freshly cloned
+    OSS repo — the parent env may carry attacker-relevant
+    vars (LD_PRELOAD, PYTHONSTARTUP, BASH_ENV from a
+    poisoned dotfile, GIT_CONFIG_GLOBAL pointing at a
+    malicious config). Inheriting them into the lifecycle
+    subprocesses (which themselves invoke raptor-managed
+    bash + python) widens the trust boundary unnecessarily.
+
+    Use `RaptorConfig.get_safe_env()` (strips the
+    DANGEROUS_ENV_VARS set: LD_PRELOAD/PYTHONSTARTUP/etc.).
+    The lifecycle helpers don't depend on operator env beyond
+    PATH/HOME/USER which `get_safe_env` preserves.
     """
+    from core.config import RaptorConfig
+    safe_env = RaptorConfig.get_safe_env()
     try:
         proc = subprocess.run(
             [str(_LIFECYCLE), "start", command, "--target", str(target)],
             capture_output=True, text=True, timeout=_LIFECYCLE_TIMEOUT_S,
+            env=safe_env,
         )
     except (subprocess.TimeoutExpired, OSError) as e:
         logger.warning("lifecycle start %s failed: %s", command, e)
@@ -445,17 +579,24 @@ def _start_lifecycle(command: str, target: Path) -> Optional[Path]:
     for line in reversed(proc.stdout.splitlines()):
         line = line.strip()
         if line.startswith("OUTPUT_DIR="):
-            return Path(line[len("OUTPUT_DIR="):])
+            return Path(line[len("OUTPUT_DIR="):]).resolve()
     logger.warning("lifecycle start %s did not emit OUTPUT_DIR=", command)
     return None
 
 
 def _complete_lifecycle(output_dir: Path) -> None:
-    """Mark a lifecycle run as completed. Best-effort; swallows errors."""
+    """Mark a lifecycle run as completed. Best-effort; swallows errors.
+
+    See `_start_lifecycle` for the env=safe_env rationale —
+    same parent-env-inheritance concern.
+    """
+    from core.config import RaptorConfig
+    safe_env = RaptorConfig.get_safe_env()
     try:
         proc = subprocess.run(
             [str(_LIFECYCLE), "complete", str(output_dir)],
             capture_output=True, text=True, timeout=_LIFECYCLE_TIMEOUT_S,
+            env=safe_env,
         )
     except (subprocess.TimeoutExpired, OSError) as e:
         logger.warning("lifecycle complete failed: %s", e)
@@ -466,13 +607,19 @@ def _complete_lifecycle(output_dir: Path) -> None:
 
 
 def _fail_lifecycle(output_dir: Path, message: str) -> None:
-    """Mark a lifecycle run as failed. Best-effort; swallows errors."""
+    """Mark a lifecycle run as failed. Best-effort; swallows errors.
+
+    See `_start_lifecycle` for the env=safe_env rationale.
+    """
     if output_dir is None:
         return
+    from core.config import RaptorConfig
+    safe_env = RaptorConfig.get_safe_env()
     try:
         proc = subprocess.run(
             [str(_LIFECYCLE), "fail", str(output_dir), message],
             capture_output=True, text=True, timeout=_LIFECYCLE_TIMEOUT_S,
+            env=safe_env,
         )
     except (subprocess.TimeoutExpired, OSError) as e:
         logger.warning("lifecycle fail failed: %s", e)
@@ -483,11 +630,17 @@ def _fail_lifecycle(output_dir: Path, message: str) -> None:
 
 
 def _build_checklist(target: Path, output_dir: Path) -> bool:
-    """Run libexec/raptor-build-checklist. Returns True on success."""
+    """Run libexec/raptor-build-checklist. Returns True on success.
+
+    See `_start_lifecycle` for the env=safe_env rationale.
+    """
+    from core.config import RaptorConfig
+    safe_env = RaptorConfig.get_safe_env()
     try:
         proc = subprocess.run(
             [str(_BUILD_CHECKLIST), str(target), str(output_dir)],
             capture_output=True, text=True, timeout=_CHECKLIST_TIMEOUT_S,
+            env=safe_env,
         )
     except (subprocess.TimeoutExpired, OSError) as e:
         logger.warning("build_checklist failed: %s", e)
@@ -552,13 +705,28 @@ def convert_agentic_to_validate(agentic_findings: list, target_path: str) -> dic
     }
 
 
+def _safe_line(raw) -> int:
+    """Coerce LLM-emitted `line` (int / "12" / "12-15" / garbage) to int.
+
+    LLMs occasionally emit ranges or non-numeric strings; an unguarded
+    `int()` would crash the entire post-pass. Fall through to 0 on parse
+    failure — schemas downstream will surface a "missing line" warning.
+    """
+    if isinstance(raw, int):
+        return raw
+    try:
+        return int(str(raw).split("-", 1)[0])
+    except (TypeError, ValueError):
+        return 0
+
+
 def _convert_one_finding(f: dict) -> dict:
     """Convert a single /agentic finding dict to /validate Finding shape."""
     # Renames per the schema_constants alignment table.
     out: dict = {
         "id": str(f.get("finding_id") or f.get("id") or ""),
         "file": f.get("file_path") or f.get("file") or "",
-        "line": int(f.get("start_line") or f.get("line") or 0),
+        "line": _safe_line(f.get("start_line") or f.get("line") or 0),
         "description": f.get("reasoning") or f.get("description") or "",
         # ruling: /agentic emits a string verdict (e.g. "validated",
         # "false_positive"); /validate expects an object {"status": ...}.
@@ -598,9 +766,21 @@ def _convert_ruling(agentic_ruling, fp_reason) -> dict:
     false_positive_reason. Keeps the agentic ruling string as a separate
     field so the original verdict is preserved verbatim alongside the
     /validate-native status field.
+
+    When the input is already a dict, returns a DEEP COPY rather than
+    aliasing the original. Pre-fix the dict-input branch returned the
+    caller's reference unchanged. Downstream consumers writing into
+    `result.ruling.<field>` (status update, reason augmentation,
+    nested evidence push) would mutate the original /agentic
+    finding's ruling — which OTHER readers (per-finding telemetry,
+    consensus scoring, the finding-id-keyed rolled-up report) might
+    still be holding. Symptom: later log/report renderings showed
+    "ruling.reason" with content that should only have appeared in
+    the /validate post-pass, contaminating /agentic's verdict trace.
     """
     if isinstance(agentic_ruling, dict):
-        return agentic_ruling  # already in object shape
+        from copy import deepcopy
+        return deepcopy(agentic_ruling)
     ruling = {"status": agentic_ruling or "", "agentic_ruling": agentic_ruling or ""}
     if fp_reason:
         ruling["reason"] = fp_reason
@@ -621,7 +801,24 @@ def _validate_context_map_shape(parsed) -> Optional[str]:
         return "unparseable JSON"
     if not isinstance(parsed, dict):
         return "not a JSON object"
-    list_keys = ("entry_points", "sink_details", "sources", "sinks", "trust_boundaries")
+    list_keys = (
+        "entry_points",
+        "sink_details",
+        "sources",
+        "sinks",
+        "trust_boundaries",
+        # Pre-fix `unchecked_flows` was missing from this guard
+        # despite the bridge iterating it in `_filter_context_map`
+        # and `enrich_checklist`. A non-list value (LLM emitting
+        # `unchecked_flows: {}` or `unchecked_flows: "n/a"`)
+        # crashed the bridge after lifecycle had already started,
+        # producing a stack trace that read like a bridge bug
+        # rather than a malformed input.
+        "unchecked_flows",
+        # Same applies to `boundary_details` — _filter_context_map
+        # iterates this list under the same shape contract.
+        "boundary_details",
+    )
     for key in list_keys:
         value = parsed.get(key)
         if value is None:
@@ -702,6 +899,138 @@ def _enrich_agentic_checklist(agentic_out_dir: Path, context_map_path: Path) -> 
         return False
 
 
+def _mark_unreachable_low_priority(
+    agentic_out_dir: Path, target: Path,
+) -> int:
+    """Mark dead-code functions as ``priority=low`` in the
+    agentic checklist.
+
+    Sibling of :func:`_enrich_agentic_checklist` — that pass
+    UPGRADES priority based on /understand context-map data;
+    this pass DOWNGRADES priority for functions not called
+    anywhere in non-test project source. The two are
+    complementary and run consecutively. Functions already
+    marked ``priority=high`` by context-map enrichment are
+    skipped (entry-point analysis trumps reachability).
+
+    Returns the count of functions marked low-priority. Best-
+    effort; failures logged at debug.
+    """
+    checklist_path = agentic_out_dir / "checklist.json"
+    if not checklist_path.exists():
+        return 0
+    try:
+        from core.json import load_json, save_json
+        from core.orchestration.reachability_enrichment import (
+            mark_unreachable_low_priority,
+        )
+        checklist = load_json(checklist_path)
+        if not isinstance(checklist, dict):
+            return 0
+        marked = mark_unreachable_low_priority(checklist, target)
+        if marked:
+            save_json(checklist_path, checklist)
+        return marked
+    except Exception:                               # noqa: BLE001
+        logger.debug(
+            "reachability low-priority enrichment failed",
+            exc_info=True,
+        )
+        return 0
+
+
+def run_reachability_prepass(
+    target: Path,
+    agentic_out_dir: Path,
+) -> "ReachabilityPrepassResult":
+    """Always-on companion to ``run_understand_prepass``.
+
+    Runs unconditionally (no --understand gating): builds the
+    inventory once, marks dead-code functions priority=low in
+    the agentic checklist, returns the inventory so downstream
+    consumers (codeql analyzer, /validate Stage B) can reuse it
+    without rebuilding.
+
+    The /agentic LLM analysis prompt already reads
+    ``priority`` / ``priority_reason`` per function and surfaces
+    them to the model — so the priority=low marking shifts the
+    analysis budget to live code regardless of whether the
+    operator passed --understand.
+
+    Best-effort: any failure (missing checklist, inventory build
+    error, malformed call_graph) is logged at debug; the
+    returned ``ReachabilityPrepassResult.ran`` is False with a
+    non-None ``skipped_reason``.
+    """
+    t0 = time.time()
+    checklist_path = agentic_out_dir / "checklist.json"
+    if not checklist_path.exists():
+        return ReachabilityPrepassResult(
+            ran=False,
+            skipped_reason="agentic checklist not yet built",
+            duration_s=time.time() - t0,
+        )
+
+    # Build the inventory once. Cached on the result so the
+    # agentic launcher can hand it to /validate + codeql.
+    try:
+        from core.inventory.builder import build_inventory
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            inventory = build_inventory(str(target), td)
+    except Exception as e:                          # noqa: BLE001
+        logger.debug(
+            "reachability prepass: inventory build failed (%s)", e,
+        )
+        return ReachabilityPrepassResult(
+            ran=False,
+            skipped_reason="inventory build failed",
+            duration_s=time.time() - t0,
+        )
+
+    try:
+        from core.orchestration.reachability_enrichment import (
+            enrich_with_caller_context,
+            mark_unreachable_low_priority,
+        )
+        checklist = load_json(checklist_path)
+        if not isinstance(checklist, dict):
+            return ReachabilityPrepassResult(
+                ran=False,
+                skipped_reason="checklist not a JSON object",
+                inventory=inventory,
+                duration_s=time.time() - t0,
+            )
+        marked = mark_unreachable_low_priority(
+            checklist, target, inventory=inventory,
+        )
+        # Caller-context enrichment runs AFTER the dead-code
+        # marking so already-marked functions can be skipped
+        # cheaply (the LLM is going to deprioritise them
+        # regardless). Each surviving function gains
+        # caller_count_direct / _transitive / _uncertain plus
+        # direct_caller_names — the triage prompt reads these to
+        # judge blast radius alongside priority.
+        enriched_caller_ctx = enrich_with_caller_context(
+            checklist, target, inventory=inventory,
+        )
+        if marked or enriched_caller_ctx:
+            save_json(checklist_path, checklist)
+    except Exception:                               # noqa: BLE001
+        logger.debug(
+            "reachability prepass: enrichment failed",
+            exc_info=True,
+        )
+        marked = 0
+
+    return ReachabilityPrepassResult(
+        ran=True,
+        marked_count=marked,
+        inventory=inventory,
+        duration_s=time.time() - t0,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Selection + prompt builders.
 # ---------------------------------------------------------------------------
@@ -714,7 +1043,14 @@ def _select_findings_for_validate(analysis_report: Path) -> list:
     equals the canonical high value. Schema-enforced enum values mean no
     case-folding or fuzzy matching is needed (see FINDING_RESULT_SCHEMA).
     """
-    report = load_json(analysis_report)
+    # `allow_non_finite=True`: scanner outputs (Semgrep + CodeQL +
+    # LLM-stage scoring) can legitimately carry NaN / Infinity in
+    # `exploitability_score`. The downstream truncation logic
+    # (`_truncate_findings_for_validate`) treats NaN as 0 to keep
+    # ordering deterministic. Without the opt-in the whole report
+    # rejects on the first NaN cell — every finding silently
+    # dropped, validate pass becomes a no-op.
+    report = load_json(analysis_report, allow_non_finite=True)
     if not isinstance(report, dict):
         logger.warning("could not parse %s as a JSON object", analysis_report)
         return []
@@ -735,17 +1071,44 @@ def _select_findings_for_validate(analysis_report: Path) -> list:
         # works across modes.
         is_exploitable = (r.get("is_exploitable") is True
                           or r.get("exploitable") is True)
-        if is_exploitable or r.get("confidence") == _HIGH_CONFIDENCE:
+        # Confidence comparison was strict equality against the
+        # canonical lowercase value. Schema enforces it for the
+        # orchestrated path, but several non-orchestrated dispatch
+        # routes (sequential mode, prep-only, retry-prompt-injected
+        # rewrites) and any future external producer can supply a
+        # confidence string with leading/trailing whitespace
+        # (`"high "` from a textual splice) or different case
+        # (`"High"`, `"HIGH"` from an LLM that wasn't envelope-
+        # constrained). Pre-fix any of those produced an exact-
+        # match miss and the finding silently failed to qualify.
+        # Strip + lower before compare.
+        confidence = r.get("confidence")
+        if isinstance(confidence, str):
+            confidence = confidence.strip().lower()
+        if is_exploitable or confidence == _HIGH_CONFIDENCE:
             selected.append(r)
     return selected
 
 
 def _build_understand_prompt(target: Path, understand_dir: Path) -> str:
+    # Escape control / format / ANSI bytes from path interpolation
+    # before splicing into the prompt. `target` and `understand_dir`
+    # come from caller-supplied input that may have flowed from a
+    # repository name, an argv flag, or a config file. A path
+    # containing `\x1b[2J` (clear-screen escape), CR/LF (prompt
+    # injection — adds "  Now follow these new instructions:"
+    # on the next visible line), or bidi-control bytes (visually
+    # mask malicious content) hijacks the prompt the LLM sees.
+    # `escape_nonprintable` replaces dangerous bytes with `\xHH`
+    # escapes that the model still reads as a path string.
+    safe_target = escape_nonprintable(str(target))
+    safe_dir = escape_nonprintable(str(understand_dir))
+    safe_raptor = escape_nonprintable(str(_RAPTOR_DIR))
     return f"""You are running the /understand --map workflow on a target repository
 as a pre-pass for the /agentic security workflow.
 
-Target repository: {target}
-Output directory:  {understand_dir}
+Target repository: {safe_target}
+Output directory:  {safe_dir}
 
 The launcher has already created the run directory and built checklist.json.
 Your job is to produce context-map.json so downstream analysis (the agentic
@@ -755,11 +1118,11 @@ has architectural context.
 Steps:
 
 1. Load .claude/skills/code-understanding/SKILL.md and
-   .claude/skills/code-understanding/map.md from {_RAPTOR_DIR}.
+   .claude/skills/code-understanding/map.md from {safe_raptor}.
 
 2. Perform the --map analysis (MAP-0 through MAP-5) against the target.
 
-3. Write the resulting context-map.json directly into {understand_dir}.
+3. Write the resulting context-map.json directly into {safe_dir}.
 
 4. Do not call libexec/raptor-run-lifecycle — the launcher manages the
    lifecycle for you. Just produce context-map.json.

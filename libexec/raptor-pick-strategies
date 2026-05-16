@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Print CWE-strategy guidance for a function under review.
+
+Usage:
+  raptor-pick-strategies [--file PATH] [--function NAME] [--cwe CWE-XX]
+                         [--calls call1,call2,...] [--includes h1,h2,...]
+                         [--max-strategies N]
+                         [--no-general]
+
+Outputs the matching strategies as a markdown block ready to inject
+into reasoning. Used by /validate stage skills, /audit's driver, and
+operators who want bug-class context for a function.
+
+Each input is optional — the picker fires on whatever signal is
+supplied. Bare invocation (no args) returns the ``general`` strategy,
+which always matches. Higher-leverage signals (in descending order):
+
+  * ``--cwe CWE-XX``  — direct evidence; heavy 100-pt match per
+                         strategy that lists the CWE.
+  * ``--calls c1,c2`` — function callees from inventory call graph;
+                         strong mechanical signal.
+  * ``--includes h1,h2`` — header includes; strong for C/C++.
+  * ``--file PATH``   — substring path matching.
+  * ``--function NAME`` — token match against function-name
+                          components.
+
+Exit codes:
+  0  — strategies rendered
+  1  — invalid arguments
+  2  — substrate not installed (older deployments)
+"""
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+import os
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import argparse
+
+
+def _split_csv(value):
+    """Comma-separated → list, dropping empty members."""
+    if not value:
+        return []
+    return [v.strip() for v in value.split(",") if v.strip()]
+
+
+def main():
+    p = argparse.ArgumentParser(
+        prog="raptor-pick-strategies",
+        description=(
+            "Print CWE-strategy guidance for a function under review."
+        ),
+    )
+    p.add_argument("--file", default="",
+                   help="repo-relative source file path")
+    p.add_argument("--function", default="",
+                   help="function name (used for keyword matching)")
+    p.add_argument("--cwe", default="",
+                   help="CWE id (e.g., CWE-78). Heaviest signal.")
+    p.add_argument(
+        "--calls", default="",
+        help="comma-separated callee names from the inventory call "
+             "graph",
+    )
+    p.add_argument(
+        "--includes", default="",
+        help="comma-separated header includes (mostly for C/C++)",
+    )
+    p.add_argument("--max-strategies", type=int, default=3,
+                   help="cap on strategies to render (default 3)")
+    p.add_argument(
+        "--no-general", action="store_true",
+        help="don't pin the always-on general strategy",
+    )
+    args = p.parse_args()
+
+    try:
+        from core.llm.cwe_strategies import (
+            pick_strategies,
+            render_strategies,
+        )
+    except ImportError as e:
+        sys.stderr.write(
+            f"raptor-pick-strategies: cwe_strategies substrate "
+            f"unavailable: {e}\n"
+        )
+        return 2
+
+    candidate_cwes = [args.cwe] if args.cwe else []
+
+    try:
+        picked = pick_strategies(
+            file_path=args.file,
+            function_name=args.function,
+            file_includes=_split_csv(args.includes),
+            function_calls_made=_split_csv(args.calls),
+            candidate_cwes=candidate_cwes,
+            max_strategies=args.max_strategies,
+            always_include_general=not args.no_general,
+        )
+    except Exception as e:
+        sys.stderr.write(f"raptor-pick-strategies: picker error: {e}\n")
+        return 1
+
+    # Honour --no-general strictly: the picker falls through to
+    # general when nothing else matched, but the operator asked for
+    # specialised lenses only.
+    if args.no_general:
+        picked = [s for s in picked if s.name != "general"]
+
+    if not picked:
+        # Edge: no strategies fired AND general was excluded. Emit
+        # an explicit no-match marker so the caller sees the result
+        # rather than thinking the helper crashed.
+        print("# Bug-class lenses")
+        print()
+        print("(no matching strategies for this context)")
+        return 0
+
+    print("# Bug-class lenses for this function/finding")
+    print()
+    print(render_strategies(picked))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

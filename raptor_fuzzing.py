@@ -26,6 +26,7 @@ from core.json import save_json
 
 from core.config import RaptorConfig
 from core.logging import get_logger
+from core.run.safe_io import safe_run_mkdir
 from packages.fuzzing import AFLRunner, CrashCollector, CorpusManager
 from packages.binary_analysis import CrashAnalyser
 from packages.llm_analysis.crash_agent import CrashAnalysisAgent
@@ -46,7 +47,7 @@ def main() -> None:
     ap.add_argument("--binary", required=True, help="Path to binary to fuzz")
     ap.add_argument("--corpus", help="Path to seed corpus directory (optional)")
     ap.add_argument("--duration", type=int, default=3600, help="Fuzzing duration in seconds (default: 3600)")
-    ap.add_argument("--parallel", type=int, default=1, help="Number of parallel AFL instances (default: 1)")
+    ap.add_argument("--parallel", type=int, default=1, help="Number of parallel AFL instances (default: 1, ceiling: tuning.json)")
     ap.add_argument("--max-crashes", type=int, default=10, help="Maximum crashes to analyse (default: 10)")
     ap.add_argument("--timeout", type=int, default=1000, help="Timeout per execution in ms (default: 1000)")
     ap.add_argument("--out", help="Output directory (default: out/fuzz_<binary_name>)")
@@ -73,7 +74,7 @@ def main() -> None:
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(ap)
     args = ap.parse_args()
-    apply_cli_args(args)
+    apply_cli_args(args, parser=ap)
 
     binary_path = Path(args.binary).resolve()
     if not binary_path.exists():
@@ -81,8 +82,31 @@ def main() -> None:
         sys.exit(1)
 
     corpus_dir = Path(args.corpus) if args.corpus else None
-    out_dir = Path(args.out) if args.out else Path(f"out/fuzz_{binary_path.stem}_{int(time.time())}")
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # Anchor default output_dir to RaptorConfig.get_out_dir().
+    # Pre-fix `Path(f"out/fuzz_...")` was relative to the cwd at
+    # script-launch time. Two failure modes:
+    #   * Operator running RAPTOR from `~/work/foo/` got fuzz
+    #     output in `~/work/foo/out/...` instead of the
+    #     configured project run dir. Subsequent /project status
+    #     showed "no fuzz output for project" because the artifacts
+    #     landed somewhere unrelated.
+    #   * Script invoked from `/` (cron / systemd / CI without
+    #     chdir set) wrote `/out/...` — permission denied or
+    #     pollution of the root filesystem.
+    #
+    # Use unique_run_suffix instead of bare `int(time.time())` so
+    # two parallel fuzz runs in the same wall-clock second get
+    # distinct output dirs (already learned this pattern in
+    # `core/run/output.py`; the bare-time-suffix collision is
+    # rare but real on multi-instance fuzz dispatch).
+    if args.out:
+        out_dir = Path(args.out)
+    else:
+        from core.config import RaptorConfig
+        from core.run.output import unique_run_suffix
+        out_dir = RaptorConfig.get_out_dir() / f"fuzz_{binary_path.stem}_{unique_run_suffix()}"
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    safe_run_mkdir(out_dir)
 
     # ========================================================================
     # ORCHESTRATOR PATH (new): capability detection + libFuzzer/AFL++ + telemetry
@@ -171,15 +195,14 @@ def main() -> None:
     logger.info(f"Sanitizer check: {'enabled' if args.check_sanitizers else 'disabled'}")
     logger.info(f"Recompile guide: {'will be shown' if args.recompile_guide else 'disabled'}")
     logger.info(f"Coverage analysis: {'enabled' if args.use_showmap else 'disabled'}")
-    logger.info(f"Input mode: {args.input_mode}")
-    if args.dict:
-        logger.info(f"Dictionary: {args.dict}")
-    if args.check_sanitizers:
-        logger.info("Sanitizer check: enabled")
-    if args.recompile_guide:
-        logger.info("Recompile guide: will be shown")
-    if args.use_showmap:
-        logger.info("Coverage analysis: enabled")
+    # Pre-fix this block had DUPLICATE log lines for input_mode,
+    # dict, check_sanitizers, recompile_guide, use_showmap (5
+    # lines repeated immediately after the first set). Operators
+    # saw each setup detail printed twice in their fuzzing
+    # output — minor but persistent UX bug. The conditional-
+    # form duplicates have been removed; the unconditional
+    # ternary-form lines above remain as the single source of
+    # truth for these fields.
 
     # ========================================================================
     # AUTONOMOUS SYSTEM INITIALIZATION
@@ -280,6 +303,32 @@ def main() -> None:
             print("    - Increasing duration (--duration)")
             print("    - Better seed corpus (--corpus)")
             print("    - Check if binary is working (./binary < test_input)")
+            # Write a minimal report before the early exit. Pre-fix
+            # the 0-crash branch jumped straight to `sys.exit(0)`
+            # and skipped the Phase-3 report writer entirely —
+            # downstream consumers checking
+            # `fuzzing_report.json` saw NO file and either crashed
+            # on FileNotFoundError or assumed the campaign failed
+            # silently (operationally indistinguishable from the
+            # afl-runner crashing). Emit a stub so the file
+            # presence + the explicit `total_crashes: 0` is the
+            # canonical "no findings" signal.
+            zero_report = {
+                "binary": str(binary_path),
+                "duration": args.duration,
+                "total_crashes": 0,
+                "analysed": 0,
+                "exploitable": 0,
+                "exploits_generated": 0,
+                "status": "no_crashes",
+            }
+            try:
+                from core.json import save_json as _save_json
+                _save_json(out_dir / "fuzzing_report.json", zero_report)
+            except Exception:
+                # Best effort — don't mask the operator's
+                # already-printed advice with a save error.
+                pass
             sys.exit(0)
 
     except Exception as e:

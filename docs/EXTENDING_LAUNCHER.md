@@ -37,11 +37,17 @@ My Scanner - Custom security scanner
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
-# Add to path for core imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+# Use the canonical RAPTOR_DIR env var (set by bin/raptor and the
+# libexec wrappers). Hard lookup via os.environ — KeyError if
+# unset. Never fall back to relative __file__-derived paths
+# (CLAUDE.md sys.path safety rule: "no fallbacks, no '.', no
+# os.getcwd(), no hardcoded paths"). This pattern matches every
+# existing entry-point script (raptor.py, raptor_agentic.py, etc.).
+sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.config import RaptorConfig
 from core.logging import get_logger
@@ -158,10 +164,13 @@ Dependency Scanner - Check for vulnerable dependencies
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+# Same RAPTOR_DIR-from-env pattern as the example above —
+# see CLAUDE.md sys.path safety rule.
+sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.config import RaptorConfig
 from core.logging import get_logger

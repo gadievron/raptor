@@ -468,13 +468,17 @@ from .cli import (
     disable_from_cli,
     set_cli_profile,
 )
-from .context import run, run_trusted, run_untrusted, sandbox
+from .context import run, run_trusted, run_untrusted, run_untrusted_networked, sandbox
 from .landlock import check_landlock_available, _get_landlock_abi
 from .observe import _BLOCKED_PATTERNS, _check_blocked, _interpret_result, _path_within
+from .observe_profile import (
+    OBSERVE_FILENAME, ConnectTarget, ObserveProfile, parse_observe_log,
+)
 from .preexec import _DEFAULT_LIMITS, _load_user_limits, _make_preexec_fn
 from .mount import _build_mount_script
 from .probes import (
     check_mount_available, check_net_available, check_sandbox_available,
+    check_seatbelt_available,
 )
 from .profiles import DEFAULT_PROFILE, PROFILES, _SANDBOX_KWARGS
 from .seccomp import check_seccomp_available
@@ -512,7 +516,7 @@ def __getattr__(name):
 
 __all__ = [
     # Context manager and convenience wrappers
-    "sandbox", "run", "run_trusted", "run_untrusted",
+    "sandbox", "run", "run_trusted", "run_untrusted", "run_untrusted_networked",
     # CLI surface
     "add_cli_args", "apply_cli_args", "disable_from_cli", "set_cli_profile",
     # Availability probes (exposed for the startup banner)

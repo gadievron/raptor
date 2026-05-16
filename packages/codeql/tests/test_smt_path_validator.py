@@ -97,17 +97,17 @@ class TestFeasibility:
 
     @_requires_z3
     def test_unparseable_condition_goes_to_unknown(self):
-        """Non-call grouping parens are still rejected — goes to unknown, not crash.
+        """Conditions outside the supported grammar go to unknown, not crash.
 
-        Function-call shapes (``ident(...)``) are recovered via the
-        free-variable fallback; only non-call grouping (``(a + b)``)
-        remains unparseable.
+        Operators silently dropped by the tokeniser (``~``, ``^``, ``/``,
+        ``%``, ...) are caught by the consumed-input check and rejected
+        rather than mis-encoded.
         """
         r = check_path_feasibility([
             PathCondition("size > 0", step_index=0),
-            PathCondition("(size + len) * 2 > 0", step_index=1),
+            PathCondition("~mask == 0xFFFFFFFF", step_index=1),
         ])
-        assert "(size + len) * 2 > 0" in r.unknown
+        assert "~mask == 0xFFFFFFFF" in r.unknown
         # The parseable condition still runs; result is sat or None, not outright infeasible
         assert r.feasible is not False
 
@@ -115,8 +115,7 @@ class TestFeasibility:
     def test_all_unknown_returns_none(self):
         """If nothing is parseable, feasible must be None (not True)."""
         r = check_path_feasibility([
-            # Non-call grouping parens — not eligible for the fallback.
-            PathCondition("(a + b) > (c + d)", step_index=0),
+            PathCondition("~mask == 0", step_index=0),  # NOT silently dropped
         ])
         assert r.feasible is None
 
@@ -616,21 +615,15 @@ class TestStructuredRejection:
         assert r.unknown_reasons == []
 
     @_requires_z3
-    def test_parens_rejection(self):
-        # Non-call grouping parens.  Function-call shapes (``ident(...)``)
-        # are recovered by the free-variable fallback and don't reach
-        # the parens-rejection path.
+    def test_unbalanced_paren_kind(self):
+        """Unbalanced parens (extra ``(`` or ``)``) reject with
+        UNBALANCED_PARENS — the dedicated kind, not the deprecated
+        PARENS_NOT_SUPPORTED.  Balanced grouping parens parse via
+        precedence climbing and don't reach this rejection path."""
         r = check_path_feasibility([
-            PathCondition("(a + b) > 0", step_index=0),
+            PathCondition("(a + b > 0", step_index=0),
         ])
-        assert self._kind_for(r, "(a + b) > 0") is RejectionKind.PARENS_NOT_SUPPORTED
-
-    @_requires_z3
-    def test_mixed_precedence_rejection(self):
-        r = check_path_feasibility([
-            PathCondition("a + b * c == 0", step_index=0),
-        ])
-        assert self._kind_for(r, "a + b * c == 0") is RejectionKind.MIXED_PRECEDENCE
+        assert self._kind_for(r, "(a + b > 0") is RejectionKind.UNBALANCED_PARENS
 
     @_requires_z3
     def test_no_relational_at_top_level_rejection(self):
@@ -656,14 +649,15 @@ class TestStructuredRejection:
 
     @_requires_z3
     def test_rejection_carries_hint(self):
-        # Non-call grouping parens — still rejected, hint suggests
-        # flattening since the call-shape fallback doesn't apply here.
+        # Top-level shape that doesn't match any relational/bitmask form
+        # comes back with UNRECOGNIZED_FORM and a hint pointing at the
+        # accepted templates.
         r = check_path_feasibility([
-            PathCondition("(a + b) * 2 > 0", step_index=0),
+            PathCondition("size_only", step_index=0),
         ])
-        rej = next(x for x in r.unknown_reasons if x.text == "(a + b) * 2 > 0")
+        rej = next(x for x in r.unknown_reasons if x.text == "size_only")
         assert rej.hint  # non-empty
-        assert "flatten" in rej.hint.lower() or "fallback" in rej.hint.lower()
+        assert "lhs" in rej.hint.lower()
 
     @_requires_z3
     def test_rejection_aligned_with_unknown_list(self):
@@ -671,8 +665,8 @@ class TestStructuredRejection:
         with the same text."""
         r = check_path_feasibility([
             PathCondition("size > 0", step_index=0),                    # parses
-            PathCondition("(p + q) == 0", step_index=1),                # grouping parens
-            PathCondition("a + b * c == 0", step_index=2),              # mixed prec
+            PathCondition("~mask == 0", step_index=1),                  # NOT silently dropped
+            PathCondition("a / b > 0", step_index=2),                   # division silently dropped
         ])
         assert set(r.unknown) == {x.text for x in r.unknown_reasons}
 
@@ -782,12 +776,12 @@ class TestFreeVariableFallback:
     def test_unbalanced_parens_still_rejected(self, expr):
         """Any paren imbalance — open without close, close without open,
         or nested mismatch — falls through the substitution and is
-        rejected by the parens-check rather than silently masquerading
-        as a parsed call."""
+        rejected by the balance check (or the expression parser) rather
+        than silently masquerading as a parsed call."""
         r = check_path_feasibility([PathCondition(expr, step_index=0)])
         assert expr in r.unknown
         rej = next(x for x in r.unknown_reasons if x.text == expr)
-        assert rej.kind is RejectionKind.PARENS_NOT_SUPPORTED
+        assert rej.kind is RejectionKind.UNBALANCED_PARENS
 
     @_requires_z3
     def test_fallback_preserves_real_constraints(self):
@@ -826,3 +820,533 @@ class TestFreeVariableFallback:
         ])
         assert r.unknown == []
         assert r.feasible is True
+
+
+# ---------------------------------------------------------------------------
+# C operator precedence
+# ---------------------------------------------------------------------------
+
+class TestPrecedence:
+    """C precedence: ``*`` > ``+ -`` > ``<< >>`` > ``|``, all left-associative.
+
+    The previous parser was strict left-to-right and rejected mixed-class
+    expressions with MIXED_PRECEDENCE.  The current parser binds operators
+    by C precedence, so mixed expressions encode with the grouping a C
+    compiler would produce.  These tests pin that grouping by asserting
+    the *value* a model would have under the correct interpretation.
+    """
+
+    @_requires_z3
+    def test_multiplication_binds_tighter_than_addition_rhs(self):
+        """``a + b * c == 64`` with ``a=4, b=4, c=15`` is feasible iff
+        the parse is ``a + (b * c) = 4 + 60 = 64``.  An LTR parse would
+        compute ``(a + b) * c = 8 * 15 = 120`` — infeasible."""
+        r = check_path_feasibility([
+            PathCondition("a + b * c == 64", step_index=0),
+            PathCondition("a == 4", step_index=1),
+            PathCondition("b == 4", step_index=2),
+            PathCondition("c == 15", step_index=3),
+        ])
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_multiplication_binds_tighter_than_addition_lhs(self):
+        """``a * b + c == 19`` with ``a=2, b=8, c=3`` requires ``(a*b)+c``."""
+        r = check_path_feasibility([
+            PathCondition("a * b + c == 19", step_index=0),
+            PathCondition("a == 2", step_index=1),
+            PathCondition("b == 8", step_index=2),
+            PathCondition("c == 3", step_index=3),
+        ])
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_subtraction_left_associative(self):
+        """``a - b - c`` parses as ``(a - b) - c``.  With a=10, b=3, c=2:
+        ``(10-3)-2 = 5``, not ``10-(3-2) = 9``."""
+        r = check_path_feasibility([
+            PathCondition("a - b - c == 5", step_index=0),
+            PathCondition("a == 10", step_index=1),
+            PathCondition("b == 3", step_index=2),
+            PathCondition("c == 2", step_index=3),
+        ])
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_shift_lower_precedence_than_addition(self):
+        """C surprise: ``a + b << 2`` is ``(a + b) << 2``, not
+        ``a + (b << 2)``.  With a=1, b=3: ``(1+3) << 2 = 16``, not
+        ``1 + (3 << 2) = 13``."""
+        r = check_path_feasibility([
+            PathCondition("a + b << 2 == 16", step_index=0),
+            PathCondition("a == 1", step_index=1),
+            PathCondition("b == 3", step_index=2),
+        ])
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_or_lowest_precedence(self):
+        """``a | b + c`` is ``a | (b + c)``.  Pick values that distinguish
+        the two readings: a=2, b=1, c=2 gives 2|(1+2)=2|3=3, while the
+        LTR misparse (2|1)+2 = 3+2 = 5."""
+        r = check_path_feasibility([
+            PathCondition("a | b + c == 3", step_index=0),
+            PathCondition("a == 2", step_index=1),
+            PathCondition("b == 1", step_index=2),
+            PathCondition("c == 2", step_index=3),
+        ])
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_multiplication_binds_tighter_than_shift(self):
+        """``a + b * c << d`` is C-parsed as ``(a + (b * c)) << d``.
+        a=1, b=2, c=3, d=1: ``(1 + 6) << 1 = 14``.  If shift bound
+        tighter than mul: ``a + b * (c << d) = 1 + 2*6 = 13``."""
+        r = check_path_feasibility([
+            PathCondition("a + b * c << d == 14", step_index=0),
+            PathCondition("a == 1", step_index=1),
+            PathCondition("b == 2", step_index=2),
+            PathCondition("c == 3", step_index=3),
+            PathCondition("d == 1", step_index=4),
+        ])
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_three_level_mix(self):
+        """``a | b + c * d`` is ``a | (b + (c * d))``.  Values:
+        a=0x10, b=2, c=3, d=4 → 0x10 | (2 + 12) = 0x10 | 14 = 0x1E."""
+        r = check_path_feasibility([
+            PathCondition("a | b + c * d == 0x1E", step_index=0),
+            PathCondition("a == 0x10", step_index=1),
+            PathCondition("b == 2", step_index=2),
+            PathCondition("c == 3", step_index=3),
+            PathCondition("d == 4", step_index=4),
+        ])
+        assert r.feasible is True
+
+
+# ---------------------------------------------------------------------------
+# Parenthesised grouping
+# ---------------------------------------------------------------------------
+
+class TestParensGrouping:
+    """Balanced parens override C precedence and are now accepted by the
+    expression parser.  Function-call shapes (``ident(...)``) still go
+    through the free-variable fallback first; only the leftover ``( ... )``
+    is grouping."""
+
+    @_requires_z3
+    def test_parens_override_precedence(self):
+        """``(a + b) * c == 30`` with a=2, b=3, c=6: ``(2+3)*6 = 30``.
+        Without the parens, the C reading is ``a + (b * c) = 2 + 18 = 20``."""
+        r = check_path_feasibility([
+            PathCondition("(a + b) * c == 30", step_index=0),
+            PathCondition("a == 2", step_index=1),
+            PathCondition("b == 3", step_index=2),
+            PathCondition("c == 6", step_index=3),
+        ])
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_parens_force_shift_then_add(self):
+        """``a + (b << 2) == 13`` with a=1, b=3: ``1 + (3<<2) = 13``.
+        Without the parens, the C reading is ``(a+b) << 2 = 16``."""
+        r = check_path_feasibility([
+            PathCondition("a + (b << 2) == 13", step_index=0),
+            PathCondition("a == 1", step_index=1),
+            PathCondition("b == 3", step_index=2),
+        ])
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_nested_parens(self):
+        """``((x))`` parses as ``x`` — extra outer layers are no-ops."""
+        r = check_path_feasibility([
+            PathCondition("((x)) == 42", step_index=0),
+        ])
+        assert r.feasible is True
+        assert r.model.get("x") == 42
+
+    @_requires_z3
+    def test_deeply_nested_parens(self):
+        r = check_path_feasibility([
+            PathCondition("(((y))) > 0", step_index=0),
+            PathCondition("y < 100", step_index=1),
+        ])
+        assert r.feasible is True
+        assert 0 < r.model["y"] < 100
+
+    @_requires_z3
+    def test_parens_on_both_sides(self):
+        """Relational regex must split at the operator with parens on
+        either side.  ``(a + b) == (c + d)`` — both sides parse."""
+        r = check_path_feasibility([
+            PathCondition("(a + b) == (c + d)", step_index=0),
+            PathCondition("a == 1", step_index=1),
+            PathCondition("b == 2", step_index=2),
+            PathCondition("c == 0", step_index=3),
+        ])
+        assert r.feasible is True
+        assert r.model.get("d") == 3
+
+    @_requires_z3
+    def test_parens_in_bitmask_lhs(self):
+        """Bitmask form's LHS goes through ``_parse_expr``; parens work
+        there too: ``(a + b) & 0xff == 0``."""
+        r = check_path_feasibility([
+            PathCondition("(a + b) & 0xff == 0", step_index=0),
+        ])
+        assert r.feasible is True
+
+    @_requires_z3
+    def test_unmatched_open_paren_in_expression(self):
+        """``(a + b > 0`` — relational splits at ``>``, LHS=``(a + b ``
+        has unmatched ``(``.  The early balance check catches this."""
+        r = check_path_feasibility([
+            PathCondition("(a + b > 0", step_index=0),
+        ])
+        assert "(a + b > 0" in r.unknown
+        rej = next(x for x in r.unknown_reasons if x.text == "(a + b > 0")
+        assert rej.kind is RejectionKind.UNBALANCED_PARENS
+
+    @_requires_z3
+    def test_unmatched_close_paren_in_expression(self):
+        """``a + b) > 0`` — extra ``)``."""
+        r = check_path_feasibility([
+            PathCondition("a + b) > 0", step_index=0),
+        ])
+        assert "a + b) > 0" in r.unknown
+        rej = next(x for x in r.unknown_reasons if x.text == "a + b) > 0")
+        assert rej.kind is RejectionKind.UNBALANCED_PARENS
+
+    @_requires_z3
+    def test_swapped_parens(self):
+        """``)a + b( > 0`` — balanced count but the structure is wrong.
+        The early balance check sees ``)`` first and rejects before
+        ``_parse_expr`` runs."""
+        r = check_path_feasibility([
+            PathCondition(")a + b( > 0", step_index=0),
+        ])
+        assert ")a + b( > 0" in r.unknown
+        rej = next(x for x in r.unknown_reasons if x.text == ")a + b( > 0")
+        assert rej.kind is RejectionKind.UNBALANCED_PARENS
+
+    @_requires_z3
+    def test_empty_parens_in_expression(self):
+        """``() + 1 > 0`` — ``()`` has no operand inside."""
+        r = check_path_feasibility([
+            PathCondition("() + 1 > 0", step_index=0),
+        ])
+        assert "() + 1 > 0" in r.unknown
+
+    @_requires_z3
+    def test_relational_inside_parens_rejected(self):
+        """``(a == b) + 1 > 0`` — the relational regex splits at the first
+        ``==`` (inside the parens), so ``_parse_expr`` sees ``(a`` as the
+        LHS — unbalanced.  The condition goes to unknown regardless of the
+        specific rejection kind, which is the correct outcome."""
+        r = check_path_feasibility([
+            PathCondition("(a == b) + 1 > 0", step_index=0),
+        ])
+        assert "(a == b) + 1 > 0" in r.unknown
+
+    @_requires_z3
+    def test_relational_inside_rhs_parens_gives_unsupported_operator(self):
+        """``result == (a > b) + 1`` — the relational regex splits at
+        ``==``, giving ``_parse_expr`` the RHS text ``(a > b) + 1``.
+        Inside the paren group, ``>`` is a condition-level operator that
+        can't appear in an arithmetic subexpression.  Must reject with
+        UNSUPPORTED_OPERATOR, not UNBALANCED_PARENS."""
+        r = check_path_feasibility([
+            PathCondition("result == (a > b) + 1", step_index=0),
+        ])
+        assert "result == (a > b) + 1" in r.unknown
+        rej = next(x for x in r.unknown_reasons if x.text == "result == (a > b) + 1")
+        assert rej.kind is RejectionKind.UNSUPPORTED_OPERATOR
+
+    @_requires_z3
+    def test_deeply_nested_parens_within_limit(self):
+        """32-deep nesting is well within the 64-level cap."""
+        inner = "x"
+        for _ in range(32):
+            inner = f"({inner})"
+        r = check_path_feasibility([
+            PathCondition(f"{inner} == 42", step_index=0),
+        ])
+        assert r.feasible is True
+        assert r.model.get("x") == 42
+
+    @_requires_z3
+    def test_parens_exceeding_depth_limit_rejected(self):
+        """Nesting beyond _MAX_PAREN_DEPTH (64) is rejected to prevent
+        unbounded recursion from untrusted input."""
+        from packages.codeql.smt_path_validator import _MAX_PAREN_DEPTH
+        inner = "x"
+        for _ in range(_MAX_PAREN_DEPTH + 1):
+            inner = f"({inner})"
+        r = check_path_feasibility([
+            PathCondition(f"{inner} > 0", step_index=0),
+        ])
+        assert f"{inner} > 0" in r.unknown
+        rej = next(x for x in r.unknown_reasons if x.text == f"{inner} > 0")
+        assert rej.kind is RejectionKind.UNRECOGNIZED_FORM
+        assert "depth" in rej.detail
+
+
+# ---------------------------------------------------------------------------
+# check_path_feasibility — input hardening caps
+# ---------------------------------------------------------------------------
+
+class TestInputLimits:
+    """Pre-parse caps on input size and call shape (C4 parser hardening).
+
+    These caps defend the parser against pathological inputs without
+    relying on Z3's per-call timeout — they fire before any solver work
+    runs, so even a malformed extraction or amplification attack costs
+    only the cap-check, not parser walk + Z3 round-trip.
+    """
+
+    @_requires_z3
+    def test_condition_length_within_cap_accepted(self):
+        """A condition just under ``_MAX_CONDITION_CHARS`` parses normally."""
+        from packages.codeql.smt_path_validator import _MAX_CONDITION_CHARS
+        # Build a condition of length _MAX_CONDITION_CHARS that the parser
+        # accepts: ``x + x + x + ... > 0``.  Each ``x + `` token is 4 chars.
+        prefix = "x + " * ((_MAX_CONDITION_CHARS - len("x > 0")) // 4)
+        cond = prefix + "x > 0"
+        assert len(cond) <= _MAX_CONDITION_CHARS
+        r = check_path_feasibility([PathCondition(cond, step_index=0)])
+        # Either feasible or rejected for non-length reasons — must NOT
+        # carry INPUT_TOO_LONG.
+        kinds = {rej.kind for rej in r.unknown_reasons}
+        assert RejectionKind.INPUT_TOO_LONG not in kinds
+
+    @_requires_z3
+    def test_condition_length_over_cap_rejected(self):
+        """A condition exceeding ``_MAX_CONDITION_CHARS`` is rejected with
+        ``INPUT_TOO_LONG`` before any parser work runs."""
+        from packages.codeql.smt_path_validator import _MAX_CONDITION_CHARS
+        huge = "x" + ("=" * _MAX_CONDITION_CHARS) + "y"
+        assert len(huge) > _MAX_CONDITION_CHARS
+        r = check_path_feasibility([PathCondition(huge, step_index=0)])
+        assert huge in r.unknown
+        rej = next(x for x in r.unknown_reasons if x.text == huge)
+        assert rej.kind is RejectionKind.INPUT_TOO_LONG
+        # Detail mentions the observed length and the cap.
+        assert str(len(huge)) in rej.detail
+        assert str(_MAX_CONDITION_CHARS) in rej.detail
+        # Hint guides the caller to a fix.
+        assert "shorten" in rej.hint or "split" in rej.hint
+
+    @_requires_z3
+    def test_condition_count_within_cap_accepted(self):
+        """A call with ``_MAX_CONDITIONS_PER_CALL`` items runs normally."""
+        from packages.codeql.smt_path_validator import _MAX_CONDITIONS_PER_CALL
+        # Use distinct variable names per condition so they trivially
+        # satisfy together — focus the test on the count check, not on
+        # condition semantics.
+        conds = [
+            PathCondition(f"x{i} > 0", step_index=i)
+            for i in range(_MAX_CONDITIONS_PER_CALL)
+        ]
+        r = check_path_feasibility(conds)
+        # Either feasible or rejected for non-count reasons — must NOT
+        # carry TOO_MANY_CONDITIONS.
+        kinds = {rej.kind for rej in r.unknown_reasons}
+        assert RejectionKind.TOO_MANY_CONDITIONS not in kinds
+
+    @_requires_z3
+    def test_condition_count_over_cap_refused(self):
+        """A call with more than ``_MAX_CONDITIONS_PER_CALL`` items refuses
+        the whole call with ``feasible=None`` and a single
+        ``TOO_MANY_CONDITIONS`` rejection."""
+        from packages.codeql.smt_path_validator import _MAX_CONDITIONS_PER_CALL
+        n = _MAX_CONDITIONS_PER_CALL + 1
+        conds = [
+            PathCondition(f"x{i} > 0", step_index=i) for i in range(n)
+        ]
+        r = check_path_feasibility(conds)
+        # Whole call refused — no partial verdict.
+        assert r.feasible is None
+        # Every input condition is in unknown (caller can match them back).
+        assert len(r.unknown) == n
+        # Exactly one TOO_MANY_CONDITIONS rejection — not one per condition,
+        # because the cap is a call-shape issue, not a per-condition issue.
+        too_many = [
+            rej for rej in r.unknown_reasons
+            if rej.kind is RejectionKind.TOO_MANY_CONDITIONS
+        ]
+        assert len(too_many) == 1
+        rej = too_many[0]
+        assert str(n) in rej.detail
+        assert str(_MAX_CONDITIONS_PER_CALL) in rej.detail
+        # Reasoning surfaces the cap so log readers understand the refusal.
+        assert "refused" in r.reasoning.lower()
+        assert str(_MAX_CONDITIONS_PER_CALL) in r.reasoning
+
+    @_requires_z3
+    def test_length_cap_fires_before_paren_depth(self):
+        """When BOTH limits would fire, INPUT_TOO_LONG should reach the
+        caller first — the length check runs at the very top of
+        _parse_condition, before any structural inspection.
+
+        This matters because the length check is cheap (one comparison)
+        while paren-depth detection runs the early-balance scan over the
+        whole input.  An adversarial input that's both very long AND has
+        deep nesting must short-circuit on length so the balance scan
+        never executes."""
+        from packages.codeql.smt_path_validator import (
+            _MAX_CONDITION_CHARS, _MAX_PAREN_DEPTH,
+        )
+        # Build a string that's BOTH over the char cap AND has deeper
+        # nesting than _MAX_PAREN_DEPTH.
+        inner = "x"
+        for _ in range(_MAX_PAREN_DEPTH + 1):
+            inner = f"({inner})"
+        # Pad with extra chars to exceed the char cap.
+        pad = "z" * (_MAX_CONDITION_CHARS + 10)
+        cond = f"{inner} == {pad}"
+        assert len(cond) > _MAX_CONDITION_CHARS
+        r = check_path_feasibility([PathCondition(cond, step_index=0)])
+        rej = next(x for x in r.unknown_reasons if x.text == cond)
+        # Length cap fires first.
+        assert rej.kind is RejectionKind.INPUT_TOO_LONG
+
+    @_requires_z3
+    def test_oversize_condition_among_normal_ones(self):
+        """One oversize condition is rejected without poisoning the rest
+        of the call — the other conditions still parse and contribute to
+        the joint feasibility verdict."""
+        from packages.codeql.smt_path_validator import _MAX_CONDITION_CHARS
+        huge = "y" + ("=" * _MAX_CONDITION_CHARS) + "0"
+        r = check_path_feasibility([
+            PathCondition("x > 0", step_index=0),
+            PathCondition(huge, step_index=1),
+            PathCondition("x < 100", step_index=2),
+        ])
+        # The two well-formed conditions are jointly satisfiable.
+        assert r.feasible is True
+        # The oversize one is rejected with INPUT_TOO_LONG.
+        assert huge in r.unknown
+        rej = next(x for x in r.unknown_reasons if x.text == huge)
+        assert rej.kind is RejectionKind.INPUT_TOO_LONG
+
+
+# ---------------------------------------------------------------------------
+# check_path_feasibility — prefer_witness (Z3 Optimize integration)
+# ---------------------------------------------------------------------------
+
+class TestPreferWitness:
+    """Driving the witness toward extreme values via z3.Optimize.
+
+    Without ``prefer_witness`` Z3 returns the smallest model that
+    satisfies the conditions — typically the trivial ``x=0``
+    assignment.  With ``prefer_witness=("var", "max")`` (or ``"min"``)
+    the encoder swaps in ``z3.Optimize`` and adds a maximize / minimize
+    objective on the named variable, producing an *exploit*-shape
+    witness instead.
+    """
+
+    def _cwe190_conds(self):
+        # Canonical CWE-190 32-bit wraparound shape.  Without a witness
+        # hint Z3 returns ``count=0``; with ``max:count`` it lands in
+        # the wraparound region (count * 16 > 2^32 - 1).
+        return [
+            PathCondition("alloc_size == count * 16", step_index=0),
+            PathCondition("alloc_size < 0x8000", step_index=1),
+        ]
+
+    @_requires_z3
+    def test_default_returns_trivial_witness(self):
+        """Sanity baseline: without prefer_witness, CWE-190 conditions
+        produce the trivial count=0 witness."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            self._cwe190_conds(), profile=BV_C_UINT32,
+        )
+        assert r.feasible is True
+        assert r.model.get("count") == 0
+
+    @_requires_z3
+    def test_max_drives_witness_into_wraparound_region(self):
+        """``max:count`` produces a witness where count * 16 exceeds
+        2^32 — confirming Z3 found a wraparound assignment."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            self._cwe190_conds(), profile=BV_C_UINT32,
+            prefer_witness=("count", "max"),
+        )
+        assert r.feasible is True
+        count = r.model.get("count")
+        assert count is not None and count > 0, (
+            f"prefer_witness max:count should produce non-trivial count, got {count}"
+        )
+        # On uint32, count * 16 in C semantics wraps; the test confirms
+        # the witness lands in a region where unwrapped multiplication
+        # would exceed UINT32_MAX.
+        assert count * 16 > 0xFFFFFFFF, (
+            f"witness count={count} does not lie in the wraparound region"
+        )
+
+    @_requires_z3
+    def test_min_drives_witness_to_floor(self):
+        """``min:count`` with a lower-bound condition returns the
+        smallest count above the bound."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            self._cwe190_conds() + [PathCondition("count > 1000", step_index=2)],
+            profile=BV_C_UINT32,
+            prefer_witness=("count", "min"),
+        )
+        assert r.feasible is True
+        # min above the floor of 1000 → 1001.
+        assert r.model.get("count") == 1001
+
+    @_requires_z3
+    def test_absent_variable_silent_skip(self):
+        """When the named variable doesn't appear in any condition the
+        objective is silently dropped and the witness reverts to the
+        default smallest-model behaviour.  No error — Z3 still returns
+        a valid (non-extremal) witness."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            self._cwe190_conds(), profile=BV_C_UINT32,
+            prefer_witness=("bogusvar", "max"),
+        )
+        assert r.feasible is True
+        # Default trivial witness comes back (count=0); no exception
+        # raised for the missing variable.
+        assert r.model.get("count") == 0
+        assert "bogusvar" not in r.model
+
+    @_requires_z3
+    def test_unsat_still_unsat_in_witness_mode(self):
+        """An unsat path remains unsat regardless of witness direction
+        — the objective only affects which sat witness is chosen, not
+        whether one exists.  unsat-core info must still surface."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            [PathCondition("x > 100", step_index=0),
+             PathCondition("x < 50", step_index=1)],
+            profile=BV_C_UINT32,
+            prefer_witness=("x", "max"),
+        )
+        assert r.feasible is False
+        # unsat-core info preserved across the Solver→Optimize swap.
+        assert "x > 100" in r.unsatisfied
+        assert "x < 50" in r.unsatisfied
+
+    @_requires_z3
+    def test_witness_mode_compatible_with_timeout(self):
+        """``timeout_ms`` is honoured by the Optimize backend the same
+        way it is by Solver — empty pending list short-circuits to
+        ``feasible=True`` without solver work, but the timeout config
+        threads through cleanly."""
+        from core.smt_solver import BV_C_UINT32
+        r = check_path_feasibility(
+            self._cwe190_conds(), profile=BV_C_UINT32,
+            prefer_witness=("count", "max"),
+            timeout_ms=10000,
+        )
+        assert r.feasible is True
+        assert r.model.get("count") is not None

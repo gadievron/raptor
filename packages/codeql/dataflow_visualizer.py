@@ -161,7 +161,9 @@ class DataflowVisualizer:
                 # Validate file path to prevent directory traversal
                 file_path = (repo_path / node['file']).resolve()
                 repo_resolved = repo_path.resolve()
-                if not str(file_path).startswith(str(repo_resolved)):
+                try:
+                    file_path.relative_to(repo_resolved)
+                except ValueError:
                     node['code_context'] = f"Access denied: {node['file']}"
                     continue
                 
@@ -210,8 +212,22 @@ class DataflowVisualizer:
     ) -> str:
         """Create HTML template with embedded visualization."""
 
-        nodes_json = json.dumps(nodes)
-        edges_json = json.dumps(edges)
+        # JSON-encode then defang `</` → `<\/` so any string in
+        # the data can't break out of the surrounding `<script>`
+        # block via a literal `</script>` substring. The browser's
+        # HTML parser searches for `</script>` regardless of JS
+        # string syntax — JSON encoding doesn't help (json.dumps
+        # produces `"</script>"` which is still `</script>` to
+        # the HTML parser). `<\/script>` is byte-equivalent in
+        # JS string literals (`\/` is just `/`) so the data round-
+        # trips identically; HTML parser sees `<\/script>` (not
+        # `</script>`) so the script context isn't closed.
+        # Same defence pattern OWASP recommends for any JSON
+        # embedded inline in `<script>...`.
+        def _safe_json(obj):
+            return json.dumps(obj).replace("</", "<\\/")
+        nodes_json = _safe_json(nodes)
+        edges_json = _safe_json(edges)
 
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -550,15 +566,31 @@ class DataflowVisualizer:
             }});
 
         function showNodeDetails(node) {{
+            // Build the structure with .html() for the static
+            // skeleton, then populate each text-bearing cell
+            // via .text() so user-controlled content (label,
+            // file path, snippet) gets DOM-text-encoded by the
+            // browser instead of parsed as HTML. Pre-fix every
+            // `${{node.<field>}}` interpolation went through
+            // `.html()` — server-side `escape()` partially
+            // mitigates but only for fields the Python side
+            // actually escaped (label and file weren't), and a
+            // payload like `<img src=x onerror=alert(1)>` from
+            // an unsanitised field renders as live HTML.
             const detailsDiv = d3.select("#node-details");
             detailsDiv.html(`
                 <div class="node-info">
-                    <h3>${{node.type.toUpperCase()}}</h3>
-                    <div class="location">${{node.file}}:${{node.line}}</div>
-                    <p style="margin-bottom: 10px; color: #d4d4d4;">${{node.label}}</p>
-                    <div class="code">${{node.code_context || node.snippet}}</div>
+                    <h3 class="r-type"></h3>
+                    <div class="location"><span class="r-file"></span>:<span class="r-line"></span></div>
+                    <p style="margin-bottom: 10px; color: #d4d4d4;" class="r-label"></p>
+                    <div class="code r-code"></div>
                 </div>
             `);
+            detailsDiv.select(".r-type").text(node.type.toUpperCase());
+            detailsDiv.select(".r-file").text(node.file || "");
+            detailsDiv.select(".r-line").text(node.line == null ? "" : String(node.line));
+            detailsDiv.select(".r-label").text(node.label || "");
+            detailsDiv.select(".r-code").text(node.code_context || node.snippet || "");
         }}
 
         // Show first node by default
@@ -589,7 +621,7 @@ class DataflowVisualizer:
         lines.append("")
 
         # Add source node
-        lines.append(f'    A0["🔴 SOURCE<br/>{self._escape_mermaid(dataflow.source.label)}<br/><i>{dataflow.source.file_path}:{dataflow.source.line}</i>"]')
+        lines.append(f'    A0["🔴 SOURCE<br/>{self._escape_mermaid(dataflow.source.label)}<br/><i>{self._escape_mermaid(dataflow.source.file_path)}:{dataflow.source.line}</i>"]')
         lines.append('    style A0 fill:#f48771,stroke:#fff,stroke-width:2px,color:#000')
         lines.append("")
 
@@ -602,7 +634,7 @@ class DataflowVisualizer:
             emoji = "🛡️" if is_sanitizer else "⚙️"
             color = "#dcdcaa" if is_sanitizer else "#4ec9b0"
 
-            lines.append(f'    {node_id}["{emoji} STEP {i}<br/>{self._escape_mermaid(step.label)}<br/><i>{step.file_path}:{step.line}</i>"]')
+            lines.append(f'    {node_id}["{emoji} STEP {i}<br/>{self._escape_mermaid(step.label)}<br/><i>{self._escape_mermaid(step.file_path)}:{step.line}</i>"]')
             lines.append(f'    style {node_id} fill:{color},stroke:#fff,stroke-width:2px,color:#000')
             lines.append(f'    {prev_id} --> {node_id}')
             lines.append("")
@@ -610,16 +642,30 @@ class DataflowVisualizer:
 
         # Add sink node
         sink_id = f"A{len(dataflow.intermediate_steps) + 1}"
-        lines.append(f'    {sink_id}["🔥 SINK<br/>{self._escape_mermaid(dataflow.sink.label)}<br/><i>{dataflow.sink.file_path}:{dataflow.sink.line}</i>"]')
+        lines.append(f'    {sink_id}["🔥 SINK<br/>{self._escape_mermaid(dataflow.sink.label)}<br/><i>{self._escape_mermaid(dataflow.sink.file_path)}:{dataflow.sink.line}</i>"]')
         lines.append(f'    style {sink_id} fill:#d16969,stroke:#fff,stroke-width:2px,color:#000')
         lines.append(f'    {prev_id} --> {sink_id}')
         lines.append("")
 
         lines.append("```")
         lines.append("")
-        lines.append(f"**Rule:** `{dataflow.rule_id}`")
+        # Sanitise rule_id and message before embedding in markdown.
+        # CodeQL rule IDs are normally `[a-z0-9/-]+` but the field
+        # type doesn't pin that, and `dataflow.message` is freeform
+        # text that often comes from LLM-extracted analysis or
+        # CodeQL's own warning text. Embedding either directly into
+        # markdown lets a hostile target's source repo contribute
+        # markup (`**bold**`, `![](evil)` autofetch, ANSI / BIDI
+        # control bytes that flip apparent direction) into the
+        # rendered report. `sanitise_string` defangs autofetch
+        # markup + escape_nonprintable; cap at 1 KB so a runaway
+        # message field doesn't bloat the markdown.
+        from core.security.prompt_output_sanitise import sanitise_string
+        safe_rule = sanitise_string(str(dataflow.rule_id), max_chars=256)
+        safe_msg = sanitise_string(str(dataflow.message), max_chars=1024)
+        lines.append(f"**Rule:** `{safe_rule}`")
         lines.append("")
-        lines.append(f"**Message:** {dataflow.message}")
+        lines.append(f"**Message:** {safe_msg}")
 
         if dataflow.sanitizers:
             lines.append("")
@@ -769,7 +815,7 @@ class DataflowVisualizer:
         lines.append("")
 
         # Source node
-        lines.append(f'    node0 [label="SOURCE\\n{self._escape_dot(dataflow.source.label)}\\n{dataflow.source.file_path}:{dataflow.source.line}", fillcolor="#f48771"];')
+        lines.append(f'    node0 [label="SOURCE\\n{self._escape_dot(dataflow.source.label)}\\n{self._escape_dot(dataflow.source.file_path)}:{dataflow.source.line}", fillcolor="#f48771"];')
 
         # Intermediate nodes
         for i, step in enumerate(dataflow.intermediate_steps, 1):
@@ -777,11 +823,11 @@ class DataflowVisualizer:
             color = "#dcdcaa" if is_sanitizer else "#4ec9b0"
             node_type = "SANITIZER" if is_sanitizer else f"STEP {i}"
 
-            lines.append(f'    node{i} [label="{node_type}\\n{self._escape_dot(step.label)}\\n{step.file_path}:{step.line}", fillcolor="{color}"];')
+            lines.append(f'    node{i} [label="{node_type}\\n{self._escape_dot(step.label)}\\n{self._escape_dot(step.file_path)}:{step.line}", fillcolor="{color}"];')
 
         # Sink node
         sink_id = len(dataflow.intermediate_steps) + 1
-        lines.append(f'    node{sink_id} [label="SINK\\n{self._escape_dot(dataflow.sink.label)}\\n{dataflow.sink.file_path}:{dataflow.sink.line}", fillcolor="#d16969"];')
+        lines.append(f'    node{sink_id} [label="SINK\\n{self._escape_dot(dataflow.sink.label)}\\n{self._escape_dot(dataflow.sink.file_path)}:{dataflow.sink.line}", fillcolor="#d16969"];')
 
         lines.append("")
 

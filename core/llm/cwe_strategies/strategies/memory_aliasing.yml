@@ -1,0 +1,147 @@
+name: memory_aliasing
+description: |
+  Code that creates aliases between two memory regions — same
+  physical pages mapped or referenced from two paths. The bug
+  class: one path treats the alias as read-only or as having
+  one set of ownership semantics; another path writes through
+  the alias or assumes different semantics. The bracket spans
+  Dirty COW (race-induced) to CopyFail (race-free in-place
+  optimisation).
+
+signals:
+  paths:
+    - mm/
+    - fs/splice.c
+    - fs/pipe.c
+    - fs/iomap/
+    - crypto/algif_aead.c
+    - lib/iov_iter.c
+  includes:
+    - linux/splice.h
+    - linux/pipe_fs_i.h
+    - linux/iov_iter.h
+  function_keywords:
+    - splice
+    - alias
+    - inplace
+  function_calls:
+    - splice_to_pipe
+    - generic_splice_sendpage
+    - sg_chain
+    - sg_init_table
+    - iov_iter_init
+    - iov_iter_pipe
+    - copy_page_to_iter
+    - get_pages
+    - get_user_pages
+    - copy_page
+  cwes:
+    # Aliasing-specific patterns. Generic buffer-bounds CWEs
+    # (CWE-119, CWE-787) belong with memory_management; including
+    # them here would make this strategy a magnet for every
+    # corruption finding, drowning the genuine alias signal.
+    - CWE-362   # race condition (Dirty COW)
+    - CWE-668   # exposure of resource to wrong sphere
+
+key_questions:
+  - "Does this code set up an aliasing relationship between two regions — same pages, overlapping scatterlists, shared page-cache entries?"
+  - "Who provided the source pages? Are they writable from the source's perspective, or only readable? Does this code write to them?"
+  - "If another subsystem holds a reference to the same pages (page cache, swap cache, file mapping), can it observe writes made through the alias?"
+  - "Are there assumptions like 'this page is private to me' that would break if the page is actually shared? What enforces privacy — a copy-on-write check, a flag bit, or just convention?"
+
+prompt_addendum: |
+  Aliasing bugs are subtle because each code path is locally
+  correct under its own assumptions. The bug emerges from the
+  intersection — the source path expects 'read-only', the destination
+  path produces 'write through'. Walk the function looking for
+  any operation that creates an alias: a scatterlist whose source
+  pages came from another subsystem, an iov_iter that transmutes
+  read iovecs into write iovecs, an in-place transform that swaps
+  destination and source. For each alias, name BOTH endpoints
+  and ask: does each endpoint's code know the other endpoint
+  exists, and does each endpoint enforce its own assumptions on
+  the shared memory?
+
+exemplars:
+  - cve: CVE-2022-0847
+    title: Dirty Pipe — pipe buffer flag persistence enables write to read-only
+      page-cache pages
+    pattern: |
+      A page splice'd from a read-only file into a pipe buffer
+      retains the ``PIPE_BUF_FLAG_CAN_MERGE`` flag from a previous
+      writer. When a subsequent ``write(pipe)`` reuses the same
+      pipe buffer slot, the kernel believes the destination page
+      is mergeable / writable and writes the new data directly
+      into the page-cache page that backs the read-only file.
+    why_buggy: |
+      The pipe buffer's flag was not cleared when the splice path
+      reused a buffer struct. The splice path treated the buffer
+      as 'read-only source'; the write path treated it as
+      'writable destination', because the flag from a prior write
+      operation persisted. Two paths, two assumptions, one
+      shared piece of state — the bug is that the state didn't
+      reset when the role changed.
+
+  - cve: CVE-2026-31431
+    title: CopyFail — algif_aead in-place authencesn aliases splice'd page-cache
+      pages
+    pattern: |
+      The algif_aead receive path reuses splice'd input pages as
+      the output scatterlist for in-place transformation. The
+      authencesn algorithm writes scratch / authentication-tag
+      bytes into the scatterlist as part of normal operation.
+      Because the splice'd pages came directly from the page
+      cache (not a private copy), the writes corrupt the file's
+      cached contents.
+    why_buggy: |
+      The optimisation aliases the source and destination
+      scatterlists for performance. It assumed the source is
+      private to algif_aead. It isn't — splice gives back
+      page-cache references, and the cache is shared with every
+      other reader of the same file. The crypto path's
+      assumption ('this is my buffer, I can write to it') is
+      locally true but globally violated. No race needed; a
+      straight-line syscall sequence corrupts arbitrary readable
+      files in the cache.
+
+  - cve: CVE-2026-43284
+    title: DirtyFrag (xfrm-ESP) — page-cache page reaches sk_buff frag, treated
+      as writable scratch
+    pattern: |
+      The xfrm-ESP transmit path obtains pages via the splice /
+      sendmsg path, which can hand back page-cache pages. Those
+      pages are placed into a ``struct sk_buff`` ``frag`` and the
+      ESP transform writes ICV / scratch bytes through the frag.
+      The networking-stack ``sk_buff`` is the wrong semantic
+      container for an immutable page-cache page — it's used as
+      scratch by every layer it passes through.
+    why_buggy: |
+      Two subsystems with different ownership models converge on
+      one piece of memory. The page-cache layer's contract
+      ("this page is shared and immutable for non-writers") and
+      the networking layer's contract ("frag pages are scratch I
+      own") are both locally consistent. The bug is the bridge:
+      ``sendmsg`` of file pages produces a frag whose contents
+      will be overwritten by xfrm-ESP. Same shape as CopyFail,
+      different subsystem — networking + page cache instead of
+      crypto + page cache.
+
+  - cve: CVE-2026-43500
+    title: DirtyFrag (AF_RXRPC) — same page-cache → sk_buff frag pattern in a
+      different protocol
+    pattern: |
+      AF_RXRPC's send path takes pages provided via splice or
+      sendmsg, places them into ``sk_buff`` frags, and lets the
+      RxRPC packet-construction code write through those frags.
+      Same as the xfrm-ESP case: page-cache pages that callers
+      assumed were read-only are mutated by the networking-stack
+      packet builder.
+    why_buggy: |
+      One bug pattern, two independent subsystems. The
+      generalisation lesson is the point: any networking path
+      that accepts caller-supplied pages and treats the resulting
+      frags as writable scratch is suspect. A Mode-2 checker
+      synthesised from CVE-2026-43284 should fire on this code
+      automatically; the bug class is "page-cache pages flow
+      into a downstream subsystem's writable buffer", not "this
+      specific protocol's send path".

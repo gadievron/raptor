@@ -1,11 +1,12 @@
 """Tests for core.orchestration.agentic_passes.
 
-Mocks subprocess.run so tests don't actually invoke claude -p or the
-lifecycle helpers. The pre-pass and post-pass each spawn multiple
-subprocess calls (lifecycle start, build_checklist, claude -p, lifecycle
-complete), so tests use side_effect callables that dispatch on argv.
+Mocks subprocess.run (lifecycle/build_checklist helpers) and sandbox_run
+(claude -p dispatch) so tests don't spawn real processes. The dispatcher
+routes by argv[0] program name — lifecycle helpers go through
+subprocess.run, claude calls through sandbox_run.
 """
 
+import contextlib
 import json
 import unittest
 from pathlib import Path
@@ -20,6 +21,49 @@ from core.orchestration.agentic_passes import (
     run_understand_prepass,
     run_validate_postpass,
 )
+
+# Assume interactive for all tests except RuleOfTwoTests (which patches
+# is_interactive explicitly). Without this, every test that exercises the
+# full pass path fails in CI/pytest (no TTY).
+_interactive_patch = None
+
+def setUpModule():
+    global _interactive_patch
+    _interactive_patch = patch(
+        "core.security.rule_of_two.is_interactive", return_value=True,
+    )
+    _interactive_patch.start()
+
+def tearDownModule():
+    _interactive_patch.stop()
+
+
+@contextlib.contextmanager
+def _patch_passes(dispatcher):
+    """Patch both subprocess.run and sandbox_run in agentic_passes.
+
+    sandbox_run receives the claude -p calls (keyword-heavy signature);
+    subprocess.run receives lifecycle/build_checklist calls. Both route
+    through the same dispatcher. Returns a combined mock whose
+    call_args_list merges both targets so existing assertions work.
+    """
+    combined = MagicMock()
+
+    def _subprocess_side_effect(cmd, *args, **kwargs):
+        result = dispatcher(cmd, *args, **kwargs)
+        combined(cmd, *args, **kwargs)
+        return result
+
+    def _sandbox_side_effect(cmd, *args, **kwargs):
+        result = dispatcher(cmd, *args, **kwargs)
+        combined(cmd, *args, **kwargs)
+        return result
+
+    with patch("core.orchestration.agentic_passes.subprocess.run",
+               side_effect=_subprocess_side_effect), \
+         patch("core.orchestration.agentic_passes.run_untrusted_networked",
+               side_effect=_sandbox_side_effect):
+        yield combined
 
 
 # ---------------------------------------------------------------------------
@@ -117,16 +161,25 @@ class SelectFindingsTests(unittest.TestCase):
             self.assertEqual(
                 {f["id"] for f in _select_findings_for_validate(report)}, {"a", "b"})
 
-    def test_strict_match_no_case_folding(self):
+    def test_case_folded_and_whitespace_tolerant(self):
+        # Pre-fix this asserted strict equality and only "c" matched.
+        # Post-fix the comparison strip+lowers so all three (and the
+        # leading/trailing-space variants common in spliced outputs)
+        # qualify. Schema-enforced canonical lowercase still produces
+        # the same outcome; the relaxation only adds robustness for
+        # non-orchestrated dispatch paths and external producers.
         with TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             report = self._write_report(tmp, [
                 {"id": "a", "confidence": "High"},
                 {"id": "b", "confidence": "HIGH"},
                 {"id": "c", "confidence": "high"},
+                {"id": "d", "confidence": "  high  "},
             ])
             self.assertEqual(
-                [f["id"] for f in _select_findings_for_validate(report)], ["c"])
+                {f["id"] for f in _select_findings_for_validate(report)},
+                {"a", "b", "c", "d"},
+            )
 
     def test_skips_null_or_missing_fields(self):
         with TemporaryDirectory() as tmp:
@@ -204,8 +257,7 @@ class UnderstandPrepassTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             dispatcher = _make_lifecycle_dispatcher(start_returncode=1)
-            with patch("core.orchestration.agentic_passes.subprocess.run",
-                       side_effect=dispatcher):
+            with _patch_passes(dispatcher):
                 result = run_understand_prepass(
                     target=tmp, agentic_out_dir=tmp,
                     claude_bin="/fake/claude",
@@ -220,8 +272,7 @@ class UnderstandPrepassTests(unittest.TestCase):
             dispatcher = _make_lifecycle_dispatcher(
                 start_dir=understand_dir, build_returncode=1,
             )
-            with patch("core.orchestration.agentic_passes.subprocess.run",
-                       side_effect=dispatcher):
+            with _patch_passes(dispatcher):
                 result = run_understand_prepass(
                     target=tmp, agentic_out_dir=tmp,
                     claude_bin="/fake/claude",
@@ -239,8 +290,7 @@ class UnderstandPrepassTests(unittest.TestCase):
                 start_dir=understand_dir,
                 claude_writes={"context-map.json": '{"sources": [], "sinks": []}'},
             )
-            with patch("core.orchestration.agentic_passes.subprocess.run",
-                       side_effect=dispatcher) as mock_run:
+            with _patch_passes(dispatcher) as mock_run:
                 result = run_understand_prepass(
                     target=tmp, agentic_out_dir=tmp,
                     claude_bin="/fake/claude",
@@ -266,8 +316,7 @@ class UnderstandPrepassTests(unittest.TestCase):
                 start_dir=understand_dir,
                 claude_writes={"context-map.json": "{}"},
             )
-            with patch("core.orchestration.agentic_passes.subprocess.run",
-                       side_effect=dispatcher) as mock_run:
+            with _patch_passes(dispatcher) as mock_run:
                 run_understand_prepass(
                     target=tmp, agentic_out_dir=tmp,
                     claude_bin="/fake/claude",
@@ -288,6 +337,52 @@ class UnderstandPrepassTests(unittest.TestCase):
             add_dirs = {cmd[i + 1] for i, a in enumerate(cmd) if a == "--add-dir"}
             self.assertIn(str(_RAPTOR_DIR), add_dirs)
             self.assertIn(str(understand_dir.resolve()), add_dirs)
+
+    def test_claude_dispatch_uses_sandbox_with_egress_proxy(self):
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            understand_dir = tmp / "understand_run"
+            dispatcher = _make_lifecycle_dispatcher(
+                start_dir=understand_dir,
+                claude_writes={"context-map.json": "{}"},
+            )
+            sandbox_calls = []
+
+            def _sandbox_capture(cmd, *args, **kwargs):
+                sandbox_calls.append(kwargs)
+                return dispatcher(cmd, *args, **kwargs)
+
+            with patch("core.orchestration.agentic_passes.subprocess.run",
+                       side_effect=dispatcher), \
+                 patch("core.orchestration.agentic_passes.run_untrusted_networked",
+                       side_effect=_sandbox_capture):
+                run_understand_prepass(
+                    target=tmp, agentic_out_dir=tmp,
+                    claude_bin="/fake/claude",
+                )
+
+            self.assertEqual(len(sandbox_calls), 1)
+            kw = sandbox_calls[0]
+            # Helper internally sets use_egress_proxy=True; the caller
+            # passes only the per-site config.
+            # Default proxy_hosts grew from a single-host list to
+            # the empirical-default set (api.anthropic.com +
+            # mcp-proxy.anthropic.com + downloads.claude.ai).
+            # Pin presence rather than full equality so future
+            # additions don't break this assertion if they're
+            # justified.
+            hosts = kw.get("proxy_hosts")
+            self.assertIn("api.anthropic.com", hosts)
+            self.assertIn("mcp-proxy.anthropic.com", hosts)
+            self.assertIn("downloads.claude.ai", hosts)
+            self.assertEqual(kw.get("caller_label"), "agentic-understand")
+            # readable_paths must include ~/.claude (Claude Code OAuth)
+            # and RAPTOR_DIR (for libexec scripts the LLM invokes).
+            paths = kw.get("readable_paths") or []
+            self.assertTrue(any(p.endswith("/.claude") for p in paths),
+                            f"missing ~/.claude in readable_paths: {paths!r}")
+            self.assertTrue(any("raptor" in p.lower() for p in paths),
+                            f"missing RAPTOR_DIR in readable_paths: {paths!r}")
 
     def test_happy_path_enriches_agentic_checklist(self):
         # End-to-end: pre-pass writes context-map.json into the understand
@@ -314,8 +409,7 @@ class UnderstandPrepassTests(unittest.TestCase):
                 start_dir=understand_dir,
                 claude_writes={"context-map.json": ctx_map},
             )
-            with patch("core.orchestration.agentic_passes.subprocess.run",
-                       side_effect=dispatcher):
+            with _patch_passes(dispatcher):
                 result = run_understand_prepass(
                     target=tmp, agentic_out_dir=agentic_out,
                     claude_bin="/fake/claude",
@@ -347,8 +441,7 @@ class UnderstandPrepassTests(unittest.TestCase):
                 start_dir=understand_dir,
                 claude_writes={"context-map.json": "{}"},
             )
-            with patch("core.orchestration.agentic_passes.subprocess.run",
-                       side_effect=dispatcher) as mock_run:
+            with _patch_passes(dispatcher) as mock_run:
                 result = run_understand_prepass(
                     target=tmp, agentic_out_dir=agentic_out,
                     claude_bin="/fake/claude",
@@ -370,8 +463,7 @@ class UnderstandPrepassTests(unittest.TestCase):
                 start_dir=understand_dir,
                 # No claude_writes — context-map.json won't appear.
             )
-            with patch("core.orchestration.agentic_passes.subprocess.run",
-                       side_effect=dispatcher):
+            with _patch_passes(dispatcher):
                 result = run_understand_prepass(
                     target=tmp, agentic_out_dir=tmp,
                     claude_bin="/fake/claude",
@@ -386,8 +478,7 @@ class UnderstandPrepassTests(unittest.TestCase):
             dispatcher = _make_lifecycle_dispatcher(
                 start_dir=understand_dir, claude_returncode=2,
             )
-            with patch("core.orchestration.agentic_passes.subprocess.run",
-                       side_effect=dispatcher):
+            with _patch_passes(dispatcher):
                 result = run_understand_prepass(
                     target=tmp, agentic_out_dir=tmp,
                     claude_bin="/fake/claude",
@@ -457,8 +548,7 @@ class ValidatePostpassTests(unittest.TestCase):
             ])
             validate_dir = tmp / "validate_run"
             dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
-            with patch("core.orchestration.agentic_passes.subprocess.run",
-                       side_effect=dispatcher) as mock_run:
+            with _patch_passes(dispatcher) as mock_run:
                 result = run_validate_postpass(
                     target=tmp, agentic_out_dir=tmp, analysis_report=report,
                     claude_bin="/fake/claude",
@@ -486,13 +576,59 @@ class ValidatePostpassTests(unittest.TestCase):
             self.assertNotIn("FINDING-F2", prompt)
             self.assertNotIn("FINDING-F3", prompt)
 
+    def test_validate_dispatch_uses_sandbox_with_egress_proxy(self):
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            report = self._make_report(tmp, [
+                {"finding_id": "FINDING-F1", "is_exploitable": True},
+            ])
+            validate_dir = tmp / "validate_run"
+            dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
+            sandbox_calls = []
+
+            def _sandbox_capture(cmd, *args, **kwargs):
+                sandbox_calls.append(kwargs)
+                return dispatcher(cmd, *args, **kwargs)
+
+            with patch("core.orchestration.agentic_passes.subprocess.run",
+                       side_effect=dispatcher), \
+                 patch("core.orchestration.agentic_passes.run_untrusted_networked",
+                       side_effect=_sandbox_capture):
+                run_validate_postpass(
+                    target=tmp, agentic_out_dir=tmp, analysis_report=report,
+                    claude_bin="/fake/claude",
+                )
+
+            self.assertEqual(len(sandbox_calls), 1)
+            kw = sandbox_calls[0]
+            # Helper internally sets use_egress_proxy=True; caller passes
+            # only the per-site config.
+            # Default proxy_hosts grew from a single-host list to
+            # the empirical-default set (api.anthropic.com +
+            # mcp-proxy.anthropic.com + downloads.claude.ai).
+            # Pin presence rather than full equality so future
+            # additions don't break this assertion if they're
+            # justified.
+            hosts = kw.get("proxy_hosts")
+            self.assertIn("api.anthropic.com", hosts)
+            self.assertIn("mcp-proxy.anthropic.com", hosts)
+            self.assertIn("downloads.claude.ai", hosts)
+            self.assertEqual(kw.get("caller_label"), "agentic-validate")
+            # readable_paths must include ~/.claude + RAPTOR_DIR + the
+            # prior phases' agentic_out_dir (validate reads back what
+            # earlier stages wrote).
+            paths = kw.get("readable_paths") or []
+            self.assertTrue(any(p.endswith("/.claude") for p in paths),
+                            f"missing ~/.claude in readable_paths: {paths!r}")
+            self.assertTrue(any("raptor" in p.lower() for p in paths),
+                            f"missing RAPTOR_DIR in readable_paths: {paths!r}")
+
     def test_skips_when_lifecycle_start_fails(self):
         with TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             report = self._make_report(tmp, [{"finding_id": "FINDING-F1", "is_exploitable": True}])
             dispatcher = _make_lifecycle_dispatcher(start_returncode=1)
-            with patch("core.orchestration.agentic_passes.subprocess.run",
-                       side_effect=dispatcher):
+            with _patch_passes(dispatcher):
                 result = run_validate_postpass(
                     target=tmp, agentic_out_dir=tmp, analysis_report=report,
                     claude_bin="/fake/claude",
@@ -509,8 +645,7 @@ class ValidatePostpassTests(unittest.TestCase):
             report = self._make_report(tmp, many)
             validate_dir = tmp / "validate_run"
             dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
-            with patch("core.orchestration.agentic_passes.subprocess.run",
-                       side_effect=dispatcher):
+            with _patch_passes(dispatcher):
                 result = run_validate_postpass(
                     target=tmp, agentic_out_dir=tmp, analysis_report=report,
                     claude_bin="/fake/claude",
@@ -610,8 +745,7 @@ class TruncationOrderTests(unittest.TestCase):
             report.write_text(json.dumps({"results": findings}))
             validate_dir = tmp / "validate_run"
             dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
-            with patch("core.orchestration.agentic_passes.subprocess.run",
-                       side_effect=dispatcher):
+            with _patch_passes(dispatcher):
                 run_validate_postpass(
                     target=tmp, agentic_out_dir=tmp, analysis_report=report,
                     claude_bin="/fake/claude",
@@ -654,8 +788,7 @@ class NaNScoreTests(unittest.TestCase):
             report.write_text(_json.dumps({"results": findings}))
             validate_dir = tmp / "validate_run"
             dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
-            with patch("core.orchestration.agentic_passes.subprocess.run",
-                       side_effect=dispatcher):
+            with _patch_passes(dispatcher):
                 result = run_validate_postpass(
                     target=tmp, agentic_out_dir=tmp, analysis_report=report,
                     claude_bin="/fake/claude",
@@ -706,8 +839,7 @@ class MalformedContextMapStructureTests(unittest.TestCase):
                     json.dumps({"entry_points": "not-a-list"}))
                 return _ok()
 
-            with patch("core.orchestration.agentic_passes.subprocess.run",
-                       side_effect=dispatcher):
+            with _patch_passes(dispatcher):
                 result = run_understand_prepass(
                     target=tmp, agentic_out_dir=tmp,
                     claude_bin="/fake/claude",
@@ -749,8 +881,7 @@ class CorruptContextMapTests(unittest.TestCase):
                     '{"sources": [partial-json-no-close')
                 return _ok()
 
-            with patch("core.orchestration.agentic_passes.subprocess.run",
-                       side_effect=dispatcher):
+            with _patch_passes(dispatcher):
                 result = run_understand_prepass(
                     target=tmp, agentic_out_dir=tmp,
                     claude_bin="/fake/claude",
@@ -789,8 +920,7 @@ class SortKeyTypeSafetyTests(unittest.TestCase):
             report.write_text(json.dumps({"results": findings}))
             validate_dir = tmp / "validate_run"
             dispatcher = _make_lifecycle_dispatcher(start_dir=validate_dir)
-            with patch("core.orchestration.agentic_passes.subprocess.run",
-                       side_effect=dispatcher):
+            with _patch_passes(dispatcher):
                 # Must not raise — backstop would catch it but the user would
                 # see "unexpected ValueError" instead of a clean post-pass.
                 result = run_validate_postpass(
@@ -848,8 +978,7 @@ class AdversarialBugsTests(unittest.TestCase):
                 # claude -p: simulate the user Ctrl-C-ing the parent process.
                 raise KeyboardInterrupt()
 
-            with patch("core.orchestration.agentic_passes.subprocess.run",
-                       side_effect=dispatcher):
+            with _patch_passes(dispatcher):
                 with self.assertRaises(KeyboardInterrupt):
                     run_understand_prepass(
                         target=tmp, agentic_out_dir=tmp,
@@ -958,8 +1087,7 @@ class TimeoutTests(unittest.TestCase):
                 from subprocess import TimeoutExpired
                 raise TimeoutExpired(cmd, kwargs.get("timeout", 0))
 
-            with patch("core.orchestration.agentic_passes.subprocess.run",
-                       side_effect=dispatcher):
+            with _patch_passes(dispatcher):
                 result = run_understand_prepass(
                     target=tmp, agentic_out_dir=tmp,
                     claude_bin="/fake/claude",
@@ -1245,6 +1373,63 @@ class MockContractTests(unittest.TestCase):
         self.assertIs(ap.subprocess, sp,
                       msg="agentic_passes must keep `import subprocess` so "
                           "tests' patch paths stay valid")
+
+
+class RuleOfTwoTests(unittest.TestCase):
+    """Agentic passes blocked in non-interactive mode (Rule of Two)."""
+
+    def test_understand_blocked_in_ci(self):
+        with patch("core.security.rule_of_two.is_interactive", return_value=False):
+            result = run_understand_prepass(
+                target=Path("/tmp/fake-target"),
+                agentic_out_dir=Path("/tmp/fake-out"),
+                claude_bin="/fake/claude",
+            )
+        self.assertFalse(result.ran)
+        self.assertIn("not allowed in non-interactive", result.skipped_reason)
+
+    def test_validate_blocked_in_ci(self):
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            report = tmp / "report.json"
+            report.write_text('{"results": []}')
+            with patch("core.security.rule_of_two.is_interactive", return_value=False):
+                result = run_validate_postpass(
+                    target=Path("/tmp/fake-target"),
+                    agentic_out_dir=tmp,
+                    analysis_report=report,
+                    claude_bin="/fake/claude",
+                )
+        self.assertFalse(result.ran)
+        self.assertIn("not allowed in non-interactive", result.skipped_reason)
+
+    def test_understand_passes_gate_when_interactive(self):
+        with patch("core.security.rule_of_two.is_interactive", return_value=True), \
+             patch("core.orchestration.agentic_passes.shutil.which",
+                   return_value=None):
+            result = run_understand_prepass(
+                target=Path("/tmp/nonexistent-target"),
+                agentic_out_dir=Path("/tmp/nonexistent-out"),
+            )
+        # Gets past the Rule of Two gate, fails at next check
+        self.assertFalse(result.ran)
+        self.assertNotIn("non-interactive", result.skipped_reason)
+
+    def test_validate_passes_gate_when_interactive(self):
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            report = tmp / "report.json"
+            report.write_text('{"results": []}')
+            with patch("core.security.rule_of_two.is_interactive", return_value=True), \
+                 patch("core.orchestration.agentic_passes.shutil.which",
+                       return_value=None):
+                result = run_validate_postpass(
+                    target=Path("/tmp/nonexistent-target"),
+                    agentic_out_dir=tmp,
+                    analysis_report=report,
+                )
+        self.assertFalse(result.ran)
+        self.assertNotIn("non-interactive", result.skipped_reason)
 
 
 if __name__ == "__main__":

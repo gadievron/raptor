@@ -30,13 +30,35 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Union
+from typing import Any, Optional, Union
 
+from .availability import z3
 from .config import BVProfile
 
 
 class RejectionKind(str, Enum):
-    """Why the parser refused to encode a constraint."""
+    """Why the parser refused to encode a constraint.
+
+    `str+Enum` mixin: instances ARE strings, so ``str(rk)`` and
+    JSON serialisation work without a custom encoder. Trade-off:
+    after a JSON round-trip
+    (``json.dumps(rk)`` -> ``"lex_empty"`` -> ``json.loads`` ->
+    plain ``str``), the loaded value is a bare string, not the
+    enum member. Comparisons must use ``==`` (which works because
+    ``str.__eq__`` compares values), NOT ``is`` (which compares
+    object identity and the post-JSON value is a freshly-allocated
+    str). Callers that match against `RejectionKind` values across
+    serialisation boundaries should:
+
+      * use ``rk == RejectionKind.LEX_EMPTY`` (correct), OR
+      * coerce on load via ``RejectionKind(s)`` to get the canonical
+        member back.
+
+    Pre-fix the docstring didn't name this contract — a maintainer
+    writing ``rk is RejectionKind.LEX_EMPTY`` post-deserialisation
+    would silently get False on every comparison and the code path
+    would never fire.
+    """
 
     LEX_EMPTY = "lex_empty"
     """Tokeniser produced no tokens — input was empty or pure whitespace."""
@@ -52,13 +74,24 @@ class RejectionKind(str, Enum):
     """An operator outside the accepted set appeared in the expression."""
 
     PARENS_NOT_SUPPORTED = "parens_not_supported"
-    """Input contained ``(`` or ``)`` — function calls and grouping
-    aren't supported by the current grammar."""
+    """Deprecated — kept for backward compatibility with downstream
+    consumers that match on this value.  No encoder emits it any more:
+    the path validator's expression parser now supports grouping
+    parentheses via precedence climbing, and unbalanced cases emit
+    :data:`UNBALANCED_PARENS` instead."""
+
+    UNBALANCED_PARENS = "unbalanced_parens"
+    """Input had ``(`` without a matching ``)`` (or vice versa).  Fired
+    by the path validator's expression parser when the bracket structure
+    of a grouping subexpression doesn't close cleanly, or by the
+    condition-level balance check before dispatch."""
 
     MIXED_PRECEDENCE = "mixed_precedence"
-    """Expression mixed additive and multiplicative/bitwise operators.
-    The parser is strictly left-to-right with no precedence, so it
-    rejects mixed forms rather than risk silent mis-encoding."""
+    """Deprecated — kept for backward compatibility with downstream
+    consumers that match on this value.  No encoder emits it any more:
+    the path validator's expression parser now uses C operator precedence
+    (``*`` > ``+ -`` > ``<< >>`` > ``|``) and accepts mixed-operator
+    expressions directly.  Use parentheses to override precedence."""
 
     TRAILING_TOKENS = "trailing_tokens"
     """Tokens were left unconsumed after parsing (e.g. ``a b``)."""
@@ -81,6 +114,38 @@ class RejectionKind(str, Enum):
     """Z3 returned ``unknown`` for some other reason (incomplete tactic,
     construct outside the decidable bitvector fragment)."""
 
+    INPUT_TOO_LONG = "input_too_long"
+    """A single condition string exceeded the configured character cap.
+    Pre-parse bound on input size — defends the parser combinator against
+    pathological inputs whose runtime is linear in length but whose total
+    length is unboundedly large (e.g. a 1 MB string of operators).  The
+    cap lives in the encoder (``smt_path_validator._MAX_CONDITION_CHARS``)
+    so it can be tuned per call site if a real-target condition ever
+    legitimately exceeds it."""
+
+    TOO_MANY_CONDITIONS = "too_many_conditions"
+    """The caller passed more conditions to ``check_path_feasibility``
+    than the configured per-call cap.  Pre-parse bound on call shape —
+    real findings have 1-10 conditions; tens of thousands is a signal of
+    malformed upstream extraction or amplification.  The whole call
+    degrades to ``feasible=None``; the rejection appears once in
+    ``unknown_reasons``."""
+
+
+# RejectionKinds that no encoder emits any more but that we've kept in
+# the enum for back-compat with downstream consumers that match on the
+# string value. Constructing a `Rejection(kind=...)` with one of these
+# is almost certainly a mistake — a freshly-written encoder rule that
+# accidentally targets a stale category, or a refactor that moved
+# semantics from PARENS_NOT_SUPPORTED → UNBALANCED_PARENS but missed a
+# call site. Emit a DeprecationWarning at construction time so the
+# misuse surfaces in tests / dev runs without breaking external
+# consumers that only consume the string value via API output.
+_DEPRECATED_KINDS = frozenset({
+    RejectionKind.PARENS_NOT_SUPPORTED,
+    RejectionKind.MIXED_PRECEDENCE,
+})
+
 
 @dataclass(frozen=True)
 class Rejection:
@@ -97,6 +162,19 @@ class Rejection:
     detail: str = ""
     hint: str = ""
 
+    def __post_init__(self) -> None:
+        if self.kind in _DEPRECATED_KINDS:
+            import warnings
+            warnings.warn(
+                f"Rejection(kind={self.kind.name}) is deprecated; "
+                f"the parser no longer emits this category. "
+                f"Use UNBALANCED_PARENS (for unbalanced groups) or "
+                f"omit the rejection entirely (for precedence-mixed "
+                f"expressions, which the parser now accepts).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
 
 # ---------------------------------------------------------------------------
 # Shared encoder helpers
@@ -105,7 +183,12 @@ class Rejection:
 # Anchored via .fullmatch() at the call site, so the patterns themselves
 # are intentionally unanchored — they accept the whole token or nothing.
 _HEX_LITERAL_RE = re.compile(r'0x[0-9a-f]+', re.IGNORECASE)
-_DEC_LITERAL_RE = re.compile(r'\d+')
+# Decimal literals may carry a leading `-` so source-form expressions
+# like ``x > -10`` or ``errno == -EAGAIN`` (when the C macro expands
+# to a literal) are parseable. Hex literals stay positive-only —
+# `-0xff` isn't real source-form input; bit-pattern literals are
+# always written as their unsigned representation.
+_DEC_LITERAL_RE = re.compile(r'-?\d+')
 
 
 def propagate(text: str, sub: Rejection) -> Rejection:
@@ -115,11 +198,48 @@ def propagate(text: str, sub: Rejection) -> Rejection:
     starts out as that slice.  When bubbling up to the caller we
     replace it with ``text`` (the parent's full input) so consumers
     can match the rejection back to the original source.
+
+    Carry the inner cause through the detail so chained propagations
+    don't lose the cause location. Pre-fix the propagate sequence
+    overwrote text at each hop without preserving the inner slice's
+    text in the visible output:
+
+        outer "(a + b) > 10"
+          inner "a + b" → Rejection(text="a + b", detail="bad token")
+          propagate("(a + b) > 10", sub) →
+              Rejection(text="(a + b) > 10", detail="bad token")
+
+    The operator saw "(a + b) > 10" with detail "bad token" and had
+    no signal that the failure originated in the inner `a + b` slice
+    — they had to re-parse the outer text to localise the cause.
+    Three levels of propagation lost the inner context twice over.
+
+    Append the inner slice to the detail when it differs from the
+    new outer text, so the cause-chain stays visible:
+
+        Rejection(text="(a + b) > 10",
+                  detail="bad token (in: 'a + b')")
+
+    Idempotent: if the sub.text already matches the new outer text
+    (caller propagates a same-level rejection), no annotation is
+    added — keeps the message clean for non-chained cases.
     """
-    return Rejection(text, sub.kind, sub.detail, sub.hint)
+    detail = sub.detail
+    if sub.text and sub.text != text and "(in:" not in detail:
+        # Truncate inner-text rendering at 80 chars so a deeply
+        # nested expression doesn't blow up the rejection message.
+        inner = sub.text if len(sub.text) <= 80 else sub.text[:77] + "..."
+        suffix = f" (in: {inner!r})" if not detail else f" (in: {inner!r})"
+        detail = f"{detail}{suffix}" if detail else f"(in: {inner!r})"
+    return Rejection(text, sub.kind, detail, sub.hint)
 
 
-def parse_literal_value(tok: str, profile: BVProfile) -> Union[int, Rejection]:
+def parse_literal_value(
+    tok: str,
+    profile: BVProfile,
+    *,
+    outer_text: Optional[str] = None,
+) -> Union[int, Rejection]:
     """Validate and convert a literal token, or return a structured rejection.
 
     Centralised so atom-position literals and bitmask-form literals
@@ -132,26 +252,87 @@ def parse_literal_value(tok: str, profile: BVProfile) -> Union[int, Rejection]:
       base-10) → :data:`RejectionKind.LITERAL_AMBIGUOUS`.
     - Anything that isn't a clean hex or decimal literal
       → :data:`RejectionKind.UNRECOGNIZED_OPERAND`.
+
+    Text-anchoring contract: by default the returned ``Rejection.text``
+    is the per-token slice (``tok``), and the caller is expected to
+    call :func:`propagate` to re-anchor on the parent expression's
+    text. Pre-fix every caller that forgot the propagate step
+    surfaced rejections to consumers with `text=tok` only — useful
+    for the LITERAL_AMBIGUOUS / OUT_OF_RANGE messages but unhelpful
+    for source-location lookup since the operator can't grep for a
+    bare token like `0x100` in a 5000-line constraint set. Pass
+    ``outer_text=<parent expression>`` to self-anchor: the function
+    stores ``outer_text`` in ``Rejection.text`` and folds the token
+    into the detail message, removing the propagate dependency.
     """
-    if _HEX_LITERAL_RE.fullmatch(tok):
+    # Text anchor: prefer caller-supplied outer expression when
+    # provided, otherwise the bare token. Detail uniformly mentions
+    # the token via `{tok!r}` so the operator-facing message is the
+    # same regardless of anchoring choice.
+    text = outer_text if outer_text is not None else tok
+    is_hex = bool(_HEX_LITERAL_RE.fullmatch(tok))
+    if is_hex:
         v = int(tok, 16)
     elif _DEC_LITERAL_RE.fullmatch(tok):
-        if len(tok) > 1 and tok[0] == "0":
+        # Leading-zero check applies only to the magnitude — `-01234`
+        # has the same C-octal ambiguity as `01234`. Skip the sign
+        # before checking.
+        magnitude = tok.lstrip("-")
+        if len(magnitude) > 1 and magnitude[0] == "0":
             return Rejection(
-                tok, RejectionKind.LITERAL_AMBIGUOUS,
-                "leading-zero decimal is ambiguous with C octal",
+                text, RejectionKind.LITERAL_AMBIGUOUS,
+                f"leading-zero decimal is ambiguous with C octal (token {tok!r})",
                 hint="rewrite as hex (0x...) or strip the leading zero",
             )
         v = int(tok)
     else:
         return Rejection(
-            tok, RejectionKind.UNRECOGNIZED_OPERAND,
+            text, RejectionKind.UNRECOGNIZED_OPERAND,
             f"token {tok!r} is not a hex or decimal literal",
         )
-    if v >= (1 << profile.width):
+    # Range check, with hex vs decimal distinction:
+    #
+    # * Hex literals are BIT PATTERNS. `0x80000000` at int32
+    #   profile represents the underlying bit pattern of -2^31,
+    #   which IS representable as signed int32 (just at the
+    #   negative end of two's complement). Allow up to 2^width
+    #   regardless of signedness — width caps what the bit
+    #   pattern can encode, signedness only changes how Z3
+    #   *interprets* the value during model rendering.
+    #
+    # * Decimal literals are NUMERICAL values. `200` at int8
+    #   profile (signed, range -128..127) doesn't fit even though
+    #   the bit pattern (0xC8) does — Z3 would silently
+    #   reinterpret it as -56, producing a verdict that didn't
+    #   match the source intent. Cap decimal literals at
+    #   2^(width-1) for signed profiles. (The regex rejects
+    #   leading '-', so we only see positive decimals here.)
+    #
+    # Pre-batch-210 the check used `v >= (1 << profile.width)`
+    # uniformly, which over-accepted decimal literals (the `200`
+    # at int8 case). Batch 210 over-corrected by tightening BOTH
+    # paths, which over-rejected hex literals like `0x80000000`
+    # at int32. This split restores hex support while keeping the
+    # decimal sign-discipline.
+    if is_hex or not profile.signed:
+        upper_exclusive = 1 << profile.width
+        lower_inclusive = 0  # hex + unsigned reject negatives
+    else:
+        upper_exclusive = 1 << (profile.width - 1)
+        # Signed two's-complement range is asymmetric: ``int8`` covers
+        # ``-128..127`` (lower bound is ``-2^(width-1)``, upper is
+        # ``2^(width-1) - 1``). A decimal `-128` at int8 must be
+        # accepted; `-129` rejected.
+        lower_inclusive = -(1 << (profile.width - 1))
+    if v >= upper_exclusive or v < lower_inclusive:
+        if is_hex:
+            range_desc = f"{profile.width}-bit range"
+        else:
+            range_desc = f"{profile.describe()} range"
         return Rejection(
-            tok, RejectionKind.LITERAL_OUT_OF_RANGE,
-            f"value {v:#x} exceeds {profile.width}-bit profile range",
+            text, RejectionKind.LITERAL_OUT_OF_RANGE,
+            f"value {v:#x} (from token {tok!r}) outside {range_desc} "
+            f"({lower_inclusive:#x}..{upper_exclusive - 1:#x})",
         )
     return v
 
@@ -164,9 +345,22 @@ def classify_solver_unknown(solver: Any) -> RejectionKind:
     :data:`RejectionKind.SOLVER_UNKNOWN` (incomplete tactic, undecidable
     fragment, ...).
     """
+    # Catch the specific failure modes Z3 may exhibit — bare
+    # `except Exception` swallowed programming bugs introduced by
+    # future maintainers (AttributeError if `solver` is the wrong
+    # type, NameError, etc.) and silently mis-classified them as
+    # SOLVER_UNKNOWN. Z3's `reason_unknown` may legitimately raise
+    # `z3.Z3Exception` (no model available — solver hasn't been
+    # called yet; called after add() during reset; etc.) or
+    # `RuntimeError` from the wrapping in some Z3 builds. Also
+    # tolerate AttributeError specifically — caller passing None or
+    # a stub object is explicit-enough that we shouldn't crash, but
+    # narrower TypeError-level mismatches should propagate.
     try:
         reason = (solver.reason_unknown() or "").lower()
-    except Exception:
+    except (AttributeError,) + (
+        (z3.Z3Exception,) if hasattr(z3, "Z3Exception") else ()
+    ) + (RuntimeError,):
         return RejectionKind.SOLVER_UNKNOWN
     if "timeout" in reason or "canceled" in reason or "cancelled" in reason:
         return RejectionKind.SOLVER_TIMEOUT

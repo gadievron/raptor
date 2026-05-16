@@ -16,19 +16,30 @@ import types
 
 # Profile definitions
 # -------------------
+# Profiles set ENFORCEMENT strictness. Audit mode is an ORTHOGONAL
+# concern engaged by the `--audit` CLI flag (or `audit=True` kwarg)
+# and works with any profile that has a seccomp filter (i.e. full or
+# debug); on `network-only` it engages only the egress-proxy log-mode
+# gate (the other audit layers are no-ops because there's no Landlock
+# / seccomp to compare against), and on `none` it errors as
+# incoherent.
+#
 # full:         network blocked + Landlock + seccomp (incl. ptrace) + rlimits.
 #               The default. Appropriate for scan/exploit/PoC work.
 # debug:        full, but seccomp permits ptrace so gdb/rr can trace the
 #               target. Use for /crash-analysis. Target AND debugger run
 #               in the same sandbox — debugger forks target as a descendant
 #               so ptrace_scope=1 naturally authorises the trace.
+#               Composes with --audit so operators can see what would
+#               have been blocked while still running gdb/rr.
 # network-only: network blocked + rlimits only (no Landlock, no seccomp).
 #               For tools whose correctness requires unrestricted fs or
 #               syscalls within a build — user's last-resort-short-of-none.
 # none:         rlimits only. Emergency escape hatch.
 #
 # `seccomp` is the profile name passed into _make_seccomp_preexec(); an
-# empty string disables seccomp for that profile.
+# empty string disables seccomp for that profile. The two audit fields
+# moved out of the profile dict to CLI flags / per-call kwargs.
 PROFILES = types.MappingProxyType({
     "full":         types.MappingProxyType({"block_network": True,  "use_landlock": True,  "seccomp": "full"}),
     "debug":        types.MappingProxyType({"block_network": True,  "use_landlock": True,  "seccomp": "debug"}),
@@ -49,4 +60,17 @@ _SANDBOX_KWARGS = frozenset({
     "restrict_reads", "readable_paths",
     "caller_label",
     "fake_home",
+    # tool_paths is sandbox()-level (extra dirs to bind-mount in
+    # mount-ns mode so operator-installed tools at non-standard
+    # paths — pip --user, pyenv, homebrew — are visible inside
+    # the sandbox). Passing to inner run() would silently no-op.
+    "tool_paths",
+    # Audit kwargs — included so run_trusted rejects them. Audit
+    # mode is incoherent with profile="none" (no enforcement to
+    # compare against), so passing audit=True to run_trusted is
+    # almost certainly a caller mistake; raise rather than silently
+    # no-op. audit_run_dir is sandbox()-level (decoupled target for
+    # audit JSONL); passing it to inner run() would silently have no
+    # effect — reject so the caller catches their mistake.
+    "audit", "audit_verbose", "audit_run_dir",
 })

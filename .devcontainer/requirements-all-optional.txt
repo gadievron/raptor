@@ -5,12 +5,13 @@
 -r ../requirements.txt
 
 # All LLM provider SDKs
-openai>=1.0.0
-anthropic>=0.40.0
+openai==2.26.0
+anthropic==0.84.0
 
-# Enhanced visualization
-tabulate>=0.9.0
+# `tabulate` is already pinned in ../requirements.txt (pulled in via
+# the `-r` above); it used to be repeated here loosely. Removed to
+# avoid the duplicate-with-different-pin footgun.
 
 # Web scanning package
-beautifulsoup4>=4.12.0
-playwright>=1.40.0
+beautifulsoup4==4.14.3
+playwright==1.58.0

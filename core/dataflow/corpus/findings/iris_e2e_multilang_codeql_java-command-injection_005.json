@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "iris_e2e_multilang_codeql_java-command-injection_005",
+  "producer": "codeql",
+  "rule_id": "raptor/java/command-injection-local",
+  "message": "main method args flow to Runtime.exec",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/iris_e2e_multilang/java/CmdInj.java",
+    "line": 3,
+    "column": 51,
+    "snippet": "Runtime.getRuntime().exec(\"ping -c1 \" + args[0]);",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/iris_e2e_multilang/java/CmdInj.java",
+    "line": 3,
+    "column": 9,
+    "snippet": "Runtime.getRuntime().exec(\"ping -c1 \" + args[0]);",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}

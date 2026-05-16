@@ -14,23 +14,56 @@
 
 set -euo pipefail
 
+# ─── trust-marker check (do not source; inline by design) ───
+if [ -z "${CLAUDECODE:-}" ] && [ -z "${_RAPTOR_TRUSTED:-}" ]; then
+    echo "$0: internal dispatch script." >&2
+    echo "  Run via 'bin/raptor' instead." >&2
+    echo "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass." >&2
+    exit 2
+fi
+# ─── end trust-marker check ─────────────────────────────────
+
 # Resolve symlinks so RAPTOR_DIR is correct even when this wrapper is
 # symlinked into ~/bin or similar (matches bin/raptor's behaviour).
+# Hop bound — see raptor-cc-trust-check for the symlink-cycle rationale.
 SCRIPT="$0"
+_symhops=0
 while [ -L "$SCRIPT" ]; do
+    _symhops=$((_symhops + 1))
+    if [ "$_symhops" -gt 32 ]; then
+        echo "raptor-agentic: symlink hop limit exceeded resolving $0" >&2
+        exit 1
+    fi
     DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
     SCRIPT="$(readlink "$SCRIPT")"
     [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
 done
+unset _symhops
 RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
 
 # Defensive: confirm we're really inside a RAPTOR install before exec'ing
 # python3 on what might be a missing path. Fails loudly if symlink-walk
 # resolved to somewhere unexpected.
+#
+# Order: this check runs BEFORE sourcing _dangerous_env_strip.sh below
+# so a broken-install path produces the explanatory "cannot find
+# raptor.py" message rather than bash's confusing
+# "No such file or directory" on the source line. The strip script
+# lives next to raptor.py, so if raptor.py is missing the strip script
+# is also missing, and the test harness expects the friendlier error.
 if [ ! -f "$RAPTOR_DIR/raptor.py" ]; then
     echo "raptor-agentic: cannot find raptor.py under $RAPTOR_DIR" >&2
     echo "raptor-agentic: (resolved from $SCRIPT)" >&2
     exit 1
 fi
+
+# Strip env vars that could inject code into the Python process.
+# Same single-source-of-truth as bin/raptor and bin/cve-diff. Pre-fix
+# this wrapper relied on the parent (bin/raptor) having already stripped
+# — which is true for the default invocation path, but power users who
+# set `_RAPTOR_TRUSTED=1` and call the wrapper directly bypassed the
+# strip entirely. Apply it here too so the trusted-direct path has the
+# same env-hygiene floor as the bin/raptor → libexec/ path.
+. "$RAPTOR_DIR/core/security/_dangerous_env_strip.sh"
 
 exec python3 "$RAPTOR_DIR/raptor.py" agentic "$@"

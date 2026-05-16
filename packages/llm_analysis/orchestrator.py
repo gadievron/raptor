@@ -20,9 +20,10 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from packages.llm_analysis.cc_dispatch import invoke_cc_simple
+from packages.llm_analysis.finding_adapter import FindingAdapter
 from core.reporting.formatting import format_elapsed as _format_elapsed
 
 logger = logging.getLogger(__name__)
@@ -70,13 +71,51 @@ class CostTracker:
         with self._lock:
             return self._total_cost / self._max_cost
 
+    # ---- Deprecated budget-cutoff API ----
+    #
+    # These three predicates were the early per-phase cutoff
+    # mechanism, replaced by `should_skip_phase` which lets each
+    # caller specify its OWN cutoff via `task.budget_cutoff`. No
+    # production code calls these methods anymore — only the
+    # legacy tests in `test_orchestrator.py` still hit them.
+    #
+    # Pre-fix the methods sat undocumented in the class, looking
+    # like usable API. New callers reading the class would have
+    # adopted them and silently bypassed the per-task cutoff
+    # configuration (CUTOFF_SKIP_CONSENSUS, CUTOFF_SKIP_EXPLOITS,
+    # CUTOFF_SINGLE_MODEL are HARDCODED constants — non-
+    # configurable, ignoring `--max-cost` percentages).
+    #
+    # Mark them deprecated via a DeprecationWarning so any future
+    # surprise caller surfaces. Keep the implementations intact
+    # for backwards-compat with the existing tests; remove in a
+    # follow-up batch once the tests migrate to should_skip_phase.
+
     def should_skip_consensus(self) -> bool:
+        import warnings
+        warnings.warn(
+            "should_skip_consensus is deprecated; use should_skip_phase "
+            "with task.budget_cutoff instead",
+            DeprecationWarning, stacklevel=2,
+        )
         return self._budget_ratio() >= CUTOFF_SKIP_CONSENSUS
 
     def should_skip_exploits(self) -> bool:
+        import warnings
+        warnings.warn(
+            "should_skip_exploits is deprecated; use should_skip_phase "
+            "with task.budget_cutoff instead",
+            DeprecationWarning, stacklevel=2,
+        )
         return self._budget_ratio() >= CUTOFF_SKIP_EXPLOITS
 
     def should_single_model(self) -> bool:
+        import warnings
+        warnings.warn(
+            "should_single_model is deprecated; use should_skip_phase "
+            "with task.budget_cutoff instead",
+            DeprecationWarning, stacklevel=2,
+        )
         return self._budget_ratio() >= CUTOFF_SINGLE_MODEL
 
     def should_skip_phase(self, n_calls: int, model_name: str,
@@ -108,7 +147,7 @@ class CostTracker:
         if is_cc:
             avg_cost = 0.20  # CC agents: observed ~$0.15-0.25/finding
         else:
-            from packages.llm_analysis.llm.model_data import MODEL_COSTS
+            from core.llm.model_data import MODEL_COSTS
             # Estimate ~2K input tokens + ~500 output tokens per analysis call
             rates = MODEL_COSTS.get(model_name, {})
             if rates:
@@ -134,6 +173,105 @@ class CostTracker:
             return summary
 
 
+def build_llm_config_from_flags(
+    *,
+    models: Optional[List[str]] = None,
+    consensus: Optional[str] = None,
+    judge: Optional[str] = None,
+    aggregate: Optional[str] = None,
+    auto_detect: bool = True,
+) -> Optional[Any]:
+    """Build an LLMConfig from CLI flags, shared by /agentic and /analyze.
+
+    Args:
+        models: List of analysis model names. Single entry = one primary.
+            Multiple = multi-model mode (each independently analyses).
+        consensus: Blind second-opinion model name.
+        judge: Non-blind review model name.
+        aggregate: Final synthesis model name.
+        auto_detect: Try env vars / models.json if no --model given.
+
+    Returns LLMConfig or None if no model could be resolved.
+    """
+    from core.llm.config import LLMConfig, _model_config_from_entry, _get_configured_models
+    from core.llm.model_data import PROVIDER_ENV_KEYS
+    from core.security.llm_family import provider_of
+
+    models = models or []
+    llm_config = None
+
+    def _resolve_model(name: str, role: str):
+        provider = provider_of(name)
+        entry: Dict[str, Any] = {"model": name, "provider": provider, "role": role}
+        for cfg_entry in _get_configured_models():
+            if cfg_entry.get("model") == name and cfg_entry.get("api_key"):
+                entry["api_key"] = cfg_entry["api_key"]
+                break
+        mc = _model_config_from_entry(entry)
+        if not mc.api_key:
+            env_key = PROVIDER_ENV_KEYS.get(provider, "???")
+            print(f"\n  Error: no API key for --model {name}")
+            print(f"  Set {env_key} or add the key to models.json")
+            return None
+        return mc
+
+    if models:
+        primary_mc = _resolve_model(models[0], "analysis")
+        if primary_mc:
+            llm_config = LLMConfig(primary_model=primary_mc)
+            for extra in models[1:]:
+                mc = _resolve_model(extra, "analysis")
+                if mc:
+                    llm_config.fallback_models.append(mc)
+    elif auto_detect:
+        try:
+            llm_config = LLMConfig()
+        except Exception:
+            pass
+
+    # Consensus auto-defaults are redundant with 3+ analysis models
+    # — the analysis models already provide independent opinions.
+    # Strip any auto-loaded consensus model from LLMConfig defaults
+    # (models.json / env-var picks). The operator's EXPLICIT
+    # --consensus flag is honored separately by the role-flag loop
+    # below; an explicit flag means the operator wants that specific
+    # model regardless of analysis-model count.
+    n_analysis = len(models)
+    if n_analysis >= 3 and llm_config and llm_config.fallback_models:
+        llm_config.fallback_models = [
+            m for m in llm_config.fallback_models if m.role != "consensus"
+        ]
+
+    role_flags = [
+        ("consensus", consensus),
+        ("judge", judge),
+        ("aggregate", aggregate),
+    ]
+    has_role_flags = any(m for _, m in role_flags)
+    if has_role_flags and not llm_config:
+        print("\n  Warning: --consensus/--judge/--aggregate require a primary analysis model")
+        print("  Use --model MODEL, configure models.json, or set an API key env var")
+    if llm_config and has_role_flags:
+        # Explicit operator role-flag overrides any auto-loaded model
+        # for the same role. Without this strip, models.json /
+        # provider-env defaults stack alongside the operator's
+        # explicit pick (e.g. operator says `--consensus
+        # claude-sonnet-4-6` but the auto-loader has already pinned
+        # claude-haiku-4-5 as consensus → 2 consensus models in
+        # fallback, neither cleanly attributable to operator intent).
+        for role, model_name in role_flags:
+            if not model_name:
+                continue
+            llm_config.fallback_models = [
+                m for m in llm_config.fallback_models if m.role != role
+            ]
+            mc = _resolve_model(model_name, role)
+            if mc:
+                llm_config.fallback_models.append(mc)
+
+    return llm_config
+
+
 def orchestrate(
     prep_report_path: Path,
     repo_path: Path,
@@ -144,6 +282,11 @@ def orchestrate(
     no_patches: bool = False,
     llm_config: Optional[Any] = None,
     block_cc_dispatch: bool = False,
+    accept_weakened_defenses: bool = False,
+    dataflow_validation_enabled: bool = True,
+    deep_validate: bool = False,
+    deep_validate_disabled: bool = False,
+    deep_validate_budget: float = 0.60,
 ) -> Optional[Dict[str, Any]]:
     """Orchestrate vulnerability analysis via external LLM or Claude Code.
 
@@ -166,6 +309,9 @@ def orchestrate(
         no_exploits: Skip exploit generation.
         no_patches: Skip patch generation.
         llm_config: LLMConfig for external LLM dispatch (None = CC only).
+        accept_weakened_defenses: If True, allow PASSTHROUGH fallback when
+            the model fails the envelope probe. If False (default), abort
+            orchestration with a clear error instead of silently weakening.
 
     Returns:
         Orchestrated report dict, or None if orchestration was skipped.
@@ -192,7 +338,20 @@ def orchestrate(
         print("\n  No findings to analyse")
         return None
 
-    # Stamp repo_path so build_analysis_prompt_from_finding forwards it to
+    # Reset the per-run defense telemetry singleton. The singleton
+    # accumulates per-model counters (response shape, schema retries,
+    # nonce-leak warnings) and is process-wide; without an explicit
+    # reset here, a long-lived orchestrator (e.g. running back-to-back
+    # via the supervisor or in test harnesses that re-invoke
+    # orchestrate without process restart) would carry state from the
+    # prior run into this one, mis-attributing counters and producing
+    # one-shot warnings that wouldn't fire again until process restart.
+    # Keep the call here (not at module import time) so callers that
+    # construct their own DefenseTelemetry don't get clobbered.
+    from core.security import prompt_telemetry as _pt
+    _pt.defense_telemetry.reset()
+
+    # Stamp repo_path so build_analysis_prompt_bundle_from_finding forwards it to
     # enrich_analysis_prompt; without this SAGE per-repo scoping (#198) makes
     # the enrichment a no-op for every finding on the dispatch path.
     for f in findings:
@@ -203,9 +362,11 @@ def orchestrate(
         findings = findings[:max_findings]
 
     # Resolve model roles
-    from packages.llm_analysis.llm.config import resolve_model_roles
+    from core.llm.config import resolve_model_roles
     role_resolution = {"analysis_model": None, "code_model": None,
-                       "consensus_models": [], "fallback_models": []}
+                       "consensus_models": [], "judge_models": [],
+                       "aggregate_models": [], "fallback_models": [],
+                       "analysis_models": []}
     if llm_config and llm_config.primary_model:
         role_resolution = resolve_model_roles(
             llm_config.primary_model,
@@ -218,44 +379,95 @@ def orchestrate(
 
     # Print dispatch info
     n_consensus = len(role_resolution.get("consensus_models", []))
-    analysis_model_name = role_resolution.get("analysis_model").model_name if role_resolution.get("analysis_model") else ""
+    n_judge = len(role_resolution.get("judge_models", []))
+    n_aggregate = len(role_resolution.get("aggregate_models", []))
+    analysis_model = role_resolution.get("analysis_model")
+    analysis_model_name = analysis_model.model_name if analysis_model else ""
     is_cc_dispatch = not (llm_config and llm_config.primary_model)
-    model_label = analysis_model_name or ("Claude Code" if is_cc_dispatch else "unknown")
+    analysis_models_all = role_resolution.get("analysis_models", [])
+    n_analysis = len(analysis_models_all)
+    if n_analysis > 1:
+        model_label = ", ".join(m.model_name for m in analysis_models_all)
+    else:
+        model_label = analysis_model_name or ("Claude Code" if is_cc_dispatch else "unknown")
     n = len(findings)
-    print(f"\n  {n} finding{'s' if n != 1 else ''} → {model_label}"
-          + (f" + {n_consensus} consensus model{'s' if n_consensus != 1 else ''}" if n_consensus else ""))
+    extras = []
+    if n_analysis > 1:
+        extras.append(f"{n_analysis} models")
+    if n_consensus:
+        extras.append(f"{n_consensus} consensus")
+    if n_judge:
+        extras.append(f"{n_judge} judge")
+    if n_aggregate:
+        extras.append(f"{n_aggregate} aggregate")
+    extra_str = f" ({', '.join(extras)})" if extras else ""
+    print(f"\n  {n} finding{'s' if n != 1 else ''} → {model_label}{extra_str}")
 
     # --- Build dispatch callable ---
     from packages.llm_analysis.dispatch import dispatch_task, DispatchResult
     from packages.llm_analysis.tasks import (
-        AnalysisTask, ExploitTask, PatchTask, ConsensusTask, GroupAnalysisTask,
-        RetryTask,
+        AnalysisTask, ExploitTask, PatchTask,
+        AggregationTask, ConsensusTask, JudgeTask, GroupAnalysisTask,
+        RetryTask, CrossFamilyCheckTask,
     )
+    from core.security.prompt_defense_profiles import (
+        CONSERVATIVE, PASSTHROUGH, get_profile_for,
+    )
+    from core.security.prompt_telemetry import defense_telemetry
 
     dispatch_mode = "none"
     dispatch_fn = None
     start_time = time.monotonic()
 
+    # Bound across both dispatch modes so the merged-dict construction
+    # below can read ``client.short_circuits`` without NameError on
+    # the CC paths (where it stays None and the count is 0).
+    client = None
+
     if llm_config and llm_config.primary_model:
         # External LLM: dispatch via generate_structured/generate
-        from packages.llm_analysis.llm.client import LLMClient
+        from core.llm.client import LLMClient
         client = LLMClient(llm_config)
 
+        # Multi-model duplicate guard: when a primary model fails and
+        # the client silently falls back, the fallback target may
+        # already be one of the OTHER active analysis models — and the
+        # multi-model panel collapses to duplicate analysed_by entries
+        # (e.g. ``[pro, flash]`` becomes ``[flash, flash]`` if pro
+        # falls back to flash). Pass the names of all active analysis
+        # models to the client so it skips them as fallback targets
+        # for any one dispatch. Other fallback targets (cross-family
+        # resilience) still work normally.
+        _active_analysis_names = {
+            m.model_name for m in role_resolution.get("analysis_models", [])
+            if m and getattr(m, "model_name", None)
+        }
+
         def dispatch_fn(prompt, schema, system_prompt, temperature, model):
+            other_active = _active_analysis_names - {model.model_name}
             if schema:
                 response = client.generate_structured(
                     prompt=prompt, schema=schema, system_prompt=system_prompt,
                     model_config=model, temperature=temperature,
+                    exclude_fallback_to=other_active,
                 )
+                result = response.result
+                quality = 1.0
+                if isinstance(result, dict) and "error" not in result:
+                    from core.llm.response_validation import validate_structured_response
+                    validated = validate_structured_response(result, schema)
+                    result = validated.data
+                    quality = validated.quality
                 return DispatchResult(
-                    result=response.result, cost=response.cost,
+                    result=result, cost=response.cost,
                     tokens=response.tokens_used, model=response.model,
-                    duration=response.duration,
+                    duration=response.duration, quality=quality,
                 )
             else:
                 response = client.generate(
                     prompt=prompt, system_prompt=system_prompt,
                     model_config=model, temperature=temperature,
+                    exclude_fallback_to=other_active,
                 )
                 return DispatchResult(
                     result={"content": response.content}, cost=response.cost,
@@ -278,15 +490,140 @@ def orchestrate(
             return None
 
         def dispatch_fn(prompt, schema, system_prompt, temperature, model):
-            return invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir)
+            # CC's invoke_cc_simple has no separate system_prompt slot — everything
+            # goes via stdin. Prepend the system prompt so the bundle migration's
+            # role-separated build_prompt (user-only) doesn't lose its instructions.
+            full = (system_prompt + "\n\n" + prompt) if system_prompt else prompt
+            return invoke_cc_simple(full, schema, repo_path, claude_bin, out_dir)
 
         dispatch_mode = "cc_dispatch"
 
+    # --- Canary probe: verify model handles the defense envelope ---
+    # Multi-model: probe each analysis model; use strictest compatible profile.
+    profile = CONSERVATIVE
+    _models_to_probe = analysis_models_all if len(analysis_models_all) > 1 else (
+        [analysis_model] if analysis_model else []
+    )
+    _probe_failed = False
+    if dispatch_fn and _models_to_probe:
+        from core.security.envelope_probe import probe_envelope_compatibility
+        # Per-model profile collection. Pre-fix the outer `profile`
+        # was set ONCE to the primary's profile and used unchanged
+        # for all models; with `--analysis-models claude-opus,gpt-4`
+        # the GPT-4 dispatches received an ANTHROPIC_CLAUDE-shaped
+        # envelope (different `tag_style`, different defence
+        # layers GPT-4 isn't validated against). Collect each
+        # probed profile and intersect at the end so AnalysisTask
+        # uses the common ground all models passed.
+        _probed_profiles: list = []
+        # Pre-fix the loop did `if not probe_result.compatible:
+        # _probe_failed = True; break`. The break terminated the
+        # probe walk on the FIRST failure, so any later models in
+        # the list were never probed and never had their probe
+        # result recorded in `defense_telemetry`.
+        #
+        # Two consequences:
+        #
+        #   (1) Telemetry shows N=1 probe failures attributable to
+        #       the first-failed model, even though the SECOND
+        #       and THIRD models might also be incompatible. The
+        #       operator-facing scorecard then misattributes
+        #       reliability across the model fleet.
+        #
+        #   (2) The intersection of compatible profiles
+        #       (`_intersect_profiles(_probed_profiles)` below)
+        #       only sees the models BEFORE the first failure. If
+        #       the eventual decision is "accept weakened
+        #       defences", the intersected profile reflects an
+        #       incomplete picture of the model fleet's
+        #       compatibility.
+        #
+        # Run all probes, record telemetry for every model.
+        # `_probe_failed` flips True if ANY model fails (any-fail
+        # gate, same semantics as before). Only successful probes
+        # contribute to `_probed_profiles`.
+        # Track which models specifically failed the probe so the
+        # PASSTHROUGH override (if accepted) records the right
+        # model names. Pre-fix `defense_telemetry.record_weakened_
+        # override(analysis_model_name, ...)` always recorded
+        # under the PRIMARY's name — even when the failing model
+        # was a secondary (e.g. --model claude-opus,gpt-4 with
+        # gpt-4 failing). Operators reading the scorecard saw
+        # claude-opus credited with the override when claude-opus
+        # actually probed clean.
+        _failed_probe_models: list = []
+        for _probe_model in _models_to_probe:
+            _pname = _probe_model.model_name if hasattr(_probe_model, "model_name") else str(_probe_model)
+            _pprofile = get_profile_for(_pname)
+            probe_result = probe_envelope_compatibility(
+                _probe_model, _pprofile, dispatch_fn,
+            )
+            defense_telemetry.set_probe_result(_pname, probe_result.compatible)
+            if not probe_result.compatible:
+                _probe_failed = True
+                _failed_probe_models.append((_pname, probe_result.error))
+                # Continue probing remaining models so each gets
+                # its own telemetry record.
+                continue
+            _probed_profiles.append(_pprofile)
+        # Intersect profiles for multi-model — AND every boolean
+        # so any model that lacks a defence layer disables it
+        # globally, matching the comment's "strictest COMPATIBLE
+        # profile" semantics.
+        if not _probe_failed and _probed_profiles:
+            profile = _intersect_profiles(_probed_profiles)
+        if _probe_failed:
+            if not accept_weakened_defenses:
+                print(f"\n  Envelope probe failed for {model_label}: {probe_result.error}")
+                print(f"  The model cannot honour the defense envelope — aborting.")
+                print(f"  To proceed with weakened defenses, re-run with --accept-weakened-defenses")
+                return None
+            from core.security.rule_of_two import (
+                NonInteractiveError, require_interactive_for_weakened_defenses,
+            )
+            try:
+                require_interactive_for_weakened_defenses()
+            except NonInteractiveError as e:
+                print(f"\n  {e}")
+                return None
+            profile = PASSTHROUGH
+            # Record the override against EACH failing model with
+            # ITS OWN error message — not the primary's name with
+            # whatever happened to be the last probe_result.
+            # Multi-model runs where a secondary failed now show
+            # the secondary in the scorecard, matching reality.
+            for _fmname, _ferr in (_failed_probe_models
+                                   or [(analysis_model_name, probe_result.error)]):
+                defense_telemetry.record_weakened_override(_fmname, _ferr)
+                logger.warning(
+                    "Operator accepted weakened defenses for %s (probe error: %s)",
+                    _fmname, _ferr,
+                )
+            print(f"\n  *** DEFENSE WARNING: envelope probe failed for {model_label} ***")
+            print(f"  Running with reduced defences (--accept-weakened-defenses)")
+            print(f"  Reason: {probe_result.error}")
+            print(f"  Model-independent floor still applies (autofetch redaction,"
+                  f" control-char sanitisation, role separation)\n")
+
     # --- Per-finding analysis ---
     results_by_id = {}
+    # Fast-tier scorecard prefilter — only wires up on the external-LLM
+    # path because the cheap call uses ``client.generate_structured``
+    # which the CC-prep / CC-fallback paths don't drive. Returns a
+    # short-circuit FP result on trusted cells so the full ANALYSE
+    # call is skipped; bumps ``client.short_circuits`` so /agentic
+    # surfaces the savings count.
+    prefilter_fn = None
+    if dispatch_mode == "external_llm":
+        from packages.llm_analysis.prefilter import prefilter_for_finding
+
+        def prefilter_fn(item):
+            return prefilter_for_finding(client, item)
+
     analysis_results = dispatch_task(
-        AnalysisTask(), findings, dispatch_fn, role_resolution,
+        AnalysisTask(profile=profile), findings, dispatch_fn, role_resolution,
         results_by_id, cost_tracker, max_parallel,
+        prefilter_fn=prefilter_fn,
     )
 
     # Fallback: if external LLM failed entirely, try CC
@@ -299,42 +636,395 @@ def orchestrate(
             dispatch_mode = "cc_fallback"
 
             def dispatch_fn(prompt, schema, system_prompt, temperature, model):
-                return invoke_cc_simple(prompt, schema, repo_path, claude_bin, out_dir)
+                full = (system_prompt + "\n\n" + prompt) if system_prompt else prompt
+                return invoke_cc_simple(full, schema, repo_path, claude_bin, out_dir)
 
+            # Carry the per-model intersected profile into the
+            # CC-fallback AnalysisTask. Pre-fix `AnalysisTask()`
+            # (no kwargs) used the default CONSERVATIVE profile,
+            # silently losing the defences the prior probe phase
+            # had validated for the actual model being dispatched.
+            # Most CC sub-agents are Claude → ANTHROPIC_CLAUDE
+            # (datamarking + base64_code enabled) so the fallback
+            # path was running with weaker defences than the
+            # primary path even though the same Claude model was
+            # behind it.
             analysis_results = dispatch_task(
-                AnalysisTask(), findings, dispatch_fn, role_resolution,
+                AnalysisTask(profile=profile), findings, dispatch_fn, role_resolution,
                 results_by_id, cost_tracker, max_parallel,
             )
 
     # Index results for downstream tasks
+    # Multi-model: multiple results per finding — pick best as primary,
+    # attach all per-model analyses for correlation.
+    _multi_results: Dict[str, List[Dict]] = {}
     for r in analysis_results:
         fid = r.get("finding_id")
         if fid:
-            results_by_id[fid] = r
+            _multi_results.setdefault(fid, []).append(r)
+
+    n_analysis_models = len(role_resolution.get("analysis_models", []))
+    findings_by_id = {f.get("finding_id"): f for f in findings if f.get("finding_id")}
+    _finding_adapter = FindingAdapter()
+    for fid, model_results in _multi_results.items():
+        if len(model_results) == 1:
+            primary = model_results[0]
+        else:
+            primary = _finding_adapter.select_primary_with_error_fallback(model_results)
+            primary["multi_model_analyses"] = [
+                _finding_adapter.extract_analysis_record(
+                    r, r.get("analysed_by", "?"),
+                )
+                for r in model_results
+            ]
+        source = findings_by_id.get(fid, {})
+        for key in ("rule_id", "file_path", "start_line", "message"):
+            if key not in primary and source.get(key) is not None:
+                primary[key] = source.get(key)
+        results_by_id[fid] = primary
+
+    # Multi-model collapse detection. The exclude_fallback_to guard above
+    # prevents most cases where a primary's failure routes silently into
+    # another active analysis model. The corner case it doesn't catch:
+    # multiple primaries failing concurrently and converging on the same
+    # external fallback (e.g., both pro and flash falling back to haiku).
+    # Surface that here so operators don't silently get a single-model
+    # result labelled as multi-model.
+    if n_analysis_models > 1:
+        collapsed = _detect_multi_model_collapse(results_by_id, n_analysis_models)
+        if collapsed:
+            logger.warning(
+                f"Multi-model collapse: {len(collapsed)}/"
+                f"{len(results_by_id)} finding(s) had fewer than "
+                f"{n_analysis_models} distinct contributors. Likely caused "
+                f"by silent fallback during model failure. First few: "
+                f"{collapsed[:3]}"
+            )
+
+    # --- IRIS-style dataflow validation (opt-in via --validate-dataflow) ---
+    # For Semgrep findings where the LLM claimed a dataflow path but no
+    # CodeQL evidence backs it, generate a CodeQL query via
+    # hypothesis_validation and run it against the project's database.
+    # Validation is NON-DESTRUCTIVE here — it records a recommendation
+    # but does not mutate is_exploitable. The reconciliation step at the
+    # end of orchestration applies the downgrade after consensus / judge
+    # have had their say. This keeps consensus blind to validation's
+    # signal and preserves the independence of multi-model voting.
+    #
+    # For correlated-error reasons, the helper prefers a different model
+    # family from the analysis model (cross-family) when one is available.
+    validation_metrics: Optional[Dict[str, Any]] = None
+    if dataflow_validation_enabled:
+        from packages.llm_analysis.dataflow_validation import run_validation_pass
+        validation_metrics = run_validation_pass(
+            findings=findings,
+            results_by_id=results_by_id,
+            out_dir=out_dir,
+            repo_path=repo_path,
+            dispatch_fn=dispatch_fn,
+            analysis_model=analysis_model,
+            role_resolution=role_resolution,
+            dispatch_mode=dispatch_mode,
+            cost_tracker=cost_tracker,
+            cross_family_resolver=_resolve_cross_family_checker,
+            budget_threshold=deep_validate_budget,
+            deep_validate=deep_validate,
+            deep_validate_disabled=deep_validate_disabled,
+        )
+        if validation_metrics is None:
+            logger.info("dataflow validation skipped: mode/db unavailable")
+            print("\n  Dataflow validation skipped (no usable CodeQL DB)")
+        elif validation_metrics.get("n_validated", 0):
+            print(
+                f"\n  Dataflow validation: "
+                f"{validation_metrics['n_validated']} validated"
+                + (
+                    f", {validation_metrics['n_cache_hits']} cache hits"
+                    if validation_metrics.get("n_cache_hits") else ""
+                )
+                + (
+                    f", {validation_metrics['n_recommended_downgrades']} flagged for downgrade"
+                    if validation_metrics.get("n_recommended_downgrades") else ""
+                )
+            )
 
     # --- Pipeline flow (maps to exploitation-validator stages) ---
     # Stage E (binary feasibility) runs in Phase 0 if --binary provided.
     # Its results are in finding["feasibility"] and included in the prompt.
     #
     # AnalysisTask (above)  → Stages A-D: is this real? how exploitable?
+    # DataflowValidation    → IRIS: refute hallucinated dataflow claims
+    # CrossFamilyCheckTask  → Re-check suspicious responses via different family
     # RetryTask             → Stage F: self-consistency check + retry
     # ConsensusTask         → Second model votes (if configured)
     # ExploitTask/PatchTask → Generate code (only for final-verdict exploitable)
     # GroupAnalysisTask     → Cross-finding patterns
 
+    # Multi-model correlation (pure Python, no LLM) — precompute
+    # FIRST so downstream stages (cross-family check, retry,
+    # consensus, judge) can SEE the multi-model agreement signal
+    # when making their own decisions. Pre-fix correlation ran
+    # AFTER all those stages, meaning their inputs reflected only
+    # primary-model verdicts and they couldn't tell whether their
+    # incoming finding was a unanimous-positive (high confidence,
+    # less critique needed) vs disputed (high confidence, more
+    # scrutiny warranted). Correlation is also re-applied as
+    # confidence_signals onto results_by_id here so e.g.
+    # CrossFamilyCheckTask.select_items can prefer disputed
+    # findings when budgeting its picks.
+    #
+    # NOTE: correlation is recomputed at the end (line ~692) too,
+    # because consensus/retry update the per-model verdicts and
+    # the final report should reflect post-pipeline state. The
+    # PRECOMPUTE here is for input to downstream stages; the
+    # POST-COMPUTE is for output to operators.
+    early_correlation = None
+    if n_analysis_models > 1:
+        from packages.llm_analysis.correlation import correlate_results
+        early_correlation = correlate_results(results_by_id)
+        for fid, signal in early_correlation.get("confidence_signals", {}).items():
+            if fid in results_by_id:
+                results_by_id[fid]["multi_model_confidence"] = signal
+
+    # Cross-family re-check: suspicious responses (low quality / nonce leaked)
+    # re-dispatched through a model from a different training lineage.
+    if dispatch_mode == "external_llm" and analysis_model:
+        checker_model = _resolve_cross_family_checker(
+            analysis_model, role_resolution,
+        )
+        if checker_model:
+            checker_name = checker_model.model_name
+            checker_profile = get_profile_for(checker_name)
+            dispatch_task(
+                CrossFamilyCheckTask(
+                    checker_model=checker_model,
+                    results_by_id=results_by_id,
+                    profile=checker_profile,
+                ),
+                findings, dispatch_fn, role_resolution,
+                results_by_id, cost_tracker, max_parallel,
+            )
+
     # Stage F: self-consistency check + retry contradictions and low confidence
     dispatch_task(
-        RetryTask(results_by_id=results_by_id), findings, dispatch_fn, role_resolution,
-        results_by_id, cost_tracker, max_parallel,
+        RetryTask(results_by_id=results_by_id, profile=profile), findings,
+        dispatch_fn, role_resolution, results_by_id, cost_tracker, max_parallel,
     )
+
+    # Snapshot original primary verdicts BEFORE the consensus
+    # stage runs. ConsensusTask.finalize() mutates
+    # `primary["is_exploitable"]` with the panel-conservative
+    # max, overwriting the primary's reasoning verdict in place.
+    # JudgeTask later reads `primary["is_exploitable"]` to know
+    # what the primary said — but by then it sees the
+    # consensus-overridden value, NOT the primary's actual
+    # reasoning. So judge's "do you agree with primary?" prompt
+    # asks about a verdict primary may not actually hold.
+    #
+    # Pre-fix this snapshot was taken AFTER consensus, BEFORE
+    # judge — capturing the post-consensus value, which defeated
+    # the snapshot's purpose. Take it here, before BOTH stages,
+    # so judge can compare against the actual primary verdict.
+    primary_verdicts_pre_consensus: Dict[str, bool] = {}
+    for fid, r in results_by_id.items():
+        if isinstance(r, dict) and "error" not in r:
+            primary_verdicts_pre_consensus[fid] = bool(
+                r.get("is_exploitable", False)
+            )
 
     # Consensus (if configured)
     consensus_models = role_resolution.get("consensus_models", [])
+    consensus_budget_skipped = False
+    consensus_all_errored = False
     if consensus_models:
+        consensus_task = ConsensusTask(profile=profile)
+        eligible = consensus_task.select_items(findings, results_by_id)
+        # Snapshot the cost tracker state BEFORE dispatch so we can
+        # tell budget-skipped (no spend) from all-errored (spend
+        # incurred but every call failed) afterwards.
+        _ct_before = cost_tracker.total_cost if cost_tracker else 0.0
         dispatch_task(
-            ConsensusTask(), findings, dispatch_fn, role_resolution,
+            consensus_task, findings, dispatch_fn, role_resolution,
             results_by_id, cost_tracker, max_parallel,
         )
+        # Pre-fix the post-dispatch check was:
+        #
+        #   if eligible and not any(... r.get("consensus") ...):
+        #       consensus_budget_skipped = True
+        #
+        # That branch fires for TWO distinct outcomes:
+        #
+        #   (1) Budget cap hit — dispatch never made any LLM calls
+        #       for the eligible set (cost_tracker spend == 0
+        #       across the consensus stage).
+        #   (2) Every call ERRORED — dispatch made N LLM calls,
+        #       all returned an error envelope, no `consensus`
+        #       field landed on any finding.
+        #
+        # Both reach "no consensus on the findings" but the
+        # operator's response is opposite: (1) means "raise the
+        # consensus budget", (2) means "investigate the API
+        # failures". Pre-fix both got reported as "budget skipped"
+        # in the orchestration summary, masking errors.
+        #
+        # Distinguish via spend delta: if the cost tracker
+        # advanced, calls were made; the absence of consensus is
+        # all-errored. If spend stayed flat, it's budget-skipped.
+        if eligible and not any(
+            isinstance(r, dict) and r.get("consensus")
+            for r in results_by_id.values()
+        ):
+            _ct_after = cost_tracker.total_cost if cost_tracker else 0.0
+            if _ct_after > _ct_before:
+                consensus_all_errored = True
+            else:
+                consensus_budget_skipped = True
+
+    # Judge review (if configured) — sees primary reasoning, critiques it
+    judge_models = role_resolution.get("judge_models", [])
+    if judge_models:
+        # Use the pre-consensus snapshot so JUDGE_REVIEW producer
+        # sees the actual primary verdict, not the consensus-
+        # overridden one. Falls back to the post-consensus state
+        # for findings that didn't exist pre-consensus (shouldn't
+        # happen in normal flow, but defensive).
+        primary_verdicts_before_judge: Dict[str, bool] = dict(
+            primary_verdicts_pre_consensus
+        )
+        for fid, r in results_by_id.items():
+            if (fid not in primary_verdicts_before_judge
+                    and isinstance(r, dict) and "error" not in r):
+                primary_verdicts_before_judge[fid] = bool(
+                    r.get("is_exploitable", False)
+                )
+        dispatch_task(
+            JudgeTask(results_by_id=results_by_id, profile=profile),
+            findings, dispatch_fn, role_resolution,
+            results_by_id, cost_tracker, max_parallel,
+        )
+
+        # Record JUDGE_REVIEW scorecard events for multi-judge
+        # disputes. Single-judge disputes are skipped (the JudgeTask
+        # keeps primary's verdict in that mode — no panel-majority
+        # signal to attribute). Agreed findings skipped (no useful
+        # per-model signal).
+        if client is not None:
+            sc = getattr(client, "scorecard", None)
+            if sc is not None:
+                from core.llm.scorecard.judge import record_judge_outcomes
+                try:
+                    record_judge_outcomes(
+                        sc,
+                        results_by_id=results_by_id,
+                        primary_verdicts_before_judge=primary_verdicts_before_judge,
+                    )
+                except Exception as e:                  # noqa: BLE001
+                    # WARNING (not DEBUG): family-wide convention.
+                    # See core/llm/scorecard/consensus.py for the
+                    # rationale on operator-visible producer failures.
+                    logger.warning("judge producer failed: %s", e)
+
+    # Multi-model correlation (pure Python, no LLM)
+    correlation = None
+    if n_analysis_models > 1:
+        from packages.llm_analysis.correlation import correlate_results
+        correlation = correlate_results(results_by_id)
+        # Apply confidence signals back to individual results
+        for fid, signal in correlation.get("confidence_signals", {}).items():
+            if fid in results_by_id:
+                results_by_id[fid]["multi_model_confidence"] = signal
+        # Per-finding reasoning-divergence metric, surfaced into the
+        # operator report alongside multi_model_confidence. Computed
+        # for every agreed finding (high / high-negative) where the
+        # panel has enough usable reasoning text. The threshold that
+        # gates the scorecard event is independent and applied inside
+        # the producer below — operators see the raw metric here so
+        # they can judge sub-threshold cases by eye.
+        _attach_reasoning_divergence(
+            results_by_id=results_by_id,
+            multi_results=_multi_results,
+            confidence_signals=correlation.get(
+                "confidence_signals") or {},
+        )
+        corr_summary = correlation.get("summary", {})
+        n_corr = corr_summary.get("total_correlated", 0)
+        n_agreed = corr_summary.get("agreed", 0)
+        n_disputed = corr_summary.get("disputed", 0)
+        if n_corr:
+            print(f"\n  Correlation: {n_corr} findings — {n_agreed} agreed, {n_disputed} disputed")
+
+        # Record MULTI_MODEL_CONSENSUS scorecard events for disputed
+        # findings: minority models → incorrect, majority → correct.
+        # Agreed findings produce no signal (every model gets the
+        # same bump → noise). Ties are skipped (no clear majority).
+        # Per-cell auto-policy unaffected — this populates its own
+        # event slot, distinct from the cheap-tier prefilter
+        # counters that drive the gate.
+        if client is not None:
+            sc = getattr(client, "scorecard", None)
+            if sc is not None:
+                # Pass ``_multi_results`` directly so the producer can
+                # attribute each minority model's reasoning to the
+                # right model. Decoupled from results_by_id to avoid
+                # mutating records that get serialised into
+                # orchestrated_report.json.
+                from core.llm.scorecard.consensus import (
+                    record_consensus_outcomes,
+                )
+                try:
+                    record_consensus_outcomes(
+                        sc,
+                        correlation=correlation,
+                        results_by_id=results_by_id,
+                        per_finding_results=_multi_results,
+                    )
+                except Exception as e:                  # noqa: BLE001
+                    # Never let scorecard wiring abort orchestration —
+                    # but log at WARNING so operators see regressions
+                    # without needing DEBUG enabled.
+                    logger.warning(
+                        "consensus producer failed: %s", e,
+                    )
+                # Sister producer covering the agreed-verdict case
+                # the consensus producer skips: panel agreed on
+                # is_exploitable but reasoning text diverged. See
+                # core.llm.scorecard.reasoning_divergence.
+                from core.llm.scorecard.reasoning_divergence import (
+                    record_reasoning_divergence,
+                )
+                try:
+                    record_reasoning_divergence(
+                        sc,
+                        correlation=correlation,
+                        results_by_id=results_by_id,
+                        per_finding_results=_multi_results,
+                    )
+                except Exception as e:                  # noqa: BLE001
+                    # WARNING (not DEBUG): see consensus producer above.
+                    logger.warning(
+                        "reasoning_divergence producer failed: %s", e,
+                    )
+
+    # Final LLM aggregation over independent analysis outputs. This is distinct
+    # from consensus/judge: it produces a downstream artifact instead of
+    # changing per-finding verdicts.
+    aggregate_models = role_resolution.get("aggregate_models", [])
+    aggregation = None
+    if aggregate_models:
+        if n_analysis_models < 2:
+            print("\n  Aggregate: skipped — requires at least two analysis models")
+        else:
+            aggregate_payload = _build_aggregation_payload(results_by_id, correlation)
+            aggregate_results = dispatch_task(
+                AggregationTask(profile=profile), [aggregate_payload], dispatch_fn,
+                role_resolution, results_by_id, cost_tracker, max_parallel,
+            )
+            for r in aggregate_results:
+                if "error" not in r:
+                    aggregation = {k: v for k, v in r.items()
+                                   if not k.startswith("_") and k != "finding_id"}
+                    _drop_hallucinated_finding_ids(aggregation, results_by_id)
+                    break
 
     # Exploit/patch generation — after final verdict
     # CC analysis may produce exploits/patches inline via schema. ExploitTask/PatchTask
@@ -342,13 +1032,13 @@ def orchestrate(
     # so this is a no-op when CC already generated them.
     if not no_exploits:
         dispatch_task(
-            ExploitTask(), findings, dispatch_fn, role_resolution,
+            ExploitTask(profile=profile), findings, dispatch_fn, role_resolution,
             results_by_id, cost_tracker, max_parallel,
         )
 
     if not no_patches:
         dispatch_task(
-            PatchTask(), findings, dispatch_fn, role_resolution,
+            PatchTask(profile=profile), findings, dispatch_fn, role_resolution,
             results_by_id, cost_tracker, max_parallel,
         )
 
@@ -361,7 +1051,7 @@ def orchestrate(
         print(f"\n  Structural grouping: {n} group{'s' if n != 1 else ''} found")
 
     # --- Group analysis ---
-    group_task = GroupAnalysisTask(results_by_id=results_by_id)
+    group_task = GroupAnalysisTask(results_by_id=results_by_id, profile=profile)
     group_results = dispatch_task(
         group_task, groups, dispatch_fn, role_resolution,
         results_by_id, cost_tracker, max_parallel,
@@ -372,39 +1062,131 @@ def orchestrate(
         if gid and "error" not in r:
             group_analyses[gid] = r
 
+    # --- Reconcile dataflow validation ---
+    # All analysis-stage tasks (consensus, judge, retry, group) have run.
+    # Apply downgrades from the validation pass that were deferred to
+    # avoid biasing those tasks. Re-scoring CVSS happens inside
+    # reconcile_dataflow_validation so the downgrade is consistent
+    # across is_exploitable / cvss_score / severity.
+    n_applied_downgrades = 0
+    n_soft_downgrades = 0
+    if dataflow_validation_enabled:
+        from packages.llm_analysis.dataflow_validation import (
+            reconcile_dataflow_validation,
+        )
+        recon = reconcile_dataflow_validation(results_by_id)
+        n_applied_downgrades = recon.get("n_hard_downgrades", 0)
+        n_soft_downgrades = recon.get("n_soft_downgrades", 0)
+        if n_applied_downgrades or n_soft_downgrades:
+            print(
+                f"  Dataflow validation reconciliation: "
+                f"{n_applied_downgrades} hard + {n_soft_downgrades} soft "
+                f"after consensus/judge"
+            )
+
     # --- Merge and write ---
     per_finding_results = list(results_by_id.values())
     merged = _merge_results(report, per_finding_results,
                             no_exploits=no_exploits, no_patches=no_patches)
     merged["cross_finding_groups"] = groups
+    if dataflow_validation_enabled:
+        merged["dataflow_validation"] = {
+            **(validation_metrics or {}),
+            "n_applied_downgrades": n_applied_downgrades,
+            "n_soft_downgrades": n_soft_downgrades,
+        }
     if group_analyses:
         merged["group_analyses"] = group_analyses
+    if correlation:
+        merged["correlation"] = correlation
+    if aggregation:
+        merged["aggregation"] = aggregation
 
+    consensus_agreed = sum(1 for r in per_finding_results
+                           if r.get("consensus") == "agreed")
     consensus_disputes = sum(1 for r in per_finding_results
                              if r.get("consensus") == "disputed")
+    judge_agreed = sum(1 for r in per_finding_results
+                       if r.get("judge") == "agreed")
+    judge_disputes = sum(1 for r in per_finding_results
+                         if r.get("judge") == "disputed")
+    cross_family_checked = sum(1 for r in per_finding_results
+                               if r.get("cross_family_check"))
+    cross_family_disputes = sum(1 for r in per_finding_results
+                                if r.get("cross_family_disputed"))
     retries = sum(1 for r in per_finding_results if r.get("retried"))
     low_confidence = sum(1 for r in per_finding_results if r.get("low_confidence"))
 
+    analysis_models_list = role_resolution.get("analysis_models", [])
     merged["orchestration"] = {
         "mode": dispatch_mode,
+        "multi_model": len(analysis_models_list) > 1,
         "analysis_model": (role_resolution.get("analysis_model").model_name
-                          if role_resolution.get("analysis_model") else None),
+                          if role_resolution.get("analysis_model")
+                          else ("Claude Code" if is_cc_dispatch else None)),
+        "analysis_models": ([m.model_name for m in analysis_models_list]
+                           or (["Claude Code"] if is_cc_dispatch else [])),
+        "defense_profile": profile.name,
+        "weakened_defenses": accept_weakened_defenses and profile.name == "passthrough",
         "consensus_models": [m.model_name for m in consensus_models],
+        "consensus_agreed": consensus_agreed,
+        "consensus_disputes": consensus_disputes,
+        "consensus_budget_skipped": consensus_budget_skipped,
+        # New: distinguish "budget capped before any LLM calls"
+        # from "calls made but all errored". Operators reading the
+        # report need to act differently on each — the existing
+        # `consensus_budget_skipped` flag was conflating both.
+        "consensus_all_errored": consensus_all_errored,
+        "judge_models": [m.model_name for m in judge_models],
+        "judge_agreed": judge_agreed,
+        "judge_disputes": judge_disputes,
+        "aggregate_models": [m.model_name for m in aggregate_models],
+        "aggregated": aggregation is not None,
         "findings_dispatched": len(findings),
         "findings_analysed": sum(1 for r in per_finding_results if "error" not in r),
         "findings_failed": sum(1 for r in per_finding_results if "error" in r),
+        "failed_by_model": _per_model_failure_summary(analysis_results),
         "structural_groups": len(groups),
-        "consensus_disputes": consensus_disputes,
+        "cross_family_checked": cross_family_checked,
+        "cross_family_disputes": cross_family_disputes,
         "low_confidence_retries": retries,
         "low_confidence_remaining": low_confidence,
         "group_analyses": len(group_analyses),
+        "correlation": correlation.get("summary") if correlation else None,
         "elapsed_seconds": round(elapsed, 1),
         "max_parallel": max_parallel,
         "cost": cost_tracker.get_summary(),
+        # Number of full ANALYSE calls avoided because the fast-tier
+        # scorecard trusted the cheap-tier "clear FP" verdict. Zero
+        # on CC-prep / CC-fallback paths (no prefilter wiring).
+        "fast_tier_short_circuits": (
+            getattr(client, "short_circuits", 0) if client is not None else 0
+        ),
     }
+
+    if defense_telemetry.has_warnings:
+        merged["orchestration"]["defense_telemetry"] = defense_telemetry.summary()
+
+    # Strip the host-side `repo_path` we stamped onto every
+    # finding for SAGE enrichment scoping (line ~303). It's an
+    # absolute filesystem path on the operator's machine
+    # (`/home/alice/projects/my-target`, `/tmp/raptor/foo`) and
+    # leaking it into the persisted report exposes operator
+    # filesystem layout downstream — anyone the report is
+    # shared with sees username, project naming conventions,
+    # and the runner's tmp-dir hierarchy. Pop AFTER all
+    # internal consumers have used it (judge, consensus,
+    # aggregation) and BEFORE save_json hits disk.
+    for f in merged.get("results", []):
+        if isinstance(f, dict):
+            f.pop("repo_path", None)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     from core.json import save_json
+    if correlation:
+        save_json(out_dir / "correlation.json", correlation)
+    if aggregation:
+        save_json(out_dir / "aggregation.json", aggregation)
     out_path = out_dir / "orchestrated_report.json"
     save_json(out_path, merged)
     logger.info(f"Orchestrated report saved to {out_path}")
@@ -435,11 +1217,326 @@ def orchestrate(
     thinking = cost_summary.get("thinking_tokens", 0)
     if thinking > 0:
         print(f"  Thinking tokens: {thinking:,}")
+    if consensus_agreed or consensus_disputes:
+        cn_parts = []
+        if consensus_agreed:
+            cn_parts.append(f"{consensus_agreed} agreed")
+        if consensus_disputes:
+            cn_parts.append(f"{consensus_disputes} disputed")
+        print(f"  Consensus: {', '.join(cn_parts)}")
+    elif consensus_budget_skipped:
+        print(f"  Consensus: skipped (budget > {int(ConsensusTask.budget_cutoff * 100)}%)")
+    if judge_agreed or judge_disputes:
+        jg_parts = []
+        if judge_agreed:
+            jg_parts.append(f"{judge_agreed} agreed")
+        if judge_disputes:
+            jg_parts.append(f"{judge_disputes} disputed")
+        print(f"  Judge: {', '.join(jg_parts)}")
+    if aggregation:
+        aggregate_by = aggregation.get("analysed_by")
+        suffix = f" ({aggregate_by})" if aggregate_by else ""
+        print(f"  Aggregate: written{suffix}")
+    if cross_family_checked:
+        cf_parts = [f"{cross_family_checked} cross-family checked"]
+        if cross_family_disputes:
+            cf_parts.append(f"{cross_family_disputes} disputed")
+        print(f"  {', '.join(cf_parts)}")
     if groups:
         print(f"  Cross-finding groups: {len(groups)}")
     print(f"  Report: {out_path}")
 
     return merged
+
+
+def _attach_reasoning_divergence(
+    *,
+    results_by_id: Dict[str, Dict],
+    multi_results: Optional[Dict[str, List[Dict]]],
+    confidence_signals: Dict[str, str],
+) -> None:
+    """Attach per-finding ``reasoning_divergence`` metric onto the
+    primary result records.
+
+    Walks every ``high`` / ``high-negative`` finding in
+    ``confidence_signals``, pulls each model's reasoning out of
+    ``multi_results``, computes Jaccard-based divergence over the
+    panel via :mod:`core.llm.semantic_entropy`, and stuffs the
+    result into ``results_by_id[fid]["reasoning_divergence"]`` so it
+    flows through the orchestrated-report serialiser.
+
+    Mutates ``results_by_id`` in place. No-op when ``multi_results``
+    is empty / ``None`` (single-model run; nothing to compute over).
+    Findings whose panel is too small / reasoning too short to
+    measure are silently skipped — the math layer returns ``None``,
+    callers must treat the absence of the field as "no signal", not
+    "no divergence".
+
+    Extracted from inline orchestrate() body so it can be unit-tested
+    against synthetic correlation + multi_results inputs without
+    standing up the full LLM-dispatch surface. See
+    ``tests/test_orchestrator_reasoning_divergence.py``.
+    """
+    if not multi_results:
+        return
+    from core.llm.semantic_entropy import divergence
+    for fid, signal in confidence_signals.items():
+        if signal not in ("high", "high-negative"):
+            continue
+        records = multi_results.get(fid) or []
+        reasonings: Dict[str, str] = {}
+        for r in records:
+            name = str(r.get("analysed_by") or r.get("model") or "")
+            text = r.get("reasoning") or ""
+            if name and text:
+                reasonings[name] = str(text)
+        metric = divergence(reasonings)
+        if metric is None or fid not in results_by_id:
+            continue
+        results_by_id[fid]["reasoning_divergence"] = {
+            "mean_pairwise_distance": metric["mean_pairwise_distance"],
+            "max_pairwise_distance": metric["max_pairwise_distance"],
+            "outlier_model": metric["outlier_model"],
+            "n_models": metric["n_models"],
+        }
+
+
+def _intersect_profiles(profiles: list) -> Any:
+    """Return a defence profile compatible with every input profile.
+
+    AND-together each boolean field — if ANY input has a layer
+    disabled, the result also disables it. Tag style: keep the
+    common one when all match; otherwise fall back to nonce-only
+    (the safe baseline that every probed profile inherits via
+    CONSERVATIVE). Single-input list short-circuits to the input.
+
+    Used by orchestrate() so multi-model runs apply the defences
+    common to all probed models, rather than the primary's
+    defences applied uniformly to every dispatcher.
+    """
+    from core.security.prompt_envelope import ModelDefenseProfile
+    if not profiles:
+        return CONSERVATIVE
+    if len(profiles) == 1:
+        return profiles[0]
+    base = profiles[0]
+    tag_styles = {p.tag_style for p in profiles}
+    role_placements = {p.role_placement for p in profiles}
+    return ModelDefenseProfile(
+        name="multi-" + "+".join(sorted({p.name for p in profiles})),
+        tag_style=base.tag_style if len(tag_styles) == 1 else "nonce-only",
+        envelope_xml=all(p.envelope_xml for p in profiles),
+        datamarking=all(p.datamarking for p in profiles),
+        base64_code=all(p.base64_code for p in profiles),
+        slot_discipline=all(p.slot_discipline for p in profiles),
+        markdown_strip=all(p.markdown_strip for p in profiles),
+        role_placement=base.role_placement if len(role_placements) == 1 else "user-only",
+    )
+
+
+def _resolve_cross_family_checker(
+    analysis_model: Any,
+    role_resolution: Dict[str, Any],
+) -> Optional[Any]:
+    """Pick a cross-family checker model from resolved roles or env auto-detect.
+
+    Returns a ModelConfig from a different training lineage than the
+    analysis model, or None if none is available.  Prefers models already
+    in the role resolution (consensus / fallback); falls back to
+    auto-detecting a cheap model from an env-var API key.
+    """
+    from core.security.llm_family import family_of, same_family
+
+    primary_name = analysis_model.model_name
+    primary_family = family_of(primary_name)
+
+    # Include `analysis_models[1:]` so the SECONDARY analysis
+    # models from a multi-model run are eligible as cross-family
+    # checkers. Pre-fix only consensus_models + fallback_models
+    # were considered; an operator running
+    # `--analysis-models claude-opus,gpt-4` (one each, no
+    # consensus/fallback configured) got NO cross-family checker
+    # candidates from resolved roles, falling through to env
+    # auto-detect — which then required a SEPARATE provider env
+    # var (PROVIDER_ENV_KEYS) and silently returned None when
+    # only the two analysis-model keys were set. The user's
+    # explicit second model was sitting right there in
+    # role_resolution and would have been the obvious choice.
+    candidates = (
+        role_resolution.get("analysis_models", [])[1:]
+        + role_resolution.get("consensus_models", [])
+        + role_resolution.get("fallback_models", [])
+    )
+    for m in candidates:
+        if not same_family(primary_name, m.model_name):
+            logger.info("Cross-family checker: %s (from resolved roles)", m.model_name)
+            return m
+
+    return _auto_detect_cross_family_checker(primary_family)
+
+
+def _auto_detect_cross_family_checker(primary_family: str) -> Optional[Any]:
+    """Auto-detect a cheap cross-family model from environment API keys."""
+    import os
+    from core.llm.config import ModelConfig
+    from core.llm.model_data import PROVIDER_ENV_KEYS
+
+    _CHEAP_CHECKERS: dict[str, tuple[str, str]] = {
+        "anthropic": ("anthropic", "claude-haiku-4-5-20251001"),
+        "google": ("gemini", "gemini-2.5-flash"),
+        "openai": ("openai", "gpt-4.1-mini"),
+        "mistral": ("mistral", "mistral-small-latest"),
+    }
+    for family, (provider, model_name) in _CHEAP_CHECKERS.items():
+        if family == primary_family:
+            continue
+        env_key = PROVIDER_ENV_KEYS.get(provider)
+        if env_key and os.environ.get(env_key):
+            logger.info(
+                "Cross-family checker: %s (auto-detected from %s)",
+                model_name, env_key,
+            )
+            return ModelConfig(provider=provider, model_name=model_name)
+    return None
+
+
+def _drop_hallucinated_finding_ids(
+    aggregation: Dict[str, Any],
+    results_by_id: Dict[str, Dict],
+) -> None:
+    """Remove items whose finding_id doesn't match a real finding.
+
+    The aggregate model occasionally invents finding IDs. We filter rather
+    than fail so partial output is still useful.
+    """
+    valid_ids = set(results_by_id.keys())
+    for key in ("highest_confidence_findings", "disputed_findings"):
+        items = aggregation.get(key)
+        if not isinstance(items, list):
+            continue
+        kept = [
+            it for it in items
+            if isinstance(it, dict) and it.get("finding_id") in valid_ids
+        ]
+        dropped = len(items) - len(kept)
+        if dropped:
+            logger.info(
+                f"Aggregate: dropped {dropped} item{'s' if dropped != 1 else ''} "
+                f"with unknown finding_id from {key}"
+            )
+        aggregation[key] = kept
+
+
+def _build_aggregation_payload(
+    results_by_id: Dict[str, Dict],
+    correlation: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Build a compact, bounded payload for the aggregate model."""
+    findings = []
+    models_seen: set[str] = set()
+
+    for fid, result in sorted(results_by_id.items()):
+        if not isinstance(result, dict) or "error" in result:
+            continue
+
+        analyses = result.get("multi_model_analyses") or [{
+            "model": result.get("analysed_by", "unknown"),
+            "is_exploitable": result.get("is_exploitable"),
+            "exploitability_score": result.get("exploitability_score"),
+            "ruling": result.get("ruling"),
+            "reasoning": result.get("reasoning", ""),
+        }]
+        compact_analyses = []
+        for analysis in analyses:
+            model = analysis.get("model", "unknown")
+            models_seen.add(model)
+            compact_analyses.append({
+                "model": model,
+                "is_exploitable": analysis.get("is_exploitable"),
+                "exploitability_score": analysis.get("exploitability_score"),
+                "ruling": analysis.get("ruling"),
+                "reasoning": (analysis.get("reasoning") or "")[:600],
+            })
+
+        findings.append({
+            "finding_id": fid,
+            "rule_id": result.get("rule_id"),
+            "file_path": result.get("file_path"),
+            "start_line": result.get("start_line"),
+            "selected_verdict": {
+                "is_exploitable": result.get("is_exploitable"),
+                "exploitability_score": result.get("exploitability_score"),
+                "ruling": result.get("ruling"),
+                "confidence": result.get("confidence"),
+            },
+            "multi_model_confidence": result.get("multi_model_confidence"),
+            "reasoning_divergence": result.get("reasoning_divergence"),
+            "analyses": compact_analyses,
+        })
+
+    return {
+        "models": sorted(models_seen),
+        "correlation_summary": (correlation or {}).get("summary", {}),
+        "confidence_signals": (correlation or {}).get("confidence_signals", {}),
+        "unique_insights": (correlation or {}).get("unique_insights", [])[:20],
+        "findings": findings,
+    }
+
+
+def _per_model_failure_summary(
+    analysis_results: List[Dict],
+) -> Dict[str, Dict[str, Any]]:
+    """Aggregate per-model failures from a flat analysis_results list.
+
+    /agentic dispatches analysis as (model × finding) work items. When
+    a model fails on a finding, the result has an ``"error"`` key plus
+    ``analysed_by`` identifying the model. Operators currently see only
+    a flat ``findings_failed`` count — they can't tell whether one
+    model failed on every finding or every model failed on one finding.
+
+    Returns ``{model_name: {count: N, first_error: "..."}}``. Empty
+    when no errors. ``first_error`` truncated to 200 chars to avoid
+    bloating the JSON report.
+    """
+    by_model: Dict[str, Dict[str, Any]] = {}
+    for r in analysis_results:
+        if not isinstance(r, dict) or "error" not in r:
+            continue
+        model = r.get("analysed_by") or "?"
+        entry = by_model.setdefault(model, {"count": 0, "first_error": None})
+        entry["count"] += 1
+        if entry["first_error"] is None:
+            entry["first_error"] = str(r["error"])[:200]
+    return by_model
+
+
+def _detect_multi_model_collapse(
+    results_by_id: Dict[str, Dict],
+    n_analysis_models: int,
+) -> List[Tuple[str, List[str]]]:
+    """Identify findings whose multi_model_analyses has fewer DISTINCT
+    contributors than the requested model count.
+
+    Returns a list of ``(finding_id, sorted_distinct_models)`` for each
+    such finding. Empty if every multi-model finding has the expected
+    number of contributors.
+
+    Helps operators spot silent-fallback failures where multiple primary
+    models converged on the same external fallback model.
+    """
+    collapsed: List[Tuple[str, List[str]]] = []
+    for fid, item in results_by_id.items():
+        analyses = item.get("multi_model_analyses")
+        if not isinstance(analyses, list) or not analyses:
+            continue
+        distinct = {
+            a.get("model") for a in analyses if isinstance(a, dict)
+        }
+        distinct.discard("?")
+        distinct.discard(None)
+        if len(distinct) < n_analysis_models:
+            collapsed.append((fid, sorted(distinct)))
+    return collapsed
 
 
 def _check_self_consistency(results_by_id: Dict[str, Dict]) -> None:
@@ -459,7 +1556,19 @@ def _merge_results(
     Matches by finding_id. CC results update analysis fields while
     preserving all prep data (code, dataflow, feasibility).
     """
-    merged = dict(prep_report)
+    # Deep-copy the entire prep_report. Pre-fix `dict(prep_report)`
+    # was a SHALLOW copy, leaving every nested dict (and the
+    # `metadata`, `summary`, `tools`, etc. top-level dicts) shared
+    # with the caller's prep_report object. Mutations to those
+    # nested structures (the per-finding mutations below were
+    # protected by a separate deepcopy on `results`, but
+    # downstream code that grew to touch other top-level keys —
+    # e.g. orchestration["defense_telemetry"] = ... in the
+    # caller, or summary statistics added in this function —
+    # leaked back into the caller's input). Doing one deepcopy
+    # at the boundary is also less error-prone than maintaining
+    # a per-key set of "things we copied" + "things we share".
+    merged = copy.deepcopy(prep_report)
     merged["mode"] = "orchestrated"
 
     # Index CC results by finding_id
@@ -469,8 +1578,10 @@ def _merge_results(
         if fid:
             cc_by_id[fid] = r
 
-    # Deep copy results so we don't mutate the caller's data
-    results = copy.deepcopy(merged.get("results", []))
+    # `results` is already deep-copied via the top-level deepcopy
+    # above; no need for the duplicate copy that pre-fix code did
+    # (and which only protected `results`, not the rest of merged).
+    results = merged.get("results", [])
 
     # Merge into findings
     analysed = 0
@@ -581,15 +1692,39 @@ def _structural_grouping(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for rule, fids in by_rule.items():
         _add_group("rule_id", rule, fids)
 
+    def _loc_key(d: Dict[str, Any]) -> Optional[str]:
+        """Build a `file:line` key from a dataflow node dict, or
+        return None if both fields are missing.
+
+        Pre-fix every site used `f"{d.get('file','?')}:{d.get('line','?')}"`
+        which produced the literal key `"?:?"` when both fields
+        were absent. ALL findings missing dataflow data then
+        clustered together under criterion_value=`?:?` — a
+        noise group with no analytical value, frequently the
+        biggest "structural" cluster in a scan because every
+        finding lacking dataflow extraction (most non-codeql
+        findings) landed there. Return None and let callers
+        skip the entry.
+        """
+        fp = d.get("file")
+        ln = d.get("line")
+        if not fp and ln in (None, ""):
+            return None
+        return f"{fp or '?'}:{ln if ln not in (None, '') else '?'}"
+
     # Group by shared sanitiser location
     by_sanitiser: Dict[str, List[str]] = {}
     for fid, r in findings_by_id.items():
         dataflow = r.get("dataflow") or {}
         for san in dataflow.get("sanitizers_found", []):
             if isinstance(san, dict):
-                loc = f"{san.get('file', '?')}:{san.get('line', '?')}"
+                loc = _loc_key(san)
+                if loc is None:
+                    continue
             else:
                 loc = str(san)
+                if not loc.strip():
+                    continue
             by_sanitiser.setdefault(loc, []).append(fid)
     for loc, fids in by_sanitiser.items():
         _add_group("sanitiser", loc, fids)
@@ -600,7 +1735,9 @@ def _structural_grouping(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         dataflow = r.get("dataflow") or {}
         source = dataflow.get("source", {})
         if source:
-            loc = f"{source.get('file', '?')}:{source.get('line', '?')}"
+            loc = _loc_key(source)
+            if loc is None:
+                continue
             by_source.setdefault(loc, []).append(fid)
     for loc, fids in by_source.items():
         _add_group("dataflow_source", loc, fids)
@@ -612,17 +1749,64 @@ def _structural_grouping(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         dataflow = r.get("dataflow") or {}
         source = dataflow.get("source", {})
         if source:
-            ref = f"{source.get('file', '?')}:{source.get('line', '?')}"
-            ref_to_fids.setdefault(ref, set()).add(fid)
+            ref = _loc_key(source)
+            if ref is not None:
+                ref_to_fids.setdefault(ref, set()).add(fid)
         for step in dataflow.get("steps", []):
-            ref = f"{step.get('file', '?')}:{step.get('line', '?')}"
-            ref_to_fids.setdefault(ref, set()).add(fid)
+            ref = _loc_key(step)
+            if ref is not None:
+                ref_to_fids.setdefault(ref, set()).add(fid)
         sink = dataflow.get("sink", {})
         if sink:
-            ref = f"{sink.get('file', '?')}:{sink.get('line', '?')}"
-            ref_to_fids.setdefault(ref, set()).add(fid)
+            ref = _loc_key(sink)
+            if ref is not None:
+                ref_to_fids.setdefault(ref, set()).add(fid)
 
     for ref, fids_set in ref_to_fids.items():
         _add_group("shared_dataflow_ref", ref, list(fids_set))
+
+    # Group by shared SMT witness model. When two findings have
+    # identical witness models (same variable=value assignment that
+    # satisfies their path conditions), Z3 has effectively said
+    # "the SAME concrete attacker input drives both findings". That
+    # makes the pair a single attack vector rather than two
+    # independent bugs — operator should test them together. The
+    # fingerprint is a sorted-tuple of (variable, integer-value)
+    # pairs derived from `smt_witness.model`. Skip witnesses where
+    # ALL keys are `_anon_*` placeholders — those are over-
+    # approximating (Z3 picked the smallest BV satisfying the
+    # condition, not a meaningful attacker input), so the "shared
+    # witness" signal becomes spurious. Anon vars with concrete
+    # decoded names (via anon_var_map) DO count as named because
+    # the witness then describes a real attacker-visible quantity
+    # (e.g. strlen(argv[1])=32).
+    by_witness: Dict[Tuple, List[str]] = {}
+    for fid, r in findings_by_id.items():
+        witness = r.get("smt_witness") or {}
+        model = witness.get("model") or {}
+        if not model:
+            continue
+        anon_map = witness.get("anon_var_map") or {}
+        # Skip when EVERY model key is an undecoded _anon_N — pure
+        # opaque-placeholder witnesses don't describe a real shared
+        # attacker input.
+        if model and all(
+            k.startswith("_anon_") and k not in anon_map
+            for k in model
+        ):
+            continue
+        fingerprint = tuple(sorted(
+            (k, v if not isinstance(v, int) else int(v))
+            for k, v in model.items()
+        ))
+        by_witness.setdefault(fingerprint, []).append(fid)
+    for fingerprint, fids in by_witness.items():
+        # Render the fingerprint as a comma-separated `var=val`
+        # string for the criterion_value field; truncate to keep
+        # report lines readable.
+        rendered = ", ".join(f"{k}={v}" for k, v in fingerprint)
+        if len(rendered) > 80:
+            rendered = rendered[:77] + "..."
+        _add_group("smt_shared_witness", rendered, fids)
 
     return groups

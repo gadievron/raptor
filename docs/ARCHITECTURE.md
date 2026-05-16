@@ -68,22 +68,39 @@ raptor/
 │
 ├── core/                           # Shared utilities layer
 │   ├── __init__.py
-│   ├── config.py                   # RaptorConfig (paths, settings)
-│   ├── git/                        # Sandbox-routed clone + URL allowlist (clone_repository, validate_repo_url)
-│   ├── hash/                       # SHA-256 helpers (sha256_tree/file/bytes/string)
-│   ├── logging.py                  # Structured logging with JSONL audit trail
-│   ├── progress.py                 # Progress tracking utilities
+│   ├── build/                      # Build-system detection + toolchain probes
+│   ├── config/                     # RaptorConfig (paths, settings)
+│   ├── coverage/                   # Read-coverage tracking + summary
+│   ├── dockerfile/                 # Dockerfile parsing helpers (FROM/ENV)
+│   ├── git/                        # Sandbox-routed clone + URL allowlist
+│   ├── hash/                       # SHA-256 helpers (tree/file/bytes/string)
+│   ├── http/                       # EgressClient + per-host allowlists
+│   ├── inventory/                  # Shared source inventory
+│   │   ├── builder.py              # build_inventory() — file enumeration + checksums
+│   │   ├── extractors.py           # Language-aware function extraction
+│   │   ├── languages.py            # LANGUAGE_MAP, detect_language
+│   │   ├── exclusions.py           # File exclusion + generated-file detection
+│   │   ├── lookup.py               # lookup_function() — file:line → function
+│   │   ├── diff.py                 # compare_inventories() — SHA-256 diffing
+│   │   ├── reachability.py         # Function-call reachability (substrate)
+│   │   └── coverage.py             # checked_by tracking + coverage stats
+│   ├── json/                       # BOM-tolerant JSON utils + cache helpers
+│   ├── llm/                        # LLM substrate (clients, providers, scorecard, tool-use loop)
+│   ├── logging/                    # Structured logging with JSONL audit trail
+│   ├── oci/                        # OCI image-ref parsing + canonicalisation
+│   ├── orchestration/              # Pipeline orchestration helpers (understand_bridge, agentic_passes)
+│   ├── progress/                   # Progress tracking utilities
+│   ├── project/                    # Project workspace mgmt (CLI, merge, clean, export, diff)
+│   ├── reporting/                  # Findings/report formatting (markdown, summary lines)
+│   ├── run/                        # Per-run lifecycle (output dir, suffixes)
+│   ├── sage/                       # SAGE inception client + hooks (memory layer)
+│   ├── sandbox/                    # subprocess isolation (Landlock + seccomp + namespaces)
 │   ├── sarif/
-│   │   ├── __init__.py
 │   │   └── parser.py               # SARIF 2.1.0 parsing utilities
-│   └── inventory/                  # Shared source inventory
-│       ├── __init__.py
-│       ├── builder.py              # build_inventory() — file enumeration + checksums
-│       ├── extractors.py           # Language-aware function extraction (12 languages)
-│       ├── languages.py            # LANGUAGE_MAP, detect_language
-│       ├── exclusions.py           # File exclusion logic + generated file detection
-│       ├── diff.py                 # compare_inventories() — SHA-256 diffing
-│       └── coverage.py             # checked_by tracking + coverage stats
+│   ├── schema_constants/           # Shared schema field-name constants
+│   ├── security/                   # Prompt envelope, secret redaction, env sanitisation, cc_trust
+│   ├── smt_solver/                 # Z3-based path-feasibility (rejection, witness, csem)
+│   └── startup/                    # CLI startup banner + env validation
 │
 ├── packages/                       # Security capabilities layer
 │   ├── __init__.py
@@ -220,7 +237,7 @@ Provide minimal shared utilities that all packages need.
 
 ### Components
 
-#### `core/config.py` - RaptorConfig
+#### `core/config/` - RaptorConfig
 **Responsibility**: Centralized configuration management
 
 ```python
@@ -243,7 +260,7 @@ class RaptorConfig:
 - Environment variable support (RAPTOR_ROOT)
 - Graceful fallback to auto-detection
 
-#### `core/logging.py` - Structured Logging
+#### `core/logging/` - Structured Logging
 **Responsibility**: Unified logging with audit trail
 
 ```python
@@ -270,7 +287,7 @@ def get_logger(name: str = "raptor") -> logging.Logger:
 }
 ```
 
-#### `core/progress.py` - Progress Tracking
+#### `core/progress/` - Progress Tracking
 **Responsibility**: Progress bar and status tracking utilities
 
 **Features**:
@@ -287,7 +304,7 @@ def get_logger(name: str = "raptor") -> logging.Logger:
 - `get_severity(result)`: Map SARIF levels to severity
 - (Additional utilities as needed)
 
-**Why Separate Module**: SARIF parsing is shared by scanner, llm-analysis, and reporting. Centralization prevents duplication.
+**Why Separate Module**: SARIF parsing is shared by scanner, llm_analysis, and reporting. Centralization prevents duplication.
 
 
 ## Packages Layer
@@ -392,7 +409,7 @@ python3 packages/codeql/agent.py \
 **Entry Point**: Also accessible via `raptor_codeql.py` for full workflow
 
 
-### Package: `llm-analysis`
+### Package: `llm_analysis`
 
 **Purpose**: LLM-powered autonomous vulnerability analysis
 
@@ -402,7 +419,7 @@ python3 packages/codeql/agent.py \
 
 **CLI Interface (agent.py)**:
 ```bash
-python3 packages/llm-analysis/agent.py \
+python3 packages/llm_analysis/agent.py \
   --repo /path/to/code \
   --sarif findings1.sarif findings2.sarif \
   --max-findings 10 \
@@ -471,7 +488,7 @@ llm/
 **Dependencies**:
 - `core.config` (paths)
 - `core.logging` (logging)
-- `packages.llm_analysis.llm` (LLM client)
+- `core.llm` (LLM client)
 
 **Design Rationale**: Provides higher-level autonomous capabilities that can be composed across different security testing workflows (fuzzing, exploitation, analysis).
 
@@ -907,7 +924,7 @@ All package agents follow a consistent CLI pattern:
 **static-analysis/scanner.py**:
 - `--policy_groups`: Comma-separated policy groups (e.g., `secrets,owasp`)
 
-**llm-analysis/agent.py**:
+**llm_analysis/agent.py**:
 - `--sarif`: SARIF file(s) to analyze (can specify multiple)
 - `--max-findings`: Limit number of findings to process
 - `--no-exploits`: Skip exploit generation
@@ -1069,7 +1086,7 @@ We think it useful to include such costings, just so people understand how much 
 ## Dependencies
 
 ### Core Dependencies (Required by All)
-- Python 3.9+
+- Python 3.10+ (PEP 604 union syntax used at function-definition time)
 - Standard library: pathlib, logging, json, subprocess, argparse
 
 ### Package-Specific Dependencies
@@ -1081,7 +1098,7 @@ We think it useful to include such costings, just so people understand how much 
 - External: `codeql` CLI (must be installed - see https://codeql.github.com/)
 - Supports multiple languages (Python, Java, C/C++, JavaScript, Go, Ruby, etc.)
 
-**llm-analysis**:
+**llm_analysis**:
 - `anthropic` SDK (if using Claude)
 - `openai` SDK (if using GPT-4)
 - OR local model server
@@ -1138,7 +1155,7 @@ python3 packages/static-analysis/scanner.py --help
 python3 raptor_codeql.py --help
 
 # Test LLM analysis
-python3 packages/llm-analysis/agent.py --help
+python3 packages/llm_analysis/agent.py --help
 
 # Test full workflows
 python3 raptor_agentic.py --help

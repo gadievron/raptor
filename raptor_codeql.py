@@ -71,10 +71,24 @@ def run_autonomous_workflow(args):
     logger.info("RAPTOR CODEQL - AUTONOMOUS SECURITY ANALYSIS")
     logger.info(f"{'=' * 70}")
 
-    # Parse languages
+    # Parse languages — filter out empty entries from leading /
+    # trailing / consecutive commas. Pre-fix `--languages
+    # ",python,"` produced `["", "python", ""]`; the empty
+    # strings then propagated to codeql command lines as
+    # `--language ""` which codeql rejected with an
+    # unhelpful "language not recognised" error. Reject the
+    # whole arg-set with a clear error if filtering leaves
+    # an empty list (operator clearly intended to specify
+    # languages but mistyped).
     languages = None
     if args.languages:
-        languages = [lang.strip() for lang in args.languages.split(",")]
+        languages = [lang.strip() for lang in args.languages.split(",") if lang.strip()]
+        if not languages:
+            logger.error(
+                "--languages was supplied but contains no non-empty entries: %r",
+                args.languages,
+            )
+            sys.exit(1)
 
     # Parse build commands
     build_commands = None
@@ -210,12 +224,14 @@ def run_autonomous_workflow(args):
                 logger.error(f"Analysis failed: {e}", exc_info=True)
 
     # Save autonomous analysis summary
+    short_circuits = getattr(llm_client, "short_circuits", 0)
     summary = {
         "total_findings": scan_result.total_findings,
         "analyzed": total_analyzed,
         "exploitable": total_exploitable,
         "exploits_generated": total_exploits_generated,
         "exploits_compiled": total_exploits_compiled,
+        "fast_tier_short_circuits": short_circuits,
         "scan_result": scan_result.to_dict(),
     }
 
@@ -233,6 +249,8 @@ def run_autonomous_workflow(args):
     print(f"Exploitable: {total_exploitable}")
     print(f"Exploits generated: {total_exploits_generated}")
     print(f"Exploits compiled: {total_exploits_compiled}")
+    if short_circuits > 0:
+        print(f"Fast-tier saved: {short_circuits} full ANALYSE call{'s' if short_circuits != 1 else ''}")
     print(f"\nOutput: {agent.out_dir}")
     print(f"  Scan results: {len(scan_result.sarif_files)} SARIF files")
     print(f"  Autonomous analysis: autonomous/")
@@ -277,15 +295,29 @@ Examples:
     parser.add_argument("--no-visualizations", action="store_true", help="Disable dataflow visualizations")
     parser.add_argument("--trust-repo", action="store_true",
                         help="Trust the target repo's config and skip safety checks "
-                             "(core/security/cc_trust.py).")
+                             "(.claude/settings*.json, .mcp.json, codeql-pack.yml, "
+                             "qlpack.yml, .github/codeql/codeql-config.yml).")
 
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(parser)
     args = parser.parse_args()
-    apply_cli_args(args)
+    # set_trust_override BEFORE apply_cli_args. apply_cli_args
+    # may invoke trust-checks downstream (e.g. when validating
+    # caller-supplied paths against project trust state). Pre-fix
+    # the trust override was set AFTER apply_cli_args, so any
+    # trust check fired during arg-application saw the default
+    # (untrusted) state and could refuse the operation despite
+    # the operator having explicitly passed --trust-repo. Move
+    # the override setup before apply_cli_args.
     if getattr(args, "trust_repo", False):
-        from core.security.cc_trust import set_trust_override
-        set_trust_override(True)
+        # Umbrella flag: every target-repo trust check honours the same
+        # operator-set override. New checks added here must keep this
+        # list in sync.
+        from core.security.cc_trust import set_trust_override as _cc_set
+        from core.security.codeql_trust import set_trust_override as _ql_set
+        _cc_set(True)
+        _ql_set(True)
+    apply_cli_args(args, parser=parser)
 
     try:
         run_autonomous_workflow(args)

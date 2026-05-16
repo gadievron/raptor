@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "finding_id": "owasp_BenchmarkTest02253_codeql_java-command-line-injection-local_06cbc8c6eb28",
+  "producer": "codeql",
+  "rule_id": "java/command-line-injection-local",
+  "message": "This command line depends on a [user-provided value](1).",
+  "source": {
+    "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02253.java",
+    "line": 75,
+    "column": 64,
+    "snippet": "Process p = r.exec(args, argsEnv, new java.io.File(System.getProperty(\"user.dir\")));",
+    "label": "getProperty(...) : String"
+  },
+  "sink": {
+    "file_path": "out/dataflow-corpus-fixtures/owasp-benchmark-java/src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02253.java",
+    "line": 75,
+    "column": 47,
+    "snippet": "Process p = r.exec(args, argsEnv, new java.io.File(System.getProperty(\"user.dir\")));",
+    "label": "new File(...)"
+  },
+  "intermediate_steps": [],
+  "raw": {
+    "ruleId": "java/command-line-injection-local",
+    "ruleIndex": 0,
+    "rule": {
+      "id": "java/command-line-injection-local",
+      "index": 0
+    },
+    "message": {
+      "text": "This command line depends on a [user-provided value](1)."
+    },
+    "locations": [
+      {
+        "physicalLocation": {
+          "artifactLocation": {
+            "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02253.java",
+            "uriBaseId": "%SRCROOT%",
+            "index": 59
+          },
+          "region": {
+            "startLine": 75,
+            "startColumn": 47,
+            "endColumn": 95
+          }
+        }
+      }
+    ],
+    "partialFingerprints": {
+      "primaryLocationLineHash": "e82b0d901027cafb:1",
+      "primaryLocationStartColumnFingerprint": "34"
+    },
+    "codeFlows": [
+      {
+        "threadFlows": [
+          {
+            "locations": [
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02253.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 59
+                    },
+                    "region": {
+                      "startLine": 75,
+                      "startColumn": 64,
+                      "endColumn": 94
+                    }
+                  },
+                  "message": {
+                    "text": "getProperty(...) : String"
+                  }
+                }
+              },
+              {
+                "location": {
+                  "physicalLocation": {
+                    "artifactLocation": {
+                      "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02253.java",
+                      "uriBaseId": "%SRCROOT%",
+                      "index": 59
+                    },
+                    "region": {
+                      "startLine": 75,
+                      "startColumn": 47,
+                      "endColumn": 95
+                    }
+                  },
+                  "message": {
+                    "text": "new File(...)"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "relatedLocations": [
+      {
+        "id": 1,
+        "physicalLocation": {
+          "artifactLocation": {
+            "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02253.java",
+            "uriBaseId": "%SRCROOT%",
+            "index": 59
+          },
+          "region": {
+            "startLine": 75,
+            "startColumn": 64,
+            "endColumn": 94
+          }
+        },
+        "message": {
+          "text": "user-provided value"
+        }
+      },
+      {
+        "physicalLocation": {
+          "artifactLocation": {
+            "uri": "src/main/java/org/owasp/benchmark/testcode/BenchmarkTest02253.java",
+            "uriBaseId": "%SRCROOT%",
+            "index": 59
+          },
+          "region": {
+            "startLine": 75,
+            "startColumn": 64,
+            "endColumn": 94
+          }
+        }
+      }
+    ]
+  }
+}

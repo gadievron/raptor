@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "webgoat_codeql_java-path-injection_d351ea5e0cab",
+  "verdict": "true_positive",
+  "fp_category": null,
+  "rationale": "Despite the file name, this handler still uses attacker-controlled input: `file.getOriginalFilename()` (line 41) returns the original client-supplied name, which can contain path traversal sequences. The 'fix' merely removes the explicit fullName parameter; the implicit filename source is unchanged. CWE-22.",
+  "labeler": "handlabel-juice-shop-webgoat",
+  "labeled_at": "2026-05-10"
+}

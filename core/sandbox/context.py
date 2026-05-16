@@ -8,8 +8,10 @@ to each result.
 
 import logging
 import os
+import shutil
 import stat
 import subprocess
+import sys
 from contextlib import contextmanager
 from typing import List, Optional
 
@@ -40,8 +42,153 @@ def check_mount_available():
     return _probes.check_mount_available()
 def check_seccomp_available():
     return _seccomp.check_seccomp_available()
+def check_seatbelt_available():
+    return _probes.check_seatbelt_available()
 
 logger = logging.getLogger(__name__)
+
+
+def _audit_degrade_reason(b_fallback_reason, b_fallback_instr,
+                          target, output, kwargs) -> tuple:
+    """Return (reason, instructions) explaining why audit can't engage.
+
+    Called when ``audit_mode`` was requested but ``spawn_eligible`` is
+    False, to populate the operator-facing WARNING and the
+    ``sandbox-audit-degraded.json`` marker.
+
+    Resolution order — the first matching cause wins, so check the
+    most specific causes first:
+
+      1. B fallback / cache hit set ``b_fallback_reason`` upstream
+         (cmd[0] outside mount tree, or cached as known-failing).
+         Their reason is the most specific: it names the binary.
+      2. ``check_mount_available()`` False — host kernel refuses
+         unprivileged mount-ns (Ubuntu 24.04 default sysctl).
+      3. ``pass_fds=`` kwarg set — _spawn doesn't plumb inherited
+         fds; the call had to go subprocess+preexec.
+      4. ``input=`` kwarg set — same reason; piping stdin via
+         input= can't survive mount-ns fork+exec.
+      5. ``target`` and ``output`` both None — mount-ns has nothing
+         to bind-mount as the working area; the tracer has nowhere
+         to attach in the new namespace.
+      6. Catch-all — reachable only if a future change adds a new
+         spawn-eligibility gate without updating this helper.
+
+    Each branch returns a short ``reason`` (what failed) and
+    ``instructions`` (operator action to fix). Both flow into the
+    WARNING and the per-output-dir marker so audit operators can
+    diagnose without cross-referencing source.
+    """
+    if b_fallback_reason:
+        return (b_fallback_reason, b_fallback_instr)
+    if sys.platform == "darwin":
+        # macOS path. The only spawn-disabling host condition on
+        # darwin (after the pass_fds / input checks below) is
+        # sandbox-exec being missing or smoke-test-failing.
+        if not check_seatbelt_available():
+            return (
+                "macOS sandbox-exec is unavailable (smoke test "
+                "failed or /usr/bin/sandbox-exec missing)",
+                "verify `sandbox-exec -p '(version 1)(allow default)' "
+                "/usr/bin/true` succeeds on this host; reinstall "
+                "Command Line Tools if missing.",
+            )
+    elif not check_mount_available():
+        return (
+            "mount-ns blocked by host "
+            "(apparmor_restrict_unprivileged_userns=1)",
+            "set kernel.apparmor_restrict_unprivileged_userns=0 "
+            "(Ubuntu 24.04+) and install the uidmap package; or "
+            "rerun on a host where mount-ns is available.",
+        )
+    if kwargs.get("pass_fds"):
+        return (
+            "call uses pass_fds= which spawn doesn't plumb through",
+            "rework the caller to avoid pass_fds or accept that this "
+            "call won't audit",
+        )
+    if kwargs.get("input") is not None:
+        return (
+            "call uses input= which spawn doesn't plumb through",
+            "pipe via stdin= instead of input=, or accept that this "
+            "call won't audit",
+        )
+    if not (target or output):
+        # Common case: callers that pass audit_run_dir= alone for
+        # audit-signal routing but no target/output for filesystem
+        # isolation (codeql analyze, helper subprocesses).
+        return (
+            "call has no target= or output= — mount-ns has nothing "
+            "to bind-mount, so the tracer can't attach",
+            "pass target=<repo_path> and/or output=<run_dir> for "
+            "full mount-ns isolation + audit, or accept that this "
+            "call runs at Landlock-only.",
+        )
+    # Reachable only if a future change adds a spawn-eligibility gate
+    # without updating this helper. Better than lying with a specific
+    # message; the docstring above tells the reader to update both.
+    return (
+        "spawn-path unavailable for this call (unknown reason)",
+        "inspect core/sandbox/context.py spawn_eligible determination "
+        "and update _audit_degrade_reason with the new branch.",
+    )
+
+
+def _cmd_visible_in_mount_tree(cmd, target, output, extra_paths) -> bool:
+    """Check if cmd[0] resolves to a path visible inside the mount-ns
+    bind tree.
+
+    The mount-ns sandbox bind-mounts a fixed set of system directories
+    (see core.sandbox.mount_ns._SYSTEM_RO_DIRS), plus target/output/
+    /tmp (per-sandbox tmpfs replaces host /tmp), plus any extra
+    readable/tool paths the caller supplied. Anything else is invisible
+    inside the new rootfs — invoking it produces ENOENT (subprocess
+    exit 127) with empty stderr.
+
+    Returns True if cmd[0] resolves to a path within any bind-mount
+    prefix, False otherwise. Returns True (don't trigger fallback) when
+    cmd is empty or cmd[0] can't be resolved at all — in that case the
+    subprocess will fail with the normal command-not-found error
+    regardless of which path we take.
+    """
+    from .mount_ns import _SYSTEM_RO_DIRS
+    if not cmd:
+        return True
+    cmd0 = cmd[0]
+    # Resolve to absolute path. shutil.which honours $PATH for relative
+    # invocations; for absolute or "./relative" paths it returns the
+    # input unchanged if executable. Returns None if not findable.
+    resolved = shutil.which(cmd0) or cmd0
+    if not resolved or not os.path.isabs(resolved):
+        # Can't determine — let the call proceed; the subprocess will
+        # fail with a clear ENOENT if the binary doesn't exist anywhere.
+        return True
+    # Follow symlinks so we check the real binary path. A symlink at
+    # /usr/local/bin/X → /home/USER/bin/X resolves to the home path
+    # and would correctly fail the visibility check.
+    abs_path = os.path.realpath(resolved)
+    # System bind-mount prefixes (must match mount_ns._SYSTEM_RO_DIRS).
+    # /tmp is the per-sandbox tmpfs — host /tmp content is NOT visible,
+    # so a binary at /tmp/X would be invisible inside the sandbox; we
+    # deliberately do NOT add /tmp to the visible list.
+    for sysdir in _SYSTEM_RO_DIRS:
+        prefix = f"/{sysdir}"
+        if abs_path == prefix or abs_path.startswith(prefix + "/"):
+            return True
+    # target / output bind-mounts (visible at original absolute path).
+    for d in (target, output):
+        if d:
+            d_abs = os.path.realpath(d)
+            if abs_path == d_abs or abs_path.startswith(d_abs + "/"):
+                return True
+    # Caller-supplied extras (readable_paths + tool_paths union).
+    for d in (extra_paths or []):
+        if not d:
+            continue
+        d_abs = os.path.realpath(d)
+        if abs_path == d_abs or abs_path.startswith(d_abs + "/"):
+            return True
+    return False
 
 
 @contextmanager
@@ -52,7 +199,12 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             use_egress_proxy: bool = False, proxy_hosts: list = None,
             restrict_reads: bool = False, readable_paths: list = None,
             caller_label: str = None,
-            fake_home: bool = False):
+            fake_home: bool = False,
+            tool_paths: list = None,
+            audit: bool = False, audit_verbose: bool = False,
+            audit_run_dir: Optional[str] = None,
+            observe: bool = False,
+            writable_paths: Optional[list] = None):
     """Context manager for sandboxed subprocess execution.
 
     Each run() call inside the context runs the target command with the
@@ -177,8 +329,82 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
     #      (injected in run() once the env dict is finalised).
     # The proxy_* state is threaded through the `run()` closure below.
     proxy_instance = None
+    # Audit-mode ref-count flags — initialised at function top so the
+    # post-yield finally can reference them safely regardless of which
+    # setup-path branches were taken.
+    #   _will_engage_audit: decision made during setup ("audit will
+    #     engage at yield-time"). Set inside the use_egress_proxy
+    #     block when audit_mode is True.
+    #   _engaging_audit: actually acquired the proxy ref-count. Set
+    #     immediately before yield, after successful acquire. The
+    #     post-yield finally checks this to decide whether to release.
+    _will_engage_audit = False
+    _engaging_audit = False
     proxy_env_overrides: dict = {}
     seccomp_block_udp = False
+
+    # Audit-mode resolution. Three inputs:
+    # 1. CLI flag (state._cli_sandbox_audit) — set by --audit
+    # 2. Per-call kwarg (audit) — set by sandbox(audit=True)
+    # 3. Effective enforcement: audit is incoherent without
+    #    enforcement layers active. Per-call disabled=True OR CLI
+    #    --no-sandbox / --sandbox none → no enforcement → audit
+    #    silently no-ops (CLI form is validated at apply_cli_args
+    #    entry; per-call form is silently demoted here so callers
+    #    passing disabled=True without thinking about audit aren't
+    #    surprised by a ValueError).
+    #
+    # We need to know "is the sandbox effectively disabled" BEFORE
+    # acquiring the egress-proxy audit ref-count below — otherwise a
+    # `sandbox(audit=True, disabled=True)` call would acquire the
+    # ref-count without ever using audit, leaking the count if the
+    # release path doesn't fire (which it does, but defensive).
+    _effectively_disabled = (
+        bool(disabled)
+        or bool(state._cli_sandbox_disabled)
+        or state._cli_sandbox_profile == "none"
+        or profile == "none"
+    )
+    # Observe mode is "audit + audit_verbose + write to a separate
+    # JSONL file + extend the trace set with stat-family". Engaging
+    # observe implies audit (TRACE action requires a tracer) and
+    # audit_verbose (we want every traced syscall, not just the ones
+    # outside an enforcement allowlist). Force both upstream so a
+    # caller passing only observe=True gets coherent behaviour.
+    audit_mode = (
+        (bool(state._cli_sandbox_audit) or bool(audit) or bool(observe))
+        and not _effectively_disabled
+    )
+    audit_verbose_active = (
+        (bool(state._cli_sandbox_audit_verbose)
+            or bool(audit_verbose)
+            or bool(observe))
+        and audit_mode
+    )
+    # Per-run observe nonce — 128 bits, generated up here so we can
+    # both forward it to the spawn layer (which threads it into the
+    # audit-config tempfile the tracer reads) AND retain it locally
+    # to stamp `result.sandbox_info["observe_nonce"]` after each run
+    # so the operator can pass it to parse_observe_log() for spoof-
+    # resistant parsing. The audit-config tempfile lives in /tmp
+    # outside the sandbox view, so a target binary cannot read the
+    # nonce; the JSONL records the binary CAN read carry the nonce
+    # but the binary can't reuse it without the parser noticing
+    # (parser pins to the per-run nonce, not "any nonce on record").
+    # None when observe is off.
+    if observe and audit_mode:
+        import secrets as _secrets
+        nonlocal_observe_nonce = _secrets.token_hex(16)
+    else:
+        nonlocal_observe_nonce = None
+
+    # NOTE on audit + output=None: validation deferred to spawn-time
+    # (run_sandboxed) — sandbox() entry just stages config; tests and
+    # programmatic users may construct a context purely to observe
+    # ref-count wiring without ever calling run(), and we shouldn't
+    # require output for those cases. When run() IS called and audit
+    # is engaged with no output, spawn raises ValueError with a
+    # clear "audit_mode=True requires audit_run_dir=" message.
 
     # Fake-HOME setup — create an empty home dir under `output` and
     # stage env overrides for the run() closure. Deferred to run-time
@@ -273,6 +499,26 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
 
         from . import proxy as _proxy_mod
         proxy_instance = _proxy_mod.get_proxy(proxy_hosts)
+        # Audit profile: ref-count engage allow-and-log on the
+        # hostname gate. Look ahead at state._cli_sandbox_profile
+        # because the per-call profile arg may not be set when the
+        # caller passed only --sandbox at the CLI. Acquire here;
+        # the matching release runs in the finally below so an
+        # exception during sandbox setup doesn't leave the count
+        # stuck above zero.
+        #
+        # Set _engaging_audit ONLY after a successful acquire — if
+        # acquire raises, the finally would otherwise call release
+        # without a matching acquire (idempotent, but produces a
+        # spurious operator log).
+        # Audit-mode acquire is DEFERRED to just before yield (see
+        # below). If we acquired here, an exception in the ~700 LOC
+        # of sandbox setup between this point and the yield would
+        # leave the ref-count permanently incremented (the
+        # contextmanager's try/finally only fires after a yield).
+        # Decision recorded as `_will_engage_audit`; the actual
+        # acquire happens right before the yield.
+        _will_engage_audit = bool(audit_mode)
         # Landlock TCP allowlist pins the child to the proxy port only.
         # Caller-supplied allowed_tcp_ports is overridden (with a log if
         # non-empty) — mixing with the proxy would let children bypass it.
@@ -344,10 +590,25 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
     # Explicitly disabled: no seccomp either (rlimits-only contract).
     if effectively_disabled:
         seccomp_profile = None
-    use_sandbox = not effectively_disabled and check_net_available()
-    # Truthy check to match the rest of the module — empty string / empty
-    # list are treated consistently as "not provided".
-    use_mount = use_sandbox and bool(target or output) and check_mount_available()
+    # Backend selection. Linux uses mount-ns + Landlock + seccomp gated
+    # on `check_net_available()` (the user-namespace foundation); macOS
+    # uses sandbox-exec / SBPL gated on `check_seatbelt_available()`.
+    # `use_sandbox` is the platform-aware "is some host-level isolation
+    # backend live for this call" flag — without the per-platform gate
+    # here, macOS would always see use_sandbox=False (no unshare
+    # binary) and silently never engage seatbelt. Both `use_mount` and
+    # `use_seatbelt` are derived from `use_sandbox` so the rest of the
+    # module reads them uniformly. Truthy check on target/output
+    # matches the rest of the module — empty string / empty list are
+    # treated consistently as "not provided".
+    if sys.platform == "darwin":
+        use_sandbox = not effectively_disabled and check_seatbelt_available()
+        use_mount = False
+        use_seatbelt = use_sandbox
+    else:
+        use_sandbox = not effectively_disabled and check_net_available()
+        use_mount = use_sandbox and bool(target or output) and check_mount_available()
+        use_seatbelt = False
 
     if effectively_disabled and not state._cli_sandbox_disabled:
         logger.info("Sandbox disabled for this call")
@@ -355,6 +616,26 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         if state.warn_once("_sandbox_unavailable_warned"):
             logger.warning(
                 "Sandbox unavailable — subprocesses run without namespace isolation"
+            )
+    elif sys.platform != "darwin" and use_sandbox and not use_mount and (target or output):
+        # Linux Landlock-only mode: sandbox engaged but mount-ns
+        # didn't (typically because unprivileged user namespaces are
+        # disabled — Ubuntu 24.04+ ships with
+        # ``kernel.apparmor_restrict_unprivileged_userns=1`` as the
+        # default).  Without mount-ns, ``$HOME`` and the host's
+        # ``/tmp`` are visible to the sandboxed child, and same-UID
+        # ``/proc/<pid>/`` reads are not UID-remapped.  ``restrict_reads=True``
+        # is the load-bearing defence in this mode.  See
+        # ``core/security/THREAT_MODEL.md`` (invariant I2-(a)).
+        if state.warn_once("_sandbox_landlock_only_warned"):
+            logger.warning(
+                "RAPTOR: sandbox running in Landlock-only mode — "
+                "mount namespace unavailable, likely "
+                "kernel.apparmor_restrict_unprivileged_userns=1. "
+                "Credential exfil is bounded only by Landlock; "
+                "callers that dispatch LLM-driven sub-agents on "
+                "hostile source should set restrict_reads=True. "
+                "See core/security/THREAT_MODEL.md (I2-(a)).",
             )
 
     effective_limits = dict(_DEFAULT_LIMITS)
@@ -366,11 +647,30 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
     # Landlock and mount-ns combine cleanly because the mount-ns path
     # engages via core.sandbox._spawn, which runs mount ops BEFORE
     # landlock_restrict_self — Landlock doesn't block them.
+    # `writable_paths` from caller is layered on top of the canonical
+    # writable surface (output + /tmp). Use case: SCA agents whose
+    # resolver subprocesses (pip-compile, npm install
+    # --package-lock-only, mvn dependency:resolve) need to write
+    # into their own scratch dirs (~/.cache/pip, ~/.npm, ~/.m2)
+    # outside the per-run output dir. Pre-fix the only way to
+    # extend the surface was to add the path to `output`, which
+    # broke Landlock's invariant that `output` is the canonical
+    # write location. Naming `writable_paths` separately keeps
+    # the canonical / extra distinction explicit.
+    extra_writable_paths = list(writable_paths or [])
     writable_paths = None
-    if target or output or allowed_tcp_ports:
+    if target or output or allowed_tcp_ports or extra_writable_paths:
         writable_paths = ["/tmp"]
         if output:
-            writable_paths.append(output)
+            # Absolutize: a relative path like "out/foo" fails Landlock
+            # open in the mount-ns child after pivot_root (the new
+            # rootfs has no `out/` directory) and triggers the
+            # "RAPTOR: Landlock writable path could not be opened"
+            # stderr line. The bind-mount fallback masks the failure
+            # as a silent enforcement gap on writes to `output`.
+            writable_paths.append(os.path.abspath(output))
+        for extra in extra_writable_paths:
+            writable_paths.append(os.path.abspath(extra))
 
     # Loud warnings when caller requested Landlock features but the kernel
     # does not actually support them — silent degradation here would mean
@@ -392,7 +692,14 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                 f"to. For a network allowlist, pass block_network=False."
             )
 
-    if not effectively_disabled and not use_mount and (target or output or allowed_tcp_ports):
+    # Skip the entire Landlock-availability warning block on macOS:
+    # seatbelt provides the equivalent enforcement (writable_paths,
+    # readable_paths, allowed_tcp_ports all flow into the SBPL profile).
+    # Without this gate, every macOS sandbox call would fire the
+    # "Landlock unavailable" warning even when seatbelt is fully
+    # engaged — confusing and Linux-flavoured.
+    if (not effectively_disabled and not use_mount and not use_seatbelt
+            and (target or output or allowed_tcp_ports)):
         if not check_landlock_available():
             if state.warn_once("_landlock_warned_unavailable"):
                 logger.warning(
@@ -526,6 +833,50 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                 f"{sorted(misused)} — isolation is fixed by the enclosing "
                 f"sandbox() context. Open a new sandbox(...) block to change it."
             )
+
+        # Audit-mode + missing output= handling. Two distinct cases:
+        #
+        # 1. EXPLICIT per-call kwarg `audit=True` + no output= →
+        #    operator-level mistake (caller deliberately asked for
+        #    audit on a call that has no output dir). Raise loudly.
+        #
+        # 2. CLI flag `--audit` set, but THIS particular sandbox call
+        #    happens to have no output= (internal helper sandboxes
+        #    like git-init on a temp target dir, capability probes,
+        #    etc.). The operator asked for audit at process level;
+        #    they didn't necessarily mean "audit every internal
+        #    helper". Silently skip audit for this call so the
+        #    workflow continues — sandbox calls that DO have output
+        #    still produce audit signal as the operator intended.
+        nonlocal_audit_mode = audit_mode
+        # `audit_run_dir` decouples "where audit JSONL goes" from
+        # "what Landlock restricts writes to". Either output= or
+        # audit_run_dir= satisfies the audit-target requirement.
+        # Callers that want audit signal WITHOUT a Landlock writable-
+        # path restriction (e.g. codeql analyze, where writes
+        # legitimately go to ~/.codeql, the database dir, etc.) pass
+        # audit_run_dir= alone.
+        _has_audit_target = bool(output) or bool(audit_run_dir)
+        if audit_mode and not _has_audit_target:
+            if audit:  # case 1 — explicit per-call kwarg
+                raise ValueError(
+                    "audit mode requires output= or audit_run_dir= so "
+                    "the tracer has a directory to write "
+                    "sandbox-summary.json into. Pass output=<dir> "
+                    "when constructing sandbox(...) (which also "
+                    "engages Landlock writable-path restriction) or "
+                    "audit_run_dir=<dir> (audit-only, no Landlock "
+                    "impact). run_untrusted() enforces output=."
+                )
+            # case 2 — CLI flag + internal helper without output.
+            # Silently demote audit for this call only. The state
+            # flag stays True for other sandbox calls in the process.
+            logger.debug(
+                "Sandbox: --audit flag is set but this call has no "
+                "output= or audit_run_dir= path; tracer cannot write "
+                "JSONL — audit demoted for this call only."
+            )
+            nonlocal_audit_mode = False
 
         # Always use safe env unless caller provided their own.
         # env=None is treated as "no env kwarg" — the subprocess
@@ -666,7 +1017,17 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         # ns + IPC ns + user ns, without network ns unless block_network
         # is also set (the egress proxy needs the shared net ns to be
         # reachable on loopback).
-        need_unshare = use_sandbox and (block_network or use_mount or restrict_reads)
+        # `need_unshare` gates the Linux user-namespace bootstrap
+        # (`unshare` + `prlimit` + pid1 shim). On macOS, isolation
+        # comes from sandbox-exec / SBPL — there is no `unshare`
+        # binary to resolve, and the seatbelt path runs through
+        # _macos_spawn instead. Without the use_seatbelt veto, an
+        # ineligible-for-spawn macOS call (or even a fully eligible
+        # one, since the unshare_cmd is built unconditionally below)
+        # tries to resolve `unshare` and crashes the sandbox call.
+        need_unshare = (use_sandbox
+                        and not use_seatbelt
+                        and (block_network or use_mount or restrict_reads))
 
         # Log active sandbox layers for this command. Cache the Landlock
         # probe locally so we don't reacquire the cache lock 2-3× per run().
@@ -817,9 +1178,158 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         #     thread to avoid pipe-fill deadlock on large inputs)
         # (`stdin=<fd>` IS plumbed through _spawn.run_sandboxed, so we
         # only exclude `input=` here, not plain stdin=.)
-        spawn_eligible = (use_mount
+        # Either backend (Linux mount-ns or macOS seatbelt) routes through
+        # the spawn path; the same kwarg-compat gate applies to both
+        # (pass_fds / input= aren't plumbed through either backend's
+        # custom spawn implementation — Linux _spawn does its own
+        # os.fork() chain, macOS _macos_spawn wraps subprocess.run with
+        # sandbox-exec but still uses our preexec for rlimits, where
+        # input= would race against the writer-thread we don't have).
+        spawn_eligible = ((use_mount or use_seatbelt)
                           and not kwargs.get("pass_fds")
                           and kwargs.get("input") is None)
+        # Track the audit-degraded reason so the audit-mode degraded
+        # diagnostic block (further down) can attribute correctly.
+        # B fallback and speculative-cache hit are NEW failure paths
+        # added in PR #265; the audit code's existing block only knew
+        # about mount-ns/pass_fds/input. Distinct reason strings help
+        # operators understand WHY audit didn't engage.
+        _b_fallback_reason = None
+        _b_fallback_instr = None
+        # Per-call check that cmd[0] is visible inside the mount-ns
+        # bind tree. The bind tree is fixed: standard system dirs,
+        # target/output, /tmp (per-sandbox tmpfs), and the union of
+        # readable_paths + tool_paths. Anything else (pip --user
+        # install at ~/.local/bin, homebrew at /opt/homebrew/bin,
+        # pyenv shims, ad-hoc /home/USER/bin) is invisible inside
+        # the new rootfs — the subprocess fails with ENOENT (exit
+        # 127) and an empty stderr that operators may misread as
+        # "tool found nothing" rather than "tool didn't run".
+        # macOS sandbox-exec doesn't change the filesystem view, so
+        # this check + the speculative-C cache it feeds are skipped
+        # on Darwin (use_mount is always False there).
+        if spawn_eligible and use_mount and cmd:
+            _all_extra = list(effective_read_paths or []) + list(tool_paths or [])
+            _resolved = shutil.which(cmd[0]) or cmd[0]
+            # B fallback: cmd[0] not in mount-ns bind tree → skip
+            # mount-ns directly.
+            if not _cmd_visible_in_mount_tree(cmd, target, output, _all_extra):
+                logger.debug(
+                    "Sandbox: Landlock-only for cmd[0]=%r "
+                    "(resolved=%r, outside mount-ns bind tree). "
+                    "Install under a system dir (/usr/local/bin) "
+                    "or pass tool_paths=[<dir>] to engage mount-ns.",
+                    cmd[0], _resolved,
+                )
+                spawn_eligible = False
+                _b_fallback_reason = (
+                    f"cmd[0]={cmd[0]!r} (resolved={_resolved!r}) is "
+                    f"outside the mount-ns bind tree — sandbox used "
+                    f"Landlock-only, tracer cannot attach")
+                _b_fallback_instr = (
+                    "install the tool under a system dir "
+                    "(/usr/local/bin) or pass tool_paths=[<bin_dir>] "
+                    "to extend the mount-ns bind tree.")
+            # Speculative-C cache: cmd[0] previously failed mount-ns
+            # at exec (typical Python tool with native exec deps not
+            # in any reasonable bind set). Skip the doomed mount-ns
+            # attempt entirely — saves ~100-300ms per call.
+            elif _resolved in state._speculative_failure_cache:
+                logger.debug(
+                    "Sandbox: Landlock-only for cmd[0]=%r — known "
+                    "speculative-failure cache hit (mount-ns "
+                    "previously failed at exec for this binary)",
+                    cmd[0],
+                )
+                spawn_eligible = False
+                _b_fallback_reason = (
+                    f"cmd[0]={cmd[0]!r} previously failed mount-ns at "
+                    f"exec — cached as known-Landlock-only; tracer "
+                    f"cannot attach for cached binaries")
+                _b_fallback_instr = (
+                    "the binary's native exec deps are outside any "
+                    "reasonable mount-ns bind set; audit can't engage "
+                    "for this tool. Other tools in the same workflow "
+                    "still audit normally.")
+        # Audit mode (b2/b3) requires the _spawn path because the
+        # tracer needs to PTRACE_SEIZE a target the parent forked
+        # itself. The Landlock-only fallback uses bare subprocess.run
+        # which doesn't surface the target's pid for ptrace attach.
+        # If audit was requested but spawn isn't eligible, warn the
+        # operator that b2/b3 silently degrade. b1 (egress proxy
+        # log-mode) is independent and still works.
+        # Use `nonlocal_audit_mode` (the per-call effective state) not
+        # `audit_mode` (the global request) — internal helper sandboxes
+        # without target/output have already been silently demoted at
+        # line ~620 ("case 2: CLI flag + internal helper without
+        # output"). Firing the degradation warning for those calls is
+        # noise.
+        # Probe whether the Landlock-only audit helper can engage on
+        # this host. When True, the spawn dispatch will route through
+        # ``_landlock_audit.run_landlock_audit`` instead of bare
+        # ``subprocess.run``, restoring observe signal. Suppress the
+        # degrade marker / warning in that case — audit IS engaging,
+        # just via a different mechanism. Probed eagerly here so the
+        # marker decision and the eventual dispatch agree on whether
+        # this run is "audit-degraded" or not.
+        _landlock_audit_eligible = False
+        if nonlocal_audit_mode and not spawn_eligible:
+            try:
+                from .ptrace_probe import (
+                    check_ptrace_available as _la_pre_ptp,
+                )
+                from .seccomp import (
+                    check_seccomp_available as _la_pre_sca,
+                )
+                _landlock_audit_eligible = bool(
+                    _la_pre_sca() and _la_pre_ptp() and seccomp_profile
+                )
+            except ImportError:
+                _landlock_audit_eligible = False
+        if (nonlocal_audit_mode and not spawn_eligible
+                and not _landlock_audit_eligible):
+            # Distinguish the actual root cause. PR #265 added two new
+            # failure paths (B fallback, cache hit) — those provide
+            # their own _b_fallback_reason; otherwise fall through to
+            # the audit-PR's original reasons (host blocked, pass_fds,
+            # input).
+            degrade_reason, degrade_instr = _audit_degrade_reason(
+                _b_fallback_reason, _b_fallback_instr,
+                target, output, kwargs,
+            )
+            if state.warn_once("_audit_warned_no_spawn"):
+                logger.warning(
+                    "Sandbox: --audit requested but %s; syscall + "
+                    "filesystem audit (b2/b3) silently degrade to "
+                    "enforcement. Network audit (b1, if "
+                    "use_egress_proxy=True) is unaffected. Fix: %s",
+                    degrade_reason, degrade_instr,
+                )
+            # Per-call marker so operators inspecting an output dir can
+            # distinguish "audit ran, found nothing" (no marker, no
+            # sandbox-summary.json) from "audit was requested but didn't
+            # actually run on this host" (this marker present). A
+            # log-only warning is easy to miss in agentic where dozens
+            # of subprocesses run in parallel and the first warning
+            # scrolls off; the marker is per-output-dir and discoverable
+            # after the fact.
+            #
+            # Marker location: audit_run_dir takes precedence (it's the
+            # canonical "where audit signal lands" path); fall back to
+            # output. Callers like codeql analyze pass audit_run_dir
+            # WITHOUT output (they want audit signal in a specific dir
+            # without taking a Landlock writable_paths restriction). If
+            # neither is set, the call's audit was already demoted
+            # silently upstream — no marker needed.
+            _marker_dir = audit_run_dir or output
+            if _marker_dir:
+                from pathlib import Path as _Path
+                from . import summary as _summary_mod
+                _summary_mod.record_audit_degraded(
+                    _Path(_marker_dir),
+                    reason=degrade_reason,
+                    instructions=degrade_instr,
+                )
         # The try/finally that unregisters the proxy token must wrap
         # BOTH paths (spawn + subprocess.run). Without this, an
         # unexpected exception from _spawn.run_sandboxed (anything
@@ -829,10 +1339,87 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
         # per-sandbox dict would grow unboundedly across a long
         # session with flaky sandboxes.
         try:
-            if spawn_eligible:
+            if spawn_eligible and use_seatbelt:
+                # macOS sandbox-exec path. No fork/pivot_root chain; no
+                # mount-ns fallback ladder. sandbox-exec wraps a single
+                # execvp with the SBPL profile applied via Sandbox.kext.
+                # No bind-tree visibility check, no speculative-C cache —
+                # the filesystem view is unchanged, so the typical
+                # mount-ns failure modes don't exist.
+                from . import _macos_spawn as _macos_mod
+                _audit_run_dir = (
+                    (audit_run_dir or output)
+                    if nonlocal_audit_mode else None
+                )
+                result = _macos_mod.run_sandboxed(
+                    cmd,
+                    target=target, output=output,
+                    block_network=block_network,
+                    nproc_limit=nproc_limit,
+                    limits=effective_limits,
+                    writable_paths=writable_paths or [],
+                    readable_paths=effective_read_paths or [],
+                    allowed_tcp_ports=list(allowed_tcp_ports)
+                        if allowed_tcp_ports else None,
+                    # Linux-only kwargs accepted for signature parity
+                    # with _spawn.run_sandboxed; ignored by SBPL backend.
+                    seccomp_profile=seccomp_profile,
+                    seccomp_block_udp=seccomp_block_udp,
+                    env=kwargs.get("env"),
+                    cwd=kwargs.get("cwd"),
+                    timeout=kwargs.get("timeout"),
+                    capture_output=kwargs.get("capture_output", False),
+                    text=kwargs.get("text", False),
+                    stdin=kwargs.get("stdin"),
+                    audit_mode=nonlocal_audit_mode,
+                    audit_run_dir=_audit_run_dir,
+                    audit_verbose=audit_verbose_active and nonlocal_audit_mode,
+                    observe_mode=observe and nonlocal_audit_mode,
+                    observe_nonce=(nonlocal_observe_nonce
+                                   if observe and nonlocal_audit_mode
+                                   else None),
+                    restrict_reads=restrict_reads,
+                    use_egress_proxy=use_egress_proxy,
+                    proxy_port=(proxy_instance.port
+                                if proxy_instance is not None else None),
+                    fake_home=fake_home,
+                    map_root=map_root,
+                    start_new_session=kwargs.get("start_new_session", True),
+                )
+                used_spawn = True
+            elif spawn_eligible:
                 try:
                     from . import _spawn as _spawn_mod
                     if _spawn_mod.mount_ns_available():
+                        # Union readable_paths + tool_paths into the
+                        # single readable_paths list _spawn forwards as
+                        # mount-ns extra_ro_paths. tool_paths is just a
+                        # named view of "extra dirs to bind-mount so a
+                        # caller-known tool's binary/deps are visible";
+                        # mount-ns layer doesn't need to distinguish.
+                        _readable_with_tools = list(effective_read_paths or [])
+                        for _tp in (tool_paths or []):
+                            if _tp and _tp not in _readable_with_tools:
+                                _readable_with_tools.append(_tp)
+                        # Audit mode: thread audit_mode + audit_run_dir
+                        # through to _spawn so the seccomp filter uses
+                        # SCMP_ACT_TRACE and the tracer subprocess runs.
+                        # Resolution order for the JSONL home:
+                        #   1. explicit audit_run_dir kwarg — for callers
+                        #      that want audit signal WITHOUT taking a
+                        #      Landlock writable_paths restriction (e.g.
+                        #      codeql analyze, where writes legitimately
+                        #      go to ~/.codeql/cache, the database dir,
+                        #      etc., none of which can be enumerated as
+                        #      writable_paths without breaking the tool)
+                        #   2. fall back to `output` — preserves the
+                        #      original behaviour for callers that
+                        #      already pass output and want a single
+                        #      directory for both purposes.
+                        _audit_run_dir = (
+                            (audit_run_dir or output)
+                            if nonlocal_audit_mode else None
+                        )
                         result = _spawn_mod.run_sandboxed(
                             cmd,
                             target=target, output=output,
@@ -840,7 +1427,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                             nproc_limit=nproc_limit,
                             limits=effective_limits,
                             writable_paths=writable_paths or [],
-                            readable_paths=effective_read_paths,
+                            readable_paths=_readable_with_tools,
                             allowed_tcp_ports=list(allowed_tcp_ports)
                                 if allowed_tcp_ports else None,
                             seccomp_profile=seccomp_profile,
@@ -851,6 +1438,14 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                             capture_output=kwargs.get("capture_output", False),
                             text=kwargs.get("text", False),
                             stdin=kwargs.get("stdin"),
+                            audit_mode=nonlocal_audit_mode,
+                            audit_run_dir=_audit_run_dir,
+                            audit_verbose=audit_verbose_active and nonlocal_audit_mode,
+                            observe_mode=observe and nonlocal_audit_mode,
+                            observe_nonce=(nonlocal_observe_nonce
+                                           if observe and nonlocal_audit_mode
+                                           else None),
+                            restrict_reads=restrict_reads,
                             # Default True here even though subprocess.run
                             # defaults to False — _spawn's historical
                             # behaviour was unconditional os.setsid() and
@@ -865,6 +1460,125 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                             start_new_session=kwargs.get("start_new_session", True),
                         )
                         used_spawn = True
+                        # Speculative-C retry: if tool_paths was supplied
+                        # and the call exited 126/127 with empty stderr,
+                        # the bind set was almost certainly insufficient
+                        # (typical Python tool: bin dir bound but stdlib
+                        # at sys.prefix/lib/pythonX.Y was not — Python
+                        # dies at `import encodings` before its stderr
+                        # handler initialises). 126/127 with NON-empty
+                        # stderr is a normal tool failure (semgrep
+                        # arg-parse error, etc.) — leave alone. Empty
+                        # stderr is the give-away that the process
+                        # never reached its error path.
+                        #
+                        # On detection: re-run via the Landlock-only
+                        # subprocess path (works without mount-ns
+                        # bind-tree visibility). This makes the
+                        # tool_paths contract speculative — caller
+                        # passes a best-guess bind set, we try it, if
+                        # it doesn't work we degrade silently to B's
+                        # fallback. Worst-case isolation matches the
+                        # B-only outcome.
+                        _stderr_text = result.stderr or b""
+                        if isinstance(_stderr_text, bytes):
+                            _stderr_text = _stderr_text.decode(
+                                "utf-8", errors="replace")
+                        if (tool_paths
+                                and result.returncode in (126, 127)
+                                and not _stderr_text.strip()):
+                            # Populate the per-cmd cache so future
+                            # calls for the same binary skip mount-ns
+                            # directly (saves the doubled subprocess
+                            # setup cost for every Semgrep rule etc).
+                            # First-time-per-binary fires INFO so
+                            # operators see what's happening; cache-
+                            # hits on subsequent calls are silent.
+                            #
+                            # Lock around the populate so two
+                            # concurrent first-failures for the same
+                            # binary don't double-log. Lock scope is
+                            # tight (dict insert + log-once decision)
+                            # — held for microseconds.
+                            _resolved_cmd0 = (shutil.which(cmd[0])
+                                              or cmd[0])
+                            import threading as _threading
+                            with state._cache_lock:
+                                _first_seen = (
+                                    _resolved_cmd0
+                                    not in state._speculative_failure_cache
+                                )
+                                if _first_seen:
+                                    state._speculative_failure_cache[
+                                        _resolved_cmd0] = True
+                            if _first_seen:
+                                # ONE-TIME INFO per binary — concise.
+                                # The "why" detail (mount-ns failed
+                                # at exec, native-deps mismatch, etc.)
+                                # belongs in DEBUG, not in operator
+                                # output. Operator just needs to
+                                # know which binary and what isolation.
+                                logger.info(
+                                    "Sandbox: %r runs at Landlock-only "
+                                    "isolation.",
+                                    cmd[0],
+                                )
+                                # Companion DEBUG with the diagnostic
+                                # detail for operators investigating.
+                                logger.debug(
+                                    "Sandbox: %r mount-ns failed at "
+                                    "exec (rc=%d, no stderr — typical "
+                                    "of tools whose native deps live "
+                                    "outside the tool_paths bind set: "
+                                    "Python with sys.prefix/lib not "
+                                    "bound, semgrep with semgrep-core "
+                                    "outside install root, etc.). "
+                                    "Cached so subsequent calls to "
+                                    "this binary skip mount-ns "
+                                    "directly.",
+                                    cmd[0], result.returncode,
+                                )
+                            else:
+                                logger.debug(
+                                    "Sandbox: speculative-C cache "
+                                    "hit on cmd[0]=%r (rc=%d) — "
+                                    "Landlock-only fallback.",
+                                    cmd[0], result.returncode,
+                                )
+                            # Audit-mode signal lost: the retry routes
+                            # through subprocess+preexec which has no
+                            # tracer attachment. Write the marker so
+                            # operators see explicitly that audit
+                            # didn't fully engage for this call —
+                            # absent records would otherwise be
+                            # misread as "nothing to audit". Marker
+                            # location: audit_run_dir takes precedence
+                            # (canonical "where audit signal lands"),
+                            # fall back to output. Codeql analyze etc.
+                            # pass audit_run_dir without output — the
+                            # marker still fires there.
+                            _retry_marker_dir = audit_run_dir or output
+                            if nonlocal_audit_mode and _retry_marker_dir:
+                                from pathlib import Path as _Path
+                                from . import summary as _summary_mod
+                                _summary_mod.record_audit_degraded(
+                                    _Path(_retry_marker_dir),
+                                    reason=(
+                                        f"cmd[0]={cmd[0]!r} mount-ns "
+                                        f"failed at exec (rc="
+                                        f"{result.returncode}, no "
+                                        f"stderr) — speculative-C "
+                                        f"retry routed via Landlock-"
+                                        f"only; tracer didn't attach"),
+                                    instructions=(
+                                        "the binary's deps are outside "
+                                        "the tool_paths bind set; "
+                                        "audit can't engage. Other "
+                                        "tools in the workflow still "
+                                        "audit normally."),
+                                )
+                            used_spawn = False
+                            # Fall through to subprocess path below.
                 except (FileNotFoundError, RuntimeError, OSError) as _spawn_err:
                     # _spawn raised mid-setup (uidmap uninstalled,
                     # kernel quirk, libc soname absent on minimal
@@ -887,7 +1601,114 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                         _spawn_err,
                     )
             if not used_spawn:
-                result = subprocess.run(full_cmd, **kwargs)
+                # Audit/observe in Landlock-only mode: the bare
+                # subprocess.run path has no tracer-fork machinery,
+                # so audit silently degraded pre-PR. _landlock_audit
+                # restores observe signal here by forking a tracer
+                # subprocess in parallel with the target child.
+                # Engaged only when the operator asked for audit
+                # AND we have the prerequisites (libseccomp + ptrace);
+                # any failure path falls back cleanly to the bare
+                # subprocess.run below. mount-ns absent is acceptable
+                # — Landlock + seccomp + ptrace are sufficient for
+                # observe semantics; the THREAT_MODEL.md
+                # Landlock-only-mode warning still applies.
+                _audit_landlock_engaged = False
+                if nonlocal_audit_mode:
+                    try:
+                        from .ptrace_probe import (
+                            check_ptrace_available as _la_ptrace_check,
+                        )
+                        from .seccomp import (
+                            check_seccomp_available as _la_seccomp_check,
+                            _make_seccomp_preexec as _la_make_seccomp,
+                        )
+                        from .landlock import (
+                            _make_landlock_preexec as _la_make_landlock,
+                        )
+                        from . import _landlock_audit as _la
+                        if (_la_seccomp_check()
+                                and _la_ptrace_check()):
+                            # Build the rlimit-only preexec (no
+                            # Landlock — we install it separately
+                            # post-sync), the Landlock preexec, and
+                            # the seccomp preexec with audit_mode=True.
+                            _rlimit_only = _make_preexec_fn(
+                                effective_limits,
+                                writable_paths=None,
+                                readable_paths=None,
+                                allowed_tcp_ports=None,
+                            )
+                            _wp = list(writable_paths or [])
+                            if "/tmp" not in _wp:
+                                _wp.append("/tmp")
+                            _ll_preexec = _la_make_landlock(
+                                _wp,
+                                list(allowed_tcp_ports)
+                                    if allowed_tcp_ports else None,
+                                readable_paths=(
+                                    list(effective_read_paths)
+                                    if effective_read_paths else None
+                                ),
+                            )
+                            _sc_preexec = _la_make_seccomp(
+                                seccomp_profile,
+                                block_udp=seccomp_block_udp,
+                                audit_mode=True,
+                                observe_mode=bool(observe and nonlocal_audit_mode),
+                            ) if seccomp_profile else None
+                            _audit_run_dir_la = (
+                                audit_run_dir or output
+                            )
+                            try:
+                                result = _la.run_landlock_audit(
+                                    full_cmd,
+                                    audit_run_dir=str(_audit_run_dir_la),
+                                    audit_verbose=audit_verbose_active,
+                                    observe_mode=bool(observe and nonlocal_audit_mode),
+                                    observe_nonce=(
+                                        nonlocal_observe_nonce
+                                        if observe and nonlocal_audit_mode
+                                        else None
+                                    ),
+                                    writable_paths=writable_paths or [],
+                                    readable_paths=effective_read_paths or [],
+                                    allowed_tcp_ports=(
+                                        list(allowed_tcp_ports)
+                                        if allowed_tcp_ports else None
+                                    ),
+                                    target=target, output=output,
+                                    restrict_reads=restrict_reads,
+                                    landlock_preexec=_ll_preexec,
+                                    seccomp_preexec=_sc_preexec,
+                                    rlimit_preexec=_rlimit_only,
+                                    env=kwargs.get("env"),
+                                    cwd=kwargs.get("cwd"),
+                                    timeout=kwargs.get("timeout"),
+                                    capture_output=kwargs.get(
+                                        "capture_output", False),
+                                    text=kwargs.get("text", False),
+                                    stdin=kwargs.get("stdin"),
+                                    start_new_session=kwargs.get(
+                                        "start_new_session", True),
+                                )
+                                _audit_landlock_engaged = True
+                            except (RuntimeError, OSError) as _la_err:
+                                # Tracer fork failed — fall through
+                                # to plain subprocess.run. Operator
+                                # gets the existing degrade marker.
+                                logger.warning(
+                                    "Sandbox: Landlock-only audit "
+                                    "tracer failed (%s); falling back "
+                                    "to non-audit subprocess.run",
+                                    _la_err,
+                                )
+                    except ImportError:
+                        # Sandbox helpers missing — let the bare
+                        # path run.
+                        pass
+                if not _audit_landlock_engaged:
+                    result = subprocess.run(full_cmd, **kwargs)
         finally:
             events = (
                 proxy_instance.unregister_sandbox(proxy_token)
@@ -900,6 +1721,46 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
 
         # Interpret process termination for observability
         _interpret_result(result, cmd_display)
+
+        # Record whether mount-ns engaged on this run so per-run
+        # forensic readers (sandbox-summary.json consumers) can tell
+        # if the child had mount-ns isolation or fell back to
+        # Landlock-only mode. See ``core/security/THREAT_MODEL.md``
+        # I2-(a) for why this matters.
+        result.sandbox_info["mount_ns_active"] = bool(use_mount)
+        result.sandbox_info["restrict_reads"] = bool(restrict_reads)
+        # Observe nonce — only present when sandbox(observe=True)
+        # actually engaged audit mode at spawn time; absent under
+        # plain audit and absent when observe was requested but
+        # audit-mode degraded silently (libseccomp unavailable,
+        # mount-ns blocked by host, etc.). Operator pipes this into
+        # parse_observe_log(expected_nonce=...) for spoof-resistant
+        # parsing. None when not engaged so a naive
+        # ``info.get("observe_nonce")`` reader gets a falsy value
+        # that signals "no provenance proof available".
+        #
+        # spawn_eligible is the load-bearing gate: a False value
+        # means we routed to the Landlock-only subprocess path
+        # which has no tracer-fork, so even though we generated a
+        # nonce upstream, no records carry it. Stamping the nonce
+        # would make a confused operator pass it to
+        # parse_observe_log() and get an empty profile back; better
+        # to surface None and let the operator notice their probe
+        # didn't engage. The sandbox-audit-degraded.json marker
+        # explains why.
+        # Either the spawn-path engaged the tracer (mount-ns spawn
+        # OR macOS seatbelt) OR the Landlock-only audit helper did.
+        # Stamp the nonce in either case so the operator can pass
+        # it to parse_observe_log() for spoof-resistant parsing.
+        _audit_engaged_anywhere = (
+            spawn_eligible or _audit_landlock_engaged
+        )
+        if (nonlocal_observe_nonce is not None
+                and nonlocal_audit_mode
+                and _audit_engaged_anywhere):
+            result.sandbox_info["observe_nonce"] = nonlocal_observe_nonce
+        else:
+            result.sandbox_info["observe_nonce"] = None
 
         # Attach proxy events (allow + deny + dns_fail + bytes) to
         # sandbox_info. Available to callers as
@@ -944,10 +1805,40 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             #     without O_NONBLOCK blocks the parent forever —
             #     DoS against any RAPTOR caller that reuses `output`.
             #     O_NONBLOCK + O_APPEND + fstat(S_ISREG) closes this.
-            if output:
+            #
+            # Invariant: never persist the JSONL into a path that lives
+            # under `target`. Some callers (e.g. packages/codeql/
+            # build_detector.py) intentionally pass output=target so
+            # Landlock engages on a writable repo for compile/build
+            # steps; writing proxy-events.jsonl there would pollute the
+            # user's scanned source tree. In-memory events on
+            # result.sandbox_info["proxy_events"] are unaffected.
+            _skip_target_pollution = False
+            try:
+                _norm_out = os.path.realpath(output) if output else None
+                _norm_tgt = os.path.realpath(target) if target else None
+                if _norm_out and _norm_tgt and (
+                    _norm_out == _norm_tgt
+                    or _norm_out.startswith(_norm_tgt + os.sep)
+                ):
+                    _skip_target_pollution = True
+                    logger.debug(
+                        f"Sandbox: output ({_norm_out}) lies within "
+                        f"target ({_norm_tgt}); skipping proxy-events."
+                        f"jsonl persistence to avoid polluting the "
+                        f"scanned tree (in-memory events unaffected)"
+                    )
+            except OSError:
+                # realpath() failed (e.g. dangling component, perm
+                # error). Fall back to the existing behaviour rather
+                # than break the scan over an observability check.
+                pass
+            if output and not _skip_target_pollution:
                 try:
                     import json as _json
-                    _log_path = os.path.join(output, "proxy-events.jsonl")
+                    _log_path = os.path.join(
+                        output, _proxy_mod.PROXY_EVENTS_FILENAME,
+                    )
                     _log_fd = os.open(
                         _log_path,
                         os.O_WRONLY | os.O_APPEND | os.O_CREAT
@@ -1009,11 +1900,34 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
             stderr_text = raw_stderr.decode("utf-8", errors="replace")
         else:
             stderr_text = ""
-        network_engaged = bool(need_unshare and block_network)
-        landlock_engaged = bool(
-            (writable_paths or allowed_tcp_ports) and landlock_available
+        # Engagement booleans tell _check_blocked which stderr patterns
+        # are admissible evidence of a sandbox firing. macOS via SBPL
+        # uses the SAME stderr patterns ("Permission denied",
+        # "PermissionError", connection refused, ...) — the kernel
+        # turns SBPL denies into the standard EACCES/EPERM errno that
+        # tools surface as the same messages — so we just OR in the
+        # seatbelt-equivalent for each layer:
+        #   network: SBPL (deny network*) is emitted when block_network
+        #     OR use_egress_proxy → network_engaged on the macOS side.
+        #   landlock: the seatbelt profile ALWAYS emits a write-deny
+        #     clause (the default exception list is /private/tmp +
+        #     output + writable_paths), so use_seatbelt itself is
+        #     sufficient signal that fs writes are gated.
+        #   seccomp: macOS has no real equivalent; we treat the
+        #     SBPL hardening clauses (Tier 1.4, deny process-info etc.)
+        #     as a coarse stand-in when seccomp_profile is requested.
+        network_engaged = bool(
+            (need_unshare and block_network)
+            or (use_seatbelt and (block_network or use_egress_proxy))
         )
-        seccomp_engaged = bool(seccomp_profile and check_seccomp_available())
+        landlock_engaged = bool(
+            ((writable_paths or allowed_tcp_ports) and landlock_available)
+            or use_seatbelt
+        )
+        seccomp_engaged = bool(
+            (seccomp_profile and check_seccomp_available())
+            or (use_seatbelt and seccomp_profile and seccomp_profile != "none")
+        )
         if stderr_text and (network_engaged or landlock_engaged or seccomp_engaged):
             _check_blocked(stderr_text, cmd_display, result.returncode,
                           result.sandbox_info,
@@ -1034,8 +1948,42 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
     run.events = _sandbox_events  # type: ignore[attr-defined]
 
     # Mount-ns stubs are cleaned up per-call inside _spawn.run_sandboxed;
-    # the sandbox() context manager itself has nothing to tear down.
-    yield run
+    # the sandbox() context manager itself has nothing to tear down
+    # EXCEPT the audit-mode ref-count on the egress proxy.
+    #
+    # ACQUIRE the audit ref-count HERE (just before yield), not earlier
+    # in the use_egress_proxy block. If we acquired earlier, any
+    # exception in the intermediate setup code would leave the count
+    # incremented forever — the contextmanager's try/finally below
+    # only fires after the yield is reached. Acquiring immediately
+    # before the yield ensures the matching release is guaranteed by
+    # the finally below.
+    if use_egress_proxy and _will_engage_audit:
+        proxy_instance.acquire_audit_log_only()
+        _engaging_audit = True
+    try:
+        yield run
+    finally:
+        if use_egress_proxy and _engaging_audit:
+            try:
+                proxy_instance.release_audit_log_only()
+            except Exception:
+                # WARNING-level (not debug): a failed release leaks
+                # the ref-count, which means every subsequent sandbox
+                # in this process will see inflated _audit_count
+                # and the proxy gate will be stuck in audit-log mode
+                # — non-audit sibling sandboxes get downgraded
+                # silently. Operator needs visibility into this so
+                # they can restart the process if accumulating leaks
+                # affect production. Stack trace via exc_info=True
+                # for diagnosis.
+                logger.warning(
+                    "audit ref-count release failed — proxy gate "
+                    "may stay in audit-log mode for remaining "
+                    "sandboxes in this process. Restart RAPTOR if "
+                    "this recurs.",
+                    exc_info=True,
+                )
 
 
 # Convenience: standalone run function for one-off sandboxed commands
@@ -1047,6 +1995,11 @@ def run(cmd: List[str], block_network: bool = False, target: str = None,
         restrict_reads: bool = False, readable_paths: list = None,
         caller_label: str = None,
         fake_home: bool = False,
+        tool_paths: list = None,
+        audit: bool = False, audit_verbose: bool = False,
+        audit_run_dir: Optional[str] = None,
+        observe: bool = False,
+        writable_paths: Optional[list] = None,
         **kwargs) -> subprocess.CompletedProcess:
     """Run a single command in a sandbox. Convenience wrapper.
 
@@ -1065,7 +2018,12 @@ def run(cmd: List[str], block_network: bool = False, target: str = None,
                  restrict_reads=restrict_reads,
                  readable_paths=readable_paths,
                  caller_label=caller_label,
-                 fake_home=fake_home) as _run:
+                 fake_home=fake_home,
+                 tool_paths=tool_paths,
+                 audit=audit, audit_verbose=audit_verbose,
+                 audit_run_dir=audit_run_dir,
+                 observe=observe,
+                 writable_paths=writable_paths) as _run:
         return _run(cmd, **kwargs)
 
 
@@ -1140,6 +2098,14 @@ def run_untrusted(cmd: List[str], *, target: str = None, output: str = None,
     For compiling/running LLM-generated code, running target binaries,
     invoking target build scripts, or anything else where the command or
     its inputs trace back to untrusted material.
+
+    `**kwargs` forwards to run() — composable with audit/audit_verbose
+    (audit-mode applies to the run_untrusted's full-strict profile),
+    profile= (override the default 'full' if absolutely needed),
+    caller_label=, env=, cwd=, etc. Forbidden via TypeError:
+    `block_network` and `allowed_tcp_ports` — run_untrusted's contract
+    is namespace-level network block, no TCP allowlist; callers
+    needing varied network policy use sandbox() directly.
     """
     # Truthy check — `target=""` and `output=""` must also be rejected,
     # otherwise the caller thinks they engaged Landlock but got no
@@ -1189,3 +2155,86 @@ def run_untrusted(cmd: List[str], *, target: str = None, output: str = None,
                readable_paths=readable_paths,
                fake_home=fake_home,
                **kwargs)
+
+
+def run_untrusted_networked(
+    cmd: List[str],
+    *,
+    target: str = None,
+    output: str = None,
+    proxy_hosts: list,
+    limits: dict = None,
+    restrict_reads: bool = True,
+    readable_paths: list = None,
+    fake_home: bool = False,
+    **kwargs,
+) -> subprocess.CompletedProcess:
+    """Variant of :func:`run_untrusted` that allows hostname-allowlisted
+    HTTPS egress instead of full network block.
+
+    Use case: an LLM-driven sub-agent or tool that must reach a known
+    upstream API (e.g. ``api.anthropic.com``) but is otherwise treated
+    as adversarial — Claude Code dispatches, future LLM-callers that
+    need network. ``run_untrusted()``'s namespace-level network block
+    makes those calls impossible; ad-hoc :func:`sandbox()` callers
+    forget to set ``restrict_reads=True`` and lose credential isolation
+    on Landlock-only hosts (Ubuntu 24.04+ default — see
+    ``core/security/THREAT_MODEL.md`` I2-(a)).
+
+    This helper enforces the safe defaults for that case:
+
+      * ``restrict_reads=True`` — kernel-level read allowlist; $HOME
+        is denied. Callers that need extra paths pass
+        ``readable_paths=[...]``.
+      * ``fake_home=False`` — Claude Code reads ``~/.claude.json`` and
+        is incompatible with HOME-redirection; callers with no such
+        constraint can override.
+      * ``use_egress_proxy=True`` + ``proxy_hosts=[...]`` — egress
+        proxy with hostname allowlist (the only network this child can
+        reach is the listed hosts on port 443).
+      * ``allowed_tcp_ports=[443]`` — only HTTPS to the proxy.
+      * ``block_network=False`` — must be False so the proxy is
+        reachable from inside the sandbox.
+
+    Mirrors :func:`run_untrusted`'s stdin / start_new_session
+    defaults — DEVNULL stdin, setsid — for the same passive-sniffer +
+    controlling-tty reasons.
+
+    No callers in this PR. Provides the safe shape for future
+    cc_dispatch-style migrations to use; see THREAT_MODEL.md.
+    """
+    if not (target or output):
+        raise ValueError(
+            "run_untrusted_networked() requires at least one non-empty of "
+            "target= or output= so Landlock actually engages."
+        )
+    if not proxy_hosts:
+        raise ValueError(
+            "run_untrusted_networked() requires proxy_hosts=[...] — "
+            "the egress allowlist is mandatory; callers wanting unrestricted "
+            "network should use sandbox() directly."
+        )
+    for forbidden in ("block_network", "allowed_tcp_ports", "use_egress_proxy"):
+        if forbidden in kwargs:
+            raise TypeError(
+                f"run_untrusted_networked() does not accept {forbidden}= — "
+                f"the network policy is fixed to egress-proxy-only on port "
+                f"443. Use sandbox() directly for varied network policy."
+            )
+    if "stdin" not in kwargs and "input" not in kwargs:
+        kwargs["stdin"] = subprocess.DEVNULL
+    if "start_new_session" not in kwargs:
+        kwargs["start_new_session"] = True
+    return run(
+        cmd,
+        block_network=False,
+        target=target, output=output,
+        limits=limits,
+        restrict_reads=restrict_reads,
+        readable_paths=readable_paths,
+        fake_home=fake_home,
+        use_egress_proxy=True,
+        proxy_hosts=list(proxy_hosts),
+        allowed_tcp_ports=[443],
+        **kwargs,
+    )

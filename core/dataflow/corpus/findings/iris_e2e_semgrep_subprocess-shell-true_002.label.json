@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "iris_e2e_semgrep_subprocess-shell-true_002",
+  "verdict": "false_positive",
+  "fp_category": "missing_sanitizer_model",
+  "rationale": "Path traverses sanitize() at line 52, which returns None for any input not in {ls, pwd, whoami, uptime} via strict regex+allowlist. execute_safe() at line 42 None-checks before subprocess.call, so the only values reaching the sink are the four allowlist entries. Semgrep's pattern-based rule has no sanitizer model and flags the surface subprocess.call(shell=True) regardless. CodeQL TaintTracking with the standard CWE-78 query refutes the path correctly. This is the canonical missing_sanitizer_model FP this corpus exists to measure.",
+  "labeler": "johnc",
+  "labeled_at": "2026-05-10"
+}

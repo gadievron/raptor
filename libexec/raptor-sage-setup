@@ -28,6 +28,39 @@
 
 set -euo pipefail
 
+# Global EXIT trap + tmp-file array. Pre-fix the script used
+# per-function `trap '...' RETURN` patterns to clean up tmp
+# files. The RETURN trap only fires on FUNCTION exit, NOT on:
+#   * Ctrl-C (SIGINT) mid-function.
+#   * SIGTERM from the operator's shell / job manager.
+#   * Crashes that propagate past the function's RETURN
+#     handler (set -e + a sub-command failure).
+# In each case the tmp file leaked into /tmp/, accumulating
+# over multiple aborted setup attempts. Operators noticed
+# `/tmp/tmp.XXXXX` files appearing after every Ctrl-C and
+# wondered which to delete.
+#
+# Maintain a `_RAPTOR_TMP_FILES` array; functions append the
+# tmp path to it. EXIT trap iterates the array and rm-fs each
+# entry, fires on EVERY exit path including signals.
+declare -a _RAPTOR_TMP_FILES=()
+_raptor_cleanup_tmps() {
+    local f
+    for f in "${_RAPTOR_TMP_FILES[@]:-}"; do
+        [ -n "$f" ] && rm -f "$f"
+    done
+}
+trap _raptor_cleanup_tmps EXIT
+
+# ─── trust-marker check (do not source; inline by design) ───
+if [ -z "${CLAUDECODE:-}" ] && [ -z "${_RAPTOR_TRUSTED:-}" ]; then
+    echo "$0: internal dispatch script." >&2
+    echo "  Run via 'bin/raptor' instead." >&2
+    echo "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass." >&2
+    exit 2
+fi
+# ─── end trust-marker check ─────────────────────────────────
+
 usage() {
     cat >&2 <<'EOF'
 usage: raptor-sage-setup [--uninstall]
@@ -41,12 +74,46 @@ EOF
 }
 
 MODE=install
+MODE_EXPLICIT=0
+# Pre-fix the parser only knew `--uninstall` (default install).
+# Two ambiguities operators hit:
+#
+# 1. Conflicting modes silently last-wins. Pre-fix
+#    `--install --uninstall` (operator typo or paste from
+#    a script that builds the argv) silently took the
+#    LAST mode flag, with no warning. Now: explicit
+#    flags conflict-detected; second mode flag errors.
+# 2. No symmetric `--install` flag. Operators following
+#    the README's "explicit is better" convention typed
+#    `--install` and got "unknown argument" — even
+#    though `--install` is exactly what the script does
+#    by default. Accept it for symmetry with `--uninstall`.
+# 3. No subcommand-style positional form. Operators used
+#    to `git fetch` / `docker pull` reach for
+#    `raptor-sage-setup install` / `raptor-sage-setup
+#    uninstall` and got "unknown argument". Accept the
+#    bare-word forms so the operator-facing surface is
+#    permissive without sacrificing the explicit-flag
+#    error path.
 for arg in "$@"; do
     case "$arg" in
-        --uninstall)
-            MODE=uninstall
+        --install|install)
+            if [ "$MODE_EXPLICIT" = "1" ] && [ "$MODE" != "install" ]; then
+                echo "raptor-sage-setup: conflicting modes: $arg vs --uninstall" >&2
+                exit 2
+            fi
+            MODE=install
+            MODE_EXPLICIT=1
             ;;
-        -h|--help)
+        --uninstall|uninstall)
+            if [ "$MODE_EXPLICIT" = "1" ] && [ "$MODE" != "uninstall" ]; then
+                echo "raptor-sage-setup: conflicting modes: $arg vs --install" >&2
+                exit 2
+            fi
+            MODE=uninstall
+            MODE_EXPLICIT=1
+            ;;
+        -h|--help|help)
             usage
             ;;
         *)
@@ -57,12 +124,20 @@ for arg in "$@"; do
 done
 
 # Resolve RAPTOR_DIR via symlink chain (same pattern as raptor-cc-trust-check).
+# Hop bound — see raptor-cc-trust-check for the symlink-cycle rationale.
 SCRIPT="$0"
+_symhops=0
 while [ -L "$SCRIPT" ]; do
+    _symhops=$((_symhops + 1))
+    if [ "$_symhops" -gt 32 ]; then
+        echo "raptor-sage-setup: symlink hop limit exceeded resolving $0" >&2
+        exit 3
+    fi
     DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
     SCRIPT="$(readlink "$SCRIPT")"
     [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
 done
+unset _symhops
 RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
 
 COMPOSE_FILE="$RAPTOR_DIR/docker-compose.sage.yml"
@@ -92,8 +167,22 @@ merge_mcp_entry() {
         echo "Created $MCP."
         return
     fi
+    # `mktemp -p` under the target directory so the subsequent
+    # `mv` is on the same filesystem (atomic rename). Pre-fix
+    # `mktemp` defaulted to `/tmp` (or whatever `$TMPDIR` resolved
+    # to), then `mv tmp $MCP` was a CROSS-FILESYSTEM move on
+    # systems where the target ($RAPTOR_DIR) and /tmp are on
+    # different mount points (common on container layouts where
+    # /tmp is tmpfs and $RAPTOR_DIR is a bind-mounted host dir;
+    # also common on dev hosts with a separate /tmp partition).
+    # Cross-fs `mv` is implemented as copy+unlink — NOT atomic;
+    # a Ctrl-C / OOM kill / power loss between the copy and the
+    # unlink leaves the source file in /tmp and the target
+    # half-written, so concurrent readers of $MCP see a partial
+    # file. Same-fs mktemp ensures the rename is atomic at the
+    # filesystem-metadata level.
     local tmp
-    tmp=$(mktemp)
+    tmp=$(mktemp -p "$(dirname "$MCP")" .tmp.mcp.XXXXXX); _RAPTOR_TMP_FILES+=("$tmp")
     trap 'rm -f "$tmp"' RETURN
     jq -s '.[0] * .[1]' "$MCP" "$TEMPLATE" > "$tmp"
     mv "$tmp" "$MCP"
@@ -103,17 +192,33 @@ merge_mcp_entry() {
 
 remove_mcp_entry() {
     [ -f "$MCP" ] || return 0
+    # Same same-fs mktemp pattern as merge_mcp_entry above.
     local tmp
-    tmp=$(mktemp)
+    tmp=$(mktemp -p "$(dirname "$MCP")" .tmp.mcp.XXXXXX); _RAPTOR_TMP_FILES+=("$tmp")
     trap 'rm -f "$tmp"' RETURN
     jq 'del(.mcpServers.sage)' "$MCP" > "$tmp"
     mv "$tmp" "$MCP"
     trap - RETURN
     # If the file now contains only an empty mcpServers object (and nothing
     # else at the top level), delete it — it's ours to clean up.
+    #
+    # Pre-fix `jq -r 'keys | length' "$MCP"` was ambiguous for
+    # non-object roots: `keys` works on BOTH objects AND arrays, so
+    # an MCP file whose root happened to be `[...]` (corrupted writer,
+    # operator hand-edit, manual JSON re-export from a tool that
+    # serialised the wrong shape) returned the array's length — and
+    # the `top_count == 1` test could match a 1-element array, leading
+    # to deletion of an MCP file we shouldn't have touched. For
+    # scalar roots (`null`, `true`, `42`, `"string"`) `keys` errors
+    # outright, which jq returns rc=5 — the unset `top_count` then
+    # compared "" against "1" and we left the file in place (correct
+    # by accident, not by design).
+    # Type-guard explicitly: only count keys when the root IS an
+    # object; otherwise return 0 (so the cleanup branch doesn't
+    # fire on non-object roots).
     local server_count top_count
     server_count="$(jq -r '.mcpServers // {} | length' "$MCP")"
-    top_count="$(jq -r 'keys | length' "$MCP")"
+    top_count="$(jq -r 'if type == "object" then keys|length else 0 end' "$MCP")"
     if [ "$server_count" = "0" ] && [ "$top_count" = "1" ]; then
         rm -f "$MCP"
         echo "Removed $MCP (no MCP servers remaining)."
@@ -126,10 +231,36 @@ wait_health() {
     printf "Waiting for SAGE health"
     # SAGE serves /health (no /v1 prefix) — see docker-compose.sage.yml
     # healthcheck and core/sage/client.py.
-    for _ in $(seq 1 60); do
-        if curl -sf "$SAGE_URL/health" >/dev/null 2>&1; then
-            printf " — ready.\n"
-            return 0
+    # `for _ in {1..60}` instead of `seq 1 60`. Pre-fix `seq`
+    # is GNU coreutils — present on Linux distros by default
+    # but NOT POSIX-required and NOT installed by default on
+    # macOS, BusyBox-based containers (Alpine without
+    # coreutils), or minimal Docker base images. Operators
+    # running RAPTOR on Alpine / minimal images saw
+    # "raptor-sage-setup: line 162: seq: command not found"
+    # and the wait_health loop never executed, then immediately
+    # printed " — timeout.\n" and exited. Bash brace expansion
+    # works on every bash >= 3.0 (which is older than macOS's
+    # bundled bash) and needs no external tool.
+    for _ in {1..60}; do
+        # Check both HTTP-200 AND a sentinel string in the
+        # response body. Pre-fix any 200 response from /health
+        # marked SAGE as "ready" — but several proxy-layer
+        # misconfigurations (nginx default-site, Cloudflare
+        # 200-OK-with-error-page, k8s ingress controller's
+        # default backend) can return 200 with completely
+        # unrelated content. The launcher then proceeded
+        # assuming SAGE was up; the first real /v1/* call
+        # then failed in confusing ways (404 from the wrong
+        # backend, JSON parse error on HTML response).
+        # SAGE's /health endpoint returns a JSON `{"status":
+        # "ok", ...}` body; confirm the "ok" sentinel is
+        # present before trusting the response.
+        if response=$(curl -sf "$SAGE_URL/health" 2>/dev/null); then
+            if printf '%s' "$response" | grep -q '"ok"'; then
+                printf " — ready.\n"
+                return 0
+            fi
         fi
         sleep 2
         printf "."
@@ -150,11 +281,31 @@ enable_sage_env() {
     # settings.local.json is per-machine (already covered by `.claude/*.local.json`
     # in .gitignore). cc_trust skips RAPTOR_DIR so the SAGE_* entry here is
     # safe from our own trust check.
+    #
+    # `umask 077` for the duration of this function. Pre-fix the
+    # generated settings.local.json + tmp files used the
+    # operator's default umask (commonly 022, world-readable).
+    # SAGE settings can grow to include endpoint URLs and (in
+    # future configurations) auth tokens; world-readable
+    # permissions on the file expose those to any local user
+    # on shared multi-user machines. 077 = owner-rwx only.
+    local _saved_umask
+    _saved_umask=$(umask)
+    umask 077
     mkdir -p "$(dirname "$SETTINGS_LOCAL")"
     local fragment='{"env":{"SAGE_ENABLED":"true"}}'
     local tmp
-    tmp=$(mktemp)
-    trap 'rm -f "$tmp"' RETURN
+    # `mktemp -p "$(dirname "$SETTINGS_LOCAL")"` so the tmp file lives
+    # on the SAME filesystem as the destination. Pre-fix bare `mktemp`
+    # defaulted to `/tmp` (or whatever `$TMPDIR` resolved to), which
+    # on hardened systems is a tmpfs separate from the home filesystem
+    # — `mv` then degraded to copy+unlink which is non-atomic, AND
+    # `/tmp`'s default permissions vary across distros (1777 on most,
+    # but containers and CI runners sometimes set 755 with operator
+    # adjacency). Same-fs mktemp keeps mv atomic and inherits the
+    # parent dir's permissions.
+    tmp=$(mktemp -p "$(dirname "$SETTINGS_LOCAL")" .tmp.settings.XXXXXX); _RAPTOR_TMP_FILES+=("$tmp")
+    trap 'rm -f "$tmp"; umask "$_saved_umask"' RETURN
     if [ ! -f "$SETTINGS_LOCAL" ]; then
         echo "$fragment" | jq . > "$SETTINGS_LOCAL"
         echo "Wrote SAGE_ENABLED=true to $SETTINGS_LOCAL."
@@ -163,25 +314,49 @@ enable_sage_env() {
         mv "$tmp" "$SETTINGS_LOCAL"
         echo "Merged SAGE_ENABLED=true into $SETTINGS_LOCAL."
     fi
+    # Belt-and-braces chmod in case mv preserved a wider mode
+    # from the tmp source (mv is atomic but inherits mode from
+    # source on cross-fs fallback).
+    chmod 600 "$SETTINGS_LOCAL"
     trap - RETURN
+    umask "$_saved_umask"
 }
 
 disable_sage_env() {
     [ -f "$SETTINGS_LOCAL" ] || return 0
     local tmp
-    tmp=$(mktemp)
+    # Same-fs mktemp — see enable_sage_env above for the rationale.
+    tmp=$(mktemp -p "$(dirname "$SETTINGS_LOCAL")" .tmp.settings.XXXXXX); _RAPTOR_TMP_FILES+=("$tmp")
     trap 'rm -f "$tmp"' RETURN
     # Remove env.SAGE_ENABLED; if env becomes empty, drop env entirely.
+    # Pre-fix the top-level "is the whole settings object now empty?"
+    # check happened AFTER the mv, opening a small race window where
+    # another process could read SETTINGS_LOCAL and observe `{}`
+    # (the post-removal state) before we got around to deleting the
+    # empty file. Two consequences:
+    #   * Any concurrent reader that special-cases "empty settings →
+    #     fall back to defaults" got a misleading "explicit empty"
+    #     signal.
+    #   * Any concurrent writer that merged into the empty file
+    #     wrote into a transient state we were about to delete,
+    #     racing the rm.
+    #
+    # Make the jq filter compute the top-level emptiness in the same
+    # pass and emit an empty document marker (`null`) when the whole
+    # object would become `{}` — bash then sees the marker and
+    # deletes the file directly without ever writing the empty `{}`
+    # state to disk.
     jq 'if has("env") then (.env |= del(.SAGE_ENABLED)
            | if .env == {} then del(.env) else . end)
-         else . end' "$SETTINGS_LOCAL" > "$tmp"
-    mv "$tmp" "$SETTINGS_LOCAL"
-    trap - RETURN
-    # If the file is now empty ({}), delete it.
-    if [ "$(jq -r 'length' "$SETTINGS_LOCAL" 2>/dev/null || echo 1)" = "0" ]; then
-        rm -f "$SETTINGS_LOCAL"
+         else . end
+       | if . == {} then null else . end' "$SETTINGS_LOCAL" > "$tmp"
+    if [ "$(cat "$tmp")" = "null" ]; then
+        rm -f "$SETTINGS_LOCAL" "$tmp"
+        trap - RETURN
         echo "Removed $SETTINGS_LOCAL (no settings remaining)."
     else
+        mv "$tmp" "$SETTINGS_LOCAL"
+        trap - RETURN
         echo "Removed SAGE_ENABLED from $SETTINGS_LOCAL."
     fi
 }
@@ -194,7 +369,15 @@ install_sage() {
     check_sdk
     merge_mcp_entry
     enable_sage_env
-    docker compose -f "$COMPOSE_FILE" up -d
+    # `--remove-orphans` so containers from a PREVIOUS
+    # compose config (e.g. the operator updated
+    # docker-compose.sage.yml between runs and the old config's
+    # containers are still running) get cleaned up too. Same
+    # rationale as `down --remove-orphans` below: stale
+    # containers from a prior config hold port bindings and
+    # confuse the install with "port already allocated"
+    # errors. Pre-fix bare `up -d` left orphans intact.
+    docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
     wait_health
     python3 "$RAPTOR_DIR/core/sage/scripts/seed_sage_knowledge.py" --sage-url "$SAGE_URL"
     python3 "$RAPTOR_DIR/core/sage/scripts/register_agents.py" --sage-url "$SAGE_URL"
@@ -205,11 +388,22 @@ install_sage() {
 uninstall_sage() {
     need jq
     need docker
-    docker compose -f "$COMPOSE_FILE" down
+    # `--remove-orphans` so containers from PREVIOUS compose
+    # configs (e.g. operator updated docker-compose.sage.yml
+    # between runs and the old config's containers are still
+    # running) get cleaned up too. Pre-fix `docker compose
+    # down` only removes containers defined in the CURRENT
+    # compose file; stale containers from a prior config
+    # (renamed services, removed dependencies) lingered as
+    # zombies, holding port bindings and confusing the next
+    # `install` invocation with "port already allocated"
+    # errors. The orphan flag is safe — we WANT teardown to
+    # be thorough.
+    docker compose -f "$COMPOSE_FILE" down --remove-orphans
     remove_mcp_entry
     disable_sage_env
     echo "SAGE sidecar stopped. Data volumes preserved."
-    echo "To wipe volumes: docker compose -f $COMPOSE_FILE down -v"
+    echo "To wipe volumes: docker compose -f $COMPOSE_FILE down -v --remove-orphans"
 }
 
 case "$MODE" in

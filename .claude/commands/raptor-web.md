@@ -36,10 +36,21 @@ Basic web scan:
 python3 raptor.py web --url https://example.com
 ```
 
-With authentication:
-```bash
-python3 raptor.py web --url https://example.com --auth-token "Bearer xyz"
-```
+<!--
+Pre-fix this section showed `python3 raptor.py web
+--url https://example.com --auth-token "Bearer xyz"`,
+but `raptor.py web` doesn't accept `--auth-token`.
+The web scanner doesn't currently support
+authenticated scanning — operators following the
+example got "unrecognized arguments: --auth-token".
+Drop the example until authenticated-scan support
+lands.
+-->
+
+(Authenticated scanning is not currently supported by
+`raptor.py web`. Track future support via the web-
+scanner roadmap; for now, scan only unauthenticated
+endpoints.)
 
 ## Important Notes
 

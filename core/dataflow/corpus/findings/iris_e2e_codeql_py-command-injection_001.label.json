@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "iris_e2e_codeql_py-command-injection_001",
+  "verdict": "true_positive",
+  "fp_category": null,
+  "rationale": "Flask request.args.get is a RemoteFlowSource. Value flows directly to subprocess.call with shell=True on the next line, no validator on path. CodeQL's prebuilt CommandInjectionFlow recognises both endpoints. Confirmed real CWE-78.",
+  "labeler": "johnc",
+  "labeled_at": "2026-05-10"
+}

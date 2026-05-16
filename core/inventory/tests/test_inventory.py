@@ -287,8 +287,17 @@ class TestBuildInventory:
 
         assert inv["total_files"] == 1  # Only app.py
         assert len(inv["excluded_files"]) >= 1
+        # `tests/` matches a `DEFAULT_EXCLUDES` directory-shaped
+        # pattern, so it's pruned at walk time. The exclusion record
+        # carries the DIRECTORY entry (not the per-file enumeration
+        # the pre-perf-fix path recorded). Operator visibility is
+        # preserved either way — the directory record names the
+        # parent that was skipped, so a reviewer scanning
+        # `excluded_files` still sees that `tests/` was suppressed.
         excluded_paths = [e["path"] for e in inv["excluded_files"]]
-        assert any("test_app.py" in p for p in excluded_paths)
+        assert any("tests/" in p for p in excluded_paths), (
+            f"expected pruned 'tests/' dir record, got {excluded_paths!r}"
+        )
 
     def test_generated_file_excluded(self, tmp_path):
         src = tmp_path / "src"
@@ -490,14 +499,24 @@ class TestCoverageStats:
 
 # ── CLI Script ──────────────────────────────────────────────────────
 
+_BUILD_INVENTORY_SCRIPT = (
+    Path(__file__).resolve().parents[3] / "build_inventory.py"
+)
+
+
 class TestCLIScript:
     def test_build_inventory_script(self, tmp_path):
+        # Anchor the script path to ``__file__`` rather than CWD so
+        # the test passes regardless of where pytest is invoked
+        # (per ``feedback-test-cwd-relative-paths``: pytest workers,
+        # IDE runners, and CI may all start with different cwds).
         src = tmp_path / "src"
         src.mkdir()
         (src / "app.py").write_text("def main(): pass\n")
 
         result = subprocess.run(
-            [sys.executable, "build_inventory.py", "--repo", str(src), "--out", str(tmp_path / "out")],
+            [sys.executable, str(_BUILD_INVENTORY_SCRIPT),
+             "--repo", str(src), "--out", str(tmp_path / "out")],
             capture_output=True, text=True, timeout=30,
         )
         assert result.returncode == 0
@@ -506,7 +525,8 @@ class TestCLIScript:
 
     def test_nonexistent_repo_fails(self, tmp_path):
         result = subprocess.run(
-            [sys.executable, "build_inventory.py", "--repo", "/nonexistent", "--out", str(tmp_path)],
+            [sys.executable, str(_BUILD_INVENTORY_SCRIPT),
+             "--repo", "/nonexistent", "--out", str(tmp_path)],
             capture_output=True, text=True, timeout=30,
         )
         assert result.returncode == 1
@@ -595,6 +615,24 @@ class TestExtractItems:
         # May be empty without tree-sitter — that's OK
         if globals_:
             assert "MAX_SIZE" in names
+
+    def test_python_chained_assignment_yields_every_target(self):
+        """Regression for IJC-27: chained assignment `A = B = C = 1`
+        should yield every LHS target, not just the first."""
+        code = "MAX_RETRIES = MAX_ATTEMPTS = MAX_TRIES = 3\ndef foo(): pass\n"
+        items = extract_items("test.py", "python", code)
+        globals_ = [i for i in items if i.kind == KIND_GLOBAL]
+        names = [g.name for g in globals_]
+        # Skip if tree-sitter isn't available — the regression test
+        # only matters when the AST extractor is in use.
+        if not globals_:
+            import pytest
+            pytest.skip("tree-sitter not available — chained-assignment test n/a")
+        # All three constants should be captured. Pre-fix only the
+        # first identifier was emitted.
+        assert "MAX_RETRIES" in names
+        assert "MAX_ATTEMPTS" in names
+        assert "MAX_TRIES" in names
 
     def test_c_macros(self):
         code = "#define BUF_SIZE 1024\n#define MAX(a,b) ((a)>(b)?(a):(b))\nvoid foo() {}\n"
@@ -689,3 +727,89 @@ class TestInventoryOutputFormat:
         inv = build_inventory(str(src), str(tmp_path / "out"))
         for item in inv["files"][0]["items"]:
             assert "kind" in item
+
+
+class TestDefaultCacheDir:
+    """Persistent inventory cache when ``output_dir`` is omitted."""
+
+    def test_default_cache_dir_distinct_per_target(self, tmp_path):
+        """Two distinct target paths get distinct cache dirs."""
+        from core.inventory.builder import default_cache_dir
+        a = tmp_path / "project-a"
+        a.mkdir()
+        b = tmp_path / "project-b"
+        b.mkdir()
+        assert default_cache_dir(str(a)) != default_cache_dir(str(b))
+
+    def test_default_cache_dir_stable_for_same_target(self, tmp_path):
+        """Same target → same cache dir across calls (stable hash)."""
+        from core.inventory.builder import default_cache_dir
+        proj = tmp_path / "project"
+        proj.mkdir()
+        assert default_cache_dir(str(proj)) == default_cache_dir(str(proj))
+
+    def test_default_cache_dir_is_absolute(self, tmp_path):
+        from core.inventory.builder import default_cache_dir
+        proj = tmp_path / "project"
+        proj.mkdir()
+        cache = default_cache_dir(str(proj))
+        assert cache.is_absolute()
+        # Lives under ~/.raptor/cache/inventory/.
+        assert ".raptor" in cache.parts
+        assert "cache" in cache.parts
+        assert "inventory" in cache.parts
+
+    def test_default_cache_dir_resolves_relative_targets(self, tmp_path,
+                                                          monkeypatch):
+        """Relative + absolute paths to the same target resolve to the
+        same cache dir — the hash is over the resolved absolute path."""
+        from core.inventory.builder import default_cache_dir
+        proj = tmp_path / "project"
+        proj.mkdir()
+        monkeypatch.chdir(tmp_path)
+        rel = default_cache_dir("project")
+        absolute = default_cache_dir(str(proj))
+        assert rel == absolute
+
+    def test_build_inventory_uses_default_when_output_dir_omitted(
+        self, tmp_path, monkeypatch,
+    ):
+        """When ``output_dir=None``, build_inventory persists its
+        checklist to the default cache dir for the target. Re-runs
+        load the existing checklist, so unchanged files reuse parsed
+        entries (the SHA-keyed incremental optimisation kicks in)."""
+        # Point the default cache root at a tmp_path so the test
+        # doesn't pollute ~/.raptor.
+        import core.inventory.builder as builder
+        monkeypatch.setattr(
+            builder, "_DEFAULT_INVENTORY_CACHE_ROOT",
+            tmp_path / "tmp-inventory-cache",
+        )
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "app.py").write_text("def main(): pass\n")
+
+        # First call: no output_dir → uses default cache
+        inv1 = builder.build_inventory(str(src))
+        assert inv1["total_files"] == 1
+
+        # Second call against the same target — must load the
+        # existing checklist from the default cache and reuse it.
+        cache_dir = builder.default_cache_dir(str(src))
+        assert (cache_dir / "checklist.json").is_file()
+        inv2 = builder.build_inventory(str(src))
+        # Same content; reused parsed entries
+        assert inv2["total_files"] == 1
+        assert inv2["files"][0]["sha256"] == inv1["files"][0]["sha256"]
+
+    def test_build_inventory_explicit_output_dir_unchanged(self, tmp_path):
+        """Explicit ``output_dir`` argument unchanged behaviour —
+        callers passing tmpdirs (tests, one-shot tools) keep working."""
+        from core.inventory.builder import build_inventory
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "app.py").write_text("def main(): pass\n")
+        explicit = tmp_path / "explicit-out"
+        inv = build_inventory(str(src), str(explicit))
+        assert inv["total_files"] == 1
+        assert (explicit / "checklist.json").is_file()

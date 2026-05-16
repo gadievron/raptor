@@ -14,6 +14,18 @@ Exit 0 on success (continue to claude), non-zero on abort.
 import sys
 from pathlib import Path
 
+# ─── trust-marker check (do not import; inline by design) ───
+import os
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
@@ -91,10 +103,31 @@ def _check_mismatch(caller_dir):
 
   or enter anything else to quit
 """)
-    try:
-        choice = input("  Choice [1]: ").strip() or "1"
-    except (EOFError, KeyboardInterrupt):
-        sys.exit(0)
+    # Non-TTY → take the default ("1", keep current active) without
+    # prompting. Pre-fix `input()` blocked indefinitely or consumed
+    # whatever stdin happened to be feeding the process — for
+    # interactive launches that's fine, but the script also runs
+    # under hooks / CI / piped invocations where:
+    #
+    # * stdin is redirected from a file: the next byte got
+    #   consumed as the choice, producing surprising behaviour
+    #   (random project switches mid-script-pipeline)
+    # * stdin is /dev/null: input() raised EOFError immediately;
+    #   the existing except caught it but then we silently exited
+    #   the whole script instead of just defaulting the prompt
+    # * stdin is a tty but the operator didn't even know they
+    #   had a stale active project (no signal that anything was
+    #   waiting for them)
+    #
+    # `sys.stdin.isatty()` is the canonical test. If false, default
+    # silently and continue.
+    if not sys.stdin.isatty():
+        choice = "1"
+    else:
+        try:
+            choice = input("  Choice [1]: ").strip() or "1"
+        except (EOFError, KeyboardInterrupt):
+            sys.exit(0)
 
     if choice == "1":
         pass

@@ -25,12 +25,46 @@ from core.json import save_json
 
 from core.config import RaptorConfig
 from core.logging import get_logger
+from core.run.safe_io import safe_run_mkdir
+from core.run.output import unique_run_suffix as _unique_run_suffix
 from packages.codeql.language_detector import LanguageDetector, LanguageInfo
 from packages.codeql.build_detector import BuildDetector, BuildSystem
 from packages.codeql.database_manager import DatabaseManager, DatabaseResult
 from packages.codeql.query_runner import QueryRunner, QueryResult
 
 logger = get_logger()
+
+
+# Operator-friendly language name aliases. Operators reach for the
+# obvious string ("c", "c++", "js", "ts", "c#"); CodeQL's canonical
+# names are different ("cpp" for both C and C++, "javascript",
+# "typescript", "csharp"). Without normalisation, `--languages c`
+# silently falls through every detector branch (build_detector
+# gates on "cpp", _detect_build_params only handles "cpp"/"java")
+# and ends in no-build mode → autobuild.sh exits 1 → "no usable
+# CodeQL DB" with no actionable diagnostic. Normalise once at the
+# entry point so every downstream consumer sees the canonical name.
+_LANGUAGE_ALIASES = {
+    "c": "cpp",
+    "c++": "cpp",
+    "cxx": "cpp",
+    "cc": "cpp",
+    "js": "javascript",
+    "ts": "typescript",
+    "cs": "csharp",
+    "c#": "csharp",
+    "kt": "kotlin",
+    "py": "python",
+}
+
+
+def _normalise_language(name: str) -> str:
+    """Map operator-friendly aliases to CodeQL canonical names.
+
+    Case-insensitive; unknown names pass through unchanged so the
+    downstream "unsupported language" diagnostic still fires.
+    """
+    return _LANGUAGE_ALIASES.get(name.strip().lower(), name.strip().lower())
 
 
 @dataclass
@@ -141,11 +175,18 @@ class CodeQLAgent:
             self.out_dir = Path(out_dir)
         else:
             # Collision-prevention via unique_run_suffix — see core/run/output.py.
-            from core.run.output import unique_run_suffix
+            # Pre-fix the import was lazy (inside this branch), so a
+            # missing-symbol failure (renamed function, removed module,
+            # broken stdlib stub) didn't surface until SOMEONE actually
+            # constructed CodeQLAgent without `out_dir` — could be
+            # weeks after the change shipped. Hoisted to module-top
+            # so the ImportError fires at agent.py import time, where
+            # operators expect import-time failures to manifest.
             repo_name = self.repo_path.name
-            self.out_dir = RaptorConfig.BASE_OUT_DIR / f"codeql_{repo_name}_{unique_run_suffix('_')}"
+            self.out_dir = RaptorConfig.BASE_OUT_DIR / f"codeql_{repo_name}_{_unique_run_suffix('_')}"
 
-        self.out_dir.mkdir(parents=True, exist_ok=True)
+        self.out_dir.parent.mkdir(parents=True, exist_ok=True)
+        safe_run_mkdir(self.out_dir)
 
         # Initialize components
         self.language_detector = LanguageDetector(self.repo_path)
@@ -189,9 +230,23 @@ class CodeQLAgent:
             logger.info(f"{'=' * 70}")
 
             if languages:
-                logger.info(f"Using specified languages: {', '.join(languages)}")
+                # Normalise operator-friendly aliases (c→cpp, js→
+                # javascript, c#→csharp, …) before they propagate to
+                # build_detector / _detect_build_params, both of
+                # which only know the canonical CodeQL names. Log
+                # the original list so the operator can see what
+                # they typed; downstream messages use the canonical
+                # form.
+                normalised = [_normalise_language(lang) for lang in languages]
+                if normalised != [lang.strip().lower() for lang in languages]:
+                    logger.info(
+                        f"Using specified languages: {', '.join(languages)} "
+                        f"(canonical: {', '.join(normalised)})"
+                    )
+                else:
+                    logger.info(f"Using specified languages: {', '.join(normalised)}")
                 detected = {}
-                for lang in languages:
+                for lang in normalised:
                     # Create minimal LanguageInfo for specified languages
                     detected[lang] = LanguageInfo(
                         language=lang,
@@ -205,6 +260,22 @@ class CodeQLAgent:
                 logger.info("Auto-detecting languages...")
                 detected = self.language_detector.detect_languages(min_files=min_files)
                 detected = self.language_detector.filter_codeql_supported(detected)
+
+                # Small-target retry. The default min_files=3 is a
+                # noise floor for monorepos but a footgun on tiny
+                # targets (single-file fixtures, minimal repros) —
+                # the detector sees the file, classifies it, then
+                # silently filters it out. If the first pass
+                # returns empty, drop the floor to 1 and warn so
+                # the operator knows we widened the criterion.
+                if not detected and min_files > 1:
+                    logger.warning(
+                        f"No languages met min_files={min_files} threshold; "
+                        f"retrying with min_files=1 (small target — single-file "
+                        f"fixtures and minimal repros land here)"
+                    )
+                    detected = self.language_detector.detect_languages(min_files=1)
+                    detected = self.language_detector.filter_codeql_supported(detected)
 
             if not detected:
                 error = "No CodeQL-supported languages detected"
@@ -270,17 +341,35 @@ class CodeQLAgent:
             db_results = self.database_manager.create_databases_parallel(
                 self.repo_path,
                 language_build_map,
-                force=force_db_creation
+                force=force_db_creation,
+                audit_run_dir=self.out_dir,
             )
 
-            # Clean up synthesised build artifacts
+            # Clean up synthesised build artifacts. Per-path try
+            # / except so one cleanup failure doesn't abort the
+            # whole sweep, and `is_dir()` / `is_file()` short-
+            # circuit if the path was already removed (idempotent
+            # under retry). `is_*` follows symlinks by default —
+            # use `follow_symlinks=False`-equivalent behaviour
+            # via `is_symlink()` short-circuit so we DELETE the
+            # symlink itself rather than its target (which could
+            # be in the user's repo or somewhere else entirely
+            # that we never put data into).
             import shutil
             for bs in language_build_map.values():
                 for p in getattr(bs, 'cleanup_paths', None) or []:
-                    if p.is_dir():
-                        shutil.rmtree(p)
-                    elif p.is_file():
-                        p.unlink()
+                    try:
+                        # Symlink → unlink the link, never follow.
+                        if p.is_symlink():
+                            p.unlink()
+                        elif p.is_dir():
+                            shutil.rmtree(p)
+                        elif p.is_file():
+                            p.unlink()
+                    except OSError as e:
+                        logger.debug(
+                            "cleanup of %s failed: %s — continuing", p, e,
+                        )
 
             # Check for failures
             successful_dbs = {
@@ -333,6 +422,16 @@ class CodeQLAgent:
                 use_extended=use_extended
             )
 
+            # IRIS LocalFlowSource pass — runs the in-repo packs that
+            # complement stdlib coverage for CLI / env / stdin sources.
+            # Empty dict if no in-repo pack exists for any of the
+            # languages we built DBs for (e.g. cpp; stdlib already
+            # covers it). Standalone /codeql benefits from this without
+            # going via /agentic.
+            iris_results = self.query_runner.analyze_iris_packs(
+                successful_dbs, self.out_dir,
+            )
+
             # Collect SARIF files and count findings
             sarif_files = []
             total_findings = 0
@@ -345,6 +444,16 @@ class CodeQLAgent:
                 else:
                     logger.error(f"  - {lang}: Analysis failed")
                     errors.extend(result.errors)
+
+            for lang, result in iris_results.items():
+                if result.success and result.sarif_path:
+                    sarif_files.append(str(result.sarif_path))
+                    total_findings += result.findings_count
+                    if result.findings_count:
+                        logger.info(
+                            f"  - {lang} IRIS LocalFlowSource: "
+                            f"{result.findings_count} extra findings"
+                        )
 
             # PHASE 5: Generate Report
             logger.info(f"\n{'=' * 70}")
@@ -385,14 +494,47 @@ class CodeQLAgent:
             )
 
     def _save_report(self, result: CodeQLWorkflowResult):
-        """Save workflow report to JSON."""
+        """Save workflow report to JSON.
+
+        Pre-fix `save_json(..., result.to_dict())` failed entirely if
+        `to_dict()` raised mid-serialization (a finding with a nested
+        dataclass that had a broken `__repr__`, a non-serialisable
+        type leaking past the converter, an LLM-augmented field that
+        ended up holding a Path object instead of a str). The except
+        logged the error and returned — leaving NO report file on
+        disk. Operators reading the run dir saw the missing file and
+        had no breadcrumb pointing at "to_dict raised" vs "the run
+        crashed entirely".
+
+        Two-stage save: try the full to_dict; on failure, fall back
+        to a minimal report carrying just the high-level stats and
+        an explicit `error` field naming the failure. Operators get
+        SOMETHING on disk + a clear "the rich report couldn't be
+        serialised" diagnostic.
+        """
         report_path = self.out_dir / "codeql_report.json"
 
         try:
             save_json(report_path, result.to_dict())
             logger.info(f"✓ Report saved: {report_path}")
+            return
         except Exception as e:
-            logger.error(f"Failed to save report: {e}")
+            logger.error(f"Failed to save full report: {e}")
+        # Fallback: minimal report with stats we know are JSON-safe.
+        try:
+            minimal = {
+                "schema_version": "minimal-fallback",
+                "repo_path": str(getattr(result, "repo_path", "")),
+                "duration_seconds": float(getattr(result, "duration_seconds", 0.0)),
+                "success": bool(getattr(result, "success", False)),
+                "total_findings": int(getattr(result, "total_findings", 0)),
+                "sarif_files": [str(p) for p in getattr(result, "sarif_files", [])],
+                "error": "to_dict() raised mid-serialization; see raptor.log",
+            }
+            save_json(report_path, minimal)
+            logger.info(f"✓ Minimal-fallback report saved: {report_path}")
+        except Exception as e2:
+            logger.error(f"Minimal report also failed: {e2}")
 
     def print_summary(self, result: CodeQLWorkflowResult):
         """Print workflow summary."""
@@ -414,14 +556,27 @@ class CodeQLAgent:
         dataflow_examples = []
 
         if result.sarif_files:
+            from core.sarif.parser import load_sarif as _load_sarif
             for sarif_path in result.sarif_files:
-                summary = self.query_runner.get_sarif_summary(Path(sarif_path))
+                # Load once, share between get_sarif_summary AND
+                # _extract_dataflow_examples. Pre-fix each helper
+                # re-parsed the SARIF independently — multi-MB files
+                # from C++/Java analyses paid the parse cost twice.
+                _sarif_path = Path(sarif_path)
+                _sarif_data = _load_sarif(_sarif_path)
+                summary = self.query_runner.get_sarif_summary(
+                    _sarif_path, sarif_data=_sarif_data,
+                )
                 total_dataflow_paths += summary.get("dataflow_paths", 0)
                 total_dataflow_steps += summary.get("total_dataflow_steps", 0)
 
                 # Collect example dataflow paths for visualization
                 if total_dataflow_paths > 0 and len(dataflow_examples) < 5:
-                    examples = self._extract_dataflow_examples(Path(sarif_path), limit=5 - len(dataflow_examples))
+                    examples = self._extract_dataflow_examples(
+                        _sarif_path,
+                        limit=5 - len(dataflow_examples),
+                        sarif_data=_sarif_data,
+                    )
                     dataflow_examples.extend(examples)
 
         if total_dataflow_paths > 0:
@@ -447,12 +602,27 @@ class CodeQLAgent:
         print(f"\nOutput directory: {self.out_dir}")
         print(f"{'=' * 70}\n")
 
-    def _extract_dataflow_examples(self, sarif_path: Path, limit: int = 5) -> list:
-        """Extract example dataflow paths from SARIF for visualization."""
+    def _extract_dataflow_examples(self, sarif_path: Path, limit: int = 5,
+                                    *, sarif_data: Optional[Dict] = None) -> list:
+        """Extract example dataflow paths from SARIF for visualization.
+
+        Pre-fix this always called `load_sarif(sarif_path)`. The
+        adjacent `get_sarif_summary` (called immediately before in
+        `print_summary`) had ALREADY loaded the same file. For a
+        run with N SARIF files, that doubled the JSON parse work
+        — multi-MB SARIFs from C++/Java analyses paid the parse
+        cost twice per `print_summary` call.
+
+        Accept optional pre-loaded `sarif_data` so the caller can
+        share the parse result across both helpers. Falls back to
+        `load_sarif` when the caller doesn't provide it (preserves
+        the standalone-call API).
+        """
         examples = []
         try:
-            from core.sarif.parser import load_sarif
-            sarif_data = load_sarif(sarif_path)
+            if sarif_data is None:
+                from core.sarif.parser import load_sarif
+                sarif_data = load_sarif(sarif_path)
             if not sarif_data:
                 return examples
 
@@ -489,11 +659,27 @@ class CodeQLAgent:
                     sink_file = sink_loc.get("physicalLocation", {}).get("artifactLocation", {}).get("uri", "")
                     sink_line = sink_loc.get("physicalLocation", {}).get("region", {}).get("startLine", 0)
 
+                    # Pre-fix `Path(source_file).name` on Linux
+                    # treated `\` as a regular char, not a separator.
+                    # A SARIF emitted on Windows can carry URIs like
+                    # `src\foo\bar.c`. `Path(...).name` then returned
+                    # the WHOLE string `"src\foo\bar.c"` instead of
+                    # the basename `"bar.c"` — operator-facing
+                    # examples were unreadably long. SARIF's spec
+                    # says URIs use `/` but real-world emitters from
+                    # MSBuild + some Windows toolchains break this.
+                    # Split on BOTH `/` and `\` to handle either
+                    # convention without depending on the running
+                    # OS's path semantics.
+                    def _basename(p: str) -> str:
+                        if not p:
+                            return ""
+                        return p.replace("\\", "/").rsplit("/", 1)[-1]
                     examples.append({
                         "rule": rule_id.split("/")[-1] if "/" in rule_id else rule_id,
                         "message": message[:60] + "..." if len(message) > 60 else message,
-                        "source": f"{Path(source_file).name}:{source_line}",
-                        "sink": f"{Path(sink_file).name}:{sink_line}",
+                        "source": f"{_basename(source_file)}:{source_line}",
+                        "sink": f"{_basename(sink_file)}:{sink_line}",
                         "steps": len(locations)
                     })
 
@@ -568,8 +754,29 @@ Examples:
     parser.add_argument("--out", help="Output directory (auto-generated if not specified)")
     parser.add_argument("--min-files", type=int, default=3, help="Minimum files to detect language")
     parser.add_argument("--codeql-cli", help="Path to CodeQL CLI (auto-detected if not specified)")
+    parser.add_argument(
+        "--no-iris-tier1", action="store_true",
+        help="Skip the IRIS Tier 1 in-repo LocalFlowSource pack analysis. "
+             "Use when the in-repo packs produce noise on a specific target "
+             "or when comparing stdlib-only vs LocalFlowSource verdicts.",
+    )
+
+    # Sandbox CLI flags (--sandbox / --no-sandbox / --audit / --audit-verbose)
+    # so the agentic-driven invocation can propagate audit mode into this
+    # subprocess. Without this, audit signal stops at the agentic process
+    # boundary because subprocesses parse a fresh argv.
+    from core.sandbox import add_cli_args, apply_cli_args
+    add_cli_args(parser)
 
     args = parser.parse_args()
+    apply_cli_args(args, parser=parser)
+
+    # Flip the IRIS Tier 1 master switch for this invocation. The
+    # config is process-scoped so /codeql subprocesses don't bleed
+    # into other consumers. Reset is implicit (process exit).
+    if args.no_iris_tier1:
+        from core.config import RaptorConfig
+        RaptorConfig.IRIS_TIER1_ENABLED = False
 
     # Parse languages
     languages = None
@@ -585,10 +792,42 @@ Examples:
         build_commands = {languages[0]: args.build_command}
 
     try:
-        # Initialize agent
+        # Pre-compute out_dir BEFORE constructing the agent so we
+        # can call set_active_run_dir FIRST. Pre-fix the order was:
+        #   1. agent = CodeQLAgent(...)        # init components
+        #   2. set_active_run_dir(agent.out_dir)
+        # Step 1's component constructors (DatabaseManager,
+        # QueryRunner, LanguageDetector, BuildDetector) shell out
+        # to detect codeql binaries, probe the sandbox profile,
+        # walk the repo. Each subprocess / probe can fire sandbox
+        # events (proxy connections, Landlock denials, audit-log
+        # entries). Until set_active_run_dir is called, the
+        # event-router has no destination — events are silently
+        # dropped. Operators reading sandbox-summary.json saw a
+        # mysterious gap covering the constructor window.
+        #
+        # Compute the same `out_dir` the constructor would compute,
+        # call set_active_run_dir, THEN construct the agent
+        # passing the path explicitly so the constructor uses
+        # OUR computed value (no second computation, no path drift).
+        from core.sandbox.summary import set_active_run_dir
+        if args.out:
+            _precomputed_out_dir = Path(args.out)
+        else:
+            _repo_name = Path(args.repo).resolve().name
+            _precomputed_out_dir = (
+                RaptorConfig.BASE_OUT_DIR
+                / f"codeql_{_repo_name}_{_unique_run_suffix('_')}"
+            )
+        _precomputed_out_dir.parent.mkdir(parents=True, exist_ok=True)
+        safe_run_mkdir(_precomputed_out_dir)
+        set_active_run_dir(_precomputed_out_dir)
+
+        # Initialize agent — sandbox events from constructor probes
+        # now route to _precomputed_out_dir.
         agent = CodeQLAgent(
             repo_path=Path(args.repo),
-            out_dir=Path(args.out) if args.out else None,
+            out_dir=_precomputed_out_dir,
             codeql_cli=args.codeql_cli
         )
 
@@ -603,6 +842,24 @@ Examples:
 
         # Print summary
         agent.print_summary(result)
+
+        # Aggregate any tracer-emitted .sandbox-denials.jsonl into
+        # sandbox-summary.json. The lifecycle hook (start_run /
+        # complete_run) lives in raptor.py / raptor_codeql.py for
+        # top-level invocations and in raptor_agentic.py for the
+        # agentic flow — neither covers THIS subprocess's out_dir
+        # when codeql/agent.py is invoked as a child of agentic.
+        # Without this call, audit JSONL produced inside codeql
+        # subprocess (e.g., via tool_paths-engaged mount-ns + tracer)
+        # would orphan in agent.out_dir/.sandbox-denials.jsonl.
+        # No-op if no JSONL was written (the common case today,
+        # since codeql calls don't engage mount-ns without target).
+        try:
+            from core.sandbox.summary import summarize_and_write
+            summarize_and_write(agent.out_dir)
+        except Exception as _e:
+            logger.debug("summarize_and_write at end of codeql/agent: "
+                         "%s", _e, exc_info=True)
 
         # Exit with appropriate code
         sys.exit(0 if result.success else 1)

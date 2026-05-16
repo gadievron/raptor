@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "juiceshop_semgrep_javascript-express-security-audit-express-template-string-sqli_e844fe06e0c5",
+  "verdict": "false_positive",
+  "fp_category": "framework_mitigation",
+  "rationale": "req.query.q is bound via Sequelize's replacements parameter (line 7). Sequelize parameterises the value before substitution \u2014 same protection as a prepared statement. Pattern-only producers don't model Sequelize's replacement mechanism.",
+  "labeler": "handlabel-juice-shop-webgoat",
+  "labeled_at": "2026-05-10"
+}

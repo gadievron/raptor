@@ -226,12 +226,22 @@ class JavaScriptExtractor:
         r'^\s+(?:async\s+)?(\w+)\s*\([^)]*\)\s*\{',
         r'(\w+)\s*:\s*(?:async\s+)?(?:function\s*)?\([^)]*\)\s*(?:=>)?\s*\{',
     ]
+    # Several patterns repeat `\s*` between optional tokens. On a long
+    # whitespace-only run that fails the structural part, the engine
+    # backtracks each `\s*` separately. Cap line length before applying
+    # any of the JS patterns. Real JS is rarely linted to >120 chars;
+    # 16 KB allows minified single-line modules through up to a
+    # reasonable bound while refusing pathological input (a single
+    # 100 MB minified bundle would otherwise sit in this loop).
+    _MAX_JS_LINE = 16 * 1024
 
     def extract(self, filepath: str, content: str) -> List[FunctionInfo]:
         functions = []
         seen = set()
 
         for i, line in enumerate(content.split('\n'), 1):
+            if len(line) > self._MAX_JS_LINE:
+                continue
             for pattern in self.PATTERNS:
                 match = re.search(pattern, line)
                 if match:
@@ -259,10 +269,27 @@ class CExtractor:
     risk breaking existing extraction).
     """
 
-    ANSI_PATTERN = r'^(?:[\w\s\*]+)\s+(\w+)\s*\([^;]*\)\s*\{'
-    ANSI_SPLIT_PATTERN = r'^(?:[\w\s\*]+)\s+(\w+)\s*\([^;{]*\)\s*$'
-    KNR_FUNCNAME = r'^(\w+)\s*\([\w\s,]*\)\s*$'
-    FUNCNAME_OPEN_PAREN = r'^(\w+)\s*\([^)]*$'
+    # `[\w\s\*]+` is greedy and overlaps the following `\s+` (both match
+    # space). On a line that's a long run of word/space chars without a
+    # following `{` or `(`, the engine must try every backtrack position
+    # before declaring no-match. Pathological input
+    # (e.g. `"a" * 50000 + "\n"`) made `re.match` quadratic in line
+    # length. C source lines aren't longer than ~10 KB in practice (per
+    # most house style guides); cap the per-line input at `_MAX_C_LINE`
+    # before running the matcher so a stray minified file or a
+    # generated source dump (single-line concatenated declarations)
+    # can't hang inventory.
+    # Compile with `re.ASCII` so the `\w` captures match only ASCII
+    # word chars. C identifiers are ASCII per the language spec; without
+    # the flag, Python's `\w` admits Unicode word characters that would
+    # be captured as the function name and surfaced into the inventory
+    # under a homoglyph that visually matches a real ASCII identifier
+    # — confusing greps and downstream cross-references.
+    ANSI_PATTERN = r'(?a)^(?:[\w\s\*]+)\s+(\w+)\s*\([^;]*\)\s*\{'
+    ANSI_SPLIT_PATTERN = r'(?a)^(?:[\w\s\*]+)\s+(\w+)\s*\([^;{]*\)\s*$'
+    _MAX_C_LINE = 16 * 1024
+    KNR_FUNCNAME = r'(?a)^(\w+)\s*\([\w\s,]*\)\s*$'
+    FUNCNAME_OPEN_PAREN = r'(?a)^(\w+)\s*\([^)]*$'
 
     C_TYPE_HINTS = frozenset({
         'void', 'int', 'char', 'short', 'long', 'float', 'double',
@@ -306,6 +333,12 @@ class CExtractor:
 
             stripped = line.strip()
             if stripped.startswith('#') or stripped.startswith('//'):
+                i += 1
+                continue
+
+            # Cap line length before regex match — see ANSI_PATTERN
+            # comment for the ReDoS rationale.
+            if len(line) > self._MAX_C_LINE:
                 i += 1
                 continue
 
@@ -380,7 +413,18 @@ class JavaExtractor:
     Missing without tree-sitter: annotations (@RequestMapping etc).
     """
 
+    # `((?:public|private|protected|static|\s)+)` — `\s` is in the
+    # alternation AND repeated, so a long whitespace run before any
+    # method-shaped tail must be backtracked one space at a time on a
+    # failed match. Combined with the `(?:throws\s+[\w,\s]+)?` tail
+    # also consuming `\s`, a degenerate Java line like
+    # `"public " + " " * 50000 + ";\n"` (no trailing `{`) hits the
+    # backtracking. Cap line length before regex match. Real Java
+    # method headers are well under 8 KB; 16 KB leaves headroom for
+    # generated annotations / generics-heavy signatures while
+    # refusing pathological input.
     PATTERN = r'((?:public|private|protected|static|\s)+)([\w<>\[\]]+)\s+(\w+)\s*\(([^)]*)\)\s*(?:throws\s+[\w,\s]+)?\s*\{'
+    _MAX_JAVA_LINE = 16 * 1024
 
     def extract(self, filepath: str, content: str) -> List[FunctionInfo]:
         functions = []
@@ -391,6 +435,11 @@ class JavaExtractor:
             class_match = re.search(r'class\s+(\w+)', line)
             if class_match:
                 current_class = class_match.group(1)
+
+            # Cap line length before regex match — see PATTERN comment
+            # for the ReDoS rationale.
+            if len(line) > self._MAX_JAVA_LINE:
+                continue
 
             match = re.search(self.PATTERN, line)
             if match:
@@ -437,7 +486,13 @@ class GoExtractor:
     syntax can't be parsed reliably with regex), return types.
     """
 
-    PATTERN = r'^func\s+(?:\((\w+)\s+(\*?\w+)\)\s+)?(\w+)\s*\('
+    # `(?a)` (re.ASCII) so `\w` matches only ASCII identifiers. Go's
+    # language spec restricts identifiers to ASCII; without `re.ASCII`,
+    # Python's `\w` admits Unicode word characters and would capture
+    # a Cyrillic homoglyph as a "function name", surfacing into the
+    # inventory under a name that visually matches a real ASCII
+    # identifier — confusing greps and downstream cross-references.
+    PATTERN = r'(?a)^func\s+(?:\((\w+)\s+(\*?\w+)\)\s+)?(\w+)\s*\('
 
     def extract(self, filepath: str, content: str) -> List[FunctionInfo]:
         functions = []
@@ -753,6 +808,27 @@ class TreeSitterExtractor:
             if len(parts) >= 2:
                 name = parts[-1].lstrip("*")
                 ptype = " ".join(parts[:-1]).replace("  ", " ")
+        # Anonymous parameter (e.g. C `void *` with no identifier,
+        # `int(*)(void)` function-pointer typedef, or a forward-
+        # declared function whose param has only a type). Pre-fix
+        # `name` stayed as the empty string returned by the
+        # tree-sitter walk, and downstream callers stored
+        # `name=""` into the inventory's parameters list. The
+        # resulting param record looked like
+        # `{"name": "", "type": "void *"}` — call-graph lookups
+        # then string-matched on `param["name"]` and matched the
+        # empty-string param against any caller's empty-string
+        # arg position, mis-pairing references.
+        #
+        # Use a positional sentinel `_anon` so consumers can tell
+        # "anonymous" apart from "missing field" without a custom
+        # null check at every callsite. Multiple anonymous params
+        # in the same signature each get the same sentinel — that
+        # matches the C semantic (they're indistinguishable
+        # without re-emitting positional indices, which we don't
+        # do here to keep the parameter shape stable).
+        if not name and ptype:
+            name = "_anon"
         return name, ptype
 
     def _extract_return_type(self, node) -> Optional[str]:
@@ -916,21 +992,123 @@ def _extract_globals_ts(root_node, language: str) -> List[CodeItem]:
 
     target_types = global_types.get(language, ())
 
-    for child in root_node.children:
+    # Java field_declarations live INSIDE class_body, not at the root.
+    # Pre-fix iterating `root_node.children` and matching against
+    # `field_declaration` returned ZERO Java fields — every Java
+    # source's class fields were silently absent from the inventory.
+    # Walk into class/interface bodies to find them. Other languages
+    # (C/C++/Go/Python/JS/TS) declare globals at file scope, so the
+    # default direct-children walk is correct for them.
+    if language == "java":
+        scan_nodes = []
+        for top in root_node.children:
+            if top.type in ("class_declaration", "interface_declaration",
+                             "enum_declaration", "record_declaration"):
+                # Find the body node and walk its children for fields.
+                body = next(
+                    (c for c in top.children if c.type in ("class_body", "interface_body",
+                                                            "enum_body", "record_body")),
+                    None,
+                )
+                if body is not None:
+                    scan_nodes.extend(body.children)
+            else:
+                scan_nodes.append(top)
+    else:
+        scan_nodes = root_node.children
+
+    for child in scan_nodes:
         if child.type not in target_types:
             continue
 
-        # Only top-level declarations (not inside functions/classes)
-        name = _global_name(child, language)
-        if name:
-            globals_found.append(CodeItem(
-                name=name,
-                kind=KIND_GLOBAL,
-                line_start=child.start_point[0] + 1,
-                line_end=child.end_point[0] + 1,
-            ))
+        # Only top-level declarations (not inside functions/classes).
+        # Emit ONE CodeItem per spec for languages that allow grouped
+        # declarations. Pre-fix `_global_name` returned a single
+        # name even for `var ( a int; b string; c bool )` — only
+        # `a` made it into the inventory; `b`, `c` were silently
+        # dropped. `_global_names` (plural) yields every name in
+        # the declaration. Falls back to the single-name path for
+        # languages where multi-spec isn't a thing.
+        names = _global_names(child, language)
+        for name in names:
+            if name:
+                globals_found.append(CodeItem(
+                    name=name,
+                    kind=KIND_GLOBAL,
+                    line_start=child.start_point[0] + 1,
+                    line_end=child.end_point[0] + 1,
+                ))
 
     return globals_found
+
+
+def _global_names(node, language: str):
+    """Yield every global name in a declaration node.
+
+    Most languages only declare one global per node — for those, the
+    legacy `_global_name` single-result is fine. Go's `var ( ... )`
+    and `const ( ... )` blocks declare multiple specs in a single
+    syntactic node; this helper yields every spec's name.
+
+    Python's chained assignment (`A = B = 1`) is a single
+    `assignment` node with multiple identifier children on the LHS
+    before the value. Pre-fix `_global_name` returned only the first
+    identifier ("A"), so chained constants were silently
+    half-recorded — `B` never made the inventory and downstream
+    coverage / lookup tools couldn't find it.
+    """
+    if language == "go":
+        for child in node.children:
+            if child.type == "var_spec" or child.type == "const_spec":
+                for sub in child.children:
+                    if sub.type == "identifier":
+                        yield sub.text.decode()
+        return
+
+    if language == "python":
+        # Unwrap expression_statement → assignment if needed.
+        target = node
+        if target.type == "expression_statement":
+            target = next(
+                (c for c in target.children if c.type == "assignment"),
+                None,
+            )
+        if target is not None and target.type == "assignment":
+            # Tree-sitter Python represents chained assignment
+            # `A = B = C = 1` as NESTED assignments (NOT flat):
+            #   assignment(identifier "A", "=",
+            #     assignment(identifier "B", "=",
+            #       assignment(identifier "C", "=", integer "1")))
+            #
+            # Pre-fix this code assumed a FLAT shape and only saw
+            # the FIRST identifier. Walk the chain recursively:
+            # at each nesting level, yield the leading identifier
+            # children (the LHS targets), then descend into the
+            # RHS if it's another assignment node. Stops when the
+            # RHS is the actual value (integer / call / etc.).
+            current = target
+            while current is not None and current.type == "assignment":
+                # Collect identifiers BEFORE the first `=` — these
+                # are the LHS targets at THIS nesting level.
+                # Apply the same uppercase/TitleCase filter as
+                # `_global_name` to avoid emitting locals.
+                next_assignment = None
+                for c in current.children:
+                    if c.type == "identifier":
+                        nm = c.text.decode()
+                        if nm and (nm.isupper() or (nm[0].isupper() and not nm.islower())):
+                            yield nm
+                    elif c.type == "assignment":
+                        # Found the nested chain RHS — descend.
+                        next_assignment = c
+                        break
+                current = next_assignment
+            return
+
+    # Other languages: defer to the single-name function.
+    name = _global_name(node, language)
+    if name:
+        yield name
 
 
 def _global_name(node, language: str) -> Optional[str]:
@@ -1001,8 +1179,16 @@ def _extract_macros_regex(content: str) -> List[CodeItem]:
     are legitimate code items — they're part of the file's structure.
     """
     macros = []
+    # `re.ASCII` so `\w` matches only ASCII word chars. C identifiers
+    # are ASCII per the spec; without the flag, Python's `\w` admits
+    # Unicode word characters (Cyrillic, Greek, etc.). A hostile or
+    # confused source dropping a non-ASCII identifier through a
+    # `#define` would have its name captured here and surfaced into
+    # the inventory under a homoglyph that matches a real ASCII
+    # identifier — confusing greps + downstream cross-references.
+    _DEFINE_RE = re.compile(r'^\s*#\s*define\s+(\w+)', re.ASCII)
     for i, line in enumerate(content.splitlines(), 1):
-        m = re.match(r'^\s*#\s*define\s+(\w+)', line)
+        m = _DEFINE_RE.match(line)
         if m:
             macros.append(CodeItem(
                 name=m.group(1),
@@ -1104,14 +1290,35 @@ def _count_comment_lines_regex(content: str, language: str) -> int:
             if stripped.startswith("#"):
                 count += 1
         elif language in ("c", "cpp", "java", "javascript", "typescript", "go"):
-            if in_block:
-                count += 1
-                if "*/" in stripped:
+            # State-machine comment-walk per line so the in_block
+            # state tracks every `/*` open and `*/` close on the
+            # line, including the `*/ /* still open` shape where a
+            # line closes a block and immediately opens a new one.
+            # Pre-fix the simple `if "*/" in stripped` close-check
+            # missed the re-open: in_block became False at line end,
+            # then every subsequent code line (which was actually
+            # inside the new block) was mis-counted as code until
+            # the eventual real `*/` arrived. Wallclock-cheap: each
+            # line scan is O(line_length).
+            entered_in_block = in_block
+            i = 0
+            while i < len(stripped):
+                if in_block:
+                    j = stripped.find("*/", i)
+                    if j < 0:
+                        break
                     in_block = False
-            elif stripped.startswith("//"):
-                count += 1
-            elif stripped.startswith("/*"):
-                count += 1
-                if "*/" not in stripped:
+                    i = j + 2
+                else:
+                    j = stripped.find("/*", i)
+                    if j < 0:
+                        break
                     in_block = True
+                    i = j + 2
+            # Count the line iff it starts inside a block, starts
+            # with `//`, or starts with `/*`.
+            if (entered_in_block
+                or stripped.startswith("//")
+                or stripped.startswith("/*")):
+                count += 1
     return count

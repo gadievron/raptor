@@ -10,6 +10,11 @@ Usage:
 
 import argparse
 import sys
+from pathlib import Path
+
+# build_inventory.py -> repo root. Belt + braces against subprocess
+# invocation under a sandboxed env that strips PYTHONPATH.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from core.inventory import build_inventory, format_coverage_summary
 
@@ -19,6 +24,22 @@ def main():
     ap.add_argument("--repo", required=True, help="Target repository or directory")
     ap.add_argument("--out", required=True, help="Output directory for checklist.json")
     args = ap.parse_args()
+
+    # Pre-create the --out directory. Pre-fix
+    # `build_inventory(args.repo, args.out)` assumed `args.out`
+    # already existed and bombed with FileNotFoundError when it
+    # didn't. Operators got "Error: [Errno 2] No such file or
+    # directory: '<out>/checklist.json'" with no breadcrumb that
+    # they needed to mkdir the parent first.
+    # mkdir(parents=True, exist_ok=True) is no-op when the dir
+    # already exists; harmless to add unconditionally.
+    from pathlib import Path
+    try:
+        Path(args.out).mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print(f"Error: cannot create --out directory {args.out!r}: {e}",
+              file=sys.stderr)
+        sys.exit(1)
 
     try:
         inventory = build_inventory(args.repo, args.out)

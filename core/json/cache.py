@@ -43,7 +43,9 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
+
+from .utils import _reject_non_finite
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +53,40 @@ logger = logging.getLogger(__name__)
 # is encoded in the key itself (e.g., wheel-metadata keyed on
 # (name, exact-version) — content can't change for a given key).
 TTL_FOREVER = -1
+
+
+# Reaper freshness threshold. Tempfiles whose mtime is within this
+# many seconds are assumed to be in-flight writes from another
+# concurrent writer, not crash-orphans. 60s is comfortably longer
+# than any realistic write window (single-key json.dump → fsync →
+# rename completes in milliseconds even on slow storage) and tight
+# enough that real crash-orphans get cleaned on the next session.
+_REAP_FRESHNESS_S = 60.0
+
+
+# Sentinel for `try_get` — distinguishes "no entry" from "entry
+# exists but value is None". `get()` collapses both to None which
+# forced consumers (notably packages.nvd.client) to invent ad-hoc
+# wrapper sentinels (`_NVD_CACHE_MISSING`) to cache "not found"
+# verdicts without re-issuing the upstream request on every read.
+# Use a class-level singleton (not just `object()`) so `is`
+# comparisons across module reloads still work for tests.
+class _MissingType:
+    _instance: Optional["_MissingType"] = None
+
+    def __new__(cls) -> "_MissingType":
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __repr__(self) -> str:
+        return "<JsonCache._MISSING>"
+
+    def __bool__(self) -> bool:
+        return False
+
+
+MISSING = _MissingType()
 
 
 @dataclass(frozen=True)
@@ -81,8 +117,42 @@ class JsonCache:
         self._writable = True
         # Hit / miss counters for surfacing cache-effectiveness metrics.
         # Reset only by reconstructing the cache.
+        #
+        # Pre-fix `self.hits += 1` / `self.misses += 1` were
+        # un-locked. Python's `+=` on an int is NOT atomic — it
+        # decomposes into LOAD/INCR/STORE, so concurrent
+        # increments under threads can lose updates. The cache
+        # is hit from the CodeQL agent's per-finding parallel
+        # dispatch and from the cve-diff worker pool, both of
+        # which call `get()` from multiple threads. Lost
+        # increments quietly skewed the cache-effectiveness
+        # metric (hit rate read low) — operators tuning cache
+        # TTL / size based on this metric were getting biased
+        # signal.
+        #
+        # Add a lock and increment under it. Cost: one mutex
+        # acquire per get(), which is microseconds (the actual
+        # cache lookup work is several orders of magnitude
+        # slower; locking overhead is in the noise).
+        import threading
+        self._counter_lock = threading.Lock()
         self.hits = 0
         self.misses = 0
+        # Per-instance in-process memo. Disk-cache hot paths (OSV
+        # per-query, KEV containment, registry metadata, supply-chain
+        # tracker lookups) call ``try_get`` with the same key many
+        # times within a single scan — pre-memo the SCA pipeline
+        # spent ~5s of a 20s saleor warm scan re-opening + re-parsing
+        # the same JSON files for the same keys. The memo is bounded
+        # by the working set (typically a few thousand entries per
+        # scan); we don't LRU-evict because scans are short-lived
+        # and the memo is reclaimed when the cache instance is GC'd.
+        # ``put`` and ``invalidate`` write through to keep the memo
+        # consistent with disk for callers who put + immediately get.
+        # ``MISSING`` is also memoised so a cold-cache miss isn't
+        # re-checked on disk repeatedly.
+        self._memo_lock = threading.Lock()
+        self._memo: dict = {}
         try:
             self._root.mkdir(parents=True, exist_ok=True)
         except OSError as e:
@@ -106,6 +176,17 @@ class JsonCache:
         across many runs (each run has a different pid, so old orphans
         are never overwritten).
 
+        Skips tempfiles modified within ``_REAP_FRESHNESS_S`` seconds.
+        Pre-fix the reaper unlinked every tempfile shape it found,
+        including those another concurrent JsonCache instance (in
+        another process or another thread) was actively writing to —
+        race: writer A opens `tmp.<pidA>.<tidA>`, writer B's
+        constructor scans, finds A's tempfile, treats it as a
+        crash-orphan, unlinks it mid-write. A's subsequent
+        `tmp.replace(path)` then fails with FileNotFoundError, the
+        cache write is lost, and the operator sees a confused
+        warning instead of the cached entry.
+
         Best-effort: any remove failure is ignored. Runs once at
         construction time; not in the hot path.
         """
@@ -115,6 +196,7 @@ class JsonCache:
             entries = list(self._root.rglob("*.tmp.*"))
         except OSError:
             return
+        now = time.time()
         for entry in entries:
             # Defensive: only target files whose suffix matches the
             # tempfile shape we write — either legacy ``.tmp.<pid>``
@@ -126,44 +208,130 @@ class JsonCache:
             if len(parts) != 2:
                 continue
             tail = parts[1].split(".")
-            if 1 <= len(tail) <= 2 and all(s.isdigit() for s in tail):
-                try:
-                    entry.unlink()
-                except OSError:
-                    pass
+            if not (1 <= len(tail) <= 2 and all(s.isdigit() for s in tail)):
+                continue
+            # Skip if mtime is recent — concurrent writer is in
+            # the middle of producing this file.
+            try:
+                mtime = entry.stat().st_mtime
+            except OSError:
+                continue
+            if now - mtime < _REAP_FRESHNESS_S:
+                continue
+            try:
+                entry.unlink()
+            except OSError:
+                pass
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def get(self, key: str, *, ttl_seconds: int) -> Optional[Any]:
-        """Return cached value if fresh; else ``None``."""
+        """Return cached value if fresh; else ``None``.
+
+        Note: returns ``None`` for both "no entry" and "entry holds
+        None". Callers that need to distinguish those cases should
+        use :meth:`try_get` instead.
+        """
+        value = self.try_get(key, ttl_seconds=ttl_seconds)
+        if value is MISSING:
+            return None
+        return value
+
+    def try_get(self, key: str, *, ttl_seconds: int) -> Any:
+        """Return cached value if fresh; else the ``MISSING`` sentinel.
+
+        Distinguishes "no entry" / "expired" / "corrupt" from
+        "entry holds None". The latter is a legitimate cached
+        value — operators caching `null` JSON responses
+        (NVD's "no record for this CVE" verdict, GitHub's
+        empty-array responses, distro tracker no-data signals)
+        previously had to wrap with their own sentinel because
+        `get` returned `None` indistinguishably for both cases.
+        """
         if not self._writable or self._root is None:
-            self.misses += 1
-            return None
+            with self._counter_lock:
+                self.misses += 1
+            return MISSING
+        # In-process memo — disk-hot keys (OSV per-query, registry
+        # metadata, supply-chain tracker lookups) get hit many times
+        # in one scan; pre-memo each repeat paid disk + JSON parse.
+        # We memoise the parsed envelope keyed on the disk file's
+        # mtime so external rewrites (test fixtures, concurrent
+        # processes) still get re-read instead of returning a stale
+        # in-memory copy. Stat is much cheaper than read + JSON parse,
+        # so the memo still wins net even with the per-hit stat.
         path = self._path_for(key)
-        if not path.exists():
-            self.misses += 1
-            return None
         try:
-            envelope = self._read_envelope(path)
-        except (OSError, ValueError, KeyError) as e:
-            logger.debug("core.json.cache: corrupt entry %s: %s", path, e)
-            self.misses += 1
-            return None
+            file_mtime = path.stat().st_mtime
+        except OSError:
+            file_mtime = None
+        if file_mtime is None:
+            with self._memo_lock:
+                self._memo[key] = MISSING
+            with self._counter_lock:
+                self.misses += 1
+            return MISSING
+        with self._memo_lock:
+            cached_pair = self._memo.get(key)
+        envelope: Optional[CacheEnvelope] = None
+        if (isinstance(cached_pair, tuple) and len(cached_pair) == 2
+                and cached_pair[1] == file_mtime):
+            envelope = cached_pair[0]
+        elif cached_pair is MISSING:
+            # Negative-cached miss is rechecked because the file may
+            # have appeared between the previous miss and this call —
+            # disk stat already proved presence above, so fall through
+            # to the read path.
+            pass
+        if envelope is None:
+            try:
+                envelope = self._read_envelope(path)
+            except (OSError, ValueError, KeyError) as e:
+                logger.debug("core.json.cache: corrupt entry %s: %s", path, e)
+                with self._memo_lock:
+                    self._memo[key] = MISSING
+                with self._counter_lock:
+                    self.misses += 1
+                return MISSING
+            with self._memo_lock:
+                self._memo[key] = (envelope, file_mtime)
         # Caller may downgrade TTL relative to what was stored. Honour
         # the *minimum* TTL.
-        effective_ttl = ttl_seconds if ttl_seconds < envelope.ttl_seconds \
-            or envelope.ttl_seconds == TTL_FOREVER else envelope.ttl_seconds
+        #
+        # `TTL_FOREVER = -1` is a sentinel for "infinite", NOT a tiny
+        # negative TTL. Pre-fix the comparison `ttl_seconds <
+        # envelope.ttl_seconds` treated -1 as smaller than any finite
+        # TTL — so a caller passing `TTL_FOREVER` against a stored
+        # 60s entry got `effective_ttl = -1` (FOREVER), silently
+        # extending the entry's lifetime past its actual expiry.
+        # Operators saw stale data persist indefinitely after they
+        # started passing FOREVER for a hot key.
+        #
+        # Correct minimum-with-sentinel logic:
+        #   * Both FOREVER → FOREVER.
+        #   * One FOREVER, other finite → finite (it IS the minimum).
+        #   * Both finite → arithmetic min.
+        if ttl_seconds == TTL_FOREVER and envelope.ttl_seconds == TTL_FOREVER:
+            effective_ttl = TTL_FOREVER
+        elif ttl_seconds == TTL_FOREVER:
+            effective_ttl = envelope.ttl_seconds
+        elif envelope.ttl_seconds == TTL_FOREVER:
+            effective_ttl = ttl_seconds
+        else:
+            effective_ttl = min(ttl_seconds, envelope.ttl_seconds)
         envelope = CacheEnvelope(
             written_at=envelope.written_at,
             ttl_seconds=effective_ttl,
             value=envelope.value,
         )
         if not envelope.is_fresh(time.time()):
-            self.misses += 1
-            return None
-        self.hits += 1
+            with self._counter_lock:
+                self.misses += 1
+            return MISSING
+        with self._counter_lock:
+            self.hits += 1
         return envelope.value
 
     def put(self, key: str, value: Any, *, ttl_seconds: int) -> None:
@@ -177,6 +345,12 @@ class JsonCache:
             ttl_seconds=ttl_seconds,
             value=value,
         )
+        # Drop any memo entry under this key so a concurrent reader
+        # doesn't return a stale envelope before the disk write
+        # completes. The next ``try_get`` after the rename will
+        # repopulate the memo via the stat + read path.
+        with self._memo_lock:
+            self._memo.pop(key, None)
         # Tempfile suffix MUST include the thread id, not just pid:
         # two threads in the same process writing the same key would
         # otherwise share a tmp path, and ``open("w")`` truncates on
@@ -207,6 +381,8 @@ class JsonCache:
         """Remove an entry. Safe to call on missing keys."""
         if not self._writable or self._root is None:
             return
+        with self._memo_lock:
+            self._memo.pop(key, None)
         path = self._path_for(key)
         try:
             path.unlink(missing_ok=True)
@@ -231,8 +407,23 @@ class JsonCache:
         for part in key.split("/"):
             if not part or part in (".", ".."):
                 continue
-            # Strip path separators that may have leaked in.
-            clean_parts.append(part.replace(os.sep, "_"))
+            # Strip BOTH separators regardless of host. Pre-fix
+            # `part.replace(os.sep, "_")` only stripped the host's
+            # separator — on Linux (os.sep="/") an embedded
+            # backslash from a Windows-formatted cache key
+            # (`"vulns\\GHSA-xxx"`) leaked through; the resulting
+            # filename either confused downstream tooling or, on a
+            # filesystem that honours backslash as a literal byte,
+            # produced a file with a backslash in its name that
+            # later glob patterns missed. Replace both `\` and `/`
+            # explicitly so the same key produces the same cache
+            # file regardless of which platform formatted it.
+            clean = part.replace("\\", "_").replace("/", "_")
+            # Strip os.sep too in case the platform uses a third
+            # separator (Path.alt_sep on some systems).
+            if os.sep not in ("\\", "/"):
+                clean = clean.replace(os.sep, "_")
+            clean_parts.append(clean)
         if not clean_parts:
             raise ValueError(f"empty cache key after sanitisation: {key!r}")
         # Append the suffix directly rather than ``Path.with_suffix``:
@@ -245,13 +436,31 @@ class JsonCache:
 
     @staticmethod
     def _read_envelope(path: Path) -> CacheEnvelope:
+        # `parse_constant` rejects ``NaN`` / ``Infinity`` / ``-Infinity``
+        # at parse time. Pre-fix `json.load` accepted them by default
+        # (a stdlib JSON5-ish extension), so a corrupt or hostile cache
+        # entry with `"ttl_seconds": Infinity` would parse cleanly,
+        # then blow up downstream with `OverflowError` from
+        # `int(float('inf'))` — an exception type try_get's
+        # `except (OSError, ValueError, KeyError)` does not cover, so
+        # the error leaked all the way out and crashed the consumer.
+        # Reject at parse time so the existing JSONDecodeError /
+        # ValueError handler treats it as a corrupt entry and the
+        # cache falls back to MISSING.
         with path.open("r", encoding="utf-8") as fh:
-            data = json.load(fh)
+            data = json.load(fh, parse_constant=_reject_non_finite)
         if not isinstance(data, dict):
             raise ValueError("cache entry is not an object")
+        # `ttl_seconds` may still be a non-numeric string from a
+        # truly malformed entry — keep the int-coerce guard for that.
+        ttl_raw = data["ttl_seconds"]
+        try:
+            ttl = int(ttl_raw)
+        except (OverflowError, ValueError, TypeError) as e:
+            raise ValueError(f"non-numeric ttl_seconds: {ttl_raw!r}") from e
         return CacheEnvelope(
             written_at=float(data["written_at"]),
-            ttl_seconds=int(data["ttl_seconds"]),
+            ttl_seconds=ttl,
             value=data["value"],
         )
 

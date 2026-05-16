@@ -77,8 +77,19 @@ class TestPropagate:
         out = propagate("full outer text", sub)
         assert out.text == "full outer text"
         assert out.kind is RejectionKind.UNRECOGNIZED_OPERAND
-        assert out.detail == "detail"
+        # Cluster 221: chained propagate carries the inner cause
+        # text in the detail so a multi-level chain doesn't lose the
+        # source location. The original detail is preserved
+        # verbatim, with `(in: '<inner>')` appended when the inner
+        # text differs from the new outer text.
+        assert out.detail == "detail (in: 'inner')"
         assert out.hint == "hint"
+
+    def test_same_text_does_not_annotate(self):
+        """Idempotent: same-text propagate keeps detail unchanged."""
+        sub = Rejection("same", RejectionKind.UNRECOGNIZED_OPERAND, "detail")
+        out = propagate("same", sub)
+        assert out.detail == "detail"
 
     def test_returns_new_instance(self):
         sub = Rejection("inner", RejectionKind.LEX_EMPTY)

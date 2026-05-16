@@ -14,6 +14,18 @@ Accepts: project output dir, run dir, target path, or project name.
 import sys
 from pathlib import Path
 
+# ─── trust-marker check (do not import; inline by design) ───
+import os
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
@@ -27,7 +39,32 @@ def _is_project_dir(d: Path) -> bool:
 
 
 def _is_run_dir(d: Path) -> bool:
-    return (d / ".raptor-run.json").exists() or (d / "checklist.json").exists()
+    """Run-dir discriminator.
+
+    Pre-fix the predicate matched any directory with EITHER
+    `.raptor-run.json` OR `checklist.json` — but `checklist.json`
+    is ALSO present in project directories (project-level
+    checklist). The bug was masked at the call site by check
+    order: `_is_project_dir(d)` is tested FIRST in
+    `_resolve_dir`, so a project dir was correctly classified
+    despite this predicate claiming True.
+
+    "Saved by check order" is fragile — any future caller that
+    skips the project-dir check (or reorders) hits the
+    misclassification. Tighten the predicate to require the
+    run-specific marker (`.raptor-run.json`) AND the absence of
+    a project-level marker. `checklist.json` alone is no longer
+    sufficient because it's ambiguous between project and run
+    dirs.
+    """
+    if not (d / ".raptor-run.json").exists():
+        return False
+    # Negative check: project-dir marker should NOT be present.
+    # `_is_project_dir` is the canonical project-dir check; if
+    # the dir has both markers, it's a project dir, not a run.
+    if _is_project_dir(d):
+        return False
+    return True
 
 
 def _resolve_dir(path_arg: str):
@@ -254,14 +291,43 @@ def main():
                 if f and name:
                     mark_targets.append(f"{f}:{name}")
             argv = argv[:idx] + argv[idx + 2:]
-    if "--mark" in argv:
-        idx = argv.index("--mark")
-        mark_targets.extend(a for a in argv[idx + 1:] if not a.startswith("--"))
-        argv = argv[:idx]
-    if "--unmark" in argv:
-        idx = argv.index("--unmark")
-        unmark_targets = [a for a in argv[idx + 1:] if not a.startswith("--")]
-        argv = argv[:idx]
+    # Process --mark / --unmark in a SINGLE pass so flag order
+    # doesn't matter. Pre-fix the if-else sequence below
+    # processed `--mark` first then truncated `argv` to
+    # `argv[:idx_of_mark]`; if the operator passed
+    # `--mark a b --unmark c`, the truncation at step 1
+    # discarded everything from `--mark` onward — including
+    # the `--unmark c` that came AFTER. Subsequent
+    # `if "--unmark" in argv:` then saw a truncated argv
+    # WITHOUT --unmark and silently no-op'd. The operator's
+    # explicit unmark request was dropped.
+    #
+    # Two-pass: collect all --mark/--unmark slices first,
+    # then do a single truncation at the smallest index so
+    # downstream positional-arg extraction sees the same
+    # cleaned-up argv it expected.
+    def _slurp_after(flag: str) -> list:
+        if flag not in argv:
+            return []
+        i = argv.index(flag)
+        out = []
+        for a in argv[i + 1:]:
+            if a.startswith("--"):
+                break
+            out.append(a)
+        return out
+    mark_extra = _slurp_after("--mark")
+    unmark_extra = _slurp_after("--unmark")
+    mark_targets.extend(mark_extra)
+    unmark_targets.extend(unmark_extra)
+    # Now truncate argv at the FIRST appearance of either flag
+    # so positional-arg extraction below isn't confused by the
+    # mark/unmark tokens.
+    cut_indices = [
+        argv.index(f) for f in ("--mark", "--unmark") if f in argv
+    ]
+    if cut_indices:
+        argv = argv[: min(cut_indices)]
 
     # Remaining positional args (after removing flags)
     args = [a for a in argv if not a.startswith("--")]

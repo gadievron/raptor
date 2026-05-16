@@ -21,10 +21,7 @@ from packages.llm_analysis.orchestrator import (
     CUTOFF_SKIP_CONSENSUS,
 )
 from packages.llm_analysis.cc_dispatch import (
-    build_finding_prompt,
     build_schema,
-    parse_cc_result,
-    parse_cc_freeform,
 )
 from packages.llm_analysis.prompts.schemas import FINDING_RESULT_SCHEMA
 
@@ -58,22 +55,107 @@ def _make_finding(finding_id, rule_id, file_path, start_line):
 
 
 def _make_cc_result(finding_id, exploitable=True, score=0.85):
-    """Create a valid CC sub-agent result dict."""
+    """Create a valid CC sub-agent result dict.
+
+    Two correctness contracts the validator + cc_dispatch enforce:
+
+    1. Every field weighted in ``core.llm.response_validation``'s
+       _FINDING_RESULT_WEIGHTS table needs a value (None is fine for
+       nullable fields). Missing high-weight fields drop the
+       quality score below 0.5 → cc_dispatch logs a low-quality
+       warning and may override is_exploitable.
+
+    2. Self-consistency: ``false_positive_reason`` MUST be None
+       when ``is_true_positive=True`` (a true positive is by
+       definition NOT a false positive). The validator at
+       packages.llm_analysis.validation flags otherwise.
+
+    This fixture sets is_true_positive=True regardless of
+    exploitability — a finding can be a true positive AND
+    not-exploitable (the bug is real but unreachable) — so
+    false_positive_reason stays None throughout.
+    """
     return {
         "finding_id": finding_id,
         "is_true_positive": True,
         "is_exploitable": exploitable,
         "exploitability_score": score,
+        "confidence": "high" if exploitable else "low",
         "severity_assessment": "high" if exploitable else "low",
+        "ruling": "exploitable" if exploitable else "not_exploitable",
         "reasoning": "Test reasoning",
         "attack_scenario": "Test scenario" if exploitable else None,
         "exploit_code": "# exploit" if exploitable else None,
         "patch_code": "# patch",
+        "cvss_vector": (
+            "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+            if exploitable else None
+        ),
+        "cvss_score_estimate": 9.8 if exploitable else None,
+        "vuln_type": "sql_injection" if exploitable else None,
+        "cwe_id": "CWE-89" if exploitable else None,
+        "dataflow_summary": (
+            "input → query" if exploitable else None
+        ),
+        "remediation": "use parameterised queries" if exploitable else None,
+        # ``is_true_positive=True`` above means this finding is NOT
+        # a false positive, so the reason field MUST be None — see
+        # contract (2) in the docstring.
+        "false_positive_reason": None,
+        "impact": "data exfiltration" if exploitable else None,
+        "prerequisites": (
+            ["authenticated user"] if exploitable else None
+        ),
+        "tool": "test",
+        "rule_id": "test/rule",
     }
 
 
 def _mock_subprocess_ok(results_by_call):
-    """Create a subprocess.run mock that returns results in order."""
+    """Create a subprocess.run mock that returns the right result
+    for each finding.
+
+    ``results_by_call`` may be either:
+
+    * a dict ``{finding_id: result_json}`` — preferred for parallel
+      dispatch, matched against the prompt the test passes via
+      ``input=`` kwarg;
+    * a list — legacy positional behaviour, returned in call order.
+
+    Parallel orchestration dispatches findings in non-deterministic
+    order; positional matching returns the WRONG result for the
+    wrong finding_id, the orchestrator then retries to correct, and
+    the retry mock returns clamped-to-last results which compounds
+    the mismatch. Dict-keyed matching is order-independent.
+    """
+    if isinstance(results_by_call, dict):
+        def mock_run_by_marker(cmd, **kwargs):
+            # Each dict key is a substring (e.g. file path) the
+            # caller picked because it appears in the prompt for
+            # exactly one finding. The build_analysis_prompt_bundle
+            # builder embeds rule_id / file_path / line info in the
+            # prompt, but NOT the synthetic ``finding_id`` the test
+            # uses for its own bookkeeping — match on something the
+            # prompt actually carries.
+            result = MagicMock()
+            result.returncode = 0
+            prompt = kwargs.get("input", "") or ""
+            chosen = None
+            for marker, payload in results_by_call.items():
+                if marker in prompt:
+                    chosen = payload
+                    break
+            if chosen is None:
+                # No marker matched — return the first entry so the
+                # orchestrator's retry logic still sees something
+                # parseable rather than crashing on empty stdout.
+                chosen = next(iter(results_by_call.values()))
+            result.stdout = chosen
+            result.stderr = ""
+            return result
+
+        return mock_run_by_marker
+
     call_count = [0]
 
     def mock_run(cmd, **kwargs):
@@ -170,10 +252,18 @@ class TestOrchestrate:
         report_path = tmp_path / "report.json"
         report_path.write_text(json.dumps(report))
 
-        cc_results = [
-            json.dumps(_make_cc_result("f-001", exploitable=True)),
-            json.dumps(_make_cc_result("f-002", exploitable=False, score=0.1)),
-        ]
+        # Dict-keyed mock so parallel dispatch returns the right
+        # result for each finding regardless of completion order.
+        # Keys must be substrings the analysis prompt embeds — the
+        # builder uses rule_id / file_path / line, NOT the synthetic
+        # finding_id this test assigns. ``db.py`` / ``template.js``
+        # are distinctive enough to identify each finding's prompt.
+        cc_results = {
+            "db.py": json.dumps(_make_cc_result("f-001", exploitable=True)),
+            "template.js": json.dumps(
+                _make_cc_result("f-002", exploitable=False, score=0.1)
+            ),
+        }
 
         with patch.dict(os.environ, {}, clear=True), \
              patch("packages.llm_analysis.orchestrator.shutil.which", return_value="/usr/bin/claude"), \
@@ -194,6 +284,59 @@ class TestOrchestrate:
         # Verify merged report was written
         out_file = tmp_path / "orch" / "orchestrated_report.json"
         assert out_file.exists()
+
+    def test_sloppy_response_normalised_through_pipeline(self, tmp_path):
+        """Sloppy LLM output is normalised by response validation in cc_dispatch."""
+        findings = [_make_finding("f-001", "py/sql-injection", "db.py", 42)]
+        report = _make_prep_report(findings=findings)
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(report))
+
+        sloppy = {
+            "finding_id": "f-001",
+            "is_true_positive": "yes",          # string, not bool
+            "is_exploitable": "True",            # string, not bool
+            "exploitability_score": "0.85",      # string, not float
+            "severity_assessment": "HIGH",       # uppercase
+            "confidence": "Medium",              # title case
+            "ruling": "Validated",               # title case
+            "vuln_type": "sqli",                 # alias
+            "reasoning": "Input reaches query unsanitised.",
+            "attack_scenario": "Inject SQL via name parameter.",
+            "cvss_vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+            "cwe_id": "CWE-89",
+        }
+        cc_results = [json.dumps(sloppy)]
+
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("packages.llm_analysis.orchestrator.shutil.which", return_value="/usr/bin/claude"), \
+             patch("packages.llm_analysis.cc_dispatch.subprocess.run",
+                   side_effect=_mock_subprocess_ok(cc_results)):
+            result = orchestrate(
+                prep_report_path=report_path,
+                repo_path=tmp_path,
+                out_dir=tmp_path / "orch",
+            )
+
+        assert result is not None
+        finding = result["results"][0]
+
+        # Bool coercion: string "True"/"yes" → True
+        assert finding["is_true_positive"] is True
+        assert finding["is_exploitable"] is True
+        assert finding["exploitable"] is True
+
+        # Numeric coercion: string "0.85" → 0.85
+        assert finding["exploitability_score"] == 0.85
+
+        # Domain normalisation: uppercase/titlecase → lowercase
+        # severity_assessment is overwritten by score_finding() from CVSS vector
+        # (9.8 = critical), so we check confidence and ruling instead
+        assert finding["confidence"] == "medium"
+        assert finding["ruling"] == "validated"
+
+        # Vuln type alias normalisation: "sqli" → "sql_injection"
+        assert finding["vuln_type"] == "sql_injection"
 
     def test_empty_findings(self, tmp_path):
         """No findings in report -> returns None."""
@@ -243,190 +386,6 @@ class TestOrchestrate:
         assert result["orchestration"]["findings_failed"] > 0
 
 
-class TestBuildFindingPrompt:
-    """Test prompt construction."""
-
-    def test_includes_finding_metadata(self):
-        """Prompt includes rule_id, file_path, line numbers."""
-        finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
-        prompt = build_finding_prompt(finding)
-
-        assert "py/sql-injection" in prompt
-        assert "db.py" in prompt
-        assert "42" in prompt
-        assert "f-001" in prompt
-
-    def test_no_raw_code_in_prompt(self):
-        """Prompt does NOT include raw code from the finding."""
-        finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
-        finding["code"] = "cursor.execute(f'SELECT * FROM users WHERE id={uid}')"
-        finding["surrounding_context"] = "def get_user(uid):\n    cursor = db.cursor()\n    ..."
-
-        prompt = build_finding_prompt(finding)
-
-        assert "cursor.execute" not in prompt
-        assert "def get_user" not in prompt
-
-    def test_includes_dataflow_summary(self):
-        """Dataflow metadata is included (without code)."""
-        finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
-        finding["dataflow"] = {
-            "source": {"file": "routes.py", "line": 15, "label": "HTTP parameter"},
-            "sink": {"file": "db.py", "line": 42, "label": "SQL query"},
-            "steps": [{"file": "utils.py", "line": 20}],
-            "sanitizers_found": [],
-        }
-
-        prompt = build_finding_prompt(finding)
-        assert "routes.py:15" in prompt
-        assert "db.py:42" in prompt
-
-    def test_no_exploits_flag(self):
-        """--no-exploits suppresses exploit generation instructions."""
-        finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
-
-        prompt_with = build_finding_prompt(finding, no_exploits=False)
-        prompt_without = build_finding_prompt(finding, no_exploits=True)
-
-        assert "proof-of-concept" in prompt_with.lower() or "exploit" in prompt_with.lower()
-        assert "proof-of-concept" not in prompt_without.lower()
-
-    def test_no_patches_flag(self):
-        """--no-patches suppresses patch generation instructions."""
-        finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
-
-        prompt_with = build_finding_prompt(finding, no_patches=False)
-        prompt_without = build_finding_prompt(finding, no_patches=True)
-
-        assert "secure fix" in prompt_with.lower() or "patch" in prompt_with.lower()
-        assert "secure fix" not in prompt_without.lower()
-
-    def test_includes_score_range(self):
-        """Prompt mentions the 0.0-1.0 score range."""
-        finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
-        prompt = build_finding_prompt(finding)
-        assert "0.0" in prompt and "1.0" in prompt
-
-    def test_feasibility_framing(self):
-        """Feasibility section tells agent to treat constraints as ground truth."""
-        finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
-        finding["feasibility"] = {
-            "verdict": "likely_exploitable",
-            "chain_breaks": ["Full RELRO blocks GOT overwrite"],
-            "what_would_help": ["Format string"],
-        }
-
-        prompt = build_finding_prompt(finding)
-        assert "ground truth" in prompt
-        assert "upstream validation pipeline" in prompt
-        assert "GOT overwrite" in prompt
-
-
-class TestParseCCResult:
-    """Test CC output parsing."""
-
-    def test_valid_json(self):
-        """Clean JSON is parsed directly."""
-        result = parse_cc_result(
-            json.dumps({"finding_id": "f-001", "is_exploitable": True}),
-            "", "f-001",
-        )
-        assert result["finding_id"] == "f-001"
-        assert "error" not in result
-
-    def test_markdown_fenced_json(self):
-        """JSON wrapped in markdown fences is extracted."""
-        content = "Here is the result:\n```json\n" + json.dumps({
-            "finding_id": "f-001", "is_exploitable": False, "reasoning": "test"
-        }) + "\n```\n"
-        result = parse_cc_result(content, "", "f-001")
-        assert result["finding_id"] == "f-001"
-        assert "error" not in result
-
-    def test_empty_output(self):
-        """Empty stdout returns error dict."""
-        result = parse_cc_result("", "some error", "f-001")
-        assert result["finding_id"] == "f-001"
-        assert "error" in result
-
-    def test_invalid_json(self):
-        """Unparseable output returns error dict."""
-        result = parse_cc_result("This is not JSON at all", "", "f-001")
-        assert "error" in result
-
-    def test_json_embedded_in_text(self):
-        """JSON object embedded in surrounding text is extracted via raw_decode."""
-        content = 'I found that {"finding_id": "f-001", "is_exploitable": true, "reasoning": "vuln"} is the result.'
-        result = parse_cc_result(content, "", "f-001")
-        assert result["finding_id"] == "f-001"
-        assert "error" not in result
-
-    def test_multiple_json_fragments_takes_first(self):
-        """With multiple JSON objects, raw_decode takes the first valid one."""
-        content = 'prefix {"partial": true} and {"finding_id": "f-001", "is_exploitable": false, "reasoning": "safe"} end'
-        result = parse_cc_result(content, "", "f-001")
-        # raw_decode takes the first complete JSON object from first {
-        assert "error" not in result
-
-    def test_claude_output_format_json_envelope(self):
-        """claude -p --output-format json wraps result in metadata envelope."""
-        envelope = json.dumps({
-            "type": "result",
-            "subtype": "success",
-            "is_error": False,
-            "result": "",
-            "session_id": "abc-123",
-            "total_cost_usd": 0.15,
-            "structured_output": {
-                "finding_id": "f-001",
-                "is_true_positive": True,
-                "is_exploitable": True,
-                "exploitability_score": 0.9,
-                "reasoning": "Stack buffer overflow",
-            }
-        })
-        result = parse_cc_result(envelope, "", "f-001")
-        assert result["finding_id"] == "f-001"
-        assert result["is_exploitable"] is True
-        assert result["exploitability_score"] == 0.9
-        assert result["reasoning"] == "Stack buffer overflow"
-        assert "session_id" not in result  # envelope fields stripped
-
-
-class TestParseCCFreeform:
-    """Test free-form CC output parsing with JSON envelope."""
-
-    def test_extracts_content_and_cost(self):
-        envelope = json.dumps({
-            "type": "result",
-            "result": "Here is the exploit code:\n```python\nimport os\n```",
-            "total_cost_usd": 0.18,
-            "duration_ms": 12500,
-            "modelUsage": {"claude-sonnet-4-20250514": {}},
-            "usage": {"input_tokens": 1000, "output_tokens": 500},
-        })
-        parsed = parse_cc_freeform(envelope, "")
-        assert "exploit code" in parsed["content"]
-        assert parsed["cost_usd"] == 0.18
-        assert parsed["duration_seconds"] == 12.5
-        assert parsed["analysed_by"] == "claude-sonnet-4-20250514"
-        assert parsed["_tokens"] == 1500
-
-    def test_empty_output(self):
-        parsed = parse_cc_freeform("", "some error")
-        assert "error" in parsed
-
-    def test_non_json_fallback(self):
-        parsed = parse_cc_freeform("Just plain text output", "")
-        assert parsed["content"] == "Just plain text output"
-
-    def test_envelope_without_cost(self):
-        envelope = json.dumps({"type": "result", "result": "analysis text"})
-        parsed = parse_cc_freeform(envelope, "")
-        assert parsed["content"] == "analysis text"
-        assert "cost_usd" not in parsed
-
-
 class TestMergeResults:
     """Test merging CC results back into prep report."""
 
@@ -448,18 +407,34 @@ class TestMergeResults:
         assert result["reasoning"] == "Test reasoning"
 
     def test_does_not_mutate_original(self):
-        """Merging does not mutate the original prep report."""
+        """Merging does not mutate the original prep report.
+
+        Pre-fix the snapshot was a shallow `report["results"][0].copy()`
+        and the assertion was `"analysis" not in report["results"][0]
+        OR report["results"][0] == original_finding`. The OR weakened
+        the test to "either the merge didn't add `analysis`, OR the
+        finding is still equal" — which a buggy merge that mutated
+        nested dicts but added the analysis key would satisfy if the
+        nested mutation happened to keep the dict equal under shallow
+        comparison.
+
+        Use `copy.deepcopy` for the "before" snapshot of the WHOLE
+        report and compare the whole thing post-merge. Catches any
+        mutation at any depth.
+        """
+        import copy
         finding = _make_finding("f-001", "py/sql-injection", "db.py", 42)
         report = _make_prep_report(findings=[finding])
-        original_mode = report["mode"]
-        original_finding = report["results"][0].copy()
+        snapshot = copy.deepcopy(report)
 
         cc_results = [_make_cc_result("f-001")]
         _merge_results(report, cc_results)
 
-        # Original report should be unchanged
-        assert report["mode"] == original_mode
-        assert "analysis" not in report["results"][0] or report["results"][0] == original_finding
+        # Original report must be unchanged at every depth.
+        assert report == snapshot, (
+            f"_merge_results mutated input report; "
+            f"diff: {report} != {snapshot}"
+        )
 
     def test_failed_finding_preserved(self):
         """Findings with CC errors keep prep data and get cc_error field."""
@@ -637,6 +612,89 @@ class TestStructuralGrouping:
         groups = _structural_grouping(results)
         assert len(groups) == 0
 
+    def test_smt_shared_witness_groups_findings_with_same_model(self):
+        """Two findings whose Tier 4 SMT witness has the same
+        variable=value model end up in the same `smt_shared_witness`
+        group. Z3 has effectively said the same concrete attacker
+        input triggers both — single attack vector, operator should
+        test them together."""
+        results = [
+            {"finding_id": "f-001", "file_path": "a.c", "rule_id": "r1",
+             "smt_witness": {
+                 "model": {"count": 268435456, "total": 0},
+                 "anon_var_map": {},
+             }},
+            {"finding_id": "f-002", "file_path": "b.c", "rule_id": "r2",
+             "smt_witness": {
+                 "model": {"count": 268435456, "total": 0},
+                 "anon_var_map": {},
+             }},
+        ]
+        groups = _structural_grouping(results)
+        witness_groups = [g for g in groups if g["criterion"] == "smt_shared_witness"]
+        assert len(witness_groups) == 1
+        assert set(witness_groups[0]["finding_ids"]) == {"f-001", "f-002"}
+        # criterion_value must be human-readable (not just `tuple(...)`)
+        assert "count=268435456" in witness_groups[0]["criterion_value"]
+
+    def test_smt_shared_witness_skips_pure_anon_models(self):
+        """Two findings with the SAME `_anon_N` model but NO
+        anon_var_map decoder are NOT grouped — pure-opaque
+        witnesses are Z3 picking the smallest BV that satisfies the
+        condition (not a meaningful shared attacker input). Pre-
+        check that the spurious grouping doesn't fire."""
+        results = [
+            {"finding_id": "f-001", "file_path": "a.c", "rule_id": "r1",
+             "smt_witness": {
+                 "model": {"_anon_0": 32},
+                 "anon_var_map": {},  # NO decoding
+             }},
+            {"finding_id": "f-002", "file_path": "b.c", "rule_id": "r2",
+             "smt_witness": {
+                 "model": {"_anon_0": 32},
+                 "anon_var_map": {},
+             }},
+        ]
+        groups = _structural_grouping(results)
+        assert not any(g["criterion"] == "smt_shared_witness" for g in groups), (
+            "Pure-opaque _anon_N witness should not produce a shared-witness "
+            "group — the value is Z3's choice, not a real attacker input"
+        )
+
+    def test_smt_shared_witness_groups_decoded_anon_models(self):
+        """When the SAME `_anon_N` value DOES have a decoder
+        (anon_var_map), the witness describes a real attacker-
+        visible quantity (e.g. strlen(argv[1])=32). Group them."""
+        results = [
+            {"finding_id": "f-001", "file_path": "a.c", "rule_id": "r1",
+             "smt_witness": {
+                 "model": {"_anon_0": 32},
+                 "anon_var_map": {"_anon_0": "strlen(argv[1])"},
+             }},
+            {"finding_id": "f-002", "file_path": "b.c", "rule_id": "r2",
+             "smt_witness": {
+                 "model": {"_anon_0": 32},
+                 "anon_var_map": {"_anon_0": "strlen(argv[1])"},
+             }},
+        ]
+        groups = _structural_grouping(results)
+        witness_groups = [g for g in groups if g["criterion"] == "smt_shared_witness"]
+        assert len(witness_groups) == 1
+        assert set(witness_groups[0]["finding_ids"]) == {"f-001", "f-002"}
+
+    def test_smt_no_witness_no_group(self):
+        """No smt_witness field, or empty model, contributes no
+        grouping signal."""
+        results = [
+            {"finding_id": "f-001", "file_path": "a.c"},
+            {"finding_id": "f-002", "file_path": "b.c",
+             "smt_witness": {"model": {}}},
+            {"finding_id": "f-003", "file_path": "c.c",
+             "smt_witness": {}},
+        ]
+        groups = _structural_grouping(results)
+        assert not any(g["criterion"] == "smt_shared_witness" for g in groups)
+
     def test_shared_dataflow_source(self):
         results = [
             {"finding_id": "f-001", "file_path": "a.py", "rule_id": "sqli",
@@ -806,3 +864,116 @@ class TestSelfConsistency:
         }
         _check_self_consistency(results)
         assert "self_contradictory" not in results["f-001"]
+
+
+# ── Weakened Defenses ──────────────────────────────────────────────
+
+class TestWeakenedDefenses:
+    """Test --accept-weakened-defenses behaviour when probe fails."""
+
+    def _make_external_llm_mocks(self):
+        """Build mocks for the external LLM dispatch path."""
+        fake_config = MagicMock()
+        fake_config.primary_model = "ollama/llama3"
+        fake_config.max_cost_per_scan = 0
+
+        mock_model = MagicMock()
+        mock_model.model_name = "ollama/llama3"
+
+        role_resolution = {
+            "analysis_model": mock_model,
+            "code_model": None,
+            "consensus_models": [],
+            "fallback_models": [],
+        }
+        return fake_config, role_resolution
+
+    def _run_with_failing_probe(self, tmp_path, accept=False):
+        """Helper: dispatch with an external LLM model that fails the canary probe."""
+        report = _make_prep_report()
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(report))
+
+        from core.security.envelope_probe import ProbeResult
+        failing_probe = ProbeResult(
+            compatible=False, valid_json=True, correct_verdict=False,
+            nonce_leaked=False, raw_response="{}",
+            error="Model failed to identify a trivial buffer overflow",
+        )
+
+        fake_config, role_res = self._make_external_llm_mocks()
+
+        analysis_result = _make_cc_result("finding-001")
+
+        def mock_dispatch_task(task, findings, dispatch_fn, role_resolution,
+                               results_by_id, cost_tracker, max_parallel,
+                               prefilter_fn=None):
+            for f in findings:
+                fid = f.get("finding_id")
+                r = dict(analysis_result, finding_id=fid)
+                results_by_id[fid] = r
+            return [dict(analysis_result, finding_id=f.get("finding_id"))
+                    for f in findings]
+
+        mock_dispatch_fn = MagicMock(return_value=MagicMock(
+            result=analysis_result, cost=0, tokens=0, model="ollama/llama3",
+            duration=0,
+        ))
+
+        with patch("core.llm.config.resolve_model_roles",
+                   return_value=role_res), \
+             patch("core.llm.client.LLMClient") as mock_cls, \
+             patch("packages.llm_analysis.dispatch.dispatch_task",
+                   side_effect=mock_dispatch_task), \
+             patch("core.security.envelope_probe.probe_envelope_compatibility",
+                   return_value=failing_probe):
+            mock_cls.return_value = MagicMock()
+            return orchestrate(
+                prep_report_path=report_path,
+                repo_path=tmp_path,
+                out_dir=tmp_path / "orch",
+                llm_config=fake_config,
+                accept_weakened_defenses=accept,
+            )
+
+    def test_probe_failure_aborts_without_flag(self, tmp_path):
+        """Probe failure without --accept-weakened-defenses returns None."""
+        result = self._run_with_failing_probe(tmp_path, accept=False)
+        assert result is None
+
+    def test_probe_failure_continues_with_flag(self, tmp_path):
+        """Probe failure with --accept-weakened-defenses falls back to passthrough."""
+        with patch("core.security.rule_of_two.is_interactive", return_value=True):
+            result = self._run_with_failing_probe(tmp_path, accept=True)
+        assert result is not None
+        assert result["orchestration"]["defense_profile"] == "passthrough"
+        assert result["orchestration"]["weakened_defenses"] is True
+
+    def test_weakened_defenses_false_when_probe_passes(self, tmp_path):
+        """When probe passes, weakened_defenses is False regardless of flag."""
+        report = _make_prep_report()
+        report_path = tmp_path / "report.json"
+        report_path.write_text(json.dumps(report))
+
+        cc_result = json.dumps(_make_cc_result("finding-001"))
+
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("packages.llm_analysis.orchestrator.shutil.which",
+                   return_value="/usr/bin/claude"), \
+             patch("packages.llm_analysis.cc_dispatch.subprocess.run",
+                   side_effect=_mock_subprocess_ok([cc_result])):
+            result = orchestrate(
+                prep_report_path=report_path,
+                repo_path=tmp_path,
+                out_dir=tmp_path / "orch",
+                accept_weakened_defenses=True,
+            )
+
+        assert result is not None
+        assert result["orchestration"]["weakened_defenses"] is False
+
+    def test_weakened_defenses_blocked_in_ci(self, tmp_path):
+        """--accept-weakened-defenses is blocked in non-interactive mode."""
+        with patch("core.security.rule_of_two.is_interactive", return_value=False):
+            result = self._run_with_failing_probe(tmp_path, accept=True)
+        assert result is None

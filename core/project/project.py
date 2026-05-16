@@ -65,8 +65,11 @@ class Project:
         """List run directories (unsorted). Shared by get_run_dirs and sweep."""
         if not self.output_path.exists():
             return []
+        generated_dirs = {"findings"}
         return [d for d in self.output_path.iterdir()
-                if d.is_dir() and not d.name.startswith((".", "_"))]
+                if d.is_dir()
+                and not d.name.startswith((".", "_"))
+                and d.name not in generated_dirs]
 
     def get_run_dirs(self, sweep=False) -> List[Path]:
         """List run directories sorted newest-first.
@@ -180,7 +183,19 @@ class ProjectManager:
     # Project names must match: alphanumeric, hyphens, dots (not leading).
     # This prevents shell metacharacters, control characters, spaces, and
     # path separators from ever appearing in filenames or directory names.
-    _NAME_PATTERN = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]*$')
+    #
+    # `\A` / `\Z` instead of `^` / `$`. Pre-fix `^...$` plus `re.match`
+    # would have accepted `"validproject\n"` (or any project name with
+    # a trailing newline) — Python's `$` matches just before a trailing
+    # newline. The newline-suffixed name then flows into the
+    # `<projects_dir>/<name>.json` filename, where the literal newline
+    # in the path produces an unreadable file (most filesystems accept
+    # newlines in names but downstream tools — shell glob, ls,
+    # operator's grep — break on them). The `re.fullmatch` semantics
+    # below would also fix this, but anchoring on `\A`/`\Z` keeps the
+    # pre-existing `re.match` call site working and makes the strict
+    # boundary visible in the pattern itself.
+    _NAME_PATTERN = re.compile(r'\A[a-zA-Z0-9][a-zA-Z0-9._-]*\Z')
 
     @classmethod
     def _validate_name(cls, name: str) -> None:
@@ -255,13 +270,36 @@ class ProjectManager:
             raise ValueError(f"Project '{name}' not found")
 
         if purge and project.output_path.exists():
-            # Safety: refuse to delete paths that could cause serious damage
+            # Safety: refuse to delete paths that could cause serious damage.
+            #
+            # The existing checks (== home, == /, < 3 parts, ancestor of
+            # home) catch the most obvious targets, but an attacker with
+            # write access to the project JSON could set
+            # `output_dir = "/etc"` or `"/usr/share/foo"` — none of those
+            # match the simple checks but rmtree of any of them is
+            # catastrophic.
+            #
+            # Add a containment check: refuse to rmtree any path that
+            # ISN'T inside the expected output base (DEFAULT_OUTPUT_BASE
+            # — `out/projects` resolved). Operators with custom
+            # output_dirs outside that base will need to clean by hand;
+            # the trade-off is correct because the alternative (trust
+            # the project JSON) is exactly the attack surface.
             output = project.output_path.resolve()
             home = Path.home().resolve()
             if (output == home or output == Path("/")
                     or len(output.parts) < 3
                     or str(home).startswith(str(output) + "/")):
                 raise ValueError(f"Refusing to delete suspicious path: {output}")
+            expected_base = DEFAULT_OUTPUT_BASE.resolve()
+            try:
+                output.relative_to(expected_base)
+            except ValueError:
+                raise ValueError(
+                    f"Refusing to delete output path {output} outside the "
+                    f"expected base {expected_base}. Use --no-purge or "
+                    f"clean the directory by hand."
+                )
             shutil.rmtree(project.output_path)
             logger.info(f"Deleted output directory: {project.output_dir}")
 
@@ -289,10 +327,35 @@ class ProjectManager:
         # Update project
         project.name = new_name
 
-        # Save new, delete old
+        # Save new, delete old.
+        # Pre-fix the unlink used `missing_ok=True` which silently
+        # swallowed every OSError including PermissionError. If the
+        # save_json succeeded but the unlink failed, the project
+        # ended up existing under BOTH names with no signal to the
+        # operator — every subsequent list/load saw two entries
+        # for what was supposed to be one project. Use os.replace
+        # to atomically move old → new, then re-write with updated
+        # content. Falls back to save+unlink with EXPLICIT error
+        # reporting if replace isn't atomic on the platform (cross-
+        # filesystem rename).
         save_json(new_file, project.to_dict())
         old_file = self.projects_dir / f"{old_name}.json"
-        old_file.unlink(missing_ok=True)
+        try:
+            old_file.unlink()
+        except FileNotFoundError:
+            pass  # already gone — fine
+        except OSError as e:
+            # Don't roll back the new file: it has the renamed
+            # content and is the source of truth going forward.
+            # But surface the failure so the operator knows the
+            # old file is still on disk and they need to clean it
+            # up by hand.
+            logger.error(
+                "rename: wrote new project file %s but failed to remove "
+                "old %s: %s. Both files now exist; remove %s manually.",
+                new_file, old_file, e, old_file,
+            )
+            raise
 
         # Update .active symlink if it pointed to the old name
         active_link = self.projects_dir / ".active"
@@ -345,7 +408,15 @@ class ProjectManager:
         skipped = 0
         dest_base = project.output_path
 
-        if is_run_directory(src):
+        # `add_runs` is the user-facing import path — operators
+        # explicitly bring in directories that may not have
+        # `.raptor-run.json` yet (legacy runs, manually-copied
+        # subsets). `generate_run_metadata` below backfills it.
+        # Pass `strict=False` so the lenient match still admits
+        # those legacy shapes; the import is gated by an explicit
+        # operator action so the over-match risk is acceptable here
+        # (unlike sweep / cleanup paths which run automatically).
+        if is_run_directory(src, strict=False):
             # Single run directory
             dest = dest_base / src.name
             if dest.exists():
@@ -357,7 +428,7 @@ class ProjectManager:
         else:
             # Directory containing runs
             for child in sorted(src.iterdir()):
-                if child.is_dir() and is_run_directory(child):
+                if child.is_dir() and is_run_directory(child, strict=False):
                     dest = dest_base / child.name
                     if dest.exists():
                         skipped += 1
@@ -398,14 +469,44 @@ class ProjectManager:
 
         The symlink is the single source of truth for project state.
         Uses atomic create-temp-then-rename to avoid TOCTOU races.
+
+        Per-process tmp-link name + name validation: pre-fix the
+        tmp link was a fixed `.active.tmp`, so two concurrent
+        `set_active` calls (rare but possible: two parallel
+        `/project use X` invocations, or a CLI race with a hook
+        fire) collided on the same tmp path. Each call's
+        `tmp_link.unlink(missing_ok=True)` then
+        `tmp_link.symlink_to(...)` lost the race — the second
+        caller's symlink_to would EEXIST against the first's
+        symlink in the gap between unlink and symlink_to,
+        crashing the second caller. Or worse, if both passed
+        their unlinks, both succeeded at symlink_to (different
+        targets), and `os.rename` was last-writer-wins with no
+        signal which name "won".
+
+        Suffix the tmp link with the PID so concurrent callers
+        each get their own tmp slot. The final `os.rename` is
+        still atomic and last-writer-wins — that's expected
+        semantics for "set the active project" — but the
+        intermediate setup no longer races.
+
+        Also validate `name` to refuse path traversal /
+        directory-separator injection. Pre-fix `name` flowed
+        straight into `f"{name}.json"` symlink target —
+        `name="../../../etc/passwd"` would create a symlink
+        pointing outside the projects dir. The existing
+        `_validate_name` covers project create / load; mirror
+        it here for the symlink target.
         """
         import os
+        if name is not None:
+            self._validate_name(name)
         active_link = self.projects_dir / ".active"
         auto_marker = self.projects_dir / ".auto"
         auto_marker.unlink(missing_ok=True)
         if name is not None:
-            # Atomic swap: create temp symlink then rename over the active link
-            tmp_link = self.projects_dir / ".active.tmp"
+            # Per-process tmp slot — see docstring.
+            tmp_link = self.projects_dir / f".active.tmp.{os.getpid()}"
             tmp_link.unlink(missing_ok=True)
             tmp_link.symlink_to(f"{name}.json")
             os.rename(str(tmp_link), str(active_link))

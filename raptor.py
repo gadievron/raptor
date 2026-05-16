@@ -18,6 +18,7 @@ Available Modes:
     web         - Web application security testing
     agentic     - Full autonomous workflow
     codeql      - CodeQL-only analysis
+    doctor      - Status report for local setup (no claude needed)
     help        - Show detailed help for a specific mode
 
 Examples:
@@ -38,21 +39,44 @@ Examples:
 """
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
 
+# raptor.py -> repo root.
+# Belt + braces against subprocess invocation under a sandboxed env
+# that strips PYTHONPATH; today's "script-dir on sys.path[0]" default
+# happens to land on the repo root because we live here, but explicit
+# is safer than implicit.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from core.run.output import get_output_dir, TargetMismatchError
 from core.run.metadata import start_run, complete_run, fail_run
+from core.run.safe_io import safe_run_mkdir
 
 
 def _extract_target(args: list) -> str | None:
-    """Extract the target path from command args (--repo, --binary, or --url)."""
+    """Extract the target path from command args (--repo, --binary, or --url).
+
+    Accepts both `--flag value` and `--flag=value` forms. Pre-fix
+    only the space-separated form was recognised — operators
+    using the canonical `--repo=/path/to/repo` form (common in
+    CI YAML / scripts) had `_extract_target` return None,
+    breaking downstream lifecycle initialisation that relies on
+    the target path for project resolution.
+    """
     for flag in ("--repo", "--binary", "--url"):
+        # `--flag value` form.
         if flag in args:
             idx = args.index(flag)
             if idx + 1 < len(args):
                 return args[idx + 1]
+        # `--flag=value` form.
+        prefix = f"{flag}="
+        for arg in args:
+            if arg.startswith(prefix):
+                return arg[len(prefix):]
     return None
 
 
@@ -69,6 +93,14 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     except TargetMismatchError as e:
         print(f"✗ {e}", file=sys.stderr)
         return 1
+
+    # Trust-boundary mkdir: refuses if the predictable run-dir name has been
+    # pre-positioned as a symlink, owned by another user, or world-writable.
+    # Subprocesses re-verify on their side (defence in depth) but the parent
+    # is the first writer and has to gate too — start_run below would
+    # otherwise create .raptor-run.json along an attacker symlink.
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    safe_run_mkdir(out_dir)
 
     start_run(out_dir, command, target=target)
 
@@ -115,19 +147,70 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
         try:
             from core.sage.hooks import store_scan_results
             import json
-            # Try to find and store SARIF results
-            sarif_files = list(out_dir.glob("*.sarif")) + list(out_dir.glob("**/*.sarif"))
+            # Try to find and store SARIF results.
+            # `os.walk(followlinks=False)` instead of `Path.rglob`:
+            # rglob follows symlinks under Python <3.13. A scanner
+            # that drops a stray symlink into out_dir (some tools'
+            # caches link to /tmp paths that themselves get cleaned
+            # mid-run, leaving dangling symlinks) would either hang
+            # the SARIF discovery in a loop or escape out of the
+            # out_dir entirely and pick up an unrelated SARIF file
+            # from somewhere else on the filesystem.
+            sarif_files = []
+            seen_sarif = set()
+            for dirpath, _dirnames, filenames in os.walk(
+                str(out_dir), followlinks=False
+            ):
+                for fname in filenames:
+                    if not fname.endswith(".sarif"):
+                        continue
+                    fpath = Path(dirpath) / fname
+                    if fpath.is_symlink():
+                        continue
+                    key = str(fpath.resolve())
+                    if key in seen_sarif:
+                        continue
+                    seen_sarif.add(key)
+                    sarif_files.append(fpath)
+            sarif_files.sort()
             findings = []
             for sf in sarif_files:
                 try:
-                    sarif = json.loads(sf.read_text())
-                    for run in sarif.get("runs", []):
-                        for result in run.get("results", []):
+                    # `encoding="utf-8-sig"` so a BOM-prefixed SARIF
+                    # file (some Windows-edited tool outputs, certain
+                    # MSBuild-emitted SARIFs, the IDE-reformatted
+                    # exports operators sometimes round-trip through)
+                    # parses cleanly. Pre-fix the bare `read_text()`
+                    # used the host locale's preferred encoding;
+                    # cp1252/latin-1 hosts mangled non-ASCII evidence,
+                    # AND a leading BOM landed at char 0 which the
+                    # JSON parser rejected with "Expecting value:
+                    # line 1 column 1 (char 0)" — no breadcrumb that
+                    # the encoding was the actual problem.
+                    sarif = json.loads(sf.read_text(encoding="utf-8-sig"))
+                    for run in (sarif.get("runs") or []):
+                        for result in (run.get("results") or []):
+                            # Defensive locations[] guard. Pre-fix
+                            # `result.get("locations") or [{}]` only
+                            # handled None and empty list — but
+                            # malformed SARIF emitters sometimes ship
+                            # `locations` as a single dict (instead
+                            # of array of dicts). Then `locs[0]`
+                            # raised KeyError 0 (dict has no integer
+                            # key) and the whole sarif-parse loop
+                            # crashed for the file. isinstance guard
+                            # falls back to `[{}]` so we get the
+                            # "unknown" path string instead of a
+                            # crash.
+                            locs = result.get("locations")
+                            if not isinstance(locs, list) or not locs:
+                                locs = [{}]
+                            first = locs[0] if isinstance(locs[0], dict) else {}
                             findings.append({
                                 "rule_id": result.get("ruleId", "unknown"),
                                 "level": result.get("level", "warning"),
-                                "message": result.get("message", {}).get("text", ""),
-                                "file_path": (result.get("locations", [{}])[0]
+                                "message": (result.get("message") or {}).get("text", ""),
+                                "file_path": (first
                                               .get("physicalLocation", {})
                                               .get("artifactLocation", {})
                                               .get("uri", "unknown")),
@@ -148,29 +231,129 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
     return rc
 
 
+_active_dispatcher = None
+
+
+def _get_or_start_dispatcher():
+    """Lazy single dispatcher per ``raptor.py`` invocation.
+
+    Phase B credential-isolation: when this is called, the spawned
+    analysis script gets ``RAPTOR_LLM_SOCKET`` + a per-spawn token
+    via ``spawn_worker``, and ``core/llm/providers.py`` routes its
+    SDK calls through the dispatcher. API keys are still in env (for
+    fallback) until Phase C drops the passthrough.
+    """
+    global _active_dispatcher
+    if _active_dispatcher is not None:
+        return _active_dispatcher
+    try:
+        from core.llm.dispatcher.server import LLMDispatcher
+        import uuid, atexit
+        _active_dispatcher = LLMDispatcher(run_id=f"raptor-{uuid.uuid4().hex[:8]}")
+        atexit.register(_active_dispatcher.shutdown)
+        return _active_dispatcher
+    except Exception as exc:
+        # Failure to start the dispatcher must not break the run —
+        # fall through to the env-direct path. The credential leak
+        # channel stays open in this case but is no worse than today.
+        # Surface the failure on stderr (in addition to the logger
+        # warning) so operators see it regardless of log-level
+        # config. After Phase C activation strips API keys from
+        # ``get_llm_env``, this fallback's "no worse than today"
+        # guarantee no longer holds — the fallback path will produce
+        # workers without auth, and the symptom will be a confusing
+        # "first LLM call fails" 30 seconds later. Step 1 of the
+        # phased Phase C rollout: make this failure mode loud at the
+        # moment it happens, before activation depends on it.
+        import logging
+        import sys as _sys
+        msg = (
+            f"raptor.py: credential-isolation dispatcher failed to "
+            f"start ({type(exc).__name__}: {exc}). Falling back to "
+            f"env-direct credential propagation. Once Phase C "
+            f"activation lands, this fallback will produce workers "
+            f"without LLM auth — fix the dispatcher startup failure "
+            f"or expect script-level auth errors."
+        )
+        _sys.stderr.write(msg + "\n")
+        _sys.stderr.flush()
+        logging.getLogger(__name__).warning(
+            "credential-isolation dispatcher failed to start, falling back "
+            "to env-direct: %s", exc,
+        )
+        return None
+
+
 def _run_script(script_path: Path, args: list) -> int:
     """
     Run a RAPTOR script with given arguments.
-    
+
     Args:
         script_path: Path to the Python script to run
         args: Command-line arguments to pass to the script
-        
+
     Returns:
         Exit code from the script
     """
     cmd = [sys.executable, str(script_path)] + args
-    
+
     try:
         from core.config import RaptorConfig
-        result = subprocess.run(cmd, env=RaptorConfig.get_safe_env())
+        # Phase B: opt the spawn into the credential-isolation
+        # dispatcher. Worker env still has API keys (fallback path
+        # exists until Phase C); ``RAPTOR_LLM_SOCKET`` and
+        # ``RAPTOR_LLM_TOKEN_FD`` direct the worker's SDK calls
+        # through the dispatcher when present.
+        dispatcher = _get_or_start_dispatcher()
+        if dispatcher is not None:
+            from core.llm.dispatcher.spawn import spawn_worker
+            proc = spawn_worker(
+                dispatcher,
+                cmd=cmd,
+                label=script_path.name,
+                env=RaptorConfig.get_llm_env(),
+            )
+            return proc.wait()
+        # Fallback: pre-Phase-B behaviour, env-direct.
+        result = subprocess.run(cmd, env=RaptorConfig.get_llm_env())
         return result.returncode
     except KeyboardInterrupt:
         print("\n\nInterrupted by user")
+        # Mark any active run as cancelled. Pre-fix Ctrl-C
+        # left runs in `status="in_progress"` forever — the
+        # next /scan or /agentic invocation saw a stale
+        # "active" run from yesterday's interrupted session
+        # and either appended to it (corrupting findings
+        # comparison) or refused to start ("a run is already
+        # active"). cancel_run flips status to "cancelled"
+        # and clears the active-run pointer; subsequent
+        # invocations get a clean slate.
+        try:
+            from core.sandbox.summary import get_active_run_dir
+            from core.run.metadata import cancel_run
+            active = get_active_run_dir()
+            if active:
+                cancel_run(active)
+        except Exception:
+            # Best-effort. Don't mask the original Ctrl-C
+            # by raising secondary errors during cleanup.
+            pass
         return 130
     except Exception as e:
-        print(f"\n✗ Error running {script_path.name}: {e}")
-        return 1
+        # Pre-fix the blanket `return 1` collapsed every internal
+        # exception (FileNotFoundError, ValueError, RuntimeError,
+        # OSError, etc.) into the same exit code as a child process
+        # that legitimately exited 1. Operators reading the rc had
+        # no signal whether the child had failed or whether the
+        # launcher itself had crashed before/after spawning.
+        #
+        # Distinguish via exit code 2 (launcher-internal failure)
+        # from rc=1 (child returned 1). Print the exception CLASS
+        # alongside the message so logs show the failure shape
+        # without needing a traceback.
+        print(f"\n✗ Error running {script_path.name}: "
+              f"{type(e).__name__}: {e}")
+        return 2
 
 
 def mode_scan(args: list) -> int:
@@ -254,13 +437,24 @@ def mode_llm_analysis(args: list) -> int:
     """Run LLM-powered vulnerability analysis on existing SARIF files."""
     script_root = Path(__file__).parent
     llm_script = script_root / "packages/llm_analysis/agent.py"
-    
+
     if not llm_script.exists():
         print(f"✗ LLM analysis script not found: {llm_script}")
         return 1
-    
+
     print("\n[*] Running LLM-powered vulnerability analysis...\n")
     return _run_script(llm_script, args)
+
+
+def mode_doctor(args: list) -> int:
+    """Run the on-demand status report.
+
+    Wraps :mod:`core.startup.doctor` — see its docstring for the
+    contract (no logo, failures-first, non-zero exit on real
+    failure). All flags pass through to ``doctor.main``.
+    """
+    from core.startup.doctor import main as doctor_main
+    return doctor_main(args)
 
 
 def show_mode_help(mode: str) -> None:
@@ -287,7 +481,81 @@ def show_mode_help(mode: str) -> None:
         return
     
     print(f"\n[*] Help for mode: {mode}\n")
-    subprocess.run([sys.executable, str(script_path), "--help"])
+    # `env=` to a stripped environment so the help-rendering
+    # subprocess doesn't inherit the parent's full env. Pre-fix the
+    # bare subprocess.run carried LD_PRELOAD / LD_LIBRARY_PATH /
+    # PYTHONPATH through to the spawned `python3 raptor_<mode>.py
+    # --help` — irrelevant for the help text itself but a
+    # consistency hazard with the rest of raptor.py's spawn paths
+    # (which all use safe env). `timeout=10` so a wedged help-text
+    # rendering (rare, but a script with a side-effect import that
+    # blocks at import time would hang the operator's terminal)
+    # doesn't pin the shell.
+    try:
+        subprocess.run(
+            [sys.executable, str(script_path), "--help"],
+            env=RaptorConfig.get_safe_env(),
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"✗ Help rendering for {mode} timed out after 10s")
+
+
+# Help epilog used by both the no-args path and the explicit
+# --help/-h path. Centralised so the two help renderings cannot
+# drift apart silently. Indented inside main()'s argparse calls
+# via formatter_class=RawDescriptionHelpFormatter (which
+# preserves leading whitespace and newlines verbatim).
+_HELP_EPILOG = """
+Available Modes:
+  scan        - Static code analysis with Semgrep
+  fuzz        - Binary fuzzing with AFL++
+  web         - Web application security testing
+  agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
+  codeql      - CodeQL-only analysis
+  analyze     - LLM-powered vulnerability analysis (requires SARIF input)
+  doctor      - Status report for local setup (no claude needed)
+
+Examples:
+  # Full autonomous workflow
+  python3 raptor.py agentic --repo /path/to/code
+
+  # Static analysis only
+  python3 raptor.py scan --repo /path/to/code --policy-groups secrets,owasp
+
+  # Binary fuzzing
+  python3 raptor.py fuzz --binary /path/to/binary --duration 3600
+
+  # Web scanning
+  python3 raptor.py web --url https://example.com
+
+  # CodeQL analysis
+  python3 raptor.py codeql --repo /path/to/code --languages java
+
+  # LLM analysis of existing SARIF
+  python3 raptor.py analyze --repo /path/to/code --sarif findings.sarif
+
+Sandbox isolation (available on all modes):
+  --sandbox {full,debug,network-only,none}
+                        Force a sandbox profile (default: full)
+  --no-sandbox          Alias for --sandbox none
+  --audit               Log what enforcement WOULD have blocked
+                        (composes with --sandbox profiles other than 'none')
+  --audit-verbose       With --audit, log every traced syscall
+                        (strace-style diagnostic)
+
+  # Examples
+  python3 raptor.py agentic --repo /code --audit          # log + run
+  python3 raptor.py scan --repo /code --sandbox debug     # gdb-friendly
+  python3 raptor.py fuzz --binary /b --audit --audit-verbose  # full trace
+
+  # Get help for a specific mode
+  python3 raptor.py help scan
+  python3 raptor.py help fuzz
+  python3 raptor.py scan --help
+
+For more information, visit: https://github.com/gadievron/raptor
+"""
 
 
 def main():
@@ -306,41 +574,7 @@ def main():
         parser = argparse.ArgumentParser(
             description="RAPTOR - Unified Security Testing Launcher",
             formatter_class=argparse.RawDescriptionHelpFormatter,
-            epilog="""
-Available Modes:
-  scan        - Static code analysis with Semgrep
-  fuzz        - Binary fuzzing with AFL++
-  web         - Web application security testing
-  agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
-  codeql      - CodeQL-only analysis
-  analyze     - LLM-powered vulnerability analysis (requires SARIF input)
-
-Examples:
-  # Full autonomous workflow
-  python3 raptor.py agentic --repo /path/to/code
-
-  # Static analysis only
-  python3 raptor.py scan --repo /path/to/code --policy_groups secrets,owasp
-
-  # Binary fuzzing
-  python3 raptor.py fuzz --binary /path/to/binary --duration 3600
-
-  # Web scanning
-  python3 raptor.py web --url https://example.com
-
-  # CodeQL analysis
-  python3 raptor.py codeql --repo /path/to/code --languages java
-
-  # LLM analysis of existing SARIF
-  python3 raptor.py analyze --repo /path/to/code --sarif findings.sarif
-
-  # Get help for a specific mode
-  python3 raptor.py help scan
-  python3 raptor.py help fuzz
-  python3 raptor.py scan --help
-
-For more information, visit: https://github.com/gadievron/raptor
-        """
+            epilog=_HELP_EPILOG,
         )
         parser.print_help()
         return 0
@@ -354,41 +588,7 @@ For more information, visit: https://github.com/gadievron/raptor
         parser = argparse.ArgumentParser(
             description="RAPTOR - Unified Security Testing Launcher",
             formatter_class=argparse.RawDescriptionHelpFormatter,
-            epilog="""
-Available Modes:
-  scan        - Static code analysis with Semgrep
-  fuzz        - Binary fuzzing with AFL++
-  web         - Web application security testing
-  agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis)
-  codeql      - CodeQL-only analysis
-  analyze     - LLM-powered vulnerability analysis (requires SARIF input)
-
-Examples:
-  # Full autonomous workflow
-  python3 raptor.py agentic --repo /path/to/code
-
-  # Static analysis only
-  python3 raptor.py scan --repo /path/to/code --policy_groups secrets,owasp
-
-  # Binary fuzzing
-  python3 raptor.py fuzz --binary /path/to/binary --duration 3600
-
-  # Web scanning
-  python3 raptor.py web --url https://example.com
-
-  # CodeQL analysis
-  python3 raptor.py codeql --repo /path/to/code --languages java
-
-  # LLM analysis of existing SARIF
-  python3 raptor.py analyze --repo /path/to/code --sarif findings.sarif
-
-  # Get help for a specific mode
-  python3 raptor.py help scan
-  python3 raptor.py help fuzz
-  python3 raptor.py scan --help
-
-For more information, visit: https://github.com/gadievron/raptor
-        """
+            epilog=_HELP_EPILOG,
         )
         parser.print_help()
         return 0
@@ -410,6 +610,7 @@ For more information, visit: https://github.com/gadievron/raptor
         'agentic': mode_agentic,
         'codeql': mode_codeql,
         'analyze': mode_llm_analysis,
+        'doctor': mode_doctor,
     }
     
     if mode not in mode_handlers:

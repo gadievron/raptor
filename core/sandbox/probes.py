@@ -110,8 +110,26 @@ def check_net_available() -> bool:
             return False
 
         try:
+            # Pre-fix this was `if sysctl.exists() and
+            # sysctl.read_text() == "0": ...`. The exists() call
+            # creates a TOCTOU window between the existence
+            # check and the read — between them the kernel
+            # module exporting the sysctl could be unloaded
+            # (rare, but `rmmod user_namespaces` during a probe
+            # is possible on test / CI hosts), or the path could
+            # be intercepted by an attacker via /proc remount.
+            #
+            # Single-step it: just attempt the read and treat
+            # FileNotFoundError as "no sysctl, assume kernel
+            # default (enabled)". OSError covers the broader
+            # "/proc not mounted" case (containers without
+            # /proc, exotic init systems).
             sysctl = Path("/proc/sys/kernel/unprivileged_userns_clone")
-            if sysctl.exists() and sysctl.read_text().strip() == "0":
+            try:
+                value = sysctl.read_text().strip()
+            except FileNotFoundError:
+                value = ""  # No sysctl on this kernel — defaults to enabled.
+            if value == "0":
                 logger.debug("Sandbox: unprivileged user namespaces disabled (sysctl)")
                 state._net_available_cache = False
                 return False
@@ -164,8 +182,22 @@ def check_mount_available() -> bool:
         # enable mount-ns if they want the stronger isolation (read-only
         # root bind, per-sandbox /tmp tmpfs, /dev/shm isolation).
         try:
+            # Same TOCTOU rationale as the unprivileged_userns_clone
+            # check above: pre-fix `sysctl.exists() and
+            # sysctl.read_text() == "1"` raced — the file could be
+            # remounted between exists() and read_text(). Single-step
+            # via attempt-read + FileNotFoundError-as-"no sysctl"
+            # fallback. The default behaviour when the sysctl is
+            # absent is "AppArmor restriction not in force" → no
+            # warning needed (the fallback is the safe path).
             sysctl = Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns")
-            if sysctl.exists() and sysctl.read_text().strip() == "1":
+            try:
+                _restrict_value = sysctl.read_text().strip()
+            except FileNotFoundError:
+                _restrict_value = ""
+            except OSError:
+                _restrict_value = ""
+            if _restrict_value == "1":
                 if state.warn_once("_mount_unavailable_warned"):
                     logger.info(
                         "Sandbox: mount-namespace isolation UNAVAILABLE — "
@@ -205,3 +237,68 @@ def check_mount_available() -> bool:
                 "To enable, run: sudo apt install uidmap"
             )
         return state._mount_available_cache
+
+
+def check_seatbelt_available() -> bool:
+    """macOS-only: check if `sandbox-exec` works for our use case.
+
+    Returns True iff:
+      - Running on darwin
+      - /usr/bin/sandbox-exec exists
+      - A smoke-test invocation under (allow default) baseline
+        succeeds (verifies SBPL parser + kernel support).
+
+    Cached per-process. Linux always returns False without invoking
+    sandbox-exec (saves the subprocess fork on every check).
+
+    The `(allow default)` baseline is the minimal SBPL profile that
+    lets dyld + libSystem load on modern macOS — pure deny-default
+    SIGABRT's the process before dyld can finish. Spike-validated
+    on macOS 26.4.1 (see scripts/macos_sandbox_spike.py).
+    """
+    import sys
+    if sys.platform != "darwin":
+        return False
+    if state._seatbelt_available_cache is not None:
+        return state._seatbelt_available_cache
+    with state._cache_lock:
+        if state._seatbelt_available_cache is not None:
+            return state._seatbelt_available_cache
+        sandbox_exec = "/usr/bin/sandbox-exec"
+        if not Path(sandbox_exec).exists():
+            state._seatbelt_available_cache = False
+            return False
+        # Smoke test: minimal valid profile + /usr/bin/true (always
+        # present on macOS). 5s timeout — sandbox-exec normally
+        # returns in <50ms; anything longer means a real problem.
+        profile = "(version 1)\n(allow default)\n"
+        try:
+            # `env=` to a stripped environment so the smoke-test
+            # subprocess can't pick up DYLD_INSERT_LIBRARIES /
+            # DYLD_LIBRARY_PATH (the macOS equivalents of LD_PRELOAD)
+            # from the parent. Pre-fix the bare subprocess inherited
+            # the parent's full env — a poisoned operator shell could
+            # have the smoke-test load attacker code via dyld at
+            # startup, AND the result of the smoke test (which
+            # determines whether subsequent subprocesses get
+            # sandboxed) could be skewed by the attacker controlling
+            # what `/usr/bin/true` actually does.
+            from core.config import RaptorConfig
+            r = subprocess.run(
+                [sandbox_exec, "-p", profile, "/usr/bin/true"],
+                capture_output=True, timeout=5,
+                env=RaptorConfig.get_safe_env(),
+            )
+            ok = (r.returncode == 0)
+        except (subprocess.TimeoutExpired, OSError):
+            ok = False
+        state._seatbelt_available_cache = ok
+        if not ok and state.warn_once("_sandbox_unavailable_warned"):
+            logger.warning(
+                "Sandbox: macOS sandbox-exec smoke test FAILED — "
+                "subprocesses will run without isolation. Verify "
+                "sandbox-exec works on this host: "
+                "`sandbox-exec -p '(version 1)(allow default)' "
+                "/usr/bin/true`"
+            )
+        return ok

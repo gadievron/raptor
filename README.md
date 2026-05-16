@@ -179,7 +179,13 @@ The **analysis dispatch layer** is the LLM that analyses individual vulnerabilit
       "provider": "openai",
       "model": "gpt-5.4",
       "api_key": "sk-...",
-      "role": "consensus"
+      "role": "analysis"
+    },
+    {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "api_key": "sk-ant-...",
+      "role": "aggregate"
     }
   ]
 }
@@ -202,9 +208,20 @@ Model roles let you assign different models to different tasks:
 | `analysis` | Validates and analyses each finding (Stages A-D) |
 | `code` | Writes exploit PoCs and patch code |
 | `consensus` | Second-opinion vote on true positives |
+| `aggregate` | Optional. LLM-written narrative synthesis on top of the deterministic multi-model correlation, written to `aggregation.json` and the final `agentic-report.md` |
 | `fallback` | Used if the primary model fails or hits rate limits |
 
-If no roles are set, the first model in the list handles everything.
+If no roles are set, the first model in the list handles everything. For multi-model
+source-code analysis, configure two or more `analysis` models — you'll get the
+deterministic correlation by default. The `aggregate` role is optional and adds an
+LLM-written summary on top:
+
+```bash
+python3 raptor.py agentic --repo /code \
+  --model claude-opus-4-6 \
+  --model gpt-5.4 \
+  --aggregate claude-sonnet-4-6
+```
 
 Budget control:
 
@@ -213,6 +230,12 @@ export RAPTOR_MAX_COST=5.00   # cap analysis spend at $5 per run
 ```
 
 Ollama works for analysis but produces unreliable exploit and patch code. For code generation tasks, use a frontier model.
+
+### Fast-tier short-circuit + the model scorecard
+
+When your analysis-tier model has a same-provider cheaper sibling (Anthropic Opus → Haiku, OpenAI 5.x → 4o-mini, Gemini Pro → Flash-Lite, Mistral Large → Small), RAPTOR will use it as a prefilter on consumers that wire into the substrate (codeql today; SCA and others as follow-ups land). The cheap model only ever short-circuits on **confident false positives**; ambiguous cases and confident-TPs always run the full analysis. Trust accumulates per `(model, decision_class)` cell — RAPTOR records cheap-vs-full agreement and only short-circuits once the Wilson 95% upper-bound on the cell's miss-rate falls at or below 5%.
+
+To inspect what your models are good at, use `/scorecard` (or directly: `libexec/raptor-llm-scorecard list`). The scorecard is global (lessons carry across projects) and persists at `out/llm_scorecard.json`.
 
 ---
 
@@ -315,8 +338,10 @@ RAPTOR is open source. Good places to start if you want to contribute:
 - Better firmware analysis coverage
 - Anything you think is missing
 
+Releases are tagged as `vX.Y.Z` and built automatically by CI. Commit prefixes determine what goes in the changelog: `feat:` for new features, `fix:` for bug fixes, `security:` for security changes, `docs:` for documentation. Anything without a prefix lands in "Other changes". No strict convention required, but it helps.
+
 Submit pull requests. Chat with us on the **#raptor** channel in the Prompt||GTFO Slack:
-https://join.slack.com/t/promptgtfo/shared_invite/zt-3kbaqgq2p-O8MAvwU1SPc10KjwJ8MN2w
+https://join.slack.com/t/promptgtfo/shared_invite/zt-3v2b4sll3-SfyzFRw2lykx_XQX7F3uNQ
 
 ---
 

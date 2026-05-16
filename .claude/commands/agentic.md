@@ -1,5 +1,5 @@
 ---
-description: Full autonomous security workflow — scan, dedup, prep, analyse, consensus, exploit, patch, group
+description: Full autonomous security workflow — scan, dedup, prep, analyse, consensus, judge, exploit, patch, group
 ---
 
 # /agentic - RAPTOR Full Autonomous Workflow
@@ -10,10 +10,12 @@ description: Full autonomous security workflow — scan, dedup, prep, analyse, c
 3. Prep findings (read code, extract dataflow)
 4. **Validate + analyse** each finding (exploitation-validator methodology, Stages A-D)
 5. **Self-review**: catch contradictions, retry low confidence (Stage F)
-6. **Consensus**: multi-model second opinion (if configured)
-7. **Generate exploit PoCs** for exploitable findings
-8. **Generate secure patches** for confirmed vulnerabilities
-9. **Cross-finding analysis** (structural grouping, shared root causes)
+6. **Consensus**: multi-model second opinion (if `--consensus`)
+7. **Judge**: non-blind review of primary reasoning (if `--judge`)
+8. **Aggregate**: synthesize multi-model results for downstream use (if `--aggregate`)
+9. **Generate exploit PoCs** for exploitable findings
+10. **Generate secure patches** for confirmed vulnerabilities
+11. **Cross-finding analysis** (structural grouping, shared root causes)
 
 Nothing will be applied to your code - only generated in the out/ directory.
 
@@ -51,8 +53,10 @@ Findings are dispatched for parallel analysis via one of two paths:
 - **External LLM configured**: dispatches via `generate_structured()` API calls
 - **Both available**: uses external LLM, falls back to Claude Code if it fails
 
-Model roles determine which model analyses (analysis), writes code (code), and
-provides second opinions (consensus).
+Model roles determine which model analyses (analysis), writes code (code),
+provides second opinions (consensus), reviews reasoning (judge), and
+synthesizes multi-model output for downstream use (aggregate).
+See the "Multi-model analysis" section below.
 
 If **neither** is available, the pipeline produces prep-only output. In that case,
 **YOU (Claude Code) are the LLM** — the user may ask you to analyse the findings
@@ -71,13 +75,46 @@ finding's analysis prompt.
 The dispatch pipeline runs these tasks in sequence:
 
 1. **AnalysisTask** — Stages A-D per finding (validation + analysis in one call)
-2. **RetryTask** — Stage F: self-consistency check, retry contradictions + low confidence
-3. **ConsensusTask** — second model votes on true positives (if configured)
-4. **ExploitTask** — PoCs for final-verdict exploitable findings
-5. **PatchTask** — secure fixes for exploitable findings
-6. **GroupAnalysisTask** — cross-finding patterns (shared root cause, attack chaining)
+2. **CrossFamilyCheckTask** — re-check suspicious responses via a different model family
+3. **RetryTask** — Stage F: self-consistency check, retry contradictions + low confidence
+4. **ConsensusTask** — blind second model votes on true positives (if `--consensus`)
+5. **JudgeTask** — non-blind review of primary reasoning (if `--judge`)
+6. **Correlation** — multi-model agreement matrix + confidence signals (if 2+ `--model`)
+7. **AggregationTask** — final synthesis into `aggregation.json`, consumed by `agentic-report.md` (if `--aggregate`)
+8. **ExploitTask** — PoCs for final-verdict exploitable findings
+9. **PatchTask** — secure fixes for exploitable findings
+10. **GroupAnalysisTask** — cross-finding patterns (shared root cause, attack chaining)
 
 Cost tracking is real-time with adaptive budget cutoff.
+
+## Multi-model analysis
+
+By default, the primary model is auto-detected from `~/.config/raptor/models.json` or API key env vars (GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY). Use `--model` to override.
+
+`--model` is repeatable. Multiple models each independently analyse every finding (Stages A-D), then results are correlated — agreement matrix, confidence signals, clusters, unique insights. With 3+ analysis models, `--consensus` is auto-skipped (redundant).
+
+| Flag | Role | What it does |
+|------|------|-------------|
+| `--model MODEL` (repeatable) | Analysis | Each model independently analyses every finding. Multiple = multi-model correlation. |
+| `--consensus MODEL` | Blind second opinion | Re-analyses each finding independently (doesn't see the primary verdict). Majority vote decides the final ruling. Auto-skipped with 3+ `--model`. |
+| `--judge MODEL` | Non-blind review | Sees the primary analysis reasoning and critiques it. Flags missed attack paths, flawed logic, or inconsistent verdicts. |
+| `--aggregate MODEL` | Final synthesis (optional) | LLM-written narrative summary on top of the deterministic correlation. Adds top findings, disputed findings, and recommended next actions to `aggregation.json` and the final `agentic-report.md`. Without it, you still get the correlation results. Requires at least two `--model` values. |
+
+```
+# Single model
+/agentic --model gemini-2.5-pro
+
+# Multi-model — each analyses independently, results correlated
+/agentic --model gemini-2.5-pro --model gpt-5 --model claude-opus-4-6
+
+# Multi-model + downstream aggregation
+/agentic --model claude-opus-4-6 --model gpt-5.4 --aggregate claude-sonnet-4-6
+
+# Single model + consensus + judge
+/agentic --model gemini-2.5-pro --consensus gpt-5.4 --judge claude-opus-4-6
+```
+
+Roles can also be set permanently in `models.json` instead of CLI flags.
 
 ## Report modes
 
@@ -102,8 +139,8 @@ read the code itself via the Read tool.
 
 **`"mode": "orchestrated"`** — Parallel analysis via external LLM or Claude Code
 sub-agents. Results include per-finding `analysed_by` (which model), `cost_usd`,
-`duration_seconds`, plus `cross_finding_groups` and optional `consensus` data.
-Present the results to the user.
+`duration_seconds`, plus `cross_finding_groups` and optional `consensus`,
+`judge` metadata. Present the results to the user.
 
 In all modes, findings are in the `results` array of the report. Orchestrated
 and full mode findings include `is_exploitable`, `reasoning`, `exploit_code`, and

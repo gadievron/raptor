@@ -92,6 +92,43 @@ _COMPREHENSIVE_DANGEROUS_ENV_VARS = frozenset({
     "NODE_OPTIONS", "NODE_PATH",
     "PERL5OPT", "PERLLIB", "PERL5LIB",
     "RUBYOPT", "RUBYLIB",
+    # Proxy redirection — a target repo's CC settings.json env can
+    # silently route every outbound HTTP/HTTPS request through an
+    # attacker-controlled proxy. Pre-fix, the standalone fallback
+    # (used when core.config is unimportable — e.g. a stripped-down
+    # CC install or partial repo) didn't catch these. The full
+    # RaptorConfig.DANGEROUS_ENV_VARS list does, but the fallback was
+    # the line of defence for everything else.
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+    "http_proxy", "https_proxy", "all_proxy",
+    "NO_PROXY", "no_proxy",
+    # JVM / language-runtime injection. Any tool that spawns Java
+    # picks JAVA_TOOL_OPTIONS up unconditionally; -javaagent loads
+    # arbitrary code at JVM startup. _JAVA_OPTIONS is the older
+    # variant. CLASSPATH adds attacker .jar to load path.
+    "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "CLASSPATH",
+    "MAVEN_OPTS", "GRADLE_OPTS",
+    # Cargo / Ruby / Node module-resolution overrides.
+    "CARGO_HOME", "GEM_HOME", "GEM_PATH", "BUNDLE_GEMFILE",
+    "PYTHONUSERBASE", "PYTHONBREAKPOINT",
+    # Git config redirection — an env-set GIT_CONFIG_GLOBAL points
+    # git at an attacker config file with `alias = !sh`,
+    # `core.editor = arbitrary binary`, `credential.helper = ...`
+    # firing on every fetch. GIT_SSH_COMMAND directly execs an
+    # attacker binary on every ssh-based git op.
+    "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG",
+    "GIT_SSH_COMMAND", "GIT_SSH", "SSH_ASKPASS",
+    # OpenSSL config — .conf files can load ENGINE .so files
+    # (arbitrary code in any process that initialises OpenSSL).
+    "OPENSSL_CONF",
+    # TLS trust override — CA bundle / cert dir redirection makes
+    # MITM trivial.
+    "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+    "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "NODE_EXTRA_CA_CERTS", "SSLKEYLOGFILE",
+    # Kubernetes — `users[].user.exec` directive runs arbitrary
+    # command for credential acquisition.
+    "KUBECONFIG",
 })
 try:
     from core.config import RaptorConfig
@@ -141,10 +178,21 @@ def _read_capped(path: Path) -> Optional[bytes]:
     """Read up to _MAX_CONFIG_BYTES+1. None on oversized/non-regular/error.
 
     O_NONBLOCK + fstat(S_ISREG) closes the FIFO-DoS and stat-vs-open TOCTOU
-    holes. Broad except for any I/O surprise — fail-closed is the safe stance.
+    holes. O_NOFOLLOW closes the symlink-redirect hole — the caller's
+    `_check_cached` symlink branch records symlinks as findings without
+    reading them, but a TOCTOU race could swap a regular file for a
+    symlink between the symlink check and the open here. With
+    O_NOFOLLOW the open fails with ELOOP and we fail-closed (return
+    None). Broad except for any I/O surprise — fail-closed is the safe
+    stance.
     """
     try:
-        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+        fd = os.open(
+            str(path),
+            os.O_RDONLY
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
     except Exception:
         return None
     data: Optional[bytes] = None
@@ -167,16 +215,54 @@ def _read_capped(path: Path) -> Optional[bytes]:
 
 
 def _load_json(path: Path) -> Tuple[Optional[dict], bool]:
-    """Return (data, ok). Broad except — any parse failure → fail-closed."""
+    """Return (data, ok). Broad except — any parse failure → fail-closed.
+
+    Pre-fix the bare `except Exception` swallowed everything
+    silently. cc_trust is a SECURITY-critical scanner — when a
+    settings file fails to parse, the operator should see a log
+    line saying "we treated this as unsafe because of <reason>"
+    so they can either fix the file or know the trust check is
+    being bypassed. Without the diagnostic, an operator
+    debugging "why won't /agentic dispatch CC?" had no signal
+    that the underlying cause was a malformed settings JSON.
+
+    Log at debug — fail-closed is the right default and we
+    don't want to spam warnings on every scan, but the
+    diagnostic is reachable via `--verbose` for operators
+    actively debugging.
+    """
     raw = _read_capped(path)
     if raw is None:
         return None, False
     try:
         # utf-8-sig handles a leading BOM transparently.
         data = json.loads(raw.decode("utf-8-sig"))
-    except Exception:
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        # Specific exception classes for the diagnostic.
+        # `Exception` catch-all kept below for unknown classes
+        # (Python version differences, future json variants).
+        import logging
+        logging.getLogger(__name__).debug(
+            "cc_trust._load_json: parse failure on %s — %s: %s",
+            path, type(exc).__name__, exc,
+        )
+        return None, False
+    except Exception as exc:
+        # Catch-all — log so an unexpected exception class
+        # (e.g. MemoryError on a multi-GB file that slipped
+        # past _read_capped) still produces a breadcrumb.
+        import logging
+        logging.getLogger(__name__).debug(
+            "cc_trust._load_json: unexpected failure on %s — %s: %s",
+            path, type(exc).__name__, exc,
+        )
         return None, False
     if not isinstance(data, dict):
+        import logging
+        logging.getLogger(__name__).debug(
+            "cc_trust._load_json: %s parsed but root is %s, not dict",
+            path, type(data).__name__,
+        )
         return None, False
     return data, True
 
@@ -208,24 +294,60 @@ def _scan_settings(path: Path) -> Optional[FileScan]:
                     for entry in inner:
                         if not isinstance(entry, dict):
                             continue
-                        if entry.get("type") == "command":
+                        # Pre-fix: only `type == "command"` hooks were
+                        # flagged. CC's hook spec is small today (just
+                        # `command`), but a future addition (or a
+                        # caller-supplied custom hook type) would slip
+                        # past entirely — we'd silently treat
+                        # `type=plugin` / `type=script` / etc. as
+                        # benign. Fail-closed: any hook entry whose
+                        # type we don't recognise is treated as
+                        # dangerous (the value field is rendered for
+                        # operator review).
+                        hook_type = entry.get("type")
+                        if hook_type == "command":
                             cmd = entry.get("command")
                             value = _truncate(cmd) if isinstance(cmd, str) and cmd else "(empty)"
                             fs.findings.append(Finding(f"{ev} hook", value, True))
+                        else:
+                            # Unknown hook type — surface the type +
+                            # the entry's keys so the operator can
+                            # judge. Treated as blocking like every
+                            # other hook finding.
+                            type_label = _truncate(
+                                str(hook_type) if hook_type is not None else "(missing)",
+                                limit=40,
+                            )
+                            keys_summary = ",".join(sorted(entry.keys()))
+                            fs.findings.append(Finding(
+                                f"{ev} hook ({type_label}, unknown type)",
+                                _truncate(keys_summary),
+                                True,
+                            ))
 
         env_cfg = data.get("env")
         if isinstance(env_cfg, dict):
+            # Pre-fix the membership check was exact-match, so a target
+            # setting `http_proxy` or `Https_Proxy` (both honoured by
+            # curl, wget, requests, and most language stdlibs) bypassed
+            # the dangerous-env detection because only uppercase
+            # `HTTP_PROXY`/`HTTPS_PROXY` were in the set. POSIX doesn't
+            # mandate uppercase env vars; the case-insensitive proxy
+            # convention is real and widely exploited. Compare against
+            # an upper-case-folded view of the dangerous set.
+            dangerous_upper = {v.upper() for v in _DANGEROUS_ENV_VARS}
             for env_key, env_val in env_cfg.items():
                 key_str = str(env_key)
+                key_upper = key_str.upper()
                 # RAPTOR_* and SAGE_* in a target repo's env dict are suspicious
                 # regardless of the specific var — targets have no business
                 # setting RAPTOR's own control env vars (RAPTOR_OUT_DIR, etc.)
                 # nor SAGE's (SAGE_URL could redirect to a poisoned memory
                 # server, SAGE_ENABLED could silently turn on persistent
                 # memory the user didn't intend, etc.).
-                if (key_str in _DANGEROUS_ENV_VARS
-                        or key_str.startswith("RAPTOR_")
-                        or key_str.startswith("SAGE_")):
+                if (key_upper in dangerous_upper
+                        or key_upper.startswith("RAPTOR_")
+                        or key_upper.startswith("SAGE_")):
                     k = _truncate(key_str, limit=40)
                     fs.findings.append(Finding(f"env {k}", _truncate(str(env_val)), True))
     except Exception:
@@ -279,15 +401,29 @@ def check_repo_claude_trust(repo_path: str, trust_override: Optional[bool] = Non
         return False
     if trust_override is None:
         trust_override = _trust_override_set
-    return _check_cached(resolved, trust_override)
+    scans, any_blocking = _scan_cached(resolved)
+    # Print side-effects live OUTSIDE the cache. Pre-fix the print() calls
+    # were inside `_check_cached` which was @lru_cache'd — so the operator
+    # only saw the warning on the FIRST identical call per process; every
+    # subsequent invocation silently returned the cached verdict with no
+    # visible diagnostic. Re-emit the rendering on each invocation so the
+    # warning isn't suppressed by cache-friendly callers (e.g. an
+    # orchestrator that re-checks the same repo per finding).
+    if scans:
+        target = Path(resolved)
+        _render_scan_report(target, scans, any_blocking, trust_override)
+    return any_blocking and not trust_override
 
 
 @lru_cache(maxsize=64)
-def _check_cached(resolved_path: str, trust_override: bool) -> bool:
-    """Cached scan + render. Don't call directly — use check_repo_claude_trust()."""
+def _scan_cached(resolved_path: str) -> Tuple[Tuple["FileScan", ...], bool]:
+    """Pure scan: returns (scans, any_blocking). Cached because filesystem
+    state for a given resolved path doesn't change within a session.
+    Side-effect free so repeated cache hits don't suppress operator-
+    visible warnings (handled in the caller)."""
     target = Path(resolved_path)
     if target == _RAPTOR_DIR:
-        return False
+        return ((), False)
 
     candidates = [
         ("settings", target / ".claude" / "settings.json"),
@@ -296,7 +432,7 @@ def _check_cached(resolved_path: str, trust_override: bool) -> bool:
     ]
     present = [(kind, p) for kind, p in candidates if _path_present(p)]
     if not present:
-        return False
+        return ((), False)
 
     scans: List[FileScan] = []
     for kind, path in present:
@@ -316,13 +452,15 @@ def _check_cached(resolved_path: str, trust_override: bool) -> bool:
         elif scanned.findings:
             scans.append(scanned)
 
-    if not scans:
-        return False  # nothing actionable → silent
-
     any_blocking = any(s.has_blocking() for s in scans)
-    safe_target = _safe(str(target))
+    return (tuple(scans), any_blocking)
 
-    # Heading
+
+def _render_scan_report(target: Path, scans, any_blocking: bool,
+                        trust_override: bool) -> None:
+    """Pure rendering — separated from `_scan_cached` so the cache
+    doesn't suppress the operator-visible warning on re-invocation."""
+    safe_target = _safe(str(target))
     if any_blocking:
         if trust_override:
             print(f"raptor: {safe_target} has dangerous Claude Code config "
@@ -332,7 +470,6 @@ def _check_cached(resolved_path: str, trust_override: bool) -> bool:
     else:
         print(f"raptor: {safe_target} has Claude Code config:")
 
-    # Per-file blocks with aligned label columns
     for fs in scans:
         try:
             rel = fs.path.relative_to(target)
@@ -342,5 +479,3 @@ def _check_cached(resolved_path: str, trust_override: bool) -> bool:
         label_w = max(len(f.label) for f in fs.findings) + 2
         for f in fs.findings:
             print(f"    {f.label:<{label_w}}{f.value}")
-
-    return any_blocking and not trust_override

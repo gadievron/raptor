@@ -144,3 +144,128 @@ def generate_from_file(path: Path) -> str:
     if data is None:
         raise ValueError(f"Failed to load {path}")
     return generate(data)
+
+
+# ---------------------------------------------------------------------------
+# Forward-reachable diagrams (one per entry point)
+# ---------------------------------------------------------------------------
+#
+# /understand --map's MAP-5b step attaches a ``forward_reachable``
+# field to each entry point (substrate-derived call closure):
+#
+#     {"host": "...", "internal_count": N, "external_count": M,
+#      "internal_names": [...], "external_names": [...],
+#      "truncated": bool}
+#
+# Rendering this in the same flowchart as entry-points / trust-
+# boundaries / sinks would explode visual complexity (10+ nodes
+# per entry × N entries). Instead we emit ONE small flowchart
+# per entry, called "Forward Reachability per Entry Point" in
+# diagrams.md.
+
+
+def generate_forward_reachable_blocks(
+    data: dict[str, Any],
+) -> list[tuple[str, str]]:
+    """Return ``(title, mermaid_diagram)`` tuples — one per entry
+    point that carries ``forward_reachable``. Empty list when no
+    entry has the field (the renderer skips the section in that
+    case).
+    """
+    out: list[tuple[str, str]] = []
+    for ep in data.get("entry_points") or []:
+        if not isinstance(ep, dict):
+            continue
+        fr = ep.get("forward_reachable")
+        if not isinstance(fr, dict):
+            continue
+        diagram = _render_one_entry_forward(ep, fr)
+        if not diagram:
+            continue
+        ep_id = ep.get("id", "EP-?")
+        host = fr.get("host", "?")
+        title = f"{ep_id}: {host}"
+        out.append((title, diagram))
+    return out
+
+
+def _render_one_entry_forward(ep: dict[str, Any], fr: dict[str, Any]) -> str:
+    """Render one entry's forward closure as a top-down flowchart.
+
+    Layout: host at top, internal callees branching down (green),
+    external dep calls branching down (purple). A truncation
+    note attaches via dashed edge when the closure walk hit
+    max_depth.
+    """
+    lines = ["flowchart TD"]
+    host = fr.get("host", "?")
+    host_id = "HOST"
+    lines.append("")
+    lines.append("    %% Host (entry point's enclosing function)")
+    lines.append(f'    {host_id}["{_sanitize(host)}"]')
+
+    internal_names = list(fr.get("internal_names") or [])
+    external_names = list(fr.get("external_names") or [])
+    int_count = fr.get("internal_count", len(internal_names))
+    ext_count = fr.get("external_count", len(external_names))
+
+    # Internal nodes
+    if internal_names:
+        lines.append("")
+        lines.append("    %% Internal callees (project functions)")
+    int_ids: list[str] = []
+    for i, name in enumerate(internal_names):
+        nid = f"INT{i:03d}"
+        int_ids.append(nid)
+        lines.append(f'    {nid}["{_sanitize(name)}"]')
+        lines.append(f"    {host_id} --> {nid}")
+
+    # External nodes — parallelogram shape, distinct from
+    # internal rectangles. Same shape the existing context-map
+    # diagram uses for sinks; reads as "exits the project".
+    if external_names:
+        lines.append("")
+        lines.append("    %% External dep calls")
+    ext_ids: list[str] = []
+    for i, name in enumerate(external_names):
+        nid = f"EXT{i:03d}"
+        ext_ids.append(nid)
+        lines.append(f'    {nid}[/"{_sanitize(name)}"\\]')
+        lines.append(f"    {host_id} --> {nid}")
+
+    # Truncation note — closure walk hit max_depth, the listed
+    # nodes are partial.
+    if fr.get("truncated"):
+        lines.append("")
+        lines.append("    %% Closure walk hit max_depth — partial enumeration")
+        lines.append('    TRUNC["… (max_depth reached)"]')
+        lines.append(f"    {host_id} -. truncated .-> TRUNC")
+
+    # Cap-disclosure comment when the rendered list is shorter
+    # than the count (substrate caps internal_names /
+    # external_names at 10 each by default).
+    if int_count > len(internal_names) or ext_count > len(external_names):
+        lines.append("")
+        lines.append(
+            f"    %% Showing {len(internal_names)}/{int_count} internal, "
+            f"{len(external_names)}/{ext_count} external"
+        )
+
+    # Style classes
+    lines.append("")
+    lines.append("    classDef host fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f")
+    lines.append("    classDef int fill:#dcfce7,stroke:#16a34a,color:#14532d")
+    lines.append("    classDef ext fill:#f3e8ff,stroke:#9333ea,color:#581c87")
+    lines.append(f"    class {host_id} host")
+    if int_ids:
+        lines.append(f"    class {','.join(int_ids)} int")
+    if ext_ids:
+        lines.append(f"    class {','.join(ext_ids)} ext")
+    return "\n".join(lines)
+
+
+__all__ = [
+    "generate",
+    "generate_forward_reachable_blocks",
+    "generate_from_file",
+]

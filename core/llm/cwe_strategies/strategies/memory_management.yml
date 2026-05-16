@@ -1,0 +1,106 @@
+name: memory_management
+description: |
+  Code that allocates, frees, or reference-counts heap objects.
+  The bug classes: asymmetric refcounting (extra free, missing
+  free, double free), dangling pointers after object removal,
+  memory leaks on error paths, use-after-free across function
+  boundaries.
+
+signals:
+  paths:
+    - mm/
+    - mm/slab/
+    - kernel/cred.c
+    - kernel/exit.c
+  includes:
+    - linux/slab.h
+    - linux/refcount.h
+    - linux/kref.h
+    - linux/percpu-refcount.h
+  function_keywords:
+    - alloc
+    - free
+    - destroy
+    - put
+    - ref
+    - unref
+    - refcount
+    - kref
+  function_calls:
+    - kmalloc
+    - kzalloc
+    - kfree
+    - kvfree
+    - vmalloc
+    - vfree
+    - kmem_cache_alloc
+    - kmem_cache_free
+    - kref_get
+    - kref_put
+    - refcount_inc
+    - refcount_dec
+    - refcount_dec_and_test
+    - put_device
+    - get_device
+  cwes:
+    - CWE-119   # buffer bounds
+    - CWE-401   # missing release after lifecycle
+    - CWE-415   # double free
+    - CWE-416   # use-after-free
+    - CWE-476   # NULL pointer dereference
+    - CWE-590   # free of memory not on heap
+    - CWE-672   # use after expiration
+    - CWE-762   # mismatched free
+    - CWE-770   # allocation without limits
+
+key_questions:
+  - "For every successful allocation, is there exactly one matching free on EVERY return path — including error paths and early returns?"
+  - "If this function takes a reference, is the reference released by the same function on errors, or transferred to the caller? Is the contract documented or enforceable?"
+  - "When an object is removed from a global structure (list, hash, tree), is every path that holds a stored pointer to it either notified or invalidated?"
+  - "For shared mutable state: is there any sequence — concurrent or sequential — that could free an object while a pointer to it is still in active use elsewhere?"
+
+prompt_addendum: |
+  Trace ownership symbolically: who 'owns' each pointer on entry,
+  what's the ownership state on each exit path, and are those
+  states consistent with the function's contract. Asymmetry is
+  the bug — one path frees, another doesn't, and the caller
+  assumes one or the other. For refcount-managed objects, count
+  the increments and decrements on every code path; they MUST
+  balance. Pay close attention to error-handling cleanup: most
+  refcount bugs live in ``goto err_*`` ladders where the order of
+  ``put`` calls relative to the failed step is wrong.
+
+exemplars:
+  - cve: CVE-2024-1086
+    title: nf_tables verdict mismatch double-free
+    pattern: |
+      The verdict path of an nft expression frees an object on
+      one side and a different verdict path frees the same object
+      on the other side. A specific sequence of netlink commands
+      causes both paths to fire in order, producing a double-free
+      of the original object plus a use-after-free on the second
+      free's allocator metadata.
+    why_buggy: |
+      Each verdict path is locally correct: it frees what its
+      branch allocated. But the two paths can both fire on the
+      same object across separate netfilter table mutations.
+      The bug is that the ownership model — which verdict 'owns'
+      the cleanup — was implicit and could be made ambiguous from
+      userspace. Real fix: explicit ownership tracking, not just
+      adding a NULL check.
+
+  - cve: CVE-2022-2588
+    title: cls_route filter dangling pointer after hash removal
+    pattern: |
+      A cls_route filter is removed from a hash table on one path
+      while another path still holds a pointer to it. The remove
+      operation only unlinks the filter; it does not invalidate
+      any other paths' caches of the now-detached pointer. A
+      subsequent operation dereferences the dangling pointer.
+    why_buggy: |
+      The function removes the filter from the visible structure
+      but doesn't synchronise with concurrent readers. Removal
+      should be a two-phase operation: detach (visible to new
+      lookups), then synchronise (drain in-flight operations
+      holding cached pointers), then free. Skipping the
+      synchronisation step leaves dangling references.

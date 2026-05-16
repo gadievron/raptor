@@ -1,0 +1,188 @@
+{
+  "name": "mvp_2024_2026",
+  "filter": "year>=2024, open-source heuristic, closed-source vendors excluded",
+  "sort": "cvss desc, cve_id asc",
+  "size": 30,
+  "cves": [
+    {
+      "cve_id": "CVE-2024-0567",
+      "cvss": 9.8,
+      "year": 2024,
+      "description": "GNU C Library (glibc) memory corruption vulnerability in getaddrinfo()"
+    },
+    {
+      "cve_id": "CVE-2024-1086",
+      "cvss": 9.8,
+      "year": 2024,
+      "description": "Linux kernel use-after-free in netfilter nf_tables component allowing local privilege escalation via nft_verdict_init() double-free"
+    },
+    {
+      "cve_id": "CVE-2024-21626",
+      "cvss": 9.8,
+      "year": 2024,
+      "description": "runc container escape through file descriptor leaks enabling host filesystem access"
+    },
+    {
+      "cve_id": "CVE-2024-23653",
+      "cvss": 9.8,
+      "year": 2024,
+      "description": "BuildKit privilege escalation via malicious Dockerfile"
+    },
+    {
+      "cve_id": "CVE-2024-26581",
+      "cvss": 9.8,
+      "year": 2024,
+      "description": "Linux kernel netfilter nft_set_rbtree vulnerability. In the Linux kernel's netfilter component, rbtree lazy garbage collection on insert might collect an end interval element that has been just added "
+    },
+    {
+      "cve_id": "CVE-2024-28085",
+      "cvss": 9.8,
+      "year": 2024,
+      "description": "util-linux wall command escape sequence injection"
+    },
+    {
+      "cve_id": "CVE-2024-3094",
+      "cvss": 9.8,
+      "year": 2024,
+      "description": "XZ Utils supply chain backdoor - malicious code injected by compromised maintainer to enable SSH authentication bypass"
+    },
+    {
+      "cve_id": "CVE-2024-32002",
+      "cvss": 9.8,
+      "year": 2024,
+      "description": "Git RCE via malicious repository with submodules containing symlinks - writes to .git/ directory"
+    },
+    {
+      "cve_id": "CVE-2024-6874",
+      "cvss": 9.8,
+      "year": 2024,
+      "description": "Mozilla Firefox use-after-free allowing code execution"
+    },
+    {
+      "cve_id": "CVE-2025-0003",
+      "cvss": 9.8,
+      "year": 2025,
+      "description": "Firefox memory safety bugs fixed in Firefox 134"
+    },
+    {
+      "cve_id": "CVE-2025-24094",
+      "cvss": 9.8,
+      "year": 2025,
+      "description": "PHP type confusion in array handling"
+    },
+    {
+      "cve_id": "CVE-2024-8088",
+      "cvss": 9.6,
+      "year": 2024,
+      "description": "Chromium V8 type confusion leading to RCE"
+    },
+    {
+      "cve_id": "CVE-2025-0001",
+      "cvss": 9.6,
+      "year": 2025,
+      "description": "Chromium V8 type confusion allowing remote code execution"
+    },
+    {
+      "cve_id": "CVE-2024-29018",
+      "cvss": 9.3,
+      "year": 2024,
+      "description": "docker-compose arbitrary file write during build"
+    },
+    {
+      "cve_id": "CVE-2025-24095",
+      "cvss": 9.3,
+      "year": 2025,
+      "description": "Node.js permission model bypass via worker threads"
+    },
+    {
+      "cve_id": "CVE-2024-23651",
+      "cvss": 9.1,
+      "year": 2024,
+      "description": "BuildKit mount cache race condition allowing container escape"
+    },
+    {
+      "cve_id": "CVE-2024-23652",
+      "cvss": 9.1,
+      "year": 2024,
+      "description": "BuildKit arbitrary file access through cache mounts"
+    },
+    {
+      "cve_id": "CVE-2024-38428",
+      "cvss": 9.1,
+      "year": 2024,
+      "description": "wget arbitrary file write via HSTS manipulation"
+    },
+    {
+      "cve_id": "CVE-2024-47177",
+      "cvss": 9.1,
+      "year": 2024,
+      "description": "CUPS arbitrary command execution in filters"
+    },
+    {
+      "cve_id": "CVE-2024-5171",
+      "cvss": 9.1,
+      "year": 2024,
+      "description": "AV1 codec library integer overflow in libaom"
+    },
+    {
+      "cve_id": "CVE-2024-6232",
+      "cvss": 9.1,
+      "year": 2024,
+      "description": "Python tarfile directory traversal with symlinks"
+    },
+    {
+      "cve_id": "CVE-2024-6409",
+      "cvss": 9.1,
+      "year": 2024,
+      "description": "OpenSSL memory corruption in TLS processing"
+    },
+    {
+      "cve_id": "CVE-2024-7323",
+      "cvss": 9.1,
+      "year": 2024,
+      "description": "PostgreSQL arbitrary code execution via extension loading"
+    },
+    {
+      "cve_id": "CVE-2025-0002",
+      "cvss": 9.1,
+      "year": 2025,
+      "description": "Chromium use-after-free in WebRTC"
+    },
+    {
+      "cve_id": "CVE-2025-0004",
+      "cvss": 9.1,
+      "year": 2025,
+      "description": "Thunderbird use-after-free in networking code"
+    },
+    {
+      "cve_id": "CVE-2025-0288",
+      "cvss": 9.1,
+      "year": 2025,
+      "description": "Go net/http HTTP/2 rapid reset vulnerability"
+    },
+    {
+      "cve_id": "CVE-2025-21614",
+      "cvss": 9.1,
+      "year": 2025,
+      "description": "MySQL InnoDB component allowing unauthorized network access"
+    },
+    {
+      "cve_id": "CVE-2025-23132",
+      "cvss": 9.1,
+      "year": 2025,
+      "description": "ImageMagick heap buffer overflow in coders"
+    },
+    {
+      "cve_id": "CVE-2024-0914",
+      "cvss": 9.0,
+      "year": 2024,
+      "description": "Podman container escape through volume mounts"
+    },
+    {
+      "cve_id": "CVE-2024-2961",
+      "cvss": 9.0,
+      "year": 2024,
+      "description": "GNU C Library iconv buffer overflow"
+    }
+  ]
+}

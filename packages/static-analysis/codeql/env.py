@@ -26,6 +26,28 @@ class CodeQLEnv:
         return asdict(self)
 
 def _run_codeql_version(cli_path: str, timeout_seconds: int = 10) -> Optional[str]:
+    # Use a sanitised env for the version probe. Pre-fix the
+    # subprocess inherited the parent's full environment —
+    # `LD_PRELOAD` / `LD_LIBRARY_PATH` / `PYTHONPATH` set in the
+    # operator's shell flowed into the codeql binary. CodeQL is a
+    # JVM host, so JAVA_TOOL_OPTIONS / _JAVA_OPTIONS also injected
+    # JVM args at startup including the `-javaagent:...` form
+    # which loads attacker-controlled .jar files and runs them
+    # inside the JVM. The detection probe ran this on every
+    # codeql startup-check call, expanding the attack surface to
+    # include "anyone who can set env vars in the parent shell
+    # can run code via the version probe".
+    #
+    # Use core.config.RaptorConfig.get_safe_env() — same allowlist
+    # used by the actual codeql analyse / database-create paths,
+    # so the probe and the analysis run with consistent env shape.
+    try:
+        from core.config import RaptorConfig
+        env = RaptorConfig.get_safe_env()
+    except ImportError:
+        # Fall back to default env rather than crashing the probe
+        # if core.config isn't importable (unusual install layout).
+        env = None
     try:
         completed = subprocess.run(
             [cli_path, "version"],
@@ -34,6 +56,7 @@ def _run_codeql_version(cli_path: str, timeout_seconds: int = 10) -> Optional[st
             text=True,
             timeout=timeout_seconds,
             check=False,
+            env=env,
         )
     except Exception:
         return None

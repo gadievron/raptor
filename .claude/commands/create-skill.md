@@ -63,7 +63,21 @@ Session impact: +___ tokens when auto-loaded
 
 ### Step 5: Create Skill File
 
-Save to: `tiers/specialists/custom/[skill_name].md`
+Save to: `.claude/skills/[skill_name]/SKILL.md` (the
+canonical Claude Code skills directory). For
+single-file skills, `.claude/skills/[skill_name].md`
+also works — Claude Code's skill discovery walks
+`.claude/skills/` and picks up both layouts.
+
+(Pre-fix this said `tiers/specialists/custom/[name].md`.
+That path is from an earlier RAPTOR layout that
+predates Claude Code's skills mechanism — files there
+aren't auto-loaded by Claude Code today, so saving
+new skills there would have made them invisible to
+the LLM. Existing files under `tiers/personas/` and
+`tiers/specialists/` are still loaded VIA EXPLICIT
+prompts, but new skills should go under
+`.claude/skills/` for auto-load.)
 
 **Skill structure:**
 ```markdown
@@ -132,7 +146,7 @@ Claude:
 
 User: Y
 
-Claude: ✓ Created: tiers/specialists/custom/api_auth_priority.md
+Claude: ✓ Created: .claude/skills/api_auth_priority/SKILL.md
         Will auto-load when keywords match: API, authentication
 
         Test it now? Run /scan on API codebase
@@ -153,13 +167,18 @@ Before saving skill:
 
 ## Maintenance
 
-Skills are stored in: `tiers/specialists/custom/`
+Skills are stored in: `.claude/skills/`
 
 **Manage skills:**
-- List: `ls tiers/specialists/custom/`
-- Disable: Add `.disabled` suffix to filename
-- Remove: Delete file
-- Edit: Modify file directly
+- List: `ls .claude/skills/`
+- Disable: Add `.disabled` suffix to the skill directory or file
+- Remove: Delete the skill directory (or the bare `.md` file)
+- Edit: Modify the skill's `SKILL.md` (or single-file `.md`) directly
+
+(Pre-fix this section pointed at `tiers/specialists/custom/` —
+an earlier RAPTOR layout that predates Claude Code's skills
+mechanism. Files there aren't auto-loaded today, so saving
+new skills there made them invisible to the LLM.)
 
 **Quarterly review prompt** (if 5+ skills exist):
 ```

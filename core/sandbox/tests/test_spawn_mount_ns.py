@@ -13,8 +13,17 @@ developer manually flips the sysctl.
 
 from __future__ import annotations
 
+import sys as _sys
+import pytest as _pytest
+pytestmark = _pytest.mark.skipif(
+    _sys.platform != "linux",
+    reason="Linux-only sandbox internals (mount-ns / Landlock / seccomp / ptrace tracer / pid1 shim) — see core/sandbox/_macos_spawn.py for the macOS path",
+)
+
+
 import os
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -59,6 +68,7 @@ class TestSyscallNumberTable(unittest.TestCase):
     wrong syscall entirely (different op, possibly unsafe). The table
     in mount_ns.py is load-bearing."""
 
+    @unittest.skipUnless(sys.platform == "linux", "pivot_root is Linux-only")
     def test_host_arch_is_mapped(self):
         import platform
         from core.sandbox.mount_ns import _PIVOT_ROOT_SYSCALL_NR
@@ -68,6 +78,7 @@ class TestSyscallNumberTable(unittest.TestCase):
                       f"— will raise NotImplementedError at run time. "
                       f"Add it to core/sandbox/mount_ns.py.")
 
+    @unittest.skipUnless(sys.platform == "linux", "pivot_root is Linux-only")
     def test_lookup_helper(self):
         from core.sandbox.mount_ns import _pivot_root_nr
         nr = _pivot_root_nr()
@@ -188,29 +199,65 @@ class TestRunSandboxedSmokeTest(unittest.TestCase):
     def test_stub_dir_cleaned_up_after_run(self):
         """The parent-created tempfile.mkdtemp stub must be removed
         after the child exits. Without cleanup, /tmp accumulates
-        empty .raptor-sbx-* dirs across runs."""
+        empty .raptor-sbx-* dirs across runs.
+
+        Order-independent: monkey-patches tempfile.mkdtemp inside
+        _spawn to capture OUR specific stub path, then asserts only
+        THAT path got cleaned up. Previous version snapshotted the
+        whole .raptor-sbx-* prefix globally, which intermittently
+        flaked when concurrent sandbox activity in other tests
+        materialised stubs in the gap (memory: project_test_spawn_
+        mount_ns_flake.md). Fix: per-run path tracking via
+        monkey-patch.
+        """
+        from core.sandbox import _spawn
         from core.sandbox._spawn import run_sandboxed
-        before = set(p for p in os.listdir("/tmp")
-                     if p.startswith(".raptor-sbx-"))
-        r = run_sandboxed(
-            ["true"],
-            target=self.tmp.name, output=self.tmp.name,
-            block_network=True,
-            nproc_limit=1024,
-            limits={"memory_mb": 0, "max_file_mb": 10240, "cpu_seconds": 300},
-            writable_paths=[self.tmp.name, "/tmp"],
-            readable_paths=None,
-            allowed_tcp_ports=None,
-            seccomp_profile=None, seccomp_block_udp=False,
-            env=None, cwd=None, timeout=15,
-            capture_output=False, text=False,
-        )
+        captured_stubs = []
+        original_mkdtemp = _spawn._tempfile.mkdtemp \
+            if hasattr(_spawn, '_tempfile') else None
+        # _spawn.run_sandboxed imports tempfile internally as _tempfile.
+        # Monkey-patch the module-level tempfile.mkdtemp to record the
+        # stub path before passing through.
+        import tempfile as _tf
+        real_mkdtemp = _tf.mkdtemp
+
+        def recording_mkdtemp(*args, **kwargs):
+            path = real_mkdtemp(*args, **kwargs)
+            if kwargs.get("prefix", "").startswith(".raptor-sbx-"):
+                captured_stubs.append(path)
+            return path
+
+        # Patch on the tempfile module — _spawn imports tempfile as
+        # _tempfile inside the function, so module-level patch wins.
+        from unittest.mock import patch
+        with patch("tempfile.mkdtemp", side_effect=recording_mkdtemp):
+            r = run_sandboxed(
+                ["true"],
+                target=self.tmp.name, output=self.tmp.name,
+                block_network=True,
+                nproc_limit=1024,
+                limits={"memory_mb": 0, "max_file_mb": 10240,
+                        "cpu_seconds": 300},
+                writable_paths=[self.tmp.name, "/tmp"],
+                readable_paths=None,
+                allowed_tcp_ports=None,
+                seccomp_profile=None, seccomp_block_udp=False,
+                env=None, cwd=None, timeout=15,
+                capture_output=False, text=False,
+            )
+
         self.assertEqual(r.returncode, 0)
-        after = set(p for p in os.listdir("/tmp")
-                    if p.startswith(".raptor-sbx-"))
-        self.assertEqual(before, after,
-                         f"mkdtemp stub directory leaked: new entries "
-                         f"{after - before}")
+        self.assertEqual(len(captured_stubs), 1, (
+            f"expected exactly 1 stub creation, got {captured_stubs}"
+        ))
+        # The specific stub we created must be cleaned up. Ignore any
+        # other .raptor-sbx-* dirs in /tmp (could be from concurrent
+        # test runs; not our responsibility to assert about).
+        our_stub = captured_stubs[0]
+        self.assertFalse(
+            os.path.exists(our_stub),
+            f"this test's mkdtemp stub leaked: {our_stub}"
+        )
 
 
 if __name__ == "__main__":

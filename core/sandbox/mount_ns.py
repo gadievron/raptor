@@ -168,6 +168,21 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
     landlock_restrict_self() — Landlock blocks mount operations on kernel
     6.15+.
     """
+    # Absolutize target/output BEFORE any bind-mount work. A relative
+    # path here produces a malformed bind-target like
+    # "/root_path" + "out/X" → "/root_pathout/X" (no slash separator,
+    # wrong tree). Companion to the absolutize in
+    # core/sandbox/context.py at writable_paths construction —
+    # WITHOUT this, the writable_paths Landlock rule references the
+    # absolutized path while the bind-mount happens at the malformed
+    # path → Landlock rejects-open the writable rule with "Landlock
+    # writable path could not be opened" + the child can't write to
+    # output even via fallback. Discovered by E2E scan against
+    # /tmp/vulns where output= was passed relative.
+    if target:
+        target = os.path.abspath(target)
+    if output:
+        output = os.path.abspath(output)
     # 1. Make propagation private — our mounts do not leak back.
     _mount(None, "/", None, MS_REC | MS_PRIVATE)
 
@@ -263,8 +278,24 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
                 else:
                     # File bind-mount: create an empty regular file to
                     # serve as the mount point.
+                    #
+                    # Use os.open with O_NOFOLLOW + 0o600 instead of
+                    # `open(inside, "a")`:
+                    #   * O_NOFOLLOW refuses to follow a symlink at
+                    #     `inside` — defence-in-depth even though our
+                    #     tmpfs root was freshly mkdir'd.
+                    #   * O_CREAT | O_EXCL refuses to reuse a pre-existing
+                    #     mount-point (which would also indicate something
+                    #     planted state we don't expect).
+                    #   * mode 0o600 — the mount-point itself shouldn't
+                    #     be world-readable (was 0o644 default via umask).
                     os.makedirs(os.path.dirname(inside), exist_ok=True)
-                    open(inside, "a").close()
+                    fd = os.open(
+                        inside,
+                        os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW | os.O_EXCL,
+                        0o600,
+                    )
+                    os.close(fd)
                 _mount(path, inside, None, MS_BIND)
                 try:
                     _mount(path, inside, None, MS_REMOUNT | MS_BIND | MS_RDONLY)

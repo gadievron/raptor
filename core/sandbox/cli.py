@@ -63,48 +63,166 @@ def set_cli_profile(profile: str) -> None:
 
 
 def add_cli_args(parser) -> None:
-    """Attach `--sandbox {full,network-only,none}` and `--no-sandbox` to an
-    argparse parser. Every RAPTOR entry point should call this so users get
-    a consistent sandbox-control surface regardless of which command they
-    launched.
+    """Attach `--sandbox {full,debug,network-only,none}`, `--no-sandbox`,
+    `--audit`, and `--audit-verbose` to an argparse parser. Every RAPTOR
+    entry point should call this so users get a consistent sandbox-
+    control surface regardless of which command they launched.
 
-    Granularity: the profile lets users loosen one layer without disabling
-    everything — e.g. `--sandbox network-only` keeps namespace network
-    block but drops Landlock, useful when a build script trips Landlock
-    but network isolation is still desired.
+    Profile (`--sandbox` or `--no-sandbox`) sets ENFORCEMENT strictness.
+    `--audit` is ORTHOGONAL — it engages audit mode on the active
+    profile (proxy log-and-allow + SCMP_ACT_TRACE + tracer subprocess
+    that records would-be-blocked events). `--audit-verbose` is
+    meaningful only with `--audit` — it flips the tracer from filtered
+    (would-be-blocked only) to strace-style (every traced syscall).
+    The flag name is namespaced (`--audit-verbose` rather than plain
+    `--verbose`) to avoid collision with entry-points that may have
+    their own `--verbose` for log-level control.
 
-    The two flags are mutually exclusive at the argparse level — users who
-    pass both get a clear error at parse time rather than silent tie-
-    breaking.
+    Granularity: the profile lets users loosen one layer without
+    disabling everything — e.g. `--sandbox network-only` keeps
+    namespace network block but drops Landlock, useful when a build
+    script trips Landlock but network isolation is still desired.
+
+    `--sandbox` and `--no-sandbox` are mutually exclusive at the
+    argparse level — users who pass both get a clear error at parse
+    time rather than silent tie-breaking.
     """
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "--sandbox", choices=sorted(PROFILES.keys()), default=None,
         help="Force sandbox profile "
-             "(full | debug | network-only | none). "
+             "(debug | full | network-only | none). "
              "Overrides any profile chosen in code. "
-             "Use 'debug' for gdb/rr work (allows ptrace), "
+             "'debug' for gdb/rr work (allows ptrace). "
              "'network-only' if Landlock or seccomp is breaking your "
-             "build, 'none' only as last resort.",
+             "build, 'none' only as last resort. "
+             "Combine with --audit to log what enforcement WOULD have "
+             "blocked instead of actually blocking.",
     )
     group.add_argument(
         "--no-sandbox", action="store_true", dest="no_sandbox",
         help="Alias for --sandbox none. Disables all subprocess isolation.",
     )
+    parser.add_argument(
+        "--audit", action="store_true", dest="audit",
+        help="Engage audit mode: workflow runs to completion AND records "
+             "what enforcement would have blocked (filtered to would-be-"
+             "denied events). Composes with --sandbox: `--sandbox debug "
+             "--audit` runs gdb-friendly + audit; `--sandbox full --audit` "
+             "is the typical 'audit' use case. Incoherent with "
+             "`--sandbox none` / `--no-sandbox`.",
+    )
+    parser.add_argument(
+        "--audit-verbose", action="store_true", dest="audit_verbose",
+        help="With --audit: log EVERY traced syscall (strace-style "
+             "diagnostic), not just would-be-blocked. Higher record "
+             "volume — expect thousands of records per run. Requires "
+             "--audit. Distinct from any entry-point's own --verbose "
+             "flag (which controls log level, not audit output).",
+    )
+    parser.add_argument(
+        "--audit-budget", type=int, dest="audit_budget", default=None,
+        metavar="N",
+        help="With --audit: override the global audit-record cap "
+             "(default 10000). Per-category and per-PID sub-caps "
+             "scale proportionally — set higher for long-running "
+             "workloads under --audit-verbose, lower for quick "
+             "diagnostic runs where you only want the first few "
+             "events. The budget protects the JSONL from a chatty "
+             "target generating gigabytes of records.",
+    )
 
 
-def apply_cli_args(args) -> None:
+def apply_cli_args(args, parser=None) -> None:
     """Called right after argparse parsing to propagate the user's choice
     into the sandbox module state. Safe to call when neither flag was
     passed (no-op in that case).
 
-    The two flags are mutually exclusive at argparse time (see
-    `add_cli_args`), so this function never has to arbitrate between them.
+    The two `--sandbox` / `--no-sandbox` flags are mutually exclusive at
+    argparse time (see `add_cli_args`), so this function never has to
+    arbitrate between them.
+
+    Validates incoherent audit combinations:
+    - `--audit-verbose` without `--audit` is meaningless.
+    - `--audit` with `--sandbox none` / `--no-sandbox` has nothing to
+      audit against (no enforcement layers active).
+
+    On invalid combinations:
+    - If `parser` is provided (CLI entry-points pass it), validation
+      errors trigger `parser.error()` which prints a clean usage
+      message and exits with code 2 — operators see argparse-style
+      output, not a Python traceback.
+    - If `parser` is None (library callers / tests), validation
+      errors raise `ValueError` so they can be caught programmatically.
 
     Not idempotent with respect to logs — calling twice produces two
     WARNING lines. In normal use this is called once per process.
     """
-    if getattr(args, "no_sandbox", False):
+    audit = bool(getattr(args, "audit", False))
+    verbose = bool(getattr(args, "audit_verbose", False))
+    budget = getattr(args, "audit_budget", None)
+    no_sandbox = bool(getattr(args, "no_sandbox", False))
+    profile = getattr(args, "sandbox", None)
+
+    def _fail(msg: str) -> None:
+        if parser is not None:
+            parser.error(msg)  # exits with code 2, clean UX
+        raise ValueError(msg)
+
+    # Validate audit combinations BEFORE mutating state.
+    if verbose and not audit:
+        _fail(
+            "--audit-verbose requires --audit (audit-verbose only "
+            "controls audit-mode tracer output)"
+        )
+    if budget is not None:
+        if not audit:
+            _fail(
+                "--audit-budget requires --audit (the budget only "
+                "applies to audit-mode JSONL output)"
+            )
+        if budget <= 0:
+            _fail(
+                f"--audit-budget must be a positive integer; got "
+                f"{budget!r}. Use a small value (e.g. 100) for "
+                f"quick diagnostic runs, the default 10000 for "
+                f"normal use, or a larger value for long-running "
+                f"--audit-verbose sessions."
+            )
+        # Upper clamp: 10M records at the average ~200 bytes/record
+        # bound (cmd + path + serialised args) is ~2GB of JSONL.
+        # Anything past that almost certainly indicates an
+        # operator typo (one extra zero) rather than a real
+        # intent — fail loud rather than letting a runaway audit
+        # eat /tmp.
+        _AUDIT_BUDGET_MAX = 10_000_000
+        if budget > _AUDIT_BUDGET_MAX:
+            _fail(
+                f"--audit-budget={budget} exceeds the upper clamp "
+                f"({_AUDIT_BUDGET_MAX}). At ~200 bytes per record "
+                f"that's ~2GB of JSONL — almost certainly a typo. "
+                f"Lower the value or split into multiple shorter "
+                f"runs."
+            )
+    if audit and (no_sandbox or profile == "none"):
+        _fail(
+            "--audit is incoherent with --sandbox none / --no-sandbox: "
+            "no enforcement layers active means there's nothing to "
+            "compare against. Use --sandbox full --audit (default) "
+            "to engage audit mode."
+        )
+
+    if no_sandbox:
         disable_from_cli()
-    elif getattr(args, "sandbox", None) is not None:
-        set_cli_profile(args.sandbox)
+    elif profile is not None:
+        set_cli_profile(profile)
+    if audit:
+        state._cli_sandbox_audit = True
+        logger.warning(
+            "Sandbox audit mode engaged via --audit "
+            "(workflow runs but enforcement events are logged not blocked)"
+        )
+    if verbose:
+        state._cli_sandbox_audit_verbose = True
+    if budget is not None:
+        state._cli_sandbox_audit_budget = int(budget)

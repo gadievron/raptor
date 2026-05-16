@@ -76,7 +76,14 @@ import logging
 import socket
 import threading
 import time
-from typing import Iterable, List, Optional, Set
+from typing import Iterable, List, Optional, Set, Tuple
+
+# Module-top so the import doesn't run on every CONNECT — the proxy
+# tunnel handler used to do `from core.security.log_sanitisation
+# import has_nonprintable` inline on the hot path. Cached after the
+# first call but still a dict lookup + module attribute access per
+# request.
+from core.security.log_sanitisation import has_nonprintable
 
 logger = logging.getLogger(__name__)
 
@@ -84,12 +91,153 @@ logger = logging.getLogger(__name__)
 # constructor kwargs but the defaults are deliberately conservative.
 _DEFAULT_IDLE_TIMEOUT = 300.0        # seconds of silence before forced close
 _DEFAULT_TOTAL_TIMEOUT = 3600.0      # absolute cap on a single tunnel
-_DEFAULT_MAX_TUNNELS = 64            # concurrent CONNECT tunnels
+# Concurrent CONNECT tunnels. The history of this knob:
+#
+#   64  — original conservative default. SCA stress harness on
+#         2026-05-09 hit this on bursty resolvers (npm install with
+#         its parallel HTTP agent + keep-alive lingering) → cascade
+#         of refused tunnels + retries → 14% of popular npm
+#         packages timed out at 90s.
+#   256 — first bump (#407). Helped marginally but ``npm install
+#         --maxsockets=8`` STILL bursts to ~280 concurrent tunnels
+#         because npm install via ``HTTPS_PROXY`` ignores
+#         ``--maxsockets`` (the flag caps direct fetches, not
+#         CONNECT-tunneled fetches; verified with both CLI and
+#         ``npm_config_maxsockets`` env var). Direct probe: peak 257
+#         tunnels for ``debug``, peak 298 for ``eslint``.
+#   1024 — interim (#411). Looked safe at first; later sampling at
+#         finer resolution showed peaks up to 792 for ``debug`` and
+#         655 for ``eslint`` (earlier 250ms-tick samples missed the
+#         instantaneous spikes), so 1024 was only ~1.3× the real
+#         burst, not the ~3× the prior comment claimed.
+#   4096 — current. Sized at ~5× the observed peak so the per-run
+#         burst variance (network jitter + proxy event-loop
+#         scheduling can inflate a peak 2× run-to-run) does not
+#         brush the cap. Resource-wise this is still cheap (each
+#         tunnel ≈ 2 sockets + ~1 KiB proxy-thread state; system
+#         FD limit is 524288 by default — a runaway client would
+#         need to drive ~250× the cap before exhausting the
+#         process FD ceiling).
+#
+# Consumer note: caps below ~2048 will eventually refuse CONNECTs
+# from real-world npm install runs against bursty manifests — set
+# the cap via the ``max_tunnels=`` constructor kwarg only when you
+# have concrete evidence of FD exhaustion at the default.
+_DEFAULT_MAX_TUNNELS = 4096
 _DEFAULT_BUFFER_SIZE = 64 * 1024     # relay buffer per direction
+
+# DNS cache TTL. Holds (expires_at, addrinfo_list) per (host, port,
+# socktype) key. 60s is a balance: short enough that a legit DNS
+# rotation propagates within a normal scan run, long enough that the
+# typical npm/pip-style burst (dozens of CONNECTs to one registry host
+# in seconds) only pays the resolver cost once. Gate 2 (resolved-IP
+# block) still runs against the cached IP on every CONNECT, so a
+# DNS-rebinding attack window doesn't widen.
+_DNS_CACHE_TTL = 60.0
+
+# Happy-eyeballs per-attempt budget. RFC 8305 recommends 250ms
+# before kicking off the next address family's attempt. We keep that
+# default — it matches the broad assumption Linux/macOS/Windows
+# stacks already use, so behaviour stays predictable for operators
+# who are used to OS-level happy-eyeballs.
+_HAPPY_EYEBALLS_DELAY = 0.25
+
+# Canonical filename for the per-run proxy events JSONL. Written by
+# context.py (post-sandbox flush of unregister_sandbox events). Defined
+# here so consumers of the proxy module reference one source-of-truth
+# rather than the literal string.
+PROXY_EVENTS_FILENAME = "proxy-events.jsonl"
+
+# Canonical set of values the `result` field of a proxy event may take.
+# Test consumers (test_proxy_audit, test_e2e_sandbox) filter events by
+# this string — silent drift between proxy emits and consumer
+# expectations would cause filtered-by-result test queries to return
+# nothing. Pinned by structural test (test_audit_filter.py) that scans
+# proxy.py for `result="..."` literals and asserts membership in this
+# set.
+_PROXY_EVENT_RESULTS = frozenset({
+    # Connection succeeded (with or without bytes flowed yet)
+    "allowed",
+    # Gate 1 (hostname allowlist) deny — enforce mode
+    "denied_host",
+    # Gate 1 audit-mode would-deny (allow + log)
+    "would_deny_host",
+    # Gate 2 (resolved IP block / DNS-rebinding defense) deny —
+    # always enforcing, never audit-allowed. There is NO
+    # `would_deny_resolved_ip` event; in audit mode gate 2 still
+    # emits `denied_resolved_ip` AND additionally writes a
+    # supplementary record to summary via record_denial.
+    "denied_resolved_ip",
+    # DNS resolution failed (NXDOMAIN, timeout)
+    "dns_failed",
+    # Upstream (or backend) refused / unreachable
+    "upstream_failed",
+    # Total tunnel duration cap exceeded mid-relay
+    "timed_out",
+    # Malformed CONNECT line / bad headers
+    "bad_request",
+    # Unhandled exception in tunnel handler
+    "handler_error",
+})
 
 # Thread-safe singleton. `get_proxy()` is the sole entry point.
 _lock = threading.Lock()
 _instance: Optional["EgressProxy"] = None
+
+
+def _record_proxy_denial(host: str, port: int, resolved_ip: Optional[str],
+                         would_deny: str) -> None:
+    """Route a proxy-side audit-mode denial into the per-run sandbox
+    summary via core.sandbox.summary.record_denial.
+
+    Called for two cases in audit mode:
+    - gate 1 (host not in allowlist) audit-fall-through: the CONNECT
+      succeeds and the child sees nothing, so the proxy has to emit
+      the record itself or it never lands in the summary.
+    - gate 2 (resolved IP blocked) deny: gate 2 stays enforcing in
+      audit mode because it's the proxy's DNS-rebinding/DNS-poisoning
+      defense, but we ALSO call this so the attack signal lands in
+      sandbox-summary.json (not only in proxy-events.jsonl).
+
+    cmd_display uses the CONNECT description (always accurate) rather
+    than the originating sandbox's caller_label. The proxy is process-
+    wide and serves all registered sandboxes; there's no source-port→
+    sandbox mapping at this layer, so any caller-label attribution
+    would be a heuristic. Operators wanting attribution can cross-
+    reference proxy-events.jsonl which has the matching event with the
+    same host/port at the same timestamp.
+
+    Lazy import: keeps core.sandbox.summary out of proxy module load,
+    matching the lazy import already used in core/run/metadata.py.
+
+    Performance note: record_denial does sync open/write/close on the
+    asyncio event-loop thread. Each record is ~300 bytes and the
+    MAX_DENIALS_PER_RUN cap (10000) bounds worst-case I/O volume —
+    fine for normal disks. If audit-mode CONNECTs ever stall under
+    slow-fs / adversarial-fs conditions, wrap with asyncio.to_thread.
+    """
+    try:
+        from core.sandbox.summary import record_denial
+        # ASCII separator rather than Unicode arrow — record_denial
+        # writes the JSONL with ensure_ascii=True, so a "→" becomes the
+        # escape sequence "→" on disk and operators reading
+        # sandbox-summary.json see noise instead of the separator.
+        cmd = (f"<egress-proxy CONNECT {host}:{port}>" if resolved_ip is None
+               else f"<egress-proxy CONNECT {host}:{port} -> {resolved_ip}>")
+        details = {"host": host, "port": port,
+                   "would_deny": would_deny, "audit": True}
+        if resolved_ip is not None:
+            details["resolved_ip"] = resolved_ip
+        record_denial(cmd, 0, "network", **details)
+    except Exception:  # noqa: BLE001 — best-effort; never fail a CONNECT
+        # Deliberate scope: Exception, not BaseException. SystemExit and
+        # KeyboardInterrupt SHOULD propagate so the process can exit.
+        # record_denial is documented to never raise either of those —
+        # if a future change makes it raise SystemExit, the gate-2 deny
+        # path's `await self._write_error(...)` would be skipped because
+        # the exception escapes this helper. Don't introduce that path.
+        logger.debug("_record_proxy_denial: record_denial failed",
+                     exc_info=True)
 
 
 def _ip_is_blocked(ip_str: str) -> bool:
@@ -178,6 +326,33 @@ def _host_in_no_proxy(host: str, patterns: list) -> bool:
     return False
 
 
+def _split_addrinfo_by_family(
+    addrinfo: list,
+) -> Tuple[list, list]:
+    """Partition an addrinfo list into (v6, v4) buckets, preserving
+    each bucket's internal order.
+
+    Happy-eyeballs (RFC 8305) prefers attempting IPv6 first because
+    when v6 works it usually has the better path; v4 is the fallback
+    if v6 stalls. Splitting by family lets the dialer race one
+    address from each bucket in parallel rather than walking the
+    full list serially with a 10s OS timeout per attempt — which is
+    what bites npm-style burst traffic when an upstream's first
+    addrinfo entry happens to be an IPv6 address the local link
+    can't reach.
+    """
+    v6, v4 = [], []
+    for entry in addrinfo:
+        family = entry[0]
+        if family == socket.AF_INET6:
+            v6.append(entry)
+        elif family == socket.AF_INET:
+            v4.append(entry)
+        # Other families (AF_UNIX etc) ignored — getaddrinfo with
+        # SOCK_STREAM on a hostname won't yield them in practice.
+    return v6, v4
+
+
 class EgressProxy:
     """HTTPS CONNECT proxy with hostname allowlist.
 
@@ -190,9 +365,37 @@ class EgressProxy:
                  max_tunnels: int = _DEFAULT_MAX_TUNNELS,
                  buffer_size: int = _DEFAULT_BUFFER_SIZE,
                  upstream_proxy: Optional[str] = None,
-                 no_proxy: Optional[str] = None):
+                 no_proxy: Optional[str] = None,
+                 audit_log_only: bool = False):
         self._hosts_lock = threading.Lock()
         self._allowed_hosts: Set[str] = {h.lower() for h in allowed_hosts}
+        # When True, gate 1 (hostname allowlist) emits a `would_deny_host`
+        # event AND a record_denial entry, then falls through to the
+        # connect path — operator workflows that hit gate 1 keep working
+        # but the policy violation is logged. Gate 2 (resolved-IP block)
+        # is the proxy's DNS-rebinding/DNS-poisoning defense and stays
+        # ENFORCING regardless: it has no legitimate-workflow false
+        # positives (an allowlisted hostname resolving to a private/
+        # loopback IP is purely an attack signal). In audit mode gate 2
+        # additionally records the deny into the summary.
+        #
+        # Operator-facing wiring: context.py engages this via
+        # acquire_audit_log_only() / release_audit_log_only() when an
+        # audit-mode sandbox enters/exits. The constructor kwarg here
+        # remains for direct test construction. Tests of the toggle
+        # itself MUST use the acquire/release API to exercise the ref-
+        # counting; concurrent mixed-profile sandbox correctness depends
+        # on it.
+        self._audit_log_only = audit_log_only
+        # Ref-count for concurrent acquire/release. Each audit-mode
+        # sandbox via use_egress_proxy=True acquires on entry, releases
+        # on exit. Gate 1 is in audit-log mode iff count > 0. Without
+        # this, mixed-profile concurrent sandboxes would race —
+        # specifically, a non-audit sandbox could see its CONNECTs
+        # silently downgraded to allow-and-log (security weakening)
+        # because a sibling audit sandbox flipped the singleton's flag.
+        self._audit_lock = threading.Lock()
+        self._audit_count = 1 if audit_log_only else 0
         self._idle_timeout = idle_timeout
         self._total_timeout = total_timeout
         self._max_tunnels = max_tunnels
@@ -210,11 +413,19 @@ class EgressProxy:
         # matching a pattern bypasses the upstream and connects directly
         # (so internal services like git-server.corp remain reachable).
         self._no_proxy_patterns: list = _parse_no_proxy(no_proxy)
+        # Per-(host, port, socktype) DNS cache. Map key → (expires_at,
+        # addrinfo_list). Bursty resolvers (npm install, pip-compile)
+        # hit the same registry host dozens of times in seconds; without
+        # caching, each CONNECT pays a fresh getaddrinfo. The cache lives
+        # only on the proxy's event-loop thread so no lock is needed —
+        # asyncio is single-threaded and reads/writes serialise on the
+        # loop.
+        self._dns_cache: dict = {}
         # Event ring buffer for observability. Each entry is a dict:
         #   {"t": monotonic_seconds, "host": str, "port": int,
-        #    "result": "allowed"|"denied_host"|"denied_resolved_ip"|
-        #              "dns_failed"|"upstream_failed"|"timed_out"|
-        #              "bad_request",
+        #    "result": one of _PROXY_EVENT_RESULTS (see module-level
+        #              constant — pinned by structural test so any
+        #              new result string fires the test until added),
         #    "reason": str|None, "resolved_ip": str|None,
         #    "bytes_c2u": int, "bytes_u2c": int, "duration": float}
         # `t` uses time.monotonic() for monotonicity across clock jumps.
@@ -234,6 +445,22 @@ class EgressProxy:
         self._sandbox_labels: dict = {}
         self._next_token = 0
         self._buffer_lock = threading.Lock()
+        # Atomic snapshot of the buffer-list refs for the hot path.
+        # `_record` is called once per CONNECT and used to acquire
+        # `_buffer_lock` to iterate `_sandbox_buffers.values()`. Under
+        # bursty traffic that single lock serialises every recorder.
+        # The snapshot is a tuple — re-bound (atomic ref-write under
+        # CPython's GIL) by register/unregister inside the lock; the
+        # hot path reads the tuple ref without the lock and iterates
+        # to append. Race window: between snapshot read and append, a
+        # concurrent unregister may have popped a buffer; the append
+        # still lands on that orphaned list. The unregistered caller's
+        # returned events are a defensive copy taken at unregister
+        # time, so the late append is silently dropped from the
+        # caller's view — same end-state as the previous design where
+        # the late event would have been recorded into a buffer the
+        # caller had already left behind.
+        self._sandbox_buffers_snapshot: Tuple[list, ...] = ()
 
         # Synchronise startup: the thread runs the asyncio loop and signals
         # `_ready` once the server is bound and port is known. The calling
@@ -251,7 +478,22 @@ class EgressProxy:
             daemon=True,
         )
         self._thread.start()
-        self._ready.wait()
+        # Bound the readiness wait. Pre-fix `self._ready.wait()` was
+        # unbounded — if the proxy thread crashed before reaching the
+        # `self._ready.set()` call AND before assigning to
+        # `_start_error` (race window between thread start and the
+        # first listening-socket bind), the caller would block forever
+        # holding the singleton lock that wraps `EgressProxy.start()`.
+        # Every subsequent sandbox acquire would then block waiting
+        # for the same lock — operator saw "everything hung after
+        # /scan started". 30s is well above any realistic
+        # asyncio-loop-startup latency on a busy host (sub-second in
+        # practice).
+        if not self._ready.wait(timeout=30.0):
+            raise RuntimeError(
+                "egress proxy did not become ready within 30s "
+                "(thread may have crashed before signalling)"
+            )
         if self._start_error is not None:
             raise RuntimeError(
                 f"egress proxy failed to start: {self._start_error}"
@@ -263,6 +505,67 @@ class EgressProxy:
         """Extend the allowlist. Idempotent. Thread-safe."""
         with self._hosts_lock:
             self._allowed_hosts.update(h.lower() for h in hosts)
+
+    def acquire_audit_log_only(self) -> None:
+        """Increment the audit-mode reference count and ensure
+        audit-log mode is engaged on the hostname gate.
+
+        Ref-counted to prevent concurrent mixed-profile sandboxes
+        from racing on the singleton: when an audit-mode sandbox
+        enters via use_egress_proxy=True, it acquires; on exit it
+        releases. The gate is in audit-log mode iff at least one
+        audit-mode sandbox is active. A concurrent NON-audit sandbox
+        does NOT release the count (it never acquired in the first
+        place), so its CONNECTs stay properly enforced.
+
+        Without ref-counting, a non-ref-counted setter on the
+        singleton (the design that pre-dated this acquire/release
+        API) would have allowed a sibling non-audit sandbox to
+        unset audit mode while an audit-mode peer was still active
+        — weakening the gate's enforcement under concurrent
+        mixed-profile usage. And vice-versa: an audit-mode set
+        would have allowed a non-audit peer's CONNECTs to non-
+        allowlisted hosts to slip through.
+
+        Gate 2 (resolved-IP block) is unaffected — it's the proxy's
+        DNS-rebinding defense and stays enforcing in every mode.
+        """
+        with self._audit_lock:
+            self._audit_count += 1
+            self._audit_log_only = (self._audit_count > 0)
+            # Log the first acquisition (security-property change
+            # visibility — matches the disable_from_cli WARNING style).
+            if self._audit_count == 1:
+                logger.warning(
+                    "egress proxy: hostname gate switched to "
+                    "AUDIT-LOG mode (CONNECT to non-allowlisted "
+                    "hosts will be ALLOWED and logged, not denied). "
+                    "Engaged by `--audit` flag."
+                )
+
+    def release_audit_log_only(self) -> None:
+        """Decrement the audit-mode reference count. When it reaches
+        zero, the hostname gate returns to enforcing mode.
+
+        Idempotent at zero — extra release()s are silently clamped
+        (defensive: an exception path that runs cleanup twice
+        shouldn't push the count negative). Logs the transition only
+        when count was actually decremented from 1 to 0; idempotent
+        zero-releases don't log so an over-eager cleanup path doesn't
+        spam the operator with misleading "returned to enforcing"
+        messages when nothing actually changed.
+        """
+        with self._audit_lock:
+            transitioned_to_zero = False
+            if self._audit_count > 0:
+                self._audit_count -= 1
+                transitioned_to_zero = (self._audit_count == 0)
+            self._audit_log_only = (self._audit_count > 0)
+            if transitioned_to_zero:
+                logger.info(
+                    "egress proxy: hostname gate returned to "
+                    "ENFORCING mode (no audit-mode sandbox active)"
+                )
 
     def is_host_allowed(self, host: str) -> bool:
         """Check if a host is in the allowlist (case-insensitive)."""
@@ -288,6 +591,9 @@ class EgressProxy:
             token = self._next_token
             self._sandbox_buffers[token] = []
             self._sandbox_labels[token] = caller_label
+            self._sandbox_buffers_snapshot = tuple(
+                self._sandbox_buffers.values()
+            )
             return token
 
     def unregister_sandbox(self, token: int) -> List[dict]:
@@ -309,13 +615,28 @@ class EgressProxy:
         with self._buffer_lock:
             events = self._sandbox_buffers.pop(token, [])
             label = self._sandbox_labels.pop(token, None)
-        # Copy + stamp outside the lock — `events` is no longer in
-        # `_sandbox_buffers` so _record won't touch it. Still, other
-        # tunnel handlers may be mutating the underlying dict
-        # references via `event.update(...)` — we copy defensively.
-        if label is not None:
-            return [{**e, "caller": label} for e in events]
-        return [dict(e) for e in events]
+            self._sandbox_buffers_snapshot = tuple(
+                self._sandbox_buffers.values()
+            )
+            # Pre-fix the copy `[{**e, "caller": label} for e in events]`
+            # happened OUTSIDE the lock. Per the docstring some event
+            # fields (bytes_c2u, bytes_u2c, duration) are mutated in
+            # place after the at-open record. If the recorder thread
+            # mid-mutated a dict during the spread (`{**e}` reads
+            # keys/values one at a time, not atomically), the copied
+            # dict captured a half-updated state — bytes_c2u updated
+            # but bytes_u2c stale, or duration updated but the bytes
+            # counters not yet. Operators reading the audit trail saw
+            # nonsensical inconsistencies they had to filter out.
+            #
+            # Move the copy inside the lock. The recorder's mutate
+            # path also takes `_buffer_lock` (see `_record`), so the
+            # spread now happens with the recorder serialised out.
+            # Cost: a few extra microseconds per event in unregister;
+            # benefit: consistent snapshots in the audit trail.
+            if label is not None:
+                return [{**e, "caller": label} for e in events]
+            return [dict(e) for e in events]
 
     def _record(self, event: dict) -> None:
         """Fan a tunnel event into every registered sandbox's buffer.
@@ -332,14 +653,205 @@ class EgressProxy:
         No-op when no sandbox is registered (rare — means the proxy is
         processing a CONNECT that happened outside any register /
         unregister window, e.g. during proxy shutdown).
-        """
-        with self._buffer_lock:
-            for buf in self._sandbox_buffers.values():
-                buf.append(event)
 
-    def stop(self) -> None:
-        """Close the server and stop the event loop. Safe to call twice."""
+        Lock-free hot path: reads `_sandbox_buffers_snapshot` (atomic
+        ref-read under the GIL) and iterates without acquiring
+        `_buffer_lock`. Append to a Python list is atomic per the GIL.
+        Under bursty traffic this avoids serialising every recorder on
+        a single mutex shared with register/unregister.
+        """
+        for buf in self._sandbox_buffers_snapshot:
+            buf.append(event)
+
+    async def _cached_getaddrinfo(self, host: str, port: int) -> list:
+        """Resolve `host:port` with a TTL cache.
+
+        On the proxy event-loop thread; no lock needed (asyncio is
+        single-threaded and the cache dict is only touched from this
+        thread). Cache miss → call `loop.getaddrinfo` and stash the
+        result with `now + _DNS_CACHE_TTL` as expiry. Cache hit →
+        return the stored addrinfo list directly.
+
+        Cache is bounded by the natural diversity of (host, port)
+        pairs the sandboxed children touch — typically a handful of
+        registry hosts per scan. We do not LRU-evict; entries simply
+        expire by TTL. If a future workload generates an unbounded
+        host set, add a max-entries cap here.
+
+        Errors are NOT cached — getaddrinfo failures are usually
+        transient (DNS hiccup, brief network glitch) and caching
+        NXDOMAIN would amplify the outage's impact for as long as the
+        TTL.
+        """
+        key = (host, port)
+        now = time.monotonic()
+        cached = self._dns_cache.get(key)
+        if cached is not None and cached[0] > now:
+            return cached[1]
+        addrinfo = await asyncio.wait_for(
+            self._loop.getaddrinfo(host, port, type=socket.SOCK_STREAM),
+            timeout=10.0,
+        )
+        self._dns_cache[key] = (now + _DNS_CACHE_TTL, addrinfo)
+        return addrinfo
+
+    async def _happy_eyeballs_connect(
+        self, addrinfo: list, port: int,
+    ) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter, str]:
+        """RFC 8305 happy-eyeballs dial across an addrinfo list.
+
+        Returns ``(reader, writer, dialed_ip)`` for the first address
+        that connects. Cancels the loser. Falls back to the original
+        sequential walk if the addrinfo list has only one family
+        (no race needed).
+
+        Why this matters: the previous code did
+        ``asyncio.open_connection(host=addrinfo[0][4][0], ...)`` and
+        ate a 10s ``asyncio.wait_for`` per attempt. When a host's
+        first record is an IPv6 address the local link can't reach,
+        the entire CONNECT stalled 10s before failing. Under bursty
+        npm traffic that's a wallclock catastrophe. Happy-eyeballs
+        kicks off the v4 attempt 250ms after v6 starts; whichever
+        wins wins, and the loser is cancelled.
+
+        Gate-2 (resolved-IP block) is re-applied per attempt — a
+        DNS-poisoned response that returns one good and one bad IP
+        won't slip the bad one in via the race.
+        """
+        v6, v4 = _split_addrinfo_by_family(addrinfo)
+
+        # Single-family path: no race needed, just walk in order.
+        if not v6 or not v4:
+            ordered = v6 if v6 else v4
+            last_exc: Optional[Exception] = None
+            for entry in ordered:
+                family, socktype, proto, _, sockaddr = entry
+                ip = sockaddr[0]
+                if _ip_is_blocked(ip):
+                    last_exc = OSError(f"IP {ip} blocked by gate 2")
+                    continue
+                try:
+                    reader, writer = await asyncio.wait_for(
+                        asyncio.open_connection(host=ip, port=port,
+                                                 family=family),
+                        timeout=10.0,
+                    )
+                    return reader, writer, ip
+                except (OSError, asyncio.TimeoutError) as e:
+                    last_exc = e
+                    continue
+            raise last_exc if last_exc is not None else OSError(
+                "no addresses to dial"
+            )
+
+        # Dual-family: race v6 first, kick v4 _HAPPY_EYEBALLS_DELAY later.
+        # Take the first connector to succeed; cancel the other. Note
+        # we only race the FIRST address of each family — if both fail
+        # we then walk the rest serially as a single-family fallback.
+        # (Most upstream registries return one address per family, so
+        # the common case is exactly two attempts.)
+        async def _attempt(entry):
+            family, socktype, proto, _, sockaddr = entry
+            ip = sockaddr[0]
+            if _ip_is_blocked(ip):
+                raise OSError(f"IP {ip} blocked by gate 2")
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(host=ip, port=port,
+                                         family=family),
+                timeout=10.0,
+            )
+            return reader, writer, ip
+
+        v6_task = asyncio.ensure_future(_attempt(v6[0]))
+        v4_task: Optional[asyncio.Task] = None
+
+        try:
+            done, pending = await asyncio.wait(
+                {v6_task},
+                timeout=_HAPPY_EYEBALLS_DELAY,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            # If v6 finished within the delay (success OR failure), and
+            # it succeeded, take it. If it failed, race v4 directly.
+            if v6_task in done:
+                try:
+                    return v6_task.result()
+                except (OSError, asyncio.TimeoutError):
+                    return await _attempt(v4[0])
+            # v6 still pending after delay: kick off v4 in parallel.
+            v4_task = asyncio.ensure_future(_attempt(v4[0]))
+            done, pending = await asyncio.wait(
+                {v6_task, v4_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            # First to finish — if it succeeded, take it; if it failed,
+            # wait on the other.
+            for t in done:
+                try:
+                    result = t.result()
+                    # Cancel the loser.
+                    for p in pending:
+                        p.cancel()
+                    return result
+                except (OSError, asyncio.TimeoutError):
+                    pass
+            # Both done in this iteration with failures? Wait the rest.
+            for t in pending:
+                try:
+                    result = await t
+                    return result
+                except (OSError, asyncio.TimeoutError) as e:
+                    last = e
+            raise last
+        finally:
+            # Best-effort: ensure no task is left dangling. Tasks that
+            # already returned a result are no-op'd on cancel; in-flight
+            # tasks get torn down so we don't leak a half-open socket.
+            for t in (v6_task, v4_task):
+                if t is not None and not t.done():
+                    t.cancel()
+
+    def stop(self, *, drain_timeout: float = 5.0) -> None:
+        """Close the server and stop the event loop. Safe to call twice.
+
+        Pre-fix `stop()` called `self._loop.stop` immediately, which
+        terminated in-flight CONNECT tunnels mid-stream. Tunnels that
+        had completed their TLS handshake but not yet finished proxying
+        bytes were dropped — clients saw connection-reset mid-request,
+        and the proxy's audit-log entries for those tunnels were
+        truncated.
+
+        With `drain_timeout > 0` we first stop ACCEPTING new connections
+        (close the server socket via `_server.close()`), then wait up to
+        `drain_timeout` seconds for existing tunnels to complete
+        naturally before stopping the event loop. New connections that
+        arrive during the drain window get connection-refused at the
+        OS level, which is the correct behaviour for a graceful
+        shutdown.
+
+        Set `drain_timeout=0` to preserve the legacy abrupt-stop
+        behaviour (callers that need synchronous teardown for tests).
+        """
         if self._loop is None:
+            return
+        if drain_timeout > 0 and self._server is not None and self._loop.is_running():
+            async def _graceful():
+                try:
+                    self._server.close()
+                    await asyncio.wait_for(
+                        self._server.wait_closed(),
+                        timeout=drain_timeout,
+                    )
+                except (asyncio.TimeoutError, RuntimeError):
+                    pass
+                self._loop.stop()
+            try:
+                asyncio.run_coroutine_threadsafe(_graceful(), self._loop)
+            except RuntimeError:
+                # Loop stopped between is_running() and submit. Close
+                # the unawaited coroutine to suppress the
+                # "never awaited" warning.
+                _graceful().close()
             return
         try:
             self._loop.call_soon_threadsafe(self._loop.stop)
@@ -393,13 +905,22 @@ class EgressProxy:
             self._ready.set()
             return
         finally:
-            if self._server is not None:
+            # Pre-fix `self._loop.close()` raised AttributeError if
+            # `new_event_loop()` itself raised at the top of the try
+            # (rare — under heavy fd pressure / sandbox configs that
+            # blocked the loop's internal pipe creation). `self._loop`
+            # was still None from the constructor, so `.close()` on
+            # None crashed the finally and masked the original error.
+            # Same for `_server` which is also None until `start_server`
+            # completes — guard both.
+            if self._server is not None and self._loop is not None:
                 self._server.close()
                 try:
                     self._loop.run_until_complete(self._server.wait_closed())
                 except Exception:
                     pass
-            self._loop.close()
+            if self._loop is not None:
+                self._loop.close()
 
     # ----- async CONNECT handler -----
 
@@ -438,7 +959,17 @@ class EgressProxy:
                 f"egress proxy: max tunnels ({self._max_tunnels}) reached — "
                 f"refusing new connection"
             )
-            await self._write_error(writer, 429, "Too Many Tunnels")
+            try:
+                await self._write_error(writer, 429, "Too Many Tunnels")
+            finally:
+                # The reject path used to `return` before the try/finally
+                # below the cap-counter, so the writer was never closed
+                # on rejection — every 429 leaked the inbound socket.
+                try:
+                    writer.close()
+                    await writer.wait_closed()
+                except Exception:
+                    pass
             return
 
         try:
@@ -511,8 +1042,9 @@ class EgressProxy:
         # json.dumps escapes control chars, but the logger.warning/info
         # calls below interpolate the host into human-readable messages
         # that may reach a live terminal. See
-        # core.security.log_sanitisation.has_nonprintable.
-        from core.security.log_sanitisation import has_nonprintable
+        # core.security.log_sanitisation.has_nonprintable. Imported at
+        # module top to avoid a per-CONNECT dict-lookup + module-attr
+        # access on the hot path.
         if has_nonprintable(target):
             event.update(result="bad_request",
                          reason="non-printable characters in CONNECT target",
@@ -527,8 +1059,13 @@ class EgressProxy:
             await self._write_error(writer, 400, "Bad Request")
             return
         host, _, port_str = target.rpartition(":")
-        # Strip IPv6 brackets if present: [::1]:443
-        host = host.strip("[]")
+        # Strip IPv6 brackets if present: [::1]:443.
+        # `str.strip("[]")` strips ANY leading/trailing `[` or `]`
+        # regardless of pairing, so `]example.com[` would also collapse
+        # to `example.com` — which doesn't match the IPv6-bracket
+        # intent. Only strip when both bookends are present together.
+        if host.startswith("[") and host.endswith("]"):
+            host = host[1:-1]
         try:
             port = int(port_str)
         except ValueError:
@@ -556,14 +1093,45 @@ class EgressProxy:
 
         # Policy gate 1: hostname allowlist.
         if not self.is_host_allowed(host):
-            logger.warning(
-                f"egress proxy: DENY {host}:{port} — not in allowlist"
-            )
-            event.update(result="denied_host", reason="host not in allowlist",
-                         duration=time.monotonic() - t_start)
-            self._record(event)
-            await self._write_error(writer, 403, "Forbidden")
-            return
+            # Snapshot the audit-log flag under the audit lock at the
+            # decision point. The flag is mutated by acquire/release
+            # ref-counting from other threads; an unlocked read here
+            # (CPython-atomic for bools, but no happens-before edge
+            # against the increment in acquire_audit_log_only) could
+            # in principle read a stale True after a concurrent
+            # release dropped the count to zero. The snapshot pattern
+            # makes the race window explicit and the outcome
+            # consistent with the count value at the snapshot moment.
+            with self._audit_lock:
+                _audit_now = self._audit_log_only
+            if _audit_now:
+                # Audit mode: record the would-deny but proceed with the
+                # CONNECT. Use a distinct event result so consumers can
+                # tell audit-would-deny apart from real-deny in the same
+                # proxy-events.jsonl. The audit event captures intent;
+                # the later "allowed" event captures the actual outcome
+                # (so a single CONNECT in audit mode produces TWO event
+                # records — one would-deny, one allowed).
+                logger.warning(
+                    f"egress proxy: AUDIT would-deny {host}:{port} — "
+                    f"not in allowlist (audit mode: allowing)"
+                )
+                audit_event = {**event, "result": "would_deny_host",
+                               "reason": "host not in allowlist (audit mode)",
+                               "duration": time.monotonic() - t_start}
+                self._record(audit_event)
+                _record_proxy_denial(host, port, None,
+                                     "host_not_in_allowlist")
+                # Fall through to the connect path.
+            else:
+                logger.warning(
+                    f"egress proxy: DENY {host}:{port} — not in allowlist"
+                )
+                event.update(result="denied_host", reason="host not in allowlist",
+                             duration=time.monotonic() - t_start)
+                self._record(event)
+                await self._write_error(writer, 403, "Forbidden")
+                return
 
         # Decide path: direct or via upstream proxy.
         use_upstream = (self._upstream is not None
@@ -643,21 +1211,20 @@ class EgressProxy:
                     break
         else:
             # Direct path — resolve target, reject private/loopback IPs,
-            # open connection to resolved address.
+            # open connection via happy-eyeballs.
             try:
-                addrinfo = await asyncio.wait_for(
-                    self._loop.getaddrinfo(host, port, type=socket.SOCK_STREAM),
-                    timeout=10.0,
-                )
+                addrinfo = await self._cached_getaddrinfo(host, port)
             except asyncio.TimeoutError:
-                logger.warning(f"egress proxy: DNS timeout for {host}:{port}")
+                logger.warning("egress proxy: DNS timeout for %s:%s",
+                                host, port)
                 event.update(result="dns_failed", reason="DNS timeout",
                              duration=time.monotonic() - t_start)
                 self._record(event)
                 await self._write_error(writer, 504, "Gateway Timeout")
                 return
             except socket.gaierror as e:
-                logger.warning(f"egress proxy: DNS failure for {host}:{port}: {e}")
+                logger.warning("egress proxy: DNS failure for %s:%s: %s",
+                                host, port, e)
                 event.update(result="dns_failed", reason=f"DNS: {e}",
                              duration=time.monotonic() - t_start)
                 self._record(event)
@@ -672,33 +1239,61 @@ class EgressProxy:
                 return
 
             # Policy gate 2: reject resolved IPs that point to loopback /
-            # private / link-local. Stops a (hypothetical future) allowlisted
-            # hostname whose DNS now points to 127.x.
+            # private / link-local. The check runs against the FIRST
+            # candidate (and the happy-eyeballs dial below also re-runs
+            # gate 2 on each per-attempt connect) so a multi-A-record
+            # hostname where one record is private and another is public
+            # still gets caught. The "first record wins gate 2" semantic
+            # matches the original code; happy-eyeballs only changes
+            # which record we end up CONNECTING to, not which we VET.
             family, socktype, proto, _, sockaddr = addrinfo[0]
             resolved_ip = sockaddr[0]
             event["resolved_ip"] = resolved_ip
             if _ip_is_blocked(resolved_ip):
+                # Gate 2 is the proxy's DNS-rebinding / IP-poisoning
+                # defense — always on whenever the proxy is in the loop,
+                # regardless of audit_log_only. Resolving an allowlisted
+                # hostname to a private/loopback/metadata IP has no
+                # legitimate workflow rationale; only DNS attacks land
+                # here. Blocking is unconditional.
+                #
+                # In audit mode we ALSO route the deny into the per-run
+                # summary via record_denial — operators reading
+                # sandbox-summary.json see the attack signal there, not
+                # only in proxy-events.jsonl. (Under full enforcement
+                # the child sees a 502 and observe.py picks it up via
+                # stderr pattern-matching; under audit the child also
+                # sees the deny but we surface it directly because the
+                # audit promise is "every policy/safety event lands in
+                # the summary".)
                 logger.warning(
-                    f"egress proxy: DENY {host}:{port} — resolved to blocked "
-                    f"IP {resolved_ip}"
+                    "egress proxy: DENY %s:%s — resolved to blocked IP %s",
+                    host, port, resolved_ip,
                 )
                 event.update(result="denied_resolved_ip",
                              reason=f"resolved to blocked range: {resolved_ip}",
                              duration=time.monotonic() - t_start)
                 self._record(event)
+                # Snapshot under the audit lock — same reasoning as
+                # gate 1 above: ref-counted mutations from other
+                # threads need a happens-before edge to make the
+                # snapshot consistent with the count.
+                with self._audit_lock:
+                    _audit_now = self._audit_log_only
+                if _audit_now:
+                    _record_proxy_denial(host, port, resolved_ip,
+                                         "resolved_ip_blocked")
                 await self._write_error(writer, 403, "Forbidden")
                 return
 
             try:
-                up_reader, up_writer = await asyncio.wait_for(
-                    asyncio.open_connection(host=resolved_ip, port=port,
-                                            family=family),
-                    timeout=10.0,
+                up_reader, up_writer, dialed_ip = (
+                    await self._happy_eyeballs_connect(addrinfo, port)
                 )
             except (OSError, asyncio.TimeoutError) as e:
                 logger.warning(
-                    f"egress proxy: upstream connect failed {host}:{port} "
-                    f"({resolved_ip}): {e}"
+                    "egress proxy: upstream connect failed %s:%s (%s): %s",
+                    host, port, resolved_ip, e,
                 )
                 event.update(result="upstream_failed",
                              reason=f"{e.__class__.__name__}: {e}",
@@ -706,6 +1301,11 @@ class EgressProxy:
                 self._record(event)
                 await self._write_error(writer, 502, "Bad Gateway")
                 return
+            # Update event with the IP we actually dialled (may differ
+            # from `resolved_ip` if happy-eyeballs preferred a v4
+            # address while the addrinfo's first record was v6).
+            if dialed_ip != resolved_ip:
+                event["resolved_ip"] = dialed_ip
 
         # Acknowledge tunnel established, then relay bytes both ways.
         writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
@@ -716,9 +1316,13 @@ class EgressProxy:
         # NameError on every upstream-proxy CONNECT, crashing the tunnel
         # handler mid-request. Read through the event dict so both paths
         # produce a valid log line.
+        # Lazy %-style format so the string isn't built when INFO is
+        # below the logger threshold — every CONNECT used to pay the
+        # f-string formatting cost regardless of whether anything
+        # consumed the line.
         logger.info(
-            f"egress proxy: OPEN {host}:{port} -> "
-            f"{event.get('resolved_ip', '?')}"
+            "egress proxy: OPEN %s:%s -> %s",
+            host, port, event.get("resolved_ip", "?"),
         )
 
         # Record the event NOW (not at close) so short tunnels that
@@ -732,12 +1336,23 @@ class EgressProxy:
         total = {"c2u": 0, "u2c": 0}  # byte counters
         result = "allowed"
         reason: Optional[str] = None
+        # `asyncio.wait_for` is the correct primitive for "cap this block
+        # at N seconds": it raises `asyncio.TimeoutError` when the deadline
+        # fires AND cancels the inner coroutine cleanly. The previous
+        # `_TunnelGuard(loop.call_later(t, task.cancel))` design raised
+        # `asyncio.CancelledError` on timeout, not TimeoutError — so the
+        # explicit `except asyncio.TimeoutError` branch below never fired,
+        # and on Python 3.11+ the CancelledError (a BaseException) escaped
+        # `except Exception` entirely, leaving the timeout completely
+        # unaccounted for in the proxy event ring buffer.
         try:
-            async with _TunnelGuard(self._total_timeout):
-                await asyncio.gather(
+            await asyncio.wait_for(
+                asyncio.gather(
                     self._relay(reader, up_writer, "c2u", total),
                     self._relay(up_reader, writer, "u2c", total),
-                )
+                ),
+                timeout=self._total_timeout,
+            )
         except asyncio.TimeoutError:
             result = "timed_out"
             reason = f"exceeded total_timeout={self._total_timeout}s"
@@ -765,8 +1380,8 @@ class EgressProxy:
                          bytes_c2u=total["c2u"], bytes_u2c=total["u2c"],
                          duration=time.monotonic() - t_start)
             logger.info(
-                f"egress proxy: CLOSE {host}:{port} "
-                f"(c2u={total['c2u']} u2c={total['u2c']})"
+                "egress proxy: CLOSE %s:%s (c2u=%s u2c=%s)",
+                host, port, total["c2u"], total["u2c"],
             )
 
     async def _relay(self, src: asyncio.StreamReader,
@@ -783,12 +1398,24 @@ class EgressProxy:
                 return
             if not chunk:
                 return
-            counters[counter_key] += len(chunk)
+            # Pre-fix the counter was bumped BEFORE `dst.drain()`. If
+            # drain raised (peer reset, broken pipe), the counter
+            # had already recorded the chunk as "delivered" even
+            # though the write never completed end-to-end. Audit
+            # logs over-reported bytes-relayed; capacity-planning
+            # off the bytes_c2u/bytes_u2c counters drifted up by
+            # the size of every aborted final chunk.
+            #
+            # Move the increment AFTER successful drain. The
+            # ConnectionResetError / BrokenPipeError branch returns
+            # early without bumping so the count reflects "bytes
+            # actually pushed through" rather than "bytes attempted".
             dst.write(chunk)
             try:
                 await dst.drain()
             except (ConnectionResetError, BrokenPipeError):
                 return
+            counters[counter_key] += len(chunk)
 
     async def _write_error(self, writer: asyncio.StreamWriter,
                            code: int, reason: str) -> None:
@@ -798,27 +1425,6 @@ class EgressProxy:
             await writer.drain()
         except Exception:
             pass
-
-
-class _TunnelGuard:
-    """Async context manager that cancels the block after total_timeout."""
-
-    def __init__(self, timeout: float):
-        self._timeout = timeout
-        self._task: Optional[asyncio.Task] = None
-
-    async def __aenter__(self):
-        self._task = asyncio.current_task()
-        # asyncio.get_event_loop() is deprecated outside coroutines and
-        # warns noisily in Python 3.12+; get_running_loop() is the
-        # current idiom for code that's known to run inside a task.
-        self._handle = asyncio.get_running_loop().call_later(
-            self._timeout,
-            lambda: self._task.cancel() if self._task else None,
-        )
-
-    async def __aexit__(self, exc_type, exc, tb):
-        self._handle.cancel()
 
 
 async def _read_line(reader: asyncio.StreamReader, max_len: int) -> Optional[str]:

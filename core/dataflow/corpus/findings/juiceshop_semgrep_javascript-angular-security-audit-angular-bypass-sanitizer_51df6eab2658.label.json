@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "juiceshop_semgrep_javascript-angular-security-audit-angular-bypass-sanitizer_51df6eab2658",
+  "verdict": "true_positive",
+  "fp_category": null,
+  "rationale": "queryParam reaches bypassSecurityTrustHtml on line 5 and is used as innerHtml binding in template \u2014 XSS. Path documented in juice-shop SOLUTIONS.md as the local XSS challenge solution.",
+  "labeler": "handlabel-juice-shop-webgoat",
+  "labeled_at": "2026-05-10"
+}

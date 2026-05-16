@@ -126,6 +126,25 @@ class WebClient:
             if not next_url:
                 return response
 
+            # Eagerly close the intermediate response's underlying
+            # urllib3 connection back to the pool. Pre-fix
+            # `history.append(response)` kept the Response object
+            # in memory; the connection stayed checked out of the
+            # pool until garbage collection. On long redirect
+            # chains (or many requests with redirects in flight),
+            # the pool exhausted and subsequent requests blocked
+            # waiting for connections to free up.
+            #
+            # `.close()` only releases the underlying connection;
+            # the Response's status_code, headers, and (already-
+            # consumed) `.content` / `.text` remain accessible
+            # via the object — caller can still inspect
+            # `response.history[i].headers` etc. without issue.
+            try:
+                response.close()
+            except Exception:
+                pass
+
             history.append(response)
             current_url = next_url
 

@@ -33,7 +33,7 @@ The three-tier search in find_understand_output() covers:
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -166,23 +166,46 @@ def _rank_candidates(
     if not candidates:
         return None
 
+    # Guarded stat helper: candidate run dirs can disappear between
+    # the enumeration that built `candidates` and this ranking pass
+    # (operator runs `/project clean`, a parallel pruner unlinks an
+    # old run, the dir was on a flaky NFS mount). Pre-fix `d.stat()`
+    # raised FileNotFoundError mid-sort and the whole bridge stage
+    # crashed, taking down /validate's understand-import with it.
+    # Treat unstattable candidates as if they had mtime=0 so they
+    # sort to the bottom, log so the operator sees the disappearance.
+    def _safe_mtime_ns(d: Path) -> int:
+        try:
+            return d.stat().st_mtime_ns
+        except OSError as exc:
+            logger.warning(
+                "understand_bridge: candidate %s vanished during ranking (%s)"
+                " — sorting last", d.name, exc,
+            )
+            return 0
+
     if not target_path:
         # No target — can't hash on disk, just pick newest.
         # Use mtime_ns for sub-second resolution; directory name breaks ties.
-        candidates.sort(key=lambda d: (d.stat().st_mtime_ns, d.name), reverse=True)
+        candidates.sort(key=lambda d: (_safe_mtime_ns(d), d.name), reverse=True)
         return candidates[0], set()
 
+    # Shared cache: hash each disk path at most once across all
+    # candidate runs. The disk doesn't change between candidates in
+    # a single ranking call, so re-hashing the same content M times
+    # was pure waste. See `_find_stale_files` docstring.
+    disk_hash_cache: Dict[str, Optional[str]] = {}
     scored = []
     for d in candidates:
         u_checklist = load_json(d / "checklist.json")
         if not u_checklist:
             # No checklist — treat as fully stale (can't verify any file)
-            scored.append((1, d.stat().st_mtime_ns, d, set()))
+            scored.append((1, _safe_mtime_ns(d), d, set()))
             continue
         u_hashes = _extract_hashes(u_checklist)
-        stale = _find_stale_files(u_hashes, target_path)
+        stale = _find_stale_files(u_hashes, target_path, disk_hash_cache)
         # fresh = 0 stale files → sort key 0 (best)
-        scored.append((len(stale), d.stat().st_mtime_ns, d, stale))
+        scored.append((len(stale), _safe_mtime_ns(d), d, stale))
 
     # Sort descending: fewest stale (negated), then newest mtime_ns, then
     # directory name (timestamp-based names sort chronologically).
@@ -201,23 +224,50 @@ def _rank_candidates(
 
 
 def _extract_hashes(checklist: Dict[str, Any]) -> Dict[str, str]:
-    """Build {relative_path: sha256} from a checklist."""
-    return {
-        f["path"]: f["sha256"]
-        for f in checklist.get("files", [])
-        if f.get("sha256")
-    }
+    """Build {relative_path: sha256} from a checklist.
+
+    Pre-fix the comprehension subscripted ``f["path"]`` directly,
+    which raised KeyError if a checklist entry had ``sha256`` but
+    no ``path`` key (older /understand outputs that recorded
+    hash-only entries for synthesised pseudo-files, hand-edited
+    checklists, partial writes from a killed Stage 0). One missing
+    key took down the whole bridge stage. Use ``.get`` and skip
+    entries without both fields, plus an isinstance guard so a
+    non-dict entry (corrupt list element) doesn't AttributeError on
+    `.get`.
+    """
+    out: Dict[str, str] = {}
+    for f in checklist.get("files", []):
+        if not isinstance(f, dict):
+            continue
+        path = f.get("path")
+        sha = f.get("sha256")
+        if isinstance(path, str) and isinstance(sha, str) and path and sha:
+            out[path] = sha
+    return out
 
 
 def _find_stale_files(
     understand_hashes: Dict[str, str],
     target_path: str,
+    disk_hash_cache: Optional[Dict[str, Optional[str]]] = None,
 ) -> Set[str]:
     """Return relative paths whose on-disk SHA-256 differs from the understand checklist.
 
     Hashes the actual files under target_path rather than comparing against
     another checklist. This is immune to the project-mode symlink problem
     where both runs share one checklist.json file.
+
+    `disk_hash_cache` (optional) is a caller-supplied dict that
+    memoises ``rel_path -> on-disk sha256 (or None if missing)``.
+    Pre-fix the function hashed each path independently for every
+    invocation. Callers like ``_rank_candidates`` invoke this once
+    per candidate run dir — for M candidates and N target files
+    that's M*N hashes of identical on-disk content (the disk
+    doesn't change between candidates in a single _rank_candidates
+    call). With four candidates against a 50k-file target the
+    redundant SHA-256 work multiplied wallclock by ~4x. Passing a
+    shared dict collapses repeats to one hash per disk path.
     """
     from core.hash import sha256_file
 
@@ -225,11 +275,18 @@ def _find_stale_files(
     stale: Set[str] = set()
     for rel_path, u_hash in understand_hashes.items():
         full_path = target / rel_path
-        if not full_path.is_file():
-            # File deleted since understand ran
+        if disk_hash_cache is not None and rel_path in disk_hash_cache:
+            disk_hash = disk_hash_cache[rel_path]
+        else:
+            if not full_path.is_file():
+                disk_hash = None
+            else:
+                disk_hash = sha256_file(full_path)
+            if disk_hash_cache is not None:
+                disk_hash_cache[rel_path] = disk_hash
+        if disk_hash is None:
             stale.add(rel_path)
             continue
-        disk_hash = sha256_file(full_path)
         if disk_hash != u_hash:
             stale.add(rel_path)
     return stale
@@ -262,7 +319,20 @@ def _search_understand_dirs(
     )
 
     results = []
-    for d in parent_dir.iterdir():
+    try:
+        children = list(parent_dir.iterdir())
+    except OSError as exc:
+        # parent_dir itself unreadable (PermissionError, ENOTDIR
+        # mid-call from a racing remount). Pre-fix the loop just
+        # crashed; now log so the operator sees why discovery
+        # returned nothing instead of guessing "no understand runs".
+        logger.warning(
+            "understand_bridge: cannot list %s (%s) — discovery skipped",
+            parent_dir, exc,
+        )
+        return []
+
+    for d in children:
         try:
             if not (d.is_dir()
                     and d != exclude
@@ -270,8 +340,22 @@ def _search_understand_dirs(
                     and infer_command_type(d) == "understand"
                     and (d / "context-map.json").exists()):
                 continue
+        except PermissionError as exc:
+            # Pre-fix `except OSError: continue` swallowed
+            # PermissionError silently. A user with a misconfigured
+            # ACL on a single understand run dir would see the
+            # whole bridge skip that run with no diagnostic — they
+            # then re-ran /validate repeatedly and got the same
+            # silent failure. Log permission errors specifically
+            # (they're config-fixable) while staying silent on
+            # broken-symlink class OSErrors.
+            logger.debug(
+                "understand_bridge: permission denied probing %s (%s) — skipped",
+                d.name, exc,
+            )
+            continue
         except OSError:
-            continue  # broken symlinks, permission errors
+            continue  # broken symlinks, transient races
 
         if target_resolved:
             from core.json import load_json
@@ -284,7 +368,16 @@ def _search_understand_dirs(
 
         results.append(d)
 
-    results.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+    # Same vanished-mid-rank race as _rank_candidates — guard stat()
+    # so a deleted dir doesn't kill the whole sort. Sort key 0 puts
+    # vanished dirs at the bottom; they'll still be in `results` but
+    # the caller's _rank_candidates layer guards subsequent stats.
+    def _safe_mtime(d: Path) -> float:
+        try:
+            return d.stat().st_mtime
+        except OSError:
+            return 0.0
+    results.sort(key=_safe_mtime, reverse=True)
     return results
 
 
@@ -349,6 +442,20 @@ def load_understand_context(
     # --- Import flow-trace-*.json into attack-paths.json ---
     trace_stats = _import_flow_traces(understand_dir, validate_dir, stale_files)
     summary["flow_traces"] = trace_stats
+
+    # --- Import unchecked_flows with SMT path_conditions ---
+    # /understand --map's sink_details can carry optional
+    # `path_conditions` / `path_profile` for memory-corruption /
+    # arithmetic / bounds sinks. Forward each such unchecked_flow
+    # as an attack-paths.json entry so /validate Stage B's SMT
+    # pre-flight finds the conditions ready-made (saves the LLM
+    # re-extracting from source). Sinks without path_conditions
+    # are skipped — the existing priority_targets path covers
+    # them for non-SMT consumers.
+    map_smt_stats = _import_unchecked_flow_conditions(
+        context_map, validate_dir,
+    )
+    summary["map_smt_paths"] = map_smt_stats
 
     logger.info(
         "understand_bridge: loaded context map from %s — "
@@ -914,8 +1021,31 @@ def _references_file(entry: Dict[str, Any], stale_files: Set[str]) -> bool:
         val = entry.get(field, "")
         if not isinstance(val, str) or not val:
             continue
-        # Extract all "word.ext:digits" tokens (filenames with line numbers)
-        for match in re.findall(r'[\w./+-]+\.\w+(?=:\d)', val):
+        # Extract all "word.ext:digits" tokens (filenames with line numbers).
+        #
+        # Pre-fix the pattern was `[\w./+-]+\.\w+(?=:\d)` without
+        # `re.ASCII`. Python `\w` defaults to Unicode-aware match,
+        # so a path containing Cyrillic, Arabic, CJK, etc. characters
+        # was tokenised as a "filename" — but `stale_files` is a
+        # set populated from the on-disk extractor (ASCII-encoded
+        # POSIX paths). The match against `stale_files` then
+        # fell through silently because the Unicode-tokenised
+        # path string never equaled the ASCII canonical form,
+        # leaving the entry as "not stale" when it actually was.
+        #
+        # Symptom: /understand JSON containing target paths with
+        # non-ASCII characters (multi-locale codebases, Asian /
+        # Slavic projects, intentionally-Unicode test fixtures)
+        # treated stale-file matches as misses, leaving stale
+        # references in the bridged context map.
+        #
+        # `re.ASCII` makes `\w` match ONLY [a-zA-Z0-9_], aligning
+        # with the on-disk path tokenisation. Length cap added
+        # at the same time — operator-edited JSON containing a
+        # giant single token (broken JSON serialiser, included
+        # base64) would re-scan repeatedly across all val
+        # occurrences.
+        for match in re.findall(r'[\w./+-]{1,1024}\.\w{1,32}(?=:\d)', val, flags=re.ASCII):
             if match in stale_files:
                 return True
 
@@ -951,15 +1081,62 @@ def _filter_context_map(context_map: Dict[str, Any], stale_files: Set[str]) -> i
     # were removed. But we already filtered those lists above. Instead,
     # collect IDs from the entries we kept and drop flows referencing
     # any ID that's NOT in the kept set.
-    kept_ep_ids = {ep.get("id") for ep in context_map.get("entry_points", []) if ep.get("id")}
-    kept_sink_ids = {s.get("id") for s in context_map.get("sink_details", []) if s.get("id")}
+    # Pre-fix:
+    #   {ep.get("id") for ep in context_map.get("entry_points", []) if ep.get("id")}
+    # crashed with `AttributeError: 'str' object has no
+    # attribute 'get'` when the JSON had a non-dict entry
+    # in the list. /understand output IS user-controlled
+    # (typically operator-edited or LLM-emitted JSON), so a
+    # malformed file with `entry_points: ["main", {...}]`
+    # crashed the whole bridge instead of degrading
+    # gracefully. Same for sink_details.
+    #
+    # Filter to dict entries first; non-dicts get dropped
+    # silently (the schema-validate step has already
+    # complained about them, no need to repeat).
+    kept_ep_ids = {
+        ep.get("id")
+        for ep in context_map.get("entry_points", [])
+        if isinstance(ep, dict) and ep.get("id")
+    }
+    kept_sink_ids = {
+        s.get("id")
+        for s in context_map.get("sink_details", [])
+        if isinstance(s, dict) and s.get("id")
+    }
 
     flows = context_map.get("unchecked_flows", [])
     if isinstance(flows, list):
+        # Pre-fix the filter assumed `entry_point` / `sink` were
+        # always single strings — `f.get("entry_point") in kept_ep_ids`
+        # silently produced False when /understand emitted a flow
+        # with a list of IDs (multi-source fan-in or multi-sink
+        # fan-out, both legitimate per the context-map schema).
+        # That drop reported the flow as "stale-filtered" when in
+        # fact every referenced ID survived; downstream consumers
+        # then lost a flow that should have been kept.
+        #
+        # Also `f.get(...)` raised AttributeError if a non-dict
+        # element snuck into `flows`. Guard for that too.
+        def _flow_ids(f, key, kept):
+            v = f.get(key)
+            if v is None:
+                return False  # missing field — stale-by-default
+            if isinstance(v, list):
+                # Empty list = no IDs to validate; treat as
+                # missing (stale-drop). Non-empty: every ID must
+                # survive.
+                if not v:
+                    return False
+                return all(item in kept for item in v)
+            # Scalar (typical case): str / int / etc.
+            return v in kept
+
         clean = [
             f for f in flows
-            if f.get("entry_point") in kept_ep_ids
-            and f.get("sink") in kept_sink_ids
+            if isinstance(f, dict)
+            and _flow_ids(f, "entry_point", kept_ep_ids)
+            and _flow_ids(f, "sink", kept_sink_ids)
         ]
         removed += len(flows) - len(clean)
         context_map["unchecked_flows"] = clean
@@ -1040,7 +1217,7 @@ def _merge_attack_surface(
             "sinks": merged_sinks,
             "trust_boundaries": merged_boundaries,
             "_imported_from": str(understand_dir / "context-map.json"),
-            "_imported_at": datetime.now().isoformat(),
+            "_imported_at": datetime.now(timezone.utc).isoformat(),
         }
         save_json(surface_path, attack_surface)
 
@@ -1063,11 +1240,27 @@ def _trace_references_stale(trace: Dict[str, Any], stale_files: Set[str]) -> boo
         f = step.get("file", "")
         if f and f in stale_files:
             return True
-        # Embedded in action/result strings — extract filenames via regex
+        # Embedded in action/result strings — extract filenames via regex.
+        # Pre-fix the pattern was `[\w./+-]+\.\w+(?=:\d)` without
+        # bounds and without `re.ASCII`. Two issues:
+        #   * Unbounded greedy `+` quantifiers — pathological action /
+        #     result strings (operator pasted a base64 blob, an LLM
+        #     emitted a 100K-char identifier-shaped run, malformed
+        #     JSON serialiser concatenated huge run) burned CPU
+        #     scanning the regex engine for a "filename ending in
+        #     .ext: digit". Same ReDoS shape that the sister callsite
+        #     at understand_bridge.py:1034 was already hardened
+        #     against in batch RX66 (file-token findall).
+        #   * Unicode-default `\w` admits Cyrillic / CJK / Devanagari
+        #     "filenames" that never match the ASCII canonical form
+        #     in `stale_files`, so the staleness check silently
+        #     missed real matches when the upstream encoded glyphs.
+        # Apply the same bounds (`{1,1024}` for the path body,
+        # `{1,32}` for the extension) + `re.ASCII` for parity.
         for field in ("action", "result"):
             val = step.get(field, "")
             if val:
-                for match in re.findall(r'[\w./+-]+\.\w+(?=:\d)', val):
+                for match in re.findall(r'[\w./+-]{1,1024}\.\w{1,32}(?=:\d)', val, flags=re.ASCII):
                     if match in stale_files:
                         return True
     return False
@@ -1088,10 +1281,48 @@ def _import_flow_traces(
 
     paths_path = validate_dir / "attack-paths.json"
     existing_paths: List[Dict[str, Any]] = []
+    paths_was_malformed = False
     if paths_path.exists():
         loaded = load_json(paths_path)
         if isinstance(loaded, list):
             existing_paths = loaded
+        else:
+            # Malformed paths_path: pre-fix two failure modes both
+            # silently destroyed operator data:
+            #
+            #   * imported>0 → save_json() overwrote the malformed
+            #     file with the freshly-imported paths, deleting
+            #     whatever the operator had there (corrupt-but-
+            #     recoverable JSON, hand-edited notes, an in-progress
+            #     export).
+            #   * imported==0 → the malformed file STAYED on disk
+            #     and downstream consumers (Stage E, /diagram) tried
+            #     to read it and failed in their own surprising ways
+            #     because the bridge gave no signal that paths_path
+            #     was unreadable.
+            #
+            # Move the malformed file aside to a `.malformed-<ts>`
+            # sibling so the operator can inspect / recover it,
+            # and warn loudly. Then proceed as if paths_path didn't
+            # exist (existing_paths stays []).
+            paths_was_malformed = True
+            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            quarantine = paths_path.with_suffix(
+                paths_path.suffix + f".malformed-{ts}"
+            )
+            try:
+                paths_path.rename(quarantine)
+                logger.warning(
+                    "understand_bridge: %s was not a JSON list "
+                    "(loaded=%s); moved aside to %s",
+                    paths_path.name, type(loaded).__name__, quarantine.name,
+                )
+            except OSError as exc:
+                logger.warning(
+                    "understand_bridge: %s was not a JSON list and could "
+                    "not be quarantined (%s) — proceeding with empty list",
+                    paths_path.name, exc,
+                )
 
     # Track which IDs are already present to avoid duplicates
     existing_ids = {p.get("id") for p in existing_paths if p.get("id")}
@@ -1128,6 +1359,88 @@ def _import_flow_traces(
     return {"count": len(trace_files), "imported_as_paths": imported, "skipped_stale": skipped_stale}
 
 
+def _import_unchecked_flow_conditions(
+    context_map: Dict[str, Any],
+    validate_dir: Path,
+) -> Dict[str, Any]:
+    """Import path_conditions from sink_details into attack-paths.json.
+
+    Walks `unchecked_flows`; for each flow whose referenced sink_detail
+    has `path_conditions` set, writes an attack-paths.json entry
+    carrying those conditions (+ optional `path_profile`). /validate
+    Stage B's SMT pre-flight then finds them ready-made instead of
+    re-extracting from source.
+
+    Skips flows whose sink_detail has no path_conditions — those stay
+    in priority_targets (existing path) without polluting attack-paths.
+
+    Returns {"count": <total>, "imported_as_paths": <with_conditions>,
+    "skipped_no_conditions": <without>}.
+    """
+    flows = _list_at(context_map, "unchecked_flows")
+    if not flows:
+        return {"count": 0, "imported_as_paths": 0, "skipped_no_conditions": 0}
+
+    _, sink_by_id = _index_entries_by_id(context_map)
+
+    paths_path = validate_dir / "attack-paths.json"
+    existing_paths: List[Dict[str, Any]] = []
+    if paths_path.exists():
+        loaded = load_json(paths_path)
+        if isinstance(loaded, list):
+            existing_paths = loaded
+    existing_ids = {p.get("id") for p in existing_paths if p.get("id")}
+
+    imported = 0
+    skipped = 0
+    for i, flow in enumerate(flows):
+        if not isinstance(flow, dict):
+            continue
+        sink_id = flow.get("sink")
+        sink = sink_by_id.get(sink_id) if isinstance(sink_id, str) else None
+        if not sink:
+            skipped += 1
+            continue
+        pc = _validate_path_conditions(
+            sink.get("path_conditions"), f"sink_detail:{sink_id}",
+        )
+        if pc is None:
+            skipped += 1
+            continue
+        path_id = f"map-flow-{i:03d}"
+        if path_id in existing_ids:
+            continue
+        entry: Dict[str, Any] = {
+            "id": path_id,
+            "name": f"Imported from /understand --map: {flow.get('entry_point')} → {sink_id}",
+            "finding": "",
+            "steps": [],
+            "proximity": 0,
+            "blockers": [],
+            "status": "uncertain",
+            "source": "understand:map",
+            "imported_at": datetime.now(timezone.utc).isoformat(),
+            "path_conditions": pc,
+        }
+        pp = _validate_path_profile(
+            sink.get("path_profile"), f"sink_detail:{sink_id}",
+        )
+        if pp is not None:
+            entry["path_profile"] = pp
+        existing_paths.append(entry)
+        existing_ids.add(path_id)
+        imported += 1
+
+    if imported > 0:
+        save_json(paths_path, existing_paths)
+
+    return {
+        "count": len(flows),
+        "imported_as_paths": imported,
+        "skipped_no_conditions": skipped,
+    }
+
+
 def _trace_to_attack_path(trace: Dict[str, Any], trace_file: Path) -> Dict[str, Any]:
     #Convert a flow-trace dict into an attack-paths entry.
 
@@ -1143,7 +1456,7 @@ def _trace_to_attack_path(trace: Dict[str, Any], trace_file: Path) -> Dict[str, 
         "status": "uncertain",
         "source": TRACE_SOURCE_LABEL,
         "imported_from": str(trace_file),
-        "imported_at": datetime.now().isoformat(),
+        "imported_at": datetime.now(timezone.utc).isoformat(),
     }
 
     # Carry through attacker control summary as an annotation — useful context
@@ -1256,8 +1569,24 @@ def _merge_list_by_key(
 def _boundary_matches(boundary: Dict[str, Any], detail: Dict[str, Any]) -> bool:
     """Check whether a trust_boundaries entry corresponds to a boundary_details entry.
 
-    Uses normalised substring matching with a minimum length to avoid
-    short strings like "a" matching everything.
+    Pre-fix used a bare substring containment check
+    (`boundary_name in detail_id or detail_id in boundary_name`)
+    with only a 4-char minimum-length guard. That produced
+    false positives like:
+        boundary_name = "auth"
+        detail_id     = "author_handler"
+    `"auth" in "author_handler"` is True — but the two refer to
+    semantically-distinct boundaries. Operators saw bridged
+    `boundary_details` entries getting wrongly attributed to
+    auth boundaries (or any short-prefix-shared name pair).
+
+    Tokenise on non-alphanumeric separators and require
+    word-level equality OR full-string equality. `auth` only
+    matches `auth` as a token, not embedded inside `author`.
+    Two-token boundary names like `auth_check` still match
+    detail IDs containing `auth_check` as a contiguous token
+    sequence — preserves the legitimate match cases the
+    substring path was trying to capture.
     """
     boundary_name = boundary.get("boundary", "").lower().strip()
     detail_id = detail.get("id", "").lower().strip()
@@ -1265,10 +1594,22 @@ def _boundary_matches(boundary: Dict[str, Any], detail: Dict[str, Any]) -> bool:
     if not boundary_name or not detail_id:
         return False
 
-    # Require the shorter string to be at least 4 chars to avoid
-    # false positives from very short boundary names
-    shorter = min(len(boundary_name), len(detail_id))
-    if shorter < 4:
-        return boundary_name == detail_id
+    # Exact match: always wins regardless of length.
+    if boundary_name == detail_id:
+        return True
 
-    return boundary_name in detail_id or detail_id in boundary_name
+    # Token-level membership: split each on non-alphanumeric
+    # separators and require all of the SHORTER side's tokens
+    # to be present in the LONGER side's token list, in order
+    # (so `auth_check` matches `pre_auth_check_v2` but not
+    # `check_post_auth`).
+    import re as _re
+    a_tokens = [t for t in _re.split(r"[^a-z0-9]+", boundary_name, flags=_re.ASCII) if t]
+    b_tokens = [t for t in _re.split(r"[^a-z0-9]+", detail_id, flags=_re.ASCII) if t]
+    if not a_tokens or not b_tokens:
+        return False
+    short, long_ = (a_tokens, b_tokens) if len(a_tokens) <= len(b_tokens) else (b_tokens, a_tokens)
+    # Subsequence-of-contiguous-tokens check: short must appear
+    # as a contiguous slice of long.
+    n = len(short)
+    return any(long_[i:i + n] == short for i in range(len(long_) - n + 1))

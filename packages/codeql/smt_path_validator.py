@@ -37,18 +37,17 @@ mis-encoded):
 
   - **Operators outside the supported set.**  Accepted: ``+ - * |``,
     relational ``< <= > >= == !=``, shifts ``<< >>``, bitmask
-    ``&`` (only in the ``flags & MASK == VAL`` form).  Rejected:
-    unary NOT (``~``), XOR (``^``), division (``/``), modulo (``%``),
-    ternary (``? :``), single-equals assignment, chained relational
-    (``0 < x < 100``).  Anything else goes to ``unknown`` via the
-    full-input-consumed sanity check.
-  - **C-syntax constructs (other than function calls).**  Type casts
-    (``(uint32_t)x``), struct/pointer access (``obj.field``,
+    ``&`` (only in the ``flags & MASK == VAL`` form), and grouping
+    parentheses ``( )``.  Rejected: unary NOT (``~``), XOR (``^``),
+    division (``/``), modulo (``%``), ternary (``? :``), single-equals
+    assignment, chained relational (``0 < x < 100``).  Anything else
+    goes to ``unknown`` via the full-input-consumed sanity check.
+  - **C-syntax constructs (other than function calls and grouping).**
+    Type casts (``(uint32_t)x``), struct/pointer access (``obj.field``,
     ``s->len``), array indexing (``arr[0]``), pointer dereference
     (``*p``), ``sizeof``.  Any token containing ``.``, ``->``, ``[``,
-    ``]`` still triggers rejection, as does **non-call grouping parens**
-    (``(a + b) * c``).  Function calls are an exception — see the
-    free-variable fallback below.
+    ``]`` still triggers rejection.  Function calls are an exception —
+    see the free-variable fallback below.
   - **Negative integer literals** (e.g. ``!= -1``) — write the
     bit-pattern in hex instead (``!= 0xFFFFFFFF`` at uint32).
   - **Leading-zero decimals** (e.g. ``01234``) — ambiguous with C
@@ -56,6 +55,8 @@ mis-encoded):
   - **Literals outside the profile's width range** — ``0x100`` at
     uint8 would silently wrap to 0 in z3; we reject so the caller
     knows the profile was wrong for this literal.
+  - **Unbalanced parentheses** — extra ``(`` or ``)``, mismatched
+    nesting (``)(``), or a paren count that doesn't return to zero.
 
 Function-call subterms (``strlen(input)``, ``getpid()``, ...) are
 recovered through a free-variable fallback: each balanced
@@ -68,11 +69,13 @@ chooses the conservative semantics (no false claims of infeasibility).
 
 Other limitations (verdict still trustworthy, but with caveats):
 
-  - **No operator precedence** — expressions are evaluated strictly
-    left-to-right.  Mixed-operator expressions (e.g. ``a + b * c``)
-    are rejected to avoid mis-encoding; full precedence support is
-    planned for a follow-up.  ``a * b * c`` and ``a + b + c`` are
-    fine (associativity preserves correctness).
+  - **C operator precedence**, not arithmetic-textbook precedence.
+    Within an expression, ``*`` binds tightest, then ``+ -``, then
+    ``<< >>``, then ``|`` (lowest).  All left-associative.  The
+    notable surprise is that shifts bind *less* tightly than additive
+    operators in C — ``a + b << 2`` parses as ``(a + b) << 2``, not
+    ``a + (b << 2)``.  Use parentheses to make the grouping explicit
+    when the C reading isn't what was meant.
   - **Bitmask form** requires both ``MASK`` and ``VAL`` to be integer
     literals; variables on either side go to ``unknown``.
   - **Profile-level signedness conflates** two concerns: comparison
@@ -83,11 +86,14 @@ Other limitations (verdict still trustworthy, but with caveats):
     first-cut design; per-variable typing is the next step when a
     real case demands it.
   - **Z3 picks the smallest satisfying witness by default**, which is
-    often the trivial assignment (``x = 0``).  To find an *exploit*
-    witness, add a lower-bound condition that forces the dangerous
-    range (e.g. ``count > 0x10000000`` for CWE-190 wraparound at
-    uint32).  Will be addressed by Z3 Optimize integration in a
-    follow-up.
+    often the trivial assignment (``x = 0``).  To drive the witness
+    into the dangerous range, pass ``prefer_witness=("count", "max")``
+    (or the shim's ``--prefer-witness max:count``) and the encoder
+    swaps in a ``z3.Optimize`` backend with the corresponding
+    ``maximize`` objective.  Manual lower-bound hints (e.g.
+    ``count > 0x10000000``) still work and remain useful when the
+    caller wants to constrain the search to a specific subrange
+    rather than push to the extreme.
 
 Integration: packages/codeql/dataflow_validator.py :: DataflowValidator
 """
@@ -110,6 +116,7 @@ from core.smt_solver import (
     core_names as _core_names,
     mk_val as _mk_val,
     mk_var as _mk_var,
+    new_optimizer as _new_optimizer,
     new_solver as _new_solver,
     parse_literal_value as _parse_literal_value,
     propagate as _propagate,
@@ -144,6 +151,15 @@ class PathSMTResult:
     same set in :class:`Rejection` form, naming *why* each was dropped
     (parser failure kind, solver timeout, ...) so consumers can retry,
     rephrase, or surface diagnostics.
+
+    ``anon_var_map`` records the mapping from each ``_anon_N``
+    placeholder allocated by ``_substitute_calls`` to the original
+    function-call subexpression it replaced (e.g.
+    ``{"_anon_0": "strlen(argv[1])"}``).  Downstream consumers
+    (``/exploit``'s witness PoC seed, report renderers) use this to
+    render meaningful labels — without it the witness model shows
+    only the opaque ``_anon_N`` names and the LLM can't connect the
+    concrete value back to anything actionable.
     """
     feasible: Optional[bool]
     satisfied: List[str]
@@ -153,6 +169,7 @@ class PathSMTResult:
     smt_available: bool
     reasoning: str
     unknown_reasons: List[Rejection] = field(default_factory=list)
+    anon_var_map: Dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -164,13 +181,55 @@ _INT_RE = re.compile(r'^\d+$')
 _IDENT_RE = re.compile(r'^[a-z_][a-z0-9_]*$', re.IGNORECASE)
 _NULL_RE = re.compile(r'^NULL$', re.IGNORECASE)
 
-# Tokenise: identifiers, hex literals, decimal literals, operators.
+# Tokenise: identifiers, hex literals, decimal literals, operators, parens.
 # '>>' and '<<' appear before '[<>&|]' so they are matched as two-char tokens
 # rather than as two separate single-char tokens.
 _TOKEN_RE = re.compile(
-    r'(0x[0-9a-f]+|\d+|[a-z_][a-z0-9_]*|[+\-*]|<=|>=|!=|==|>>|<<|[<>&|])',
+    r'(0x[0-9a-f]+|\d+|[a-z_][a-z0-9_]*|[+\-*()]|<=|>=|!=|==|>>|<<|[<>&|])',
     re.IGNORECASE,
 )
+
+# Operator precedence for the arithmetic/bitwise sub-expression.  C-derived:
+#   *               > +-              > << >>            > |
+# All left-associative.  The relational and bitmask layers run in
+# ``_parse_condition`` above this; ``&`` therefore doesn't appear in this
+# table — it's only accepted in the dedicated bitmask form.
+_PRECEDENCE: Dict[str, int] = {
+    '|':  1,
+    '<<': 2, '>>': 2,
+    '+':  3, '-':  3,
+    '*':  4,
+}
+
+# Maximum nesting depth for parenthesised subexpressions.  The parser
+# recurses once per nesting level (_atom -> _climb -> _atom), so untrusted
+# input with deep nesting can blow the Python call stack.  64 levels is
+# far more than any real C condition would ever need.
+_MAX_PAREN_DEPTH = 64
+
+# Maximum length in characters of a single condition string.  Defends the
+# parser against pathological inputs whose runtime is linear in length but
+# whose total length is unboundedly large (e.g. a 1 MB string of operators).
+# Real path-conditions extracted from source rarely exceed a few hundred
+# characters even with verbose chained predicates; 2048 is generously above
+# any observed legitimate input.  Companion bound to ``_MAX_PAREN_DEPTH``
+# (depth) — together they cap both axes of parser cost.
+_MAX_CONDITION_CHARS = 2048
+
+# Maximum number of conditions accepted in a single ``check_path_feasibility``
+# call.  Real findings carry 1-10 conditions; tens of thousands signals
+# malformed upstream extraction or amplification.  When exceeded the call
+# degrades to ``feasible=None`` so partial answers can't be misread as
+# authoritative.
+_MAX_CONDITIONS_PER_CALL = 64
+
+# Operator-shaped tokens we recognise but don't accept as binary operators
+# inside ``_parse_expr`` — they belong to the relational or bitmask layer
+# and reaching ``_parse_expr`` with one in operand-trailing position is a
+# user error rather than a malformed expression.  Named
+# ``_CONDITION_LEVEL_OPS`` (not ``_RELATIONAL_TOKENS``) because the set
+# includes ``&`` (bitwise AND in bitmask form), which is not relational.
+_CONDITION_LEVEL_OPS = frozenset({'<=', '>=', '!=', '==', '<', '>', '&'})
 
 
 def _parse_expr(
@@ -178,18 +237,24 @@ def _parse_expr(
 ) -> Union[Any, Rejection]:
     """Parse an arithmetic expression into a Z3 bitvector at the given profile.
 
-    Handles: identifier, NULL, hex literal, decimal literal, and binary
-    +/-/* /|/shifts between those terms (left-to-right, no precedence).
-    Right-shift is routed through ``csem.ashr`` / ``csem.lshr`` by
-    signedness so the same ``>>`` source form encodes differently for
-    signed vs unsigned path conditions.
+    Handles: identifier, NULL, hex literal, decimal literal, parenthesised
+    grouping, and binary ``+ - * | << >>`` between those terms.  Operators
+    bind by C precedence (``*`` > ``+ -`` > ``<< >>`` > ``|``), all
+    left-associative.  Right-shift is routed through ``csem.ashr`` /
+    ``csem.lshr`` by signedness so the same ``>>`` source form encodes
+    differently for signed vs unsigned path conditions.
 
     Returns a :class:`Rejection` — rather than a partial Z3 expression —
     when something can't be encoded, so the whole condition falls through
     to the unknown list with a structured reason rather than being
     silently mis-encoded.
+
+    Implementation: precedence climbing over a flat token list, with a
+    mutable cursor (``pos``) shared by closures.  Atoms include
+    parenthesised subexpressions, which recursively re-enter the climb
+    with ``min_prec=0`` and consume the matching ``)``.
     """
-    tokens = [t for t in _TOKEN_RE.findall(text.strip()) if t not in ('(', ')')]
+    tokens = _TOKEN_RE.findall(text.strip())
     if not tokens:
         return Rejection(text, RejectionKind.LEX_EMPTY, "no tokens after tokenisation")
 
@@ -204,74 +269,154 @@ def _parse_expr(
             hint="remove or rephrase unsupported operators (e.g. ~, ^, /, %)",
         )
 
-    # Reject mixed-operator expressions to avoid silent mis-encoding due to
-    # the lack of operator precedence (currently strictly left-to-right).
-    if {'+', '-'} & set(tokens[1::2]) and {'*', '>>', '<<', '|'} & set(tokens[1::2]):
-        return Rejection(
-            text, RejectionKind.MIXED_PRECEDENCE,
-            "additive and multiplicative/bitwise ops mixed",
-            hint="split into separate conditions, each using one operator class",
-        )
+    pos = [0]
+    paren_depth = [0]
 
-    def atom(tok: str) -> Optional[Any]:
+    def _atom() -> Union[Any, Rejection]:
+        if pos[0] >= len(tokens):
+            return Rejection(
+                text, RejectionKind.UNRECOGNIZED_OPERAND,
+                "unexpected end of expression — operand expected",
+            )
+        tok = tokens[pos[0]]
+        if tok == '(':
+            paren_depth[0] += 1
+            if paren_depth[0] > _MAX_PAREN_DEPTH:
+                return Rejection(
+                    text, RejectionKind.UNRECOGNIZED_FORM,
+                    "parenthesis nesting exceeds depth limit",
+                )
+            pos[0] += 1
+            inner = _climb(0)
+            if isinstance(inner, Rejection):
+                paren_depth[0] -= 1
+                return inner
+            if pos[0] >= len(tokens) or tokens[pos[0]] != ')':
+                paren_depth[0] -= 1
+                # Check for a relational/bitmask operator that shouldn't
+                # appear inside a parenthesised arithmetic subexpression
+                # (e.g. ``(a == b) + 1``).  Without this, the user gets
+                # UNBALANCED_PARENS which misidentifies the problem.
+                if pos[0] < len(tokens) and tokens[pos[0]] in _CONDITION_LEVEL_OPS:
+                    return Rejection(
+                        text, RejectionKind.UNSUPPORTED_OPERATOR,
+                        f"relational operator {tokens[pos[0]]!r} cannot appear "
+                        f"inside a parenthesised arithmetic subexpression",
+                    )
+                return Rejection(
+                    text, RejectionKind.UNBALANCED_PARENS,
+                    "expected ')' to close subexpression",
+                )
+            paren_depth[0] -= 1
+            pos[0] += 1
+            return inner
+        if tok == ')':
+            return Rejection(
+                text, RejectionKind.UNBALANCED_PARENS,
+                "expected operand, got ')'",
+            )
         if _NULL_RE.match(tok):
+            pos[0] += 1
             return _mk_val(0, profile.width)
         if _HEX_RE.match(tok) or _INT_RE.match(tok):
             v = _parse_literal_value(tok, profile)
-            # Atom-level literal failures collapse to None and surface as
-            # generic UNRECOGNIZED_OPERAND at the loop boundary; the more
-            # specific reasons (LITERAL_AMBIGUOUS / LITERAL_OUT_OF_RANGE)
-            # are preserved on the bitmask path which calls
-            # _parse_literal_value directly.
-            return None if isinstance(v, Rejection) else _mk_val(v, profile.width)
+            if isinstance(v, Rejection):
+                # Re-anchor the literal-specific rejection (LITERAL_AMBIGUOUS
+                # / LITERAL_OUT_OF_RANGE) on the full input text so callers
+                # can match it back to the original condition.
+                return _propagate(text, v)
+            pos[0] += 1
+            return _mk_val(v, profile.width)
         if _IDENT_RE.match(tok):
-            if tok.lower() not in vars_:
-                vars_[tok.lower()] = _mk_var(tok.lower(), profile.width)
-            return vars_[tok.lower()]
-        return None
-
-    # Left-to-right accumulation of arithmetic and bitwise operators.
-    # Any unsupported operator yields a structured rejection.
-    result = atom(tokens[0])
-    if result is None:
+            key = tok.lower()
+            if key not in vars_:
+                vars_[key] = _mk_var(key, profile.width)
+            pos[0] += 1
+            return vars_[key]
         return Rejection(
             text, RejectionKind.UNRECOGNIZED_OPERAND,
-            f"token {tokens[0]!r} is not an identifier, NULL, or numeric literal",
+            f"token {tok!r} is not an identifier, NULL, or numeric literal",
         )
-    i = 1
-    while i < len(tokens) - 1:
-        op = tokens[i]
-        if op not in ('+', '-', '*', '|', '>>', '<<'):
-            return Rejection(
-                text, RejectionKind.UNSUPPORTED_OPERATOR,
-                f"operator {op!r} not in {{+, -, *, |, >>, <<}}",
-            )
-        right = atom(tokens[i + 1])
-        if right is None:
-            return Rejection(
-                text, RejectionKind.UNRECOGNIZED_OPERAND,
-                f"token {tokens[i + 1]!r} is not an identifier, NULL, or numeric literal",
-            )
-        if op == '+':
-            result = result + right
-        elif op == '-':
-            result = result - right
-        elif op == '*':
-            result = result * right
-        elif op == '|':
-            result = result | right
-        elif op == '>>':
+
+    def _apply(op: str, lhs: Any, rhs: Any) -> Any:
+        if op == '+':  return lhs + rhs
+        if op == '-':  return lhs - rhs
+        if op == '*':  return lhs * rhs
+        if op == '|':  return lhs | rhs
+        if op == '<<': return lhs << rhs
+        if op == '>>':
             # Route right-shift through csem so signedness picks the
             # correct arithmetic vs logical variant.
-            result = _ashr(result, right) if profile.signed else _lshr(result, right)
-        else:  # '<<'
-            result = result << right
-        i += 2
+            return _ashr(lhs, rhs) if profile.signed else _lshr(lhs, rhs)
+        # _PRECEDENCE keys are exhaustive; reaching here is a bug, not user
+        # input.  Raise so the invariant survives under ``python -O``.
+        raise RuntimeError(f"unhandled operator {op!r}")
 
-    if i != len(tokens):
+    # Recursion depth bound for `_climb`. Pre-fix the recursive
+    # precedence-climber unwound through Python's call stack one
+    # frame per nested operator. A long flat chain like
+    # `a+a+a+a+...+a` (1000+ ops) crossed Python's default
+    # recursion limit (~1000) and raised RecursionError, which
+    # bypassed every Rejection-shaped error path the parser
+    # relied on. Bound depth explicitly + return a Rejection
+    # rather than crashing. 256 is well above any realistic
+    # human-or-LLM-emitted condition (deeply-nested constraints
+    # in real RAPTOR runs top out at <20 ops).
+    _MAX_CLIMB_DEPTH = 256
+    _climb_depth = [0]
+
+    def _climb(min_prec: int) -> Union[Any, Rejection]:
+        if _climb_depth[0] >= _MAX_CLIMB_DEPTH:
+            return Rejection(
+                ' '.join(tokens),
+                RejectionKind.UNRECOGNIZED_FORM,
+                f"expression nesting exceeded depth {_MAX_CLIMB_DEPTH}; "
+                f"refusing to recurse further",
+            )
+        _climb_depth[0] += 1
+        try:
+            lhs = _atom()
+            if isinstance(lhs, Rejection):
+                return lhs
+            while pos[0] < len(tokens):
+                tok = tokens[pos[0]]
+                if tok not in _PRECEDENCE:
+                    # Anything else — ``)``, a relational op, an extra atom —
+                    # ends this climb level.  The outer dispatcher classifies
+                    # the leftover (paren imbalance, unsupported operator, or
+                    # plain trailing token).
+                    break
+                prec = _PRECEDENCE[tok]
+                if prec < min_prec:
+                    break
+                pos[0] += 1
+                rhs = _climb(prec + 1)  # left-associative
+                if isinstance(rhs, Rejection):
+                    return rhs
+                lhs = _apply(tok, lhs, rhs)
+        finally:
+            _climb_depth[0] -= 1
+        return lhs
+
+    result = _climb(0)
+    if isinstance(result, Rejection):
+        return result
+
+    if pos[0] != len(tokens):
+        leftover = tokens[pos[0]]
+        if leftover in ('(', ')'):
+            return Rejection(
+                text, RejectionKind.UNBALANCED_PARENS,
+                f"unexpected {leftover!r} in expression",
+            )
+        if leftover in _CONDITION_LEVEL_OPS:
+            return Rejection(
+                text, RejectionKind.UNSUPPORTED_OPERATOR,
+                f"operator {leftover!r} not in {{+, -, *, |, >>, <<}}",
+            )
         return Rejection(
             text, RejectionKind.TRAILING_TOKENS,
-            f"unconsumed token {tokens[i]!r}",
+            f"unconsumed token {leftover!r}",
         )
 
     return result
@@ -345,6 +490,7 @@ def make_anon_call_var(vars_: Dict[str, Any], *, profile: BVProfile) -> Any:
 
 def _substitute_calls(
     text: str, vars_: Dict[str, Any], *, profile: BVProfile,
+    anon_map: Optional[Dict[str, str]] = None,
 ) -> str:
     """Replace balanced ``<ident>(...)`` subterms with fresh free variables.
 
@@ -362,6 +508,15 @@ def _substitute_calls(
 
     Unbalanced parens (``strlen(x``) are left in place; the caller's
     parens-check still rejects them.
+
+    When ``anon_map`` is supplied, each new ``_anon_N`` allocated
+    here is recorded with the original substring it replaced
+    (``anon_map["_anon_0"] = "strlen(argv[1])"``).  Threaded through
+    ``_parse_condition`` and ``_classify_text_condition`` from
+    ``check_path_feasibility`` so the final ``PathSMTResult`` can
+    surface meaningful labels for the witness model.  None / omitted
+    preserves backwards compatibility — callers that don't care
+    (verb path, tests pre-dating this) still work unchanged.
     """
     counter = _next_anon_index(vars_)
     out: List[str] = []
@@ -382,11 +537,28 @@ def _substitute_calls(
                 placeholder = f'_anon_{counter}'
                 counter += 1
                 vars_[placeholder] = _mk_var(placeholder, profile.width)
+                if anon_map is not None:
+                    anon_map[placeholder] = text[i:j]
                 out.append(placeholder)
                 i = j
                 continue
             # Unbalanced: fall through and copy the head char-by-char so
             # the parens-check can flag it.
+        # Pre-fix the no-match path always did `i += 1`, even when
+        # `_CALL_HEAD_RE.match` returned an identifier-shaped match
+        # that just wasn't followed by `(`. That meant for an
+        # identifier-heavy input (100k chars of `foo bar baz qux ...`
+        # / large macro-expanded condition text), each character
+        # position re-scanned the identifier from scratch — O(N) per
+        # position × N positions = O(N²) wallclock.
+        # When we matched an identifier but it wasn't a call, jump
+        # past the identifier in one step instead of one char at a
+        # time. Append the matched substring as-is. Reduces O(N²)
+        # to O(N) for identifier-heavy text.
+        if m:
+            out.append(text[i:m.end()])
+            i = m.end()
+            continue
         out.append(text[i])
         i += 1
     return ''.join(out)
@@ -394,6 +566,7 @@ def _substitute_calls(
 
 def _parse_condition(
     text: str, vars_: Dict[str, Any], *, profile: BVProfile,
+    anon_map: Optional[Dict[str, str]] = None,
 ) -> Union[Any, Rejection]:
     """Parse a single condition string into a Z3 boolean expression.
 
@@ -410,24 +583,66 @@ def _parse_condition(
     free variables by :func:`_substitute_calls`, so conditions like
     ``strlen(input) < 1024`` can still drive feasibility analysis.  Any
     parentheses left behind after that pass are non-call grouping
-    (``(a + b) * c``) and are rejected with
-    :data:`RejectionKind.PARENS_NOT_SUPPORTED`.  ``text`` (the original)
-    is preserved for rejection messages so callers can match failures
-    back to their input.
+    (``(a + b) * c``) and are now supported via precedence climbing in
+    :func:`_parse_expr` — the early balance check below only catches
+    the structurally-broken cases (extra ``)`` or unmatched ``(``)
+    before they fall through to a less specific rejection further down.
+    ``text`` (the original) is preserved for rejection messages so
+    callers can match failures back to their input.
     """
-    t = _substitute_calls(_canonicalise(text), vars_, profile=profile)
-
-    if '(' in t or ')' in t:
+    # Hard cap on input size before any parsing work runs.  Defends the
+    # parser combinator against pathological inputs whose total length is
+    # unboundedly large.  See ``_MAX_CONDITION_CHARS`` for the rationale
+    # and tuning guidance.
+    if len(text) > _MAX_CONDITION_CHARS:
         return Rejection(
-            text, RejectionKind.PARENS_NOT_SUPPORTED,
-            "input contains '(' or ')' that is not a recognised function call",
-            hint="function calls (ident(...)) parse via the free-variable fallback; "
-                 "non-call grouping is unsupported — flatten the expression",
+            text, RejectionKind.INPUT_TOO_LONG,
+            f"condition length {len(text)} exceeds limit {_MAX_CONDITION_CHARS}",
+            hint=(
+                f"shorten or split the predicate so each condition is at "
+                f"most {_MAX_CONDITION_CHARS} characters"
+            ),
+        )
+    t = _substitute_calls(
+        _canonicalise(text), vars_, profile=profile, anon_map=anon_map,
+    )
+
+    # Early paren-balance scan.  ``_parse_expr`` would catch most imbalances
+    # itself, but only conditions whose top-level matches the relational or
+    # bitmask regex below ever reach it.  Cases like ``strlen(x`` or
+    # ``f(g(x)`` (no relational op) would otherwise fall through to a
+    # generic UNRECOGNIZED_FORM rejection — this loop pre-empts that with
+    # a more specific UNBALANCED_PARENS.
+    depth = 0
+    for ch in t:
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+            if depth < 0:
+                return Rejection(
+                    text, RejectionKind.UNBALANCED_PARENS,
+                    "')' has no matching '('",
+                )
+    if depth != 0:
+        return Rejection(
+            text, RejectionKind.UNBALANCED_PARENS,
+            f"{depth} unmatched '(' at end of input",
         )
 
-    # Bitmask: lhs & mask (==|!=) val
+    # Bitmask: lhs & mask (==|!=) val.
+    #
+    # Pre-fix the LHS was `(.+?)` — a lazy unbounded quantifier
+    # over ANY character, including `&`. On a non-bitmask input
+    # the regex engine had to expand `.+?` greedily one character
+    # at a time, hunting for a `&` separator that never arrived;
+    # for an N-character input that's O(N) failed-match cost per
+    # invocation. Same ReDoS shape that `_parse_atom` was already
+    # hardened against by switching to `[^&]+?` (negated class so
+    # the lazy quantifier short-circuits at the first `&`).
+    # Apply the same fix here for parity.
     m = re.fullmatch(
-        r'(.+?)\s*&\s*(0x[0-9a-f]+|\d+)\s*(==|!=)\s*(0x[0-9a-f]+|\d+)',
+        r'([^&]+?)\s*&\s*(0x[0-9a-f]+|\d+)\s*(==|!=)\s*(0x[0-9a-f]+|\d+)',
         t, re.IGNORECASE,
     )
     if m:
@@ -496,6 +711,7 @@ def _classify_text_condition(
     solver: Any,
     *,
     profile: BVProfile,
+    anon_map: Optional[Dict[str, str]] = None,
 ) -> Tuple[Optional[str], Optional[Tuple[str, Any]], Optional[Rejection]]:
     """Parse one text condition and classify it.
 
@@ -508,7 +724,7 @@ def _classify_text_condition(
     :func:`check_verb_feasibility` share the same parse-and-classify
     semantics.
     """
-    expr = _parse_condition(cond.text, vars_, profile=profile)
+    expr = _parse_condition(cond.text, vars_, profile=profile, anon_map=anon_map)
     if isinstance(expr, Rejection):
         _get_logger().debug(
             f"smt_path_validator: rejected {cond.text!r} ({expr.kind.value}: {expr.detail})"
@@ -539,6 +755,9 @@ def _solve_pending(
     unknown_reasons: List[Rejection],
     *,
     profile: BVProfile,
+    anon_map: Optional[Dict[str, str]] = None,
+    prefer_witness: Optional[Tuple[str, str]] = None,
+    vars_: Optional[Dict[str, Any]] = None,
 ) -> PathSMTResult:
     """Run the solver over pending predicates and produce a verdict.
 
@@ -547,8 +766,41 @@ def _solve_pending(
     each input as tautology/pending/unknown; this function turns the
     pending list into a sat/unsat/unknown verdict and packages the
     result.
+
+    When ``prefer_witness`` is set, ``solver`` is expected to be a
+    ``z3.Optimize`` instance (the caller is responsible for the
+    backend swap).  This function then adds the appropriate
+    ``maximize`` or ``minimize`` objective for the named variable.
+    ``vars_`` carries the parser's interned BitVec table so the
+    objective lookup uses the same variable instance the predicates
+    were built against — name collisions in z3's hash-cons would
+    otherwise produce an objective on a freshly-minted variable
+    decoupled from the path.
     """
     mode = profile.describe()
+
+    # Apply the witness-direction objective before solving.  Silently
+    # skip if the named variable doesn't appear in the parsed
+    # conditions — the caller can spot this by inspecting `model` to
+    # confirm the variable is present, and the unsat-core /
+    # smallest-model behaviour still produces a valid (just not
+    # extremal) witness.
+    if prefer_witness is not None and pending and vars_ is not None:
+        var_name, direction = prefer_witness
+        target = vars_.get(var_name)
+        if target is not None:
+            if direction == "max":
+                solver.maximize(target)
+            elif direction == "min":
+                solver.minimize(target)
+            # Any other direction value is silently ignored — the
+            # caller's API (validate_path / shim) is responsible for
+            # vetting; defensive ignore avoids partial-objective
+            # state if a stray string gets here.
+
+    # Default to empty dict so the field is always present on the
+    # PathSMTResult — downstream consumers never need to None-check.
+    _anon_map = anon_map or {}
 
     if not pending:
         if unknown:
@@ -561,6 +813,7 @@ def _solve_pending(
                     f"indeterminate ({mode}): {len(satisfied)} trivially satisfied, "
                     f"{len(unknown)} unparseable — LLM analysis required"
                 ),
+                anon_var_map=_anon_map,
             )
         return PathSMTResult(
             feasible=True,
@@ -568,6 +821,7 @@ def _solve_pending(
             unknown_reasons=[],
             model={}, smt_available=True,
             reasoning=f"all {len(satisfied)} condition(s) trivially satisfied ({mode})",
+            anon_var_map=_anon_map,
         )
 
     label_map = _track(solver, pending)
@@ -585,6 +839,7 @@ def _solve_pending(
                 + (f"; {len(satisfied)} trivially satisfied" if satisfied else "")
                 + (f"; {len(unknown)} unparsed" if unknown else "")
             ),
+            anon_var_map=_anon_map,
         )
 
     if result == z3.unsat:
@@ -599,6 +854,7 @@ def _solve_pending(
             unknown_reasons=unknown_reasons,
             model={}, smt_available=True,
             reasoning=reasoning,
+            anon_var_map=_anon_map,
         )
 
     # z3.unknown — timeout or outside decidable fragment.
@@ -624,6 +880,7 @@ def _solve_pending(
         unknown_reasons=unknown_reasons + pending_reasons,
         model={}, smt_available=True,
         reasoning=f"Z3 returned unknown ({mode}) — {detail}",
+        anon_var_map=_anon_map,
     )
 
 
@@ -725,6 +982,8 @@ def check_path_feasibility(
     conditions: List[PathCondition],
     *,
     profile: BVProfile = BV_C_UINT64,
+    timeout_ms: Optional[int] = None,
+    prefer_witness: Optional[Tuple[str, str]] = None,
 ) -> PathSMTResult:
     """
     Check whether a set of path conditions are jointly satisfiable.
@@ -739,6 +998,20 @@ def check_path_feasibility(
                     rendering.  Defaults to BV_C_UINT64 (64-bit unsigned).
                     Use BV_C_UINT32 for CWE-190 32-bit wraparound paths;
                     BV_C_INT32 for signed-integer path conditions; etc.
+        prefer_witness: When set to ``(var_name, "max")`` or
+                    ``(var_name, "min")``, drive the satisfying witness
+                    toward an extreme value of ``var_name`` instead of
+                    Z3's default (smallest model).  Useful for CWE-190
+                    wraparound and similar bug classes where the
+                    *exploit* witness lives at the high end of a
+                    variable's domain — without ``prefer_witness`` Z3
+                    typically returns the trivial ``var=0`` model that
+                    technically satisfies the path but isn't a useful
+                    PoC seed.  When the named variable is absent from
+                    the parsed conditions (e.g. caller mistake or
+                    rejected via parser fall-through) the objective is
+                    silently skipped and the witness reverts to the
+                    default smallest-model behaviour.
 
     Returns:
         PathSMTResult.  feasible=None when Z3 is unavailable or every
@@ -756,6 +1029,37 @@ def check_path_feasibility(
             reasoning="z3 not available — install z3-solver for path feasibility analysis",
         )
 
+    # Hard cap on number of conditions per call.  Caller mistakes
+    # (malformed upstream extraction, accidental amplification) can
+    # flood the parser with tens of thousands of items.  Refuse the
+    # whole call cleanly so partial parser progress isn't misread as
+    # an authoritative feasibility verdict.
+    if len(conditions) > _MAX_CONDITIONS_PER_CALL:
+        cap_reason = Rejection(
+            text="",
+            kind=RejectionKind.TOO_MANY_CONDITIONS,
+            detail=(
+                f"{len(conditions)} conditions exceeds per-call cap "
+                f"{_MAX_CONDITIONS_PER_CALL}"
+            ),
+            hint=(
+                "split the path into smaller condition batches or "
+                "deduplicate before calling check_path_feasibility"
+            ),
+        )
+        return PathSMTResult(
+            feasible=None,
+            satisfied=[], unsatisfied=[],
+            unknown=[c.text for c in conditions],
+            unknown_reasons=[cap_reason],
+            model={}, smt_available=True,
+            reasoning=(
+                f"refused: {len(conditions)} conditions exceeds the per-call "
+                f"cap of {_MAX_CONDITIONS_PER_CALL} — caller should split or "
+                f"deduplicate before retrying"
+            ),
+        )
+
     if not conditions:
         return PathSMTResult(
             feasible=True,
@@ -766,7 +1070,34 @@ def check_path_feasibility(
         )
 
     vars_: Dict[str, Any] = {}
-    solver = _new_solver()
+    # Per-call timeout override. Default to the substrate's
+    # DEFAULT_TIMEOUT_MS (5s). Callers that know their CWE-class
+    # solving-cost profile (CWE-190 wraparound is fast; CWE-787
+    # OOB with complex array indexing may need longer) can pass
+    # a tuned value via _tier4_smt_refine or the libexec shims.
+    #
+    # When prefer_witness is set, swap z3.Solver for z3.Optimize so
+    # we can drive the witness toward a maximal/minimal value of a
+    # named variable.  Optimize shares the entire Solver interface
+    # (add/check/model/push/pop/assert_and_track/unsat_core) so the
+    # rest of the encoder is agnostic to which backend is in use.
+    if prefer_witness is not None:
+        solver = (
+            _new_optimizer(timeout_ms) if timeout_ms is not None
+            else _new_optimizer()
+        )
+    else:
+        solver = (
+            _new_solver(timeout_ms) if timeout_ms is not None
+            else _new_solver()
+        )
+    # Per-check anon-var mapping. Populated by `_substitute_calls`
+    # as it allocates `_anon_N` placeholders for function-call
+    # subterms; threaded into the PathSMTResult so downstream
+    # consumers (witness PoC seed renderer) can show meaningful
+    # labels like `_anon_0 (= strlen(argv[1])) = 32` instead of
+    # bare `_anon_0 = 32`.
+    anon_map: Dict[str, str] = {}
 
     satisfied: List[str] = []
     unknown: List[str] = []
@@ -775,7 +1106,7 @@ def check_path_feasibility(
 
     for cond in conditions:
         sat_display, pending_pair, rejection = _classify_text_condition(
-            cond, vars_, solver, profile=profile,
+            cond, vars_, solver, profile=profile, anon_map=anon_map,
         )
         if sat_display is not None:
             satisfied.append(sat_display)
@@ -787,5 +1118,7 @@ def check_path_feasibility(
             pending.append(pending_pair)
 
     return _solve_pending(
-        pending, solver, satisfied, unknown, unknown_reasons, profile=profile,
+        pending, solver, satisfied, unknown, unknown_reasons,
+        profile=profile, anon_map=anon_map,
+        prefer_witness=prefer_witness, vars_=vars_,
     )

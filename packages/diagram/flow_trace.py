@@ -38,15 +38,35 @@ def _step_label(step: dict[str, Any]) -> str:
 
 def _parse_file_line(loc: str) -> tuple[str | None, int]:
     """Parse 'path/to/file.py:42' into ('path/to/file.py', 42).
-    Returns (None, 0) if the string doesn't match the pattern."""
+    Returns (None, 0) if the string doesn't match the pattern.
+
+    Validate path-shape on the file portion. Pre-fix
+    `parts[0]` was returned without checking — input like
+    `:42` (empty path), `   :42` (whitespace path), or
+    `a:b:c:42` (after `rsplit(":", 1)` the path part still
+    contains `:`) was returned as a "file path" that
+    downstream consumers (file matching, branch attachment)
+    couldn't sensibly compare against real step file paths,
+    causing matching to silently miss legitimate
+    correspondences.
+    """
     if not loc:
         return None, 0
     parts = loc.rsplit(":", 1)
     if len(parts) == 2:
         try:
-            return parts[0], int(parts[1])
+            line_num = int(parts[1])
         except ValueError:
-            pass
+            return None, 0
+        file_part = parts[0].strip()
+        # Reject empty / whitespace-only / clearly-non-path
+        # results. A legitimate path can contain `:` (Windows
+        # drive letters, time-prefixed log lines that someone
+        # mistakenly passed through here), so we don't reject
+        # those — we just require non-empty after strip.
+        if not file_part:
+            return None, 0
+        return file_part, line_num
     return None, 0
 
 
@@ -73,8 +93,28 @@ def generate(data: dict[str, Any]) -> str:
     trace_id = data.get("id", "TRACE")
     name = _sanitize(data.get("name", trace_id))
     steps = data.get("steps", [])
+    # Cap step count. Pre-fix `steps` was used unbounded;
+    # legitimate large traces (deep call chains in
+    # generated code, recursive analyses) produced
+    # massive Mermaid diagrams that:
+    #   * Took 10+ seconds to render in browsers, blocking
+    #     the operator UI thread.
+    #   * Hit Mermaid's own internal node-count limits and
+    #     produced cryptic "diagram too complex" errors.
+    #   * Exceeded markdown-rendering tools' size budgets,
+    #     causing reports to silently truncate at the
+    #     wrong place.
+    # 200 steps is the largest size that renders cleanly in
+    # mainstream Mermaid setups. Cap with a clear annotation
+    # in the diagram so the operator knows WHY truncation
+    # happened.
+    _MAX_STEPS = 200
+    truncated_count = 0
+    if len(steps) > _MAX_STEPS:
+        truncated_count = len(steps) - _MAX_STEPS
+        steps = steps[:_MAX_STEPS]
     branches = data.get("branches", [])
-    attacker_control = data.get("attacker_control", {})
+    attacker_control = data.get("attacker_control") or {}
 
 
     if not steps:
@@ -86,13 +126,38 @@ def generate(data: dict[str, Any]) -> str:
     lines.append("")
 
     node_ids: list[str] = ["TITLE"]
+    # Stable per-step ID map so subsequent _step_node_id calls
+    # (branch attachment, class-list assembly) reuse the SAME id
+    # this loop assigned. Pre-fix the later call sites used the
+    # default `fallback="?"`, so when two steps both lacked an
+    # explicit `step` field, BOTH got id "S?" — Mermaid collapsed
+    # them into one graphical node, losing the visual
+    # distinction between them. Keying by `id(step)` gives a
+    # process-stable handle that's unique per step object
+    # within this call's `steps` list.
+    step_id_map: dict[int, str] = {}
 
     for step in steps:
         nid = _step_node_id(step, len(node_ids))
+        # Disambiguate when the per-step `step` field is missing
+        # or duplicated across multiple steps. Suffix with the
+        # 1-based index ensures every step gets a unique node
+        # id even if `step` field collides.
+        if nid in node_ids:
+            nid = f"{nid}_{len(node_ids)}"
+        step_id_map[id(step)] = nid
         label = _step_label(step)
         open_ch, close_ch = _step_node_shape(step)
         lines.append(f'    {nid}{open_ch}"{label}"{close_ch}')
         node_ids.append(nid)
+
+    def _stable_id(step: dict[str, Any]) -> str:
+        """Return the id this loop assigned, falling back to
+        derivation for callers that pass a step dict not in
+        `steps` (defensive — shouldn't happen, but the fallback
+        keeps us correctness-equivalent to pre-fix in that
+        edge case)."""
+        return step_id_map.get(id(step), _step_node_id(step))
 
     # Main chain edges
     lines.append("")
@@ -126,7 +191,7 @@ def generate(data: dict[str, Any]) -> str:
                 call_site = step.get("call_site", "") or ""
                 defn = step.get("definition", "") or ""
                 if branch_point_raw and (branch_point_raw in call_site or branch_point_raw in defn):
-                    lines.append(f"    {_step_node_id(step)} -. \"branch\" .-> {bid}")
+                    lines.append(f"    {_stable_id(step)} -. \"branch\" .-> {bid}")
                     attached = True
                     break
 
@@ -150,7 +215,7 @@ def generate(data: dict[str, Any]) -> str:
                                 best_dist = dist
                                 best_step = step
                     if best_step is not None:
-                        lines.append(f"    {_step_node_id(best_step)} -. \"branch\" .-> {bid}")
+                        lines.append(f"    {_stable_id(best_step)} -. \"branch\" .-> {bid}")
                         attached = True
 
             # --- pass 3: attach to first real step ---
@@ -167,9 +232,9 @@ def generate(data: dict[str, Any]) -> str:
         lines.append("    style CTRL fill:#fef9c3,stroke:#ca8a04")
 
     # Style: entry=blue, sink=red, call=default
-    entry_ids = ",".join(_step_node_id(s) for s in steps if s.get("type") == "entry")
-    sink_ids = ",".join(_step_node_id(s) for s in steps if s.get("type") == "sink")
-    sanitize_ids = ",".join(_step_node_id(s) for s in steps if s.get("type") == "sanitize")
+    entry_ids = ",".join(_stable_id(s) for s in steps if s.get("type") == "entry")
+    sink_ids = ",".join(_stable_id(s) for s in steps if s.get("type") == "sink")
+    sanitize_ids = ",".join(_stable_id(s) for s in steps if s.get("type") == "sanitize")
 
     lines.append("")
     lines.append("    classDef entry fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f")
@@ -181,6 +246,15 @@ def generate(data: dict[str, Any]) -> str:
         lines.append(f"    class {sink_ids} sink")
     if sanitize_ids:
         lines.append(f"    class {sanitize_ids} sanitize")
+
+    if truncated_count > 0:
+        lines.append("")
+        lines.append(
+            f'    TRUNC["⚠ Diagram truncated: '
+            f'{truncated_count} additional steps not shown '
+            f'(cap {_MAX_STEPS})"]'
+        )
+        lines.append("    style TRUNC fill:#fef9c3,stroke:#a16207")
 
     return "\n".join(lines)
 

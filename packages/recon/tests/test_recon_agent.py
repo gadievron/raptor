@@ -13,6 +13,45 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 from packages.recon.agent import inventory, get_out_dir
 
 
+# Session cwd anchor — the test file's parent's parent's parent
+# is the repo root, doesn't depend on cwd to compute, so safe
+# even when cwd has been invalidated by a prior test's tmp_path
+# cleanup.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+@pytest.fixture(autouse=True)
+def _restore_cwd():
+    """Module-wide autouse fixture: ensure each test starts and
+    ends with a valid cwd anchored at the repo root.
+
+    Pre-fix the only protection was an inline `os.chdir(repo_root)`
+    inside `test_defaults_to_out_subdirectory`. That test
+    happened to be the canary for "previous test's tmp_path
+    cleanup invalidated cwd" — the rest of the test class
+    was equally vulnerable, just less likely to fail because
+    they didn't try to introspect cwd. With pytest's
+    randomised test ordering or a different test-ordering
+    plugin, the bare bug could surface in any test.
+
+    Capture cwd before the test, restore (or fall back to
+    repo root) after — fires per-test so transient cwd
+    changes can't leak across the file.
+    """
+    try:
+        old = os.getcwd()
+    except FileNotFoundError:
+        old = str(_REPO_ROOT)
+        os.chdir(old)
+    try:
+        yield
+    finally:
+        try:
+            os.chdir(old)
+        except FileNotFoundError:
+            os.chdir(_REPO_ROOT)
+
+
 # ---------------------------------------------------------------------------
 # inventory()
 # ---------------------------------------------------------------------------

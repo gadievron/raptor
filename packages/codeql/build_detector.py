@@ -277,11 +277,53 @@ class BuildDetector:
 
             # Check for extension match (e.g., *.csproj)
             if build_file.startswith("."):
-                matches = list(self.repo_path.rglob(f"*{build_file}"))
+                # Sort matches for determinism. `rglob` returns
+                # filesystem-iteration order (varies between
+                # machines and even between runs on the same
+                # machine after FS metadata reordering); without
+                # sorting `matches[0].parent` was non-
+                # deterministic — repos with multiple .csproj /
+                # .sln / .gradle files picked DIFFERENT
+                # working_dirs across runs, producing different
+                # CodeQL DBs and different SARIF outputs for the
+                # same source. Sort by path string to pin the
+                # selection to "shallowest-then-alphabetical"
+                # which matches operator intuition for "primary"
+                # build root.
+                matches = sorted(
+                    self.repo_path.rglob(f"*{build_file}"),
+                    key=lambda p: (len(p.parts), str(p)),
+                )
                 if matches:
                     detected_files.append(build_file)
-                    # Use the directory of the first match
-                    working_dir = matches[0].parent
+                    # Use the directory of the first match WITH
+                    # containment + executability checks. Pre-fix
+                    # `working_dir = matches[0].parent` blindly
+                    # used the rglob result, which on Python <
+                    # 3.13 follows symlinks — a symlink in the
+                    # repo pointing OUT to e.g. /etc could land
+                    # us with `working_dir = /etc` which codeql
+                    # can't cd into and which leaks the
+                    # operator's filesystem layout into logs.
+                    # X_OK check refuses dirs we can't actually
+                    # browse into.
+                    candidate = matches[0].parent
+                    try:
+                        cand_resolved = candidate.resolve(strict=False)
+                        repo_resolved = self.repo_path.resolve(strict=False)
+                        cand_resolved.relative_to(repo_resolved)
+                        if os.access(candidate, os.X_OK):
+                            working_dir = candidate
+                        else:
+                            logger.debug(
+                                "Skipping working_dir %s — not browseable",
+                                candidate,
+                            )
+                    except (ValueError, OSError):
+                        logger.debug(
+                            "Skipping out-of-tree working_dir candidate %s",
+                            candidate,
+                        )
 
         if not detected_files:
             return None
@@ -381,8 +423,51 @@ class BuildDetector:
 
         validation_cmd = validation_commands.get(build_system.type)
         if not validation_cmd:
-            logger.debug(f"No validation command for {build_system.type}")
-            return True  # Assume it's OK if we can't validate
+            # Unknown build-tool type. Pre-fix we returned True
+            # ("Assume it's OK if we can't validate") — but the
+            # next caller-side step is `--build-command "<bs.cmd>"`
+            # against `codeql database create`, which spawns the
+            # tool and fails opaquely if it isn't installed. The
+            # operator sees a CodeQL extraction error two minutes
+            # into a database build, not a clear "tool missing"
+            # warning at validation time.
+            #
+            # Returning False here is the honest answer: we have
+            # no evidence the build will succeed. The caller's
+            # validation-failed branch logs and skips this
+            # language with a useful message; the optimistic-True
+            # branch silently let unbuildable matrix entries
+            # through.
+            #
+            # Still log at debug so legitimately-unknown tool
+            # types (e.g. obscure JVM build systems we haven't
+            # added probes for yet) leave a breadcrumb when
+            # operators report unexpected validation failures.
+            logger.debug(
+                "No validation command for %s; treating as "
+                "unvalidated (returning False) — add a probe "
+                "command to validation_commands above to opt in.",
+                build_system.type,
+            )
+            return False
+
+        # Pre-flight working_dir exists + is a directory. Pre-fix
+        # we passed `cwd=build_system.working_dir` directly to the
+        # subprocess; if the path was synthesised to a non-
+        # existent location (e.g. detection picked a build-system
+        # candidate whose parent was deleted between detection
+        # and validation, or a stale BuildSystem object was
+        # serialised across runs), Popen raised FileNotFoundError
+        # for the cwd — but the operator-visible error read as
+        # "build tool not found", confusing the diagnosis. Check
+        # explicitly so the warning identifies the actual issue.
+        wd = Path(build_system.working_dir) if build_system.working_dir else None
+        if wd is not None and not wd.is_dir():
+            logger.warning(
+                "✗ %s validation skipped: working_dir %r doesn't exist",
+                build_system.type, str(wd),
+            )
+            return False
 
         try:
             result = _run_trusted(  # --version checks only
@@ -416,7 +501,20 @@ class BuildDetector:
     # Note: -I/ (root include) is technically allowed — file permissions are
     # the protection. CodeQL's --source-root prevents system headers from
     # being indexed as project code.
-    _SAFE_FLAG_TOKEN = re.compile(r'^-?[A-Za-z0-9._/+=-]+$')
+    # Pre-fix this used `^...$`. Python regex `$` matches end-of-
+    # string OR just-before-a-trailing-newline, so a flag token
+    # `-DEVIL=$(rm -rf $HOME)\n` passed validation: the trailing
+    # `\n` was eaten by `$`. The safe-flag token then flowed into
+    # the build script as `-DEVIL=$(rm -rf $HOME)` (the newline
+    # got stripped) — and even more dangerously, in some
+    # contexts the embedded `\n` carried through to subprocess
+    # arg lists, where the next process's argv parser saw two
+    # arguments: the flag plus whatever followed the newline.
+    #
+    # Use `\A...\Z` for unambiguous string-boundary anchors:
+    # `\Z` doesn't accept the trailing newline, so the
+    # injection-shaped flag is correctly rejected.
+    _SAFE_FLAG_TOKEN = re.compile(r'\A-?[A-Za-z0-9._/+=-]+\Z')
 
     def _validate_flags(self, flags: list) -> list:
         """Validate and normalise compiler flags.
@@ -452,7 +550,31 @@ class BuildDetector:
 
         Returns None for unsupported languages or no source files.
         """
-        if language not in self.COMPILED_LANGUAGES or language not in ("cpp", "java"):
+        # Pre-fix:
+        #   if language not in self.COMPILED_LANGUAGES or language not in ("cpp", "java"):
+        #       return None
+        # COMPILED_LANGUAGES contains 5 entries (cpp, java,
+        # csharp, swift, rust), but the second `or` clause
+        # narrows the gate to ("cpp", "java"). With `or`, the
+        # condition is True (and we return None) whenever EITHER
+        # check trips — and the ("cpp", "java") tuple is strictly
+        # narrower than COMPILED_LANGUAGES, so the first check
+        # never independently rejects anything the second check
+        # accepts. The COMPILED_LANGUAGES test is dead.
+        #
+        # Worse, the dead check misleads readers: it suggests
+        # synthesise_build_command supports the full
+        # COMPILED_LANGUAGES set when in fact it gates on the
+        # narrow 2-language tuple. The synthesiser body assumes
+        # cpp/java only (compiler detection in
+        # _detect_build_params, .java vs .cpp source-file
+        # filtering); enabling csharp/swift/rust here would just
+        # produce empty source_files and return None one branch
+        # later — but the misleading first check made it look
+        # like the function had broader scope.
+        #
+        # Replace with the single, honest gate.
+        if language not in ("cpp", "java"):
             return None
 
         source_files, compiler, include_flags, define_flags = self._detect_build_params(language)
@@ -503,8 +625,16 @@ class BuildDetector:
         build_type = "synthesised"
         confidence = 0.7
 
-        # If heuristic has failures, try CC for better flags
-        if failures:
+        # `failures is None` → dry-run never ran (script crashed,
+        # sandbox-launch failed, timeout). We can't measure
+        # whether the heuristic flags work, so don't attempt a
+        # CC-suggest retry (the second dry-run would fail the same
+        # way and waste budget).
+        if failures is None:
+            logger.warning(
+                "  Dry-run didn't execute — using heuristic flags without measurement",
+            )
+        elif failures:
             heuristic_ok = len(source_files) - len(failures)
             logger.info(f"  Dry-run: {heuristic_ok}/{len(source_files)} compiled, {len(failures)} failed")
 
@@ -516,12 +646,15 @@ class BuildDetector:
                     define_flags + cc_flags.get("defines", []),
                 )
                 cc_failures = self._dry_run(script_path, language=language)
-                cc_ok = len(source_files) - len(cc_failures)
-                if cc_ok > heuristic_ok:
-                    logger.info(f"  CC improved: {heuristic_ok} → {cc_ok} compiled")
-                    build_type = "synthesised-cc"
+                if cc_failures is None:
+                    logger.info("  CC retry didn't run — keeping heuristic")
                 else:
-                    logger.info("  CC didn't improve, using heuristic")
+                    cc_ok = len(source_files) - len(cc_failures)
+                    if cc_ok > heuristic_ok:
+                        logger.info(f"  CC improved: {heuristic_ok} → {cc_ok} compiled")
+                        build_type = "synthesised-cc"
+                    else:
+                        logger.info("  CC didn't improve, using heuristic")
                     self._write_build_script(
                         script_path, build_dir,
                         source_files, compiler, include_flags, define_flags,
@@ -644,6 +777,40 @@ Tolerates individual compilation failures.
 """
 import os, subprocess, sys
 
+# Strip dynamic-loader injection vars from the env we pass to each
+# compile subprocess. CodeQL's tracer wraps the build script with
+# its own preload library to capture compiler invocations; the
+# script itself shouldn't FORWARD a parent's LD_PRELOAD /
+# LD_LIBRARY_PATH / DYLD_* / PYTHONPATH (or other code-injection
+# vars) to gcc/javac, which would then attach attacker code at
+# every compile step. Build a one-shot scrubbed env here; reuse
+# across the per-file loop.
+_SCRUB_ENV_VARS = (
+    "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT",
+    "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH",
+    "PYTHONPATH", "PYTHONSTARTUP",
+    "BASH_ENV", "ENV",
+    "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS",
+)
+# Pre-fix the script scrubbed _SCRUB_ENV_VARS only from the env
+# passed to gcc/javac subprocesses (`_BUILD_ENV` below). The script
+# ITSELF (this python3 process) inherited the parent's full env —
+# so an attacker who could plant `LD_PRELOAD=/tmp/evil.so` in the
+# parent (a poisoned `.envrc` in the target repo, an operator's
+# config that set it for unrelated reasons) attached attacker code
+# to the python3 interpreter running the build script. The
+# subsequent `os.environ.items()` iteration would then capture the
+# tainted env even with the scrub above (because the script's own
+# state was already compromised). Defang at script entry by
+# popping the scrub vars from `os.environ` BEFORE building
+# `_BUILD_ENV`. The python3 interpreter's already-loaded preload
+# can't be unloaded mid-run, but removing the env var means any
+# subprocesses (including subprocess.run / Popen calls below)
+# don't re-inherit the preload chain.
+for _v in _SCRUB_ENV_VARS:
+    os.environ.pop(_v, None)
+_BUILD_ENV = {{k: v for k, v in os.environ.items() if k not in _SCRUB_ENV_VARS}}
+
 COMPILER = {compiler!r}
 FLAGS = {(include_flags + define_flags)!r}
 BUILD_DIR = {str(build_dir)!r}
@@ -686,12 +853,73 @@ for i, src in enumerate(FILES):
             created_dirs.add(obj_dir)
         cmd = [COMPILER, "-w"] + FLAGS + ["-c", src, "-o", obj]
 
-    result = subprocess.run(cmd, stderr=subprocess.PIPE)
-    if result.returncode == 0:
+    # Per-compile stderr cap. Pre-fix `stderr=subprocess.PIPE`
+    # buffered the full stderr stream into the parent before
+    # returning — for C++ template-instantiation errors a
+    # SINGLE source file can produce tens of MB of stderr.
+    # Across hundreds of source files in a target, the script's
+    # RSS grew unbounded. Operators saw the build script
+    # OOM-killed mid-pass.
+    #
+    # Use Popen + bounded read(N) so each compile's stderr is
+    # capped at 256 KB — enough for a useful diagnostic
+    # excerpt, hard upper bound. Drain remaining bytes via
+    # /dev/null so the child can finish without SIGPIPE.
+    proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, env=_BUILD_ENV)
+    _STDERR_CAP = 256 * 1024
+    captured = b""
+    if proc.stderr is not None:
+        captured = proc.stderr.read(_STDERR_CAP)
+        # Drain any remainder so the child unblocks on its
+        # next stderr write rather than hanging on a full
+        # pipe buffer (PIPE_BUF is 64 KB on Linux; without
+        # the drain, a child writing > 256 KB sleeps in
+        # write(2) waiting for a reader).
+        while proc.stderr.read(64 * 1024):
+            pass
+    # Per-file compile timeout. Pre-fix `proc.wait()` had no
+    # bound — a runaway compile (gcc on a pathological template
+    # instantiation, javac on infinite annotation processing,
+    # deliberately slow input from an untrusted target) hung
+    # the whole build script forever. CodeQL DB build then
+    # blocked indefinitely with no progress signal.
+    # 120s is comfortably above any legitimate single-file
+    # compile (the slowest C++ template compiles in real
+    # codebases run ~30s); a hung compile gets killed and
+    # counted as a failure so the rest of the pass continues.
+    _COMPILE_TIMEOUT_S = 120
+    try:
+        proc.wait(timeout=_COMPILE_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        fail += 1
+        sys.stderr.buffer.write(
+            f"\\n[compile timeout {{_COMPILE_TIMEOUT_S}}s on {{src!r}}]\\n".encode()
+        )
+        continue
+    if proc.returncode == 0:
         ok += 1
     else:
         fail += 1
-        sys.stderr.buffer.write(result.stderr)
+        sys.stderr.buffer.write(captured)
+        if proc.stderr is not None and len(captured) >= _STDERR_CAP:
+            sys.stderr.buffer.write(
+                # Doubled braces escape in the OUTER template so the
+                # generated script gets a literal brace pair (runtime
+                # f-string reference to the script-local _STDERR_CAP),
+                # NOT an outer-scope substitution. Pre-fix the single
+                # braces let the OUTER f-string evaluate _STDERR_CAP
+                # at template-generation time, which raised NameError
+                # because _STDERR_CAP only exists in the GENERATED
+                # script scope. (Note: keep this comment free of
+                # triple-quotes — the outer template uses triple
+                # single-quotes.)
+                f"\\n[truncated to first {{_STDERR_CAP // 1024}} KB]\\n".encode()
+            )
 
 print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
 ''')
@@ -700,8 +928,24 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
         script_path.chmod(0o500)
         return script_path
 
-    def _dry_run(self, script_path, language: Optional[str] = None) -> list:
+    def _dry_run(self, script_path, language: Optional[str] = None) -> Optional[list]:
         """Run the build script and return compilation failures.
+
+        Returns:
+          * ``list`` of failures (possibly empty) — script ran to
+            completion. `[]` means "ran successfully, no errors".
+          * ``None`` — script did NOT run at all (subprocess failed to
+            spawn, timeout, sandbox-launch error). Distinct from
+            "ran with zero failures" because the CC-flag-suggest path
+            (which kicks in `if failures:`) shouldn't fire when we
+            simply couldn't measure anything.
+
+        Pre-fix this returned `[]` for both cases. The caller's
+        `if failures:` then took the "no improvement needed" branch
+        when the script crashed at startup (interpreter mismatch,
+        sandbox eviction), silently degrading the synthesised-build
+        flow to "use heuristic flags" when the actual problem was
+        "we never compiled anything to know if the heuristic worked".
 
         `language` is used to pick the env vars the build tool expects
         — for Java synthesised builds we auto-detect JAVA_HOME and
@@ -721,20 +965,55 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
 
         try:
             repo_path = str(self.repo_path)
+            # tool_paths: best-guess bind set for the Python interpreter
+            # — its bin dir AND its stdlib dir at sys.prefix/lib/
+            # pythonX.Y/. Without the stdlib dir, Python would die at
+            # `import encodings` (exit 126, no stderr) — caught and
+            # retried as Landlock-only by context.py's speculative-C
+            # retry. Worst case = same isolation as not passing
+            # tool_paths at all.
+            import sysconfig
+            from pathlib import Path as _P
+            _tps = []
+            _interp_dir = str(_P(sys.executable).resolve().parent)
+            _platstdlib = sysconfig.get_paths().get("platstdlib")
+            for _p in (_interp_dir, _platstdlib):
+                if _p and _P(_p).is_absolute() \
+                        and not _p.startswith(("/usr/", "/lib/", "/lib64/")):
+                    _tps.append(_p)
             result = _sandbox_run(
                 [sys.executable, str(script_path)],
                 block_network=True,
                 target=repo_path, output=repo_path,
                 cwd=self.repo_path,
                 env=env,
+                tool_paths=_tps or None,
                 capture_output=True, text=True, timeout=300,
             )
-            # Script crash (not compilation failure) — treat as unknown
+            # Script crash (not compilation failure) — treat as
+            # "didn't actually run a build" via None sentinel, NOT
+            # `[]` ("ran with zero failures"). Pre-fix the empty
+            # list collapsed both cases and the CC-flag-suggest
+            # path silently skipped its retry attempt.
             if result.returncode != 0 and "Traceback" in result.stderr:
-                logger.warning(f"Build script crashed: {result.stderr.split(chr(10))[-2]}")
-                return []
-        except (subprocess.TimeoutExpired, Exception):
-            return []
+                # `[-2]` reaches the second-to-last line, but
+                # `result.stderr.split("\n")[-2]` raises IndexError
+                # if stderr has fewer than 2 lines (e.g. the script
+                # crashed before printing anything, or printed a
+                # single line without a trailing newline). Pre-fix
+                # the IndexError aborted the warning emission AND
+                # dropped through to the bare `except Exception`
+                # below, returning [] (now None) but with the
+                # operator-visible cause swallowed. Defensive
+                # slicing: take the last non-empty line, or the
+                # whole stderr if there's only one line.
+                stderr_lines = [l for l in (result.stderr or "").split("\n") if l.strip()]
+                tail = stderr_lines[-1] if stderr_lines else "(no stderr)"
+                logger.warning(f"Build script crashed: {tail}")
+                return None
+        except (subprocess.TimeoutExpired, Exception) as e:
+            logger.warning("Build script never ran (%r) — treating as 'didn't run'", e)
+            return None
 
         # Parse gcc/g++ errors from stderr
         failures = []
@@ -761,28 +1040,76 @@ print(f"Compiled {{ok}}/{{total}} files ({{fail}} failed)")
         claude_bin = _shutil.which("claude")
         if not claude_bin:
             return None
+        # Path allowlist for the resolved claude binary. `which` walks
+        # PATH, which an untrusted target repo could influence —
+        # `direnv`-style `.envrc`, a `pyproject.toml` build hook, or
+        # a Makefile that calls into the build_detector flow can
+        # prepend a malicious dir to PATH. The resolved absolute
+        # path must come from a known install location so an injected
+        # `claude` shim in the target repo doesn't get executed under
+        # CC's allowlisted-tool model.
+        try:
+            real_claude = os.path.realpath(claude_bin)
+        except OSError:
+            return None
+        allowed_prefixes = (
+            "/usr/local/bin/",
+            "/usr/bin/",
+            "/opt/",
+            os.path.expanduser("~/.local/bin/"),
+            os.path.expanduser("~/.npm-global/bin/"),
+            "/snap/",
+            "/home/linuxbrew/.linuxbrew/bin/",
+            "/opt/homebrew/bin/",
+        )
+        if not any(real_claude.startswith(p) for p in allowed_prefixes):
+            logger.info(
+                "  Skipping CC flag inference — `claude` resolves to %r "
+                "which is outside the install-location allowlist. "
+                "If this is a legitimate location, add it to "
+                "_cc_suggest_flags' `allowed_prefixes`.",
+                real_claude,
+            )
+            return None
 
         failure_sample = "\n".join(
             f"- {f['file']}: {f['error']}" for f in failures[:15]
         )
 
-        prompt = f"""I have a {language} project in {self.repo_path} with no build system.
-Compilation with {language == 'cpp' and 'gcc' or 'javac'} -w -c and auto-detected -I flags partially works,
-but {len(failures)} files fail.
+        from core.security.prompt_envelope import UntrustedBlock, build_prompt
+        from core.security.prompt_defense_profiles import CONSERVATIVE
 
-Sample errors:
-{failure_sample}
-
-Read the source files to understand what's needed. Then output ONLY a JSON
-object with two arrays — no other text:
-
-{{"includes": ["-Ipath1", "-Ipath2"], "defines": ["-DFOO", "-DBAR=1", "-include header.h"]}}
-
-Rules:
-- Only suggest -I, -D, -include, and -std flags
-- Do NOT invent #define values that aren't in the source
-- Paths should be relative to the project root
-"""
+        compiler = "gcc" if language == "cpp" else "javac"
+        system = (
+            f"I have a {language} project with no build system. "
+            f"Compilation with {compiler} -w -c and auto-detected -I flags "
+            f"partially works, but {len(failures)} files fail.\n\n"
+            "Read the source files to understand what's needed. Then output "
+            "ONLY a JSON object with two arrays — no other text:\n\n"
+            '{"includes": ["-Ipath1", "-Ipath2"], '
+            '"defines": ["-DFOO", "-DBAR=1", "-include header.h"]}\n\n'
+            "Rules:\n"
+            "- Only suggest -I, -D, -include, and -std flags\n"
+            "- Do NOT invent #define values that aren't in the source\n"
+            "- Paths should be relative to the project root"
+        )
+        bundle = build_prompt(
+            system=system,
+            profile=CONSERVATIVE,
+            untrusted_blocks=(
+                UntrustedBlock(
+                    content=str(self.repo_path),
+                    kind="project_path",
+                    origin="build_detector",
+                ),
+                UntrustedBlock(
+                    content=failure_sample,
+                    kind="compiler_errors",
+                    origin="build_detector",
+                ),
+            ),
+        )
+        prompt = next(m.content for m in bundle.messages if m.role == "user")
 
         from core.security.cc_trust import check_repo_claude_trust
         if check_repo_claude_trust(str(self.repo_path)):
@@ -793,51 +1120,107 @@ Rules:
 
         try:
             logger.info("  Asking Claude Code for additional compiler flags...")
-            # Route through the RAPTOR-local egress proxy: hostname
-            # allowlist pins outbound to api.anthropic.com only, seccomp
-            # blocks UDP (no DNS exfil), proxy event log captures every
-            # CONNECT attempt in sandbox_info["proxy_events"].
+            from core.llm.cc_adapter import CCDispatchConfig, build_cc_command, strip_json_fences
+            config = CCDispatchConfig(
+                claude_bin=claude_bin,
+                tools="Read,Grep,Glob",
+                add_dirs=(str(self.repo_path),),
+                budget_usd="2.00",
+                timeout_s=180,
+                capture_json_envelope=False,
+            )
             repo_path = str(self.repo_path)
+            # Route hostname allowlist through cc_proxy_hosts so this
+            # site picks up the same calibrate-aware policy as
+            # cc_dispatch's main entry point — operator override,
+            # calibrated SandboxProfile, then provider-aware fallback.
+            # Pre-migration this hardcoded ``api.anthropic.com``,
+            # which silently broke Bedrock / Vertex / Azure /
+            # custom-endpoint setups. The downstream client is
+            # ``claude`` either way, so the policy is identical.
+            from core.llm.cc_proxy_hosts import proxy_hosts_for_cc_dispatch
             result = _sandbox_run(
-                [claude_bin, "-p",
-                 "--no-session-persistence",
-                 "--allowed-tools", "Read,Grep,Glob",
-                 "--add-dir", str(self.repo_path),
-                 "--max-budget-usd", "2.00"],
+                build_cc_command(config),
                 target=repo_path, output=repo_path,
                 use_egress_proxy=True,
-                proxy_hosts=["api.anthropic.com"],
+                proxy_hosts=proxy_hosts_for_cc_dispatch(claude_bin),
                 caller_label="codeql-build-detect",
                 input=prompt, capture_output=True, text=True, timeout=180,
             )
             if result.returncode != 0 or not result.stdout.strip():
                 return None
 
-            content = result.stdout.strip()
-            if "```" in content:
-                parts = content.split("```")
-                for part in parts[1::2]:
-                    lines = part.strip().split("\n", 1)
-                    candidate = lines[1].strip() if len(lines) > 1 else part.strip()
-                    if "{" in candidate:
-                        content = candidate
-                        break
+            # Cap JSON parse input. Pre-fix `result.stdout` could be
+            # arbitrarily large (CC model hallucinates and emits MB
+            # of "JSON"; CC subprocess could be tricked into echoing
+            # a large file via Read+output); json.loads would gladly
+            # consume the entire blob, allocating proportional
+            # memory + serialising it through the parser. The
+            # genuine response shape — `{"includes": [...],
+            # "defines": [...]}` with maybe 50 entries each at
+            # <100 chars — comfortably fits in 100KB. Anything
+            # larger is hallucination or attack.
+            _CC_JSON_MAX_BYTES = 100 * 1024
+            stdout = result.stdout.strip()
+            if len(stdout) > _CC_JSON_MAX_BYTES:
+                logger.warning(
+                    "CC suggest-flags output exceeded %d bytes (%d) — rejecting",
+                    _CC_JSON_MAX_BYTES, len(stdout),
+                )
+                return None
+            content = strip_json_fences(stdout)
 
             import json
             try:
-                # Try strict parse first (entire content is JSON)
                 data = json.loads(content)
             except json.JSONDecodeError:
-                # Fallback: find first { and try to parse from there
-                try:
-                    idx = content.index("{")
-                    data = json.loads(content[idx:])
-                except (ValueError, json.JSONDecodeError):
-                    logger.debug("CC output wasn't valid JSON")
+                # Recover by scanning forward through `{` positions and
+                # picking the FIRST one whose tail JSON-parses cleanly.
+                # Pre-fix `idx = content.index("{")` always picked the
+                # first `{` — but LLM prose with embedded `{` glyphs
+                # ("the function takes { foo, bar } as params, here is
+                # the JSON: {valid}") parsed from the wrong position
+                # and silently dropped the real answer. Bound the
+                # scan at 16 attempts so a CC output full of literal
+                # `{` glyphs (a list of code samples) doesn't burn
+                # measurable wallclock retrying.
+                data = None
+                _attempts = 0
+                _start = 0
+                while _attempts < 16:
+                    idx = content.find("{", _start)
+                    if idx < 0:
+                        break
+                    try:
+                        data = json.loads(content[idx:])
+                        break
+                    except (ValueError, json.JSONDecodeError):
+                        _start = idx + 1
+                        _attempts += 1
+                if data is None:
+                    logger.debug(
+                        "CC output wasn't valid JSON after %d brace probes",
+                        _attempts,
+                    )
                     return None
 
-            includes = self._validate_flags(data.get("includes", []))
-            defines = self._validate_flags(data.get("defines", []))
+            # Pre-fix `data.get("includes", [])` returned the
+            # default `[]` only when the key was MISSING. If the
+            # CC LLM emitted `{"includes": null, "defines": null}`
+            # (common when the model thought "no useful suggestion"
+            # and serialised null instead of an empty array), the
+            # `.get("includes", [])` returned None, and
+            # `_validate_flags(None)` crashed with `TypeError:
+            # 'NoneType' object is not iterable`. Coerce explicit
+            # null to [] in addition to the missing-key default.
+            #
+            # Real failure mode: a quiet json-from-CC failure
+            # turned into a Python traceback aborting the whole
+            # heuristic-build flow, where the right behaviour is
+            # to log "no flags suggested" and proceed with the
+            # base build.
+            includes = self._validate_flags(data.get("includes") or [])
+            defines = self._validate_flags(data.get("defines") or [])
 
             if includes or defines:
                 logger.info(f"  CC suggested {len(includes)} includes, {len(defines)} defines")

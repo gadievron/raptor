@@ -36,16 +36,16 @@ except IndexError:
 from core.security.cc_trust import (
     check_repo_claude_trust,
     set_trust_override,
-    _check_cached,
+    _scan_cached,
 )
 
 
 @pytest.fixture(autouse=True)
 def _clear_trust_cache():
     """Fresh cache per test so prints happen deterministically."""
-    _check_cached.cache_clear()
+    _scan_cached.cache_clear()
     yield
-    _check_cached.cache_clear()
+    _scan_cached.cache_clear()
 
 
 @pytest.fixture(autouse=True)
@@ -181,12 +181,24 @@ class TestHooks:
         "not-a-dict", 42, None, [], {"Event": "not-a-list"}, {"Event": [None]},
         {"Event": [{"hooks": "not-a-list"}]},
         {"Event": [{"hooks": [None]}]},
-        {"Event": [{"hooks": [{"type": "notification"}]}]},  # non-command type
     ])
     def test_malformed_hooks_do_not_false_positive(self, tmp_path, hooks_value):
         claude = tmp_path / ".claude"; claude.mkdir()
         (claude / "settings.json").write_text(json.dumps({"hooks": hooks_value}))
         assert _check(str(tmp_path)) is False
+
+    def test_unknown_hook_type_blocks(self, tmp_path, capsys):
+        # Fail-closed: any hook entry whose type we don't recognise is
+        # treated as dangerous. CC's hook spec is small today (just
+        # `command`), but a future addition or caller-supplied custom
+        # type must NOT slip past silently. Pre-fix `type=notification`
+        # / `type=plugin` / `type=script` were treated as benign.
+        claude = tmp_path / ".claude"; claude.mkdir()
+        (claude / "settings.json").write_text(json.dumps({
+            "hooks": {"Event": [{"hooks": [{"type": "notification"}]}]}
+        }))
+        assert _check(str(tmp_path)) is True
+        assert "unknown type" in capsys.readouterr().out
 
 
 class TestEnvInjection:
@@ -492,7 +504,13 @@ class TestTrustOverride:
 
 class TestCache:
 
-    def test_repeat_calls_print_once(self, tmp_path, capsys):
+    def test_repeat_calls_print_each_time(self, tmp_path, capsys):
+        # Pre-fix the print() side-effects lived inside @lru_cache,
+        # so repeated checks of the same repo silently returned the
+        # cached verdict — operators saw the warning once per process
+        # and missed it for every later finding triggered against the
+        # same repo. Now the scan is cached but the rendering runs
+        # every time, so each invocation produces visible output.
         claude = tmp_path / ".claude"; claude.mkdir()
         (claude / "settings.json").write_text(json.dumps({"apiKeyHelper": "x"}))
         _check(str(tmp_path))
@@ -500,7 +518,7 @@ class TestCache:
         _check(str(tmp_path))
         second = capsys.readouterr().out
         assert first != ""
-        assert second == ""
+        assert second == first
 
     def test_absolute_vs_relative_share_entry(self, tmp_path):
         (tmp_path / ".mcp.json").write_text(json.dumps({
@@ -508,7 +526,7 @@ class TestCache:
         }))
         _check(str(tmp_path))
         _check(str(tmp_path / "." / ""))
-        assert _check_cached.cache_info().hits >= 1
+        assert _scan_cached.cache_info().hits >= 1
 
 
 class TestRaptorSelfScan:

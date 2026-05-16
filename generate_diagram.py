@@ -15,6 +15,10 @@ import argparse
 import sys
 from pathlib import Path
 
+# generate_diagram.py -> repo root. Belt + braces against subprocess
+# invocation under a sandboxed env that strips PYTHONPATH.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -42,6 +46,14 @@ def main() -> int:
         default="all",
         dest="diagram_type",
         help="Which diagram type to generate (default: all).",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing diagram output files. Without this flag, "
+             "the command refuses to overwrite a pre-existing diagram-*.md "
+             "or diagrams.md so an operator's hand-edited diagram isn't "
+             "silently clobbered by a re-render.",
     )
 
     args = parser.parse_args()
@@ -93,6 +105,13 @@ def main() -> int:
             print(content)
         else:
             out_file = out_dir / f"diagram-{args.diagram_type}.md"
+            if out_file.exists() and not args.force:
+                print(
+                    f"error: {out_file} already exists. Pass --force to "
+                    f"overwrite, or --stdout to print without writing.",
+                    file=sys.stderr,
+                )
+                return 1
             out_file.write_text(content, encoding="utf-8")
             print(f"Written: {out_file}")
         return 0
@@ -104,6 +123,20 @@ def main() -> int:
         content = render_directory(out_dir, target=args.target)
         print(content)
     else:
+        # Pre-flight overwrite check before render_and_write does
+        # the actual write. The default `diagrams.md` is the
+        # canonical full-render output filename; if it already
+        # exists (operator hand-edited a previous render with their
+        # own annotations) the re-render would silently clobber.
+        # `--force` opts into the overwrite.
+        default_out = out_dir / "diagrams.md"
+        if default_out.exists() and not args.force:
+            print(
+                f"error: {default_out} already exists. Pass --force to "
+                f"overwrite, or --stdout to print without writing.",
+                file=sys.stderr,
+            )
+            return 1
         out_file = render_and_write(out_dir, target=args.target)
         print(f"Written: {out_file}")
 

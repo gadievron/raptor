@@ -118,7 +118,18 @@ class LanguageDetector:
         "__pycache__", ".pytest_cache", ".mypy_cache",
         "target", "build", "dist", "out", "bin", "obj",
         ".gradle", ".mvn", ".idea", ".vscode", ".vs",
-        "vendor", "packages", "bower_components",
+        "vendor", "bower_components",
+        # NOTE: `packages` was previously listed here but removed
+        # — many real user repos have a top-level `packages/`
+        # directory containing actual source (npm workspaces,
+        # Lerna monorepos, pnpm workspaces, custom Python
+        # multi-package layouts including RAPTOR itself). Pre-fix
+        # the language detector skipped them entirely, producing
+        # zero-language detection for monorepos and forcing
+        # operators to manually --language override. Remove
+        # from ignore set; rely on the more specific
+        # `node_modules` / `__pycache__` / `vendor` entries to
+        # exclude vendored content.
     }
 
     # Files to ignore
@@ -228,20 +239,30 @@ class LanguageDetector:
         return stats
 
     def _walk_repository(self):
-        """Walk repository while respecting ignore patterns."""
+        """Walk repository while respecting ignore patterns.
+
+        Uses `os.walk` with in-place `dirnames` pruning so we
+        DON'T descend into ignored directories. Pre-fix `rglob`
+        walked the entire tree first then post-filtered via `if
+        any(ignored in path.parts)` — for repos with
+        `node_modules` (millions of files), `__pycache__`, or
+        large `target/` builds, that meant enumerating those
+        files just to discard them, taking minutes on monorepos.
+        os.walk + dirnames-prune skips the descent entirely.
+        """
+        import os
         try:
-            for path in self.repo_path.rglob("*"):
-                # Skip ignored directories
-                if any(ignored in path.parts for ignored in self.IGNORE_DIRS):
-                    continue
-
-                # Skip ignored files
-                if path.name in self.IGNORE_FILES:
-                    continue
-
-                # Only process files
-                if path.is_file():
-                    yield path
+            for dirpath, dirnames, filenames in os.walk(
+                self.repo_path, followlinks=False,
+            ):
+                # In-place prune ignored dirs from descent.
+                dirnames[:] = [d for d in dirnames if d not in self.IGNORE_DIRS]
+                for name in filenames:
+                    if name in self.IGNORE_FILES:
+                        continue
+                    p = Path(dirpath) / name
+                    if p.is_file():
+                        yield p
         except PermissionError as e:
             logger.warning(f"Permission denied accessing: {e}")
 

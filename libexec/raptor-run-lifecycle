@@ -18,6 +18,18 @@ are handled by their respective tools.
 import sys
 from pathlib import Path
 
+# ─── trust-marker check (do not import; inline by design) ───
+import os
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.run.output import get_output_dir, TargetMismatchError
@@ -32,35 +44,59 @@ def main():
     action = sys.argv[1]
 
     if action == "start":
-        if len(sys.argv) < 3:
-            print("Usage: raptor-run-lifecycle start <command> --target <path> [--out <dir>]",
-                  file=sys.stderr)
-            sys.exit(1)
-        command = sys.argv[2]
-        target_path = None
-        explicit_out = None
-        i = 3
-        while i < len(sys.argv):
-            if sys.argv[i] == "--target" and i + 1 < len(sys.argv):
-                target_path = sys.argv[i + 1]
-                i += 2
-            elif sys.argv[i] == "--out" and i + 1 < len(sys.argv):
-                explicit_out = sys.argv[i + 1]
-                i += 2
-            elif not sys.argv[i].startswith("--"):
-                target_path = target_path or sys.argv[i]
-                i += 1
-            else:
-                i += 1
+        # Use argparse instead of the hand-rolled walker. Pre-fix the
+        # walker had three subtle gaps:
+        #
+        # 1. `--target` with no following value: the `i + 1 < len(sys.argv)`
+        #    guard kept target_path as None, then the else at the bottom
+        #    advanced i by 1 — but the operator's bug ("--target" at end,
+        #    no value) was silently swallowed. Argparse errors with a
+        #    clear "expected one argument" message at parse time.
+        # 2. `--target X positional_arg` ordering: walker accepted both
+        #    forms, but `positional_arg --target X` ALSO accepted and
+        #    used the positional first (then --target overrode), which
+        #    invited surprises about WHICH path actually won when the
+        #    operator was using both forms in scripts. Argparse
+        #    rejects unknown positional args by default — the operator
+        #    types one path either via flag or positional, not both.
+        # 3. Unknown flags (typo `--targt`) silently consumed by the
+        #    final else branch — operator's intended `--target` was
+        #    never set, target_path stayed None, downstream
+        #    `get_output_dir` ran without target context. Argparse
+        #    errors on unknown flags by default.
+        import argparse as _argparse
+        parser = _argparse.ArgumentParser(
+            prog="raptor-run-lifecycle start",
+            description="Start a run lifecycle for a RAPTOR command",
+        )
+        parser.add_argument("command", help="Command name (scan|agentic|...)")
+        parser.add_argument("positional_target", nargs="?", default=None,
+                            help="Target path (alternative to --target)")
+        parser.add_argument("--target", dest="target_flag", default=None,
+                            help="Target path (preferred form)")
+        parser.add_argument("--out", dest="explicit_out", default=None,
+                            help="Explicit output directory override")
+        # `sys.argv[2:]` so the `start` subcommand isn't re-parsed.
+        try:
+            args = parser.parse_args(sys.argv[2:])
+        except SystemExit:
+            # argparse already printed a clean usage message to stderr.
+            raise
+
+        # `--target` takes precedence over the positional form so a
+        # script that explicitly passes `--target X` always wins.
+        # Pre-fix the walker did "first one wins" via `or`, which is
+        # ordering-dependent.
+        target_path = args.target_flag or args.positional_target
 
         try:
-            out_dir = get_output_dir(command, target_path=target_path,
-                                     explicit_out=explicit_out)
+            out_dir = get_output_dir(args.command, target_path=target_path,
+                                     explicit_out=args.explicit_out)
         except TargetMismatchError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)
 
-        start_run(out_dir, command, target=target_path)
+        start_run(out_dir, args.command, target=target_path)
         print(f"OUTPUT_DIR={out_dir}")
 
     elif action == "complete":

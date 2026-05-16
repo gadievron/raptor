@@ -29,6 +29,7 @@ except ImportError:
     sys.exit(1)
 
 from core.sage.scripts._common import async_memory_exists
+from core.security.log_sanitisation import escape_nonprintable as _escape_nonprintable
 
 # Parallelism cap for SAGE proposes. CometBFT batches concurrent txs into
 # the same block, so N sequential rounds collapse to ~1-2 blocks wall time.
@@ -336,6 +337,17 @@ async def _register_one(
                     tags=[xref_tag],
                 )
 
+            # Status differentiates force-mode from cold-stores. With
+            # `--force`, role_exists / xref_exists were stomped to False
+            # above so the cold-store path always runs; pre-fix this
+            # came back as "stored" indistinguishable from a real first
+            # registration. Operators rerunning `--force` after an
+            # incident review need to see "this was already there, I
+            # just rewrote it" vs "this was net-new" — masking the
+            # difference made the success log useless for confirming
+            # whether the registry was actually missing entries.
+            if force:
+                return (name, "force-restored")
             if role_exists or xref_exists:
                 return (name, "partial")  # one half was already present
             return (name, "stored")
@@ -399,29 +411,57 @@ async def register_agents(sage_url: str, dry_run: bool = False, force: bool = Fa
         pass
 
     sem = asyncio.Semaphore(_PROPOSE_CONCURRENCY)
-    results = await asyncio.gather(
-        *(_register_one(client, agent, force, sem) for agent in RAPTOR_AGENTS)
+    # `return_exceptions=True` for batch robustness — see seed_sage's
+    # equivalent fix for the rationale. A single _register_one failure
+    # used to abort the rest, leaving the operator with a half-
+    # registered set and no visibility into which agents made it.
+    raw_results = await asyncio.gather(
+        *(_register_one(client, agent, force, sem) for agent in RAPTOR_AGENTS),
+        return_exceptions=True,
     )
+    results = []
+    for agent, r in zip(RAPTOR_AGENTS, raw_results):
+        if isinstance(r, BaseException):
+            name = getattr(agent, "name", str(agent))
+            results.append((name, f"failed: {type(r).__name__}: {r}"))
+        else:
+            results.append(r)
 
     stored = sum(1 for _, status in results if status == "stored")
+    force_restored = sum(1 for _, status in results if status == "force-restored")
     partial = sum(1 for _, status in results if status == "partial")
     skipped = sum(1 for _, status in results if status == "skipped")
     failed = [(name, status) for name, status in results if status.startswith("failed")]
 
+    # Escape non-printable bytes in `name` and `status` before
+    # printing — both fields can carry agent-supplied content
+    # (agent name from RAPTOR_AGENTS metadata, status text from
+    # the SAGE SDK exception's `str(e)`). Pre-fix a hostile or
+    # corrupted entry with embedded ANSI escape sequences could
+    # overwrite the operator's terminal display ("smuggle a
+    # successful-looking line over a real failure"). The terminal-
+    # safe form keeps the output reviewable without escaping
+    # surprises.
+    safe_name = lambda s: _escape_nonprintable(str(s))
     for name, status in results:
+        n = safe_name(name)
+        s = safe_name(status)
         if status == "stored":
-            print(f"  stored:  {name}")
+            print(f"  stored:         {n}")
+        elif status == "force-restored":
+            print(f"  force-restored: {n} (re-proposed under --force)")
         elif status == "partial":
-            print(f"  partial: {name} (filled in missing half from a prior partial run)")
+            print(f"  partial:        {n} (filled in missing half from a prior partial run)")
         elif status == "skipped":
-            print(f"  skipped: {name} (already registered)")
+            print(f"  skipped:        {n} (already registered)")
         else:
-            print(f"  {status.upper()}: {name}")
+            print(f"  {s.upper()}: {n}")
 
     print()
     print("=" * 60)
     print(
         f"Stored: {stored}/{len(RAPTOR_AGENTS)}  "
+        f"Force-restored: {force_restored}  "
         f"Partial: {partial}  Skipped: {skipped}  Failed: {len(failed)}"
     )
     print("=" * 60)

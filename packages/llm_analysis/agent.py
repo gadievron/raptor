@@ -13,27 +13,27 @@ This agent provides TRUE agentic behaviour with NO templates:
 
 import argparse
 import json
+import re
 import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Add parent directory to path for core imports
-# Add current directory to path for llm imports
-# packages/llm_analysis/agent.py -> repo root
-sys.path.insert(0, str(Path(__file__).parents[2]))
+# Also run as standalone subprocess: python3 packages/llm_analysis/agent.py
+sys.path.insert(0, str(Path(__file__).parents[2]))  # repo root
 
 from core.json import load_json, save_json
-sys.path.insert(0, str(Path(__file__).parent))
 from core.config import RaptorConfig
+from core.llm.task_types import TaskType
 from core.logging import get_logger
 from core.progress import HackerProgress
 from core.run.output import unique_run_suffix
 from core.sarif.parser import parse_sarif_findings, deduplicate_findings
 from core.inventory.lookup import lookup_function as _lookup_function
-from llm.client import LLMClient, _is_auth_error
-from llm.config import LLMConfig, detect_llm_availability
-from llm.providers import ClaudeCodeProvider
+from core.llm.client import LLMClient, _is_auth_error
+from core.llm.config import LLMConfig
+from core.llm.detection import detect_llm_availability
+from core.llm.providers import ClaudeCodeProvider
 
 logger = get_logger()
 
@@ -103,9 +103,28 @@ class VulnerabilityContext:
             logger.warning(f"Cannot read file: {file_path}")
             return False
 
+        # Cap source-file read at 10 MB. Pre-fix `f.readlines()`
+        # loaded the whole file into memory before any size check —
+        # a generated source file (single-line concatenated bundle,
+        # vendored data file misclassified as code, hostile target
+        # repo with a giant binary mislabeled as `.c`) would
+        # OOM-kill the analyser. Real C/C++/Java/Python source files
+        # are well under 1 MB; 10 MB leaves headroom for unusually
+        # large generated parsers / lexers while bounding
+        # pathological input. Truncated reads still return True so
+        # the agent can analyse the visible portion.
+        _MAX_SOURCE_BYTES = 10 * 1024 * 1024
         try:
             with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
+                content = f.read(_MAX_SOURCE_BYTES + 1)
+            if len(content) > _MAX_SOURCE_BYTES:
+                logger.warning(
+                    f"Source file {file_path} exceeded "
+                    f"{_MAX_SOURCE_BYTES}-byte cap; analysis sees "
+                    f"truncated content"
+                )
+                content = content[:_MAX_SOURCE_BYTES]
+            lines = content.splitlines(keepends=True)
 
             # Get the specific vulnerable lines
             if self.start_line and self.end_line:
@@ -144,14 +163,23 @@ class VulnerabilityContext:
             clean_path = file_uri.replace("file://", "")
             file_path = (self.repo_path / clean_path).resolve()
 
-            if not str(file_path).startswith(str(self.repo_path.resolve())):
+            try:
+                file_path.relative_to(self.repo_path.resolve())
+            except ValueError:
                 return f"[Path traversal blocked: {file_uri}]"
 
             if not file_path.exists():
                 return f"[File not found: {file_uri}]"
 
+            # Same byte cap as read_vulnerable_code above. Same
+            # rationale: bound the in-flight memory regardless of
+            # source-file size.
+            _MAX_SOURCE_BYTES = 10 * 1024 * 1024
             with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
+                content = f.read(_MAX_SOURCE_BYTES + 1)
+            if len(content) > _MAX_SOURCE_BYTES:
+                content = content[:_MAX_SOURCE_BYTES]
+            lines = content.splitlines(keepends=True)
 
             # Get context around the line
             start = max(0, line - context_lines - 1)
@@ -302,7 +330,9 @@ def convert_validated_to_agent_format(data: dict) -> List[Dict[str, Any]]:
     Skips ruled_out, confirmed_blocked, and unlikely-verdict findings.
     Normalizes status fields in-place before filtering (idempotent).
     """
-    from packages.exploitability_validation.models import Finding
+    from packages.exploitability_validation.models import (
+        Finding, EXPLOITABLE_FINAL_STATUSES,
+    )
 
     try:
         from packages.exploitability_validation import normalize_findings
@@ -310,12 +340,30 @@ def convert_validated_to_agent_format(data: dict) -> List[Dict[str, Any]]:
     except ImportError:
         pass
     converted = []
+    # Pre-fix the exclusion sets here had drifted from
+    # core/schema_constants.py:
+    #
+    #   * `f.status in ("ruled_out", "disproven")` — fine.
+    #   * `f.final_status in ("ruled_out", "confirmed_blocked")`
+    #     — MISSED `disproven` (Stage B disqualifier outcome,
+    #     which can land in final_status from upstream
+    #     orchestrator wiring).
+    #
+    # Findings with `final_status="disproven"` then leaked
+    # into the exploit / patch / report consumers as
+    # warnings, even though they had been actively disproven
+    # by Stage B. Operators saw "warning: this disproven
+    # finding..." in reports.
+    #
+    # Add `disproven` to the exclusion set. Symmetric with
+    # the `f.status` check above which already covers it.
+    _SKIP_FINAL_STATUSES = ("ruled_out", "confirmed_blocked", "disproven")
     for raw in data.get("findings", []):
         f = Finding.from_dict(raw)
         # Check both status and final_status for exclusion
         if f.status in ("ruled_out", "disproven"):
             continue
-        if f.final_status in ("ruled_out", "confirmed_blocked"):
+        if f.final_status in _SKIP_FINAL_STATUSES:
             continue
         if f.feasibility.verdict == "unlikely":
             continue
@@ -329,7 +377,7 @@ def convert_validated_to_agent_format(data: dict) -> List[Dict[str, Any]]:
             "endLine": f.line,
             "snippet": f.proof.vulnerable_code,
             "message": f.candidate_reasoning or f.message or f.rule_id or f"{f.vuln_type} in {f.function or 'unknown'}",
-            "level": "error" if f.final_status in ("exploitable", "likely_exploitable", "confirmed_constrained") else "warning",
+            "level": "error" if f.final_status in EXPLOITABLE_FINAL_STATUSES else "warning",
             "has_dataflow": bool(f.proof.flow),
             "feasibility": feasibility_d,
             "attack_path_ref": f.feasibility.attack_path_ref,
@@ -343,10 +391,16 @@ def convert_validated_to_agent_format(data: dict) -> List[Dict[str, Any]]:
 
 class AutonomousSecurityAgentV2:
     def __init__(self, repo_path: Path, out_dir: Path, llm_config: Optional[LLMConfig] = None,
-                 prep_only: bool = False):
+                 prep_only: bool = False,
+                 synthesise_checkers: bool = True):
         self.repo_path = repo_path
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
+        # KNighter follow-up: synthesise a checker rule for every
+        # confirmed exploitable finding and emit suspicious annotations
+        # for variants found across the codebase. Default on; opt out
+        # via ``--no-checker-synthesis`` for cost-sensitive runs.
+        self.synthesise_checkers = synthesise_checkers
 
         # Detect LLM availability and choose provider
         availability = detect_llm_availability()
@@ -401,11 +455,40 @@ class AutonomousSecurityAgentV2:
             print()
 
     def _load_attack_path(self, ref: str) -> Optional[Dict[str, Any]]:
-        """Load attack path from a ref like 'attack-paths.json#PATH-001'."""
+        """Load attack path from a ref like 'attack-paths.json#PATH-001'.
+
+        `ref` is read from finding JSON which may originate from
+        an LLM response or a third-party SARIF — it is untrusted.
+        Reject `file_name` segments that contain path separators
+        or `..` so a malicious ref can't escape the intended search
+        roots and load arbitrary attacker-controlled JSON files
+        from the filesystem (e.g. `ref =
+        "../../../tmp/attacker.json#x"` would otherwise resolve
+        and the parsed list would feed straight into the
+        validation pipeline as if it were a real attack path).
+        """
         if not ref or '#' not in ref:
             return None
         try:
             file_name, path_id = ref.split('#', 1)
+            # Containment: file_name must be a single bare filename
+            # (no slashes, no parent traversal). Reject NUL bytes
+            # for filesystem-API safety. Empty rejected too —
+            # `Path / ""` is `Path` and would load the directory
+            # listing as JSON (then fail at parse, but still
+            # opens an unintended path).
+            if (
+                not file_name
+                or "/" in file_name
+                or "\\" in file_name
+                or "\x00" in file_name
+                or file_name in {".", ".."}
+                or file_name.startswith("..")
+            ):
+                logger.debug(
+                    "Refusing attack-path ref with non-bare filename: %r", ref,
+                )
+                return None
             # Search in validation directory — check multiple likely locations
             candidates = [
                 self.out_dir.parent / "validation" / file_name,    # Normal pipeline layout
@@ -441,185 +524,65 @@ class AutonomousSecurityAgentV2:
         logger.info("DATAFLOW VALIDATION (Deep Analysis)")
         logger.info("=" * 70)
 
-        # Build comprehensive validation prompt
-        validation_prompt = f"""You are an elite security researcher performing DEEP VALIDATION of a dataflow path detected by CodeQL.
+        from packages.llm_analysis.prompts import (
+            build_dataflow_validation_bundle,
+            DATAFLOW_VALIDATION_SCHEMA,
+        )
 
-**CRITICAL MISSION:** Determine if this is a REAL exploitable vulnerability or a FALSE POSITIVE.
-
-**VULNERABILITY:** {vuln.rule_id}
-**MESSAGE:** {vuln.message}
-
-═══════════════════════════════════════════════════════════════
-COMPLETE DATAFLOW PATH ANALYSIS
-═══════════════════════════════════════════════════════════════
-
-**SOURCE (Where data enters the system):**
-Location: {vuln.dataflow_source['file']}:{vuln.dataflow_source['line']}
-Type: {vuln.dataflow_source['label']}
-
-Code:
-```
-{vuln.dataflow_source['code']}
-```
-
-"""
-
-        # Add each intermediate step with detailed analysis
-        if vuln.dataflow_steps:
-            validation_prompt += f"**INTERMEDIATE STEPS ({len(vuln.dataflow_steps)} transformations):**\n\n"
-
-            for i, step in enumerate(vuln.dataflow_steps, 1):
-                marker = "🛡️ SANITIZER" if step['is_sanitizer'] else "⚙️ TRANSFORMATION"
-                validation_prompt += f"""{marker} #{i}: {step['label']}
-Location: {step['file']}:{step['line']}
-
-Code:
-```
-{step['code']}
-```
-
-"""
-
-        validation_prompt += f"""**SINK (Where data reaches dangerous operation):**
-Location: {vuln.dataflow_sink['file']}:{vuln.dataflow_sink['line']}
-Type: {vuln.dataflow_sink['label']}
-
-Code:
-```
-{vuln.dataflow_sink['code']}
-```
-
-═══════════════════════════════════════════════════════════════
-VALIDATION TASKS (BE BRUTALLY HONEST)
-═══════════════════════════════════════════════════════════════
-
-**1. SOURCE CONTROL ANALYSIS:**
-   Examine the source code carefully:
-   - Is this data from HTTP request, user input, file upload? → ATTACKER CONTROLLED ✅
-   - Is it from config file, environment variable? → REQUIRES ACCESS FIRST 🔶
-   - Is it a hardcoded constant, internal variable? → FALSE POSITIVE ❌
-
-   Look at the actual code - what does it show?
-
-**2. SANITIZER EFFECTIVENESS ANALYSIS:**
-"""
-
-        if vuln.sanitizers_found:
-            validation_prompt += f"""   You detected {len(vuln.sanitizers_found)} sanitizer(s): {', '.join(vuln.sanitizers_found)}
-
-   For EACH sanitizer, analyze the actual code:
-   - What exactly does it do? (trim, replace, escape, encode, validate)
-   - Is it appropriate for the vulnerability type?
-     * SQL injection needs parameterized queries or escaping
-     * XSS needs HTML entity encoding
-     * Command injection needs input validation or safe APIs
-   - Can it be bypassed? Common bypasses:
-     * Incomplete sanitization (only filters some chars)
-     * Encoding bypasses (URL encoding, double encoding)
-     * Case sensitivity issues
-     * Unicode/UTF-8 bypasses
-   - Is it applied to ALL code paths?
-
-"""
-        else:
-            validation_prompt += """   NO sanitizers detected in dataflow path!
-   - Is there implicit sanitization (type checking, framework protection)?
-   - Are there barriers in the runtime environment?
-
-"""
-
-        validation_prompt += """**3. REACHABILITY ANALYSIS:**
-   - Can an attacker actually trigger this code path?
-   - Are there authentication/authorization checks?
-   - Are there prerequisites that block exploitation?
-   - Is this code path actually used in production?
-
-**4. EXPLOITABILITY ASSESSMENT:**
-   Consider the COMPLETE path from source to sink:
-   - Can attacker-controlled data reach the sink with malicious content intact?
-   - What specific payload would exploit this?
-   - What is the attack complexity (low/medium/high)?
-
-**5. IMPACT ANALYSIS:**
-   If exploitable, what can an attacker achieve?
-   - Code execution, data exfiltration, privilege escalation?
-   - Estimate CVSS score (0.0-10.0)
-
-═══════════════════════════════════════════════════════════════
-YOUR VERDICT
-═══════════════════════════════════════════════════════════════
-
-Provide a structured assessment covering ALL points above.
-Be specific - cite actual code and explain your reasoning.
-If you find this is NOT exploitable, explain exactly why (don't just say "sanitized").
-If it IS exploitable, provide the exact attack path and payload concept.
-"""
-
-        # Validation schema
-        validation_schema = {
-            "source_type": "string - describe what type of source this is (user_input/config/hardcoded/etc)",
-            "source_attacker_controlled": "boolean - can attacker control this source?",
-            "source_reasoning": "string - explain why source is or isn't attacker-controlled",
-
-            "sanitizers_found": f"integer - number of sanitizers ({len(vuln.sanitizers_found)})",
-            "sanitizers_effective": "boolean - do sanitizers prevent exploitation?",
-            "sanitizer_details": "list of dicts with keys: name, purpose, bypass_possible, bypass_method",
-
-            "path_reachable": "boolean - can this code path be reached by attacker?",
-            "reachability_barriers": "list of strings - what blocks reaching this path?",
-
-            "is_exploitable": "boolean - FINAL VERDICT: is this truly exploitable?",
-            "exploitability_confidence": "float (0.0-1.0) - how confident in this assessment?",
-            "exploitability_reasoning": "string - detailed explanation of verdict",
-
-            "attack_complexity": "string - low/medium/high - difficulty of exploitation",
-            "attack_prerequisites": "list of strings - what attacker needs to succeed",
-            "attack_payload_concept": "string - describe what payload would work, or empty if not exploitable",
-
-            "impact_if_exploited": "string - what attacker can achieve",
-            "cvss_estimate": "float (0.0-10.0) - severity score",
-
-            "false_positive": "boolean - is this a false positive?",
-            "false_positive_reason": "string - why it's false positive, or empty",
-        }
-
-        system_prompt = """You are an elite security researcher specializing in:
-- Advanced vulnerability analysis and exploit development
-- Sanitizer bypass techniques and evasion
-- Real-world attack scenarios and feasibility assessment
-- CVSS scoring and risk assessment
-
-Your job is to validate dataflow findings with BRUTAL HONESTY:
-- If it's a false positive, say so clearly and explain why
-- If sanitizers are effective, explain exactly how they work
-- If it's exploitable, provide specific attack details
-- Base ALL conclusions on the actual code provided
-
-Do NOT:
-- Guess or assume
-- Give generic answers
-- Overstate or understate severity
-- Ignore sanitizers or barriers"""
+        bundle = build_dataflow_validation_bundle(
+            rule_id=vuln.rule_id,
+            message=vuln.message,
+            dataflow_source=vuln.dataflow_source,
+            dataflow_sink=vuln.dataflow_sink,
+            dataflow_steps=vuln.dataflow_steps,
+            sanitizers_found=vuln.sanitizers_found,
+        )
+        validation_prompt = next(m.content for m in bundle.messages if m.role == "user")
+        system_prompt = next(m.content for m in bundle.messages if m.role == "system")
+        validation_schema = DATAFLOW_VALIDATION_SCHEMA
 
         try:
             logger.info("Sending dataflow to LLM for deep validation...")
 
-            validation, _response = self.llm.generate_structured(
+            raw_validation, _response = self.llm.generate_structured(
                 prompt=validation_prompt,
                 schema=validation_schema,
-                system_prompt=system_prompt
+                system_prompt=system_prompt,
+                task_type=TaskType.ANALYSE,
             )
 
-            if validation is None:
+            if raw_validation is None:
                 logger.info("No external LLM available — skipping dataflow validation")
                 return {}
+
+            from core.llm.response_validation import (
+                attempt_quality_retry, validate_structured_response,
+            )
+            validated = validate_structured_response(raw_validation, validation_schema)
+            # Single-retry uplift: if the LLM's first response is missing
+            # required fields or had to be coerced, re-prompt with the
+            # specific problems called out. Returns the higher-quality
+            # of the two responses (original if retry didn't beat it).
+            validated = attempt_quality_retry(
+                self.llm, validated, validation_prompt, validation_schema,
+                system_prompt=system_prompt, task_type=TaskType.ANALYSE,
+                threshold=0.5,
+            )
+            validation = validated.data
+            if validated.quality < 0.5:
+                logger.warning(f"Low-quality dataflow validation (q={validated.quality:.2f}), incomplete: {validated.incomplete}")
 
             logger.info("✓ Dataflow validation complete:")
             logger.info(f"  Source attacker-controlled: {validation.get('source_attacker_controlled')}")
             logger.info(f"  Sanitizers effective: {validation.get('sanitizers_effective')}")
             logger.info(f"  Path reachable: {validation.get('path_reachable')}")
             logger.info(f"  Is exploitable: {validation.get('is_exploitable')}")
-            logger.info(f"  Confidence: {validation.get('exploitability_confidence', 0):.2f}")
+            # `.get(key, default)` only fires the default for MISSING keys;
+            # an explicit `null` from the LLM passes through as None, then
+            # `f"{None:.2f}"` raises TypeError mid-log-write and aborts
+            # the whole validate_dataflow call. Coalesce explicitly.
+            _conf = validation.get('exploitability_confidence')
+            logger.info(f"  Confidence: {(_conf if _conf is not None else 0):.2f}")
             logger.info(f"  Attack complexity: {validation.get('attack_complexity')}")
             logger.info(f"  False positive: {validation.get('false_positive')}")
 
@@ -677,14 +640,23 @@ Do NOT:
             else:
                 logger.warning(f"⚠️  Failed to extract dataflow path")
 
-        # Generate analysis using LLM
         from packages.llm_analysis.prompts import (
-            build_analysis_prompt, build_analysis_schema, ANALYSIS_SYSTEM_PROMPT,
+            build_analysis_prompt_bundle,
+            build_analysis_schema,
         )
 
         analysis_schema = build_analysis_schema(has_dataflow=vuln.has_dataflow)
 
-        prompt = build_analysis_prompt(
+        # Surface the function's inventory metadata to the strategy
+        # picker so it can match on function-name keywords and any
+        # known callees. ``vuln.metadata`` is populated upstream from
+        # the inventory checklist when available.
+        meta = vuln.metadata or {}
+        function_name = meta.get("name") or ""
+        file_includes = meta.get("includes") or ()
+        function_calls_made = meta.get("calls") or meta.get("callees") or ()
+
+        bundle = build_analysis_prompt_bundle(
             rule_id=vuln.rule_id,
             level=vuln.level,
             file_path=vuln.file_path,
@@ -697,25 +669,45 @@ Do NOT:
             dataflow_source=vuln.dataflow_source,
             dataflow_sink=vuln.dataflow_sink,
             dataflow_steps=vuln.dataflow_steps,
+            metadata=meta,
             repo_path=str(vuln.repo_path),
+            cwe_id=vuln.cwe_id,
+            function_name=function_name,
+            file_includes=file_includes,
+            function_calls_made=function_calls_made,
         )
-
-        system_prompt = ANALYSIS_SYSTEM_PROMPT
+        prompt = next(m.content for m in bundle.messages if m.role == "user")
+        system_prompt = next(m.content for m in bundle.messages if m.role == "system")
 
         try:
             if not isinstance(self.llm, ClaudeCodeProvider):
                 logger.info("Sending vulnerability to LLM for analysis...")
 
             # Use LLM for intelligent analysis
-            analysis, _full_response = self.llm.generate_structured(
+            raw_analysis, _full_response = self.llm.generate_structured(
                 prompt=prompt,
                 schema=analysis_schema,
-                system_prompt=system_prompt
+                system_prompt=system_prompt,
+                task_type=TaskType.ANALYSE,
             )
 
-            if analysis is None:
+            if raw_analysis is None:
                 logger.debug("Prep mode — Phase 4 will handle analysis")
                 return False
+
+            from core.llm.response_validation import (
+                attempt_quality_retry, validate_structured_response,
+            )
+            validated = validate_structured_response(raw_analysis, analysis_schema)
+            # See validate_dataflow above for the retry rationale.
+            validated = attempt_quality_retry(
+                self.llm, validated, prompt, analysis_schema,
+                system_prompt=system_prompt, task_type=TaskType.ANALYSE,
+                threshold=0.5,
+            )
+            analysis = validated.data
+            if validated.quality < 0.5:
+                logger.warning(f"Low-quality LLM response (q={validated.quality:.2f}), incomplete: {validated.incomplete}")
 
             vuln.exploitable = analysis.get("is_exploitable", False)
             vuln.exploitability_score = analysis.get("exploitability_score", 0.0)
@@ -749,35 +741,79 @@ Do NOT:
 
             # Deep dataflow validation for high-confidence findings
             if vuln.has_dataflow and vuln.exploitable:
-                logger.info("\n" + "─" * 70)
-                logger.info("🔍 Performing DEEP DATAFLOW VALIDATION...")
-                logger.info("─" * 70)
+                # IRIS Tier 1 pre-flight — same pattern as the
+                # `generate_exploit` gate below. A free CodeQL refutation
+                # short-circuits the LLM-backed deep validation entirely.
+                # Reuses the cached Tier 1 verdict if `validate_dataflow_claims`
+                # already ran (the /agentic --validate-dataflow path);
+                # otherwise discovers DBs lazily and runs Tier 1 against
+                # this finding. Inconclusive / confirmed / no_check fall
+                # through and the LLM call proceeds as before.
+                gate = self._tier1_pre_flight(vuln)
+                if gate == "refuted":
+                    logger.info(
+                        f"⚠️  IRIS Tier 1 refuted dataflow for "
+                        f"{vuln.rule_id} at "
+                        f"{vuln.file_path}:{vuln.start_line} — "
+                        f"skipping LLM deep validation"
+                    )
+                    vuln.exploitable = False
+                    vuln.exploitability_score = 0.0
+                    # Record the verdict in the same shape the LLM-backed
+                    # validation would, so downstream consumers (report
+                    # rendering, _tier1_pre_flight cache reuse from
+                    # `generate_exploit`) see a consistent dataflow_validation
+                    # record.
+                    analysis["dataflow_validation"] = {
+                        "verdict": "refuted",
+                        "tier": "iris_tier1",
+                        "false_positive": True,
+                        "false_positive_reason": (
+                            "iris_tier1_refuted: LocalFlowSource query "
+                            "found no path; LLM deep validation skipped"
+                        ),
+                        "is_exploitable": False,
+                    }
+                else:
+                    logger.info("\n" + "─" * 70)
+                    logger.info("🔍 Performing DEEP DATAFLOW VALIDATION...")
+                    logger.info("─" * 70)
 
-                validation = self.validate_dataflow(vuln)
+                    validation = self.validate_dataflow(vuln)
 
-                if validation:
-                    # Update exploitability based on validation
-                    if validation.get('false_positive'):
-                        logger.info(f"⚠️  Validation marked as FALSE POSITIVE:")
-                        logger.info(f"    Reason: {validation.get('false_positive_reason')}")
-                        vuln.exploitable = False
-                        vuln.exploitability_score = 0.0
-                    elif not validation.get('is_exploitable'):
-                        logger.info(f"⚠️  Validation determined NOT EXPLOITABLE:")
-                        logger.info(f"    Reason: {(validation.get('exploitability_reasoning') or '')[:150]}")
-                        vuln.exploitable = False
-                        vuln.exploitability_score = validation.get('exploitability_confidence', 0.0) * 0.5
-                    else:
-                        # Validation confirms exploitability
-                        logger.info(f"✓ Validation confirms EXPLOITABLE")
-                        # Use validation confidence to refine score
-                        vuln.exploitability_score = max(
-                            vuln.exploitability_score,
-                            validation.get('exploitability_confidence', vuln.exploitability_score)
-                        )
+                    if validation:
+                        # Update exploitability based on validation
+                        if validation.get('false_positive'):
+                            logger.info(f"⚠️  Validation marked as FALSE POSITIVE:")
+                            logger.info(f"    Reason: {validation.get('false_positive_reason')}")
+                            vuln.exploitable = False
+                            vuln.exploitability_score = 0.0
+                        elif not validation.get('is_exploitable'):
+                            logger.info(f"⚠️  Validation determined NOT EXPLOITABLE:")
+                            logger.info(f"    Reason: {(validation.get('exploitability_reasoning') or '')[:150]}")
+                            vuln.exploitable = False
+                            # Same null-vs-missing distinction as the
+                            # log site above — explicit None from the
+                            # LLM crashes `None * 0.5`.
+                            _conf = validation.get('exploitability_confidence')
+                            if _conf is None:
+                                _conf = 0.0
+                            vuln.exploitability_score = _conf * 0.5
+                        else:
+                            # Validation confirms exploitability
+                            logger.info(f"✓ Validation confirms EXPLOITABLE")
+                            # Use validation confidence to refine score —
+                            # fall back to existing score if missing OR
+                            # explicit null (max(float, None) → TypeError).
+                            _conf = validation.get('exploitability_confidence')
+                            if _conf is None:
+                                _conf = vuln.exploitability_score
+                            vuln.exploitability_score = max(
+                                vuln.exploitability_score, _conf,
+                            )
 
-                    # Store validation in analysis
-                    analysis['dataflow_validation'] = validation
+                        # Store validation in analysis
+                        analysis['dataflow_validation'] = validation
 
             # Save detailed analysis
             analysis_file = self.out_dir / "analysis" / f"{vuln.finding_id}.json"
@@ -801,21 +837,180 @@ Do NOT:
             vuln.exploitability_score = 0.5
             return False
 
+    def _tier1_pre_flight(self, vuln: VulnerabilityContext) -> str:
+        """Run IRIS Tier 1 against `vuln` if a CodeQL DB is available.
+
+        Returns one of "confirmed" / "refuted" / "inconclusive" /
+        "no_check". Refuted is the only verdict that gates exploit
+        generation — everything else proceeds. See
+        `dataflow_validation.tier1_check_finding` for the verdict
+        semantics.
+
+        Two paths to a verdict, in priority order:
+
+          1. Reuse `vuln.analysis['dataflow_validation']` if the
+             orchestrator already ran `validate_dataflow_claims` on
+             this finding. Avoids a second CodeQL invocation
+             (free-but-not-zero), and survives the case where the
+             CodeQL DB has been cleaned up between phases — the
+             cached verdict still tells us what to do.
+          2. Otherwise: discover DBs lazily from `<out_dir>/codeql/`
+             and call `tier1_check_finding`. If the codeql phase
+             didn't run for this target, the DB dict is empty and
+             the gate becomes a no-op.
+
+        The gate must never raise — any exception falls through to
+        "no_check" so a sandbox / discovery / config bug can't break
+        the exploit pipeline.
+        """
+        # Path 1: reuse orchestrator's earlier validation if present.
+        existing = (vuln.analysis or {}).get("dataflow_validation") or {}
+        verdict = existing.get("verdict")
+        if verdict in ("confirmed", "refuted", "inconclusive"):
+            return verdict
+
+        # Path 2: fresh Tier 1 check against the run's CodeQL DBs.
+        if getattr(self, "_codeql_dbs", None) is None:
+            try:
+                from packages.llm_analysis.dataflow_validation import (
+                    discover_codeql_databases,
+                )
+                self._codeql_dbs = discover_codeql_databases(self.out_dir) or {}
+            except Exception as e:
+                logger.debug(f"Tier 1 gate: DB discovery failed: {e}")
+                self._codeql_dbs = {}
+        if not self._codeql_dbs:
+            return "no_check"
+        try:
+            from packages.llm_analysis.dataflow_validation import (
+                tier1_check_finding,
+            )
+            return tier1_check_finding(vuln.finding, self._codeql_dbs,
+                                       target_path=self.repo_path)
+        except Exception as e:
+            # The gate must never break the pipeline. Log and proceed.
+            logger.debug(f"Tier 1 gate: check raised: {e}")
+            return "no_check"
+
+    def _smt_pre_flight(self, vuln: VulnerabilityContext) -> str:
+        """Free SMT path-feasibility check using the LLM-extracted
+        ``path_conditions`` / ``path_profile`` fields on this finding's
+        analysis. Same shape as ``_tier1_pre_flight`` but reads SMT
+        instead of CodeQL.
+
+        Returns one of "refuted" / "confirmed" / "no_check":
+
+          "refuted"   — SMT proved the conditions mutually exclusive;
+                        the dangerous path is unreachable. Caller
+                        should skip downstream LLM cost.
+          "confirmed" — SMT found a satisfying assignment. Path is
+                        reachable; falls through to exploit gen as
+                        before. (Witness model is also recorded in
+                        the analysis dict for downstream PoC seeding
+                        in a future PR.)
+          "no_check"  — no path_conditions on the analysis OR Z3 not
+                        installed OR conditions unparseable. Same
+                        meaning as the IRIS gate's no_check: caller
+                        proceeds without information.
+
+        Never raises — any failure mode returns "no_check" so the
+        exploit pipeline is never broken by SMT issues.
+        """
+        analysis = vuln.analysis or {}
+        # Same field-precedence as Tier 4 (`_tier4_smt_refine` in
+        # dataflow_validation.py): nested deep-validation block wins
+        # over top-level analysis.
+        nested = analysis.get("dataflow_validation") or {}
+        conditions = (
+            nested.get("path_conditions")
+            or analysis.get("path_conditions")
+            or []
+        )
+        if not conditions:
+            return "no_check"
+        profile = (
+            nested.get("path_profile")
+            or analysis.get("path_profile")
+            or "uint64"
+        ).strip().lower()
+
+        try:
+            from packages.exploit_feasibility.smt_path import validate_path
+        except ImportError as e:
+            logger.debug(f"SMT pre-flight: substrate unavailable: {e}")
+            return "no_check"
+
+        try:
+            smt = validate_path(conditions, profile=profile)
+        except Exception as e:
+            logger.debug(f"SMT pre-flight: check raised: {e}")
+            return "no_check"
+
+        if not smt.get("smt_available"):
+            return "no_check"
+
+        feasible = smt.get("feasible")
+        if feasible is False:
+            return "refuted"
+        if feasible is True:
+            return "confirmed"
+        # feasible is None — Z3 timed out / all conditions unparseable.
+        return "no_check"
+
     def generate_exploit(self, vuln: VulnerabilityContext) -> bool:
 
         if not vuln.exploitable:
             logger.debug(f"⊘ Skipping exploit generation (not exploitable)")
             return False
 
+        # IRIS Tier 1 pre-flight gate — free CodeQL check before paying
+        # for LLM exploit generation. If discovery surfaces an in-repo
+        # LocalFlowSource query for the finding's (lang, CWE) and that
+        # query refutes the dataflow (zero matches under the broad
+        # source model), skip generation. Inconclusive / confirmed /
+        # no_check fall through and proceed as before.
+        gate = self._tier1_pre_flight(vuln)
+        if gate == "refuted":
+            logger.info(
+                f"⊘ Skipping exploit generation: IRIS Tier 1 refuted the "
+                f"dataflow claim for {vuln.rule_id} at "
+                f"{vuln.file_path}:{vuln.start_line}"
+            )
+            vuln.analysis = (vuln.analysis or {})
+            vuln.analysis["exploit_skipped_reason"] = (
+                "iris_tier1_refuted: Tier 1 LocalFlowSource query "
+                "found no path; no LLM tokens spent"
+            )
+            return False
+
+        # SMT pre-flight gate — free Z3 check using the same
+        # `path_conditions` field that /agentic --validate-dataflow
+        # Tier 4 reads. Fires only when the per-finding analysis
+        # populated path_conditions (typically CWE-190/125/787/476/191).
+        # Refute on unsat → skip exploit gen for free. Mirrors the IRIS
+        # Tier 1 gate above; same fail-open semantics (any failure
+        # → no_check → fall through).
+        smt_gate = self._smt_pre_flight(vuln)
+        if smt_gate == "refuted":
+            logger.info(
+                f"⊘ Skipping exploit generation: SMT proved path "
+                f"conditions unsatisfiable for {vuln.rule_id} at "
+                f"{vuln.file_path}:{vuln.start_line}"
+            )
+            vuln.analysis = (vuln.analysis or {})
+            vuln.analysis["exploit_skipped_reason"] = (
+                "smt_unsat: path conditions are mutually exclusive; "
+                "the dangerous path is unreachable. No LLM tokens spent."
+            )
+            return False
+
         logger.info("─" * 70)
         logger.info(f"Generating exploit PoC for {vuln.rule_id}")
         logger.info(f"   Target: {vuln.file_path}:{vuln.start_line}")
 
-        from packages.llm_analysis.prompts import (
-            build_exploit_prompt, EXPLOIT_SYSTEM_PROMPT,
-        )
+        from packages.llm_analysis.prompts.exploit import build_exploit_prompt_bundle
 
-        prompt = build_exploit_prompt(
+        bundle = build_exploit_prompt_bundle(
             rule_id=vuln.rule_id,
             file_path=vuln.file_path,
             start_line=vuln.start_line,
@@ -825,8 +1020,8 @@ Do NOT:
             surrounding_context=vuln.surrounding_context,
             feasibility=vuln.feasibility if hasattr(vuln, 'feasibility') else None,
         )
-
-        system_prompt = EXPLOIT_SYSTEM_PROMPT
+        prompt = next(m.content for m in bundle.messages if m.role == "user")
+        system_prompt = next(m.content for m in bundle.messages if m.role == "system")
 
         try:
             logger.info("Requesting exploit code from LLM...")
@@ -834,7 +1029,8 @@ Do NOT:
             response = self.llm.generate(
                 prompt=prompt,
                 system_prompt=system_prompt,
-                temperature=0.8  # Higher creativity for exploit generation. YMMV
+                temperature=0.8,  # Higher creativity for exploit generation. YMMV
+                task_type=TaskType.GENERATE_CODE,
             )
 
             if response is None:
@@ -881,16 +1077,14 @@ Do NOT:
         with open(file_path) as f:
             full_file_content = f.read()
 
-        from packages.llm_analysis.prompts import (
-            build_patch_prompt, PATCH_SYSTEM_PROMPT,
-        )
+        from packages.llm_analysis.prompts.patch import build_patch_prompt_bundle
 
         # Load attack path if available
         attack_path = None
         if vuln.attack_path_ref:
             attack_path = self._load_attack_path(vuln.attack_path_ref)
 
-        prompt = build_patch_prompt(
+        bundle = build_patch_prompt_bundle(
             rule_id=vuln.rule_id,
             file_path=vuln.file_path,
             start_line=vuln.start_line,
@@ -902,8 +1096,8 @@ Do NOT:
             feasibility=vuln.feasibility,
             attack_path=attack_path,
         )
-
-        system_prompt = PATCH_SYSTEM_PROMPT
+        prompt = next(m.content for m in bundle.messages if m.role == "user")
+        system_prompt = next(m.content for m in bundle.messages if m.role == "system")
 
         try:
             logger.info("   🤖 Requesting secure patch from LLM...")
@@ -911,7 +1105,8 @@ Do NOT:
             response = self.llm.generate(
                 prompt=prompt,
                 system_prompt=system_prompt,
-                temperature=0.3  # Lower temperature for safer patches
+                temperature=0.3,  # Lower temperature for safer patches
+                task_type=TaskType.GENERATE_CODE,
             )
 
             if response is None:
@@ -955,33 +1150,49 @@ Do NOT:
                 print("⚠️  LLM authentication failed — check your API key.")
             return False
 
-    def _extract_code(self, content: str) -> Optional[str]:
-        """Extract code from LLM response (handles markdown code blocks)."""
-        # Try to find C++ code block first
-        if "```cpp" in content:
-            parts = content.split("```cpp")
-            if len(parts) > 1:
-                code = parts[1].split("```")[0].strip()
-                return code
-        # Try to find C code block
-        elif "```c" in content:
-            parts = content.split("```c")
-            if len(parts) > 1:
-                code = parts[1].split("```")[0].strip()
-                return code
-        # Try to find Python code block
-        elif "```python" in content:
-            parts = content.split("```python")
-            if len(parts) > 1:
-                code = parts[1].split("```")[0].strip()
-                return code
-        elif "```" in content:
-            parts = content.split("```")
-            if len(parts) > 1:
-                code = parts[1].strip()
-                return code
+    # Match a markdown fenced code block. Captures the optional
+    # language tag and the body between fences. The language tag
+    # must end at a newline or the closing fence — pre-fix the
+    # plain `"```c" in content` substring check matched ```cpp,
+    # ```csharp, ```cmake, ```css, and even ```c++ as if they were
+    # the C-language branch (because "```c" is a prefix of all of
+    # them). Anchored on a per-line basis (re.MULTILINE) so prose
+    # text containing "```cpp" inline (`"like ```cpp would match"`)
+    # doesn't false-positive as a code block.
+    _CODE_FENCE_RE = re.compile(
+        r"^```(?P<lang>[a-zA-Z0-9_+-]*)\s*\n"
+        r"(?P<body>.*?)"
+        r"^```\s*$",
+        re.MULTILINE | re.DOTALL,
+    )
 
-        # If no code block, return content as-is
+    def _extract_code(self, content: str) -> Optional[str]:
+        """Extract code from LLM response (handles markdown code blocks).
+
+        Preference order: ```cpp > ```c > ```python > untagged
+        ``` > raw content. Pre-fix the substring matches conflated
+        ```cpp / ```csharp / ```cmake / ```css with ```c, and
+        matched ``` substrings inside prose as code blocks. The
+        regex requires the fence to be at line start and the
+        language tag to be a clean identifier ending at whitespace
+        / newline.
+        """
+        # Find every fenced block and choose by language tag.
+        blocks = list(self._CODE_FENCE_RE.finditer(content))
+        if blocks:
+            by_lang: Dict[str, str] = {}
+            for m in blocks:
+                lang = (m.group("lang") or "").lower()
+                # First occurrence per language wins (preserve order).
+                by_lang.setdefault(lang, m.group("body").rstrip())
+            for preferred in ("cpp", "c++", "c", "python", "py", ""):
+                if preferred in by_lang:
+                    return by_lang[preferred].strip()
+            # Fall back to the first block of any other language so
+            # captions like ```rust still extract.
+            return next(iter(by_lang.values())).strip()
+
+        # No code block — return content as-is.
         return content.strip()
 
     def _load_validated_findings(self, findings_path: str) -> List[Dict[str, Any]]:
@@ -1000,9 +1211,44 @@ Do NOT:
                     f"(skipped {len(data.get('findings', [])) - len(converted)} ruled out/unlikely)")
         return converted
 
+    def _emit_finding_annotation(
+        self, vuln: "VulnerabilityContext",
+        checklist: Optional[Dict[str, Any]],
+    ) -> Optional[Path]:
+        """Emit a per-function annotation for ``vuln`` after analysis
+        completes. Best-effort — any exception is logged at DEBUG and
+        swallowed so annotation failures cannot break the analysis loop.
+
+        Returns the annotation path on success, or ``None`` if the
+        emit was skipped (no checklist, no inventory match, manual
+        annotation already present, or an error was swallowed).
+        Caller can use the return value for telemetry.
+        """
+        try:
+            from packages.llm_analysis.annotation_emit import (
+                emit_finding_annotation,
+            )
+            return emit_finding_annotation(
+                vuln,
+                base_dir=self.out_dir / "annotations",
+                checklist=checklist,
+                repo_root=self.repo_path,
+            )
+        except Exception:
+            logger.debug("annotation emit error", exc_info=True)
+            return None
+
     def process_findings(self, sarif_paths: List[str] = None, findings_path: str = None,
-                         max_findings: int = 10, checklist: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Process findings with full LLM-powered autonomous workflow."""
+                         max_findings: int = 10, checklist: Dict[str, Any] = None,
+                         emit_annotations: bool = True) -> Dict[str, Any]:
+        """Process findings with full LLM-powered autonomous workflow.
+
+        ``emit_annotations``: when False, skip the per-finding
+        annotation emit and the end-of-run coverage record. Useful
+        for operators who want analysis without the side effect of
+        modifying the annotation tree (e.g. CI runs that compare
+        scanner output rather than persist review state).
+        """
         start_time = time.time()
 
         # Parse findings
@@ -1052,6 +1298,15 @@ Do NOT:
         patches_generated = 0
         dataflow_validated = 0
         false_positives_found = 0
+        annotations_emitted = 0
+        variant_annotations = 0
+        # D-1 fixture-detection pre-flight metrics. Counts of
+        # findings the pre-flight saw and how it ruled. Surfaced
+        # in the autonomous report so operators can see whether
+        # the pre-flight is firing usefully and how many LLM
+        # tokens it saved.
+        fixture_prep_outcomes = {"true": 0, "false": 0, "candidate": 0}
+        fixture_skipped_llm_calls = 0
         idx = 0  # Initialize idx to prevent UnboundLocalError when unique_findings is empty
 
         is_prep = isinstance(self.llm, ClaudeCodeProvider)
@@ -1096,9 +1351,102 @@ Do NOT:
 
                 vuln = VulnerabilityContext(finding, self.repo_path)
 
+                # 0. Pre-flight: D-1 fixture-detection. When the
+                # finding sits in test code AND the function isn't
+                # reachable from any production entry point, the
+                # LLM verdict is essentially deterministic — skip
+                # the LLM call to save tokens and emit a clean
+                # annotation directly. Only the high-confidence
+                # ``true`` case skips; ``candidate`` (path matches
+                # but reachability uncertain) still runs the LLM
+                # so it can verify. ``manual_override`` operator
+                # flag bypasses pre-flight entirely.
+                #
+                # See core/inventory/fixture_detection for the
+                # path + reachability gate logic; mirrors the
+                # /validate Stage D [D-1] integration.
+                fixture_skipped_this = False
+                if checklist and not finding.get("manual_override"):
+                    try:
+                        from core.inventory.fixture_detection import (
+                            detect_fixture,
+                        )
+                        verdict = detect_fixture(
+                            file_path=(
+                                finding.get("file_path")
+                                or finding.get("file") or ""
+                            ),
+                            function=(
+                                finding.get("function")
+                                or (finding.get("metadata") or {}).get(
+                                    "function_name", ""
+                                )
+                            ),
+                            inventory=checklist,
+                        )
+                        finding["likely_test_harness"] = (
+                            verdict.likely_test_harness
+                        )
+                        finding["harness_evidence"] = [
+                            e.to_dict() for e in verdict.evidence
+                        ]
+                        fixture_prep_outcomes[
+                            verdict.likely_test_harness
+                        ] = (
+                            fixture_prep_outcomes.get(
+                                verdict.likely_test_harness, 0,
+                            ) + 1
+                        )
+                        if verdict.likely_test_harness == "true":
+                            # Synthesise a deterministic clean
+                            # analysis. _derive_status (in
+                            # annotation_emit) maps
+                            # is_true_positive=False to status=
+                            # clean automatically; the
+                            # ``fixture_demotion`` tag flags the
+                            # reason for the operator's review.
+                            vuln.analysis = {
+                                "is_true_positive": False,
+                                "is_exploitable": False,
+                                "reasoning": (
+                                    "Test-harness circularity: the "
+                                    "finding's enclosing function is "
+                                    "in test-fixture code and not "
+                                    "reachable from any production "
+                                    "entry point. See harness_evidence "
+                                    "for the path-pattern match and "
+                                    "reachability check that confirmed "
+                                    "this. To override, set "
+                                    "``manual_override: true`` on the "
+                                    "finding and re-run."
+                                ),
+                                "fixture_demotion": True,
+                                "harness_evidence": (
+                                    finding["harness_evidence"]
+                                ),
+                            }
+                            fixture_skipped_this = True
+                    except Exception as e:  # noqa: BLE001
+                        logger.debug(
+                            "fixture pre-flight failed on %s: %s",
+                            finding.get("finding_id") or finding.get("id"),
+                            e,
+                        )
+
+                if fixture_skipped_this:
+                    analyzed += 1
+                    fixture_skipped_llm_calls += 1
+                    if emit_annotations:
+                        if self._emit_finding_annotation(vuln, checklist):
+                            annotations_emitted += 1
+                    continue  # skip LLM analyze + exploit + patch
+
                 # 1. Autonomous analysis (LLM-powered, or prep-only)
                 if self.analyze_vulnerability(vuln):
                     analyzed += 1
+                    if emit_annotations:
+                        if self._emit_finding_annotation(vuln, checklist):
+                            annotations_emitted += 1
 
                     # Track dataflow validation
                     if vuln.has_dataflow and vuln.analysis and 'dataflow_validation' in vuln.analysis:
@@ -1117,6 +1465,33 @@ Do NOT:
                         # 3. Generate patch using LLM (only for exploitable)
                         if self.generate_patch(vuln):
                             patches_generated += 1
+
+                        # 4. KNighter follow-up: synthesise a checker
+                        # rule for the confirmed pattern, run across
+                        # the codebase, emit suspicious annotations
+                        # for variant matches. One bug → N candidate
+                        # variants. Best-effort — failures don't break
+                        # the analysis loop.
+                        if (
+                            emit_annotations
+                            and getattr(self, "synthesise_checkers", True)
+                        ):
+                            try:
+                                from packages.llm_analysis.checker_followup import (
+                                    emit_variant_annotations_for_finding,
+                                )
+                                n_variants = emit_variant_annotations_for_finding(
+                                    vuln,
+                                    out_dir=self.out_dir,
+                                    checklist=checklist,
+                                    repo_root=self.repo_path,
+                                    llm_client=self.llm,
+                                )
+                                variant_annotations += n_variants
+                            except Exception:
+                                logger.debug(
+                                    "checker followup error", exc_info=True,
+                                )
                     else:
                         logger.debug(f"⊘ Skipping patch generation (not exploitable)")
 
@@ -1153,6 +1528,12 @@ Do NOT:
             "patches_generated": patches_generated,
             "dataflow_validated": dataflow_validated,
             "false_positives_caught": false_positives_found,
+            "annotations_emitted": annotations_emitted,
+            "variant_annotations": variant_annotations,
+            "fixture_detection_metrics": {
+                "prep_outcomes": fixture_prep_outcomes,
+                "skipped_llm_calls": fixture_skipped_llm_calls,
+            },
             "execution_time": execution_time,
             "llm_stats": llm_stats,
             "results": results,
@@ -1162,6 +1543,22 @@ Do NOT:
         report_file = self.out_dir / "autonomous_analysis_report.json"
         save_json(report_file, report)
 
+        # Emit a coverage record from the annotations tree, so
+        # ``raptor-coverage-summary`` picks them up as reviewed
+        # functions. Best-effort — coverage record failures should
+        # not break the analysis report. Skipped when annotation
+        # emission was suppressed.
+        if emit_annotations:
+            try:
+                from core.coverage.record import (
+                    build_from_annotations, write_record,
+                )
+                ann_record = build_from_annotations(self.out_dir / "annotations")
+                if ann_record:
+                    write_record(self.out_dir, ann_record, tool_name="annotations")
+            except Exception:
+                logger.debug("annotation coverage record failed", exc_info=True)
+
         if is_prep_only:
             logger.debug(f"Prep complete: {len(unique_findings)} findings")
         else:
@@ -1170,6 +1567,23 @@ Do NOT:
             logger.info(f"✓ Exploitable: {exploitable} vulnerabilities")
             logger.info(f"✓ Exploits generated: {exploits_generated}")
             logger.info(f"✓ Patches generated: {patches_generated}")
+            if annotations_emitted > 0:
+                logger.info(
+                    f"✓ Annotations emitted: {annotations_emitted} "
+                    f"(in {self.out_dir / 'annotations'})"
+                )
+            if variant_annotations > 0:
+                logger.info(
+                    f"✓ Checker-synthesised variants: {variant_annotations} "
+                    f"(suspicious annotations from KNighter follow-up)"
+                )
+            if fixture_skipped_llm_calls > 0:
+                logger.info(
+                    f"✓ Fixture-detection (D-1): "
+                    f"{fixture_skipped_llm_calls} LLM call(s) skipped "
+                    f"(test-harness circularity); prep outcomes "
+                    f"{fixture_prep_outcomes}"
+                )
             logger.info(f"")
             if dataflow_validated > 0:
                 logger.info(f"Dataflow Validation:")
@@ -1230,13 +1644,74 @@ def main() -> None:
     ap.add_argument("--out", help="Output directory")
     ap.add_argument("--max-findings", type=int, default=10, help="Max findings to process")
     ap.add_argument("--checklist", help="Inventory checklist.json for function metadata lookup")
+    ap.add_argument(
+        "--no-annotations",
+        action="store_true",
+        help="Skip per-finding annotation emission and the "
+             "annotation-derived coverage record",
+    )
+    ap.add_argument(
+        "--no-checker-synthesis",
+        action="store_true",
+        help="Skip the KNighter follow-up: don't synthesise a "
+             "checker rule per confirmed finding, don't emit "
+             "variant annotations. Use to cut LLM cost on confirmed "
+             "exploitable findings — at the price of losing variant "
+             "discovery.",
+    )
     ap.add_argument("--prep-only", action="store_true",
                     help="Skip LLM analysis; produce structured findings for external orchestration")
+    ap.add_argument("--max-parallel", type=int, default=3, help="Max parallel dispatch threads")
+
+    model_group = ap.add_argument_group(
+        "multi-model analysis",
+        "When any of these flags are provided, findings are prepped then "
+        "dispatched through the parallel orchestrator with role support.",
+    )
+    model_group.add_argument("--model", metavar="MODEL", action="append", default=[],
+                             help="Analysis model (repeatable for multi-model)")
+    model_group.add_argument("--consensus", metavar="MODEL",
+                             help="Blind second opinion model")
+    model_group.add_argument("--judge", metavar="MODEL",
+                             help="Non-blind review model")
+    model_group.add_argument("--aggregate", metavar="MODEL",
+                             help="Final synthesis model for multi-model results")
+
+    # IRIS Tier 2/3 deep-validate gate. Mirrors raptor_agentic.py.
+    # Without these flags /analyze can never reach Tier 4 SMT
+    # refinement on findings the orchestrator passed through —
+    # the auto-enable on path_conditions is the only path most
+    # operators take, so we want it here too.
+    ap.add_argument(
+        "--deep-validate",
+        action="store_true",
+        help="Force-enable Tier 2 / Tier 3 of IRIS validation for ALL "
+             "findings: when Tier 1 is inconclusive, ask the LLM to write "
+             "source+sink predicates and retry on compile errors. Costs "
+             "LLM tokens. Without this flag, Tier 2/3 auto-enables per-"
+             "finding when the LLM emits `path_conditions` (usage-driven "
+             "default); pass --no-deep-validate to disable even that auto-"
+             "enable path.",
+    )
+    ap.add_argument(
+        "--no-deep-validate",
+        action="store_true",
+        help="Hard kill-switch: disable Tier 2 / Tier 3 entirely, including "
+             "the default usage-driven auto-enable. Takes precedence over "
+             "--deep-validate.",
+    )
 
     args = ap.parse_args()
 
     if not args.sarif and not args.findings:
         ap.error("Either --sarif or --findings is required")
+
+    _has_role_flags = any([
+        getattr(args, "model", []),
+        getattr(args, "consensus", None),
+        getattr(args, "judge", None),
+        getattr(args, "aggregate", None),
+    ])
 
     # Suggest --findings if validation artifacts exist nearby
     if args.sarif and not args.findings:
@@ -1253,8 +1728,13 @@ def main() -> None:
         # Collision-prevention via unique_run_suffix — see core/run/output.py.
         out_dir = RaptorConfig.get_out_dir() / f"autonomous_v2_{unique_run_suffix('_')}"
 
-    # Initialize agent with LLM
-    agent = AutonomousSecurityAgentV2(repo_path, out_dir, prep_only=args.prep_only)
+    # When role flags are present, force prep-only then hand off to orchestrator
+    prep_only = args.prep_only or _has_role_flags
+    agent = AutonomousSecurityAgentV2(
+        repo_path, out_dir,
+        prep_only=prep_only,
+        synthesise_checkers=not args.no_checker_synthesis,
+    )
 
     # Load checklist for metadata lookup
     checklist = None
@@ -1267,12 +1747,44 @@ def main() -> None:
             logger.warning(f"Could not load checklist: {args.checklist}")
 
     # Process findings - route based on input type
+    emit_annotations = not args.no_annotations
     if args.findings:
         report = agent.process_findings(findings_path=args.findings, max_findings=args.max_findings,
-                                        checklist=checklist)
+                                        checklist=checklist,
+                                        emit_annotations=emit_annotations)
     else:
         report = agent.process_findings(sarif_paths=args.sarif, max_findings=args.max_findings,
-                                        checklist=checklist)
+                                        checklist=checklist,
+                                        emit_annotations=emit_annotations)
+
+    # Orchestrated path: role flags → prep then parallel dispatch
+    if _has_role_flags and report.get("mode") == "prep_only":
+        prep_report_path = out_dir / "autonomous_analysis_report.json"
+        if prep_report_path.exists():
+            from packages.llm_analysis.orchestrator import (
+                build_llm_config_from_flags, orchestrate,
+            )
+            llm_config = build_llm_config_from_flags(
+                models=args.model or [],
+                consensus=args.consensus,
+                judge=args.judge,
+                aggregate=args.aggregate,
+            )
+            if llm_config:
+                result = orchestrate(
+                    prep_report_path=prep_report_path,
+                    repo_path=repo_path,
+                    out_dir=out_dir,
+                    max_parallel=args.max_parallel,
+                    max_findings=args.max_findings,
+                    llm_config=llm_config,
+                    deep_validate=getattr(args, "deep_validate", False),
+                    deep_validate_disabled=getattr(args, "no_deep_validate", False),
+                )
+                if result:
+                    return
+        print("\n  Orchestration skipped — check model/API key configuration")
+        return
 
     if report.get('mode') != 'prep_only':
         print("\n" + "=" * 70)
@@ -1282,6 +1794,17 @@ def main() -> None:
         print(f"Exploitable: {report['exploitable']}")
         print(f"Exploits generated: {report['exploits_generated']} (LLM-generated)")
         print(f"Patches generated: {report['patches_generated']} (LLM-generated)")
+        # IRIS Tier 1/2/3/4 + path_conditions telemetry — same
+        # surfacing /agentic uses (raptor_agentic.py). Renders only
+        # when validation actually ran on at least one finding;
+        # silent on prep-only / no-CodeQL-DB runs. Indent at zero
+        # because /analyze's report uses flat lines (no leading
+        # whitespace), unlike /agentic which uses "   " for the
+        # nested-under-summary cadence.
+        from core.reporting.dataflow_summary import render_dataflow_validation_lines
+        dv = (report or {}).get("dataflow_validation") or {}
+        for line in render_dataflow_validation_lines(dv, indent=""):
+            print(line)
         print(f"LLM cost: ${report['llm_stats']['total_cost']:.4f}")
         print(f"Output: {out_dir}")
         print("=" * 70)

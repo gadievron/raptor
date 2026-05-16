@@ -158,9 +158,6 @@
 ## Recovery Commands
 
 ```bash
-# Retry specific stage
-/validate ./code --resume --stage C
-
 # Skip problematic stage
 /validate ./code --skip-feasibility
 

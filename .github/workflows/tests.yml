@@ -5,6 +5,13 @@ on:
     branches: [ main ]
   push:
     branches: [ main ]
+  merge_group:
+  schedule:
+    # Daily full-suite run catches indirect breakage a path filter
+    # would miss (e.g. a refactor breaks an API contract without
+    # touching the tests that exercise it). Daily rather than weekly
+    # given the codebase's churn rate.
+    - cron: '0 6 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -16,54 +23,217 @@ env:
   VENV_PATH: .venv
 
 permissions:
-    contents: read
+  contents: read
+  # Needed by the pre_check job to query prior workflow runs at the
+  # current SHA via ``gh api repos/.../actions/runs``.
+  actions: read
 
 jobs:
+  # Skip the workflow if a previous successful run of this same workflow
+  # already passed at the exact same commit SHA — catches the
+  # "PR fast-forward-merged → main push reruns the same SHA" case and
+  # explicit re-runs. Doc-only / .claude-only PRs are skipped naturally
+  # by the per-job path-filter gate in `changes`, not here.
+  pre_check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      should_skip: ${{ steps.dup.outputs.should_skip }}
+    steps:
+      - id: dup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW: ${{ github.workflow }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          should_skip=false
+          # Never dedup forced-full events: the operator triggered them
+          # deliberately (cron, manual dispatch) or the merge queue needs
+          # an authoritative pass.
+          if [[ "$EVENT" != "schedule" && "$EVENT" != "workflow_dispatch" \
+             && "$EVENT" != "merge_group" ]]; then
+            dup=$(gh api -X GET "repos/${REPO}/actions/runs" \
+                    -f "head_sha=${SHA}" -f "status=success" \
+                    --jq ".workflow_runs[] | select(.name==\"${WORKFLOW}\" and .id != ${RUN_ID}) | .id" \
+                  | head -n1 || true)
+            if [[ -n "${dup:-}" ]]; then
+              should_skip=true
+              echo "Skipping: prior successful run ${dup} already covered SHA ${SHA}"
+            fi
+          fi
+          echo "should_skip=${should_skip}" >> "$GITHUB_OUTPUT"
+
+  # Path-filter equivalent of dorny/paths-filter, implemented with the
+  # GitHub API for changed-file enumeration and a small in-tree Python
+  # script (``.github/scripts/compute_filters.py``) for glob matching.
+  # The script's FILTERS dict is the single source of truth, also
+  # imported by ``.github/tests/test_filter_coverage.py``.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      python: ${{ steps.filter.outputs.python }}
+      sandbox: ${{ steps.filter.outputs.sandbox }}
+      exploit_feasibility: ${{ steps.filter.outputs.exploit_feasibility }}
+      prompt_audit: ${{ steps.filter.outputs.prompt_audit }}
+      ci_lint: ${{ steps.filter.outputs.ci_lint }}
+      codeql: ${{ steps.filter.outputs.codeql }}
+      llm_analysis: ${{ steps.filter.outputs.llm_analysis }}
+      cve_diff: ${{ steps.filter.outputs.cve_diff }}
+      fuzzing: ${{ steps.filter.outputs.fuzzing }}
+      sage: ${{ steps.filter.outputs.sage }}
+      orchestration: ${{ steps.filter.outputs.orchestration }}
+      force_full: ${{ steps.force.outputs.force_full }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
+
+      - id: force
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT" == "schedule" || "$EVENT" == "workflow_dispatch" \
+             || "$EVENT" == "merge_group" ]]; then
+            echo "force_full=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "force_full=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - id: changed_files
+        if: steps.force.outputs.force_full == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          out=/tmp/changed_files.txt
+          : > "$out"
+          case "$EVENT" in
+            pull_request|pull_request_target)
+              gh api --paginate \
+                "repos/${REPO}/pulls/${PR_NUMBER}/files" \
+                --jq '.[].filename' >> "$out"
+              ;;
+            push)
+              if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
+                # First push to a new branch — no diff base. Fall through
+                # to the no-list path so compute_filters forces all true.
+                rm -f "$out"
+              else
+                gh api --paginate \
+                  "repos/${REPO}/compare/${BEFORE}...${AFTER}" \
+                  --jq '.files[].filename' >> "$out"
+              fi
+              ;;
+            *)
+              # Other event types reach this step only if force_full was
+              # false (shouldn't happen given the if: above). Treat as
+              # "unknown diff" → force all filters on.
+              rm -f "$out"
+              ;;
+          esac
+          if [[ -f "$out" ]]; then
+            echo "list=$out" >> "$GITHUB_OUTPUT"
+            echo "Changed files ($(wc -l < "$out")):"
+            cat "$out"
+          fi
+
+      - id: filter
+        env:
+          CHANGED_FILES_LIST: ${{ steps.changed_files.outputs.list }}
+        run: |
+          python3 .github/scripts/compute_filters.py
+
   deps:
+    needs: [pre_check, changes]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.python == 'true' ||
+       needs.changes.outputs.sandbox == 'true' ||
+       needs.changes.outputs.exploit_feasibility == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # was v8.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "requirements*.txt"
+
       - name: Create venv and install deps
         run: |
-          python -m venv $VENV_PATH
+          uv venv $VENV_PATH
           source $VENV_PATH/bin/activate
-          python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          uv pip install -r requirements-dev.txt
 
       - name: Verify venv exists
         run: test -d "$VENV_PATH" || (echo "venv missing at $VENV_PATH" && exit 1)
 
       - name: Upload venv for this run
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # was v7
         with:
           name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}
           include-hidden-files: true
           retention-days: 1
 
-  python-unit-tests:
+  # Fast tier: everything under core/ and packages/ except the two
+  # heavyweight subdirs that get their own jobs (sandbox, exploit_feasibility).
+  # Split 2-way via pytest-split so the slowest CI job runs in parallel.
+  # No .test_durations file is committed: pytest-split falls back to random
+  # distribution on first run and converges over subsequent runs. The
+  # max(group1, group2) wallclock is still well below the unsplit total
+  # even when unbalanced, so the saving is meaningful from day one.
+  python-unit-tests-fast:
+    needs: [pre_check, changes, deps]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.python == 'true')
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    needs: deps
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # 4-way split: ~2x parallelism uplift over the 2-way split for
+        # the same per-runner setup cost (venv download + compileall).
+        # Sweet spot before per-runner overhead dominates the wall-clock
+        # win — a 5th group would mostly buy queueing + setup, not test
+        # parallelism.
+        group: [1, 2, 3, 4]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Download venv artifact
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
         with:
           name: venv-${{ github.run_id }}
           path: ${{ env.VENV_PATH }}
@@ -71,47 +241,385 @@ jobs:
       - name: Restore venv permissions
         run: chmod +x $VENV_PATH/bin/*
 
+      - name: Cache Python bytecode
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # was v5.0.5
+        with:
+          # __pycache__ contents are deterministic per (Python version,
+          # source contents). Caching by source-tree hash recovers the
+          # ~10–30s `compileall` adds per runner. Cache miss is a no-op
+          # — `compileall` regenerates from scratch.
+          path: |
+            core/**/__pycache__
+            packages/**/__pycache__
+            libexec/tests/**/__pycache__
+          key: pycache-${{ env.PYTHON_VERSION }}-${{ hashFiles('core/**/*.py', 'packages/**/*.py', 'libexec/tests/**/*.py') }}
+          restore-keys: |
+            pycache-${{ env.PYTHON_VERSION }}-
+
       - name: Compile Python sources
         run: |
           source $VENV_PATH/bin/activate
-          python -m compileall -q core packages *.py
+          python -m compileall -q core packages libexec/tests *.py
 
-      - name: Run unit tests
+      - name: Run unit tests (fast tier, group ${{ matrix.group }} of 4)
         run: |
           source $VENV_PATH/bin/activate
-          pytest core packages
+          # The prompt-envelope audit runs in its own narrowly-scoped
+          # job (python-prompt-audit) so it doesn't fire on unrelated
+          # Python changes. Exclude it here to avoid duplicate runs.
+          # The .github/tests filter-coverage suite has its own job so
+          # we don't pull it into the fast tier either.
+          # Heavy subsystems carved into their own gated jobs are
+          # ignored here too — see the dedicated `python-unit-tests-*`
+          # jobs further down.
+          pytest -n auto --splits 4 --group ${{ matrix.group }} core packages \
+            --ignore=core/sandbox/tests \
+            --ignore=packages/exploit_feasibility/tests \
+            --ignore=packages/codeql/tests \
+            --ignore=packages/llm_analysis/tests \
+            --ignore=packages/cve_diff/tests \
+            --ignore=packages/fuzzing/tests \
+            --ignore=packages/oss_forensics/tests \
+            --ignore=core/sage/tests \
+            --ignore=core/orchestration/tests \
+            --ignore=core/security/tests/test_prompt_envelope_audit.py
 
-  test-workflows:
-    needs: deps
-    uses: ./.github/workflows/bash-test.yml
-    with:
-      test_script: test_workflows.sh
-      venv_artifact_name: venv-${{ github.run_id }}
+      - name: Run libexec wrapper tests (group 1 only)
+        if: matrix.group == 1
+        run: |
+          source $VENV_PATH/bin/activate
+          # Keep this separate from `pytest core packages` to avoid pytest
+          # import-name collisions with other top-level tests packages.
+          pytest libexec/tests
 
-  test-fast:
-    needs: deps
-    uses: ./.github/workflows/bash-test.yml
-    with:
-      test_script: real_tests_fast.sh
-      venv_artifact_name: venv-${{ github.run_id }}
+      - name: Run CLI smoke tests (group 1 only)
+        if: matrix.group == 1
+        run: |
+          source $VENV_PATH/bin/activate
+          # End-to-end argparse acceptance + entry-point smoke for
+          # raptor.py. Ported from the now-retired test/real_tests_fast.sh.
+          # Kept separate from `pytest core packages` for the same reason
+          # as libexec/tests above.
+          pytest test/test_cli_smoke.py -n auto
 
-  test-real:
-    needs: deps
-    uses: ./.github/workflows/bash-test.yml
-    with:
-      test_script: real_tests.sh
-      venv_artifact_name: venv-${{ github.run_id }}
+      # Note: the path-filter coverage tests at `.github/tests/` used to
+      # run in this job (group 1 only). They now have their own
+      # dedicated job (`ci-lint-tests`) gated on `.github/**` changes
+      # so a code-only PR doesn't pay for them.
 
-  test-comprehensive:
-    needs: deps
-    uses: ./.github/workflows/bash-test.yml
-    with:
-      test_script: comprehensive_test.sh
-      venv_artifact_name: venv-${{ github.run_id }}
+  # Sandbox tier: ~251 heavyweight tests doing real namespace/mount/seccomp
+  # work. Gated on sandbox-related path changes only.
+  python-unit-tests-sandbox:
+    needs: [pre_check, changes, deps]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.sandbox == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
 
-  test-integration:
-    needs: deps
-    uses: ./.github/workflows/bash-test.yml
-    with:
-      test_script: integration_tests.sh
-      venv_artifact_name: venv-${{ github.run_id }}
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Download venv artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
+        with:
+          name: venv-${{ github.run_id }}
+          path: ${{ env.VENV_PATH }}
+
+      - name: Restore venv permissions
+        run: chmod +x $VENV_PATH/bin/*
+
+      - name: Run sandbox tests
+        run: |
+          source $VENV_PATH/bin/activate
+          # `python -m pytest` (rather than bare `pytest`) puts the repo
+          # root on sys.path so `from core.security.redaction import ...`
+          # in sandbox sources resolves. Bare pytest only works when
+          # `core` is included in the args (e.g. `pytest core packages`).
+          python -m pytest core/sandbox/tests
+
+  # Exploit-feasibility integration tier: 11 × ~15 s tests calling
+  # analyze_binary against real binaries. Gated on the package's real
+  # upstream dependency surface.
+  python-unit-tests-exploit-feasibility:
+    needs: [pre_check, changes, deps]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.exploit_feasibility == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Download venv artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
+        with:
+          name: venv-${{ github.run_id }}
+          path: ${{ env.VENV_PATH }}
+
+      - name: Restore venv permissions
+        run: chmod +x $VENV_PATH/bin/*
+
+      - name: Run exploit_feasibility integration tests
+        run: |
+          source $VENV_PATH/bin/activate
+          # See sandbox tests above for why `python -m pytest` is needed
+          # rather than bare `pytest`.
+          python -m pytest packages/exploit_feasibility/tests
+
+  # Prompt-envelope audit: AST-based heuristic over the registered
+  # prompt-construction files. The test only needs stdlib + pytest
+  # (no project deps), so it skips the venv artefact entirely and
+  # installs pytest standalone. Gated on the narrow ``prompt_audit``
+  # filter so it only fires when an audited file, the audit module,
+  # or the test itself actually changes.
+  python-prompt-audit:
+    needs: [pre_check, changes]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.prompt_audit == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run prompt-envelope audit
+        run: |
+          # `python -m pytest` so `from core.security...` resolves
+          # without needing the repo on PYTHONPATH.
+          python -m pytest core/security/tests/test_prompt_envelope_audit.py -q
+
+  # CI lint / filter-coverage tests. Validates that compute_filters.py's
+  # globs cover the actual import dependencies of subsystem-scoped jobs.
+  # No project deps required — only pytest.
+  ci-lint-tests:
+    needs: [pre_check, changes]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.ci_lint == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run CI filter-coverage tests
+        run: pytest .github/tests
+
+  # Heavy-subdir Python tiers — each gated on its own filter so a PR
+  # touching only one package skips the others. Filters live in
+  # compute_filters.FILTERS and are validated by ci-lint-tests above.
+  python-unit-tests-codeql:
+    needs: [pre_check, changes, deps]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.codeql == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Download venv artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
+        with:
+          name: venv-${{ github.run_id }}
+          path: ${{ env.VENV_PATH }}
+      - name: Restore venv permissions
+        run: chmod +x $VENV_PATH/bin/*
+      - name: Run codeql tests
+        run: |
+          source $VENV_PATH/bin/activate
+          python -m pytest packages/codeql/tests -n auto
+
+  python-unit-tests-llm-analysis:
+    needs: [pre_check, changes, deps]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.llm_analysis == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Download venv artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
+        with:
+          name: venv-${{ github.run_id }}
+          path: ${{ env.VENV_PATH }}
+      - name: Restore venv permissions
+        run: chmod +x $VENV_PATH/bin/*
+      - name: Run llm_analysis tests
+        run: |
+          source $VENV_PATH/bin/activate
+          python -m pytest packages/llm_analysis/tests -n auto
+
+  python-unit-tests-cve-diff:
+    needs: [pre_check, changes, deps]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.cve_diff == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Download venv artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
+        with:
+          name: venv-${{ github.run_id }}
+          path: ${{ env.VENV_PATH }}
+      - name: Restore venv permissions
+        run: chmod +x $VENV_PATH/bin/*
+      - name: Run cve_diff tests
+        run: |
+          source $VENV_PATH/bin/activate
+          python -m pytest packages/cve_diff/tests -n auto
+
+  python-unit-tests-fuzzing:
+    needs: [pre_check, changes, deps]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.fuzzing == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Download venv artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
+        with:
+          name: venv-${{ github.run_id }}
+          path: ${{ env.VENV_PATH }}
+      - name: Restore venv permissions
+        run: chmod +x $VENV_PATH/bin/*
+      - name: Run fuzzing tests
+        run: |
+          source $VENV_PATH/bin/activate
+          python -m pytest packages/fuzzing/tests -n auto
+
+  python-unit-tests-sage:
+    needs: [pre_check, changes, deps]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.sage == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Download venv artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
+        with:
+          name: venv-${{ github.run_id }}
+          path: ${{ env.VENV_PATH }}
+      - name: Restore venv permissions
+        run: chmod +x $VENV_PATH/bin/*
+      - name: Run sage tests
+        run: |
+          source $VENV_PATH/bin/activate
+          python -m pytest core/sage/tests -n auto
+
+  python-unit-tests-orchestration:
+    needs: [pre_check, changes, deps]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      (needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.orchestration == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # was v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Download venv artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
+        with:
+          name: venv-${{ github.run_id }}
+          path: ${{ env.VENV_PATH }}
+      - name: Restore venv permissions
+        run: chmod +x $VENV_PATH/bin/*
+      - name: Run orchestration tests
+        run: |
+          source $VENV_PATH/bin/activate
+          python -m pytest core/orchestration/tests -n auto
+

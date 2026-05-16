@@ -29,9 +29,15 @@ sys.path.insert(0, str(Path(__file__).parent))
 from core.json import load_json, save_json
 from core.config import RaptorConfig
 from core.logging import get_logger
+from core.run.safe_io import safe_run_mkdir
 from core.security.cc_trust import check_repo_claude_trust, set_trust_override
 
 logger = get_logger()
+
+
+def _tuning_default(key: str) -> int:
+    from core.tuning import get_tuning
+    return getattr(get_tuning(), key)
 
 
 def run_command_streaming(cmd: list, description: str) -> tuple[int, str, str]:
@@ -70,6 +76,31 @@ def run_command_streaming(cmd: list, description: str) -> tuple[int, str, str]:
         finally:
             pipe.close()
 
+    # Phase B credential-isolation: when raptor_agentic.py was
+    # itself spawned with a dispatcher session (RAPTOR_LLM_SOCKET +
+    # RAPTOR_LLM_TOKEN_FD), relay the session to the grandchild so
+    # ``--sequential`` mode of ``packages/llm_analysis/agent.py`` can
+    # reach the LLM after Phase C drops API keys from the env. Same
+    # token value, fresh inheritable FD — see
+    # ``core.llm.dispatcher.client.relay_for_grandchild``.
+    child_env = RaptorConfig.get_safe_env()
+    child_pass_fds: list[int] = []
+    if os.environ.get("RAPTOR_LLM_SOCKET"):
+        try:
+            from core.llm.dispatcher.client import relay_for_grandchild
+            socket_path, token_fd = relay_for_grandchild()
+            child_env["RAPTOR_LLM_SOCKET"] = socket_path
+            child_env["RAPTOR_LLM_TOKEN_FD"] = str(token_fd)
+            child_pass_fds.append(token_fd)
+        except Exception as exc:
+            logger.warning(
+                f"credential-isolation relay to grandchild failed, "
+                f"falling back to env-direct: {exc}"
+            )
+            token_fd = None
+    else:
+        token_fd = None
+
     try:
         process = subprocess.Popen(
             cmd,
@@ -78,20 +109,58 @@ def run_command_streaming(cmd: list, description: str) -> tuple[int, str, str]:
             text=True,
             bufsize=1,  # Line buffered
             universal_newlines=True,
-            env=RaptorConfig.get_safe_env()
+            env=child_env,
+            pass_fds=tuple(child_pass_fds),
+            # Detach from parent's process group so operator
+            # Ctrl-C in the parent doesn't propagate SIGINT
+            # to the child via the controlling terminal. The
+            # parent handles its own KeyboardInterrupt and
+            # decides what to do with the child (terminate
+            # gracefully, kill, or let finish). Pre-fix
+            # SIGINT reached the child too — race-condition
+            # cleanup where the child died mid-write before
+            # the parent's handler could log a meaningful
+            # message.
+            start_new_session=True,
         )
+        # The child has inherited the FD; close our copy so the
+        # pipe's EOF tracks the child's lifetime, not ours.
+        if token_fd is not None:
+            try:
+                os.close(token_fd)
+            except OSError:
+                pass
 
         stdout_lines = []
         stderr_lines = []
 
-        # Create threads to read stdout and stderr concurrently
+        # Create threads to read stdout and stderr concurrently.
+        #
+        # `daemon=True` so an unexpected interpreter exit doesn't
+        # block on a stuck reader. Pre-fix the threads were
+        # foreground (default `daemon=False`); on a failure path
+        # where the parent's main thread raised before reaching
+        # the bounded join (e.g. a downstream lifecycle helper
+        # crashing during `_complete_lifecycle`), Python's atexit
+        # path waited indefinitely for the readers to finish —
+        # which they wouldn't, because the child process was
+        # gone but its grandchildren held the pipe FDs open.
+        # Operators saw RAPTOR "complete" then HANG at exit
+        # instead of returning to the prompt; the only escape
+        # was Ctrl-C, which often killed the run summary too.
+        # With daemon=True the interpreter exits regardless,
+        # losing any in-flight stream lines (acceptable — by
+        # then the run is already over and post-processing is
+        # done).
         stdout_thread = threading.Thread(
             target=stream_output,
-            args=(process.stdout, stdout_lines)
+            args=(process.stdout, stdout_lines),
+            daemon=True,
         )
         stderr_thread = threading.Thread(
             target=stream_output,
-            args=(process.stderr, stderr_lines)
+            args=(process.stderr, stderr_lines),
+            daemon=True,
         )
 
         # Start reading threads
@@ -101,9 +170,16 @@ def run_command_streaming(cmd: list, description: str) -> tuple[int, str, str]:
         # Wait for process to complete
         process.wait(timeout=1800)  # 30 minutes
 
-        # Wait for all output to be read
-        stdout_thread.join()
-        stderr_thread.join()
+        # Wait for all output to be read.
+        # Bounded join: pre-fix `.join()` (no timeout) hung forever
+        # if the reader thread blocked on a stuck pipe (process is
+        # gone but the OS pipe-buffer drain isn't progressing — rare
+        # with subprocess.PIPE + .wait() done first, but seen on
+        # macOS with zombie children that keep the pipe FD alive).
+        # 5s is plenty after process.wait() returned — by then the
+        # OS has flushed everything that's coming.
+        stdout_thread.join(timeout=5)
+        stderr_thread.join(timeout=5)
 
         stdout = ''.join(stdout_lines)
         stderr = ''.join(stderr_lines)
@@ -112,7 +188,24 @@ def run_command_streaming(cmd: list, description: str) -> tuple[int, str, str]:
 
     except subprocess.TimeoutExpired:
         logger.error(f"Command timed out: {description}")
+        # Reap properly: kill THEN wait. Pre-fix `process.kill()`
+        # alone left the child as a zombie until the OS reaped it
+        # via SIGCHLD (or until our parent process exited),
+        # potentially holding open pipe FDs and sandbox resources.
+        # The follow-up `wait(timeout=5)` collects the exit status
+        # and frees the kernel slot.
         process.kill()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                f"Process {process.pid} did not exit within 5s of SIGKILL — "
+                f"leaving as zombie (OS will reap on parent exit)"
+            )
+        # Bounded thread join after kill so we don't hang on the
+        # pipe-reader threads — same rationale as the success path.
+        stdout_thread.join(timeout=5)
+        stderr_thread.join(timeout=5)
         return -1, "", "Timeout"
     except Exception as e:
         logger.error(f"Command failed: {e}")
@@ -514,6 +607,25 @@ Examples:
 
   # Focus validation on specific vulnerability type
   python3 raptor.py agentic --repo /path/to/code --vuln-type sql_injection
+
+  # Choose a specific analysis model (overrides models.json auto-detection)
+  python3 raptor.py agentic --repo /path/to/code --model gemini-2.5-pro
+
+  # Multi-model: N models independently analyse, results correlated
+  python3 raptor.py agentic --repo /path/to/code \\
+    --model gemini-2.5-pro --model gpt-5 --model claude-opus-4-6
+
+  # Two analysis models + one aggregate model for downstream triage
+  python3 raptor.py agentic --repo /path/to/code \\
+    --model claude-opus-4-6 --model gpt-5.4 --aggregate claude-sonnet-4-6
+
+  # Single model + consensus second opinion
+  python3 raptor.py agentic --repo /path/to/code --model gemini-2.5-pro \\
+    --consensus claude-opus-4-6
+
+  # Single model + judge review
+  python3 raptor.py agentic --repo /path/to/code --model gemini-2.5-pro \\
+    --judge claude-opus-4-6
         """
     )
 
@@ -523,6 +635,11 @@ Examples:
     parser.add_argument("--max-findings", type=int, default=10, help="Maximum findings to process (default: 10)")
     parser.add_argument("--no-exploits", action="store_true", help="Skip exploit generation")
     parser.add_argument("--no-patches", action="store_true", help="Skip patch generation")
+    parser.add_argument(
+        "--no-annotations",
+        action="store_true",
+        help="Skip per-finding annotation emission (default: emit)",
+    )
     parser.add_argument("--out", help="Output directory")
     parser.add_argument("--mode", choices=["fast", "thorough"], default="thorough",
                        help="fast: quick scan, thorough: detailed analysis")
@@ -550,14 +667,19 @@ Examples:
     parser.add_argument("--vuln-type", help="Vulnerability type to focus on (e.g., command_injection, sql_injection)")
 
     # Orchestration options
-    parser.add_argument("--max-parallel", type=int, default=3,
-                       help="Maximum parallel Claude Code agents for Phase 4 orchestration (default: 3)")
+    parser.add_argument("--max-parallel", type=int, default=None,
+                       help="Maximum parallel Claude Code agents for Phase 4 orchestration (default: from tuning.json)")
     parser.add_argument("--understand", action="store_true",
                         help="Run /understand --map before scanning for architectural context")
     parser.add_argument("--validate", action="store_true",
                         help="Run /validate on exploitable/high-confidence findings after analysis")
     parser.add_argument("--sequential", action="store_true",
                        help="Sequential analysis in Phase 3 instead of parallel Phase 4 orchestration")
+    parser.add_argument("--verbose", action="store_true",
+                       help="Drop console log level from INFO to DEBUG. "
+                            "Surfaces per-LLM-call detail (cache hits, retries, "
+                            "per-call cost/duration). Useful for debugging "
+                            "multi-model dispatches or schema validation failures.")
 
     # Fuzzing integration (Phase 5: dynamic confirmation)
     parser.add_argument("--fuzz", action="store_true",
@@ -573,23 +695,123 @@ Examples:
                             "Use this to verify host capabilities before a long campaign.")
 
     parser.add_argument(
+        "--accept-weakened-defenses",
+        action="store_true",
+        help="Allow analysis to proceed when a model fails the defense envelope "
+             "probe. Without this flag, probe failure aborts orchestration. "
+             "With it, model-dependent defenses (envelope tags, datamarking, "
+             "base64) are disabled; model-independent floor still holds. "
+             "Logged in run metadata and flagged in the final report.",
+    )
+    model_group = parser.add_argument_group(
+        "multi-model analysis",
+        "Choose which LLMs analyse findings. The primary model is auto-detected "
+        "from models.json / API key env vars unless --model overrides it. "
+        "Role models (consensus, judge, aggregate) are optional additions.",
+    )
+    model_group.add_argument(
+        "--model",
+        metavar="MODEL",
+        action="append",
+        default=[],
+        help="Analysis model (repeatable). Single: --model gemini-2.5-pro. "
+             "Multi: --model gemini-2.5-pro --model gpt-5 — each independently "
+             "analyses every finding, then results are correlated.",
+    )
+    model_group.add_argument(
+        "--consensus",
+        metavar="MODEL",
+        help="Blind second opinion — re-analyses each finding independently "
+             "without seeing the primary verdict. Majority vote decides.",
+    )
+    model_group.add_argument(
+        "--judge",
+        metavar="MODEL",
+        help="Non-blind review — sees and critiques the primary analysis "
+             "reasoning. Flags missed attack paths or flawed logic.",
+    )
+    model_group.add_argument(
+        "--aggregate",
+        metavar="MODEL",
+        help="Optional. LLM-written synthesis on top of the deterministic "
+             "multi-model correlation. Adds a narrative summary, top findings, "
+             "and recommended next actions to the report. Requires at least "
+             "two --model values; without --aggregate you still get the "
+             "correlation results.",
+    )
+    parser.add_argument(
+        "--no-validate-dataflow",
+        action="store_true",
+        help="Disable IRIS-style dataflow validation entirely. By default, "
+             "Tier 1 (free, CodeQL-only — runs the pre-built RemoteFlowSource "
+             "and RAPTOR-shipped LocalFlowSource queries against the project "
+             "database) is on whenever --codeql produced a database. Pass this "
+             "flag to skip validation completely.",
+    )
+    parser.add_argument(
+        "--deep-validate",
+        action="store_true",
+        help="Force-enable Tier 2 / Tier 3 of IRIS validation for ALL "
+             "findings: when Tier 1 is inconclusive, ask the LLM to write "
+             "source+sink predicates and retry on compile errors. Costs LLM "
+             "tokens. Implies dataflow validation is enabled (see "
+             "--no-validate-dataflow to opt out). Without this flag, Tier 2/3 "
+             "auto-enables per-finding when the LLM emits `path_conditions` "
+             "(usage-driven default — only spends tokens on findings the LLM "
+             "thinks it can SMT-check); pass --no-deep-validate to disable "
+             "even that auto-enable path.",
+    )
+    parser.add_argument(
+        "--no-deep-validate",
+        action="store_true",
+        help="Hard kill-switch: disable Tier 2 / Tier 3 entirely, including "
+             "the default usage-driven auto-enable on findings where the LLM "
+             "emitted `path_conditions`. Use when budget pressure is acute or "
+             "when bisecting whether deep-validate is responsible for a "
+             "verdict change. Takes precedence over --deep-validate.",
+    )
+    parser.add_argument(
+        "--deep-validate-budget",
+        type=float,
+        default=0.60,
+        metavar="FRACTION",
+        help="Fraction of LLM budget (0.0-1.0) above which --deep-validate's "
+             "Tier 2 / 3 LLM calls are skipped to leave room for downstream "
+             "tasks (consensus, exploit, patch). Tier 1 has no LLM cost so "
+             "this budget never gates it. Default 0.60.",
+    )
+    parser.add_argument(
         "--trust-repo",
         action="store_true",
-        help="Trust the target repo's config and skip safety checks. Currently "
-             "covers the Claude Code config check in core/security/cc_trust.py "
-             "(credential helpers, hooks, dangerous env vars, stdio MCP servers). "
-             "Future trust checks read the same signal.",
+        help="Trust the target repo's config and skip safety checks. Covers the "
+             "Claude Code config check (core/security/cc_trust.py) AND the "
+             "CodeQL pack/config check (core/security/codeql_trust.py). New "
+             "trust checks read the same signal.",
     )
 
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(parser)
     args = parser.parse_args()
-    apply_cli_args(args)
+    apply_cli_args(args, parser=parser)
 
-    # Propagate --trust-repo via a module-level flag in cc_trust so every
-    # in-process trust check (this module, build_detector, ...) agrees.
+    # --verbose: drop the existing console StreamHandler from INFO to
+    # DEBUG so per-LLM-call detail (cache hits, retries, per-call
+    # cost/duration) becomes visible. Doesn't change the file handler
+    # (already DEBUG) — only what the operator sees on stderr.
+    if getattr(args, "verbose", False):
+        import logging
+        for h in logger.logger.handlers:
+            if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+                h.setLevel(logging.DEBUG)
+
+    # Propagate --trust-repo to every target-repo trust check so each
+    # in-process consumer (cc_trust, codeql_trust, build_detector, ...)
+    # agrees on the operator's intent. New checks added here must keep
+    # this list in sync.
     if getattr(args, "trust_repo", False):
         set_trust_override(True)
+        from core.security.codeql_trust import set_trust_override as _ql_set
+        _ql_set(True)
 
     if not args.repo:
         parser.error("--repo is required (or launch via `raptor` from the target directory)")
@@ -691,7 +913,11 @@ Examples:
     repo_name = repo_path.name  # Define repo_name for logging
     from core.run import get_output_dir
     out_dir = get_output_dir("agentic", target_name=repo_name, explicit_out=args.out if args.out else None)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # Parent (RAPTOR_DIR/out/, project dir, or --out target's parent) is
+    # raptor-controlled — plain mkdir is fine. The leaf is the predictable
+    # timestamp+PID name and gets the symlink/UID/world-write check.
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    safe_run_mkdir(out_dir)
 
     try:
         from core.run import start_run
@@ -821,6 +1047,40 @@ Examples:
         else:
             logger.warning(f"Pre-pass skipped: {prepass_result.skipped_reason}")
 
+    # ========================================================================
+    # PRE-PASS: reachability — always-on companion to /understand.
+    # Marks dead-code functions priority=low in the agentic checklist using
+    # core.inventory.reachability. Runs regardless of --understand because
+    # the agentic LLM analysis prompt reads priority/priority_reason and
+    # benefits from the dead-code signal even without context-map upgrades.
+    # The returned inventory is threaded through to downstream consumers
+    # (codeql analyzer, /validate post-pass) so they don't re-walk the tree.
+    # ========================================================================
+    reachability_prepass_result = None
+    try:
+        from core.orchestration import run_reachability_prepass
+        reachability_prepass_result = run_reachability_prepass(
+            target=original_repo_path,
+            agentic_out_dir=out_dir,
+        )
+        if reachability_prepass_result.ran:
+            logger.info(
+                f"Reachability pre-pass marked "
+                f"{reachability_prepass_result.marked_count} dead-code "
+                f"function(s) priority=low "
+                f"(took {reachability_prepass_result.duration_s:.1f}s)"
+            )
+        else:
+            logger.debug(
+                "Reachability pre-pass skipped: "
+                f"{reachability_prepass_result.skipped_reason}"
+            )
+    except Exception:                               # noqa: BLE001
+        logger.warning(
+            "Reachability pre-pass failed; continuing without it",
+            exc_info=True,
+        )
+
     all_sarif_files = []
     semgrep_metrics = {}
     codeql_metrics = {}
@@ -834,6 +1094,24 @@ Examples:
     semgrep_proc = None
     codeql_proc = None
 
+    # Propagate sandbox CLI flags to the scanner subprocesses. Without
+    # this, `python raptor.py agentic --audit` would set audit mode in
+    # the agentic process but the actual sandbox-using subprocesses
+    # (scanner.py, codeql/agent.py) would inherit nothing — audit signal
+    # in the run dir would be empty even though --audit was requested.
+    # Discovered by E2E against /tmp/vulns: the outer process logged
+    # "audit engaged" but no sandbox-summary.json appeared in any
+    # subprocess's run dir.
+    sandbox_passthrough = []
+    if getattr(args, "sandbox", None) is not None:
+        sandbox_passthrough.extend(["--sandbox", args.sandbox])
+    if getattr(args, "no_sandbox", False):
+        sandbox_passthrough.append("--no-sandbox")
+    if getattr(args, "audit", False):
+        sandbox_passthrough.append("--audit")
+    if getattr(args, "audit_verbose", False):
+        sandbox_passthrough.append("--audit-verbose")
+
     if run_semgrep:
         print("\n[*] Running Semgrep analysis...")
         semgrep_cmd = [
@@ -841,11 +1119,14 @@ Examples:
             str(script_root / "packages/static-analysis/scanner.py"),
             "--repo", str(repo_path),
             "--policy_groups", args.policy_groups,
+            *sandbox_passthrough,
         ]
         logger.info("Running: Scanning code with Semgrep")
         semgrep_proc = subprocess.Popen(
             semgrep_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            bufsize=1,  # Line-buffered, see main-Popen comment.
             env=RaptorConfig.get_safe_env(),
+            start_new_session=True,  # See main-Popen comment.
         )
 
     if run_codeql:
@@ -855,12 +1136,35 @@ Examples:
             str(script_root / "packages/codeql/agent.py"),
             "--repo", str(repo_path),
             "--out", str(out_dir / "codeql"),
+            *sandbox_passthrough,
         ]
         if args.languages:
             codeql_cmd.extend(["--languages", args.languages])
         if args.build_command:
-            # SECURITY: build_command is shell-evaluated. Must be operator-supplied,
-            # never derived from repo content (malicious Makefiles, etc.)
+            # SECURITY: build_command flows to `codeql database
+            # create --command <cmd>`. CodeQL splits --command on
+            # whitespace WITHOUT shell interpretation (no &&, ||,
+            # ;, | etc.), then either runs the resulting argv
+            # directly OR wraps it in a temp shell script when
+            # the operator's command needs shell semantics
+            # (handled in `database_manager._wrap_in_shell_script`
+            # — see its docstring).
+            #
+            # Pre-fix this comment said "build_command is
+            # shell-evaluated" without context. That's true for
+            # the SHELL-WRAPPED path (database_manager wraps in
+            # bash when `;`/`&&` are present) but NOT for the
+            # default direct-argv path. The misleading absolute
+            # made operators assume any shell-meta in
+            # build_command was always live, which is true for
+            # security purposes (the value MUST be operator-
+            # supplied, never repo-derived) but the runtime
+            # behaviour is more nuanced.
+            #
+            # Net: same security requirement (operator-supplied
+            # only), but the comment now reflects reality:
+            # CodeQL's own splitter is no-shell; only the
+            # explicit shell-script wrap path runs under bash.
             codeql_cmd.extend(["--build-command", args.build_command])
         if args.extended:
             codeql_cmd.append("--extended")
@@ -869,10 +1173,13 @@ Examples:
         logger.info("Running: Scanning code with CodeQL")
         codeql_proc = subprocess.Popen(
             codeql_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            bufsize=1,  # Line-buffered, see main-Popen comment.
             env=RaptorConfig.get_safe_env(),
+            start_new_session=True,  # See main-Popen comment.
         )
 
     # ---- Collect Semgrep results ----
+    semgrep_timed_out = False
     if semgrep_proc:
         try:
             semgrep_stdout, semgrep_stderr = semgrep_proc.communicate(timeout=1800)
@@ -881,8 +1188,29 @@ Examples:
             semgrep_proc.kill()
             semgrep_proc.communicate()
             rc = -1
+            semgrep_timed_out = True
             print("❌ Semgrep scan timed out (30m)")
             logger.error("Semgrep scan timed out")
+            # Surface the timeout in the agentic-run summary even when
+            # CodeQL also runs. Pre-fix the `if not run_codeql:
+            # sys.exit(1)` asymmetry made the timeout LOUDLY fail
+            # Semgrep-only runs but SILENTLY continue mixed runs —
+            # operator scrolling past the error mid-run could miss
+            # it and ship a "scan complete" report that was actually
+            # missing all Semgrep findings. Write a marker file so
+            # downstream consumers (project merge, /project status,
+            # final summary) see an unambiguous "Semgrep timed out"
+            # signal instead of just absent semgrep_*.json files
+            # (which look indistinguishable from "scan was disabled").
+            try:
+                from core.json import save_json as _save_json
+                _save_json(
+                    Path(args.out) / ".semgrep_timeout" if args.out
+                    else RaptorConfig.get_out_dir() / ".semgrep_timeout",
+                    {"timed_out_at_seconds": 1800, "stage": "semgrep"},
+                )
+            except Exception:
+                pass
             if not run_codeql:
                 sys.exit(1)
 
@@ -954,19 +1282,80 @@ Examples:
                 for sarif in sarif_files:
                     all_sarif_files.append(Path(sarif))
 
-    # Check if we have any findings
+    # Check if we have any findings from source-code scanners.
+    # SCA may still contribute findings even when Semgrep/CodeQL found nothing,
+    # so we don't exit here — we proceed to the SCA phase first.
+    source_scan_empty = not all_sarif_files
+
+    # ========================================================================
+    # PHASE 1b: SOFTWARE COMPOSITION ANALYSIS
+    # ========================================================================
+    sca_metrics = {}
+    sca_out = out_dir / "sca"
+    try:
+        from packages.sca.agent import _find_sca_agent, run_sca_subprocess
+        sca_agent = _find_sca_agent()
+    except ImportError:
+        sca_agent = None
+
+    if sca_agent:
+        print("\n" + "=" * 70)
+        print("SOFTWARE COMPOSITION ANALYSIS")
+        print("=" * 70)
+        print("\n[*] Running SCA (dependencies, supply chain, reachability)...")
+        # Route via sandbox egress proxy so SCA's HTTP calls are
+        # hostname-allowlisted when --sandbox is active. The allowlist
+        # is SCA_ALLOWED_HOSTS (vuln feeds + registries + archives).
+        rc, sca_stdout, sca_stderr = run_sca_subprocess(
+            sca_agent,
+            original_repo_path,
+            sca_out,
+            sandbox_args=sandbox_passthrough,
+        )
+        if rc == 0:
+            sca_sarif = sca_out / "findings.sarif"
+            if sca_sarif.exists():
+                all_sarif_files.append(sca_sarif)
+            # Parse the one-line JSON summary from stdout
+            import json as _json
+            for line in reversed(sca_stdout.strip().splitlines()):
+                line = line.strip()
+                if line.startswith("{"):
+                    try:
+                        sca_metrics = _json.loads(line)
+                    except Exception:
+                        pass
+                    break
+            sca_findings_count = sca_metrics.get("vuln_findings", 0) + \
+                                 sca_metrics.get("supply_chain_findings", 0)
+            print(f"\n✓ SCA complete:")
+            print(f"  - Dependencies: {sca_metrics.get('deps_analysed', 0)}")
+            print(f"  - Vulnerability findings: {sca_metrics.get('vuln_findings', 0)}")
+            print(f"  - Supply chain findings: {sca_metrics.get('supply_chain_findings', 0)}")
+            print(f"  - Hygiene findings: {sca_metrics.get('hygiene_findings', 0)}")
+        else:
+            logger.warning(f"SCA failed (rc={rc}) — continuing without dep findings")
+            sca_findings_count = 0
+    else:
+        sca_findings_count = 0
+        if not source_scan_empty:
+            logger.info("raptor-sca not installed — skipping SCA phase")
+
     if not all_sarif_files:
         print("\n❌ No SARIF files generated from scanning")
         sys.exit(1)
 
     # Combine metrics
-    total_findings = semgrep_metrics.get('total_findings', 0) + codeql_metrics.get('total_findings', 0)
+    total_findings = (semgrep_metrics.get('total_findings', 0)
+                      + codeql_metrics.get('total_findings', 0)
+                      + sca_findings_count)
     scan_metrics = {
         'total_findings': total_findings,
         'total_files_scanned': semgrep_metrics.get('total_files_scanned', 0),
         'findings_by_severity': semgrep_metrics.get('findings_by_severity', {}),
         'semgrep': semgrep_metrics,
         'codeql': codeql_metrics,
+        'sca': sca_metrics,
     }
 
     sarif_files = all_sarif_files
@@ -976,6 +1365,8 @@ Examples:
         print(f"  Semgrep: {semgrep_metrics.get('total_findings', 0)} findings")
     if codeql_metrics:
         print(f"  CodeQL: {codeql_metrics.get('total_findings', 0)} findings")
+    if sca_findings_count:
+        print(f"  SCA: {sca_findings_count} findings")
     print(f"SARIF files: {len(sarif_files)}")
 
     # ========================================================================
@@ -1045,6 +1436,11 @@ Examples:
         if (out_dir / "checklist.json").exists():
             analysis_cmd.extend(["--checklist", str(out_dir / "checklist.json")])
 
+        # Forward --no-annotations opt-out so operators who don't
+        # want annotation side effects (CI / scratch runs) can suppress.
+        if args.no_annotations:
+            analysis_cmd.append("--no-annotations")
+
         # Phase 3 preps data; Phase 4 handles LLM work (unless --sequential)
         if (llm_env.claude_code or llm_env.external_llm) and not args.sequential:
             analysis_cmd.append("--prep-only")
@@ -1084,23 +1480,35 @@ Examples:
         print("=" * 70)
 
         if analysis_report and analysis_report.exists():
-            # Build LLMConfig if external LLM is available
-            llm_config = None
-            if llm_env.external_llm:
-                from packages.llm_analysis import LLMConfig
-                llm_config = LLMConfig()
+            from packages.llm_analysis.orchestrator import (
+                build_llm_config_from_flags, orchestrate,
+            )
 
-            from packages.llm_analysis.orchestrator import orchestrate
+            llm_config = build_llm_config_from_flags(
+                models=getattr(args, "model", []) or [],
+                consensus=getattr(args, "consensus", None),
+                judge=getattr(args, "judge", None),
+                aggregate=getattr(args, "aggregate", None),
+                auto_detect=llm_env.external_llm,
+            )
+            # Dataflow validation is on by default when CodeQL ran;
+            # `--no-validate-dataflow` opts out entirely. `--deep-validate`
+            # opts into LLM-backed Tier 2/3 on top of the always-free Tier 1.
             orchestration_result = orchestrate(
                 prep_report_path=analysis_report,
                 repo_path=original_repo_path,
                 out_dir=out_dir,
-                max_parallel=args.max_parallel,
+                max_parallel=args.max_parallel if args.max_parallel is not None else _tuning_default("max_agentic_parallel"),
                 max_findings=args.max_findings,
                 no_exploits=args.no_exploits,
                 no_patches=args.no_patches,
                 llm_config=llm_config,
                 block_cc_dispatch=block_cc_dispatch,
+                accept_weakened_defenses=args.accept_weakened_defenses,
+                dataflow_validation_enabled=not getattr(args, "no_validate_dataflow", False),
+                deep_validate=getattr(args, "deep_validate", False),
+                deep_validate_disabled=getattr(args, "no_deep_validate", False),
+                deep_validate_budget=getattr(args, "deep_validate_budget", 0.60),
             )
         else:
             print("\n  No analysis report from Phase 3 — skipping orchestration")
@@ -1119,10 +1527,15 @@ Examples:
         print("\n" + "=" * 70)
         print("VALIDATE POST-PASS")
         print("=" * 70)
+        validate_input_report = (
+            out_dir / "orchestrated_report.json"
+            if orchestration_result
+            else (analysis_report if analysis_report else out_dir / "autonomous" / "autonomous_analysis_report.json")
+        )
         postpass_result = run_validate_postpass(
             target=original_repo_path,
             agentic_out_dir=out_dir,
-            analysis_report=analysis_report if analysis_report else out_dir / "autonomous" / "autonomous_analysis_report.json",
+            analysis_report=validate_input_report,
             block_cc_dispatch=block_cc_dispatch,
         )
         if postpass_result.ran:
@@ -1147,6 +1560,7 @@ Examples:
         "tools_used": {
             "semgrep": not args.codeql_only,
             "codeql": args.codeql or args.codeql_only,
+            "sca": bool(sca_agent and sca_metrics),
         },
         "phases": {
             "scanning": {
@@ -1188,6 +1602,7 @@ Examples:
             "validation_report": str(out_dir / "validation" / "findings.json") if validation_result else None,
             "autonomous_report": str(analysis_report) if analysis_report and analysis_report.exists() else None,
             "orchestrated_report": str(out_dir / "orchestrated_report.json") if orchestration_result else None,
+            "aggregation_report": str(out_dir / "aggregation.json") if orchestration_result and orchestration_result.get("aggregation") else None,
             "exploits_directory": str(autonomous_out / "exploits") if autonomous_out else None,
             "patches_directory": str(autonomous_out / "patches") if autonomous_out else None,
             "exploit_feasibility": str(out_dir / "exploit_feasibility.txt") if mitigation_result else None,
@@ -1420,6 +1835,18 @@ Examples:
         if failed_count > 0:
             parts.append(f"{failed_count} failed")
         print(f"   ⚠️  {', '.join(parts)}")
+        # Per-model failure breakdown — operator can see which model
+        # failed and why (first error truncated to 200 chars).
+        if orchestration_result:
+            failed_by_model = (
+                orchestration_result.get("orchestration", {})
+                .get("failed_by_model", {})
+            )
+            for model, info in sorted(failed_by_model.items()):
+                first_err = info.get("first_error") or ""
+                err_snippet = (first_err[:120] + "...") if len(first_err) > 120 else first_err
+                print(f"     {model}: {info.get('count', 0)} error{'s' if info.get('count') != 1 else ''}"
+                      + (f" — {err_snippet}" if err_snippet else ""))
     if true_positives > 0 or false_positives > 0:
         print(f"   True positives: {true_positives}")
         if false_positives > 0:
@@ -1436,8 +1863,21 @@ Examples:
         print(f"   Exploits generated: {exploits_count}")
     if patches_count > 0:
         print(f"   Patches generated: {patches_count}")
-    if (args.codeql or args.codeql_only) and analysis.get('dataflow_validated', 0) > 0:
-        print(f"   Dataflow paths validated: {analysis.get('dataflow_validated', 0)}")
+    # IRIS Tier 1 / 2 / 3 / 4 + path_conditions telemetry surfacing.
+    # Helper lives in core/reporting/dataflow_summary.py so /analyze
+    # (packages/llm_analysis/agent.py) can render the same block —
+    # operators running /analyze standalone after /scan would
+    # otherwise miss whether IRIS validated findings, populated
+    # path_conditions, or fired SMT.
+    from core.reporting.dataflow_summary import render_dataflow_validation_lines
+    dv = (orchestration_result or {}).get("dataflow_validation") or {}
+    for line in render_dataflow_validation_lines(dv, indent="   "):
+        print(line)
+    aggregation = orchestration_result.get("aggregation", {}) if orchestration_result else {}
+    if aggregation:
+        summary = str(aggregation.get("summary") or "").strip()
+        if summary:
+            print(f"   Aggregate synthesis: {summary[:120]}{'...' if len(summary) > 120 else ''}")
     from core.reporting import (
         FINDINGS_COLUMNS, render_console_table, render_report, build_findings_spec,
         build_findings_rows, build_findings_summary, findings_summary_line,
@@ -1458,6 +1898,16 @@ Examples:
             if len(by_model) > 1:
                 for model, mcost in by_model.items():
                     print(f"     {model}: ${mcost:.2f}")
+        # Fast-tier scorecard savings — surface concrete behaviour
+        # of the prefilter (full ANALYSE calls skipped on findings
+        # the cheap tier confidently classified as FPs and the
+        # scorecard trusted).
+        short_circuits = orchestration_result.get("orchestration", {}).get(
+            "fast_tier_short_circuits", 0
+        )
+        if short_circuits > 0:
+            plural = "s" if short_circuits != 1 else ""
+            print(f"   Fast-tier saved: {short_circuits} full ANALYSE call{plural}")
 
     print("\n📁 Outputs:")
     print(f"   Main report: {report_file}")
@@ -1492,6 +1942,8 @@ Examples:
         print("   ✓ Scanned with CodeQL")
         if codeql_metrics.get('total_findings', 0) > 0:
             print("   ✓ Validated dataflow paths")
+    if sca_metrics:
+        print(f"   ✓ Analysed {sca_metrics.get('deps_analysed', 0)} dependencies (SCA)")
     if validation_result:
         print("   ✓ Deduplicated findings")
     print("   ✓ Analysed vulnerabilities")
@@ -1512,6 +1964,8 @@ Examples:
             via = mode
         n = orch.get('findings_analysed', 0)
         print(f"   ✓ Analysed {n} finding{'s' if n != 1 else ''} via {via}")
+        if orch.get("aggregated"):
+            print("   ✓ Aggregated multi-model findings")
     print("\nReview the outputs and apply patches as needed.")
 
     # Generate markdown report
@@ -1534,6 +1988,8 @@ Examples:
         via = None
 
     pipeline_parts = ["Scan"]
+    if sca_metrics:
+        pipeline_parts.append("SCA")
     if validation.get("completed"):
         pipeline_parts.append("Dedup")
     if analysed_count > 0:
@@ -1560,6 +2016,8 @@ Examples:
     codeql = scanning.get("codeql", {})
     if codeql.get("enabled"):
         extra_summary["CodeQL"] = codeql.get("findings", 0)
+    if sca_findings_count:
+        extra_summary["SCA"] = sca_findings_count
     if validation.get("completed"):
         extra_summary["After deduplication"] = validation.get("validated_findings", 0)
     if analysed_count > 0:
@@ -1576,6 +2034,9 @@ Examples:
     cost = cost_summary.get("total_cost", 0)
     if cost > 0:
         extra_summary["Cost"] = f"${cost:.2f}"
+    if aggregation:
+        aggregate_model = aggregation.get("analysed_by")
+        extra_summary["Aggregate synthesis"] = aggregate_model or "completed"
 
     # Warnings
     warnings = []
@@ -1583,12 +2044,20 @@ Examples:
         warnings.append(f"{len(severity_mismatches)} high-severity finding(s) ruled as false positive — review recommended")
     if contradictions > 0:
         warnings.append(f"{contradictions} self-contradictory verdict(s) — reasoning conflicts with conclusion")
+    if orch_phase.get("weakened_defenses"):
+        warnings.append(
+            "Model-dependent defenses disabled (--accept-weakened-defenses). "
+            "Envelope tags, datamarking, and base64 wrapping were not applied. "
+            "Findings may be influenced by adversarial content in the target."
+        )
 
     # Output files — significant outputs only, not per-category SARIF
     outputs = final_report.get("outputs", {})
     output_files = []
     if outputs.get("orchestrated_report"):
         output_files.append(outputs["orchestrated_report"])
+    if outputs.get("aggregation_report"):
+        output_files.append(outputs["aggregation_report"])
     if outputs.get("autonomous_report"):
         output_files.append(outputs["autonomous_report"])
     sarif_files = outputs.get("sarif_files", [])
@@ -1599,12 +2068,20 @@ Examples:
         output_files.append(sarif_files[0])
     output_files.append("agentic-report.md")
 
+    extra_sections = []
+    if aggregation:
+        extra_sections.append(_build_aggregation_report_section(aggregation))
+    dv = (orchestration_result or {}).get("dataflow_validation") or {}
+    if dv and (dv.get("n_validated") or dv.get("n_cache_hits") or dv.get("skipped_reason")):
+        extra_sections.append(_build_dataflow_validation_report_section(dv))
+
     spec = build_findings_spec(
         analysed_results,
         title="RAPTOR Agentic Security Report",
         metadata=metadata,
         extra_summary=extra_summary,
         warnings=warnings,
+        extra_sections=extra_sections,
         output_files=output_files,
         include_details=False,
     )
@@ -1627,10 +2104,15 @@ Examples:
     # Mark run as completed
     try:
         from core.run import complete_run
+        orch_meta = (orchestration_result or {}).get("orchestration", {})
         complete_run(out_dir, extra={
             "findings_count": analysed_count,
             "exploitable_count": exploitable_count,
             "duration_seconds": round(workflow_duration, 1),
+            "analysis_model": orch_meta.get("analysis_model"),
+            "analysis_models": orch_meta.get("analysis_models", []),
+            "aggregate_models": orch_meta.get("aggregate_models", []),
+            "aggregated": orch_meta.get("aggregated", False),
         })
     except Exception as e:
         logger.debug(f"Run metadata: {e}")  # Optional — don't fail the pipeline
@@ -1646,6 +2128,195 @@ Examples:
 
 
 from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE
+
+
+def _build_aggregation_report_section(aggregation):
+    """Render aggregate-model synthesis for the final agentic report."""
+    from core.reporting import ReportSection
+    from core.security.prompt_output_sanitise import sanitise_string
+
+    def _text(value, max_chars=1500):
+        return sanitise_string(str(value or "").strip(), max_chars=max_chars)
+
+    lines = []
+    analysed_by = aggregation.get("analysed_by")
+    if analysed_by:
+        lines.append(f"**Model:** `{_text(analysed_by, max_chars=200)}`")
+
+    summary = _text(aggregation.get("summary"), max_chars=2000)
+    if summary:
+        lines.append(f"\n**Summary:**\n{summary}")
+
+    model_agreement = _text(aggregation.get("model_agreement"), max_chars=1500)
+    if model_agreement:
+        lines.append(f"\n**Model Agreement:**\n{model_agreement}")
+
+    high_confidence = aggregation.get("highest_confidence_findings") or []
+    if isinstance(high_confidence, list) and high_confidence:
+        lines.append("\n**Highest Confidence Findings:**")
+        for item in high_confidence[:10]:
+            if not isinstance(item, dict):
+                continue
+            fid = _text(item.get("finding_id"), max_chars=120)
+            verdict = _text(item.get("verdict"), max_chars=120)
+            confidence = _text(item.get("confidence"), max_chars=120)
+            reason = _text(item.get("reason"), max_chars=300)
+            lines.append(f"- `{fid}`: {verdict} ({confidence}) — {reason}")
+
+    disputed = aggregation.get("disputed_findings") or []
+    if isinstance(disputed, list) and disputed:
+        lines.append("\n**Disputed Findings:**")
+        for item in disputed[:10]:
+            if not isinstance(item, dict):
+                continue
+            fid = _text(item.get("finding_id"), max_chars=120)
+            disagreement = _text(item.get("disagreement"), max_chars=300)
+            needed = _text(item.get("resolution_needed"), max_chars=300)
+            lines.append(f"- `{fid}`: {disagreement}. Resolution needed: {needed}")
+
+    actions = aggregation.get("recommended_next_actions") or []
+    if isinstance(actions, list) and actions:
+        lines.append("\n**Recommended Next Actions:**")
+        for action in actions[:10]:
+            lines.append(f"- {_text(action, max_chars=300)}")
+
+    risk_notes = aggregation.get("risk_notes") or []
+    if isinstance(risk_notes, list) and risk_notes:
+        lines.append("\n**Risk Notes:**")
+        for note in risk_notes[:10]:
+            lines.append(f"- {_text(note, max_chars=300)}")
+
+    return ReportSection(
+        title="Aggregate Synthesis",
+        content="\n".join(lines) if lines else "Aggregate synthesis was requested, but the model returned no reportable fields.",
+    )
+
+
+def _build_dataflow_validation_report_section(dv):
+    """Render IRIS dataflow-validation metrics for the agentic report.
+
+    Surfaces the same Tier 1 / Tier 2 / 3 + downgrade breakdown that
+    the console summary shows, plus a couple of fields useful for
+    post-hoc review (skipped reasons, stale-DB warnings) that aren't
+    worth taking up a console line for.
+    """
+    from core.reporting import ReportSection
+
+    skipped = dv.get("skipped_reason") or ""
+    if skipped:
+        return ReportSection(
+            title="IRIS Dataflow Validation",
+            content=f"Validation was attempted but skipped: `{skipped}`.",
+        )
+
+    n_eligible = dv.get("n_eligible", 0)
+    n_validated = dv.get("n_validated", 0)
+    n_cache_hits = dv.get("n_cache_hits", 0)
+    n_errors = dv.get("n_errors", 0)
+    n_skip_no_db = dv.get("n_skipped_no_db_for_language", 0)
+    n_stale_warnings = dv.get("n_stale_db_warnings", 0)
+    n_tier1 = dv.get("n_tier1_prebuilt", 0)
+    n_tier2 = dv.get("n_tier2_template", 0)
+    n_tier3 = dv.get("n_tier3_retry", 0)
+    n_smt_refuted = dv.get("n_tier4_smt_refuted", 0)
+    n_smt_witness = dv.get("n_tier4_smt_witness", 0)
+    n_smt_disagree = dv.get("n_tier4_smt_disagree", 0)
+    n_recommended = dv.get("n_recommended_downgrades", 0)
+    n_hard = dv.get("n_applied_downgrades", 0)
+    n_soft = dv.get("n_soft_downgrades", 0)
+
+    lines = []
+    lines.append(
+        f"Eligible findings: **{n_eligible}** · "
+        f"validated: **{n_validated}**"
+        + (f" (+{n_cache_hits} cache hit{'s' if n_cache_hits != 1 else ''})"
+           if n_cache_hits else "")
+    )
+    if n_tier1 or n_tier2 or n_tier3:
+        lines.append("")
+        lines.append("**By tier:**")
+        # Tier 1 is mechanical / free (CodeQL only — pre-built or
+        # in-repo LocalFlowSource queries). Tier 2 and 3 burn LLM
+        # tokens; only run when `--deep-validate` is set.
+        if n_tier1:
+            lines.append(f"- Tier 1 (free, prebuilt query): {n_tier1}")
+        if n_tier2:
+            lines.append(f"- Tier 2 (LLM-customised predicates): {n_tier2}")
+        if n_tier3:
+            lines.append(f"- Tier 3 (LLM compile-error retry): {n_tier3}")
+    if n_smt_refuted or n_smt_witness or n_smt_disagree:
+        lines.append("")
+        lines.append("**Tier 4 SMT path-feasibility refinement:**")
+        # Tier 4 outcomes are additive on top of the Tier 1/2/3
+        # verdict. Listed separately because a single finding can
+        # have a confirmed-by-Tier-1 verdict AND a witness-attached-
+        # by-Tier-4 outcome — they aren't exclusive.
+        if n_smt_refuted:
+            lines.append(
+                f"- Refuted (inconclusive → refuted on unsat conditions): "
+                f"{n_smt_refuted}"
+            )
+        if n_smt_witness:
+            lines.append(
+                f"- Witness attached to confirmed (concrete attacker-input "
+                f"values, usable as PoC seed): {n_smt_witness}"
+            )
+        if n_smt_disagree:
+            lines.append(
+                f"- SMT-CodeQL disagreement (kept CodeQL signal — see "
+                f"warning logs): {n_smt_disagree}"
+            )
+    # path_conditions population telemetry — answers "is the LLM
+    # actually emitting the SMT-checkable conditions the schema
+    # asks for?" Without this, all-zero Tier 4 counts are ambiguous
+    # between "LLM never populates" and "LLM populates but every
+    # case resolves to no_check" — different remediations.
+    n_pc_pop = dv.get("n_path_conditions_populated", 0)
+    if n_pc_pop:
+        lines.append("")
+        lines.append("**Schema population — `path_conditions`:**")
+        lines.append(
+            f"- Findings with non-empty `path_conditions`: {n_pc_pop} "
+            f"of {n_validated} validated"
+        )
+        cwe_breakdown = dv.get("path_conditions_by_cwe") or {}
+        if cwe_breakdown:
+            lines.append("- By CWE:")
+            for cwe, count in sorted(cwe_breakdown.items(), key=lambda kv: -kv[1]):
+                lines.append(f"  - {cwe}: {count}")
+    if n_recommended:
+        lines.append("")
+        lines.append("**Downgrades:**")
+        lines.append(f"- Recommended (validation refuted claim): {n_recommended}")
+        if n_hard:
+            lines.append(f"- Applied hard (no consensus override): {n_hard}")
+        if n_soft:
+            lines.append(
+                f"- Applied soft (kept exploitable, lowered confidence — "
+                f"consensus or judge agreed with original analysis): {n_soft}"
+            )
+        if not (n_hard or n_soft):
+            lines.append(
+                "- *Note:* recommendations were not applied — "
+                "reconciliation may have been skipped or all overruled."
+            )
+    if n_errors:
+        lines.append("")
+        lines.append(f"**Errors:** {n_errors} validation(s) failed (loop did not crash).")
+    if n_skip_no_db:
+        lines.append(
+            f"**Skipped (no CodeQL DB for finding's language):** {n_skip_no_db}"
+        )
+    if n_stale_warnings:
+        lines.append(
+            f"**Stale-DB warnings:** {n_stale_warnings} — DB mtime predates "
+            "recent source changes; results may not reflect current code."
+        )
+
+    return ReportSection(
+        title="IRIS Dataflow Validation",
+        content="\n".join(lines),
+    )
 
 
 def _postprocess_findings(results):

@@ -27,7 +27,24 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
     sections: list[str] = []
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    target_str = f" for `{target}`" if target else ""
+    # Escape backticks in `target`. Pre-fix `target` was
+    # interpolated raw between backticks: `f" for `{target}`"`.
+    # An operator-supplied `--target` value containing a `` ` ``
+    # broke the markdown inline-code span and either:
+    #   * leaked the rest of the header line into raw markdown
+    #     rendering (a target like `` weird`name `` produced
+    #     `for `weird`name`` — the `name` rendered as bold/code
+    #     depending on what followed)
+    #   * matched another later `` ` `` in the document and
+    #     swallowed prose into a code span until the next
+    #     unmatched backtick
+    # `target` flows from the `--target` CLI flag in
+    # `generate_diagram.py` and is operator-controlled. Escape
+    # backticks to backslash-backtick so markdown renders them as
+    # literal characters; doesn't break valid targets that don't
+    # contain backticks.
+    safe_target = (target or "").replace("`", "\\`")
+    target_str = f" for `{safe_target}`" if target else ""
     sections.append(f"# Security Diagrams{target_str}\n\n_Generated {now}_\n")
 
     # --- Findings summary pies (exec summary, shown first) ---
@@ -70,6 +87,36 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
             diagram = context_map.generate(data)
             body = f"_Source: `{fname}`_\n\n```mermaid\n{diagram}\n```"
             sections.append(_section(title, body))
+            # Per-entry forward-reachable diagrams (substrate-derived
+            # call closure from /understand --map's MAP-5b step).
+            # Only fires for context-map.json today; attack-surface.json
+            # uses a different shape but the helper safely returns []
+            # when no entry has forward_reachable.
+            try:
+                fr_blocks = context_map.generate_forward_reachable_blocks(
+                    data,
+                )
+            except Exception as exc:
+                fr_blocks = []
+                sections.append(_section(
+                    f"{title} — Forward Reachability",
+                    f"> Could not render forward-reachable blocks: {exc}",
+                ))
+            if fr_blocks:
+                sub_sections: list[str] = []
+                for sub_title, sub_diagram in fr_blocks:
+                    sub_sections.append(_section(
+                        sub_title,
+                        f"```mermaid\n{sub_diagram}\n```",
+                        level=3,
+                    ))
+                sections.append(_section(
+                    f"{title} — Forward Reachability per Entry Point",
+                    "_Source: `" + fname + "` (`forward_reachable` "
+                    "field per entry, populated by "
+                    "`raptor-enrich-context-map-callgraph`)_\n\n"
+                    + "\n".join(sub_sections),
+                ))
         except Exception as exc:
             sections.append(_section(title, f"> Could not render `{fname}`: {exc}"))
 
@@ -128,7 +175,7 @@ def render_directory(out_dir: Path, target: Optional[str] = None) -> str:
             hyp_list = raw if isinstance(raw, list) else raw.get("hypotheses", [])
             if hyp_list:
                 diagram = hypotheses.generate(hyp_list)
-                body = "_Source: `hypotheses.json`_\n\n```mermaid\n{diagram}\n```".format(diagram=diagram)
+                body = f"_Source: `hypotheses.json`_\n\n```mermaid\n{diagram}\n```"
                 sections.append(_section("Hypotheses,Evidence Chain", body))
         except Exception as exc:
             sections.append(_section("Hypotheses,Evidence Chain", f"> Could not render `hypotheses.json`: {exc}"))

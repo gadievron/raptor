@@ -1,0 +1,89 @@
+name: cryptography
+description: |
+  Cryptographic primitives, protocol implementations, key
+  management. The bug classes: timing side channels, padding /
+  format oracles, weak randomness, key-lifecycle errors, mode-
+  of-operation misuse, and constant-time-violation patterns.
+
+signals:
+  paths:
+    - crypto/
+    - lib/crypto/
+    - net/tls/
+    - drivers/crypto/
+  includes:
+    - linux/crypto.h
+    - crypto/aes.h
+    - crypto/hash.h
+    - crypto/skcipher.h
+  function_keywords:
+    - encrypt
+    - decrypt
+    - sign
+    - verify
+    - hash
+    - hmac
+    - cipher
+    - constant
+  function_calls:
+    - crypto_memneq
+    - constant_time_memcmp
+    - memcmp
+    - crypto_alloc_skcipher
+    - crypto_alloc_aead
+    - crypto_alloc_shash
+    - crypto_aead_encrypt
+    - crypto_aead_decrypt
+    - skcipher_walk_first
+    - shash_update
+    - get_random_bytes
+  cwes:
+    - CWE-200   # information exposure
+    - CWE-203   # observable discrepancy
+    - CWE-208   # observable timing discrepancy
+    - CWE-310   # cryptographic issues (legacy)
+    - CWE-326   # inadequate encryption strength
+    - CWE-327   # use of broken or risky crypto
+    - CWE-328   # weak hash
+    - CWE-330   # use of insufficiently random values
+    - CWE-340   # generation of predictable numbers
+    - CWE-916   # use of password hash with insufficient effort
+
+key_questions:
+  - "Does this code make any decision (branch, table lookup, early exit) on data derived from a secret? If so, the timing of that decision leaks the secret bit-by-bit."
+  - "When verifying a tag / MAC / signature, does the comparison run for the FULL length unconditionally, or does it short-circuit on first mismatch?"
+  - "Is the cryptographic primitive being used in the right mode? (ECB for bulk data; CBC without authentication; nonce reuse with stream ciphers; etc.)"
+  - "When an operation fails (verification, decryption), does the error path leak more information than the success path — error message texts, length of returned data, presence vs absence of side effects?"
+
+prompt_addendum: |
+  Cryptographic code requires constant-time discipline that's
+  often violated by ostensibly "obvious" optimisations: early
+  exit on mismatch in ``memcmp``, table lookups indexed by secret
+  bytes, branching on whether decryption succeeded. Look for
+  any control-flow OR data-flow that depends on a secret. For
+  every comparison of secrets, confirm it uses a constant-time
+  helper (``crypto_memneq``, ``CRYPTO_memcmp``) — never a plain
+  ``memcmp`` or ``==``. For every modular arithmetic operation,
+  ask whether the implementation pre-computes blinding values to
+  hide the secret operand's bit pattern from cache-timing
+  observers.
+
+exemplars:
+  - cve: CVE-2016-2107
+    title: OpenSSL AES-NI CBC padding oracle
+    pattern: |
+      The decryption path computes the MAC over the padded
+      plaintext and the ciphertext separately, leaving a timing
+      difference between "MAC verification failed because padding
+      was structurally wrong" and "MAC verification failed because
+      of a content mismatch". An attacker observing the timing of
+      many attempts reconstructs the plaintext byte by byte.
+    why_buggy: |
+      The two failure modes leave through different code paths
+      with measurably different durations. A constant-time
+      implementation would compute through to the same
+      operation count regardless of where verification first
+      failed. The attacker sends crafted ciphertexts and times
+      the response — millions of queries reveal the secret.
+      Lesson: even when the algorithm itself is sound, leaking
+      the WHY of a verification failure is enough to break it.

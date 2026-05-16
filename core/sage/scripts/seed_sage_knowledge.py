@@ -134,7 +134,16 @@ def extract_personas() -> list[dict]:
             continue
 
         persona_name = persona_file.stem.replace("_", " ").replace("-", " ")
-        content = persona_file.read_text(encoding="utf-8").strip()
+        # Cap before reading. Pre-fix `read_text()` was unbounded; a
+        # legitimate persona is <50 KB, but a corrupted .md file or
+        # an inadvertent log paste into the personas dir could be
+        # tens of MB and we'd then chunk-load the whole thing into
+        # SAGE — wallclock + memory penalty for what's almost
+        # certainly bad data. 5 MB cap leaves headroom for unusually
+        # rich personas while refusing pathological input.
+        if not _read_capped(persona_file, max_bytes=5 * 1024 * 1024):
+            continue
+        content = _read_capped(persona_file, max_bytes=5 * 1024 * 1024).strip()
 
         # Chunk long personas into ~1500 char segments
         if len(content) > 1500:
@@ -176,7 +185,10 @@ def extract_methodology() -> list[dict]:
         if not fpath.exists():
             continue
 
-        content = fpath.read_text(encoding="utf-8").strip()
+        capped = _read_capped(fpath, max_bytes=5 * 1024 * 1024)
+        if not capped:
+            continue
+        content = capped.strip()
         doc_name = fname.replace(".md", "").replace("-", " ")
 
         chunks = _chunk_text(content, max_chars=1500)
@@ -244,12 +256,64 @@ def extract_semgrep_config() -> list[dict]:
     return memories
 
 
+def _read_capped(path: Path, *, max_bytes: int) -> str:
+    """Read a text file with a byte cap. Returns "" on read failure or
+    if the file exceeds ``max_bytes`` (logging a warning on the
+    oversize path so an operator sees what was skipped).
+
+    Pre-fix every `read_text` call here was unbounded. A corrupted
+    .md file in the personas/methodology dir, or an inadvertent log
+    paste, could be tens of MB and we'd chunk-load the whole thing
+    into SAGE — wallclock + memory + bandwidth penalty for what's
+    almost certainly bad data.
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return ""
+    if st.st_size > max_bytes:
+        import logging
+        logging.getLogger(__name__).warning(
+            "seed_sage: skipping %s (size %s exceeds cap %s)",
+            path.name, st.st_size, max_bytes,
+        )
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
 def _chunk_text(text: str, max_chars: int = 1500) -> list[str]:
-    """Split text into chunks at paragraph or section boundaries."""
+    """Split text into chunks at paragraph or section boundaries.
+
+    Hard-splits any single line longer than ``max_chars``. Pre-fix the
+    line-by-line path appended `current = line` whenever the current
+    chunk would exceed `max_chars` — but if `line` itself was longer
+    than `max_chars` (e.g. a wrapped log entry, a long URL, a
+    minified JSON paste), the function emitted that single
+    over-budget line as its own "chunk" without any further split,
+    silently sending an oversized payload to SAGE that the embed
+    layer then rejected with an opaque token-limit error.
+    """
     chunks = []
     current = ""
 
+    def _hard_split(line: str) -> list[str]:
+        # Greedy fixed-width split on `max_chars` boundaries.
+        return [line[i:i + max_chars] for i in range(0, len(line), max_chars)] or [""]
+
     for line in text.split("\n"):
+        # Hard-split any line that, on its own, exceeds the budget.
+        # The flush of `current` happens first so we don't merge an
+        # oversized line into the previous paragraph's chunk.
+        if len(line) > max_chars:
+            if current.strip():
+                chunks.append(current.strip())
+                current = ""
+            for piece in _hard_split(line):
+                chunks.append(piece)
+            continue
         if len(current) + len(line) + 1 > max_chars and current:
             chunks.append(current.strip())
             current = line
@@ -382,9 +446,26 @@ async def seed(sage_url: str, dry_run: bool = False, force: bool = False):
         pass
 
     sem = asyncio.Semaphore(_PROPOSE_CONCURRENCY)
-    results = await asyncio.gather(
-        *(_seed_one(client, mem, force, sem) for mem in all_memories)
+    # `return_exceptions=True` so a single _seed_one failure doesn't
+    # abort the entire batch. Pre-fix the gather would raise on the
+    # first exception, leaving the rest of the all_memories list
+    # un-seeded — operator had to re-run, again hitting the same
+    # failure and again losing visibility into the rest. Now each
+    # failed task surfaces as an Exception in `results`; the
+    # downstream classifier (status == "stored" / "skipped" /
+    # starts-with "failed") needs a None-or-Exception handling
+    # branch.
+    raw_results = await asyncio.gather(
+        *(_seed_one(client, mem, force, sem) for mem in all_memories),
+        return_exceptions=True,
     )
+    results = []
+    for mem, r in zip(all_memories, raw_results):
+        if isinstance(r, BaseException):
+            label = getattr(mem, "label", str(mem))
+            results.append((label, f"failed: {type(r).__name__}: {r}"))
+        else:
+            results.append(r)
 
     stored = sum(1 for _, status in results if status == "stored")
     skipped = sum(1 for _, status in results if status == "skipped")

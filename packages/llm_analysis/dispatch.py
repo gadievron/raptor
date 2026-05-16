@@ -6,23 +6,37 @@ Task subclasses define semantics: what prompt, what schema, which model.
 """
 
 import logging
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Corpora checked by dispatch preflight.  Excludes "structural_injection"
+# because the assembled prompt contains RAPTOR's own JSON fields
+# ("ruling": "false_positive", "is_exploitable": false) which those
+# patterns legitimately match.
+_DISPATCH_CORPORA = (
+    "english",
+    "role_injection",
+    "unicode_smuggling",
+    "encoding_evasion",
+)
+
 
 class DispatchResult:
     """Normalised result from any dispatch path (external LLM or CC)."""
 
     def __init__(self, result: Dict[str, Any], cost: float = 0.0,
-                 tokens: int = 0, model: str = "", duration: float = 0.0):
+                 tokens: int = 0, model: str = "", duration: float = 0.0,
+                 quality: float = 1.0):
         self.result = result
         self.cost = cost
         self.tokens = tokens
         self.model = model
         self.duration = duration
+        self.quality = quality
 
 
 class DispatchTask:
@@ -36,6 +50,18 @@ class DispatchTask:
     model_role: str = "analysis"
     temperature: float = 0.7
     budget_cutoff: float = 1.0  # 1.0 = never skip. 0.85 = skip at 85% budget
+
+    def get_last_nonce(self) -> str:
+        """Return the nonce from the most recent build_prompt call, if any.
+
+        Subclasses that use PromptBundle should store bundle.nonce and
+        return it here so the dispatcher can feed it to defense telemetry.
+        """
+        return ""
+
+    def get_profile_name(self) -> str:
+        """Return the defense profile name for telemetry."""
+        return ""
 
     def select_items(self, items: list, prior_results: dict) -> list:
         """Select which items to process. Default: all items."""
@@ -93,14 +119,54 @@ def _format_elapsed(seconds: float) -> str:
     return format_elapsed(seconds)
 
 
+# Word-boundary patterns for auth and classify_error keywords.
+# Pre-fix the substring `in lower` checks produced false positives:
+#   * `"401"` matched any error string containing the digits "401"
+#     anywhere — including stack-trace line numbers (`line 401, in
+#     ...`), HTTP status logs from unrelated endpoints, content-
+#     length headers, etc.
+#   * `"safety"` matched legitimate non-content-filter contexts
+#     ("safety check failed in tokenizer", "thread-safety
+#     violation", "safe to retry").
+#   * `"credit"` matched "credentials", "credit card validation",
+#     "discredit". The intent was billing-credit-exhausted but
+#     the substring caught everything credit-shaped.
+#   * `"refusal"` was OK as a substring; "refused request" was
+#     fine; but neither is reliably emitted by all providers.
+# Word-boundary regex via `\b...\b` keeps the keywords but
+# anchors them to token boundaries.
+_AUTH_KEYWORDS_RE = re.compile(
+    # Bare 401/403 only when preceded by a status-context word
+    # (HTTP, status, code) — "line 401" in a stack trace
+    # otherwise false-positives. Word words remain unconstrained.
+    r"\b((?:http|status|code)\s+40[13]\b|"
+    r"40[13]\s+(?:unauthorized|forbidden)|"
+    r"authentication|unauthorized|invalid api key|billing|"
+    r"quota|rate limit|insufficient_quota|credits?|"
+    r"api[_ ]?key (?:invalid|expired|missing))\b",
+    re.IGNORECASE,
+)
+
+_BLOCKED_KEYWORDS_RE = re.compile(
+    r"\b(content filter|blocked response|content (?:policy|safety) violation|"
+    r"refused (?:request|to respond)|response (?:was )?refused|"
+    r"safety filter|content blocked|moderation block)\b",
+    re.IGNORECASE,
+)
+
+_TIMEOUT_KEYWORDS_RE = re.compile(
+    r"\b(timeout|timed out|deadline exceeded|read timed? out)\b",
+    re.IGNORECASE,
+)
+
+
 def _is_auth_error(error_str: str) -> bool:
-    """Check if an error string indicates an authentication/billing failure."""
-    lower = error_str.lower()
-    return any(x in lower for x in [
-        "401", "403", "authentication", "unauthorized",
-        "invalid api key", "billing", "quota", "rate limit",
-        "insufficient_quota", "credit",
-    ])
+    """Check if an error string indicates an authentication/billing failure.
+
+    Word-boundary matched (see module-level RE comments) so a
+    "line 401, in foo" stack-trace fragment doesn't false-positive.
+    """
+    return bool(_AUTH_KEYWORDS_RE.search(error_str or ""))
 
 
 def _classify_error(error_str: str) -> str:
@@ -108,14 +174,16 @@ def _classify_error(error_str: str) -> str:
 
     Returns: 'blocked' (content filter/safety/refusal), 'auth' (key/billing/quota),
     'timeout', or 'error' (everything else).
+
+    Uses word-boundary regex matching — see module RE comments for
+    the substring false-positives this fixes.
     """
-    lower = error_str.lower()
-    if any(x in lower for x in ["content filter", "blocked response", "safety",
-                                 "refused request", "refusal"]):
+    text = error_str or ""
+    if _BLOCKED_KEYWORDS_RE.search(text):
         return "blocked"
-    if _is_auth_error(error_str):
+    if _is_auth_error(text):
         return "auth"
-    if any(x in lower for x in ["timeout", "timed out"]):
+    if _TIMEOUT_KEYWORDS_RE.search(text):
         return "timeout"
     return "error"
 
@@ -128,6 +196,7 @@ def dispatch_task(
     prior_results: dict,
     cost_tracker: Any,
     max_parallel: int = 3,
+    prefilter_fn: Optional[Callable] = None,
 ) -> List[Dict[str, Any]]:
     """Generic parallel dispatcher.
 
@@ -143,6 +212,13 @@ def dispatch_task(
         prior_results: Results from earlier tasks, keyed by item ID.
         cost_tracker: CostTracker for budget enforcement.
         max_parallel: Maximum concurrent dispatches.
+        prefilter_fn: Optional ``(item) -> Optional[result-dict]`` hook
+            invoked before building the prompt and calling dispatch_fn.
+            When it returns a dict the work item is short-circuited
+            (no full ANALYSE call, no token/cost accounting beyond
+            whatever the hook itself spent). Used by /agentic to wire
+            in the scorecard prefilter; ``None`` for tasks that don't
+            participate.
 
     Returns:
         List of result dicts, one per item dispatched. Failed items have "error" key.
@@ -156,11 +232,49 @@ def dispatch_task(
         # CC path: no model resolution, dispatch_fn ignores model parameter
         models = [None]
 
-    # Budget pre-check
+    # Budget pre-check.
+    #
+    # Pre-fix this used `models[0].model_name` for the per-call
+    # rate estimate. With multi-model dispatch (`--model
+    # claude-opus --model gpt-4o`), the cost tracker estimated
+    # the WHOLE phase as if every call used models[0]'s rate —
+    # so a phase routing 50% of calls to a 10x-cheaper secondary
+    # model still got estimated at the full primary rate.
+    # Operators saw "skipped — budget" warnings on phases that
+    # would actually have fit within budget.
+    #
+    # Use the MAXIMUM per-call rate across the model list. The
+    # estimate is then conservative (over-, never under-), so
+    # the budget gate fires at most where it should and never
+    # silently skips a phase that would have fit.
     if task.budget_cutoff < 1.0:
-        model_name = models[0].model_name if models[0] else ""
+        # Pick the most expensive model name as the pessimistic
+        # estimator. cost_tracker.should_skip_phase indexes by
+        # name to look up the rate; passing the priciest gives
+        # the conservative ceiling. Fallback to "" if all None
+        # (CC path) — should_skip_phase handles unknown.
+        named_models = [m for m in models if m is not None]
+        if named_models:
+            # cost_tracker.estimate_call_cost returns USD per call
+            # for the named model; pick the model with the highest
+            # estimated rate.
+            try:
+                model_name = max(
+                    named_models,
+                    key=lambda m: cost_tracker.estimate_call_cost(m.model_name),
+                ).model_name
+            except (AttributeError, TypeError):
+                # Older cost trackers without estimate_call_cost
+                # — fall back to the primary's rate. Same behaviour
+                # as pre-fix for that case.
+                model_name = named_models[0].model_name
+        else:
+            model_name = ""
         total_calls = len(selected) * len(models)
         if cost_tracker.should_skip_phase(total_calls, model_name, task.budget_cutoff, task.name):
+            print(f"\n  {task.name}: skipped ({len(selected)} items) — "
+                  f"budget > {int(task.budget_cutoff * 100)}%"
+                  f"; raise --max-cost to include")
             return []
 
     # Build work items: (model, item) pairs
@@ -178,15 +292,70 @@ def dispatch_task(
     completed = 0
     running_cost = 0.0
     abort = False
-    consecutive_errors = 0
+    # Per-model state — see error path for the rationale (auth
+    # and consecutive-error tracking moved from global counters
+    # to per-model so a single bad credential or model-specific
+    # failure burst doesn't kill peer models' work).
+    _per_model_auth_fail: set = set()
+    _per_model_dead: set = set()
+    _per_model_state: Dict[str, Dict[str, int]] = {}
     start = time.monotonic()
     system_prompt = task.get_system_prompt()
+
+    from core.security.prompt_telemetry import defense_telemetry
+    from core.security.prompt_input_preflight import preflight
+    profile_name = task.get_profile_name()
+
+    import threading as _th
+    # Key by (item_id, model_key) tuple — NOT just item_id. With N
+    # models analysing the same item (multi-model orchestration),
+    # all N writes land on the same `iid` key and last-writer-
+    # wins, then the first completed future pops the entry and
+    # the remaining N-1 model responses see an empty nonce →
+    # `defense_telemetry.record_response` silently never fires
+    # for them, defeating the entire prompt-injection / nonce-
+    # leak detection layer (it can't detect leakage if it never
+    # gets to compare the response against the nonce). Each
+    # (item, model) pair must hold its own nonce to its own
+    # completion.
+    _nonces: dict[tuple, str] = {}
+    _nonces_lock = _th.Lock()
+
+    def _model_key(m) -> str:
+        """Stable hashable identity for a model object — same
+        formula used for telemetry's `model_id` so the nonce
+        lookup matches the recorded response."""
+        return getattr(m, "model_name", None) or str(m)
 
     with ThreadPoolExecutor(max_workers=max_parallel) as executor:
         futures = {}
         for model, item in work:
             def _do_one(m=model, it=item):
+                # Prefilter hook (fast-tier scorecard) — fires before
+                # prompt build and full dispatch so we don't pay for
+                # token-heavy work when the cheap-tier verdict is
+                # trusted. Returning a dict here ends this work item
+                # with that result; ``None`` proceeds to full dispatch.
+                if prefilter_fn is not None:
+                    sc_result = prefilter_fn(it)
+                    if sc_result is not None:
+                        model_name = m.model_name if m is not None else "prefilter"
+                        return DispatchResult(
+                            result=sc_result,
+                            cost=0.0,
+                            tokens=0,
+                            model=model_name,
+                            duration=0.0,
+                            quality=1.0,
+                        )
                 prompt = task.build_prompt(it)
+                nonce = task.get_last_nonce()
+                if nonce:
+                    iid = task.get_item_id(it)
+                    with _nonces_lock:
+                        _nonces[(iid, _model_key(m))] = nonce
+                pf = preflight(prompt, corpora=_DISPATCH_CORPORA)
+                defense_telemetry.record_preflight(hit=pf.has_injection_indicators)
                 schema = task.get_schema(it)
                 return dispatch_fn(prompt, schema, system_prompt, task.temperature, m)
 
@@ -196,6 +365,7 @@ def dispatch_task(
         for future in as_completed(futures):
             model, item = futures[future]
             item_id = task.get_item_id(item)
+            model_key = _model_key(model)
             completed += 1
             elapsed = time.monotonic() - start
 
@@ -203,15 +373,69 @@ def dispatch_task(
                 dispatch_result = future.result()
                 processed = task.process_result(item, dispatch_result)
                 processed["finding_id"] = item_id  # Authoritative — overrides any LLM-set value
+                processed["_quality"] = getattr(dispatch_result, "quality", 1.0)
                 item_cost = processed.get("cost_usd", 0)
                 running_cost += item_cost
                 results.append(processed)
-                consecutive_errors = 0
+                # Reset this model's consecutive-failure counter
+                # — successful response means we're not in a
+                # death spiral for this model.
+                pm = _per_model_state.setdefault(model_key, {"consec": 0, "completed": 0})
+                pm["completed"] += 1
+                pm["consec"] = 0
 
-                # Feed costs to tracker for budget enforcement
-                if item_cost > 0:
-                    model_name = processed.get("analysed_by", "unknown")
-                    cost_tracker.add_cost(model_name, item_cost)
+                # Record defense telemetry (nonce leakage, schema rejection)
+                with _nonces_lock:
+                    nonce = _nonces.pop((item_id, model_key), "")
+                if nonce and profile_name:
+                    raw = ""
+                    if hasattr(dispatch_result, "result") and isinstance(dispatch_result.result, dict):
+                        raw = dispatch_result.result.get("content", "")
+                    raw_text = raw or str(dispatch_result.result)
+                    defense_telemetry.record_response(
+                        model_id=processed.get("analysed_by", "unknown"),
+                        profile_name=profile_name,
+                        nonce=nonce,
+                        raw_response=raw_text,
+                        schema_accepted=True,
+                        schema_retried=False,
+                    )
+                    from core.security.prompt_envelope import nonce_leaked_in
+                    if nonce_leaked_in(nonce, raw_text):
+                        processed["_nonce_leaked"] = True
+
+                # Feed costs AND tokens to tracker. Pre-fix only
+                # `cost` was passed; the dispatch_result already
+                # carried `tokens` (provider-reported usage from
+                # external LLM clients, or _tokens parsed from CC
+                # subprocess envelope). CostTracker stored token
+                # totals (`_total_tokens`, `_thinking_tokens`)
+                # but they stayed at 0 across every run because
+                # this single call site was the funnel and it
+                # dropped the kwarg. `get_summary()` then
+                # reported `total_tokens: 0` regardless of actual
+                # usage, breaking telemetry, cost-per-token
+                # diagnostics, and the model-economy reports the
+                # operator UI surfaces.
+                # Pre-fix the gate was `if item_cost > 0:`,
+                # which dropped CC zero-cost responses entirely
+                # — neither the cost (0, fine) NOR the TOKEN
+                # COUNT got recorded. CC subprocess invocations
+                # (`claude -p`) are billed at the parent layer
+                # but produce real token usage that the
+                # downstream model-economy report needs to
+                # surface.
+                #
+                # Run the gate as `cost > 0 OR tokens > 0`:
+                # zero-cost responses with token usage still
+                # contribute to token telemetry, while
+                # truly-empty responses (no cost, no tokens —
+                # error envelopes, immediate refusals) skip
+                # cleanly.
+                model_name = processed.get("analysed_by", "unknown")
+                item_tokens = getattr(dispatch_result, "tokens", 0) or 0
+                if item_cost > 0 or item_tokens > 0:
+                    cost_tracker.add_cost(model_name, item_cost, tokens=item_tokens)
 
                 # Progress line
                 display = task.get_item_display(item)
@@ -243,19 +467,83 @@ def dispatch_task(
                 print(f"  [{completed}/{total} {_format_elapsed(elapsed)} ${running_cost:.2f}] "
                       f"{display} FAILED — {err_str}")
 
-                if _is_auth_error(err_str):
-                    print("\n  Authentication/billing error — aborting remaining")
-                    abort = True
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    break
+                # Record schema failure telemetry (skip auth/network errors)
+                if error_type not in ("auth", "timeout") and profile_name:
+                    with _nonces_lock:
+                        nonce = _nonces.pop((item_id, model_key), "")
+                    if nonce:
+                        # When dispatching via CC (model=None,
+                        # cc_dispatch.invoke_cc_simple), `model` is
+                        # None and pre-fix `getattr(None,
+                        # "model_name", str(None))` produced the
+                        # literal string "None" as the telemetry
+                        # model_id. Per-model telemetry counters
+                        # then attributed every CC schema failure
+                        # to a phantom model called "None" instead
+                        # of "claude-code". Coerce the CC case to
+                        # the canonical "claude-code" string so
+                        # failure telemetry matches the success
+                        # path's `analysed_by` attribution
+                        # (cc_dispatch.py sets it to "claude-code").
+                        if model is None:
+                            model_id = "claude-code"
+                        else:
+                            model_id = getattr(model, "model_name", str(model))
+                        defense_telemetry.record_response(
+                            model_id=model_id,
+                            profile_name=profile_name,
+                            nonce=nonce,
+                            raw_response=err_str,
+                            schema_accepted=False,
+                            schema_retried=False,
+                        )
 
-                consecutive_errors += 1
-                if consecutive_errors >= 3 and completed == consecutive_errors:
-                    # Every result so far has failed — abort early
-                    print(f"\n  {consecutive_errors} consecutive failures — aborting remaining")
-                    abort = True
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    break
+                # Per-model auth-failure tracking. Pre-fix any
+                # single auth error from ANY model aborted the
+                # WHOLE dispatch — so with multi-model dispatch
+                # (M models × N findings) a single bad credential
+                # on one model killed work in progress on every
+                # other valid model. Track per (model_key, "auth")
+                # and only abort when ALL models active for this
+                # task have hit auth errors.
+                if _is_auth_error(err_str):
+                    _per_model_auth_fail.add(model_key)
+                    distinct_models = {_model_key(m) for m, _ in work}
+                    if _per_model_auth_fail >= distinct_models:
+                        print("\n  All models hit auth/billing errors — aborting remaining")
+                        abort = True
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        break
+                    else:
+                        # Single-model auth failure — keep dispatching
+                        # to other models. Surface the per-model
+                        # failure but don't kill peers.
+                        print(f"  (model {model_key} auth-failed; continuing with other models)")
+
+                # Per-model consecutive_errors. Pre-fix the global
+                # counter triggered "3 consecutive failures" abort
+                # when one bad model's failures interleaved with
+                # other models' successes — with M models the
+                # round-robin scheduler frequently hit
+                # fail/fail/fail-from-same-model bursts that the
+                # GLOBAL counter saw as universal failure even
+                # when other models had succeeded between them.
+                # Per-model counter only triggers when this
+                # specific model has 3 consecutive failures
+                # AND every result for this model has been a
+                # failure.
+                pm = _per_model_state.setdefault(model_key, {"consec": 0, "completed": 0})
+                pm["completed"] += 1
+                pm["consec"] += 1
+                if pm["consec"] >= 3 and pm["completed"] == pm["consec"]:
+                    print(f"\n  Model {model_key}: {pm['consec']} consecutive failures — "
+                          "stopping dispatch to this model (others continue)")
+                    _per_model_dead.add(model_key)
+                    distinct_models = {_model_key(m) for m, _ in work}
+                    if _per_model_dead >= distinct_models:
+                        abort = True
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        break
 
     if abort:
         completed_ids = {r.get("finding_id") for r in results}

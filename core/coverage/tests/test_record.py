@@ -10,6 +10,7 @@ from core.coverage.record import (
     build_from_manifest,
     build_from_semgrep,
     build_from_codeql,
+    build_from_cocci,
     build_from_findings,
     write_record,
     load_record,
@@ -145,6 +146,115 @@ class TestBuildFromCodeQL(unittest.TestCase):
             sarif = Path(d) / "codeql.sarif"
             sarif.write_text(json.dumps({"runs": [{"tool": {"driver": {}}, "artifacts": []}]}))
             self.assertIsNone(build_from_codeql(sarif))
+
+
+class _StubSpatchResult:
+    """Test double matching the SpatchResult attribute surface
+    ``build_from_cocci`` reads. Avoids importing the real dataclass
+    so this test module stays decoupled from packages/coccinelle —
+    matches the dependency posture of the production
+    ``build_from_cocci`` (Any-typed input)."""
+    def __init__(self, rule="", files_examined=(), errors=()):
+        self.rule = rule
+        self.files_examined = list(files_examined)
+        self.errors = list(errors)
+
+
+class TestBuildFromCocci(unittest.TestCase):
+
+    def test_returns_none_for_empty_input(self):
+        """No spatch results at all (e.g. cocci skipped because
+        target had no C source) → no record. Matches
+        ``build_from_semgrep`` shape; callers don't write empty
+        records."""
+        self.assertIsNone(build_from_cocci([]))
+
+    def test_returns_none_when_results_have_nothing(self):
+        """A list of empty SpatchResults (no rules, no files) →
+        also no record. Defensive — a future runner change that
+        emits placeholder results shouldn't pollute coverage."""
+        self.assertIsNone(build_from_cocci([_StubSpatchResult()]))
+
+    def test_builds_from_results_with_files_and_rules(self):
+        """Canonical happy path: 2 rules, 3 files examined, no
+        errors. Record carries rule_applied as a sorted set,
+        files_examined sorted, tool=coccinelle."""
+        results = [
+            _StubSpatchResult(
+                rule="missing_null_check",
+                files_examined=["src/parser.c", "src/util.c"],
+            ),
+            _StubSpatchResult(
+                rule="lock_imbalance",
+                files_examined=["src/util.c", "src/sched.c"],
+            ),
+        ]
+        record = build_from_cocci(results, spatch_version="1.3")
+        self.assertEqual(record["tool"], "coccinelle")
+        self.assertEqual(record["version"], "1.3")
+        self.assertEqual(record["files_examined"],
+                         ["src/parser.c", "src/sched.c", "src/util.c"])
+        self.assertEqual(record["rules_applied"],
+                         ["lock_imbalance", "missing_null_check"])
+        self.assertNotIn("files_failed", record)
+
+    def test_captures_per_rule_errors(self):
+        """A rule that errored is tracked in files_failed under
+        the rule name (no per-file binding for cocci errors —
+        spatch reports errors at rule level, not match level)."""
+        results = [
+            _StubSpatchResult(
+                rule="broken_rule",
+                files_examined=["src/x.c"],
+                errors=["semantic error: unbound metavariable foo"],
+            ),
+        ]
+        record = build_from_cocci(results)
+        self.assertIn("files_failed", record)
+        self.assertEqual(len(record["files_failed"]), 1)
+        self.assertEqual(record["files_failed"][0]["path"], "broken_rule")
+        self.assertIn("unbound metavariable",
+                      record["files_failed"][0]["reason"])
+
+    def test_dedupes_files_across_rules(self):
+        """Two rules examining the same files → ``files_examined``
+        is a sorted union, not a duplicated list."""
+        results = [
+            _StubSpatchResult(rule="r1", files_examined=["a.c", "b.c"]),
+            _StubSpatchResult(rule="r2", files_examined=["b.c", "c.c"]),
+        ]
+        record = build_from_cocci(results)
+        self.assertEqual(record["files_examined"],
+                         ["a.c", "b.c", "c.c"])
+
+    def test_dedupes_rules_across_results(self):
+        """If the runner emits the same rule name in multiple
+        result objects (e.g. multi-target invocation pattern),
+        ``rules_applied`` deduplicates."""
+        results = [
+            _StubSpatchResult(rule="r1", files_examined=["a.c"]),
+            _StubSpatchResult(rule="r1", files_examined=["b.c"]),
+        ]
+        record = build_from_cocci(results)
+        self.assertEqual(record["rules_applied"], ["r1"])
+
+    def test_omits_version_when_unknown(self):
+        """spatch version is best-effort — when ``packages.coccinelle.runner.version()``
+        returns None, the ``version`` field is absent rather than
+        carrying a misleading empty string."""
+        results = [_StubSpatchResult(rule="r", files_examined=["a.c"])]
+        record = build_from_cocci(results)  # no spatch_version
+        self.assertNotIn("version", record)
+
+    def test_truncates_long_error_messages(self):
+        """spatch errors can be very long (semantic-error backtraces).
+        Pin the 500-char cap so coverage records stay disk-friendly."""
+        long_err = "x" * 5000
+        results = [_StubSpatchResult(
+            rule="r", files_examined=["a.c"], errors=[long_err],
+        )]
+        record = build_from_cocci(results)
+        self.assertEqual(len(record["files_failed"][0]["reason"]), 500)
 
 
 class TestBuildFromFindings(unittest.TestCase):

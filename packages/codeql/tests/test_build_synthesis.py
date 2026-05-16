@@ -199,5 +199,10 @@ class TestScriptSafety:
         bd = BuildDetector(tmp_path)
         bd.synthesise_build_command("cpp")
         script = _find_script(tmp_path).read_text()
-        assert "subprocess.run(cmd" in script
+        # Earlier batch SP14 swapped subprocess.run for
+        # subprocess.Popen so per-compile stderr could be capped
+        # via bounded read. Both are list-form, no-shell — the
+        # test's intent is "no shell injection" not "specifically
+        # subprocess.run". Accept either.
+        assert "subprocess.run(cmd" in script or "subprocess.Popen(cmd" in script
         assert "shell=True" not in script

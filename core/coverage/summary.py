@@ -79,11 +79,31 @@ def compute_summary(run_dir: Path) -> Optional[Dict[str, Any]]:
         # Functions analysed (LLM)
         functions_analysed = record.get("functions_analysed", [])
         if functions_analysed:
-            tool_info["functions_analysed"] = len(functions_analysed)
-            tool_info["functions_total"] = total_items
-            # Compute SLOC covered by analysed functions
-            analysed_sloc = 0
+            # Deduplicate before counting. A single tool can record
+            # the same (file, function) twice — most commonly when
+            # a multi-stage analyser (validate stages A/B/C/D each
+            # touch the same sink function) appends per-stage entries
+            # without checking; or when an enrichment pass re-records
+            # an already-analysed function. Pre-fix the
+            # `len(functions_analysed)` count and the line-range sum
+            # both double-counted: a function analysed twice was
+            # reported as `functions_analysed=2` and its line range
+            # was added twice to `sloc_analysed`, inflating coverage
+            # numbers for any tool that records repeats.
+            seen_keys = set()
+            deduped = []
             for fa in functions_analysed:
+                key = (fa.get("file", ""), fa.get("function", ""))
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                deduped.append(fa)
+
+            tool_info["functions_analysed"] = len(deduped)
+            tool_info["functions_total"] = total_items
+            # Compute SLOC covered by analysed functions.
+            analysed_sloc = 0
+            for fa in deduped:
                 file_path = fa.get("file", "")
                 func_name = fa.get("function", "")
                 matched_path = _match_to_inventory(file_path, inventory_paths) or file_path
@@ -209,6 +229,32 @@ def compute_summary(run_dir: Path) -> Optional[Dict[str, Any]]:
 def _pl(n: int, word: str) -> str:
     """Pluralise: 1 item, 2 items."""
     return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def llm_item_coverage_percent(summary: Dict[str, Any]) -> float:
+    """Return percentage of inventory items reviewed by LLM coverage records."""
+    if not summary:
+        return 0.0
+    total = summary.get("inventory", {}).get("items", 0)
+    if not total:
+        return 100.0
+    reviewed = total - summary.get("unreviewed_functions", 0)
+    return max(0.0, min(100.0, reviewed / total * 100))
+
+
+def coverage_threshold_met(summary: Dict[str, Any], fail_under: float) -> bool:
+    """Return whether LLM item coverage satisfies ``fail_under`` percent."""
+    return llm_item_coverage_percent(summary) >= fail_under
+
+
+def format_threshold_result(summary: Dict[str, Any], fail_under: float) -> str:
+    """Format a copy-paste friendly coverage threshold result."""
+    pct = llm_item_coverage_percent(summary)
+    status = "PASS" if coverage_threshold_met(summary, fail_under) else "FAIL"
+    return (
+        f"Coverage threshold: {pct:.1f}% LLM item coverage; "
+        f"required {fail_under:.1f}% — {status}"
+    )
 
 
 def format_summary(summary: Dict[str, Any]) -> str:
@@ -409,6 +455,14 @@ def compute_project_summary(project) -> Optional[Dict[str, Any]]:
                 "tool": tool,
                 "files_examined": set(),
                 "functions_analysed": [],
+                # Maintain a parallel seen-set for the
+                # functions_analysed list. Pre-fix the dedup check
+                # rebuilt a fresh set comprehension over the entire
+                # list on EVERY incoming entry — O(N²) for N total
+                # functions across all records. Projects with a few
+                # thousand functions across multiple runs spent
+                # multiple seconds in this single line.
+                "_func_keys": set(),
                 "rules_applied": set(),
                 "packs": set(),
                 "files_failed": [],
@@ -418,8 +472,9 @@ def compute_project_summary(project) -> Optional[Dict[str, Any]]:
             m["files_examined"].add(f)
         for fa in record.get("functions_analysed", []):
             key = (fa.get("file", ""), fa.get("function", ""))
-            if key not in {(x.get("file"), x.get("function")) for x in m["functions_analysed"]}:
+            if key not in m["_func_keys"]:
                 m["functions_analysed"].append(fa)
+                m["_func_keys"].add(key)
         for r in record.get("rules_applied", []):
             m["rules_applied"].add(r)
         for p in record.get("packs", []):
@@ -477,8 +532,13 @@ def _match_to_inventory(path: str, inventory_paths: set) -> Optional[str]:
     if path in inventory_paths:
         return path
 
-    # Strip leading ./
-    stripped = path.lstrip("./")
+    # Strip leading ./ — `lstrip("./")` would strip ANY leading
+    # `.` or `/` character (set semantics, not prefix), so:
+    #   * `.foo.py` (hidden file) → `foo.py` (wrong inventory key)
+    #   * `//abs/path` (double slash from a careless join) → `abs/path`
+    #   * `...etc` → `etc`
+    # `removeprefix` only strips the literal prefix once.
+    stripped = path.removeprefix("./")
     if stripped in inventory_paths:
         return stripped
 
@@ -488,9 +548,27 @@ def _match_to_inventory(path: str, inventory_paths: set) -> Optional[str]:
     if len(matches) == 1:
         return matches[0]
 
-    # Try suffix matching (tool may report relative to different root)
+    # Try suffix matching (tool may report relative to different root).
+    # Pre-fix this used plain `str.endswith` — produced false matches
+    # whenever the shorter path's first component happened to be a
+    # SUFFIX of a longer path's component (not a separate component):
+    #   * `foo.py` matched `src/notfoo.py` (the latter ENDS WITH the
+    #     literal string "foo.py").
+    #   * `lib/x.py` matched `sublib/x.py` (the latter ends with
+    #     "lib/x.py" because "sublib" ends with "lib").
+    # Path-component-aware match: the suffix must align on a `/`
+    # separator boundary OR equal the whole longer path.
+    def _path_suffix_match(longer: str, shorter: str) -> bool:
+        if longer == shorter:
+            return True
+        if not longer.endswith(shorter):
+            return False
+        # Char immediately preceding the suffix must be a separator
+        # so the boundary aligns on a path component.
+        return longer[len(longer) - len(shorter) - 1] == "/"
+
     for inv_path in inventory_paths:
-        if inv_path.endswith(path) or path.endswith(inv_path):
+        if _path_suffix_match(inv_path, path) or _path_suffix_match(path, inv_path):
             return inv_path
 
     return None

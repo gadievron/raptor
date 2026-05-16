@@ -6,6 +6,7 @@ Used by both /validate and /agentic pipelines.
 
 from typing import Any, Dict, List, Optional, Tuple
 
+from core.security.prompt_output_sanitise import sanitise_code, sanitise_string
 from .formatting import get_display_status, title_case_type, truncate_path
 from .spec import ReportSpec, ReportSection
 
@@ -67,14 +68,49 @@ _CVSS_NOTE = "CVSS scores reflect **inherent vulnerability impact** — not bina
 
 
 def build_findings_summary(findings: List[Dict[str, Any]]) -> Dict[str, int]:
-    """Count findings by status category."""
-    counts = {"total": len(findings), "exploitable": 0, "confirmed": 0,
-              "false_positive": 0, "ruled_out": 0, "error": 0, "other": 0}
+    """Count findings by status category.
+
+    Splits the ``Confirmed`` family into three sub-counts so the
+    summary line can show the operationally distinct outcomes
+    separately (an operator triaging a report needs to see
+    "real and reachable in production" vs "real but mitigated by
+    a runtime control" vs "real but completely blocked by mitigations"
+    as separate numbers, not one collapsed `Confirmed` count):
+
+    * ``confirmed_unrestricted`` — `"Confirmed"` (plain): real,
+      reachable, no notable mitigation
+    * ``confirmed_constrained`` — `"Confirmed (Constrained)"`:
+      real, reachable, but a runtime control narrows the
+      exploit window (e.g. ASLR + partial overwrite needed)
+    * ``confirmed_blocked`` — `"Confirmed (Blocked)"`: real,
+      but mitigations make the path infeasible from the
+      attacker's perspective (e.g. Full RELRO + non-writable
+      .got blocks the only viable hijack target)
+
+    The ``confirmed`` umbrella key is retained as a sum across the
+    three sub-counts so older consumers that read just ``confirmed``
+    still see the right total.
+    """
+    counts = {"total": len(findings),
+              "exploitable": 0,
+              "confirmed": 0,
+              "confirmed_unrestricted": 0,
+              "confirmed_constrained": 0,
+              "confirmed_blocked": 0,
+              "false_positive": 0,
+              "ruled_out": 0, "error": 0, "other": 0}
     for f in findings:
         status = get_display_status(f)
         if status == "Exploitable":
             counts["exploitable"] += 1
+        elif status == "Confirmed (Constrained)":
+            counts["confirmed_constrained"] += 1
+            counts["confirmed"] += 1
+        elif status == "Confirmed (Blocked)":
+            counts["confirmed_blocked"] += 1
+            counts["confirmed"] += 1
         elif status.startswith("Confirmed"):
+            counts["confirmed_unrestricted"] += 1
             counts["confirmed"] += 1
         elif status == "False Positive":
             counts["false_positive"] += 1
@@ -92,8 +128,23 @@ def findings_summary_line(counts: Dict[str, int], vuln_count: Optional[int] = No
     parts = []
     if counts["exploitable"]:
         parts.append(f"{counts['exploitable']} Exploitable")
-    if counts["confirmed"]:
+    # Render the three Confirmed sub-buckets independently so an
+    # operator sees "5 Confirmed, 2 Confirmed (Constrained), 1
+    # Confirmed (Blocked)" rather than a collapsed "8 Confirmed"
+    # that hides the operational distinction. Older callers passing
+    # legacy `counts` dicts without the sub-keys still render via
+    # `counts.get(..., 0)` (zero falls through the truthy guards).
+    if counts.get("confirmed_unrestricted"):
+        parts.append(f"{counts['confirmed_unrestricted']} Confirmed")
+    elif counts["confirmed"] and not (
+        counts.get("confirmed_constrained") or counts.get("confirmed_blocked")
+    ):
+        # Legacy summary: only the umbrella key was populated.
         parts.append(f"{counts['confirmed']} Confirmed")
+    if counts.get("confirmed_constrained"):
+        parts.append(f"{counts['confirmed_constrained']} Confirmed (Constrained)")
+    if counts.get("confirmed_blocked"):
+        parts.append(f"{counts['confirmed_blocked']} Confirmed (Blocked)")
     if counts["false_positive"]:
         parts.append(f"{counts['false_positive']} False Positive")
     if counts["ruled_out"]:
@@ -102,14 +153,52 @@ def findings_summary_line(counts: Dict[str, int], vuln_count: Optional[int] = No
         parts.append(f"{counts['error']} Error")
     if counts.get("other"):
         parts.append(f"{counts['other']} Uncategorised")
+    # Denominator clarity: when a `vuln_count` is passed AND it
+    # disagrees with `counts['total']`, the two numbers represent
+    # different things (`vuln_count` is the count of underlying
+    # vulnerability records before per-finding rendering;
+    # `counts['total']` is the count of findings actually scored).
+    # Pre-fix the line read `**X Confirmed** out of Y findings.`
+    # where Y was `vuln_count` — but the buckets in `parts` summed
+    # to `counts['total']`, not `vuln_count`. An operator doing
+    # arithmetic on the line ("X Confirmed + Z FP = Y findings?")
+    # got numbers that didn't add up. Disambiguate by labelling the
+    # mismatched-vuln_count case explicitly so the reader sees the
+    # ratio's denominator without needing to read the source.
     total = counts['total']
     if vuln_count is not None and vuln_count != total:
-        label = f"{vuln_count} findings"
+        label = f"{total} scored findings (from {vuln_count} vulnerability records)"
     else:
         label = f"{total} findings"
     if not parts:
         return f"0 out of {label} categorised."
     return f"**{', '.join(parts)}** out of {label}."
+
+
+def _md_table_cell(s: str) -> str:
+    """Escape characters that break out of a markdown table cell.
+
+    Pre-fix only `|` was escaped, and only at one site
+    (`build_finding_detail`'s code-line). Other cells interpolated
+    raw — a `vtype` containing `|` rendered as a column split,
+    a `function` name with backtick injection broke `code` cell
+    rendering, and any cell starting with a `-` or `+` could
+    de-stabilise downstream markdown processors that try to
+    re-parse the table as a list.
+
+    Escapes:
+      * `|` → `\\|` (table column separator)
+      * `` ` `` → `\\` ` (inline-code fence)
+      * Newlines → `<br>` (rows must be one line)
+    """
+    if s is None:
+        return ""
+    s = str(s)
+    s = s.replace("\\", "\\\\")
+    s = s.replace("|", "\\|")
+    s = s.replace("`", "\\`")
+    s = s.replace("\r\n", "<br>").replace("\n", "<br>").replace("\r", "<br>")
+    return s
 
 
 def build_finding_detail(finding: Dict[str, Any], index: int) -> ReportSection:
@@ -125,68 +214,69 @@ def build_finding_detail(finding: Dict[str, Any], index: int) -> ReportSection:
     lines = []
     lines.append("| Attribute | Value |")
     lines.append("|-----------|-------|")
-    lines.append(f"| Type | {vtype} |")
+    lines.append(f"| Type | {_md_table_cell(vtype)} |")
 
     func = finding.get("function")
     if func:
-        lines.append(f"| Function | `{func}` |")
+        lines.append(f"| Function | `{_md_table_cell(func)}` |")
 
     code = finding.get("proof", {}).get("vulnerable_code") if isinstance(finding.get("proof"), dict) else None
     code = code or finding.get("code") or ""
     if code:
-        code_line = code.strip().split("\n")[0][:100].replace("|", "\\|")
-        lines.append(f"| Code | `{code_line}` |")
+        code_line = code.strip().split("\n")[0][:100]
+        lines.append(f"| Code | `{_md_table_cell(code_line)}` |")
 
-    lines.append(f"| Final Status | {get_display_status(finding)} |")
+    lines.append(f"| Final Status | {_md_table_cell(get_display_status(finding))} |")
 
     cwe = finding.get("cwe_id")
     if cwe:
-        lines.append(f"| CWE | {cwe} |")
+        lines.append(f"| CWE | {_md_table_cell(cwe)} |")
 
     cvss = finding.get("cvss_score_estimate")
     cvss_vec = finding.get("cvss_vector")
     if cvss is not None:
-        cvss_str = str(cvss)
+        cvss_str = _md_table_cell(str(cvss))
         if cvss_vec:
-            cvss_str += f" (`{cvss_vec}`)"
+            cvss_str += f" (`{_md_table_cell(cvss_vec)}`)"
         lines.append(f"| CVSS | {cvss_str} |")
 
     confidence = finding.get("confidence")
     if confidence:
-        lines.append(f"| Confidence | {str(confidence).title()} |")
+        lines.append(f"| Confidence | {_md_table_cell(str(confidence).title())} |")
 
     lines.append("")
 
     # Reasoning / analysis (from agentic or validate)
     reasoning = finding.get("reasoning") or finding.get("analysis")
     if reasoning:
-        lines.append(f"\n**Analysis:**\n{reasoning.strip()}")
+        lines.append(f"\n**Analysis:**\n{sanitise_string(str(reasoning).strip(), max_chars=3000)}")
 
     # Attack scenario
     attack = finding.get("attack_scenario")
     if attack:
-        lines.append(f"\n**Attack Scenario:**\n{attack.strip()}")
+        lines.append(f"\n**Attack Scenario:**\n{sanitise_string(str(attack).strip(), max_chars=2000)}")
 
     # Remediation
     remediation = finding.get("remediation")
     patch_code = finding.get("patch_code")
     if remediation:
-        lines.append(f"\n**Remediation:**\n{remediation.strip()}")
+        lines.append(f"\n**Remediation:**\n{sanitise_string(str(remediation).strip(), max_chars=2000)}")
     if patch_code:
-        lines.append(f"\n**Patch:**\n```\n{patch_code.strip()}\n```")
+        lines.append(f"\n**Patch:**\n```\n{sanitise_code(str(patch_code).strip())}\n```")
 
     # Key findings from feasibility
     feasibility = finding.get("feasibility", {})
     if isinstance(feasibility, dict):
         if feasibility.get("verdict"):
-            lines.append(f"\n**Feasibility:** {feasibility['verdict']}")
+            lines.append(f"\n**Feasibility:** {sanitise_string(str(feasibility['verdict']), max_chars=200)}")
         if feasibility.get("chain_breaks"):
-            lines.append(f"**Blockers:** {', '.join(feasibility['chain_breaks'][:3])}")
+            breaks = [sanitise_string(str(b), max_chars=200) for b in feasibility['chain_breaks'][:3]]
+            lines.append(f"**Blockers:** {', '.join(breaks)}")
 
     # Dataflow
     dataflow = finding.get("dataflow_summary")
     if dataflow:
-        lines.append(f"\n**Dataflow:** `{dataflow}`")
+        lines.append(f"\n**Dataflow:** `{sanitise_string(str(dataflow), max_chars=500)}`")
 
     return ReportSection(title=title, content="\n".join(lines))
 

@@ -41,13 +41,28 @@ class GHArchiveClient:
             )
         return self._client
 
+    # Inline JSON credentials path can carry an arbitrarily large
+    # service-account key. A 100 MB string is handed to `json.loads`
+    # which loads the whole thing into memory before failing — and a
+    # 1 GB string OOMs the process. Real service-account JSON files
+    # are <4 KB; cap well above that to leave headroom for unusual
+    # multi-key formats while refusing pathological inputs.
+    _CREDS_INLINE_MAX = 64 * 1024
+
     def _resolve_credentials(self) -> tuple[Any, str | None]:
         """Resolve credentials - supports file path or inline JSON."""
         scopes = ["https://www.googleapis.com/auth/bigquery"]
         creds_value = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
 
-        # Inline JSON (starts with '{')
+        # Inline JSON (starts with '{'). Cap the input so a hostile
+        # operator-supplied env var doesn't OOM us.
         if creds_value.startswith("{"):
+            if len(creds_value) > self._CREDS_INLINE_MAX:
+                raise ValueError(
+                    "GOOGLE_APPLICATION_CREDENTIALS inline JSON exceeds "
+                    f"{self._CREDS_INLINE_MAX} bytes — service-account "
+                    "keys are typically <4 KB; refuse pathological input"
+                )
             info = json.loads(creds_value)
             credentials = service_account.Credentials.from_service_account_info(
                 info, scopes=scopes

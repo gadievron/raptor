@@ -148,7 +148,7 @@ The crash analysis uses a multi-agent system:
 | `crash-analyzer-agent` | Deep root-cause analysis |
 | `crash-analyzer-checker-agent` | Rigorous validation |
 | `function-trace-generator-agent` | Execution tracing |
-| `coverage-analyzer-agent` | Code coverage |
+| `coverage-analysis-generator-agent` | Code coverage |
 
 ### Validation Requirements
 

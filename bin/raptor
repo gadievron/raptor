@@ -34,17 +34,34 @@ fi
 # vars, editor/pager, Kerberos, etc.) are handled by
 # core.config.get_safe_env() when we spawn children — stripping them
 # here would needlessly break the user's legitimate environment.
-for _var in \
-    LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT \
-    GCONV_PATH \
-    PYTHONSTARTUP PYTHONPATH PYTHONHOME PYTHONUSERBASE \
-    PYTHONBREAKPOINT PYTHONINSPECT \
-    OPENSSL_CONF SSLKEYLOGFILE \
-    NODE_OPTIONS NODE_PATH NODE_EXTRA_CA_CERTS \
-    BASH_ENV ENV ; do
-    unset "$_var"
-done
-unset _var
+# Sourced from core/security/_dangerous_env_strip.sh — single
+# source of truth shared with bin/cve-diff. Lives next to its
+# Python siblings (core/config.RaptorConfig.DANGEROUS_ENV_VARS
+# + core/security/env_sanitisation.strip_env_vars) so a single
+# `git grep` over core/security/ surfaces the canonical list
+# regardless of which language layer is enforcing.
+# RAPTOR_DIR isn't set yet (this runs before the python entry
+# point), so we resolve the strip-list path relative to this script.
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../core/security/_dangerous_env_strip.sh"
+# Added by batch 581:
+#   * LD_DEBUG / LD_PROFILE / LD_PROFILE_OUTPUT — glibc loader
+#     diagnostic env vars that write profile data to operator-
+#     readable paths, can be abused to enumerate libraries
+#     loaded by the launcher and to write to predictable
+#     filesystem locations during dynamic linking.
+#   * MALLOC_CONF / JE_MALLOC_CONF — jemalloc config; lets an
+#     attacker enable heap profiling, redirect profile writes
+#     to attacker-readable paths (e.g.
+#     `prof:true,prof_prefix:/tmp/x`), or trigger predictable
+#     allocator behaviour useful for exploit construction.
+#   * MALLOC_CHECK_ / MALLOC_PERTURB_ — glibc allocator
+#     diagnostics: high MALLOC_CHECK_ values print verbose
+#     allocator state to stderr (operator log capture leaks
+#     internal state); MALLOC_PERTURB_ stabilises
+#     uninitialised-memory disclosure ABI for an exploit.
+# All consistent with core/config.DANGEROUS_ENV_VARS (batch
+# 291). Stripping here protects the launcher → Python →
+# Claude Code chain at process boot.
 
 if ! command -v python3 >/dev/null 2>&1; then
     echo "raptor: python3 not found" >&2
@@ -102,6 +119,20 @@ if [[ "${1:-}" == "project" ]]; then
     exec "$RAPTOR_DIR/libexec/raptor-project-manager" "$@"
 fi
 
+# Route doctor directly (no Claude needed) — the doctor is a status
+# report on local setup, and `raptor doctor` is precisely the
+# command an operator runs when claude itself is missing.
+# Export RAPTOR_DIR + _RAPTOR_TRUSTED here because the main path's
+# `export RAPTOR_DIR` (below) hasn't run yet; doctor needs them
+# in the python subprocess env.
+if [[ "${1:-}" == "doctor" ]]; then
+    shift
+    cd "$RAPTOR_DIR" || exit 1
+    export RAPTOR_DIR
+    export _RAPTOR_TRUSTED=1
+    exec python3 -m core.startup.doctor "$@"
+fi
+
 # Claude required for everything else
 if ! command -v claude >/dev/null 2>&1; then
     echo "raptor: claude not found. Install Claude Code:" >&2
@@ -109,9 +140,28 @@ if ! command -v claude >/dev/null 2>&1; then
     exit 1
 fi
 
-# Export static env vars
-export RAPTOR_CALLER_DIR="$(pwd)"
+# Export static env vars. RAPTOR_CALLER_DIR holds the
+# operator's PWD at launch time (used to resolve targets +
+# project paths in subcommands). Reject control bytes
+# (newlines, tabs, NULs, escape) so a pathologically-crafted
+# pwd value can't smuggle CLI-arg / line-injection payloads
+# downstream — a directory path SHOULD never contain
+# whitespace control chars on a healthy filesystem.
+_caller_dir="$(pwd)"
+case "$_caller_dir" in
+    *[$'\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x1b']*)
+        echo "raptor: RAPTOR_CALLER_DIR contains control bytes — refusing" >&2
+        echo "  (\$PWD has chars in the C0 control range; this is suspicious — bailing safely)" >&2
+        exit 1
+        ;;
+esac
+export RAPTOR_CALLER_DIR="$_caller_dir"
+unset _caller_dir
 export RAPTOR_DIR
+# Trust marker — libexec/ scripts refuse to run without one of
+# CLAUDECODE, _RAPTOR_TRUSTED, or RAPTOR_DIR. We've stripped env above
+# and resolved RAPTOR_DIR; mark this invocation as trusted.
+export _RAPTOR_TRUSTED=1
 
 # Parse RAPTOR-specific args, collect Claude args
 STARTUP_ARGS=("--caller-dir" "$RAPTOR_CALLER_DIR")
@@ -125,6 +175,23 @@ while [[ $# -gt 0 ]]; do
             [[ $# -ge 2 ]] || { echo "raptor: $1 requires a value" >&2; exit 1; }
             STARTUP_ARGS+=("-p" "$2")
             shift 2
+            ;;
+        --project=*)
+            # `--project=foo` form. Pre-fix only `--project foo`
+            # (separate args) was accepted — the `--project=foo`
+            # convention is standard for GNU long-options and
+            # operators familiar with it (gcc, find, grep) hit
+            # "unknown option" on the launcher when they used it.
+            # Strip the `--project=` prefix and route through the
+            # same STARTUP_ARGS path.
+            _proj_value="${1#--project=}"
+            if [ -z "$_proj_value" ]; then
+                echo "raptor: --project= requires a value" >&2
+                exit 1
+            fi
+            STARTUP_ARGS+=("-p" "$_proj_value")
+            unset _proj_value
+            shift
             ;;
         -c|--continue)
             CLAUDE_ARGS+=("--continue")
@@ -144,6 +211,18 @@ while [[ $# -gt 0 ]]; do
             TRUST_REPO_ARG="--trust"
             shift
             ;;
+        -h|--help|help)
+            # The early help check at the top of this script only
+            # tests `${1:-}` — so `raptor <target> -h` (help requested
+            # AFTER a positional target) never reached the early
+            # branch, fell through `-*)` here, and got forwarded to
+            # Claude Code as a flag, which then complained about
+            # "unrecognised --help" and exited. Operators expected
+            # `raptor <anything> -h` to work like every other CLI.
+            # Fall back to re-execing self with just `-h` so the
+            # early branch fires and prints our help text.
+            exec "$0" -h
+            ;;
         -*)
             CLAUDE_ARGS+=("$1")
             shift
@@ -156,10 +235,29 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Build initial prompt: /raptor [target]
-if [[ -n "$TARGET" && -n "$INITIAL_PROMPT" ]]; then
-    INITIAL_PROMPT="/raptor $TARGET"
+# Build initial prompt: /raptor [target]. Escape TARGET
+# before interpolating into the prompt string. Pre-fix `"/raptor
+# $TARGET"` interpolated `$TARGET` raw — for legitimate paths
+# this was harmless, but TARGET is operator-supplied:
+#   * Path with embedded newlines (`/foo$'\n'/extra`) split
+#     the prompt into multiple lines downstream — the second
+#     line was treated by Claude Code as a new instruction.
+#   * Path with embedded backticks / `$()` was preserved
+#     verbatim into the prompt (Claude Code receives a
+#     literal string, doesn't shell-eval), but if the
+#     operator copied the rendered prompt elsewhere
+#     (Slack message, ticket) and pasted into a shell, the
+#     command substitution would fire there.
+# Strip control bytes from TARGET before interpolation;
+# legitimate path components don't contain them.
+_target_clean=$(printf '%s' "$TARGET" | tr -d '\000-\010\013-\037')
+if [ "$_target_clean" != "$TARGET" ]; then
+    echo "raptor: TARGET contained control bytes — stripped before use" >&2
 fi
+if [[ -n "$_target_clean" && -n "$INITIAL_PROMPT" ]]; then
+    INITIAL_PROMPT="/raptor $_target_clean"
+fi
+unset _target_clean
 
 # Resolve which directory the trust check should scan
 CHECK_TARGET=""
@@ -169,14 +267,35 @@ elif [ -d "$RAPTOR_CALLER_DIR" ]; then
     CHECK_TARGET="$RAPTOR_CALLER_DIR"
 fi
 
-# Pre-flight: target-repo trust check (core/security/cc_trust.py).
+# Clear the screen BEFORE pre-flight checks so any warning /
+# error output from `raptor-cc-trust-check` or
+# `raptor-startup-check` stays visible to the operator. Pre-fix
+# the `clear` call lived AFTER the pre-flight checks (just before
+# `exec claude`), wiping every line they emitted to stderr —
+# trust-check warnings about untrusted target repos, startup-check
+# diagnostics about API key configuration, project-mismatch
+# prompts. The operator launched what looked like a clean Claude
+# session unaware that the launcher had flagged a problem.
+# Moving `clear` here keeps the visual reset (legitimate UX —
+# operators expect a fresh screen on every `raptor` launch)
+# without erasing actionable diagnostics from the gates that
+# decide WHETHER to launch.
+clear
 # Same policy shared with raptor_agentic.py + build_detector.py.
 if [ -n "$CHECK_TARGET" ]; then
     set +e
+    # `--` terminator before the target separates flags from the
+    # positional path. Pre-fix a target path that started with
+    # `-` (rare but legitimate: someone scanning a sibling
+    # checkout named `--branch-foo/`) was interpreted by the
+    # cc-trust-check arg parser as a flag, triggering "unknown
+    # option" + exit 2 — which the launcher then treated as
+    # "refused to launch", failing the run on a path the
+    # operator never intended as a flag.
     if [ -n "$TRUST_REPO_ARG" ]; then
-        "$RAPTOR_DIR/libexec/raptor-cc-trust-check" "$TRUST_REPO_ARG" "$CHECK_TARGET"
+        "$RAPTOR_DIR/libexec/raptor-cc-trust-check" "$TRUST_REPO_ARG" -- "$CHECK_TARGET"
     else
-        "$RAPTOR_DIR/libexec/raptor-cc-trust-check" "$CHECK_TARGET"
+        "$RAPTOR_DIR/libexec/raptor-cc-trust-check" -- "$CHECK_TARGET"
     fi
     trust_rc=$?
     set -e
@@ -198,9 +317,30 @@ if [ -d "$RAPTOR_DIR/plugins/coverage" ]; then
     PLUGIN_ARGS+=(--plugin-dir "$RAPTOR_DIR/plugins/coverage")
 fi
 
-clear
+# Clear was previously called here, but moved earlier (before
+# pre-flight checks) so trust-check / startup-check stderr stays
+# visible. See the `clear` comment above.
+# `env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS` defensively
+# strips a small set of shell-eval env vars at the exec boundary,
+# even if our earlier source of `_dangerous_env_strip.sh` missed
+# them somehow (e.g. a bash plugin or hook re-set BASH_ENV between
+# the strip and here, or an operator's late-loaded config). The
+# strip-list source above already covers the common case; this is
+# pure defence-in-depth for the moment of `exec`.
+#
+# Why these four specifically and not the whole strip-list? Most
+# of the other vars in the strip-list affect Python / glibc / Node
+# loaders, not the bash shell that wraps a launched binary. The
+# four here are the ones that bash itself reads from the env at
+# startup (BASH_ENV, ENV, SHELLOPTS, BASHOPTS) — if claude
+# happens to be a bash wrapper script (some package-manager installs
+# of claude are wrapper scripts that exec node with the right
+# args), these are the vars that influence its startup before
+# `--noprofile --norc` would help.
 if [[ -n "$INITIAL_PROMPT" ]]; then
-    exec claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}" "$INITIAL_PROMPT"
+    exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
+        claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}" "$INITIAL_PROMPT"
 else
-    exec claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}"
+    exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
+        claude "${PLUGIN_ARGS[@]}" "${CLAUDE_ARGS[@]}"
 fi

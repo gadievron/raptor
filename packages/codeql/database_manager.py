@@ -19,7 +19,7 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -31,6 +31,11 @@ from core.json import load_json, save_json
 from core.config import RaptorConfig
 from core.hash import sha256_string
 from core.logging import get_logger
+# Per-invocation git overrides for target-repo invocations.
+# See `core.git.clone.safe_git_command` for the threat model
+# (CVE-2024-32002 family: hostile per-repo .git/config).
+from core.git.clone import safe_git_command
+from core.git import get_safe_git_env
 from packages.codeql.build_detector import BuildSystem
 
 logger = get_logger()
@@ -103,16 +108,30 @@ class DatabaseManager:
         logger.info(f"Database manager initialized: {self.db_root}")
         logger.info(f"CodeQL CLI: {self.codeql_cli}")
 
+    def _sandbox_tool_paths(self) -> list:
+        """Mount-ns bind dirs needed for codeql to run. See QueryRunner
+        equivalent — same rationale (codeql install root rarely lives
+        in /usr/bin)."""
+        return [str(Path(self.codeql_cli).resolve().parent)]
+
     def _detect_codeql_cli(self) -> Optional[str]:
-        """Detect CodeQL CLI path."""
+        """Detect CodeQL CLI path.
+
+        `os.access(path, X_OK)` instead of bare `Path.exists()`. Pre-fix
+        the env-var path was accepted as long as the file existed —
+        `CODEQL_CLI=/etc/passwd` would have us shell out to a non-
+        executable file, which then raised OSError at subprocess.run
+        with a confusing stderr instead of failing the detection
+        cleanly.
+        """
         import os
 
         # Check environment variable
         env_cli = os.environ.get("CODEQL_CLI")
-        if env_cli and Path(env_cli).exists():
+        if env_cli and os.access(env_cli, os.X_OK):
             return env_cli
 
-        # Check PATH
+        # Check PATH (shutil.which already requires X_OK)
         cli_path = shutil.which("codeql")
         if cli_path:
             return cli_path
@@ -120,18 +139,47 @@ class DatabaseManager:
         return None
 
     def get_codeql_version(self) -> Optional[str]:
-        """Get CodeQL version."""
+        """Get CodeQL version.
+
+        Returns the dotted-version number (e.g. ``"2.16.4"``) extracted
+        from `codeql version` output, or None on failure. Pre-fix the
+        function returned the WHOLE first line, which on modern CodeQL
+        looks like::
+
+            CodeQL command-line toolchain release 2.16.4.
+
+        Callers comparing against version strings (semver, regex
+        `\\d+\\.\\d+`) then matched against the trailing prose, not the
+        version number, and either crashed or silently mismatched.
+        """
         try:
+            # `env=RaptorConfig.get_safe_env()` so the version probe
+            # doesn't inherit the parent's env. Pre-fix the bare
+            # `subprocess.run` carried LD_PRELOAD / LD_LIBRARY_PATH /
+            # PYTHONPATH / etc. through to the codeql binary —
+            # codeql is a JVM launcher that respects JAVA_TOOL_OPTIONS
+            # and other JVM env vars (which can attach a Java agent
+            # at startup, equivalent to LD_PRELOAD for Java). Same
+            # env-hygiene posture as the database-creation Popen
+            # below.
             result = subprocess.run(
                 [self.codeql_cli, "version"],
                 capture_output=True,
                 text=True,
                 timeout=10,
+                env=RaptorConfig.get_safe_env(),
             )
             if result.returncode == 0:
-                # Parse version from output (first line usually contains version)
-                version = result.stdout.strip().split('\n')[0]
-                return version
+                # Parse first dotted-version-shaped token from stdout.
+                # `re.ASCII` so Unicode digits don't sneak in (see
+                # packages/exploit_feasibility/profiles.py for the same
+                # rationale applied to glibc parsing).
+                m = re.search(r'\d+(?:\.\d+){1,3}', result.stdout, re.ASCII)
+                if m:
+                    return m.group(0)
+                # Fallback for unexpected output: return first line so
+                # operators still see SOMETHING in logs/banners.
+                return result.stdout.strip().split('\n')[0] or None
             return None
         except Exception as e:
             logger.warning(f"Failed to get CodeQL version: {e}")
@@ -151,14 +199,20 @@ class DatabaseManager:
         """
         repo_path = Path(repo_path).resolve()
 
-        # Try to use git commit hash (fast)
+        # Try to use git commit hash (fast).
+        # `safe_git_command` prepends -c overrides that defend
+        # against hostile per-repo `.git/config` (core.fsmonitor
+        # RCE family). `env=get_safe_git_env()` strips the
+        # ambient process env (HOME pinning, GIT_CONFIG_GLOBAL=
+        # /dev/null). Both apply — defence in depth.
         try:
             result = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
+                safe_git_command("rev-parse", "HEAD"),
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
                 timeout=5,
+                env=get_safe_git_env(),
             )
             if result.returncode == 0:
                 git_hash = result.stdout.strip()
@@ -168,24 +222,61 @@ class DatabaseManager:
         except Exception:
             pass
 
-        # Fallback: hash directory structure and modification times.
-        # Iterative accumulator (mixing many inputs into one digest) so
-        # this stays on hashlib.sha256() — core.hash exposes only
-        # closed-form one-shot helpers. Filename .encode() calls below
-        # use surrogateescape to match core.hash's non-UTF-8 safety.
+        # Fallback: hash directory structure and file sizes (no
+        # mtime). Iterative accumulator (mixing many inputs into
+        # one digest) so this stays on hashlib.sha256() —
+        # core.hash exposes only closed-form one-shot helpers.
+        # Filename .encode() calls below use surrogateescape to
+        # match core.hash's non-UTF-8 safety.
+        #
+        # Pre-fix issues addressed here:
+        #   * `list(rglob("*"))` walked the ENTIRE tree first
+        #     then `[:1000]` sliced. For big repos with
+        #     node_modules / .venv / .git this enumerated
+        #     millions of files before discarding most. Use
+        #     os.walk with early-exit so we stop after collecting
+        #     1000 candidates.
+        #   * mtime in the hash invalidated the cache on any
+        #     `touch`-style write that didn't change content
+        #     (`make` rebuilds, editor saves with same content,
+        #     git checkout updates mtimes wholesale). Drop mtime;
+        #     keep (name, size) — same files at same sizes
+        #     produce the same hash regardless of touch noise.
+        #   * No filtering of known noise directories. Skip
+        #     .git / node_modules / .venv / __pycache__ / .tox /
+        #     dist / build / target — none are source-of-truth
+        #     for the database identity.
+        _SKIP_DIRS = {
+            ".git", "node_modules", ".venv", "venv", "__pycache__",
+            ".tox", "dist", "build", "target", ".idea", ".vscode",
+            ".gradle", ".mvn", ".cache", "coverage",
+        }
         hasher = hashlib.sha256()
         hasher.update(str(repo_path).encode("utf-8", errors="surrogateescape"))
 
-        # Hash a sample of files (for performance)
         try:
-            files = list(repo_path.rglob("*"))[:1000]  # Sample first 1000 files
-            for file_path in sorted(files):
+            collected: List[Path] = []
+            for dirpath, dirnames, filenames in os.walk(
+                repo_path, followlinks=False,
+            ):
+                # In-place prune skipped dirs from the walk to
+                # avoid even descending into them.
+                dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+                for name in filenames:
+                    collected.append(Path(dirpath) / name)
+                    if len(collected) >= 1000:
+                        break
+                if len(collected) >= 1000:
+                    break
+
+            for file_path in sorted(collected):
                 if file_path.is_file():
-                    hasher.update(str(file_path.relative_to(repo_path)).encode("utf-8", errors="surrogateescape"))
+                    hasher.update(
+                        str(file_path.relative_to(repo_path))
+                        .encode("utf-8", errors="surrogateescape"),
+                    )
                     try:
-                        stat = file_path.stat()
-                        hasher.update(str(stat.st_mtime).encode())
-                        hasher.update(str(stat.st_size).encode())
+                        hasher.update(str(file_path.stat().st_size).encode())
                     except OSError:
                         pass
         except Exception as e:
@@ -258,7 +349,11 @@ class DatabaseManager:
         # Check age
         try:
             created_at = datetime.fromisoformat(metadata.created_at)
-            age = datetime.now() - created_at
+            # Promote naive timestamps from pre-batch-396 metadata
+            # to UTC so the comparison below doesn't TypeError.
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            age = datetime.now(timezone.utc) - created_at
             if age > timedelta(days=max_age_days):
                 logger.debug(f"Cached database too old: {age.days} days")
                 return None
@@ -297,9 +392,22 @@ class DatabaseManager:
         processes (not threads) so this is fine in practice; a future
         thread-based caller would need a different staging key (e.g.,
         include thread.get_ident()).
+
+        Uniqueness suffix: PID alone is NOT sufficient when two writers
+        live in DIFFERENT PID namespaces (containers) but share a
+        bind-mounted db_root. Two containers can both report
+        `os.getpid() == 1` (their per-ns init) and silently collide on
+        `.staging-<language>-1`. Append a 4-byte random uniquifier so
+        cross-namespace writers stay isolated even if their PID
+        coincides. The `_gc_stale_markers` path globs `.staging-*` so
+        the trailing uniquifier doesn't break orphan cleanup.
         """
+        import secrets
         canonical = self.get_database_dir(repo_hash, language)
-        return canonical.parent / f".staging-{language}-{os.getpid()}"
+        return (
+            canonical.parent
+            / f".staging-{language}-{os.getpid()}-{secrets.token_hex(4)}"
+        )
 
     def _stale_marker_name(self, canonical: Path) -> str:
         """Build a unique stale-marker name for an evicted canonical.
@@ -386,7 +494,11 @@ class DatabaseManager:
         else:
             try:
                 created_at = datetime.fromisoformat(metadata.created_at)
-                if datetime.now() - created_at > timedelta(days=max_age_days):
+                # Promote naive timestamps from pre-batch-396 metadata
+                # to UTC so the comparison below doesn't TypeError.
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) - created_at > timedelta(days=max_age_days):
                     evict = True
             except (ValueError, AttributeError):
                 # Malformed metadata can't come from an in-flight writer
@@ -397,7 +509,31 @@ class DatabaseManager:
                 evict = True
         if not evict:
             return
+        # Pre-check the canonical path right before rename so a race
+        # with another evictor / cleanup process surfaces as a fast
+        # short-circuit rather than as a silenced OSError. Without
+        # this guard, the missing-canonical case fell through into
+        # the `os.rename` at the bottom which raised ENOENT, which
+        # the bare `except OSError` swallowed — so we couldn't
+        # distinguish "harmless race" from "logic bug".
+        try:
+            real_canonical = canonical.resolve()
+        except OSError:
+            return  # canonical disappeared between metadata check and rename
+        if not real_canonical.exists():
+            return
+        # Generate a unique marker — if a previous eviction crashed
+        # mid-rename and left a marker behind, or two evictors raced
+        # to the same `_stale_marker_name`, the second rename would
+        # fail with ENOTEMPTY (POSIX rename refuses to clobber a
+        # non-empty target directory). Append a short uniquifier so
+        # the eviction always succeeds for the canonical-path case
+        # we actually care about.
         marker = canonical.with_name(self._stale_marker_name(canonical))
+        if marker.exists():
+            marker = canonical.with_name(
+                f"{self._stale_marker_name(canonical)}.{os.getpid()}.{int(time.monotonic_ns() % 1_000_000)}"
+            )
         try:
             os.rename(canonical, marker)
         except OSError:
@@ -408,7 +544,8 @@ class DatabaseManager:
         repo_path: Path,
         language: str,
         build_system: Optional[BuildSystem] = None,
-        force: bool = False
+        force: bool = False,
+        audit_run_dir: Optional[Path] = None,
     ) -> DatabaseResult:
         """
         Create CodeQL database.
@@ -417,6 +554,12 @@ class DatabaseManager:
             repo_path: Path to source code
             language: Programming language
             build_system: Build system info (None for no-build mode)
+            audit_run_dir: When --audit is engaged, where the tracer
+                should drop the audit JSONL. Decoupled from output= so
+                Landlock writable_paths isn't restricted (codeql
+                database create runs build subprocesses that write to
+                ~/.codeql, the database dir, and working_dir — none
+                of which can be safely listed as writable).
             force: Force recreation even if cached DB exists. Skips both
                 the initial cache check AND the race-absorbing re-check
                 — a sibling who promoted between our entry and our force
@@ -435,6 +578,29 @@ class DatabaseManager:
         logger.info(f"{'=' * 70}")
         logger.info(f"Creating CodeQL database for {language}")
         logger.info(f"{'=' * 70}")
+
+        # Trust check: target-repo codeql-pack.yml / qlpack.yml /
+        # codeql-config.yml can declare custom extractors, build hooks
+        # and external pack dependencies that codeql exec's during
+        # `database create`. Refuse on findings unless --trust-repo
+        # has been parsed at the entry point. Distinct surface from
+        # the cc_trust check (which guards .claude/settings.json).
+        from core.security.codeql_trust import check_repo_codeql_trust
+        if check_repo_codeql_trust(str(repo_path)):
+            return DatabaseResult(
+                success=False,
+                language=language,
+                database_path=None,
+                metadata=None,
+                errors=[
+                    "target repo has unsafe CodeQL pack config — refusing "
+                    "to invoke `codeql database create`. Re-run with "
+                    "--trust-repo to override after auditing the printed "
+                    "findings."
+                ],
+                duration_seconds=time.time() - start_time,
+                cached=False,
+            )
 
         # Check for cached database
         if not force:
@@ -515,8 +681,38 @@ class DatabaseManager:
             f"--source-root={repo_path}",
         ]
 
-        # Set working directory and environment
+        # Set working directory and environment.
+        #
+        # `os.access(working_dir, os.X_OK)` check before passing to
+        # subprocess. A directory must have execute permission for a
+        # process to chdir into it; without it, subprocess.run with
+        # `cwd=working_dir` fails with PermissionError that the caller
+        # sees only as "build failed". The common cause is a noexec
+        # mount: shared CI runners that mount the build area noexec for
+        # security, or `/tmp` mounted noexec on hardened hosts. Surface
+        # the issue with an actionable message instead of a generic
+        # subprocess error. Skip on platforms without POSIX
+        # permission semantics (Windows: os.access semantics differ
+        # but the noexec hazard doesn't apply the same way).
         working_dir = build_system.working_dir if build_system else repo_path
+        if (
+            os.name == "posix"
+            and not os.access(working_dir, os.X_OK)
+        ):
+            return DatabaseResult(
+                success=False,
+                language=language,
+                database_path="",
+                metadata=None,
+                errors=[
+                    f"working_dir {working_dir!r} lacks execute permission "
+                    f"(POSIX dir-exec). Common cause: noexec mount on the "
+                    f"build area. Re-mount with exec, or move the build "
+                    f"into a directory that has it (e.g. $HOME)."
+                ],
+                duration_seconds=time.time() - start_time,
+                cached=False,
+            )
         env = RaptorConfig.get_safe_env()
         if build_system and build_system.env_vars:
             # Filter build env vars through the same blocklist — a malicious
@@ -548,14 +744,34 @@ class DatabaseManager:
                 # if we reach the outer try — so guard create+write+chmod
                 # atomically here: clean up our own mess if any of the three
                 # raises, then re-raise so the caller still sees the error.
+                #
+                # `dir=` is `self.db_root / "tmp"`, NOT `working_dir`. Pre-fix
+                # the build script was written into the operator's REPO
+                # directory (`dir=working_dir`). On cleanup-failure paths
+                # (cleanup at line ~831 unlinks but only if exists; sandbox
+                # crashes mid-build skip it) the user found
+                # `.raptor_codeql_build_*.sh` files in their git checkout —
+                # `git status` noise, accidental `git add -A` commits,
+                # confused operators. Keep our scratch under our managed
+                # area where we control cleanup.
+                tmp_dir = self.db_root / "tmp"
+                tmp_dir.mkdir(parents=True, exist_ok=True)
                 fd, script_name = tempfile.mkstemp(
-                    prefix=".raptor_codeql_build_", suffix=".sh", dir=working_dir,
+                    prefix=".raptor_codeql_build_", suffix=".sh", dir=str(tmp_dir),
                 )
                 os.close(fd)
                 build_script = Path(script_name)
                 try:
                     build_script.write_text(f"#!/bin/bash\n{build_cmd}\n")
-                    build_script.chmod(build_script.stat().st_mode | stat.S_IEXEC)
+                    # 0o500 (read+execute, no write) for parity with
+                    # `build_detector.py:871`'s synthesised-script mode
+                    # — TOCTOU mitigation: a separate process can't
+                    # modify the script between our write and CodeQL's
+                    # exec. Pre-fix the chmod was
+                    # `st_mode | S_IEXEC` which kept the write bit
+                    # from mkstemp's 0o600 default, leaving the script
+                    # writable for the lifetime of the build invocation.
+                    build_script.chmod(0o500)
                 except BaseException:
                     build_script.unlink(missing_ok=True)
                     build_script = None
@@ -577,6 +793,13 @@ class DatabaseManager:
                 block_network=True,
                 cwd=working_dir,
                 env=env,
+                tool_paths=self._sandbox_tool_paths(),
+                # Audit JSONL home (only used when --audit is engaged).
+                # Decoupled from output= because the build subprocess
+                # writes to working_dir / db_path / ~/.codeql, none of
+                # which can safely be enumerated as Landlock writable_
+                # paths without breaking real codeql workflows.
+                audit_run_dir=str(audit_run_dir) if audit_run_dir else None,
                 capture_output=True,
                 text=True,
                 timeout=RaptorConfig.CODEQL_TIMEOUT,
@@ -620,6 +843,27 @@ class DatabaseManager:
                 did_promote = False
                 used_cached = False
                 try:
+                    # Pre-flight existence check. `os.rename` on Linux
+                    # silently SUCCEEDS when the target is an empty
+                    # directory — it replaces the empty dir without
+                    # raising ENOTEMPTY. A sibling that created
+                    # `canonical_path` as a placeholder (e.g. via
+                    # `mkdir`-as-lock pattern in some other tool, or a
+                    # half-initialised promote-in-progress state) would
+                    # have its empty dir silently overwritten by our
+                    # staging — the lost-race branch never fires and we
+                    # don't validate the sibling's intent. Raise
+                    # FileExistsError manually so the existing
+                    # ENOTEMPTY/EEXIST handler treats this case the
+                    # same as a populated-target collision.
+                    if canonical_path.exists():
+                        raise FileExistsError(
+                            errno.EEXIST,
+                            "canonical_path exists pre-rename "
+                            "(possibly empty placeholder); routing "
+                            "through lost-race handler",
+                            str(canonical_path),
+                        )
                     os.rename(staging_path, canonical_path)
                     logger.info(f"✓ Database promoted to canonical: {canonical_path}")
                     did_promote = True
@@ -698,7 +942,13 @@ class DatabaseManager:
                 repo_hash=repo_hash,
                 repo_path=str(repo_path),
                 language=language,
-                created_at=datetime.now().isoformat(),
+                # Tz-aware UTC timestamp. Pre-fix `datetime.now()`
+                # was tz-naive — when serialised to ISO and later
+                # parsed by another runner in a different
+                # timezone, the comparison against `datetime.now()`
+                # (which would be a different tz-naive local time)
+                # produced silently-wrong age calculations.
+                created_at=datetime.now(timezone.utc).isoformat(),
                 codeql_version=self.get_codeql_version() or "unknown",
                 build_command=build_system.command if build_system else "",
                 build_system=build_system.type if build_system else "no-build",
@@ -757,8 +1007,22 @@ class DatabaseManager:
             )
 
         finally:
-            if build_script and build_script.exists():
-                build_script.unlink()
+            # build_script unlink: missing_ok=True so a script that
+            # was already cleaned up by an earlier branch (or that
+            # never landed on disk because mkstemp succeeded but
+            # write_text raised) doesn't crash the cleanup. Pre-fix
+            # `build_script.unlink()` raised FileNotFoundError when
+            # the success path had already deleted the script, AND
+            # raised PermissionError if the script's parent dir got
+            # mounted noexec/readonly mid-build (rare but observed
+            # on some CI runners). Either case took the cleanup
+            # exception out of `finally:` and skipped the staging
+            # rmtree below.
+            if build_script:
+                try:
+                    build_script.unlink(missing_ok=True)
+                except OSError as _bs_err:
+                    logger.debug(f"build_script unlink failed: {_bs_err}")
             # Belt-and-braces staging cleanup for timeout / unhandled exception
             # paths that bypass the success/failure cleanup branches above.
             # Skip if we ended up using staging as final_path (the fallback
@@ -775,7 +1039,8 @@ class DatabaseManager:
         repo_path: Path,
         language_build_map: Dict[str, Optional[BuildSystem]],
         force: bool = False,
-        max_workers: Optional[int] = None
+        max_workers: Optional[int] = None,
+        audit_run_dir: Optional[Path] = None,
     ) -> Dict[str, DatabaseResult]:
         """
         Create multiple databases in parallel.
@@ -785,6 +1050,8 @@ class DatabaseManager:
             language_build_map: Dict mapping language -> BuildSystem
             force: Force recreation
             max_workers: Max parallel workers (default: RaptorConfig.MAX_CODEQL_WORKERS)
+            audit_run_dir: Forwarded to per-language create_database for
+                audit JSONL targeting (no Landlock impact).
 
         Returns:
             Dict mapping language -> DatabaseResult
@@ -802,7 +1069,8 @@ class DatabaseManager:
                     repo_path,
                     lang,
                     build_system,
-                    force
+                    force,
+                    audit_run_dir,
                 ): lang
                 for lang, build_system in language_build_map.items()
             }
@@ -851,19 +1119,40 @@ class DatabaseManager:
                 logger.debug(f"Missing essential file: {file_name}")
                 return False
 
-        # Run codeql database check (optional, can be slow)
-        # Disabled by default for performance
-        # try:
-        #     result = subprocess.run(
-        #         [self.codeql_cli, "database", "check", str(db_path)],
-        #         capture_output=True,
-        #         timeout=30,
-        #     )
-        #     return result.returncode == 0
-        # except Exception:
-        #     return False
-
-        return True
+        # Pre-fix `codeql-database.yml` existence was the only
+        # check — easy for a half-built / corrupted database to
+        # pass (the yml is the FIRST thing CodeQL writes during
+        # build, so an aborted build leaves the yml in place
+        # but no actual DB content). Add a minimal-substance
+        # check: the database must have a `db-*` subdirectory
+        # (CodeQL writes per-language dbs as db-cpp, db-java,
+        # etc.) AND that subdir must be non-empty / non-trivial
+        # in size. Half-built databases typically have a few KB
+        # of yml/header but the multi-MB db-*/default/* trie
+        # files only land on successful build completion.
+        try:
+            db_subdirs = [d for d in db_path.iterdir()
+                          if d.is_dir() and d.name.startswith("db-")]
+            if not db_subdirs:
+                logger.debug(f"No db-* subdir in {db_path}")
+                return False
+            # At least one db-* subdir must hold > 100KB of data
+            # (the smallest realistic codeql DB observed in
+            # practice). Empty / kilobyte-sized = aborted build.
+            for sub in db_subdirs:
+                total_size = sum(
+                    f.stat().st_size for f in sub.rglob("*") if f.is_file()
+                )
+                if total_size > 100 * 1024:
+                    return True
+            logger.debug(
+                f"db-* subdirs present but trivially small in {db_path} "
+                f"(likely aborted build)",
+            )
+            return False
+        except OSError as e:
+            logger.debug(f"validate_database couldn't stat {db_path}: {e}")
+            return False
 
     def _count_database_files(self, db_path: Path) -> int:
         """Count files in database (for statistics)."""
@@ -890,7 +1179,7 @@ class DatabaseManager:
             List of deleted database paths
         """
         logger.info(f"Cleaning up databases older than {days} days...")
-        cutoff = datetime.now() - timedelta(days=days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         deleted = []
 
         for repo_dir in self.db_root.iterdir():
@@ -904,9 +1193,34 @@ class DatabaseManager:
                     if data is None:
                         continue
                     created_at = datetime.fromisoformat(data["created_at"])
+                    # Promote naive timestamps from pre-batch-396
+                    # metadata to UTC so the cutoff comparison
+                    # doesn't TypeError.
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=timezone.utc)
 
                     if created_at < cutoff:
                         db_path = Path(data["database_path"])
+                        # Containment guard: db_path comes from the
+                        # JSON metadata file. Pre-fix `shutil.rmtree
+                        # (db_path)` blindly trusted that path. A
+                        # tampered or copy-pasted metadata file
+                        # naming `database_path: "/etc"` would have
+                        # had cleanup obliterate /etc.
+                        # Restrict to paths INSIDE self.db_root so
+                        # only databases this manager could have
+                        # created are eligible for deletion.
+                        try:
+                            db_resolved = db_path.resolve(strict=False)
+                            db_root_resolved = self.db_root.resolve(strict=False)
+                            db_resolved.relative_to(db_root_resolved)
+                        except (ValueError, OSError):
+                            logger.warning(
+                                "cleanup_old_databases: refusing to delete "
+                                "%r — outside db_root %r",
+                                db_path, self.db_root,
+                            )
+                            continue
                         if db_path.exists():
                             if not dry_run:
                                 shutil.rmtree(db_path)

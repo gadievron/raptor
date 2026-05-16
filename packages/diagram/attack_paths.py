@@ -44,7 +44,7 @@ def generate_single(path_data: dict[str, Any], path_index: int) -> str:
     path_id = path_data.get("id", f"PATH-{path_index+1}")
     name = _sanitize(path_data.get("name", path_id))
     steps = path_data.get("steps", [])
-    proximity = path_data.get("proximity", 0)
+    proximity = path_data.get("proximity") or 0
     blockers = path_data.get("blockers", [])
     status = path_data.get("status", "uncertain")
 
@@ -112,7 +112,7 @@ def generate(data: list[dict[str, Any]]) -> str:
     for i, path_data in enumerate(data):
         path_id = path_data.get("id", f"PATH-{i+1}")
         name = path_data.get("name", path_id)
-        proximity = path_data.get("proximity", 0)
+        proximity = path_data.get("proximity") or 0
         status = path_data.get("status", "uncertain")
         sections.append(f"#### {path_id}: {name} (Proximity {proximity}/10, {status})\n")
         sections.append("```mermaid")

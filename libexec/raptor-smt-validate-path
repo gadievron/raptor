@@ -35,6 +35,12 @@ or the file/id can't be resolved.
   int32   32-bit signed (signed-overflow UB reasoning)
   uint16  int16  uint8  int8
 
+``--prefer-witness max:VAR`` (or ``min:VAR``) drives the satisfying
+witness toward an extreme value of ``VAR`` instead of Z3's default
+smallest-model behaviour.  Common case is CWE-190 wraparound — pass
+``--prefer-witness max:count`` so the witness lands in the wraparound
+region instead of the trivial ``count=0`` Z3 returns by default.
+
 Output: JSON to stdout with keys
 
   feasible        true | false | null
@@ -59,6 +65,18 @@ import sys
 from pathlib import Path
 
 # libexec/<this> -> repo root
+# ─── trust-marker check (do not import; inline by design) ───
+import os
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from packages.exploit_feasibility.smt_path import validate_path
@@ -151,6 +169,30 @@ def main() -> int:
         nargs="*",
         help="Path-condition strings (each a single predicate).",
     )
+    p.add_argument(
+        "--timeout-ms",
+        type=int,
+        default=None,
+        metavar="MS",
+        help="Per-call Z3 timeout in milliseconds. Defaults to the "
+             "substrate default (5000ms). Increase to ~10000 for "
+             "complex CWE-125/787 array-index expressions; decrease "
+             "to ~2000 for CWE-190/191/476 to fail-fast on "
+             "pathological encodings. Clamped to [1, 2**31-1].",
+    )
+    p.add_argument(
+        "--prefer-witness",
+        default=None,
+        metavar="DIR:VAR",
+        help="Drive the satisfying witness toward an extreme value of "
+             "a named variable instead of Z3's default smallest-model "
+             "behaviour. Format: 'max:<var>' or 'min:<var>'. Common "
+             "use case: CWE-190 wraparound — pass 'max:count' so the "
+             "witness lands in the wraparound region instead of the "
+             "trivial 'count=0' Z3 returns by default. When <var> is "
+             "absent from the parsed conditions the objective is "
+             "silently skipped.",
+    )
     args = p.parse_args()
 
     # Mutually-exclusive input modes
@@ -183,7 +225,10 @@ def main() -> int:
     profile = args.profile or trace_profile or "uint64"
 
     try:
-        result = validate_path(conditions, profile=profile)
+        result = validate_path(
+            conditions, profile=profile, timeout_ms=args.timeout_ms,
+            prefer_witness=args.prefer_witness,
+        )
     except (TypeError, ValueError) as e:
         return _err(str(e))
 

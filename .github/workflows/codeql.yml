@@ -1,0 +1,379 @@
+# CodeQL Advanced — RAPTOR
+#
+# Restructured 2026-05-15 to eliminate the "1 configuration not found"
+# meta-check race:
+#
+#   * Pre-fix: each matrix entry uploaded its own SARIF as soon as
+#     analyze finished. The c-cpp / actions stubs landed in ~12s,
+#     the python real analysis arrived ~60s later, and GitHub's
+#     `CodeQL` (github-advanced-security app) meta-check evaluated
+#     on first-upload arrival — well before python landed. Two of
+#     three configs visible → "1 configuration not found".
+#
+#   * Post-fix: matrix entries write SARIF to disk only
+#     (`upload: never`) and stash as artifacts. A barrier `upload`
+#     job depends on the whole matrix, downloads all three
+#     artifacts, merges them into a single multi-run SARIF
+#     (each run keeps its own automationDetails.id = category),
+#     and uploads via ONE `upload-sarif` call. GitHub processes
+#     the multi-run file as a single atomic delivery, so the
+#     meta-check fires with all three configs visible.
+#
+# Combining multi-run SARIFs with DIFFERENT categories is
+# explicitly supported by github/codeql-action (the 2025-07-21
+# changelog only deprecated combining runs with DUPLICATE
+# categories — see codeql-action/src/upload-lib.ts:65-95).
+
+name: "CodeQL Advanced"
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  merge_group:
+  schedule:
+    - cron: '34 2 * * 5'
+  workflow_dispatch:
+
+# Cancel superseded runs on the same PR. Pushes to main are NOT
+# cancelled — every main commit must be fully analysed for the
+# baseline. The conditional handles both correctly.
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Default to least-privilege at the workflow level. Individual jobs
+# elevate as needed (e.g. ``upload`` needs ``security-events: write``
+# to upload SARIF results).
+permissions:
+  contents: read
+
+jobs:
+  # Skip the analyze + upload jobs if a previous successful run already
+  # covered this exact commit SHA. Same homebrew dedup pattern as tests.yml.
+  pre_check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      actions: read
+    outputs:
+      should_skip: ${{ steps.dup.outputs.should_skip }}
+    steps:
+      - id: dup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW: ${{ github.workflow }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          should_skip=false
+          if [[ "$EVENT" != "schedule" && "$EVENT" != "workflow_dispatch" \
+             && "$EVENT" != "merge_group" ]]; then
+            dup=$(gh api -X GET "repos/${REPO}/actions/runs" \
+                    -f "head_sha=${SHA}" -f "status=success" \
+                    --jq ".workflow_runs[] | select(.name==\"${WORKFLOW}\" and .id != ${RUN_ID}) | .id" \
+                  | head -n1 || true)
+            if [[ -n "${dup:-}" ]]; then
+              should_skip=true
+              echo "Skipping: prior successful run ${dup} already covered SHA ${SHA}"
+            fi
+          fi
+          echo "should_skip=${should_skip}" >> "$GITHUB_OUTPUT"
+
+  # Per-language path scoping — the analyze matrix gates each entry on
+  # its corresponding filter so a python-only PR skips the c-cpp and
+  # actions matrix entries, etc. Reuses tests.yml's compute_filters.py
+  # for filter logic so both workflows stay in sync.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    needs: pre_check
+    if: needs.pre_check.outputs.should_skip != 'true'
+    permissions:
+      contents: read
+    outputs:
+      codeql_python: ${{ steps.filter.outputs.codeql_python }}
+      codeql_cpp: ${{ steps.filter.outputs.codeql_cpp }}
+      codeql_actions: ${{ steps.filter.outputs.codeql_actions }}
+      force_full: ${{ steps.force.outputs.force_full }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6.0.2
+        with:
+          persist-credentials: false
+      - id: force
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT" == "schedule" || "$EVENT" == "workflow_dispatch" \
+             || "$EVENT" == "merge_group" ]]; then
+            echo "force_full=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "force_full=false" >> "$GITHUB_OUTPUT"
+          fi
+      - id: changed_files
+        if: steps.force.outputs.force_full == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          set -euo pipefail
+          out=/tmp/changed_files.txt
+          : > "$out"
+          case "$EVENT" in
+            pull_request|pull_request_target)
+              gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/files" \
+                --jq '.[].filename' >> "$out"
+              ;;
+            push)
+              if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
+                rm -f "$out"
+              else
+                gh api --paginate "repos/${REPO}/compare/${BEFORE}...${AFTER}" \
+                  --jq '.files[].filename' >> "$out"
+              fi
+              ;;
+            *)
+              rm -f "$out"
+              ;;
+          esac
+          if [[ -f "$out" ]]; then
+            echo "list=$out" >> "$GITHUB_OUTPUT"
+          fi
+      - id: filter
+        env:
+          CHANGED_FILES_LIST: ${{ steps.changed_files.outputs.list }}
+        run: |
+          python3 .github/scripts/compute_filters.py
+
+  # Run analyses in parallel; SARIF stashed as artifacts. No upload
+  # happens here — the barrier job below collects all three and
+  # delivers them atomically.
+  analyze:
+    needs: [pre_check, changes]
+    if: needs.pre_check.outputs.should_skip != 'true'
+    name: Analyze (${{ matrix.language }})
+    runs-on: ${{ (matrix.language == 'swift' && 'macos-latest') || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    permissions:
+      # security-events: write NOT needed here — only the upload job
+      # publishes SARIFs. Analyse just produces them.
+      packages: read
+      actions: read
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: c-cpp
+            build-mode: none
+          - language: python
+            build-mode: none
+
+    steps:
+      - name: Determine whether this matrix entry should run
+        id: gate
+        env:
+          FORCE: ${{ needs.changes.outputs.force_full }}
+          FILTER_PYTHON: ${{ needs.changes.outputs.codeql_python }}
+          FILTER_CPP: ${{ needs.changes.outputs.codeql_cpp }}
+          FILTER_ACTIONS: ${{ needs.changes.outputs.codeql_actions }}
+          LANG: ${{ matrix.language }}
+        run: |
+          set -euo pipefail
+          case "$LANG" in
+            python)  flag="$FILTER_PYTHON" ;;
+            c-cpp)   flag="$FILTER_CPP" ;;
+            actions) flag="$FILTER_ACTIONS" ;;
+            *)       flag="true" ;;
+          esac
+          if [[ "$FORCE" == "true" || "$flag" == "true" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping CodeQL ${LANG} — no relevant changes"
+          fi
+
+      - name: Checkout repository
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6.0.2
+        with:
+          persist-credentials: false
+
+      # Initializes the CodeQL tools for scanning.
+      - name: Initialize CodeQL
+        if: steps.gate.outputs.run == 'true'
+        uses: github/codeql-action/init@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # was v4.35.5
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Run manual build steps
+        if: steps.gate.outputs.run == 'true' && matrix.build-mode == 'manual'
+        shell: bash
+        run: |
+          echo 'If you are using a "manual" build mode, replace this with the build commands.' >&2
+          exit 1
+
+      # ANALYSE only — do NOT upload from here. The barrier job
+      # below uploads all three matrix outputs atomically.
+      - name: Perform CodeQL Analysis (no upload — deferred to barrier job)
+        if: steps.gate.outputs.run == 'true'
+        uses: github/codeql-action/analyze@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # was v4.35.5
+        with:
+          category: "/language:${{matrix.language}}"
+          upload: never
+          output: ./sarif-out
+
+      # When the per-language gate skipped this matrix entry (no
+      # relevant changes), write an empty stub SARIF for the same
+      # category so the merged multi-run upload below covers all
+      # three configs and the meta-check sees a complete baseline
+      # match.
+      - name: Write empty SARIF for skipped language
+        if: steps.gate.outputs.run != 'true'
+        env:
+          LANG_NAME: ${{ matrix.language }}
+        run: |
+          mkdir -p ./sarif-out
+          python3 - <<'PY' > ./sarif-out/empty.sarif
+          import json, os
+          from datetime import datetime, timezone
+          lang = os.environ["LANG_NAME"]
+          # automationDetails.id MUST match the category convention
+          # `/language:<lang>/` so the merged upload registers the
+          # same category as a real analyze would have.
+          run = {
+              "tool": {
+                  "driver": {
+                      "name": "CodeQL",
+                      "organization": "GitHub",
+                      "notifications": [],
+                      "rules": [],
+                  }
+              },
+              "automationDetails": {
+                  "id": f"/language:{lang}/",
+              },
+              "invocations": [{
+                  "executionSuccessful": True,
+                  "endTimeUtc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                  "toolExecutionNotifications": [],
+              }],
+              "artifacts": [],
+              "results": [],
+              "columnKind": "utf16CodeUnits",
+              "properties": {
+                  "raptor.skipped_language": lang,
+                  "raptor.reason": "no relevant changes — gated out by compute_filters.py",
+              },
+          }
+          doc = {
+              "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+              "version": "2.1.0",
+              "runs": [run],
+          }
+          print(json.dumps(doc))
+          PY
+
+      - name: Stash SARIF as artifact for atomic upload
+        if: needs.pre_check.outputs.should_skip != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # was v7.0.1
+        with:
+          name: sarif-${{ matrix.language }}
+          path: ./sarif-out/*.sarif
+          if-no-files-found: error
+          retention-days: 1
+
+  # Atomic multi-run upload. Combines all three matrix-emitted SARIFs
+  # into a single SARIF document and uploads in one POST so GitHub's
+  # CodeQL meta-check sees all configs in one shot.
+  upload:
+    needs: [pre_check, analyze]
+    if: needs.pre_check.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Required to upload SARIF results.
+      security-events: write
+      # Required by the codeql-action/upload-sarif action's internal
+      # provenance / status checks.
+      contents: read
+      actions: read
+      packages: read
+
+    steps:
+      - name: Checkout (needed by upload-sarif for repo metadata)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # was v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download all SARIF artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # was v8.0.1
+        with:
+          path: ./sarif-in
+          pattern: sarif-*
+
+      - name: Combine into single multi-run SARIF
+        env:
+          SHA: ${{ github.sha }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > combined.sarif
+          import json, glob, os, sys
+          from datetime import datetime, timezone
+
+          runs = []
+          for path in sorted(glob.glob("sarif-in/sarif-*/*.sarif")):
+              with open(path) as f:
+                  doc = json.load(f)
+              for run in doc.get("runs", []):
+                  # Defensive: ensure every run carries automationDetails.id.
+                  # `analyze@v4` writes it from `category:`; the stub writer
+                  # above sets it explicitly. Either path satisfies the
+                  # PR-vs-base correlator.
+                  if not run.get("automationDetails", {}).get("id"):
+                      print(
+                          f"::warning::SARIF run from {path} missing "
+                          f"automationDetails.id — skipping",
+                          file=sys.stderr,
+                      )
+                      continue
+                  runs.append(run)
+
+          if not runs:
+              print("::error::No valid SARIF runs to upload", file=sys.stderr)
+              sys.exit(1)
+
+          out = {
+              "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+              "version": "2.1.0",
+              "runs": runs,
+          }
+          print(json.dumps(out))
+          PY
+          echo "Combined $(jq '.runs | length' combined.sarif) runs:"
+          jq -r '.runs[] | "  - \(.automationDetails.id)  results=\(.results | length)"' combined.sarif
+
+      # Single upload, atomic delivery. The action sends one POST to
+      # `/code-scanning/sarifs` containing all runs; GitHub processes
+      # the multi-run file as one batch and the meta-check fires with
+      # all three configs visible.
+      - name: Upload combined SARIF
+        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # was v4.35.5
+        with:
+          sarif_file: combined.sarif
+          # No `category:` here — each run carries its own
+          # automationDetails.id which the action honours.

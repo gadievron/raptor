@@ -9,6 +9,33 @@ from typing import Any
 from ..schema.common import EvidenceSource
 
 
+# Per-invocation `-c` overrides that defang malicious settings the
+# operator's REPO can plant in its own .git/config — env vars alone
+# can't suppress per-repo config. Mirrors core.git.clone._SAFE_GIT_
+# OVERRIDES; inlined because this skill module has no core/ import.
+#
+# Threats neutralised:
+#   - core.fsmonitor=<cmd>: arbitrary command on every git invocation
+#     (CVE-2024-32002 family). Setting `core.fsmonitor=` (empty)
+#     refuses the override.
+#   - core.editor / core.pager: launch attacker-named editor or
+#     pager on commit/log/blame.
+#   - core.askPass: spawn askpass binary for credential prompts.
+#   - core.sshCommand: per-repo SSH command override.
+#   - protocol.file.allow / protocol.ext.allow: refuses file:// and
+#     ext:: URLs as remotes (otherwise smuggle command exec via the
+#     remote URL parser).
+_SAFE_GIT_OVERRIDES = (
+    "-c", "core.fsmonitor=",
+    "-c", "core.editor=true",
+    "-c", "core.pager=cat",
+    "-c", "core.askPass=true",
+    "-c", "core.sshCommand=ssh",
+    "-c", "protocol.file.allow=user",
+    "-c", "protocol.ext.allow=never",
+)
+
+
 class GitClient:
     """Client for local git operations."""
 
@@ -22,7 +49,7 @@ class GitClient:
     def _run(self, *args: str) -> str:
         try:
             result = subprocess.run(
-                ["git", "-C", self.repo_path, *args],
+                ["git", *_SAFE_GIT_OVERRIDES, "-C", self.repo_path, *args],
                 capture_output=True,
                 text=True,
                 check=True,
@@ -109,10 +136,10 @@ class GitClient:
         # but prints to stdout/stderr.
         # We want to capture everything.
         result = subprocess.run(
-            ["git", "-C", self.repo_path, "fsck", "--full"],
+            ["git", *_SAFE_GIT_OVERRIDES, "-C", self.repo_path, "fsck", "--full"],
             capture_output=True,
             text=True,
-            check=False 
+            check=False
         )
         return result.stdout + result.stderr
 

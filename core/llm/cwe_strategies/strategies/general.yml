@@ -1,0 +1,53 @@
+name: general
+description: |
+  Default strategy for all code under review. Trust + assumption
+  reasoning that applies regardless of bug class — when no other
+  strategy fits, this one always does.
+
+signals:
+  # General has no specialised signals — it's the default fallback.
+  # When other strategies match better, those win; general stays
+  # included by the picker's always-on flag.
+  cwes: []
+
+key_questions:
+  - "What does this function trust about its inputs and the surrounding state?"
+  - "What invariants must callers maintain? Where are they checked?"
+  - "What happens when each assumption is violated — does the function still behave safely?"
+  - "On error paths, are resources released and partial state cleaned up?"
+
+prompt_addendum: |
+  Read the function with an attacker who controls everything the
+  function does not explicitly validate. For each parameter, ask
+  what the function does if the value is unexpected (negative
+  length, NULL pointer, oversized buffer, malformed string, the
+  same value as another parameter that's supposed to be different).
+  Trace what happens on the EARLY-RETURN paths as carefully as on
+  the success path — bugs often live in cleanup gaps.
+
+exemplars:
+  - cve: CVE-2022-0995
+    title: watch_queue missing bounds check
+    pattern: |
+      The function indexes into a fixed-size array using a value
+      derived from a syscall argument without first validating
+      that the index falls within the array.
+    why_buggy: |
+      Caller-supplied integer is used as an array index. The
+      function assumes the caller passes only valid indices, but
+      the caller is unprivileged userspace and can pass anything.
+      Out-of-bounds write corrupts adjacent kernel state.
+
+  - cve: CVE-2022-1016
+    title: nf_tables information leak from uninitialised stack
+    pattern: |
+      A struct on the stack is partially initialised (some fields
+      assigned, others left untouched) and then copied to userspace
+      as the response to a syscall.
+    why_buggy: |
+      The function trusts that ``memset`` or per-field assignment
+      covers every byte of the struct. Compiler padding between
+      fields, or a new field added without updating the
+      initialisation, leaves uninitialised stack bytes that get
+      copied out — leaking whatever the previous stack frame
+      contained.

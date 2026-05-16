@@ -1,10 +1,10 @@
 """Integration tests for CodeQL database_manager concurrent-write safety.
 
-These tests use real multiprocessing (subprocess Popen via mp.Pool) to
-exercise the build-in-staging + atomic-promote flow with real PIDs and
-real concurrent file operations — exactly the conditions where the bug
-this fix addresses (two concurrent /codeql runs corrupting each other's
-canonical DB) actually manifests.
+These tests use real multiprocessing (one mp.Process per worker, spawn
+context) to exercise the build-in-staging + atomic-promote flow with
+real PIDs and real concurrent file operations — exactly the conditions
+where the bug this fix addresses (two concurrent /codeql runs corrupting
+each other's canonical DB) actually manifests.
 
 Mocks-only unit tests in test_database_manager.py validate the logic
 shape; these tests validate behaviour under real concurrency.
@@ -22,12 +22,12 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-# Module-level worker so it can be pickled by mp.Pool. Cannot reference
-# enclosing test scope; gets all state via args.
 
-
+# Module-level worker — spawn pickles by name, so it must not be nested
+# inside a test class or closure. State arrives via args; nothing from
+# the parent process is captured.
 def _concurrent_create_worker(args):
-    """Worker run inside a subprocess via mp.Pool.
+    """Worker run inside a subprocess.
 
     Each process:
       - constructs its own DatabaseManager pointing at the shared cache_dir
@@ -54,17 +54,22 @@ def _concurrent_create_worker(args):
         staging = Path(cmd[3])
         staging.mkdir(parents=True, exist_ok=True)
         time.sleep(random.uniform(sleep_min, sleep_max))
-        # codeql-database.yml is the marker validate_database checks for.
-        # Without this file, get_cached_database considers the cached
-        # DB invalid even after promotion.
+        # codeql-database.yml is the legacy marker validate_database
+        # checked for. Batch 399 added a stricter check: at least one
+        # `db-<lang>/` subdirectory must exist and hold > 100KB of
+        # content (real codeql databases write per-language tries
+        # under db-cpp/, db-java/, db-python/, etc.). The fixture
+        # mimics that shape so validate_database accepts it.
         (staging / "codeql-database.yml").write_text(
             "sourceLocationPrefix: /repo\nlanguage: python\n"
         )
         (staging / "db-info.json").write_text(f'{{"pid": {os.getpid()}}}')
-        # Add some bulk so the staging dir is non-trivial — better
-        # simulates real codeql DB shape (>= a few files of content)
+        db_subdir = staging / "db-python"
+        db_subdir.mkdir(exist_ok=True)
+        # > 100KB of "trie" content under db-python/ to pass the
+        # validate_database minimum-substance check.
         for i in range(3):
-            (staging / f"chunk-{i}.bin").write_bytes(b"x" * 4096)
+            (db_subdir / f"chunk-{i}.bin").write_bytes(b"x" * 50_000)
         r = MagicMock()
         r.returncode = 0
         r.stdout = "2.16.0"
@@ -81,6 +86,37 @@ def _concurrent_create_worker(args):
         'pid': os.getpid(),
         'cached': result.cached,
     }
+
+
+def _process_worker_target(args, queue):
+    """Module-level Process target so spawn can pickle it. Forwards the
+    worker's return value through the queue."""
+    queue.put(_concurrent_create_worker(args))
+
+
+def _run_concurrent_workers(args_list):
+    """Spawn one fresh process per task and collect their results.
+
+    Why mp.Process per task instead of mp.Pool.map: Pool uses a shared
+    task queue (chunksize=1 by default), so a worker that finishes its
+    first task fast can pull the next one before slower siblings finish
+    their first — concentrating multiple tasks onto fewer PIDs. That
+    breaks the "N independent /codeql invocations" model these tests
+    are simulating, and it would also exercise the same staging-path
+    twice within one process (PID-derived path) which is not what the
+    concurrent-write story is about.
+    """
+    ctx = mp.get_context('spawn')
+    queue = ctx.Queue()
+    procs = [ctx.Process(target=_process_worker_target, args=(args, queue))
+             for args in args_list]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join()
+    # Result order is by completion time, not args order; tests treat
+    # results as a set of independent outcomes so this is fine.
+    return [queue.get() for _ in args_list]
 
 
 class TestConcurrentCreateDatabase:
@@ -112,17 +148,13 @@ class TestConcurrentCreateDatabase:
         args = [(str(cache_dir), str(repo_path), 0.1, 0.3)
                 for _ in range(n_workers)]
 
-        # 'spawn' context: avoids fork-related issues with patches in
-        # parent affecting children unexpectedly.
-        ctx = mp.get_context('spawn')
-        with ctx.Pool(n_workers) as pool:
-            results = pool.map(_concurrent_create_worker, args)
+        results = _run_concurrent_workers(args)
 
         # All workers succeeded
         for i, r in enumerate(results):
             assert r['success'], f"worker {i} failed: {r}"
 
-        # All have distinct PIDs (sanity check that mp actually forked)
+        # One process per task — each worker has its own PID.
         assert len(set(r['pid'] for r in results)) == n_workers
 
         # Cache slot is populated. Compute hash from the same code path
@@ -163,9 +195,7 @@ class TestConcurrentCreateDatabase:
         args = [(str(cache_dir), str(repo_path), 0.02, 0.1)
                 for _ in range(n_workers)]
 
-        ctx = mp.get_context('spawn')
-        with ctx.Pool(n_workers) as pool:
-            results = pool.map(_concurrent_create_worker, args)
+        results = _run_concurrent_workers(args)
 
         # Same invariants as the 4-worker case
         for i, r in enumerate(results):
@@ -191,11 +221,10 @@ class TestConcurrentCreateDatabase:
         repo_path = self._make_target_repo(tmp_path)
 
         # Phase 1: initial concurrent burst populates cache
-        ctx = mp.get_context('spawn')
-        with ctx.Pool(3) as pool:
-            results = pool.map(_concurrent_create_worker,
-                               [(str(cache_dir), str(repo_path), 0.05, 0.15)
-                                for _ in range(3)])
+        results = _run_concurrent_workers(
+            [(str(cache_dir), str(repo_path), 0.05, 0.15)
+             for _ in range(3)]
+        )
         assert all(r['success'] for r in results)
 
         # Phase 2: a fresh single process — should hit cache

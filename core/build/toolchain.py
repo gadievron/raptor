@@ -72,28 +72,47 @@ def _resolve_from_which(cmd: str, strip_suffix: str) -> Optional[str]:
 
 def detect_JAVA_HOME() -> Optional[str]:
     """Resolve JAVA_HOME from the host. See module docstring for order."""
+    import sys as _sys
     # 1. Debian/Ubuntu convention
     default_java = "/usr/lib/jvm/default-java"
     if os.path.isdir(default_java):
         return default_java
-    # 2. From `which java`
+    # 2. macOS's canonical helper. MUST run BEFORE the which-java
+    # heuristic on Darwin: `/usr/bin/java` is Apple's stub that
+    # exists even when no JDK is installed, so `which java` returns
+    # `/usr/bin/java` → strip /bin/java → JAVA_HOME = `/usr`. Setting
+    # `JAVA_HOME=/usr` makes the stub recursively re-exec itself
+    # (it finds `/usr/bin/javac` = the stub itself = infinite loop)
+    # and ANY subprocess that invokes javac under that env hangs
+    # indefinitely. Apple's java_home is the authoritative source on
+    # macOS — defer to it. Caught by macOS dogfooding of
+    # packages/codeql build synthesis.
+    if _sys.platform == "darwin":
+        macos_helper = "/usr/libexec/java_home"
+        if os.path.isfile(macos_helper) and os.access(macos_helper, os.X_OK):
+            try:
+                import subprocess
+                r = subprocess.run(
+                    [macos_helper], capture_output=True, text=True, timeout=5,
+                )
+                if r.returncode == 0 and r.stdout.strip():
+                    candidate = r.stdout.strip()
+                    if os.path.isdir(candidate):
+                        return candidate
+            except (OSError, subprocess.SubprocessError):
+                pass
+        # macOS without a JDK: don't fall through to the which-java
+        # heuristic — would hit the stub-loop trap above. Return None
+        # and let the caller's build tool surface the missing-
+        # toolchain error.
+        return None
+    # 3. From `which java` (Linux). Reject `/usr` itself as a
+    # defensive check: any host where the resolved java install
+    # root collapses to `/usr` is misconfigured (would hit the
+    # stub-loop on macOS, surely wrong on Linux too).
     home = _resolve_from_which("java", "bin/java")
-    if home and os.path.isdir(home):
+    if home and home != "/usr" and os.path.isdir(home):
         return home
-    # 3. macOS's canonical helper (no-op on Linux)
-    macos_helper = "/usr/libexec/java_home"
-    if os.path.isfile(macos_helper) and os.access(macos_helper, os.X_OK):
-        try:
-            import subprocess
-            r = subprocess.run(
-                [macos_helper], capture_output=True, text=True, timeout=5,
-            )
-            if r.returncode == 0 and r.stdout.strip():
-                candidate = r.stdout.strip()
-                if os.path.isdir(candidate):
-                    return candidate
-        except (OSError, subprocess.SubprocessError):
-            pass
     return None
 
 
@@ -108,7 +127,19 @@ def detect_GOROOT() -> Optional[str]:
 def detect_DOTNET_ROOT() -> Optional[str]:
     """Resolve DOTNET_ROOT: dotnet is installed with `dotnet` at the
     root, not under a bin/ subdir on most distros — strip only the
-    trailing filename."""
+    trailing filename.
+
+    Refuses the filesystem root ``/`` and the user's ``$HOME``:
+      * ``/`` happens when dotnet is installed AS `/dotnet` (some
+        minimal container layouts). Setting `DOTNET_ROOT=/` makes
+        dotnet scan the entire filesystem for SDKs and can
+        legitimately try to write workload metadata into ``/``.
+      * ``$HOME`` happens when a custom layout puts the dotnet
+        binary directly in the user's home (`~/dotnet`).
+        DOTNET_ROOT then refers to the whole home directory —
+        dotnet writes workload state and tooling cache into the
+        home root instead of a scoped install dir.
+    """
     found = shutil.which("dotnet")
     if not found:
         return None
@@ -117,9 +148,21 @@ def detect_DOTNET_ROOT() -> Optional[str]:
     except OSError:
         return None
     root = os.path.dirname(real)
-    if root and os.path.isdir(root):
-        return root
-    return None
+    if not root or not os.path.isdir(root):
+        return None
+    # Refuse the filesystem root and HOME exactly.
+    # `os.path.normpath` rather than `os.path.realpath` for the HOME
+    # comparison: realpath was already invoked above on the original
+    # binary, so `root` already reflects symlink resolution. Re-running
+    # realpath here would unnecessarily stat HOME and complicate the
+    # tests that mock `os.path.realpath` to return a fixed value
+    # regardless of input.
+    if root == os.sep:
+        return None
+    home = os.environ.get("HOME")
+    if home and os.path.normpath(root) == os.path.normpath(home):
+        return None
+    return root
 
 
 def detect_RUSTUP_HOME() -> Optional[str]:
@@ -144,10 +187,27 @@ def detect_RUSTUP_HOME() -> Optional[str]:
                     return candidate
         except (OSError, subprocess.SubprocessError):
             pass
-    # 2. Fallback: ~/.rustup if it's a real dir
-    home_env = os.environ.get("HOME")
-    if home_env:
-        candidate = os.path.join(home_env, ".rustup")
+    # 2. Fallback: ~/.rustup if it's a real dir.
+    # Prefer `pwd.getpwuid(os.geteuid()).pw_dir` over `$HOME` when
+    # available. Pre-fix the env-var lookup honoured a hostile
+    # `HOME=/etc` (set by an attacker via `env -` or a shell hook) —
+    # we'd then probe `/etc/.rustup`, find a planted dir, and
+    # report it as the user's RUSTUP_HOME. Subsequent rustc /
+    # cargo invocations under the build_detector flow would honour
+    # the attacker-controlled toolchain location. The pwd lookup
+    # reads from `/etc/passwd` (kernel-ratified user identity) so
+    # an attacker with shell access to set `HOME` can't redirect.
+    # Fall back to `$HOME` only when pwd lookup fails (e.g.
+    # nsswitch-broken container, custom auth backend that returns
+    # nothing for the running uid).
+    home = None
+    try:
+        import pwd
+        home = pwd.getpwuid(os.geteuid()).pw_dir
+    except (KeyError, ImportError, OSError):
+        home = os.environ.get("HOME")
+    if home:
+        candidate = os.path.join(home, ".rustup")
         if os.path.isdir(candidate):
             return candidate
     return None
@@ -186,16 +246,38 @@ def apply_toolchain_env(env: Dict[str, str],
                 f"entry {name!r}. Add a detect_{name}() helper or "
                 f"remove the name from BUILD_SYSTEMS.env_detect."
             )
-        # Treat any detector exception as "not found" rather than
+        # Treat detector failures as "not found" rather than
         # propagating — a detector crash on an exotic distro (odd
-        # filesystem, broken shutil.which) should NOT take out the
-        # whole build. The warning below tells operators what happened.
+        # filesystem, broken shutil.which, subprocess timeout)
+        # should NOT take out the whole build.
+        #
+        # Two-tier logging:
+        #   * Expected failure classes (OSError, subprocess.*,
+        #     TimeoutError) log at WARNING — these happen in the
+        #     wild on legitimate broken hosts and aren't actionable.
+        #   * Anything else (AttributeError from a typo, NameError
+        #     from a refactor, TypeError from wrong return shape) is
+        #     almost certainly a programming bug — log at ERROR with
+        #     exc_info so the traceback surfaces in CI / dev. Pre-fix
+        #     ALL exception types logged at WARNING with no
+        #     traceback, silently masking real bugs introduced by
+        #     detector edits.
+        import subprocess
+        expected_failures = (OSError, subprocess.SubprocessError, TimeoutError)
         try:
             value = DETECTORS[name]()
-        except Exception as e:
+        except expected_failures as e:
             logger.warning(
                 f"build toolchain: detector for {name} raised "
                 f"{type(e).__name__}: {e} — treating as not found."
+            )
+            value = None
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "build toolchain: detector for %s raised "
+                "unexpected %s: %s — treating as not found "
+                "(this is likely a programming bug, see traceback)",
+                name, type(e).__name__, e, exc_info=True,
             )
             value = None
         if value is None:

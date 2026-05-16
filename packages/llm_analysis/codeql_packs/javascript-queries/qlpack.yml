@@ -1,0 +1,14 @@
+---
+# RAPTOR-shipped CodeQL pack for JavaScript / TypeScript: companion
+# queries that complement the stdlib `codeql/javascript-queries` pack
+# with sources beyond `RemoteFlowSource`. See the Python pack at
+# packages/llm_analysis/codeql_packs/python-queries/ for the design
+# rationale; the JS pack mirrors that pattern, selecting stdlib
+# threat-model sources tagged `commandargs` (process.argv, yargs,
+# optimist), `environment` (process.env), `stdin`, and `file`.
+library: false
+name: raptor/javascript-queries
+version: 0.0.1
+dependencies:
+  codeql/javascript-all: "*"
+extractor: javascript

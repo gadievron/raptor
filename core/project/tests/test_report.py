@@ -84,6 +84,70 @@ class TestProjectReport(unittest.TestCase):
             stats = generate_project_report(p)
             self.assertEqual(stats["findings"], 1)  # Not 2
 
+    def test_report_writes_grouped_markdown_findings(self):
+        with TemporaryDirectory() as d:
+            p = self._make_project(d, {
+                "scan-20260401": [
+                    {
+                        "id": "RPT-001",
+                        "title": "Command injection",
+                        "status": "confirmed",
+                        "severity": "high",
+                        "file": "src/app.py",
+                        "function": "handler",
+                        "line": 42,
+                        "vuln_type": "command_injection",
+                        "evidence": "attacker-controlled argument reaches subprocess",
+                    },
+                    {
+                        "id": "RPT-002",
+                        "title": "Dead code report",
+                        "status": "ruled_out",
+                        "file": "src/legacy.py",
+                        "function": "old_handler",
+                    },
+                    {
+                        "id": "RPT-003",
+                        "title": "Needs triage",
+                        "status": "not_disproven",
+                        "file": "src/review.py",
+                    },
+                ],
+            })
+
+            stats = generate_project_report(p)
+
+            findings_dir = p.output_path / "findings"
+            self.assertEqual(stats["finding_buckets"], {
+                "confirmed": 1,
+                "needs-review": 1,
+                "ruled-out": 1,
+            })
+            self.assertTrue((findings_dir / "manifest.json").exists())
+            self.assertTrue((findings_dir / "findings.jsonl").exists())
+            self.assertTrue((findings_dir / "test.md").exists())
+            self.assertEqual(len(list((findings_dir / "confirmed").glob("*.md"))), 1)
+            self.assertEqual(len(list((findings_dir / "ruled-out").glob("*.md"))), 1)
+            self.assertEqual(len(list((findings_dir / "needs-review").glob("*.md"))), 1)
+            aggregate = (findings_dir / "test.md").read_text()
+            self.assertIn("# test findings", aggregate)
+            self.assertLess(aggregate.index("## High"), aggregate.index("## Unknown"))
+            markdown = next((findings_dir / "confirmed").glob("*.md")).read_text()
+            self.assertIn("# Command injection", markdown)
+            self.assertIn("Stable fingerprint:", markdown)
+            self.assertIn("| Severity | high |", markdown)
+            self.assertIn("attacker-controlled argument reaches subprocess", markdown)
+
+    def test_generated_findings_directory_is_not_treated_as_run(self):
+        with TemporaryDirectory() as d:
+            p = self._make_project(d, {
+                "scan-20260401": [{"id": "F-001", "status": "confirmed"}],
+            })
+            generate_project_report(p)
+            stats = generate_project_report(p)
+            self.assertEqual(stats["runs"], 1)
+            self.assertEqual(stats["findings"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

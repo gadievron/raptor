@@ -104,6 +104,50 @@ class Response:
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
             raise HttpError(f"Response is not valid JSON: {e}") from e
 
+    # ------------------------------------------------------------------
+    # ``requests``-compat shim
+    #
+    # Some consumers (notably ``core.oci.client``) were originally
+    # written against the ``requests.Response`` API. Adding aliases
+    # here lets them work against this Response dataclass without a
+    # rewrite. Native callers continue to use ``status`` / ``body``.
+    # ------------------------------------------------------------------
+
+    @property
+    def status_code(self) -> int:
+        """Alias for ``status`` — matches ``requests.Response``."""
+        return self.status
+
+    @property
+    def content(self) -> bytes:
+        """Alias for ``body`` — matches ``requests.Response``."""
+        return self.body
+
+    @property
+    def text(self) -> str:
+        """UTF-8 decoded body (errors=replace) — matches
+        ``requests.Response.text`` behaviour."""
+        return self.body.decode("utf-8", errors="replace")
+
+    def iter_content(self, chunk_size: int = 65536) -> Iterator[bytes]:
+        """Yield the body in ``chunk_size`` chunks.
+
+        The underlying urllib backend has already buffered the entire
+        body — we re-chunk it here to satisfy the consumer contract
+        without changing the buffering model. For genuinely streamed
+        downloads (where the body could be 100MB+ and shouldn't sit
+        in memory at all), use :meth:`HttpClient.stream_bytes`
+        instead.
+        """
+        body = self.body
+        for i in range(0, len(body), chunk_size):
+            yield body[i:i + chunk_size]
+
+    def close(self) -> None:
+        """No-op for the buffered backend; matches ``requests.Response``
+        which closes the underlying connection."""
+        pass
+
 
 class NotModified(HttpError):
     """Raised when a server returns 304 Not Modified.

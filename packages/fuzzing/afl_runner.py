@@ -62,8 +62,31 @@ class AFLRunner:
         if not self.binary.stat().st_mode & 0o111:  # Check if executable
             raise PermissionError(f"Binary is not executable: {binary_path}")
 
+        # Anchor default output to RaptorConfig.get_out_dir() so
+        # fuzz output lands under the operator-configured run
+        # base, NOT a literal `out/` relative to whatever
+        # cwd the script happened to launch from. Pre-fix
+        # `Path(f"out/fuzz_{name}")` was relative to the current
+        # working directory at runner-construction time. Two
+        # failure modes:
+        #   * Operator running RAPTOR from `~/work/foo/` got
+        #     fuzz output in `~/work/foo/out/fuzz_*` instead of
+        #     the configured project run dir.
+        #   * Script invoked via cron / systemd / CI from `/`
+        #     wrote `/out/fuzz_*` (or failed with permission
+        #     denied), polluting the root filesystem.
+        # `RaptorConfig.get_out_dir()` resolves to the active
+        # project's run dir (or DEFAULT_OUTPUT_BASE when no
+        # project is active) per the standard run-lifecycle
+        # rule.
+        if output_dir:
+            self.output_dir = Path(output_dir)
+        else:
+            from core.config import RaptorConfig
+            self.output_dir = RaptorConfig.get_out_dir() / f"fuzz_{self.binary.stem}"
+        # Resolve corpus AFTER output_dir so the default-corpus
+        # path can anchor under output_dir (rather than CWD).
         self.corpus_dir = Path(corpus_dir) if corpus_dir else self._create_default_corpus()
-        self.output_dir = Path(output_dir) if output_dir else Path(f"out/fuzz_{self.binary.stem}")
         self.dict_path = Path(dict_path) if dict_path else None
         self.input_mode = input_mode
         self.check_sanitizers = check_sanitizers
@@ -126,8 +149,13 @@ class AFLRunner:
             raise RuntimeError(f"AFL++ validation failed: {e}")
 
     def _create_default_corpus(self) -> Path:
-        """Create minimal default corpus if none provided."""
-        corpus = Path("out/corpus_default")
+        """Create minimal default corpus if none provided.
+
+        Anchored to ``self.output_dir`` (not CWD) so running
+        ``/fuzz`` from inside a target tree does NOT plant seed
+        files in ``<target>/out/corpus_default/``.
+        """
+        corpus = self.output_dir / "corpus_default"
         corpus.mkdir(parents=True, exist_ok=True)
 
         # Create some basic seed inputs
@@ -146,12 +174,30 @@ class AFLRunner:
 
     def check_binary_instrumentation(self) -> bool:
         """Check if binary is instrumented for AFL."""
-        # Try to detect AFL instrumentation
-        result = _run_trusted(
-            ["strings", str(self.binary)],
-            capture_output=True,
-            text=True,
-        )
+        # Try to detect AFL instrumentation. `strings` runs over
+        # the operator-supplied (potentially attacker-controlled)
+        # target binary. Pre-fix this had no `timeout=` — a
+        # malformed binary with extreme string-table density
+        # could pin `strings` for many minutes (well-known DoS:
+        # a 1 GB ELF with .rodata of nothing but printable ASCII
+        # produces gigabytes of stdout that strings tries to
+        # buffer). Cap at 60 seconds — well above what a
+        # legitimate scan needs (a normal multi-MB binary
+        # finishes in << 1 second).
+        try:
+            result = _run_trusted(
+                ["strings", str(self.binary)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "strings %s exceeded 60s — assuming not "
+                "AFL-instrumented (treat as needs-QEMU)",
+                self.binary,
+            )
+            return False
 
         is_instrumented = "__AFL" in result.stdout or "afl" in result.stdout.lower()
 
@@ -200,12 +246,25 @@ class AFLRunner:
                 logger.warning(f"AFL compatibility check failed: {e}")
 
     def check_binary_sanitizers(self) -> bool:
-        """Check if binary is compiled with sanitizers like ASAN."""
-        result = _run_trusted(
-            ["strings", str(self.binary)],
-            capture_output=True,
-            text=True,
-        )
+        """Check if binary is compiled with sanitizers like ASAN.
+
+        See `check_binary_instrumentation` for the timeout
+        rationale — same 60s cap, same DoS class.
+        """
+        try:
+            result = _run_trusted(
+                ["strings", str(self.binary)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "strings %s exceeded 60s — sanitizer check "
+                "skipped, assuming none",
+                self.binary,
+            )
+            return False
 
         strings_output = result.stdout.lower()
         has_asan = self._has_runtime_sanitizer(strings_output, "asan")
@@ -349,6 +408,26 @@ class AFLRunner:
             # to tolerate both: we lose a small amount of speed and the
             # guarantee that external cores are captured (AFL still writes its
             # own crash artefacts under crashes/).
+            # Use get_safe_env() as the base, NOT os.environ.copy().
+            # Pre-fix the AFL subprocess inherited the operator's
+            # FULL environment including any RAPTOR-internal vars
+            # (RAPTOR_*, ANTHROPIC_API_KEY, OPENAI_API_KEY,
+            # AWS_*, GH_TOKEN, etc.). AFL itself doesn't
+            # interpret most of those, but:
+            #   * The fuzzed binary inherits the same env. If the
+            #     target reads `getenv("AWS_*")` (boto SDK,
+            #     credentials chain) or shells out (passing env
+            #     to libc functions), the operator's
+            #     credentials reach attacker-controlled code in
+            #     the fuzz target.
+            #   * On crash, AFL writes the env to the crash
+            #     metadata in `crashes/`; reports / triage flows
+            #     that include those files leak credentials.
+            # `get_safe_env()` strips dangerous / sensitive
+            # variables (see core/config.py DANGEROUS_ENV_VARS,
+            # LLM_API_KEY_VARS) by default. AFL_* vars get
+            # added explicitly below.
+            from core.config import RaptorConfig
             afl_env = RaptorConfig.get_safe_env()
             afl_env.setdefault("AFL_SKIP_CPUFREQ", "1")
             afl_env.setdefault("AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES", "1")
@@ -362,6 +441,29 @@ class AFLRunner:
 
             # Intentionally bare Popen — AFL fuzz daemon is long-running and
             # needs streaming output. Cannot use sandbox_run (blocks until exit).
+            #
+            # `stdout=DEVNULL` instead of `PIPE`. Pre-fix both
+            # streams went to PIPE buffers without ANY drainer
+            # thread consuming them while AFL ran. AFL's
+            # status-screen writes to stdout periodically; after
+            # roughly the OS-default 64KB pipe buffer filled, the
+            # next write blocked AFL waiting for a reader — the
+            # whole fuzzing daemon stalled silently with no
+            # error visible to the operator (process showed as
+            # alive but execs/sec dropped to 0). The stall could
+            # last hours before the operator noticed in the
+            # status dashboard.
+            #
+            # stdout=DEVNULL discards the (verbose, redundant
+            # with our own status capture) AFL output without
+            # buffer-fill risk. stderr stays PIPE because:
+            #  (1) it's much lower volume — AFL only writes to
+            #      stderr on startup errors and shutdown,
+            #  (2) the post-exit `proc.communicate(timeout=1)`
+            #      below collects it for diagnostic logging
+            #      (the shmget / SHM-config error messages
+            #      operators rely on for setup troubleshooting).
+            # 64KB stderr pre-exit is plenty for either case.
             proc = subprocess.Popen(
                 cmd,
                 stdout=stdout_fp,
@@ -472,20 +574,36 @@ class AFLRunner:
                     break
 
         finally:
-            # Stop all AFL instances
+            # Stop all AFL instances. Use communicate(timeout=5)
+            # NOT wait(timeout=5) — pre-fix `proc.wait()` could
+            # deadlock indefinitely if AFL had buffered output in
+            # the stderr PIPE that no one had drained (stdout is
+            # DEVNULL post-batch-450; stderr is still PIPE for
+            # diagnostic capture). On SIGTERM AFL writes a
+            # shutdown banner + final stats to stderr — for
+            # campaigns that ran long enough to fill 64KB of
+            # stderr, wait() blocked forever waiting for the
+            # process to exit while the process blocked forever
+            # waiting for stderr-pipe space. communicate() drains
+            # the pipe and waits in a single thread-safe call.
             logger.info("Stopping AFL instances...")
             for entry in processes:
                 name = entry["name"]
                 proc = entry["proc"]
                 proc.terminate()
                 try:
-                    proc.wait(timeout=5)
+                    proc.communicate(timeout=5)
                 except subprocess.TimeoutExpired:
                     logger.warning(f"Force killing {name}")
                     proc.kill()
-                    proc.wait(timeout=5)
+                    try:
+                        proc.communicate(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        # Kernel-level wedge — at this point we've
+                        # done what we can; orphan the proc.
+                        pass
                 finally:
-                    self._close_process_logs(entry)
+                    self._close_process_logs(entry)     
 
         # Count final crashes
         total_crashes = 0
@@ -725,7 +843,17 @@ class AFLRunner:
             return {}
 
         stats = {}
-        with open(stats_file) as f:
+        # Explicit `encoding="utf-8"` + `errors="replace"`. Pre-fix
+        # bare `open(stats_file)` used the host locale encoding —
+        # AFL writes its `fuzzer_stats` file in UTF-8 (the C side
+        # writes ASCII keys + UTF-8 stringified values), so a
+        # latin-1 / cp1252 default could mojibake non-ASCII path
+        # components in `target_mode`, `command_line`, etc., and
+        # raise UnicodeDecodeError on operator paths with i18n
+        # characters. `errors="replace"` keeps the parse going even
+        # if a byte sequence somehow doesn't decode (preferred over
+        # crashing the whole stats read for a single bad value).
+        with open(stats_file, encoding="utf-8", errors="replace") as f:
             for line in f:
                 if ":" in line:
                     key, value = line.strip().split(":", 1)
@@ -767,16 +895,54 @@ class AFLRunner:
             if self.input_mode == "file" and test_input:
                 env['AFL_INPUT_FILE'] = str(test_input)
 
+            # Landlock readable_paths: afl-showmap needs to READ
+            # the target binary (self.binary) and the input
+            # corpus file (test_input). Both typically live
+            # OUTSIDE self.output_dir — the binary in the
+            # operator's build dir, the input under the project's
+            # corpus tree. Pre-fix the only readable+writable
+            # path was self.output_dir, so:
+            #
+            #   * afl-showmap couldn't open the binary →
+            #     "afl-showmap: cannot open binary" error,
+            #     coverage report empty, operators saw "0%
+            #     coverage" with no signal that landlock was the
+            #     blocker.
+            #   * AFL_INPUT_FILE pointed outside the readable
+            #     scope → afl-showmap couldn't read it either.
+            #
+            # Add binary parent + input parent to readable_paths
+            # so afl-showmap can open both. Output stays
+            # restricted to output_dir.
+            readable_paths = [str(Path(self.binary).parent)]
+            if test_input:
+                readable_paths.append(str(Path(test_input).parent))
+
+            # Bound afl-showmap wallclock. Pre-fix the call had no
+            # `timeout=` — afl-showmap runs the (attacker-controlled)
+            # target binary with a single corpus entry to extract
+            # coverage; a target with an infinite loop, a sleep, or
+            # any non-terminating control flow on the chosen input
+            # would hang the analyser indefinitely. afl-showmap's
+            # own `-t` flag bounds the per-execution timeout, but a
+            # subprocess-level safety net catches the wedge case
+            # where the target ignores SIGALRM (e.g. a binary that
+            # blocks signals or installs a custom handler that
+            # masks the timeout). 5 minutes is generous: typical
+            # showmap runs are sub-second; even instrumentation-
+            # heavy binaries finish in well under a minute.
             result = _sandbox_run(
                 showmap_cmd,
                 block_network=True,
                 target=str(self.output_dir),
                 output=str(self.output_dir),
+                readable_paths=readable_paths,
                 capture_output=True,
                 text=True,
                 stdin=stdin_input,
                 cwd=str(self.output_dir),
                 env=env,
+                timeout=300,
             )
 
             # Parse output for coverage info

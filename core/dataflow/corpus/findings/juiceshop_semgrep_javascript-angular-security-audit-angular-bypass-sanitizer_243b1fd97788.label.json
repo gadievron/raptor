@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "juiceshop_semgrep_javascript-angular-security-audit-angular-bypass-sanitizer_243b1fd97788",
+  "verdict": "false_positive",
+  "fp_category": "type_constraint",
+  "rationale": "queryParam (from this.route.snapshot.queryParams.q) is passed to bypassSecurityTrustResourceUrl on line 6. The result is assigned to searchValue but used only as a Material table filter string (this.dataSource.filter is a plain string predicate), never as href/src. Without an HTML render context the bypass is harmless. Pattern matchers fire on bypassSecurityTrust* regardless of usage type.",
+  "labeler": "handlabel-juice-shop-webgoat",
+  "labeled_at": "2026-05-10"
+}

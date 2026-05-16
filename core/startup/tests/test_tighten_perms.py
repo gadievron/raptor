@@ -78,9 +78,13 @@ class TestTightenConfigPerms(unittest.TestCase):
             self.assertEqual(target.stat().st_mode & 0o777, 0o664)
 
     def test_chmod_failure_falls_back_to_warning(self):
+        # Patch `os.fchmod` (the new TOCTOU-safe call site) instead
+        # of `os.chmod`. Pre-fix the function used `os.chmod` which
+        # follows symlinks; batch 250 switched to open(O_NOFOLLOW)
+        # + fchmod to close the swap-symlink-mid-call race.
         with TemporaryDirectory() as d:
             p = self._make_file(Path(d), 0o644)
-            with patch("os.chmod", side_effect=PermissionError("denied")):
+            with patch("os.fchmod", side_effect=PermissionError("denied")):
                 notice = _tighten_config_perms(p)
             self.assertTrue(notice.startswith("\u26a0"))
             self.assertIn("chmod failed", notice)

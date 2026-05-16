@@ -72,6 +72,7 @@ _lock = threading.Lock()
 
 DENIALS_FILE = ".sandbox-denials.jsonl"
 SUMMARY_FILE = "sandbox-summary.json"
+AUDIT_DEGRADED_FILE = "sandbox-audit-degraded.json"
 
 # Per-run cap on recorded denials. A malicious target that triggers
 # thousands of network attempts (or any chatty workflow) would otherwise
@@ -122,13 +123,31 @@ def record_denial(cmd_display: str, returncode: int,
     run_dir = _active_run_dir
     if run_dir is None:
         return
-    # Per-run cap: silently drop denials past MAX_DENIALS_PER_RUN. Logs
-    # once at the boundary so a developer can find it. Lock-free
-    # increment is fine under CPython GIL (slight overcount past cap is
-    # acceptable for a DoS defense).
-    _denial_count += 1
-    if _denial_count > MAX_DENIALS_PER_RUN:
-        if _denial_count == MAX_DENIALS_PER_RUN + 1:
+    # Per-run cap: silently drop denials past MAX_DENIALS_PER_RUN.
+    # Logs once at the boundary so a developer can find it.
+    #
+    # Pre-fix the comment claimed "lock-free increment is fine
+    # under CPython GIL (slight overcount past cap is acceptable
+    # for a DoS defense)." But `+= 1` is NOT atomic in CPython —
+    # it compiles to LOAD + BINARY_ADD + STORE. Two threads can
+    # both load N, both add, both store N+1 (one update lost).
+    # That's harmless for the cap itself (a few extra records
+    # past the cap) BUT can cause the boundary log
+    # (`if _denial_count == MAX + 1`) to be missed entirely if
+    # the counter jumps from N to N+2 across a missed update.
+    # The boundary log is the operator's one signal that the cap
+    # was reached; missing it means an adversarial target's
+    # denials silently disappear with no log line announcing the
+    # cap.
+    # Hold `_lock` (already used by set_active_run_dir for the
+    # same `_denial_count` global) across the increment + boundary
+    # check + early return so the boundary log fires exactly once.
+    with _lock:
+        _denial_count += 1
+        local_count = _denial_count
+        is_boundary = (local_count == MAX_DENIALS_PER_RUN + 1)
+    if local_count > MAX_DENIALS_PER_RUN:
+        if is_boundary:
             logger.warning(
                 "sandbox summary cap reached (%d denials this run); "
                 "dropping further denials. Adversarial target or runaway "
@@ -142,21 +161,32 @@ def record_denial(cmd_display: str, returncode: int,
     # values (very long paths, env-string args) could still blow up.
     if len(cmd_display) > MAX_CMD_LEN:
         cmd_display = cmd_display[:MAX_CMD_LEN - 1] + "…"
-    # Redact secrets in cmd_display before persisting. The string is already
-    # escape_nonprintable'd by context.py at construction, but redact_secrets
-    # is what catches user:pass@host URLs, Bearer/Basic headers, and similar
-    # credential shapes that escape doesn't touch. Logs are typically rotated
-    # frequently (hourly) by syslog/journald; summaries live in the run dir
-    # until the operator runs `/project clean` (days-to-weeks), and operators
-    # paste run-dir contents into bug reports without thinking. The longer
-    # window + the "share without thinking" pattern justify the extra defense.
+    # Redact secrets + defensive escape_nonprintable in cmd_display
+    # before persisting.
+    #
+    # Pre-fix the comment claimed cmd_display was "already
+    # escape_nonprintable'd by context.py at construction" — but
+    # that relied on an UPSTREAM CONTRACT. A future caller (a new
+    # observation site, a refactored context.py, an LLM-generated
+    # call from agentic dispatch) that bypasses the construction
+    # path would feed raw control bytes (ANSI escape sequences,
+    # BIDI overrides, NUL/CR/LF) straight into the JSONL line.
+    # Operators tailing the JSONL via `tail -f` would then see
+    # forged log lines / smuggled escape sequences.
+    # Defense in depth: escape_nonprintable AFTER redact_secrets
+    # so even a contract violation upstream gets defanged here.
+    # Order matters — redact first so secrets don't get
+    # escape-byte-rewritten before pattern matching, then escape
+    # so any remaining non-printables are visible-form'd.
+    from core.security.prompt_output_sanitise import escape_nonprintable
+    cmd_safe = escape_nonprintable(redact_secrets(cmd_display))
     # Spread `details` FIRST so the explicit reserved fields below override
     # — without this, a caller passing details={"type": "evil", "cmd": ...}
     # could mask the real denial values.
     record = {
         **details,
         "ts": datetime.now(timezone.utc).isoformat(),
-        "cmd": redact_secrets(cmd_display),
+        "cmd": cmd_safe,
         "returncode": returncode,
         "type": denial_type,
         "suggested_fix": _suggested_fix(denial_type, **details),
@@ -210,6 +240,16 @@ def _suggested_fix(denial_type: str, **details: Any) -> str:
     if denial_type == "network":
         host = details.get("host")
         ctx = f" to `{host}`" if host else ""
+        if details.get("audit"):
+            # Audit-mode would-deny: informational only. The proxy_hosts
+            # allowlist is a sandbox API kwarg, not a CLI flag — per the
+            # round-2 PR #251 rule, suggestions must reference only
+            # operator-facing CLI flags, so we don't suggest "add this
+            # host to proxy_hosts". Operators wanting to keep the host
+            # allowed under full enforcement need to modify the calling
+            # code, which isn't a CLI affordance.
+            return (f"audit: outbound network{ctx} would be blocked under "
+                    f"`--sandbox full`")
         return (f"outbound network blocked{ctx}; use `--sandbox none` "
                 f"to allow network (or accept the block)")
     if denial_type == "write":
@@ -229,6 +269,61 @@ def _suggested_fix(denial_type: str, **details: Any) -> str:
     return "review denial; no specific suggestion available"
 
 
+def record_audit_degraded(run_dir: Path, *, reason: str,
+                          instructions: str = "") -> None:
+    """Write a marker file when --audit was requested but couldn't run.
+
+    Operators inspecting an output dir need to distinguish three states:
+      (1) audit ran, recorded events  → sandbox-summary.json present
+      (2) audit ran, no events        → no files (current convention)
+      (3) audit was requested but did NOT run on this host → THIS file
+
+    Without (3), an operator who runs `--audit` on Ubuntu 24.04 default
+    (apparmor sysctl=1) sees no summary and may interpret it as "audit
+    found nothing" rather than "audit didn't actually happen".
+
+    Idempotent across multiple sandbox calls in one run: writes once,
+    skips on subsequent calls. Safe to invoke from each per-call site
+    that detected degradation.
+    """
+    run_dir = Path(run_dir)
+    out = run_dir / AUDIT_DEGRADED_FILE
+    if out.exists():
+        return
+    payload = {
+        "audit_requested": True,
+        "audit_engaged": False,
+        "degraded": True,
+        "reason": reason,
+        "instructions": instructions,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    tmp = out.with_name(f".~{out.name}.tmp")
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=True) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(tmp, out)
+    except (OSError, ValueError, TypeError):
+        # Marker is best-effort. The log warning is the primary signal.
+        # Catch programming-error-shaped failures too (a future payload
+        # change with non-serialisable types would otherwise propagate
+        # and abort the caller's cleanup path while still leaking the
+        # `.~sandbox-audit-degraded.json.tmp` file).
+        pass
+    finally:
+        # Ensure the tmp file doesn't leak when write_text succeeded but
+        # os.replace failed (e.g. EBUSY, EXDEV, target dir vanished).
+        # Unlink missing_ok handles both "tmp never existed" and "replace
+        # already moved it" cases as no-ops.
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
     """Read ``<run_dir>/.sandbox-denials.jsonl`` and write
     ``<run_dir>/sandbox-summary.json`` aggregating all denials.
@@ -245,9 +340,33 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
     if not jsonl.exists():
         return None
 
+    # Rename-then-read pattern. Pre-fix the read-then-unlink sequence
+    # had a race: a writer (concurrent sandbox subprocess emitting a
+    # late denial) could append between the read and the unlink, and
+    # the unlink would drop that entry. Rename moves the directory
+    # entry atomically so any subsequent writer either creates a
+    # FRESH `.sandbox-denials.jsonl` (caught by the next
+    # `summarize_and_write` call) or appends to a path no longer
+    # bound to our inode.
+    #
+    # The tracer side appends with O_APPEND on the original path;
+    # POSIX guarantees O_APPEND opens resolve the path at write
+    # time, so a writer that opens AFTER our rename creates the new
+    # file. A writer that opened BEFORE rename keeps writing to our
+    # renamed inode (which we then unlink — those entries are lost,
+    # but they're a strictly small race window vs the bigger
+    # multi-second post-summary race the prior code had).
+    import os as _os
+    tmp = jsonl.with_name(f"{jsonl.name}.summarising.{_os.getpid()}")
+    try:
+        _os.replace(str(jsonl), str(tmp))
+    except OSError:
+        # Race lost (sibling already renamed) or jsonl disappeared.
+        return None
+
     denials = []
     try:
-        with open(jsonl, "r", encoding="utf-8") as f:
+        with open(tmp, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -257,14 +376,39 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
                 except json.JSONDecodeError:
                     continue  # skip malformed lines, keep going
     except OSError:
-        return None
-
-    if not denials:
         try:
-            jsonl.unlink()
+            tmp.unlink(missing_ok=True)
         except OSError:
             pass
         return None
+
+    # tmp file's data is now in memory; remove it.
+    try:
+        tmp.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+    if not denials:
+        return None
+
+    # Enrich tracer-emitted records with `suggested_fix` if they lack it
+    # (the tracer subprocess doesn't have the suggestion logic;
+    # _suggested_fix lives here in summary). Records from
+    # record_denial already include the field. After this loop,
+    # every record in `denials` has a uniform `suggested_fix` field —
+    # operators parsing sandbox-summary.json don't need defensive
+    # `.get()` for cross-source consistency.
+    for d in denials:
+        if "suggested_fix" not in d:
+            # Build details from the record's keys (type-specific
+            # ones like host/path/profile/audit/etc.). _suggested_fix
+            # accepts arbitrary kwargs and uses .get() internally.
+            details = {k: v for k, v in d.items()
+                       if k not in ("ts", "cmd", "returncode", "type",
+                                    "suggested_fix")}
+            d["suggested_fix"] = _suggested_fix(
+                d.get("type", "unknown"), **details,
+            )
 
     by_type: Dict[str, int] = {}
     for d in denials:
@@ -292,12 +436,12 @@ def summarize_and_write(run_dir: Path) -> Optional[Dict[str, Any]]:
             pass
         return None
 
-    # Remove the intermediate JSONL — summary supersedes it.
-    try:
-        jsonl.unlink()
-    except OSError:
-        pass
-
+    # The intermediate JSONL was already renamed-and-unlinked above
+    # (see the rename-then-read pattern at the start of the
+    # function). Nothing to clean up here. The bare `jsonl.unlink()`
+    # that lived here pre-fix was redundant after the rename and
+    # would always OSError now (caught by the swallow); keeping the
+    # comment marker for clarity.
     return summary
 
 

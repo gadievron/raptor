@@ -23,9 +23,41 @@ def _check_zip_entries(infolist) -> List[str]:
     warnings: List[str] = []
     for info in infolist:
         name = info.filename
-        if name.startswith("/") or name.startswith("\\"):
+        # Pre-fix the absolute-path + traversal checks tested
+        # `name.startswith("/")` then `".." in name.split("/")`
+        # / `name.split("\\")`. Two leaks:
+        #
+        #   1. WINDOWS DRIVE LETTERS. `C:\Users\...` doesn't
+        #      start with `/` or `\\`, but on Windows `Path()
+        #      .joinpath` against an absolute drive-letter path
+        #      ANCHORS to that drive — so a zip entry named
+        #      `C:\evil\file` extracted under `output_dir`
+        #      lands at `C:\evil\file`, not `output_dir/C/evil/
+        #      file`. The traversal vector is silent on POSIX
+        #      but dangerous on Windows.
+        #
+        #   2. SEPARATOR INCONSISTENCY. The traversal check
+        #      split on `/` AND `\\` independently, so an
+        #      entry like `foo/../bar` was caught (`..` in the
+        #      `/`-split) but the path `foo\..\bar` was caught
+        #      via the `\\`-split. A MIXED-separator entry like
+        #      `foo/..\\bar` slipped through both: the `/`-split
+        #      yielded `["foo", "..\\bar"]` (no bare `..`), and
+        #      the `\\`-split yielded `["foo/..", "bar"]` (no
+        #      bare `..`). Normalise BOTH separators first then
+        #      split once.
+        #
+        # Normalise backslashes to forward slashes for the
+        # checks. Then check absolute-path on the normalised
+        # form, traversal on the normalised split, AND check
+        # for a Windows drive-letter prefix (`C:`, `c:`, etc.).
+        normalised = name.replace("\\", "/")
+        if normalised.startswith("/"):
             warnings.append(f"Absolute path: {name}")
-        if ".." in name.split("/") or ".." in name.split("\\"):
+        # Windows drive letter (e.g. `C:`, `c:`, `Z:`).
+        if len(name) >= 2 and name[0].isalpha() and name[1] == ":":
+            warnings.append(f"Windows-absolute path: {name}")
+        if ".." in normalised.split("/"):
             warnings.append(f"Path traversal: {name}")
         if info.external_attr >> 28 == 0xA:
             warnings.append(f"Symlink: {name}")
@@ -48,11 +80,63 @@ def validate_zip_contents(zip_path: Path) -> Tuple[bool, List[str]]:
 
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
-            warnings = _check_zip_entries(zf.infolist())
+            # Pre-fix `zf.infolist()` materialised the FULL entry
+            # table before `_check_zip_entries` could examine even
+            # the first one. A zip-bomb shaped file with millions
+            # of entries (each pointing at the same compressed
+            # blob) consumed multi-GB RSS just on the
+            # infolist materialisation — `validate_zip_contents`
+            # OOM'd before its safety checks ran.
+            #
+            # Cap the entry count: a legitimate RAPTOR project zip
+            # holds at most a few hundred output files (run dirs,
+            # findings, reports, attachments). 10,000 is generous
+            # and far below the entry counts that trigger
+            # bomb-shaped resource exhaustion. Refuse over-cap.
+            _MAX_ENTRIES = 10_000
+            entries = []
+            for i, info in enumerate(zf.infolist()):
+                if i >= _MAX_ENTRIES:
+                    return False, [
+                        f"zip has more than {_MAX_ENTRIES} entries — "
+                        f"refusing as zip-bomb shape (legitimate "
+                        f"RAPTOR project exports have << 1000 entries)"
+                    ]
+                entries.append(info)
+            warnings = _check_zip_entries(entries)
     except zipfile.BadZipFile:
         return False, ["Invalid zip file"]
 
     return len(warnings) == 0, warnings
+
+
+def _is_transient_artefact(path: Path) -> bool:
+    """Per-process / per-machine files that shouldn't ship in a
+    portable export bundle.
+
+    Currently filters:
+      * ``*.lock`` — POSIX advisory lock files (e.g.
+        ``annotations/<src>.md.lock`` from
+        ``core.annotations.storage._file_lock``). They carry no
+        data — they're just stable file descriptors for
+        ``fcntl.flock``. A new importing process creates its own
+        lock file on first write; shipping the original is bundle
+        bloat and operator confusion.
+      * ``.annotation-*.tmp`` — orphaned tempfiles from
+        interrupted atomic writes. Should already be cleaned up
+        by the writer's ``except`` block, but this is belt-and-
+        braces.
+
+    Pre-existing exclusions are NOT widened by this commit — the
+    historical behaviour for ``.reads-manifest`` and
+    ``.raptor-run.json`` is preserved.
+    """
+    name = path.name
+    if name.endswith(".lock"):
+        return True
+    if name.startswith(".annotation-") and name.endswith(".tmp"):
+        return True
+    return False
 
 
 def export_project(project_output_dir: Path, dest_path: Path,
@@ -87,12 +171,17 @@ def export_project(project_output_dir: Path, dest_path: Path,
     dest_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Build zip manually to skip symlinks (shutil.make_archive follows them)
+    # plus per-process / transient artefacts that shouldn't ship in a
+    # portable archive (POSIX advisory lock files, tempfile leftovers).
     with zipfile.ZipFile(dest_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for item in project_output_dir.rglob("*"):
             if item.is_symlink():
                 logger.debug(f"Skipping symlink in export: {item}")
                 continue
             if item.is_file():
+                if _is_transient_artefact(item):
+                    logger.debug(f"Skipping transient artefact: {item}")
+                    continue
                 arcname = f"{project_output_dir.name}/{item.relative_to(project_output_dir)}"
                 zf.write(item, arcname)
         # Include project metadata if provided
@@ -217,8 +306,25 @@ def import_project(zip_path: Path, projects_dir: Path,
                 logger.info(f"Removed existing project '{project_name}' (force=True)")
 
             # --- Extract output data ---
+            #
+            # Streaming extract with cumulative byte cap. Pre-fix
+            # `zf.extract(info, ...)` wrote the FULL decompressed
+            # file to disk before the size check ran. A zip-bomb
+            # entry with a small declared size but a 10 GB
+            # decompressed payload then materialised the entire
+            # 10 GB on disk before the cap caught it — fills the
+            # filesystem, may OOM if the entry is held in memory
+            # by the zlib backend, and leaves the partial file
+            # for cleanup.
+            #
+            # Streaming via `zf.open(info, "r")` + chunked read
+            # lets us check both the per-entry declared size AND
+            # the running cumulative bytes BEFORE writing each
+            # chunk to the destination. The per-chunk write
+            # short-circuits as soon as the cap is exceeded.
             output_dir.mkdir(parents=True, exist_ok=True)
             max_size = 10 * 1024 * 1024 * 1024  # 10GB
+            chunk = 1024 * 1024  # 1 MiB
             bytes_extracted = 0
             try:
                 for info in zf.infolist():
@@ -226,20 +332,62 @@ def import_project(zip_path: Path, projects_dir: Path,
                         continue
                     if info.is_dir():
                         continue
-                    extract_dest = output_base if has_common_root else output_dir
-                    extracted_path = Path(zf.extract(info, extract_dest))
-                    actual_size = extracted_path.stat().st_size
+                    # Refuse if the per-entry declared size alone
+                    # would exceed remaining budget — saves opening
+                    # a stream we'd immediately cancel.
+                    if bytes_extracted + info.file_size > max_size:
+                        raise ValueError(
+                            f"Entry {info.filename!r} ({info.file_size / 1024 / 1024:.0f}MB) "
+                            f"would exceed limit ({max_size / 1024 / 1024:.0f}MB)"
+                        )
+                    extract_dest = Path(output_base if has_common_root else output_dir)
+                    target_path = extract_dest / info.filename
+                    # Resolve and re-check containment.
+                    # `_check_zip_entries` already vetted the
+                    # filenames upstream, but Python's traversal-
+                    # protection in zipfile is version-dependent
+                    # (3.6 had bugs around symlink-shaped entries,
+                    # 3.11 added stricter checks but still misses
+                    # NTFS-style alternate-data-stream filenames
+                    # and Windows drive-letter prefixes on POSIX).
+                    # Pre-fix this comment claimed "defence in
+                    # depth" but performed NO re-check — the
+                    # comment was a lie. Add the actual containment
+                    # check so any traversal that slipped past
+                    # _check_zip_entries (future regression, novel
+                    # filename shape, or a Python-version
+                    # behavioural difference) is caught here.
+                    extract_dest_resolved = extract_dest.resolve(strict=False)
+                    target_resolved = target_path.resolve(strict=False)
+                    try:
+                        target_resolved.relative_to(extract_dest_resolved)
+                    except ValueError:
+                        raise ValueError(
+                            f"Refusing to extract {info.filename!r}: "
+                            f"resolved target {target_resolved} escapes "
+                            f"destination {extract_dest_resolved}"
+                        )
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    actual_size = 0
+                    with zf.open(info, "r") as src, open(target_path, "wb") as dst:
+                        while True:
+                            buf = src.read(chunk)
+                            if not buf:
+                                break
+                            actual_size += len(buf)
+                            bytes_extracted += len(buf)
+                            if bytes_extracted > max_size:
+                                raise ValueError(
+                                    f"Extracted size ({bytes_extracted / 1024 / 1024:.0f}MB) "
+                                    f"exceeds limit ({max_size / 1024 / 1024:.0f}MB) "
+                                    f"during {info.filename!r}"
+                                )
+                            dst.write(buf)
                     if actual_size != info.file_size:
                         raise ValueError(
                             f"Size mismatch for {info.filename}: "
                             f"header says {info.file_size}, got {actual_size} "
                             f"(corrupted or malicious zip)"
-                        )
-                    bytes_extracted += actual_size
-                    if bytes_extracted > max_size:
-                        raise ValueError(
-                            f"Extracted size ({bytes_extracted / 1024 / 1024:.0f}MB) "
-                            f"exceeds limit ({max_size / 1024 / 1024:.0f}MB)"
                         )
             except Exception:
                 # Clean up partial extraction

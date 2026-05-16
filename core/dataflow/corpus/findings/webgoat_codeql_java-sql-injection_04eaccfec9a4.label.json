@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "finding_id": "webgoat_codeql_java-sql-injection_04eaccfec9a4",
+  "verdict": "false_positive",
+  "fp_category": "framework_mitigation",
+  "rationale": "@RequestParam ip (line 43) is bound via PreparedStatement.setString (line 47), then executeQuery is called on the prepared statement (line 49). PreparedStatement parameterisation is the canonical mitigation pattern matchers don't model \u2014 they see the @RequestParam-to-execute path and flag regardless of binding.",
+  "labeler": "handlabel-juice-shop-webgoat",
+  "labeled_at": "2026-05-10"
+}

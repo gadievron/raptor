@@ -4,15 +4,34 @@
 -r requirements.txt
 
 # Linting
-ruff>=0.1.0
+ruff==0.15.12
 
 # Type checking
-mypy>=1.0.0
+mypy==2.0.0
 
 # Testing
-pytest>=7.0.0
-pytest-cov>=4.0.0
-gcovr>=5.1
+# pytest pinned exactly: the root pytest.ini uses ``--import-mode=importlib``
+# and ``pythonpath`` (pytest 7+ features) to fix a ``tests`` namespace
+# collision between packages that all carry ``tests/__init__.py``. Pinning
+# avoids surprise regressions from collection-mode changes between minors.
+pytest==9.0.3
+pytest-cov==7.0.0
+pytest-xdist==3.6.1
+pytest-split==0.11.0
+gcovr==8.4
+
+# Optional runtime deps that gate test collection. Listed here (not in
+# requirements.txt) so CI runs the full /web test suite without
+# affecting the user-facing "Optional: For web scanning package" path.
+# Tests retain their @skipUnless guards as defense-in-depth for devs
+# running pytest without bs4 installed.
+beautifulsoup4==4.14.3
 
 # test for Z3 solver
-z3-solver==4.16.0.0
+# Capped at 4.15.4.0 until the devcontainer base image moves to trixie:
+# z3-solver 4.15.5+ ships only manylinux_2_38_aarch64 wheels (glibc 2.38+),
+# but mcr.microsoft.com/devcontainers/python:1-3.12-bookworm has glibc 2.36.
+# 4.15.4.0 uses manylinux_2_34_aarch64 (glibc 2.34) and installs cleanly on
+# both x86_64 and aarch64. Move forward when bookworm -> trixie (glibc 2.41).
+# Our z3 surface (BitVec + Bool only) is unaffected by post-4.15.4 changes.
+z3-solver==4.15.4.0

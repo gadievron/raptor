@@ -27,7 +27,64 @@ logger = get_logger()
 
 import re
 
-_PACK_NOT_FOUND_RE = re.compile(r"[Qq]uery pack ([\w/.-]+)\S* cannot be found")
+# Tightened from `[\w/.-]+\S*` which accepted any path-like
+# blob (path-traversal `../../etc/passwd`, multi-segment
+# `a/b/c/d`, leading-dot `..foo`). Pack names follow CodeQL's
+# canonical `<scope>/<name>` format: each segment starts and
+# ends with alphanumeric, contains only alphanumeric + dash +
+# (for the `<name>` half) dot/underscore. The downloaded pack
+# name flows into a CLI-arg execve here (`codeql pack download
+# <pack>`); even though codeql validates internally, accepting
+# operator-controlled strings into ANOTHER subprocess invocation
+# is a surface we don't need.
+_PACK_NOT_FOUND_RE = re.compile(
+    r"[Qq]uery pack "
+    r"([a-zA-Z0-9](?:[a-zA-Z0-9_-]*[a-zA-Z0-9])?/"
+    r"[a-zA-Z0-9](?:[a-zA-Z0-9_.-]*[a-zA-Z0-9])?)"
+    # Optional version (`@1.2.3`) or suite-path (`:suite/x.qls`)
+    # suffix that codeql appends — discarded, not captured.
+    r"(?:[@:][^\s]*)?"
+    r" cannot be found"
+)
+
+
+def _iris_pack_deps_already_resolved(pack_dir: Path) -> bool:
+    """True when every dep pinned in `pack_dir/codeql-pack.lock.yml`
+    exists at its pinned version under `~/.codeql/packages/`.
+
+    Used by `analyze_iris_packs` to skip the network-permitted
+    `codeql pack install` call when the dep cache is already warm —
+    avoids both the subprocess and the sandbox network round-trip on
+    every IRIS analysis. Common case in normal RAPTOR setups (where
+    the user already has `codeql/<lang>-all` cached from prior
+    /codeql or /agentic runs).
+
+    Returns False (i.e. defer to full install) on any parse error,
+    missing lockfile, or missing dep — never raises.
+    """
+    lock = pack_dir / "codeql-pack.lock.yml"
+    if not lock.is_file():
+        return False
+    try:
+        import yaml  # transitively available via codeql packs
+    except ImportError:
+        return False
+    try:
+        data = yaml.safe_load(lock.read_text()) or {}
+    except Exception:
+        return False
+    deps = (data.get("dependencies") or {})
+    if not deps:
+        return False
+    cache = Path.home() / ".codeql" / "packages"
+    for dep_name, info in deps.items():
+        version = (info or {}).get("version")
+        if not version or not (cache / dep_name / version).is_dir():
+            return False
+    return True
+
+
+_STDERR_LENGTH_CAP = 256 * 1024  # 256 KB; codeql stderr is typically <16 KB
 
 
 def _extract_missing_pack(stderr: str) -> str | None:
@@ -35,7 +92,30 @@ def _extract_missing_pack(stderr: str) -> str | None:
 
     Matches: "Query pack codeql/cpp-queries:suites/foo.qls cannot be found."
     Does NOT match: "Could not read /path/to/suite.qls" (different error).
+
+    Caps stderr length before the regex match to bound wallclock.
+    Pre-fix the regex ran against unbounded stderr — codeql stderr
+    is typically <16 KB, but a misbehaving build that streamed
+    multi-MB output (build-mode=manual with verbose logging,
+    java-kotlin builds dumping JVM stack traces from a crash)
+    could feed pathological input to the regex. The pattern
+    contains nested quantifiers that, while not catastrophic-
+    backtracking, scan O(N) per failed match attempt — multi-MB
+    input → measurable wallclock per stderr scan.
+
+    Also: the captured pack name flows into a CLI-arg execve
+    (`codeql pack download <pack>`), so a too-long match could
+    trigger E2BIG from the kernel. The regex itself bounds the
+    pack-name shape to small strings, but the WHOLE-STDERR scan
+    is still proportional to input size.
+
+    256 KB cap covers any realistic codeql stderr while refusing
+    pathological input. Above the cap we return None — the same
+    behaviour as a non-matching stderr; caller falls through to
+    the normal "no pack to retry" path.
     """
+    if len(stderr) > _STDERR_LENGTH_CAP:
+        return None
     m = _PACK_NOT_FOUND_RE.search(stderr)
     if m:
         # Strip trailing colon or version: "codeql/cpp-queries:" → "codeql/cpp-queries"
@@ -109,6 +189,20 @@ class QueryRunner:
             raise RuntimeError("CodeQL CLI not found")
 
         logger.info(f"Query runner initialized with CodeQL: {self.codeql_cli}")
+
+    def _sandbox_tool_paths(self) -> list:
+        """Mount-ns bind dirs needed for codeql to run.
+
+        Returns the codeql binary's containing dir. The codeql install
+        layout typically places the binary at `<install_root>/codeql`
+        with lib/java/packs siblings — bind-mounting the parent directory
+        exposes the whole install root. Without this, mount-ns mode
+        would fall back to Landlock-only (per context.py's
+        `_cmd_visible_in_mount_tree` check) because codeql is rarely
+        in /usr/bin.
+        """
+        from pathlib import Path
+        return [str(Path(self.codeql_cli).resolve().parent)]
 
     def run_suite(
         self,
@@ -247,6 +341,13 @@ class QueryRunner:
             result = sandbox_run(
                 cmd,
                 block_network=True,
+                tool_paths=self._sandbox_tool_paths(),
+                # audit_run_dir = where audit JSONL lands when --audit
+                # is set. Decoupled from output= so Landlock writable_
+                # paths isn't restricted (codeql analyze writes to
+                # ~/.codeql cache, the database dir, etc. — paths we
+                # can't safely enumerate as writable).
+                audit_run_dir=str(out_dir),
                 capture_output=True,
                 text=True,
                 timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,
@@ -270,38 +371,80 @@ class QueryRunner:
                     from pathlib import Path
                     codeql_cache = Path.home() / ".codeql"
                     codeql_cache.mkdir(parents=True, exist_ok=True)
-                    dl = sandbox_run(
-                        [self.codeql_cli, "pack", "download", pack_name],
-                        use_egress_proxy=True,
-                        proxy_hosts=[
-                            "ghcr.io",            # CodeQL packs hosted here
-                            "codeload.github.com",
-                            "objects.githubusercontent.com",
-                            "pkg-containers.githubusercontent.com",
-                        ],
-                        caller_label="codeql-pack-download",
-                        target=str(codeql_cache),
-                        output=str(codeql_cache),
-                        capture_output=True, text=True, timeout=120,
+                    # Retry the download up to 3x with exponential
+                    # backoff. Pre-fix a single attempt — if the
+                    # registry was momentarily slow / a transient
+                    # 503 from ghcr.io / network blip, the whole
+                    # analysis dispatch failed and the operator
+                    # had to re-run the entire scan. Retries are
+                    # cheap (at most 3 sub-2-minute calls) and
+                    # cover the common transient failure modes.
+                    import time as _time
+                    dl = None
+                    from packages.codeql.codeql_proxy_hosts import (
+                        proxy_hosts_for_codeql,
                     )
+                    for attempt in range(3):
+                        dl = sandbox_run(
+                            [self.codeql_cli, "pack", "download", pack_name],
+                            use_egress_proxy=True,
+                            # Hostname allowlist auto-discovered from
+                            # the calibrated profile when present
+                            # (catches enterprise GHE redirect to
+                            # `ghe.<corp>.example`-style hosts);
+                            # falls back to the documented vanilla
+                            # GitHub Container Registry set otherwise.
+                            # Operator override at
+                            # ~/.config/raptor/codeql-proxy-hosts.json
+                            # short-circuits both.
+                            proxy_hosts=proxy_hosts_for_codeql(
+                                self.codeql_cli,
+                            ),
+                            caller_label="codeql-pack-download",
+                            target=str(codeql_cache),
+                            output=str(codeql_cache),
+                            tool_paths=self._sandbox_tool_paths(),
+                            capture_output=True, text=True, timeout=120,
+                        )
+                        if dl.returncode == 0:
+                            break
+                        if attempt < 2:
+                            backoff = 2 ** attempt  # 1s, 2s
+                            logger.info(
+                                "Pack download attempt %d failed (rc=%d); "
+                                "retrying in %ds", attempt + 1, dl.returncode, backoff,
+                            )
+                            _time.sleep(backoff)
                     if dl.returncode == 0:
                         logger.info(f"✓ Downloaded {pack_name} — retrying analysis")
                         result = sandbox_run(
                             cmd, block_network=True,
+                            tool_paths=self._sandbox_tool_paths(),
+                            audit_run_dir=str(out_dir),
                             capture_output=True, text=True,
                             timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,
                         )
                         success = result.returncode == 0
                     else:
-                        errors.append(f"Pack download failed: {dl.stderr[:200]}")
-                        logger.error(f"✗ Failed to download {pack_name}: {dl.stderr[:200]}")
+                        # `or ""` — sandbox_run can return None for
+                        # stderr when the captured stream was closed
+                        # before any output was written; pre-fix the
+                        # `[:200]` slice raised TypeError on None,
+                        # masking the original "download failed" with
+                        # an unrelated traceback.
+                        dl_stderr = (dl.stderr or "")[:200]
+                        errors.append(f"Pack download failed: {dl_stderr}")
+                        logger.error(f"✗ Failed to download {pack_name}: {dl_stderr}")
 
             if not success:
                 errors.append(f"Analysis failed with exit code {result.returncode}")
                 if result.stderr:
                     errors.append(result.stderr[:1000])
                 logger.error(f"✗ Analysis failed for {language}")
-                logger.error(result.stderr[:500])
+                # `or ""` for the same reason as above — `result.stderr`
+                # may be None on some sandbox failure modes (timeout
+                # mid-stream, killed before write).
+                logger.error((result.stderr or "")[:500])
 
                 return QueryResult(
                     success=False,
@@ -417,6 +560,8 @@ class QueryRunner:
             result = sandbox_run(
                 cmd,
                 block_network=True,
+                tool_paths=self._sandbox_tool_paths(),
+                audit_run_dir=str(out_dir),
                 capture_output=True,
                 text=True,
                 timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,
@@ -526,6 +671,189 @@ class QueryRunner:
 
         return results
 
+    def analyze_iris_packs(
+        self,
+        databases: Dict[str, Path],
+        out_dir: Path,
+        max_workers: Optional[int] = None,
+    ) -> Dict[str, "QueryResult"]:
+        """Run RAPTOR's in-repo IRIS LocalFlowSource packs against each
+        database. Same DBs the standard suite uses; complementary
+        queries that catch CLI / env / stdin source flows the stdlib
+        `RemoteFlowSource`-based queries miss.
+
+        Standalone consumers: `/codeql` calls this after the standard
+        suite so operators running CodeQL outside `/agentic` get
+        LocalFlowSource coverage too. The pack lives at
+        `packages/llm_analysis/codeql_packs/<lang>-queries/`; lockfile
+        is committed, so `codeql pack install` is a fast idempotent
+        no-op on subsequent runs.
+
+        Returns one `QueryResult` per language whose pack exists. Langs
+        without an in-repo pack (e.g. cpp — stdlib already covers it
+        via parent `FlowSource`) are silently skipped.
+
+        Per-language analyses run in parallel via the same
+        ThreadPoolExecutor pattern `analyze_all_databases` uses.
+
+        Caveat: first install on a fresh checkout needs network to
+        fetch dependency packs (codeql/<lang>-all etc.). Subsequent
+        runs are offline-cacheable via the committed lockfile. CI
+        environments without egress should pre-warm the dep cache;
+        otherwise IRIS analyses surface a `success=False` QueryResult
+        with the resolution error captured in `errors`.
+        """
+        from core.config import RaptorConfig
+
+        # Master kill-switch — operators can disable IRIS Tier 1
+        # globally via `RaptorConfig.IRIS_TIER1_ENABLED = False`. /codeql
+        # CLI's `--no-iris-tier1` flag flips this for a single invocation.
+        if not RaptorConfig.IRIS_TIER1_ENABLED:
+            logger.info("IRIS pack analysis skipped: IRIS_TIER1_ENABLED is False")
+            return {}
+
+        extras = list(RaptorConfig.EXTRA_CODEQL_PACK_ROOTS or [])
+        if not extras:
+            return {}
+        # First entry is the canonical RAPTOR-shipped pack root.
+        pack_root = extras[0]
+        if not pack_root.is_dir():
+            return {}
+
+        # Filter to languages that actually have an in-repo pack.
+        analyzable: Dict[str, Tuple[Path, Path]] = {}
+        for lang, db in databases.items():
+            pack_dir = pack_root / f"{lang}-queries"
+            if pack_dir.is_dir():
+                analyzable[lang] = (db, pack_dir)
+        if not analyzable:
+            return {}
+
+        max_workers = max_workers or RaptorConfig.MAX_CODEQL_WORKERS
+        results: Dict[str, "QueryResult"] = {}
+
+        def _run_one(lang: str, db: Path, pack_dir: Path) -> "QueryResult":
+            return self._run_iris_pack(lang, db, pack_dir, out_dir)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_lang = {
+                executor.submit(_run_one, lang, db, pack_dir): lang
+                for lang, (db, pack_dir) in analyzable.items()
+            }
+            for future in as_completed(future_to_lang):
+                lang = future_to_lang[future]
+                try:
+                    results[lang] = future.result()
+                except Exception as e:
+                    logger.warning(f"IRIS LocalFlowSource ({lang}) raised: {e}")
+                    db, _ = analyzable[lang]
+                    results[lang] = QueryResult(
+                        success=False, language=lang,
+                        database_path=db, sarif_path=None, findings_count=0,
+                        duration_seconds=0.0, errors=[str(e)],
+                        suite_name="raptor-iris-local",
+                    )
+        return results
+
+    def _run_iris_pack(
+        self, lang: str, db: Path, pack_dir: Path, out_dir: Path,
+    ) -> "QueryResult":
+        """Per-language worker for `analyze_iris_packs` — pack install
+        followed by analyze. Extracted so the parallel orchestrator
+        above is just dispatch + result aggregation."""
+        from core.config import RaptorConfig
+        from core.sandbox import run as sandbox_run
+
+        # Skip the install entirely when every dep pinned in the
+        # in-repo lockfile is already present in the standard pack
+        # cache. In normal RAPTOR setups (where `~/.codeql/packages/
+        # codeql/<lang>-all/...` is populated by the user's existing
+        # CodeQL install) this is the common case, and skipping
+        # avoids both the subprocess and the sandbox network-permit
+        # round-trip. Sandboxed CI environments without a populated
+        # pack cache fall through to the install attempt as before.
+        if _iris_pack_deps_already_resolved(pack_dir):
+            logger.debug(
+                f"IRIS pack ({lang}): deps satisfied from pack cache, skipping install"
+            )
+        else:
+            # Lazy `codeql pack install` — populates dependency cache
+            # from the committed lockfile. Idempotent and fast on
+            # subsequent runs; needed once on fresh checkouts before
+            # the in-repo queries can resolve their imports.
+            try:
+                install_proc = sandbox_run(
+                    [self.codeql_cli, "pack", "install", str(pack_dir)],
+                    block_network=False,  # may need to fetch dep packs first time
+                    tool_paths=self._sandbox_tool_paths(),
+                    audit_run_dir=str(out_dir),
+                    capture_output=True, text=True,
+                    timeout=180,
+                )
+                if install_proc.returncode != 0:
+                    # Surface install failure at warning level so
+                    # operators see *why* a subsequent analyze
+                    # failure is happening. Common failure mode:
+                    # sandboxed CI without network on a fresh
+                    # checkout (lockfile committed but dep packs not
+                    # cached locally).
+                    install_err = (
+                        install_proc.stderr or install_proc.stdout or ""
+                    ).strip()[:300]
+                    logger.warning(
+                        f"IRIS pack install ({lang}) returned "
+                        f"{install_proc.returncode}: {install_err}"
+                    )
+            except Exception as e:
+                logger.warning(f"IRIS pack install ({lang}) raised: {e}")
+
+        sarif_path = out_dir / f"codeql_{lang}_iris.sarif"
+        cmd = [
+            self.codeql_cli, "database", "analyze",
+            str(db), str(pack_dir),
+            "--format=sarif-latest",
+            f"--output={sarif_path}",
+            f"--threads={RaptorConfig.CODEQL_THREADS}",
+        ]
+        analysis_start = time.time()
+        try:
+            proc = sandbox_run(
+                cmd, block_network=True,
+                tool_paths=self._sandbox_tool_paths(),
+                audit_run_dir=str(out_dir),
+                capture_output=True, text=True,
+                timeout=RaptorConfig.CODEQL_ANALYZE_TIMEOUT,
+            )
+        except Exception as e:
+            logger.warning(f"IRIS LocalFlowSource ({lang}) analyze raised: {e}")
+            return QueryResult(
+                success=False, language=lang,
+                database_path=db, sarif_path=None, findings_count=0,
+                duration_seconds=time.time() - analysis_start,
+                errors=[str(e)], suite_name="raptor-iris-local",
+            )
+
+        if proc.returncode == 0 and sarif_path.exists():
+            n = self._count_sarif_findings(sarif_path)
+            logger.info(f"✓ IRIS LocalFlowSource ({lang}): {n} findings")
+            return QueryResult(
+                success=True, language=lang,
+                database_path=db, sarif_path=sarif_path,
+                findings_count=n,
+                duration_seconds=time.time() - analysis_start,
+                errors=[], suite_name="raptor-iris-local",
+            )
+
+        err = (proc.stderr or proc.stdout or "").strip()[:300]
+        logger.warning(f"IRIS LocalFlowSource ({lang}) failed: {err}")
+        return QueryResult(
+            success=False, language=lang,
+            database_path=db, sarif_path=None, findings_count=0,
+            duration_seconds=time.time() - analysis_start,
+            errors=[err] if err else [],
+            suite_name="raptor-iris-local",
+        )
+
     def _count_sarif_findings(self, sarif_path: Path) -> int:
         """Count findings in SARIF file."""
         from core.sarif.parser import load_sarif
@@ -534,16 +862,25 @@ class QueryRunner:
             return 0
         return sum(len(run.get("results", [])) for run in sarif_data.get("runs", []))
 
-    def get_sarif_summary(self, sarif_path: Path) -> Dict:
+    def get_sarif_summary(self, sarif_path: Path,
+                          *, sarif_data: Optional[Dict] = None) -> Dict:
         """
         Extract summary information from SARIF file.
+
+        `sarif_data` (optional) is a pre-parsed SARIF dict. When the
+        caller has already loaded the file (e.g. agent.print_summary
+        loading it once and sharing across summary + example
+        extraction), pass it here to avoid the redundant parse.
+        Defaults to None → load the file ourselves (preserves the
+        standalone-call API).
 
         Returns:
             Dict with summary statistics
         """
         try:
-            from core.sarif.parser import load_sarif
-            sarif_data = load_sarif(sarif_path)
+            if sarif_data is None:
+                from core.sarif.parser import load_sarif
+                sarif_data = load_sarif(sarif_path)
             if not sarif_data:
                 return {}
 
@@ -561,22 +898,41 @@ class QueryRunner:
                 for result in run.get("results", []):
                     summary["total_findings"] += 1
 
-                    level = result.get("level", "warning")
+                    # Coerce to str — SARIF spec says `level` is a
+                    # string enum, but malformed emitters
+                    # occasionally produce ints (numeric severity)
+                    # or None. Pre-fix `summary["by_severity"][level]`
+                    # used the value as a dict key, so a dict-typed
+                    # tag (some custom queries return rich objects)
+                    # raised TypeError. None merged into one bucket
+                    # with the literal string "None" — confusing
+                    # later report consumers. Coerce defensively.
+                    raw_level = result.get("level", "warning")
+                    level = str(raw_level) if raw_level is not None else "warning"
                     summary["by_severity"][level] = summary["by_severity"].get(level, 0) + 1
 
                     # Count by rule
                     rule_id = result.get("ruleId", "unknown")
                     summary["by_rule"][rule_id] = summary["by_rule"].get(rule_id, 0) + 1
 
-                    # Count dataflow paths
+                    # Count dataflow paths. Pre-fix `+= 1` per
+                    # result conflated "findings WITH dataflow"
+                    # with "number of actual dataflow paths" —
+                    # a single finding often has multiple
+                    # codeFlows (alternative paths reaching the
+                    # same sink), each of which is a distinct
+                    # exploitable path. Operators reading the
+                    # summary saw "dataflow_paths: 12" and
+                    # assumed 12 distinct paths to triage; in
+                    # reality there could be 12 findings with
+                    # 30+ paths between them. Count one per
+                    # codeFlow so the metric matches the name.
                     code_flows = result.get("codeFlows", [])
-                    if code_flows:
-                        summary["dataflow_paths"] += 1
-                        # Count total steps in all dataflow paths for this finding
-                        for flow in code_flows:
-                            for thread_flow in flow.get("threadFlows", []):
-                                locations = thread_flow.get("locations", [])
-                                summary["total_dataflow_steps"] += len(locations)
+                    summary["dataflow_paths"] += len(code_flows)
+                    for flow in code_flows:
+                        for thread_flow in flow.get("threadFlows", []):
+                            locations = thread_flow.get("locations", [])
+                            summary["total_dataflow_steps"] += len(locations)
 
                 # Count queries
                 tool = run.get("tool", {})

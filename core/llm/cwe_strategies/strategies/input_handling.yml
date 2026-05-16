@@ -1,0 +1,78 @@
+name: input_handling
+description: |
+  Parsers, protocol handlers, and any code that reads structured
+  data supplied by an attacker. The signature pattern: a length /
+  type / offset field is consumed before being validated against
+  the actual buffer or table size.
+
+signals:
+  paths:
+    - net/
+    - drivers/input/
+    - drivers/usb/
+    - drivers/net/
+    - fs/
+    - sound/
+  includes:
+    - linux/skbuff.h
+    - linux/netlink.h
+    - linux/usb.h
+  function_keywords:
+    - parse
+    - decode
+    - deserialize
+    - unmarshal
+    - load
+  function_calls:
+    - copy_from_user
+    - get_user
+    - skb_pull
+    - skb_push
+    - skb_copy_bits
+    - nla_get_u32
+    - nla_get_u64
+    - kmemdup_array
+  cwes:
+    - CWE-20    # improper input validation
+    - CWE-78    # OS command injection
+    - CWE-79    # XSS
+    - CWE-89    # SQL injection
+    - CWE-119   # buffer bounds
+    - CWE-120   # classic buffer overflow
+    - CWE-125   # out-of-bounds read
+    - CWE-787   # out-of-bounds write
+    - CWE-22    # path traversal
+    - CWE-94    # code injection
+
+key_questions:
+  - "What format does this code assume the input has? Does it ever check before consuming?"
+  - "Are length / size / count / offset fields validated against the actual buffer size BEFORE being used?"
+  - "If a length field claims more bytes than available, what happens — out-of-bounds read, integer overflow on the length, infinite loop?"
+  - "Are integer fields checked for negative / zero / overflow values that would cause downstream calculations to wrap?"
+
+prompt_addendum: |
+  Treat every byte of the input as adversary-controlled. For each
+  field the code reads, ask: what's the largest value that gets
+  through? what's the smallest? does the code handle both extremes?
+  Pay particular attention to length-prefixed fields where the
+  length is read from the buffer — these are nearly always the
+  source of CVEs in protocol handlers. Walk the function with
+  inputs that lie about their size: a length field saying 1MB when
+  only 64 bytes are available, or claiming 0 bytes after a header
+  the code already advanced past.
+
+exemplars:
+  - cve: CVE-2023-0179
+    title: nf_tables payload length confusion
+    pattern: |
+      A length field from a netlink payload is used to size a
+      memory copy without first checking that the field's claimed
+      length fits within the actual netlink message buffer. The
+      copy reads past the end of attacker-controlled memory.
+    why_buggy: |
+      The function trusts the length field to be honest. The
+      caller is unprivileged userspace via a netlink socket — it
+      can claim any length. Validation that ``claimed_len <=
+      remaining_buffer_bytes`` was missing on the path the
+      attacker exercised. Result: out-of-bounds read of kernel
+      memory, leakable through a subsequent write to userspace.

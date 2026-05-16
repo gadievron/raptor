@@ -34,7 +34,18 @@ _SEVERITY = [
 ]
 
 _VECTOR_RE = re.compile(
-    r"^CVSS:3\.[01]/"
+    # `\A` / `\Z` anchors instead of `^` / `$`. Pre-fix `$` in
+    # Python regex matches end-of-string OR just before a
+    # trailing newline. So a vector like
+    # `"CVSS:3.1/AV:N/AC:L/.../A:H\nrm -rf"` PASSED
+    # validation — the `\n` after `A:H` matched `$`, and the
+    # rest of the string (which could be CLI-injected payload
+    # text or LLM-output trailing junk) was silently ignored
+    # by the regex. Downstream `parse_vector` then split on
+    # `/` and processed `A:H\nrm` as a metric (the colon match
+    # would still parse the key as `A` and value as `H\nrm`).
+    # Strict-end-of-string `\Z` rejects trailing newlines.
+    r"\ACVSS:3\.[01]/"
     r"AV:[NALP]/AC:[LH]/PR:[NLH]/UI:[NR]/S:[UC]/"
     r"C:[NLH]/I:[NLH]/A:[NLH]"
     # Optional temporal (E, RL, RC) and environmental
@@ -45,7 +56,7 @@ _VECTOR_RE = re.compile(
     # alphabetic and the value is a single token; we accept any such
     # suffix. ``compute_base_score`` ignores keys it doesn't recognise.
     r"(?:/[A-Za-z]+:[A-Za-z0-9]+)*"
-    r"$"
+    r"\Z"
 )
 
 
@@ -56,8 +67,32 @@ def validate_vector(vector: str) -> bool:
     environmental extensions (``/E:H``, ``/RL:O``, ``/CR:H`` …). Only
     the base segments contribute to the numeric score; the extensions
     are tolerated, not consumed.
+
+    Reject vectors with duplicate metric keys. Pre-fix
+    `parse_vector` built `metrics[key] = value` in a dict, so a
+    vector like
+    `CVSS:3.1/AV:N/AC:L/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H` (note
+    AC appears twice) silently took the SECOND occurrence's
+    value, scoring as if it were `AC:H` even though the
+    operator had recorded both. Real-world cause: hand-edited
+    CVE entries where someone updated the AC value but
+    forgot to remove the old segment, or LLM-generated
+    vectors with hallucinated repeats. Stricter validation
+    here surfaces the malformation before scoring.
     """
-    return bool(_VECTOR_RE.match(vector))
+    if not _VECTOR_RE.match(vector):
+        return False
+    # Duplicate-key check.
+    parts = vector.split("/")[1:]  # Skip "CVSS:3.1" prefix.
+    seen = set()
+    for part in parts:
+        if ":" not in part:
+            continue
+        key = part.split(":", 1)[0]
+        if key in seen:
+            return False
+        seen.add(key)
+    return True
 
 
 def parse_vector(vector: str) -> dict:

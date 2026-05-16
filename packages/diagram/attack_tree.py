@@ -126,11 +126,27 @@ def _find_subgraph_groups(
         raw = node_map.get(nid, {}).get("leads_to", "") or ""
         return [t.strip() for t in raw.split(",") if t.strip() and t.strip() in node_map]
 
-    def descendants(nid: str) -> list[str]:
+    def descendants(nid: str, _seen: set | None = None) -> list[str]:
+        # Cycle protection. Pre-fix `descendants(child)` recursed
+        # without tracking visited nodes — if the input tree had
+        # ANY cycle in `leads_to` chains (LLM-generated attack
+        # trees occasionally produce A→B→A loops; manually-edited
+        # JSON can introduce them), the recursion ran until
+        # RecursionError was raised somewhere ~1000 levels deep.
+        # The diagram render then aborted with a stack-overflow
+        # traceback shown to the operator instead of "your input
+        # has a cycle, here's where".
+        if _seen is None:
+            _seen = set()
+        if nid in _seen:
+            return []
+        _seen.add(nid)
         result = []
         for child in children_of(nid):
+            if child in _seen:
+                continue
             result.append(child)
-            result.extend(descendants(child))
+            result.extend(descendants(child, _seen))
         return result
 
     if not root_id or root_id not in node_map:
@@ -161,12 +177,32 @@ def generate(
     hypotheses: list[dict] | None = None,
 ) -> str:
     root_id = _sid(data.get("root", "ROOT"))
-    nodes: list[dict] = data.get("nodes", [])
+    raw_nodes: list[dict] = data.get("nodes", [])
 
-    if not nodes:
+    if not raw_nodes:
         return 'flowchart TD\n    EMPTY["No attack tree nodes"]'
 
-    # Sanitize all node IDs upfront to prevent Mermaid markup injection
+    # Sanitize all node IDs upfront to prevent Mermaid markup injection.
+    # Pre-fix this mutated `raw_nodes[i]["id"]` in-place — the caller's
+    # `data` dict had its node IDs rewritten as a side effect of
+    # rendering. Symptoms:
+    #
+    # * A re-render of the same `data` dict (e.g. once for the
+    #   diagrams.md file, once via the JSON output back to the
+    #   knowledge graph) saw the already-sanitized IDs as inputs and
+    #   sanitized them again — `_sid` is idempotent so the IDs were
+    #   stable, but any caller relying on the original ID values lost
+    #   them on first render.
+    # * Tests that built `data` once and asserted on it afterwards
+    #   saw mutated IDs.
+    # * Two consumers reading the same `data` (knowledge graph + this
+    #   renderer) raced — whichever ran first decided the final ID
+    #   form.
+    #
+    # Shallow-copy each node before assigning the sanitized id, so
+    # the caller's dict is untouched. The new list still references
+    # the same shape information, just with id rewritten on a copy.
+    nodes = [dict(n) for n in raw_nodes]
     for n in nodes:
         n["id"] = _sid(n.get("id", "?"))
     node_map = {n["id"]: n for n in nodes}

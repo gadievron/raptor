@@ -14,7 +14,7 @@ Generate secure patches to fix vulnerabilities.
 - Saves to out/*/patches/
 - Does NOT generate exploits (use /exploit for that)
 
-**Run:** `python3 raptor.py agentic --repo <path> --sarif <sarif-file> --no-exploits --max-findings <N>`
+**Run:** `python3 raptor.py agentic --repo <path> --no-exploits --max-findings <N>`
 
 **Example:**
 ```bash

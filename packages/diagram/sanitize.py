@@ -53,3 +53,30 @@ def sanitize_id(node_id: str) -> str:
     """
     sanitized = _SAFE_ID_RE.sub('_', str(node_id))
     return sanitized if sanitized.strip('_') else "node"
+
+
+def detect_id_collisions(raw_ids) -> list[tuple[str, list[str]]]:
+    """Return list of (sanitized_id, [raw_ids_that_collapsed_to_it])
+    for any sanitization that produced collisions.
+
+    `sanitize_id` deterministically maps two distinct raw ids
+    (e.g. `"foo!"` and `"foo?"`) to the same sanitized form
+    (`"foo_"`). The renderer then can't visually distinguish
+    them — a single collapsed Mermaid node represents two
+    semantically-distinct source nodes, structural information
+    is lost silently.
+
+    Pre-fix nothing surfaced these collisions. This helper lets
+    callers (renderer assembly) detect and log them so the
+    operator knows which input ids need disambiguation.
+    Returns empty list when no collisions present.
+    """
+    by_sanitized: dict[str, list[str]] = {}
+    for raw in raw_ids:
+        s = sanitize_id(raw)
+        by_sanitized.setdefault(s, []).append(str(raw))
+    return [
+        (sanitized, originals)
+        for sanitized, originals in by_sanitized.items()
+        if len(set(originals)) > 1
+    ]

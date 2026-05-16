@@ -134,22 +134,81 @@ class EvidenceStore:
         return json.dumps(data, indent=indent, default=str)
 
     def save(self, path: str | Path) -> None:
-        """Save store to JSON file."""
+        """Save store to JSON file (atomic write).
+
+        Pre-fix `path.write_text(...)` used `open(path, 'w')`
+        internally — truncate-then-write. A crash, OOM kill, or
+        SIGTERM between truncate and write left a partially-written
+        evidence file. Forensic investigations that resumed against
+        a corrupted store either failed to load (JSONDecodeError) or
+        loaded a truncated set, dropping evidence silently. Both
+        modes destroy the audit trail the store is supposed to
+        preserve.
+
+        Atomic-write pattern: serialise to `<path>.tmp.<pid>` in the
+        same directory then `os.replace` (atomic per POSIX). PID
+        suffix disambiguates concurrent saves from different
+        processes. On any write failure, clean up the staging file
+        so we don't leak `.tmp.<pid>` siblings across crashes.
+        """
+        import os
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.to_json())
+        body = self.to_json()
+        tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+        try:
+            tmp.write_text(body)
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
+
+    # Cap on JSON-string input. Pre-fix `from_json` accepted any
+    # length string. A hostile or corrupted evidence file (a 10 GB
+    # JSON dump misnamed, an attacker-supplied payload routed
+    # through a CI artifact ingest, a malformed recovery dump) would
+    # OOM the process during `json.loads`'s parse. Real evidence
+    # bundles top out at low MB (the largest pinned-evidence forensic
+    # report observed in the wild is ~8 MB); 100 MB cap leaves 10x
+    # headroom while bounding pathological input.
+    _FROM_JSON_MAX_BYTES = 100 * 1024 * 1024
 
     @classmethod
     def from_json(cls, json_str: str) -> "EvidenceStore":
         """Create store from JSON string."""
+        if len(json_str) > cls._FROM_JSON_MAX_BYTES:
+            raise ValueError(
+                f"EvidenceStore.from_json: input exceeds "
+                f"{cls._FROM_JSON_MAX_BYTES} bytes — refusing to load "
+                f"(pathological input bounds enforced)"
+            )
         from . import load_evidence_from_json
         data = json.loads(json_str)
         return cls([load_evidence_from_json(item) for item in data])
 
     @classmethod
     def load(cls, path: str | Path) -> "EvidenceStore":
-        """Load store from JSON file."""
-        return cls.from_json(Path(path).read_text())
+        """Load store from JSON file.
+
+        Explicit `encoding="utf-8-sig"` so:
+          * The read uses UTF-8 regardless of the host locale's default
+            encoding (`locale.getpreferredencoding()` returns cp1252
+            on a Windows host, latin-1 on some C-locale containers).
+            Pre-fix the bare `read_text()` would mangle non-ASCII
+            bytes in evidence content (commit messages with
+            accented chars, unicode usernames, BOM-prefixed JSON
+            from some tools) silently or raise UnicodeDecodeError.
+          * `utf-8-sig` is a strict superset of `utf-8` — identical
+            for BOM-less files, transparent for BOM-prefixed ones.
+            Some Windows-edited evidence JSON files carry a leading
+            BOM that the JSON parser would reject as
+            "Expecting value: line 1 column 1 (char 0)" with no hint
+            that the encoding is the actual problem.
+        """
+        return cls.from_json(Path(path).read_text(encoding="utf-8-sig"))
 
     def merge(self, other: "EvidenceStore") -> None:
         """Merge another store into this one."""

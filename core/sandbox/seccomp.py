@@ -36,8 +36,65 @@ def _SCMP_ACT_ERRNO(errno_val):
     return 0x00050000 | (errno_val & 0x0000ffff)
 
 
+def _SCMP_ACT_TRACE(msg_num: int = 0):
+    """Construct the SCMP_ACT_TRACE action value.
+
+    When a syscall hits a TRACE-action rule, the kernel pauses the tracee
+    and notifies the attached ptrace tracer with PTRACE_EVENT_SECCOMP
+    (event code 7). The tracer reads the offending syscall via
+    PTRACE_GETREGSET and decides what to do (in audit mode: log + resume).
+
+    REQUIRES a tracer to be attached when the rule fires. If no tracer
+    is attached, the kernel default action is to kill the process with
+    SIGSYS. Used by `--audit` mode (orthogonal flag, composes with any
+    enforcement profile that has a seccomp filter) where
+    core/sandbox/tracer.py is the attached tracer; never use TRACE
+    without ensuring a tracer is wired in for the target's lifetime.
+    """
+    return 0x7ff00000 | (msg_num & 0x0000ffff)
+
+
+# Additional syscalls traced under audit mode (b3: filesystem path
+# audit + connect-attempt audit). These are NOT in the blocklist —
+# under enforcement they're allowed normally; under audit_mode they
+# get the TRACE action so the tracer logs each call and the operator
+# sees what files / connect targets the workload uses.
+_AUDIT_EXTRA_TRACE_SYSCALLS = (
+    "open", "openat", "openat2",  # b3: filesystem path coverage
+    "connect",                    # b3: outbound network attempts
+)
+
+# Additional syscalls traced under observe mode ON TOP OF the audit
+# set. Stat-family covers "binary probed for X but didn't open" — a
+# common shape for config-discovery in tools like Claude Code that
+# enumerate candidate config locations. Pure read access, no write
+# intent; never blocked at any layer (Landlock applies to opens not
+# stats), so they're observe-only signal — no use under enforcement
+# audit, where the question is "what got denied".
+#
+# `stat`/`lstat` are x86_64-only — aarch64 userspace uses newfstatat
+# exclusively. libseccomp's seccomp_syscall_resolve_name returns -1
+# for unsupported names on the current arch; the install loop skips
+# negative resolutions so this is harmless.
+_OBSERVE_EXTRA_TRACE_SYSCALLS = (
+    "stat", "lstat",        # legacy x86_64 stat syscalls
+    "newfstatat",            # AT_*-aware variant; aarch64 + modern x86_64
+    "access", "faccessat", "faccessat2",
+)
+
+
 # libseccomp comparison ops (scmp_compare)
-_SCMP_CMP_EQ = 4  # equal to
+_SCMP_CMP_EQ = 4         # equal to: arg == datum_a
+_SCMP_CMP_MASKED_EQ = 7  # masked equal: (arg & datum_a) == datum_b
+
+# Linux extracts the socket type from the (type | flags) arg with this
+# mask (linux/socket.h SOCK_TYPE_MASK). Without it, exact-equality rules
+# on `arg=1` for `SOCK_DGRAM` (2) miss the very common
+# `SOCK_DGRAM | SOCK_CLOEXEC` (524290 = 0x80002) and
+# `SOCK_DGRAM | SOCK_NONBLOCK` (2050 = 0x802) variants. Same for
+# SOCK_RAW (3). Use SCMP_CMP_MASKED_EQ with this mask so the rule matches
+# regardless of the flag bits.
+_SOCK_TYPE_MASK = 0xf
 
 
 class _ScmpArgCmp(ctypes.Structure):
@@ -181,7 +238,9 @@ def check_seccomp_available() -> bool:
         return True
 
 
-def _make_seccomp_preexec(profile: str, block_udp: bool = False):
+def _make_seccomp_preexec(profile: str, block_udp: bool = False,
+                          audit_mode: bool = False,
+                          observe_mode: bool = False):
     """Create a preexec_fn that installs the seccomp filter for `profile`.
 
     Runs POST-fork in the child. Same fork-safety rules as Landlock: capture
@@ -196,9 +255,32 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False):
     because UDP/DNS is needed for normal sandbox use (e.g. block_network=True
     with no proxy — DNS still used inside the net-ns for loopback lookups).
 
-    Returns None if libseccomp is unavailable or `profile == "none"`.
+    `audit_mode=True` swaps the deny action from SCMP_ACT_ERRNO(EPERM) to
+    SCMP_ACT_TRACE — the kernel pauses the tracee and notifies the
+    attached ptrace tracer (core/sandbox/tracer.py) instead of erroring
+    the syscall. Also adds open/openat/connect to the trace set for b3
+    filesystem + network audit coverage. CRITICAL: requires a ptrace
+    tracer to be attached for the target's lifetime; without it, the
+    kernel default action for unhandled TRACE is SIGSYS-kill the
+    process. The caller (_spawn.py) is responsible for ensuring tracer
+    is attached before any traced syscall fires.
+
+    `observe_mode=True` extends the trace set with stat-family syscalls
+    (stat/lstat/newfstatat/access/faccessat/faccessat2) on top of the
+    audit set. Stat-family events surface "binary probed candidate
+    paths" — useful for profile-extraction probes (e.g., calibrating
+    Claude Code's filesystem reach) where the question is "what does
+    this binary touch", not "what did the sandbox deny". Implies
+    audit_mode (TRACE action, tracer attached); enforcement-shape
+    audits should leave it off.
+
+    Returns None if libseccomp is unavailable or the profile
+    indicates "no seccomp" — both falsy values (None, "") and the
+    literal string "none" are accepted as disable triggers, matching
+    callers that may convert via `profile_dict["seccomp"] or None`
+    (context.py) and callers that pass the raw profile name.
     """
-    if profile == "none" or not check_seccomp_available():
+    if not profile or profile == "none" or not check_seccomp_available():
         return None
 
     lib = state._libseccomp_cache  # CDLL captured at check time
@@ -229,6 +311,22 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False):
     blocked_syscalls = list(_SECCOMP_BLOCK_ALWAYS)
     if profile != "debug":
         blocked_syscalls += list(_SECCOMP_BLOCK_UNLESS_DEBUG)
+    # Audit mode: add b3 syscalls (open/openat/connect) to the trace
+    # set so the tracer logs every file path attempt and connect
+    # target. Under enforcement these aren't blocked at all (Landlock
+    # / egress proxy handle them at other layers); under audit they
+    # become observable via SCMP_ACT_TRACE.
+    audit_extra: list = []
+    if audit_mode:
+        audit_names = list(_AUDIT_EXTRA_TRACE_SYSCALLS)
+        if observe_mode:
+            # Stat-family on top of audit's open/connect. Resolves
+            # to -1 on arches missing a given syscall (e.g. aarch64
+            # has no `stat`/`lstat`); the install loop below skips
+            # negative resolutions so this is a no-op on those
+            # arches rather than an error.
+            audit_names += list(_OBSERVE_EXTRA_TRACE_SYSCALLS)
+        audit_extra = [(name, _resolve(name)) for name in audit_names]
     resolved_blocks = [(name, _resolve(name)) for name in blocked_syscalls]
     # Sockets: filter by argument (family). Same syscall number, multiple rules.
     socket_num = _resolve("socket")
@@ -262,12 +360,43 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False):
 
     _os_write = os.write
 
+    # Resolve libc.prctl in the parent so the child doesn't have to dlopen.
+    # PR_SET_NO_NEW_PRIVS is a hard prerequisite for seccomp_load() unless
+    # the caller has CAP_SYS_ADMIN. Landlock's preexec sets it when it's
+    # configured; without Landlock (no writable_paths and no allowed_tcp_ports),
+    # nobody set NNP and seccomp_load fails with EPERM — silently degrading
+    # to "no seccomp" before this commit's fail-closed change at load,
+    # and to a hard exit (126) afterwards. Either way the operator's
+    # filter never installed. Set NNP unconditionally inside _apply_seccomp
+    # so the filter installs regardless of whether Landlock ran. NNP is
+    # one-way / idempotent: calling it twice (once from Landlock, once
+    # from here) is a no-op.
+    _libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6",
+                        use_errno=True)
+    _libc.prctl.restype = ctypes.c_int
+    _libc.prctl.argtypes = [
+        ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
+        ctypes.c_ulong, ctypes.c_ulong,
+    ]
+    _PR_SET_NO_NEW_PRIVS = 38
+
     def _apply_seccomp():
         try:
+            if _libc.prctl(_PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
+                _os_write(2, b"RAPTOR: prctl(PR_SET_NO_NEW_PRIVS) failed -- "
+                             b"seccomp filter cannot be installed\n")
+                os._exit(126)
+
             ctx = lib.seccomp_init(_SCMP_ACT_ALLOW)
             if not ctx:
-                _os_write(2, b"RAPTOR: seccomp_init failed\n")
-                return
+                # Fail-closed: was a bare `return`, which let the child
+                # exec with NO seccomp filter despite the operator
+                # asking for one. Match the policy at seccomp_load:
+                # a security layer that the operator requested but
+                # failed to install MUST NOT silently degrade.
+                _os_write(2, b"RAPTOR: seccomp_init failed -- "
+                             b"refusing to exec without filter\n")
+                os._exit(126)
             try:
                 # Explicitly set BADARCH = KILL_PROCESS. Current libseccomp
                 # (2.5.x) defaults to KILL_PROCESS, but we've relied on
@@ -281,7 +410,18 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False):
                                      _SCMP_ACT_KILL_PROCESS)
 
                 errno_eperm = 1  # EPERM
-                deny = _SCMP_ACT_ERRNO(errno_eperm)
+                # Audit mode: swap the deny action from ERRNO to TRACE.
+                # Under TRACE, the kernel pauses on the offending syscall
+                # and notifies our ptrace tracer (core/sandbox/tracer.py)
+                # which logs the event and resumes the syscall. CRITICAL:
+                # with no tracer attached, the kernel default for TRACE
+                # is to SIGSYS the process — _spawn.py is responsible
+                # for ensuring the tracer is attached BEFORE any traced
+                # syscall fires.
+                if audit_mode:
+                    deny = _SCMP_ACT_TRACE(0)
+                else:
+                    deny = _SCMP_ACT_ERRNO(errno_eperm)
 
                 for name, num in resolved_blocks:
                     if num < 0:
@@ -291,6 +431,23 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False):
                     ret = lib.seccomp_rule_add_array(ctx, deny, num, 0, null_args)
                     if ret < 0:
                         _os_write(2, b"RAPTOR: seccomp add_rule failed\n")
+
+                # Audit-mode-only extras: open/openat/connect get the
+                # TRACE action so the tracer logs every file path and
+                # connect attempt for b3 coverage. Skipped under
+                # enforcement (these aren't blocked at the seccomp
+                # layer in any non-audit profile).
+                if audit_mode:
+                    trace_act = _SCMP_ACT_TRACE(0)
+                    for name, num in audit_extra:
+                        if num < 0:
+                            continue
+                        null_args = ctypes.POINTER(_ScmpArgCmp)()
+                        ret = lib.seccomp_rule_add_array(
+                            ctx, trace_act, num, 0, null_args,
+                        )
+                        if ret < 0:
+                            _os_write(2, b"RAPTOR: seccomp audit rule failed\n")
 
                 # socket() with blocked family — one rule per family
                 if socket_num >= 0:
@@ -305,15 +462,18 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False):
                             _os_write(2, b"RAPTOR: seccomp socket family rule failed\n")
 
                     # socket() with SOCK_RAW — argument 1 is type (with optional
-                    # SOCK_NONBLOCK/CLOEXEC bits). We only match SOCK_RAW exactly;
-                    # the common `SOCK_RAW | SOCK_CLOEXEC` pattern slips through.
-                    # Raw sockets also require CAP_NET_RAW on the host which the
-                    # sandbox doesn't grant, so this is belt-and-braces. Lives
-                    # alongside the other socket() rules (was previously nested
-                    # inside the ioctl block by accident — it depends on
-                    # socket_num, not ioctl_num).
-                    arg = _ScmpArgCmp(arg=1, op=_SCMP_CMP_EQ,
-                                      datum_a=socket_type_block, datum_b=0)
+                    # SOCK_NONBLOCK/CLOEXEC bits). Use MASKED_EQ with the
+                    # kernel's SOCK_TYPE_MASK (0xf) so the rule matches the
+                    # bare `SOCK_RAW` and also `SOCK_RAW | SOCK_CLOEXEC` /
+                    # `SOCK_RAW | SOCK_NONBLOCK`. Raw sockets also require
+                    # CAP_NET_RAW on the host which the sandbox doesn't grant,
+                    # so this is belt-and-braces. Lives alongside the other
+                    # socket() rules (was previously nested inside the ioctl
+                    # block by accident — it depends on socket_num, not
+                    # ioctl_num).
+                    arg = _ScmpArgCmp(arg=1, op=_SCMP_CMP_MASKED_EQ,
+                                      datum_a=_SOCK_TYPE_MASK,
+                                      datum_b=socket_type_block)
                     arg_arr = (_ScmpArgCmp * 1)(arg)
                     ret = lib.seccomp_rule_add_array(
                         ctx, deny, socket_num, 1, arg_arr,
@@ -329,13 +489,29 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False):
                 # what we do). Rejects AF_INET/AF_INET6 + SOCK_DGRAM.
                 # Allows UDP for other families (AF_UNIX/NETLINK etc.
                 # are already blocked above regardless of type).
+                if block_udp and socket_num < 0:
+                    # Fail-closed: caller asked for proxy-mode UDP block
+                    # but we can't install the rule (socket() syscall
+                    # unresolved on this arch). Silently skipping would
+                    # let DNS/UDP exfil through despite the operator
+                    # selecting the hardened mode.
+                    _os_write(2, b"RAPTOR: seccomp block_udp requested but "
+                                 b"socket() syscall unresolved -- refusing to "
+                                 b"exec without UDP filter\n")
+                    os._exit(126)
                 if block_udp and socket_num >= 0:
                     for fam in (_AF_INET, _AF_INET6):
+                        # arg 1 is type | flags (SOCK_CLOEXEC / SOCK_NONBLOCK).
+                        # Use MASKED_EQ with SOCK_TYPE_MASK (0xf) so
+                        # `SOCK_DGRAM | SOCK_CLOEXEC` (524290) and
+                        # `SOCK_DGRAM | SOCK_NONBLOCK` (2050) both match the
+                        # block — exact equality misses both common variants.
                         args = (_ScmpArgCmp * 2)(
                             _ScmpArgCmp(arg=0, op=_SCMP_CMP_EQ,
                                         datum_a=fam, datum_b=0),
-                            _ScmpArgCmp(arg=1, op=_SCMP_CMP_EQ,
-                                        datum_a=_SOCK_DGRAM, datum_b=0),
+                            _ScmpArgCmp(arg=1, op=_SCMP_CMP_MASKED_EQ,
+                                        datum_a=_SOCK_TYPE_MASK,
+                                        datum_b=_SOCK_DGRAM),
                         )
                         ret = lib.seccomp_rule_add_array(
                             ctx, deny, socket_num, 2, args,
@@ -376,10 +552,24 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False):
 
                 ret = lib.seccomp_load(ctx)
                 if ret < 0:
-                    _os_write(2, b"RAPTOR: seccomp_load failed\n")
+                    # Fail-closed (was: write to stderr + continue,
+                    # which silently fails OPEN — child execs without
+                    # seccomp despite operator running --sandbox full).
+                    # Match Landlock's posture: a security layer that
+                    # the operator asked for but fails to install MUST
+                    # NOT silently degrade enforcement.
+                    _os_write(2, b"RAPTOR: seccomp_load failed -- "
+                                 b"refusing to exec without filter\n")
+                    os._exit(126)
             finally:
                 lib.seccomp_release(ctx)
-        except Exception:
-            _os_write(2, b"RAPTOR: seccomp enforcement failed\n")
+        except BaseException:
+            # Fail-closed on any unexpected exception -- same reason.
+            # BaseException so SystemExit / KeyboardInterrupt also
+            # route through the safe-exit path rather than letting
+            # the child continue with no seccomp.
+            _os_write(2, b"RAPTOR: seccomp enforcement failed -- "
+                         b"refusing to exec without filter\n")
+            os._exit(126)
 
     return _apply_seccomp

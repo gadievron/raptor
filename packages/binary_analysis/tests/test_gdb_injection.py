@@ -241,14 +241,67 @@ class TestDebuggerTempFile:
         assert not Path(script_paths[0]).exists(), "Script should be cleaned up after"
 
     def test_temp_file_cleaned_up_on_error(self, debugger, tmp_path):
-        """Script file should be deleted even if GDB fails."""
+        """Script file should be deleted even if GDB fails.
+
+        Pre-fix this test had NO assertion — it called
+        run_commands inside a try/except, swallowed the
+        exception, and returned. The test "passed" trivially
+        whether or not cleanup actually fired. Per cluster
+        720, the test now captures the script path BEFORE
+        the simulated failure (via the fake_run side_effect)
+        and asserts the file is gone afterwards.
+        """
         import subprocess as sp
 
-        with patch("subprocess.run", side_effect=sp.TimeoutExpired("gdb", 30)):
+        script_paths = []
+
+        # Verify cleanup behavior directly via filesystem
+        # inspection — pre-fix this test had no assertions.
+        # The script lands under `binary_dir` (per batch 836)
+        # with prefix `.raptor_gdb_` (per debugger.py
+        # tempfile.mkstemp call). After a failed run, the dir
+        # should contain ZERO `.raptor_gdb_*.txt` leftovers.
+        #
+        # Filesystem-level check is robust to test isolation
+        # issues that arise when we try to intercept the
+        # subprocess call to capture the script path —
+        # `_sandbox_run` makes multiple probe calls whose
+        # patched-MagicMock return values don't always lead
+        # to the actual gdb invocation depending on whether
+        # core/sandbox/probes.py's per-process cache was
+        # populated by a prior test.
+        binary_dir = debugger.binary.parent
+
+        def fake_run_then_fail(cmd, **kw):
+            # Track gdb invocations by `-x` presence; raise
+            # only on those, return MagicMock success for
+            # sandbox probes so probe-caching state doesn't
+            # determine whether we reach the gdb call.
+            for i, arg in enumerate(cmd):
+                if arg == "-x" and i + 1 < len(cmd):
+                    raise sp.TimeoutExpired("gdb", 30)
+            # Probe call — return success.
+            r = MagicMock()
+            r.stdout = ""
+            r.stderr = ""
+            r.returncode = 0
+            return r
+
+        with patch("subprocess.run", side_effect=fake_run_then_fail):
             try:
                 debugger.run_commands(["run", "quit"])
             except sp.TimeoutExpired:
                 pass
+
+        # Filesystem assertion: regardless of whether the gdb
+        # invocation actually ran, NO leftover script files
+        # should exist in binary_dir. If the cleanup code
+        # was broken, mkstemp would have created the script
+        # and a missing unlink would leave it behind.
+        leftover_scripts = list(binary_dir.glob(".raptor_gdb_*.txt"))
+        assert leftover_scripts == [], (
+            f"GDB scripts not cleaned up after error: {leftover_scripts}"
+        )
 
 
 class TestLLDBNoPathInjection:
@@ -284,18 +337,49 @@ class TestLLDBNoPathInjection:
             r.returncode = 0
             return r
 
-        with patch("subprocess.run", side_effect=fake_run):
+        # Patch the *imported* `_sandbox_run` symbol inside
+        # `packages.binary_analysis.crash_analyser` rather than the
+        # top-level `subprocess.run`. Pre-fix the test patched
+        # `subprocess.run`, but `_run_lldb_analysis` invokes
+        # `_sandbox_run` (imported at module top as
+        # `from core.sandbox import run as _sandbox_run`). The
+        # `subprocess.run` patch never fired, the fake_run
+        # callback was never invoked, `captured_scripts` stayed
+        # empty, and the post-FIO14 assertion (which fails loud
+        # on empty captures) tripped vacuously.
+        # Patch the actual call site so the script-write +
+        # path-injection invariant gets exercised.
+        with patch(
+            "packages.binary_analysis.crash_analyser._sandbox_run",
+            side_effect=fake_run,
+        ):
             try:
                 analyser._run_lldb_analysis(input_file)
             except Exception:
                 pass
 
-        if captured_scripts:
-            for script in captured_scripts:
-                assert str(input_file) not in script, \
-                    f"Input file path found in LLDB script: {script[:200]}"
-                assert "-i " not in script or str(input_file) not in script, \
-                    "LLDB script should not use -i with input file path"
+        # REQUIRE that at least one script was captured. Pre-fix
+        # the assertion was guarded by `if captured_scripts:`,
+        # so a regression that caused `_run_lldb_analysis` to
+        # exit BEFORE writing the LLDB script (e.g. the binary-
+        # validation early-return, an exception in the script-
+        # building code path, a future refactor that moved the
+        # subprocess invocation out of the function) would leave
+        # `captured_scripts` empty and the test would PASS
+        # vacuously — exactly the false-positive shape cluster
+        # 720 fixed for the GDB equivalent. Make the test fail
+        # loud if no scripts got written; that's the contract
+        # we're testing.
+        assert captured_scripts, (
+            "LLDB analysis didn't write any script — assertion vacuous. "
+            "Either _run_lldb_analysis short-circuited or the test setup "
+            "failed to mock subprocess correctly."
+        )
+        for script in captured_scripts:
+            assert str(input_file) not in script, \
+                f"Input file path found in LLDB script: {script[:200]}"
+            assert "-i " not in script or str(input_file) not in script, \
+                "LLDB script should not use -i with input file path"
 
 
 class TestPathTraversal:

@@ -5,6 +5,11 @@ Simple SARIF merger - combines multiple SARIF files into one.
 import sys
 from pathlib import Path
 
+# engine/semgrep/tools/sarif_merge.py -> repo root (4 levels up).
+# Needed when this is invoked as a subprocess under a sandboxed env
+# that strips PYTHONPATH and doesn't allowlist RAPTOR_DIR.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
 from core.json import save_json
 
 

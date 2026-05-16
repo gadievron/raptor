@@ -15,13 +15,14 @@ Usage::
 """
 from __future__ import annotations
 
+import uuid
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .availability import z3
 
 
 def track(
-        solver: Any, 
+        solver: Any,
         labeled: Sequence[Tuple[str, Any]],
         rev: Optional[Dict[str, str]] = None,
 ) -> Dict[str, str]:
@@ -32,18 +33,55 @@ def track(
     ``solver.unsat_core()`` output.  Existing (non-tracked) assertions on
     the solver are unaffected and will not appear in the unsat core.
 
-    Pass an existing ``rev`` dict to chain multiple batches on 
-    the same solver safely — the label counter is derived from 
-    ``len(rev)`` so new labels never collide with previously 
+    Pass an existing ``rev`` dict to chain multiple batches on
+    the same solver safely — the label counter is derived from
+    ``len(rev)`` so new labels never collide with previously
     tracked ones.  When ``rev`` is ``None`` (default) a fresh
     dict is created, matching the original single-call behaviour.
+
+    Per-call UUID prefix on label names: Z3 maintains a process-wide
+    hash-cons table for symbolic constants, so two ``track`` calls
+    against *different* solver instances that both name a label
+    ``_c0`` actually share the same z3 ``BoolRef`` — solver B's
+    `assert_and_track(expr_B, label)` poisons solver A's tracking
+    (the underlying label object is shared; solver A's `unsat_core()`
+    then surfaces a label name from solver B's call, and `rev.get(...)`
+    returns the wrong human-readable name or ``None``). Pre-fix this
+    only manifested when two solvers ran concurrently or when a test
+    re-used label names across solver instances. The UUID prefix
+    makes every ``track`` call mint fresh, collision-free labels
+    regardless of how many solver instances exist in the process.
     """
 
     if rev is None:
         rev = {}
-    offset = len(rev)
+    # 8 hex chars from a uuid4 = ~4 billion-call collision-resistance,
+    # which is overkill for one process but cheap.
+    call_prefix = uuid.uuid4().hex[:8]
+    # Per-call counter starts at zero. Pre-fix `offset = len(rev)`
+    # then `offset + i`. With the UUID prefix already guaranteeing
+    # cross-call collision-freedom, the `len(rev)` offset added no
+    # protection but introduced two correctness gaps:
+    #
+    # * If a caller mutated `rev` between batches (deleted some
+    #   entries to drop them from the tracked set), `len(rev)`
+    #   shrank and the next batch's labels overlapped with
+    #   already-issued ones from the SAME prefix's earlier batch
+    #   (rare in practice — the UUID is per-CALL so this only hit
+    #   the unusual "carry rev across calls" pattern, but the bug
+    #   was real).
+    # * Operators reading the label name in error logs saw an
+    #   index that depended on the dict's current size, not the
+    #   per-batch position — confusing because two re-runs of the
+    #   same batch produced different labels depending on what
+    #   else was tracked.
+    #
+    # A real per-call counter (`enumerate` from 0) gives stable,
+    # batch-local indices that are easy to reason about. UUID
+    # handles cross-call uniqueness; per-call counter handles
+    # in-call uniqueness.
     for i, (name, expr) in enumerate(labeled):
-        label = z3.Bool(f"_c{offset+i}")
+        label = z3.Bool(f"_c{call_prefix}_{i}")
         solver.assert_and_track(expr, label)
         rev[str(label)] = name
     return rev
@@ -54,9 +92,30 @@ def core_names(solver: Any, rev: Dict[str, str]) -> List[str]:
 
     Call after ``solver.check()`` returns ``z3.unsat``. Labels added by
     other callers (not present in ``rev``) are silently omitted.
+
+    Guards against bad solver state. Z3's ``unsat_core()`` raises
+    ``z3.Z3Exception`` when:
+
+    * `check()` was never called on the solver
+    * `check()` was called but returned `sat` or `unknown` (the unsat
+      core is only defined for `unsat`)
+    * `check()` was called with no tracked assertions present
+    * The solver was constructed without `set_param("unsat_core", True)`
+      (some Z3 builds), or with a tactic that doesn't produce cores
+
+    Pre-fix any of these leaked a `Z3Exception` out of `core_names`,
+    crashing Stage-E `chain_breaks` reporting. Treat all of them as
+    "no nameable core available" — return an empty list, which the
+    caller already handles (no constraints to display). The caller
+    is responsible for verifying `solver.check() == z3.unsat` before
+    expecting a populated list.
     """
     names: List[str] = []
-    for label in solver.unsat_core():
+    try:
+        core = solver.unsat_core()
+    except (z3.Z3Exception, AttributeError):
+        return names
+    for label in core:
         name = rev.get(str(label))
         if name is not None:
             names.append(name)

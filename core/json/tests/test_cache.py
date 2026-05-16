@@ -148,23 +148,49 @@ def test_orphan_tempfiles_are_reaped_at_construction(tmp_path: Path) -> None:
     so the dir doesn't accumulate orphans across runs. Both the
     legacy single-pid format and the current pid.tid format are
     recognised.
+
+    Test files are aged past `_REAP_FRESHNESS_S` so the
+    concurrent-writer-protection (batch 193) doesn't skip them.
     """
+    import os
     # Legacy ``.tmp.<pid>`` shape (orphans from earlier code on disk).
-    (tmp_path / "k.tmp.99999").write_text('{"partial": true}')
+    legacy = tmp_path / "k.tmp.99999"
+    legacy.write_text('{"partial": true}')
     (tmp_path / "vulns").mkdir()
-    (tmp_path / "vulns" / "GHSA-xxx.tmp.12345").write_text('{"x": 1}')
+    inner = tmp_path / "vulns" / "GHSA-xxx.tmp.12345"
+    inner.write_text('{"x": 1}')
     # Current ``.tmp.<pid>.<tid>`` shape (what put() writes now).
-    (tmp_path / "current.tmp.12345.67890").write_text('{"partial": true}')
+    current = tmp_path / "current.tmp.12345.67890"
+    current.write_text('{"partial": true}')
     # Also a file with a similar but non-matching suffix — must NOT be reaped.
     decoy = tmp_path / "config.tmp.json"
     decoy.write_text("user data")
 
+    # Age the orphans past the freshness threshold so the
+    # concurrent-writer-protection added in batch 193 doesn't
+    # skip them.
+    old = time.time() - 3600
+    for f in (legacy, inner, current):
+        os.utime(f, (old, old))
+
     JsonCache(root=tmp_path)   # construction triggers the sweep
 
-    assert not (tmp_path / "k.tmp.99999").exists()
-    assert not (tmp_path / "vulns" / "GHSA-xxx.tmp.12345").exists()
-    assert not (tmp_path / "current.tmp.12345.67890").exists()
+    assert not legacy.exists()
+    assert not inner.exists()
+    assert not current.exists()
     assert decoy.exists(), "must not reap files whose suffix isn't .tmp.<digits>[.<digits>]"
+
+
+def test_orphan_tempfile_recent_is_skipped(tmp_path: Path) -> None:
+    """A tempfile modified seconds ago is presumed to belong to a
+    concurrent in-flight writer in another process / thread — DON'T
+    reap it. Pre-fix the constructor unlinked any tempfile shape it
+    found, racing the writer's tmp.replace() into FileNotFoundError."""
+    fresh = tmp_path / "live.tmp.99999.11111"
+    fresh.write_text('{"in_progress": true}')
+    # Default mtime is now — within the freshness window.
+    JsonCache(root=tmp_path)
+    assert fresh.exists(), "fresh tempfile (concurrent writer) must survive"
 
 
 def test_concurrent_threads_same_key_no_torn_writes(tmp_path: Path) -> None:
@@ -215,3 +241,83 @@ def test_non_json_serialisable_value_does_not_leak_tempfile(tmp_path: Path) -> N
     assert leftovers == [], f"tempfile leak: {leftovers}"
     # And the cache returns None on subsequent get (write was rejected).
     assert cache.get("k", ttl_seconds=60) is None
+
+
+# ---------------------------------------------------------------------------
+# In-process memo
+# ---------------------------------------------------------------------------
+
+
+def test_memo_serves_repeat_get_without_disk_read(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """Second get on the same key should be served from the memo
+    without re-parsing the JSON file."""
+    cache = JsonCache(root=tmp_path)
+    cache.put("k", {"big": "value"}, ttl_seconds=60)
+
+    # Spy on the parse path: count calls to _read_envelope.
+    original = JsonCache._read_envelope
+    calls = {"n": 0}
+    def counting(path):
+        calls["n"] += 1
+        return original(path)
+    # ``monkeypatch`` cleanly restores the staticmethod wrapper on
+    # teardown — direct `JsonCache._read_envelope = original` would
+    # leave the class attribute as a plain function, breaking later
+    # tests that call the method via the class binding.
+    monkeypatch.setattr(JsonCache, "_read_envelope", staticmethod(counting))
+    for _ in range(10):
+        assert cache.get("k", ttl_seconds=60) == {"big": "value"}
+    # 10 get()s, only 1 read.
+    assert calls["n"] == 1, f"expected 1 disk read, got {calls['n']}"
+
+
+def test_memo_invalidated_on_external_disk_rewrite(tmp_path: Path) -> None:
+    """If the disk file is rewritten externally (different mtime),
+    the next get must re-read rather than serve a stale memo entry.
+    Pins the test that exposed the original memo correctness bug."""
+    cache = JsonCache(root=tmp_path)
+    cache.put("k", "old", ttl_seconds=60)
+    assert cache.get("k", ttl_seconds=60) == "old"
+    # Wait long enough that the next mtime is detectably different.
+    p = tmp_path / "k.json"
+    import os as _os
+    raw = json.loads(p.read_text())
+    raw["value"] = "new"
+    # Rewrite + bump mtime (st_mtime usually has 1ns resolution
+    # on Linux; force-bump explicitly to be safe across filesystems).
+    p.write_text(json.dumps(raw))
+    new_mtime = p.stat().st_mtime + 5.0
+    _os.utime(p, (new_mtime, new_mtime))
+    assert cache.get("k", ttl_seconds=60) == "new"
+
+
+def test_memo_invalidated_on_put(tmp_path: Path) -> None:
+    """put under the same key must replace the memo entry."""
+    cache = JsonCache(root=tmp_path)
+    cache.put("k", "v1", ttl_seconds=60)
+    assert cache.get("k", ttl_seconds=60) == "v1"
+    cache.put("k", "v2", ttl_seconds=60)
+    assert cache.get("k", ttl_seconds=60) == "v2"
+
+
+def test_memo_invalidated_on_invalidate(tmp_path: Path) -> None:
+    cache = JsonCache(root=tmp_path)
+    cache.put("k", "v", ttl_seconds=60)
+    assert cache.get("k", ttl_seconds=60) == "v"
+    cache.invalidate("k")
+    assert cache.get("k", ttl_seconds=60) is None
+
+
+def test_memo_negative_cached_miss_is_recomputed_after_put(
+    tmp_path: Path,
+) -> None:
+    """Repeated misses on a never-written key shouldn't trigger
+    repeat disk stat — but a subsequent put on that key must be
+    seen by the next get."""
+    cache = JsonCache(root=tmp_path)
+    assert cache.get("k", ttl_seconds=60) is None
+    assert cache.get("k", ttl_seconds=60) is None
+    cache.put("k", "v", ttl_seconds=60)
+    assert cache.get("k", ttl_seconds=60) == "v"

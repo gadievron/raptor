@@ -6,6 +6,18 @@ Usage: raptor-render-diagrams <output_dir> [--target <name>]
 import sys
 from pathlib import Path
 
+# ─── trust-marker check (do not import; inline by design) ───
+import os
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# ─── end trust-marker check ─────────────────────────────────
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
@@ -19,8 +31,29 @@ def main():
     target = None
     if "--target" in sys.argv:
         idx = sys.argv.index("--target")
-        if idx + 1 < len(sys.argv):
-            target = sys.argv[idx + 1]
+        # Reject `--target` without a value. Pre-fix the trailing
+        # `--target` (no following arg) was silently treated as
+        # "no target" — operator typo went undetected. Worse, an
+        # operator who passed `raptor-render-diagrams out --target`
+        # then later flags (e.g. `--target --some-flag`) silently
+        # consumed `--some-flag` as the target VALUE, producing
+        # nonsensical diagram headers.
+        if idx + 1 >= len(sys.argv):
+            print(
+                "ERROR: --target requires a value (e.g. --target my-app)",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        target = sys.argv[idx + 1]
+        # Reject value that itself looks like a flag — same
+        # protection against accidental flag-as-value capture.
+        if target.startswith("--"):
+            print(
+                f"ERROR: --target value {target!r} looks like a flag; "
+                f"--target requires a non-flag value",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     if not out_dir.exists():
         print(f"ERROR: directory not found: {out_dir}", file=sys.stderr)

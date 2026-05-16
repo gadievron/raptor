@@ -225,14 +225,21 @@ def _path_within(path: str, allowed: list) -> bool:
 
     Conservative: returns False on relative paths or any parsing failure so
     callers can treat the result as "definitely within an allowed dir".
+
+    Relative paths must be rejected BEFORE `Path.resolve()` — `resolve()`
+    silently turns a relative path into an absolute one rooted at the
+    parent process's cwd, so the post-resolve `is_absolute()` check below
+    can never be False. Without this gate, a relative path coming through
+    sandbox stderr enrichment was matched against the allowlist via cwd
+    semantics that the sandboxed child's cwd may not even share.
     """
     if not path or not allowed:
+        return False
+    if not Path(path).is_absolute():
         return False
     try:
         p = Path(path).resolve(strict=False)
     except (OSError, ValueError):
-        return False
-    if not p.is_absolute():
         return False
     for a in allowed:
         try:

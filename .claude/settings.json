@@ -34,6 +34,40 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/libexec/raptor-lifecycle-hook\" stop"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(libexec/raptor-*)",
+            "command": "\"$CLAUDE_PROJECT_DIR/libexec/raptor-lifecycle-hook\" tool-failure"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/libexec/raptor-lifecycle-hook\" session-end"
+          }
+        ]
+      }
     ]
   }
 }

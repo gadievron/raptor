@@ -102,11 +102,29 @@ def _tighten_config_perms(path: Path) -> str | None:
         return (f"⚠ {path} not owned by current user "
                 f"(mode {oct(st.st_mode)[-3:]}). Fix perms manually.")
 
+    # Open with O_NOFOLLOW + fchmod to close a TOCTOU race. Pre-fix
+    # the sequence was `lstat` (not a symlink) → `os.chmod(path,
+    # 0o600)`. `os.chmod` follows symlinks. Between the lstat and
+    # the chmod, an attacker (or a careless install script) could
+    # swap the file for a symlink to e.g. `/etc/passwd` — our
+    # chmod would then change perms on the swap target. ELOOP from
+    # the kernel when the path is now a symlink → falls through to
+    # the OSError handler with a meaningful message.
     try:
-        os.chmod(path, 0o600)
+        fd = os.open(
+            str(path),
+            os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+        )
     except OSError as e:
+        return (f"⚠ {path} could not be opened for chmod: {e}. "
+                f"Run: chmod 600 {path}")
+    try:
+        os.fchmod(fd, 0o600)
+    except OSError as e:
+        os.close(fd)
         return (f"⚠ {path} mode {oct(st.st_mode)[-3:]} and chmod failed: {e}. "
                 f"Run: chmod 600 {path}")
+    os.close(fd)
 
     return (f"tightened {path} permissions to 600 "
             f"(was {oct(st.st_mode)[-3:]}; contains API keys)")
@@ -167,10 +185,27 @@ def check_llm() -> tuple[list, list]:
                         continue
                     seen.add(provider)
                     futures[pool.submit(_test_key, provider, api_key, m.get("api_base"))] = provider
-                for future in as_completed(futures, timeout=5):
+                # `as_completed(timeout=5)` is an AGGREGATE
+                # timeout — applies to the iterator, not to
+                # individual futures. Pre-fix: with 5 providers
+                # configured, timeout=5 covered ALL of them
+                # collectively, so a single slow provider
+                # (network-misconfigured Anthropic endpoint
+                # taking 5s to fail-DNS) consumed the whole
+                # budget and the remaining providers never had
+                # their results collected — they got marked
+                # False as if THEIR keys failed.
+                #
+                # Wrap each `future.result()` in its own
+                # per-task `timeout=5` so each provider gets a
+                # full 5-second budget independent of others.
+                # The outer as_completed's timeout still bounds
+                # total wall-clock at ~5×N seconds worst case
+                # (acceptable for startup banner).
+                for future in as_completed(futures):
                     provider = futures[future]
                     try:
-                        key_status[provider] = future.result()
+                        key_status[provider] = future.result(timeout=5)
                     except Exception:
                         key_status[provider] = False
 
@@ -212,8 +247,19 @@ def _test_key(provider: str, api_key: str, api_base: str = None) -> bool:
     timeout = 3
     try:
         if provider == "gemini":
+            # Use `x-goog-api-key` header rather than `?key=...` query
+            # parameter. Both are documented; the header form keeps the
+            # key out of any logs that capture URLs:
+            #   * Gemini's server-side access logs.
+            #   * Any HTTPS proxy in the path that captures CONNECT
+            #     URLs (uncommon but seen on corporate gateways).
+            #   * Downstream debugging tools (curl --trace, requests'
+            #     hooks, anything that re-renders the request line).
+            # The TLS encryption protects the bytes in transit; the
+            # logging exposure is at endpoints.
             r = requests.get(
-                f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
+                "https://generativelanguage.googleapis.com/v1beta/models",
+                headers={"x-goog-api-key": api_key},
                 timeout=timeout,
             )
             return r.status_code == 200
@@ -280,6 +326,70 @@ def check_env(unavailable_features: set) -> tuple[list, list]:
     if os.getuid() == 0:
         warnings.append("Running as root is strongly discouraged — RAPTOR executes untrusted build commands, compiles PoCs, and runs fuzzing targets")
 
+    # Python version. RAPTOR requires 3.10+: ``packages/
+    # exploitability_validation/schemas.py`` (and other sites)
+    # uses PEP 604 union syntax (``str | None``) at function-
+    # definition time without ``from __future__ import
+    # annotations``, so the module fails to import on 3.9 with
+    # a confusing ``TypeError: unsupported operand type(s) for |``.
+    # Surface the version mismatch early so the operator sees
+    # "wrong Python" instead of a deep import trace.
+    import platform
+    py_version_str = platform.python_version()
+    if sys.version_info < (3, 10):
+        parts.append(f"Python {py_version_str} ✗")
+        warnings.append(
+            f"Python {py_version_str} at {sys.executable} — RAPTOR "
+            f"requires Python 3.10+. PEP 604 union syntax used in "
+            f"packages/exploitability_validation/schemas.py fails "
+            f"to import on older versions."
+        )
+    else:
+        parts.append(f"Python {py_version_str} ✓")
+
+    # RAPTOR_DIR — defensive check for the "operator bypassed the
+    # wrapper" path. ``bin/raptor`` / ``libexec/*`` scripts set this
+    # automatically; ``CLAUDE_ENV_FILE`` propagates it into claude-
+    # spawned Bash tool calls. Only unset when someone runs
+    # ``python3 raptor.py …`` (or imports core/ modules) from a
+    # bare shell. Specific value computed from REPO_ROOT so the
+    # operator can copy-paste the right export line.
+    raptor_dir = os.environ.get("RAPTOR_DIR")
+    if not raptor_dir:
+        warnings.append(
+            f"RAPTOR_DIR not set in this process; expected "
+            f"{REPO_ROOT} based on checkout location. Affects "
+            f"direct ``python3 raptor.py …`` invocations only — "
+            f"bin/raptor and claude sessions set it automatically."
+        )
+    else:
+        resolved = Path(raptor_dir).resolve()
+        if not resolved.is_dir():
+            warnings.append(
+                f"RAPTOR_DIR={raptor_dir!r} does not resolve to a "
+                f"directory"
+            )
+        else:
+            missing = [
+                d for d in ("core", "packages", "libexec", "bin")
+                if not (resolved / d).is_dir()
+            ]
+            if missing:
+                warnings.append(
+                    f"RAPTOR_DIR={raptor_dir!r} is missing expected "
+                    f"directories: {', '.join(missing)}"
+                )
+
+    # No check on .claude/raptor.env or .claude/settings.json
+    # despite both being part of the SessionStart hook chain.
+    # Failure modes for either file missing are: operator wiped
+    # it (wilful — operator knows), hook script broken (RAPTOR
+    # ship-side bug, doctor advice doesn't help), claude using
+    # a different project's settings (operator-config; doctor
+    # advice doesn't help). None are both common-enough-to-
+    # design-for AND actionable-via-doctor-output. Dropping
+    # avoids noise without missing real signal.
+
     out_dir = RaptorConfig.get_out_dir()
     out_ok = out_dir.exists() and os.access(out_dir, os.W_OK)
     parts.append("out/ ✓" if out_ok else "out/ ✗")
@@ -296,61 +406,87 @@ def check_env(unavailable_features: set) -> tuple[list, list]:
     except OSError:
         pass
 
-    if os.getenv("RAPTOR_OUT_DIR"):
-        parts.append(f"RAPTOR_OUT_DIR={os.getenv('RAPTOR_OUT_DIR')}")
-    if os.getenv("RAPTOR_CONFIG"):
-        parts.append(f"RAPTOR_CONFIG={os.getenv('RAPTOR_CONFIG')}")
+    # Operator-supplied env values flow into the startup banner that
+    # gets printed to the terminal. A value containing ANSI escapes
+    # (`\x1b[2J`) blanks the terminal; a value with bidi controls
+    # visually re-orders the line; CR/LF splits across lines.
+    # Apply `escape_nonprintable` so dangerous bytes render as
+    # `\xHH` literals.
+    from core.security.log_sanitisation import escape_nonprintable
+    out_dir_env = os.getenv("RAPTOR_OUT_DIR")
+    if out_dir_env:
+        parts.append(f"RAPTOR_OUT_DIR={escape_nonprintable(out_dir_env)}")
+    config_env = os.getenv("RAPTOR_CONFIG")
+    if config_env:
+        parts.append(f"RAPTOR_CONFIG={escape_nonprintable(config_env)}")
 
     if not os.getenv("GOOGLE_APPLICATION_CREDENTIALS"):
         warnings.append("/oss-forensics unavailable — BigQuery not configured")
 
-    # Subprocess sandboxing. Namespaces and Landlock are independent — a
-    # system without user namespaces (e.g. restricted containers) can
-    # still have Landlock, which protects the filesystem side. Report
-    # whatever is actually available rather than an all-or-nothing flag.
+    # Subprocess sandboxing. Layers reported per-platform:
+    #   Linux: net + mount + landlock + seccomp (any combination — see
+    #     core/sandbox/__init__.py module docstring)
+    #   macOS: seatbelt (single integrated layer via sandbox-exec / SBPL)
+    # Probing is a one-shot subprocess (cached); we report whatever is
+    # actually available rather than an all-or-nothing flag.
     try:
-        from core.sandbox import (
-            check_net_available, check_mount_available, check_landlock_available,
-            check_seccomp_available,
-        )
-        net_ok = check_net_available()
-        mount_ok = check_mount_available() if net_ok else False
-        landlock_ok = check_landlock_available()
-        seccomp_ok = check_seccomp_available()
-        features = []
-        if net_ok:
-            features.append("net")
-        if mount_ok:
-            features.append("mount")
-        if landlock_ok:
-            features.append("landlock")
-        if seccomp_ok:
-            features.append("seccomp")
-        if features:
-            parts.append(f"sandbox ✓ ({'+'.join(features)})")
-            # Partial-sandbox warnings — name what's missing so users can
-            # decide whether the gap matters for their use case. (The
-            # banner's feature list already shows what IS active.)
-            if not net_ok:
+        if sys.platform == "darwin":
+            from core.sandbox import check_seatbelt_available
+            seatbelt_ok = check_seatbelt_available()
+            if seatbelt_ok:
+                parts.append("sandbox ✓ (seatbelt)")
+            else:
+                parts.append("sandbox ✗")
                 warnings.append(
-                    "Sandbox network isolation missing — user namespaces "
-                    "not supported on this kernel. Subprocesses can still "
-                    "reach the network unless the caller passes "
-                    "allowed_tcp_ports to sandbox()."
-                )
-            elif not landlock_ok:
-                warnings.append(
-                    "Sandbox Landlock filesystem restriction missing — "
-                    "kernel does not support Landlock (needs 5.13+). "
-                    "Network isolation still active; writes outside the "
-                    "output dir are NOT restricted."
+                    "Subprocess sandboxing unavailable — sandbox-exec "
+                    "smoke test failed. Verify Command Line Tools are "
+                    "installed and "
+                    "`sandbox-exec -p '(version 1)(allow default)' "
+                    "/usr/bin/true` succeeds on this host."
                 )
         else:
-            parts.append("sandbox ✗")
-            warnings.append(
-                "Subprocess sandboxing unavailable — neither user "
-                "namespaces nor Landlock are supported on this kernel"
+            from core.sandbox import (
+                check_net_available, check_mount_available,
+                check_landlock_available, check_seccomp_available,
             )
+            net_ok = check_net_available()
+            mount_ok = check_mount_available() if net_ok else False
+            landlock_ok = check_landlock_available()
+            seccomp_ok = check_seccomp_available()
+            features = []
+            if net_ok:
+                features.append("net")
+            if mount_ok:
+                features.append("mount")
+            if landlock_ok:
+                features.append("landlock")
+            if seccomp_ok:
+                features.append("seccomp")
+            if features:
+                parts.append(f"sandbox ✓ ({'+'.join(features)})")
+                # Partial-sandbox warnings — name what's missing so users
+                # can decide whether the gap matters for their use case.
+                # (The banner's feature list already shows what IS active.)
+                if not net_ok:
+                    warnings.append(
+                        "Sandbox network isolation missing — user "
+                        "namespaces not supported on this kernel. "
+                        "Subprocesses can still reach the network unless "
+                        "the caller passes allowed_tcp_ports to sandbox()."
+                    )
+                elif not landlock_ok:
+                    warnings.append(
+                        "Sandbox Landlock filesystem restriction missing "
+                        "— kernel does not support Landlock (needs "
+                        "5.13+). Network isolation still active; writes "
+                        "outside the output dir are NOT restricted."
+                    )
+            else:
+                parts.append("sandbox ✗")
+                warnings.append(
+                    "Subprocess sandboxing unavailable — neither user "
+                    "namespaces nor Landlock are supported on this kernel"
+                )
     except Exception:
         # Never let a sandbox-probe bug kill startup, but leave a trail
         # at DEBUG so the bug is findable instead of invisible.
@@ -386,9 +522,24 @@ def check_active_project() -> str | None:
         if not data:
             return None
         proj_target = data.get("target", "")
+        # Bounded read of the .auto marker. Pre-fix `read_text()`
+        # loaded the WHOLE file into memory before the strip+compare.
+        # The marker SHOULD only ever contain a project name (a few
+        # bytes) but if the file was malformed (a hostile sample, a
+        # corrupted sparse file, a symlink-to-/dev/zero) the unbounded
+        # read OOM-killed the entire startup banner. Read just enough
+        # bytes to compare against `name + 1` so any oversize file
+        # rejects via the comparison.
         auto_marker = PROJECTS_DIR / ".auto"
-        if auto_marker.exists() and auto_marker.read_text().strip() == name:
-            return f"Auto-activated project: {name} ({proj_target}) — `/project none` to clear"
+        if auto_marker.exists():
+            try:
+                cap = max(len(name) + 64, 256)
+                with auto_marker.open("rb") as fh:
+                    head = fh.read(cap)
+                if head.decode("utf-8", errors="replace").strip() == name:
+                    return f"Auto-activated project: {name} ({proj_target}) — `/project none` to clear"
+            except OSError:
+                pass
         return f"Project: {name} ({proj_target}) — `/project none` to clear"
     except Exception:
         return None
@@ -396,31 +547,18 @@ def check_active_project() -> str | None:
 
 # ---------------------------------------------------------------------------
 # Environment setup
+#
+# `setup_env_file()` was removed: the live code path is
+# `libexec/raptor-session-init:write_env_file` which is what the
+# SessionStart hook actually invokes. The duplicate Python helper here
+# was never wired into anything outside its own tests, and the two
+# implementations had drifted (the libexec script overwrites the env
+# file unconditionally; the Python helper appended via O_NOFOLLOW). The
+# divergence was a hazard — if a future caller wired `setup_env_file`
+# into startup, we'd silently get two contradicting env files written
+# in the same session. Keeping one source of truth (the libexec
+# script) avoids that.
 # ---------------------------------------------------------------------------
-
-def setup_env_file():
-    """Add bin/ to PATH via CLAUDE_ENV_FILE.
-
-    Covers direct `claude` launches where bin/raptor didn't set PATH.
-    Harmless duplicate if it did.
-    """
-    env_file = os.environ.get("CLAUDE_ENV_FILE")
-    if not env_file:
-        return
-    repo_root = str(REPO_ROOT)
-    bin_dir = str(REPO_ROOT / "bin")
-    try:
-        existing = Path(env_file).read_text() if Path(env_file).exists() else ""
-        additions = []
-        if bin_dir not in existing:
-            additions.append(f'export PATH="$PATH:{bin_dir}"')
-        if "RAPTOR_DIR" not in existing:
-            additions.append(f'export RAPTOR_DIR="{repo_root}"')
-        if additions:
-            with open(env_file, "a") as f:
-                f.write("\n".join(additions) + "\n")
-    except OSError:
-        pass
 
 
 # ---------------------------------------------------------------------------

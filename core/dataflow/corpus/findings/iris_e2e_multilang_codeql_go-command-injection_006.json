@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "finding_id": "iris_e2e_multilang_codeql_go-command-injection_006",
+  "producer": "codeql",
+  "rule_id": "raptor/go/command-injection-local",
+  "message": "os.Args flows to exec.Command shell invocation",
+  "source": {
+    "file_path": "packages/llm_analysis/tests/fixtures/iris_e2e_multilang/go/cmd_inj.go",
+    "line": 9,
+    "column": 12,
+    "snippet": "target := os.Args[1]",
+    "label": "source"
+  },
+  "sink": {
+    "file_path": "packages/llm_analysis/tests/fixtures/iris_e2e_multilang/go/cmd_inj.go",
+    "line": 10,
+    "column": 2,
+    "snippet": "exec.Command(\"sh\", \"-c\", \"ping -c1 \"+target).Run()",
+    "label": "sink"
+  },
+  "intermediate_steps": [],
+  "raw": {}
+}
