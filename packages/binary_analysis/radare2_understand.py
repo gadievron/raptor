@@ -24,9 +24,22 @@ import json
 import logging
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# Module-level lock serialising the os.environ mutation + r2pipe.open()
+# critical section inside BinaryUnderstand.analyse(). Concurrent
+# analyse() calls would otherwise race: thread A sets R2PIPE_R2 /
+# OUTPUT_DIR / R2_TARGET_DIR, thread B clobbers them with its own
+# values before A's r2pipe.open() completes spawning the wrapper, and
+# A's wrapper reads B's env (wrong target dir → r2 fails to find
+# binary). The lock is held only across the env-set-and-spawn window;
+# after r2pipe.open() returns, the wrapper has its own env copy and
+# the parent can mutate freely. Sequential callers (the only callers
+# today) pay no cost — uncontended acquire is ~100ns.
+_ANALYSE_ENV_LOCK = threading.Lock()
 
 logger = logging.getLogger(__name__)
 
@@ -259,12 +272,74 @@ class BinaryUnderstand:
         max_decompile bounds the number of high-priority functions we ask
         the decompiler for, since decompilation is the slowest step.
         """
+        import os as _os
+        import tempfile as _tempfile
         import r2pipe
 
+        # Sandbox r2 via the libexec wrapper. r2pipe reads R2PIPE_R2 from
+        # env and spawns the wrapper instead of `radare2` directly; the
+        # wrapper engages mount-ns + Landlock + seccomp + UTS-ns +
+        # fingerprint sanitisation around the r2 child, then exits when
+        # r2 exits. r2pipe's pipe protocol flows unchanged through the
+        # wrapper's inherited stdin/stdout.
+        #
+        # Required env for the wrapper: OUTPUT_DIR (scratch writable
+        # dir; we mkdtemp one per analysis) and R2_TARGET_DIR (binary's
+        # parent, bound RO into the sandbox so r2 can resolve the
+        # absolute path it was given). The wrapper falls back to
+        # `dirname(binary)` if R2_TARGET_DIR isn't set, but we pass it
+        # explicitly so the substrate stays simple.
+        _wrapper = (
+            Path(__file__).resolve().parents[2]
+            / "libexec" / "raptor-r2-sandboxed"
+        )
+        if not _wrapper.is_file():
+            raise RuntimeError(
+                f"r2 sandbox wrapper missing: {_wrapper}. "
+                f"Reinstall RAPTOR or check libexec/ is intact."
+            )
+        _r2_scratch = _tempfile.mkdtemp(prefix="r2-sandbox-")
+        _env_overrides = {
+            "R2PIPE_R2": str(_wrapper),
+            "OUTPUT_DIR": _r2_scratch,
+            "R2_TARGET_DIR": str(self.binary.parent),
+            # The wrapper's trust-marker gate refuses to run without
+            # one of these env vars present — set it explicitly so
+            # operators running outside Claude Code (e.g. CI) still
+            # get the sandboxed path.
+            "_RAPTOR_TRUSTED": "1",
+        }
+        # Single try/finally guarding env-restore + scratch cleanup —
+        # MUST wrap r2pipe.open() itself, not just the post-open
+        # analysis. A failure in r2pipe.open (wrapper crash, mount-ns
+        # unavailable, r2 binary missing) would otherwise leak the
+        # wrapper-only env vars into the rest of the parent process.
+        #
+        # _ANALYSE_ENV_LOCK serialises the env-set + r2pipe.open
+        # window across threads — after r2pipe.open() returns, the
+        # wrapper has snapshotted its env and the parent can mutate
+        # freely. We hold the lock just long enough to spawn, then
+        # release before the slow analysis runs (otherwise concurrent
+        # analyse() calls would serialise end-to-end).
+        r2 = None
         ctx = BinaryContextMap(binary_path=self.binary)
-        logger.info(f"radare2 analysis: opening {self.binary}")
-        r2 = r2pipe.open(str(self.binary), flags=["-2"])  # -2: silence stderr
+        _saved_env: Dict[str, Optional[str]] = {}
         try:
+            with _ANALYSE_ENV_LOCK:
+                _saved_env = {k: _os.environ.get(k) for k in _env_overrides}
+                _os.environ.update(_env_overrides)
+                logger.info(
+                    f"radare2 analysis: opening {self.binary} (sandboxed)"
+                )
+                r2 = r2pipe.open(str(self.binary), flags=["-2"])  # -2: silence stderr
+                # Wrapper has spawned + read env. Restore parent env
+                # now so concurrent analyse() callers can proceed.
+                for k, v in _saved_env.items():
+                    if v is None:
+                        _os.environ.pop(k, None)
+                    else:
+                        _os.environ[k] = v
+                _saved_env = {}  # already restored — finally skips re-restore
             r2.cmd("aaa")    # full auto-analysis
             self._extract_metadata(r2, ctx)
             self._extract_imports_exports(r2, ctx)
@@ -278,10 +353,29 @@ class BinaryUnderstand:
             else:
                 self._heuristic_prioritise(ctx)
         finally:
-            try:
-                r2.quit()
-            except Exception:
-                pass
+            if r2 is not None:
+                try:
+                    r2.quit()
+                except Exception:
+                    pass
+            # Env restore — _saved_env is non-empty only if the lock
+            # block exited before its inline restore (e.g. r2pipe.open
+            # raised). Defensive double-restore: this is a no-op when
+            # the inline restore already ran.
+            if _saved_env:
+                with _ANALYSE_ENV_LOCK:
+                    for k, v in _saved_env.items():
+                        if v is None:
+                            _os.environ.pop(k, None)
+                        else:
+                            _os.environ[k] = v
+            # Best-effort scratch cleanup. The wrapper bind-mounted
+            # this dir into the sandbox so r2 could write any
+            # incidental output; on exit the binds tear down with
+            # the namespace and the dir's contents (if any) are
+            # ours to remove.
+            import shutil as _shutil
+            _shutil.rmtree(_r2_scratch, ignore_errors=True)
 
         logger.info(
             f"radare2 analysis: {len(ctx.interesting_functions)} interesting funcs, "

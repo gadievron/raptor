@@ -225,5 +225,123 @@ class TestBinaryUnderstand(unittest.TestCase):
             mock_understand.assert_called_once_with(Path("/tmp/sample"), llm=None)
 
 
+class TestSandboxWiring(unittest.TestCase):
+    """Verify analyse() sets R2PIPE_R2 + cleanup env BEFORE r2pipe.open()
+    runs, and restores env on exit. Drives r2pipe via a mock so we don't
+    need a real r2 binary or wrapper-host capabilities (mount-ns etc.) —
+    the wrapper's runtime behaviour is covered by
+    test_r2_sandboxed_wrapper.py."""
+
+    def _make_understand_with_fake_binary(self):
+        """Build a BinaryUnderstand against a real on-disk ELF stub so
+        the constructor's `is_file()` + `exists()` checks pass without
+        needing to mock them."""
+        tmp = tempfile.NamedTemporaryFile(
+            delete=False, suffix="-stub", prefix="r2-wiring-",
+        )
+        tmp.write(b"\x7fELF" + b"\x00" * 60)
+        tmp.close()
+        self.addCleanup(lambda p=tmp.name: Path(p).unlink(missing_ok=True))
+        # probe_capability is checked in __init__; patch it to look
+        # available so we don't need real radare2 binary on the CI host.
+        with patch(
+            "packages.binary_analysis.radare2_understand.probe_capability",
+            return_value={"available": True, "r2_path": "/usr/bin/radare2",
+                          "r2_version": "5.0", "has_r2pipe": True,
+                          "has_r2ghidra": False, "decompiler": "pdc"},
+        ):
+            return BinaryUnderstand(Path(tmp.name), llm=None)
+
+    @patch("packages.binary_analysis.radare2_understand.logger")
+    def test_analyse_sets_r2pipe_r2_to_wrapper(self, _mock_logger):
+        """Inside analyse(), r2pipe.open is called WITH R2PIPE_R2 pointing
+        at libexec/raptor-r2-sandboxed. Captured by patching r2pipe to
+        snapshot os.environ at call-time."""
+        import os
+        understand = self._make_understand_with_fake_binary()
+        captured_env = {}
+
+        def fake_open(path, flags=None):
+            # Snapshot the relevant env vars at the moment r2pipe.open
+            # would have spawned the wrapper.
+            for k in ("R2PIPE_R2", "OUTPUT_DIR", "R2_TARGET_DIR",
+                      "_RAPTOR_TRUSTED"):
+                captured_env[k] = os.environ.get(k)
+            mock = MagicMock()
+            mock.cmd.return_value = "[]"
+            return mock
+
+        fake_r2pipe = MagicMock()
+        fake_r2pipe.open = fake_open
+        with patch.dict("sys.modules", {"r2pipe": fake_r2pipe}):
+            understand.analyse(max_decompile=0, max_strings=0)
+
+        self.assertIsNotNone(captured_env["R2PIPE_R2"])
+        self.assertTrue(
+            captured_env["R2PIPE_R2"].endswith("/libexec/raptor-r2-sandboxed"),
+            f"R2PIPE_R2 was {captured_env['R2PIPE_R2']!r}, "
+            f"expected to end with /libexec/raptor-r2-sandboxed",
+        )
+        self.assertTrue(Path(captured_env["R2PIPE_R2"]).is_file(),
+                        "wrapper path must resolve to a real file")
+        self.assertIsNotNone(captured_env["OUTPUT_DIR"])
+        self.assertIsNotNone(captured_env["R2_TARGET_DIR"])
+        # Trust marker required by the wrapper's gate.
+        self.assertEqual(captured_env["_RAPTOR_TRUSTED"], "1")
+
+    @patch("packages.binary_analysis.radare2_understand.logger")
+    def test_analyse_restores_env_on_exit(self, _mock_logger):
+        """Env vars set for the wrapper must be cleaned up after
+        analyse() returns — preventing pollution into the parent's
+        other subprocess spawns (LLM dispatch, sibling tools)."""
+        import os
+        understand = self._make_understand_with_fake_binary()
+        pre = {k: os.environ.get(k) for k in
+               ("R2PIPE_R2", "OUTPUT_DIR", "R2_TARGET_DIR",
+                "_RAPTOR_TRUSTED")}
+        fake_r2pipe = MagicMock()
+        fake_r2pipe.open.return_value.cmd.return_value = "[]"
+        with patch.dict("sys.modules", {"r2pipe": fake_r2pipe}):
+            understand.analyse(max_decompile=0, max_strings=0)
+        for k, v in pre.items():
+            self.assertEqual(
+                os.environ.get(k), v,
+                f"env var {k} leaked after analyse(): "
+                f"before={v!r}, after={os.environ.get(k)!r}",
+            )
+
+    @patch("packages.binary_analysis.radare2_understand.logger")
+    def test_analyse_restores_env_on_exception(self, _mock_logger):
+        """If r2pipe / r2 raises mid-analysis, env restoration must
+        still run (finally block) — otherwise a single failure leaks
+        the wrapper-only env into the rest of the process."""
+        import os
+        understand = self._make_understand_with_fake_binary()
+        pre_r2pipe_r2 = os.environ.get("R2PIPE_R2")
+        fake_r2pipe = MagicMock()
+        fake_r2pipe.open.side_effect = RuntimeError("simulated r2 failure")
+        with patch.dict("sys.modules", {"r2pipe": fake_r2pipe}):
+            with self.assertRaises(RuntimeError):
+                understand.analyse(max_decompile=0, max_strings=0)
+        self.assertEqual(os.environ.get("R2PIPE_R2"), pre_r2pipe_r2,
+                         "R2PIPE_R2 leaked after exception")
+
+    def test_wrapper_path_resolves_correctly(self):
+        """Static check that the wrapper path derivation in
+        radare2_understand matches libexec/raptor-r2-sandboxed —
+        catches a refactor that moves the wrapper without updating
+        the caller."""
+        # radare2_understand.py is at packages/binary_analysis/...
+        # parents[2] from that file = repo root. Wrapper is at
+        # <root>/libexec/raptor-r2-sandboxed.
+        import packages.binary_analysis.radare2_understand as ru
+        repo_root = Path(ru.__file__).resolve().parents[2]
+        expected = repo_root / "libexec" / "raptor-r2-sandboxed"
+        self.assertTrue(
+            expected.is_file(),
+            f"libexec wrapper missing at {expected} — wiring will fail",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
