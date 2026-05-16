@@ -774,3 +774,80 @@ class TestProxyAuditModeRecordsSurviveErrors:
         # The buffer event still landed (independent of record_denial)
         denied = [e for e in events if e["result"] == "denied_resolved_ip"]
         assert len(denied) == 1
+
+
+# ──────────────────────────────────────────────────────────────────────
+# RAPTOR_PROXY_AUDIT_ENFORCE env-var parse (W36.K.1 / F068)
+# ──────────────────────────────────────────────────────────────────────
+#
+# Before W36.K.1: `bool(env_var)` treated any non-empty string as truthy,
+# so RAPTOR_PROXY_AUDIT_ENFORCE=0 / false / no / off all enabled strict
+# mode — fail-SAFE direction but contrary to operator expectations.
+# After W36.K.1: whitelist of explicit truthy spellings.
+
+
+class TestProxyAuditEnforceEnvVarParse:
+    """Regression coverage for the W36.K.1 truthy-whitelist parse."""
+
+    @pytest.mark.parametrize("value", [
+        "0",
+        "false",
+        "False",
+        "FALSE",
+        "no",
+        "No",
+        "off",
+        "OFF",
+        "",
+        "   ",
+        "garbage",
+        "2",       # only "1" is truthy by the whitelist
+        "10",
+    ])
+    def test_non_truthy_value_disables_enforce(
+            self, reset_proxy, monkeypatch, value):
+        monkeypatch.setenv("RAPTOR_PROXY_AUDIT_ENFORCE", value)
+        p = proxy_mod.get_proxy(["example.com"])
+        try:
+            assert p._audit_enforce is False, (
+                f"RAPTOR_PROXY_AUDIT_ENFORCE={value!r} must NOT enable "
+                f"strict mode (got True)"
+            )
+        finally:
+            proxy_mod._reset_for_tests()
+
+    @pytest.mark.parametrize("value", [
+        "1",
+        "true",
+        "True",
+        "TRUE",
+        "yes",
+        "Yes",
+        "YES",
+        "on",
+        "On",
+        "ON",
+        "  1  ",   # leading/trailing whitespace is stripped
+        " true ",
+    ])
+    def test_truthy_value_enables_enforce(
+            self, reset_proxy, monkeypatch, value):
+        monkeypatch.setenv("RAPTOR_PROXY_AUDIT_ENFORCE", value)
+        p = proxy_mod.get_proxy(["example.com"])
+        try:
+            assert p._audit_enforce is True, (
+                f"RAPTOR_PROXY_AUDIT_ENFORCE={value!r} must enable "
+                f"strict mode (got False)"
+            )
+        finally:
+            proxy_mod._reset_for_tests()
+
+    def test_absent_env_var_disables_enforce(self, reset_proxy, monkeypatch):
+        # An unset variable is the default-safe baseline — operators
+        # who never touched the env var get log-only audit, not deny.
+        monkeypatch.delenv("RAPTOR_PROXY_AUDIT_ENFORCE", raising=False)
+        p = proxy_mod.get_proxy(["example.com"])
+        try:
+            assert p._audit_enforce is False
+        finally:
+            proxy_mod._reset_for_tests()
