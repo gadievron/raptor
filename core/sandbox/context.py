@@ -1458,6 +1458,7 @@ def sandbox(block_network: bool = False, target: str = None, output: str = None,
                                            if observe and nonlocal_audit_mode
                                            else None),
                             restrict_reads=restrict_reads,
+                            strict_env=strict_env,
                             # Default True here even though subprocess.run
                             # defaults to False — _spawn's historical
                             # behaviour was unconditional os.setsid() and

@@ -358,6 +358,7 @@ def run_sandboxed(
     observe_mode: bool = False,
     observe_nonce: Optional[str] = None,
     restrict_reads: bool = False,
+    strict_env: bool = False,
 ) -> subprocess.CompletedProcess:
     """Run `cmd` inside a fully-isolated sandbox.
 
@@ -943,6 +944,20 @@ def run_sandboxed(
                 # Grandchild runs as PID 1 in the new pid-ns.
                 if env is not None:
                     exec_env = env
+                    # Defense-in-depth: context.py:run() already strips
+                    # DANGEROUS_ENV_VARS from the caller env when
+                    # strict_env=True, so this re-strip is a no-op on
+                    # the standard call path. The kwarg lives here for
+                    # parity with _macos_spawn.run_sandboxed and to
+                    # protect direct callers of this function that
+                    # bypass the run() wrapper (tests, future helpers).
+                    if strict_env:
+                        from core.config import RaptorConfig
+                        _dangerous = set(RaptorConfig.DANGEROUS_ENV_VARS)
+                        exec_env = {
+                            k: v for k, v in exec_env.items()
+                            if k not in _dangerous
+                        }
                 else:
                     exec_env = os.environ.copy()
                 # bounded fork count via RLIMIT_NPROC (prlimit).
