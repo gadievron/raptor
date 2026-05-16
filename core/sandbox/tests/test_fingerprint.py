@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from core.sandbox.fingerprint import (
+    HOST_CPU_COUNT,
     _HOSTNAME,
     _DOMAINNAME,
     _MACHINE_ID,
@@ -28,6 +29,49 @@ from core.sandbox.fingerprint import (
     is_supported,
     set_cpu_affinity,
 )
+
+
+# --- HOST_CPU_COUNT sentinel ---
+
+def test_host_cpu_count_sentinel_resolves_to_host(tmp_path):
+    """build_persona(cpu_count=HOST_CPU_COUNT) must resolve to the
+    host's actual schedulable CPU count via os.sched_getaffinity(0).
+    Persona.cpu_count is the resolved int, not the sentinel."""
+    expected = len(os.sched_getaffinity(0))
+    persona = build_persona(tmp_path, cpu_count=HOST_CPU_COUNT)
+    assert persona.cpu_count == expected, (
+        f"sentinel resolved to {persona.cpu_count}, expected {expected}"
+    )
+
+
+def test_host_cpu_count_sentinel_yields_n_cpuinfo_blocks(tmp_path):
+    """With the sentinel, /proc/cpuinfo claims as many processors as
+    the host has available — preserves capability surface for callers
+    that need real parallelism (codeql, parallel builds)."""
+    expected = len(os.sched_getaffinity(0))
+    build_persona(tmp_path, cpu_count=HOST_CPU_COUNT)
+    content = (tmp_path / "cpuinfo").read_text()
+    indices = [
+        m for m in content.splitlines() if m.startswith("processor\t:")
+    ]
+    assert len(indices) == expected
+
+
+def test_host_cpu_count_sentinel_value_is_negative():
+    """Sentinel must be < 1 so existing ValueError paths don't
+    accidentally accept it. Using -1 (conventional "unset" / "not
+    applicable")."""
+    assert HOST_CPU_COUNT < 1
+    assert HOST_CPU_COUNT != 0  # 0 might be confused with "no CPUs"
+
+
+def test_build_persona_still_rejects_invalid_negative(tmp_path):
+    """Any negative value OTHER than HOST_CPU_COUNT must still raise."""
+    import pytest as _pytest
+    # Pick a negative that isn't the sentinel.
+    bad = HOST_CPU_COUNT - 1
+    with _pytest.raises(ValueError, match="cpu_count must be >= 1"):
+        build_persona(tmp_path, cpu_count=bad)
 
 
 # --- Constants / shape ---
@@ -90,8 +134,10 @@ def test_build_persona_rejects_zero_cpu_count(tmp_path):
 
 
 def test_build_persona_rejects_negative_cpu_count(tmp_path):
+    # -1 is the HOST_CPU_COUNT sentinel (covered separately). Pick a
+    # negative that isn't a sentinel.
     with pytest.raises(ValueError, match="cpu_count must be >= 1"):
-        build_persona(tmp_path, cpu_count=-1)
+        build_persona(tmp_path, cpu_count=-2)
 
 
 # --- build_persona output shape ---

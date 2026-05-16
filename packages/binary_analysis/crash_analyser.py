@@ -538,6 +538,7 @@ class CrashAnalyser:
                     capture_output=True,
                     text=True,
                     timeout=30,
+                    sanitise_host_fingerprint=True,
                 )
         finally:
             # Clean up command file
@@ -617,6 +618,7 @@ class CrashAnalyser:
                         capture_output=True,
                         text=True,
                         timeout=60,  # Increased timeout
+                        sanitise_host_fingerprint=True,
                     )
             except subprocess.TimeoutExpired:
                 logger.warning("LLDB analysis timed out - trying fallback approach")
@@ -701,6 +703,7 @@ class CrashAnalyser:
                     capture_output=True,
                     text=True,
                     timeout=30,
+                    sanitise_host_fingerprint=True,
                 )
             return result.stdout
         except subprocess.TimeoutExpired:
@@ -1490,6 +1493,7 @@ class CrashAnalyser:
                     capture_output=True,
                     text=True,
                     timeout=30,
+                    sanitise_host_fingerprint=True,
                     # Use get_safe_env() as the base, NOT os.environ.
                     # Pre-fix `{**os.environ, "ASAN_OPTIONS": ...}`
                     # passed the operator's full env (LLM API keys,

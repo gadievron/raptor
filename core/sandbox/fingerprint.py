@@ -68,6 +68,28 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+# === Public sentinels ===
+
+# Sentinel for the `cpu_count` argument meaning "preserve the host's
+# actual CPU count" — build_persona resolves it from
+# len(os.sched_getaffinity(0)) at build time, and set_cpu_affinity
+# becomes a no-op (the existing host mask already matches).
+#
+# Use case: callers like `codeql database create` that engage a
+# target-repo parallel build (make -j$(nproc), mvn -T NC). Pinning
+# to the default cpu_count=4 on a 32-core CI host causes ~8x build
+# slowdown and pushes long builds past CODEQL_TIMEOUT.
+# HOST_CPU_COUNT preserves real parallelism while still masking
+# identity (model name, vendor, microcode, hostname, machine-id,
+# DMI, /proc/version, etc.).
+#
+# Caveat: leaks CPU count to the target (a 32-core operator is
+# distinguishable from a 4-core operator). Acceptable when the
+# caller's primary motivation is anti-analysis identity masking,
+# not full anti-fingerprint capability masking.
+HOST_CPU_COUNT = -1
+
+
 # === Persona constants ===
 
 # Hostname / domainname — applied via sethostname() / setdomainname()
@@ -199,9 +221,19 @@ class Persona:
 def build_persona(tmpdir: Path, cpu_count: int) -> Persona:
     """Materialise persona files under `tmpdir` and return the Persona.
 
-    cpu_count must be >= 1. The /proc/cpuinfo file will contain that
-    many `processor` blocks; the matching `sched_setaffinity` mask
-    is the caller's responsibility (see `set_cpu_affinity`).
+    cpu_count must be >= 1 OR the HOST_CPU_COUNT sentinel. When the
+    sentinel is passed, cpu_count is resolved to the host's actual
+    schedulable CPU count via len(os.sched_getaffinity(0)) — useful
+    for callers that engage target parallel builds (codeql database
+    create runs make/mvn/gradle, which need the real CPU count to
+    avoid build serialisation). set_cpu_affinity for that resolved
+    value is a no-op (matches the existing mask) so no CPU pin is
+    applied. The persona.cpu_count attribute reflects the resolved
+    integer either way.
+
+    The /proc/cpuinfo file will contain `cpu_count` `processor`
+    blocks; the matching `sched_setaffinity` mask is the caller's
+    responsibility (see `set_cpu_affinity`).
 
     Reads the host's /proc/cpuinfo `flags` line ONCE so all per-CPU
     blocks share the same flag set. Host flags are preserved
@@ -210,8 +242,12 @@ def build_persona(tmpdir: Path, cpu_count: int) -> Persona:
     them. Empty string if host /proc/cpuinfo unreadable — handled
     gracefully (tools fall back to default code paths).
     """
+    if cpu_count == HOST_CPU_COUNT:
+        cpu_count = len(os.sched_getaffinity(0))
     if cpu_count < 1:
-        raise ValueError(f"cpu_count must be >= 1, got {cpu_count}")
+        raise ValueError(
+            f"cpu_count must be >= 1 or HOST_CPU_COUNT, got {cpu_count}"
+        )
     tmpdir = Path(tmpdir)
     tmpdir.mkdir(parents=True, exist_ok=True)
 
