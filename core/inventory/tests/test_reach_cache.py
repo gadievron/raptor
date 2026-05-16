@@ -7,7 +7,6 @@ sha256.
 
 from __future__ import annotations
 
-import pickle
 from pathlib import Path
 from typing import Any, Dict
 
@@ -239,7 +238,7 @@ def test_load_refuses_world_writable_cache_file(tmp_path):
     """Cache file with group/world write bits set must not be
     unpickled — a less-privileged process or a misconfigured
     umask could plant a poisoned pickle."""
-    import os, stat as _stat
+    import os
     fp = "e" * 64
     _reach_cache.save_index(fp, _AdjacencyIndex())
     path = _reach_cache._cache_path_for(fp)
@@ -268,7 +267,8 @@ def test_load_does_not_execute_pickle_payload(tmp_path):
     """Direct anti-RCE check: even if an attacker plants a file
     with the correct magic + a malicious pickle, the UID/perms
     gate must block it before pickle.loads runs."""
-    import pickle, os, stat as _stat
+    import pickle
+    import os
     canary = tmp_path / "canary"
 
     class Exploit:

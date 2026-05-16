@@ -11,11 +11,8 @@ import io
 import stat
 import zipfile
 
-import pytest
-
 from core.zip.safe_member import (
     DEFAULT_MAX_MEMBER_BYTES,
-    DEFAULT_MAX_RATIO,
     UnsafeMemberReason,
     is_safe_member,
     safe_member_reason,

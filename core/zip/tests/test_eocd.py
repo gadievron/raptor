@@ -11,8 +11,6 @@ import io
 import zipfile
 from pathlib import Path
 
-import pytest
-
 from core.zip.eocd import (
     DEFAULT_MAX_ENTRIES,
     peek_total_entries,
