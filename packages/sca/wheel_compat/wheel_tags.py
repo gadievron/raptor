@@ -46,6 +46,13 @@ class WheelTag:
     libc: Optional[LibcVersion]        # glibc/musl version requirement
     os: str                            # ``linux`` / ``macosx`` / ``windows`` / ``any``
     raw: str                           # original platform-tag string
+    # ``macosx_X_Y_<arch>`` tags encode the minimum macOS version
+    # the wheel was built against. A wheel tagged ``macosx_11_0_arm64``
+    # installs on macOS 11+ and is rejected by pip on macOS 10.x. We
+    # capture it as ``(11, 0)`` so the compat checker can refuse a
+    # too-new wheel against a project pinned to an older macOS
+    # runner. ``None`` for non-macOS tags.
+    macos_version: Optional[Tuple[int, int]] = None
 
 
 # Architecture portion of platform tags. ``i686`` / ``i386`` / ``amd64``
@@ -127,6 +134,7 @@ def _parse_single_platform_tag(tag: str) -> WheelTag:
         return WheelTag(
             arch=_PLATFORM_ARCH_ALIASES.get(arch, arch),
             libc=None, os="macosx", raw=tag,
+            macos_version=(int(major), int(minor)),
         )
 
     # Windows

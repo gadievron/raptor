@@ -58,7 +58,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Optional, Set
+from typing import Iterable, Optional, Set, Tuple
 
 from packages.sca.platform_matrix.glibc_db import (
     LibcVersion,
@@ -71,7 +71,14 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class PlatformPair:
-    """One (arch, libc) combo a Python wheel must install on."""
+    """One (arch, OS-constraint) combo a Python wheel must install on.
+
+    On Linux the OS constraint is the libc family + version. On macOS
+    it's the macOS version (Apple Silicon projects pinned to a
+    specific runner version, e.g. macos-13 vs macos-14, accept
+    different wheel-tag windows). On Windows there's effectively no
+    version constraint — wheel tags only encode bitness.
+    """
 
     arch: str                  # "x86_64" | "aarch64" | "armv7l" | "i686" | …
     libc: Optional[LibcVersion]
@@ -80,8 +87,15 @@ class PlatformPair:
     # checker; surfaces in operator-facing reports so a flagged
     # incompat says WHERE the platform came from.
     source: str = ""
+    # macOS minimum version the project accepts wheels against. A
+    # project on a macos-13 runner has macos_version=(13, 0); a wheel
+    # tagged ``macosx_14_0_arm64`` is too new and gets refused. ``None``
+    # for non-macOS pairs.
+    macos_version: Optional[Tuple[int, int]] = None
 
     def as_str(self) -> str:
+        if self.macos_version is not None:
+            return f"{self.arch}/macos-{self.macos_version[0]}.{self.macos_version[1]}"
         libc = self.libc.as_str() if self.libc else "no-libc"
         return f"{self.arch}/{libc}"
 
@@ -543,6 +557,32 @@ def _extract_gha_build_push_platforms(
             ))
 
 
+# GitHub's macOS runner naming: ``macos-13``, ``macos-14``,
+# ``macos-15``, ``macos-latest``. The numeric form maps directly to
+# the macOS major version. ``macos-latest`` follows GitHub's policy
+# of the second-most-recent stable; track it loosely (current as of
+# 2026: latest = 14). If GitHub bumps this, the regression test
+# catches the lag; lift the constant when it does.
+_MACOS_RUNNER_LATEST = (14, 0)
+
+_MACOS_RUNNER_RE = re.compile(r"^macos-(\d+)(?:\.(\d+))?$")
+
+
+def _parse_macos_runner_version(runner_ref: str) -> Optional[Tuple[int, int]]:
+    """Map a GHA macOS runner label to its (major, minor) macOS
+    version. Returns ``None`` for unrecognised labels — let the
+    wheel-compat check fall back to "no version constraint" rather
+    than emit a misleading verdict."""
+    if runner_ref == "macos-latest":
+        return _MACOS_RUNNER_LATEST
+    m = _MACOS_RUNNER_RE.match(runner_ref)
+    if m is None:
+        return None
+    major = int(m.group(1))
+    minor = int(m.group(2)) if m.group(2) else 0
+    return (major, minor)
+
+
 def _add_runner(
     runner_ref: str,
     matrix: ProjectPlatformMatrix,
@@ -564,9 +604,11 @@ def _add_runner(
     if runner_ref.startswith("macos-"):
         # Modern macOS runners are aarch64 (Apple Silicon).
         arch = "aarch64"
+        macos_version = _parse_macos_runner_version(runner_ref)
         matrix.add(PlatformPair(
             arch=arch, libc=None,
             source=f"GHA runs-on: {runner_ref} in {workflow.name}",
+            macos_version=macos_version,
         ))
         return
     if libc is None:

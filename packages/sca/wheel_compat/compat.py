@@ -132,7 +132,24 @@ def _best_match(
             # Project pair is non-Linux — wheel must match the OS.
             # We don't distinguish macOS / Windows in PlatformPair
             # today; fall through and let arch match decide.
-            if w.os in ("macosx", "windows"):
+            if w.os == "windows":
+                candidates.append(w)
+                continue
+            if w.os == "macosx":
+                # macOS version gating: a project pinned to macos-13
+                # (pair.macos_version=(13, 0)) can install
+                # ``macosx_11_0_arm64`` wheels but NOT
+                # ``macosx_14_0_arm64`` wheels. When pair.macos_version
+                # is set + wheel declares a tag version, reject too-new
+                # wheels. When EITHER side is missing version info,
+                # fall through to "arch match decides" (the existing
+                # lenient behaviour).
+                if (pair.macos_version is not None
+                        and w.macos_version is not None
+                        and w.macos_version > pair.macos_version):
+                    # Wheel requires a NEWER macOS than the project
+                    # accepts — not a fit.
+                    continue
                 candidates.append(w)
             continue
         # Linux pair → wheel must be Linux + libc family + version OK.
@@ -229,15 +246,66 @@ def _verdict_for_pair(
                 matching_wheel=min_libc.raw,
             )
 
+    # macOS version gating: project on macos-13 vs a dep that only
+    # ships macosx_14+_arm64 wheels. Mirrors the libc_too_new logic
+    # above. Only fires when the project explicitly declares a
+    # macOS version (GHA macos-N runner) AND every same-arch macOS
+    # wheel requires a newer version.
+    if pair.macos_version is not None:
+        same_macos = [
+            w for w in same_arch
+            if w.os == "macosx" and w.macos_version is not None
+        ]
+        if same_macos:
+            min_required = min(
+                same_macos, key=lambda w: w.macos_version,
+            )
+            if min_required.macos_version > pair.macos_version:
+                return CompatVerdict(
+                    pair=pair, verdict="macos_too_new",
+                    reason=(
+                        f"{wm.name}=={wm.version}'s {pair.arch} wheels "
+                        f"require macOS "
+                        f"{min_required.macos_version[0]}.{min_required.macos_version[1]} "
+                        f"or newer; project pair targets macOS "
+                        f"{pair.macos_version[0]}.{pair.macos_version[1]}"
+                    ),
+                    matching_wheel=min_required.raw,
+                )
+
     # Fallback — no libc info or different family; surface generic.
     if wm.has_sdist:
-        return CompatVerdict(
-            pair=pair, verdict="sdist_only",
-            reason=(
+        # Alpine / musl projects hitting a dep that only ships
+        # manylinux (glibc) wheels are the dominant cross-family
+        # case. The default generic message ("sdist available but
+        # requires build environment") is correct but unactionable;
+        # add an Alpine-specific build-tools hint when we recognise
+        # the shape so operators get a clear next step.
+        is_alpine_glibc_only = (
+            pair.libc is not None and pair.libc.family == "musl"
+            and any(
+                w.libc is not None and w.libc.family == "glibc"
+                for w in same_arch
+            )
+        )
+        if is_alpine_glibc_only:
+            reason = (
+                f"{wm.name}=={wm.version} ships manylinux (glibc) "
+                f"wheels for {pair.arch} but no musllinux wheel "
+                f"for {pair.as_str()}. sdist available; on Alpine "
+                f"add ``apk add build-base python3-dev`` to your "
+                f"Dockerfile to enable source build, or switch "
+                f"base to a glibc image (``python:3.X-bookworm``)."
+            )
+        else:
+            reason = (
                 f"{wm.name}=={wm.version}'s {pair.arch} wheels "
                 f"don't match {pair.as_str()}; sdist available "
                 f"but requires build environment"
-            ),
+            )
+        return CompatVerdict(
+            pair=pair, verdict="sdist_only",
+            reason=reason,
         )
     return CompatVerdict(
         pair=pair, verdict="arch_gap",
@@ -273,15 +341,22 @@ _RECOMMENDATION_CACHE: Dict[
 
 
 def _matrix_cache_key(matrix: ProjectPlatformMatrix) -> FrozenSet[
-    Tuple[str, Optional[LibcVersion]]
+    Tuple[str, Optional[LibcVersion], Optional[Tuple[int, int]]]
 ]:
     """Build a cache key that ignores ``PlatformPair.source``.
 
-    Two matrices with the same ``{(arch, libc)}`` set produce the
-    same recommendation regardless of which Dockerfile / GHA / etc.
-    each pair was discovered from.
+    Two matrices with the same ``{(arch, libc, macos_version)}`` set
+    produce the same recommendation regardless of which Dockerfile /
+    GHA / etc. each pair was discovered from.
+
+    ``macos_version`` MUST be in the key — a project on macos-13 and
+    one on macos-14 have different acceptable-wheel windows
+    (macos-13 rejects ``macosx_14_arm64`` wheels). Sharing a cache
+    entry would mis-recommend.
     """
-    return frozenset((p.arch, p.libc) for p in matrix.pairs)
+    return frozenset(
+        (p.arch, p.libc, p.macos_version) for p in matrix.pairs
+    )
 
 
 def clear_recommendation_cache() -> None:

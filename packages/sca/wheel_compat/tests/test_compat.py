@@ -455,3 +455,163 @@ def test_recommendation_cache_does_not_cache_failure():
     assert find_compatible_version(pypi, "z3-solver", matrix) is None
     # Second call retries (cache wasn't poisoned) and succeeds.
     assert find_compatible_version(pypi, "z3-solver", matrix) == "4.15.8.0"
+
+
+# ---------------------------------------------------------------------------
+# macOS version gating
+# ---------------------------------------------------------------------------
+
+
+def _macos_pair(arch: str, macos_version: tuple) -> PlatformPair:
+    return PlatformPair(
+        arch=arch, libc=None, source="test",
+        macos_version=macos_version,
+    )
+
+
+def test_macos_wheel_too_new_for_project_runner():
+    """Project on macos-12, dep ships ``macosx_14_0_arm64`` wheel
+    only → verdict ``macos_too_new``. This is the silent miss the
+    pre-fix code happily said OK to."""
+    pypi = _StubPyPI({
+        "shiny-c-ext": {
+            "releases": {
+                "1.0.0": [
+                    {"filename":
+                     "shiny_c_ext-1.0.0-cp311-cp311-macosx_14_0_arm64.whl"},
+                ],
+            },
+        },
+    })
+    wm = wheel_matrix_for_version(pypi, "shiny-c-ext", "1.0.0")
+    matrix = ProjectPlatformMatrix()
+    matrix.add(_macos_pair("aarch64", (12, 0)))
+    verdicts = check_compat(matrix, wm)
+    assert len(verdicts) == 1
+    assert verdicts[0].verdict == "macos_too_new", (
+        f"expected macos_too_new, got {verdicts[0].verdict} "
+        f"({verdicts[0].reason})"
+    )
+    assert "macosx_14_0_arm64" in verdicts[0].matching_wheel
+
+
+def test_macos_wheel_matches_when_runner_is_newer():
+    """Project on macos-14, dep wheel is ``macosx_11_0_arm64`` —
+    newer macOS accepts older-tag wheels."""
+    pypi = _StubPyPI({
+        "shiny-c-ext": {
+            "releases": {
+                "1.0.0": [
+                    {"filename":
+                     "shiny_c_ext-1.0.0-cp311-cp311-macosx_11_0_arm64.whl"},
+                ],
+            },
+        },
+    })
+    wm = wheel_matrix_for_version(pypi, "shiny-c-ext", "1.0.0")
+    matrix = ProjectPlatformMatrix()
+    matrix.add(_macos_pair("aarch64", (14, 0)))
+    verdicts = check_compat(matrix, wm)
+    assert len(verdicts) == 1
+    assert verdicts[0].verdict == "ok"
+
+
+def test_macos_no_version_pin_stays_lenient():
+    """Project pair has macos_version=None (operator didn't pin a
+    GHA macos-N runner) → fall through to "arch match decides"
+    behaviour; even macosx_14 wheels match."""
+    pypi = _StubPyPI({
+        "shiny-c-ext": {
+            "releases": {
+                "1.0.0": [
+                    {"filename":
+                     "shiny_c_ext-1.0.0-cp311-cp311-macosx_14_0_arm64.whl"},
+                ],
+            },
+        },
+    })
+    wm = wheel_matrix_for_version(pypi, "shiny-c-ext", "1.0.0")
+    matrix = ProjectPlatformMatrix()
+    matrix.add(PlatformPair(arch="aarch64", libc=None, source="test"))
+    verdicts = check_compat(matrix, wm)
+    assert verdicts[0].verdict == "ok", (
+        "macos_version=None pair must stay lenient"
+    )
+
+
+def test_recommendation_cache_distinguishes_macos_versions():
+    """A project on macos-12 should get a different recommendation
+    than one on macos-14 — they accept different wheel-tag windows."""
+    from packages.sca.wheel_compat.compat import (
+        clear_recommendation_cache, find_compatible_version,
+    )
+    clear_recommendation_cache()
+    pypi = _StubPyPI({
+        "shiny-c-ext": {
+            "releases": {
+                "2.0.0": [
+                    {"filename":
+                     "shiny_c_ext-2.0.0-cp311-cp311-macosx_14_0_arm64.whl"},
+                ],
+                "1.5.0": [
+                    {"filename":
+                     "shiny_c_ext-1.5.0-cp311-cp311-macosx_11_0_arm64.whl"},
+                ],
+            },
+        },
+    })
+    matrix_12 = ProjectPlatformMatrix()
+    matrix_12.add(_macos_pair("aarch64", (12, 0)))
+    matrix_14 = ProjectPlatformMatrix()
+    matrix_14.add(_macos_pair("aarch64", (14, 0)))
+    rec_12 = find_compatible_version(pypi, "shiny-c-ext", matrix_12)
+    rec_14 = find_compatible_version(pypi, "shiny-c-ext", matrix_14)
+    # macos-12 must walk back to 1.5.0 (the macosx_11 wheel); the
+    # macos-14 user can stay on 2.0.0.
+    assert rec_12 == "1.5.0", f"macos-12 should pick 1.5.0, got {rec_12}"
+    assert rec_14 == "2.0.0", f"macos-14 should pick 2.0.0, got {rec_14}"
+    # Critically: the two results MUST differ. Pre-cache-key-fix,
+    # both shared an entry and would return the same value.
+    assert rec_12 != rec_14, (
+        "cache key collision — macos_version not in cache key"
+    )
+
+
+# ---------------------------------------------------------------------------
+# musllinux UX touch-up
+# ---------------------------------------------------------------------------
+
+
+def test_musl_project_glibc_only_dep_gets_actionable_alpine_hint():
+    """Project on Alpine (musl) + dep ships only manylinux (glibc)
+    wheels → verdict ``sdist_only`` with actionable build-tools
+    hint that mentions ``apk add build-base python3-dev``."""
+    pypi = _StubPyPI({
+        "compiled-thing": {
+            "releases": {
+                "1.0.0": [
+                    {"filename":
+                     "compiled_thing-1.0.0-cp311-cp311-manylinux_2_28_x86_64.whl"},
+                    {"filename":
+                     "compiled-thing-1.0.0.tar.gz"},
+                ],
+            },
+        },
+    })
+    wm = wheel_matrix_for_version(pypi, "compiled-thing", "1.0.0")
+    assert wm is not None and wm.has_sdist
+    matrix = ProjectPlatformMatrix()
+    # Alpine 3.19 musl
+    matrix.add(PlatformPair(
+        arch="x86_64",
+        libc=LibcVersion("musl", (1, 2, 4)),
+        source="test",
+    ))
+    verdicts = check_compat(matrix, wm)
+    assert len(verdicts) == 1
+    v = verdicts[0]
+    assert v.verdict == "sdist_only"
+    # Actionable hints — both the apk command + the base-image
+    # alternative should appear so the operator has a clear fix.
+    assert "apk add build-base" in v.reason
+    assert "python:3.X-bookworm" in v.reason
