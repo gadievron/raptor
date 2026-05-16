@@ -2610,6 +2610,922 @@ class _PhpCallGraph:
         return None
 
 
+# ===========================================================================
+# C
+# ===========================================================================
+#
+# C semantics differ from the higher-level languages above:
+#
+#   * No module system. ``#include "foo.h"`` is preprocessor text
+#     substitution; there's no qualified-name space the linker
+#     exposes by file. ``imports`` records included headers as
+#     ``basename(header) -> header path`` so the resolver can
+#     match ``foo`` → ``foo.h`` at the call site.
+#
+#   * Function pointers are first-class. ``fp()`` where ``fp`` is a
+#     local variable is statically indistinguishable from a direct
+#     call without type-resolution. Walker emits the call with chain
+#     ``[<name>]`` and adds ``INDIRECTION_FN_POINTER`` to the
+#     indirection set. Resolver downstream can downweight matches.
+#
+#   * Macros that look like calls (``BUG_ON(...)``,
+#     ``container_of(...)``) appear as ``call_expression`` to
+#     tree-sitter — the preprocessor isn't run. The walker emits
+#     them as regular calls with the macro identifier as chain.
+#     Downstream consumers can disambiguate via the inventory's
+#     macro list.
+#
+#   * No classes, no namespaces (C++ handles those separately).
+
+INDIRECTION_FN_POINTER = "fn_pointer"  # C/C++ call through a fn pointer var
+
+
+def extract_call_graph_c(content: str) -> FileCallGraph:
+    """Walk a C source string via tree-sitter-c and return its
+    :class:`FileCallGraph`.
+
+    Returns an empty graph when ``tree_sitter_c`` isn't installed or
+    the file is unparseable.
+
+    Shapes captured:
+
+      * ``#include "x.h"`` / ``#include <x.h>`` → ``imports``: the
+        basename without extension maps to the full header path.
+        ``#include "subdir/x.h"`` records both ``x`` → ``subdir/x.h``.
+      * ``foo(...)`` → chain ``["foo"]``
+      * ``obj.foo(...)`` → chain ``["obj", "foo"]``
+        (struct field access via tree-sitter ``field_expression``)
+      * ``obj->foo(...)`` → chain ``["obj", "foo"]``
+        (pointer-to-struct field access; same node type)
+      * ``a.b.c(...)`` / ``a->b->c(...)`` → chain ``["a", "b", "c"]``
+      * ``(*fp)(...)`` → chain ``[<name>]`` + ``INDIRECTION_FN_POINTER``
+      * ``fp(...)`` where ``fp`` looks like a local variable —
+        statically indistinguishable from a direct call; emitted as a
+        regular call. Downstream consumers wanting to filter
+        function-pointer-likely callees should consult the inventory
+        for whether ``fp`` is a known function name.
+
+    Limitations (deliberate, not bugs):
+
+      * Macros that expand to call expressions are not seen as such —
+        the walker reads pre-preprocessor source. ``BUG_ON(x)`` is
+        emitted as a call to ``BUG_ON``; its expansion (``do { if
+        (x) { ... } } while (0)``) is invisible.
+      * Typedef'd function-pointer types aren't traced; only the
+        syntactic ``(*fp)(...)`` form is recognised as indirection.
+      * K&R-style function definitions are accepted by tree-sitter
+        but the declarator walk only handles ANSI prototypes for
+        signature/parameters extraction.
+    """
+    try:
+        import tree_sitter_c as ts_c
+        from tree_sitter import Language, Parser
+    except ImportError:
+        logger.debug(
+            "call_graph: tree-sitter C grammar not installed; "
+            "returning empty graph",
+        )
+        return FileCallGraph()
+
+    try:
+        parser = Parser(Language(ts_c.language()))
+        tree = parser.parse(content.encode("utf-8", errors="replace"))
+    except Exception as e:                              # noqa: BLE001
+        logger.debug("call_graph: C parse failed (%s)", e)
+        return FileCallGraph()
+
+    walker = _CCallGraph()
+    walker.walk(tree.root_node)
+    return walker.graph
+
+
+class _CCallGraph:
+    """Single-pass tree-sitter-c walk.
+
+    Maintains a stack of enclosing function names so each emitted
+    ``CallSite`` knows its lexical container. The stack is keyed by
+    function identifier; for static functions and externs the
+    identifier is sufficient because C's single global namespace per
+    translation unit means name + file is unique.
+    """
+
+    # Top-level constructs.
+    _FUNCTION_DEFINITION = "function_definition"
+    _PREPROC_INCLUDE = "preproc_include"
+
+    # Declarator wrapping.
+    _FUNCTION_DECLARATOR = "function_declarator"
+    _POINTER_DECLARATOR = "pointer_declarator"
+    _PARENTHESIZED_DECLARATOR = "parenthesized_declarator"
+
+    # Expressions.
+    _CALL_EXPRESSION = "call_expression"
+    _FIELD_EXPRESSION = "field_expression"
+    _POINTER_EXPRESSION = "pointer_expression"
+    _PARENTHESIZED_EXPRESSION = "parenthesized_expression"
+
+    # Leaf names.
+    _IDENTIFIER = "identifier"
+    _FIELD_IDENTIFIER = "field_identifier"
+
+    # Header strings.
+    _STRING_LITERAL = "string_literal"
+    _SYSTEM_LIB_STRING = "system_lib_string"
+    _STRING_CONTENT = "string_content"
+
+    def __init__(self) -> None:
+        self.graph = FileCallGraph()
+        # Stack of lexically-enclosing function names. ``None`` is
+        # never pushed — file-scope ``CallSite``s (initialisers) emit
+        # with ``caller=None``.
+        self._enclosing: List[str] = []
+
+    # ------------------------------------------------------------------
+    # Walk dispatch
+    # ------------------------------------------------------------------
+
+    def walk(self, node) -> None:
+        """Pre-order traversal. Function definitions push their name
+        before children are visited; pop on the way back up."""
+        t = node.type
+        if t == self._PREPROC_INCLUDE:
+            self._visit_include(node)
+            # Includes don't have function/call children worth walking.
+            return
+        if t == self._FUNCTION_DEFINITION:
+            name = self._function_name(node)
+            if name is not None:
+                self._enclosing.append(name)
+                try:
+                    for child in node.children:
+                        self.walk(child)
+                    return
+                finally:
+                    self._enclosing.pop()
+        if t == self._CALL_EXPRESSION:
+            self._visit_call(node)
+            # Fall through so nested calls inside the arg list are visited.
+        for child in node.children:
+            self.walk(child)
+
+    # ------------------------------------------------------------------
+    # Includes
+    # ------------------------------------------------------------------
+
+    def _visit_include(self, node) -> None:
+        # tree-sitter-c structure:
+        #   preproc_include "#include" (string_literal | system_lib_string)
+        for child in node.children:
+            if child.type == self._STRING_LITERAL:
+                # "foo/bar.h" → unwrap the string_content.
+                path = self._unwrap_string(child)
+                if path:
+                    self._record_include(path)
+            elif child.type == self._SYSTEM_LIB_STRING:
+                # <stdio.h> — the whole text including angle brackets.
+                raw = child.text.decode("utf-8", errors="replace").strip()
+                if raw.startswith("<") and raw.endswith(">"):
+                    path = raw[1:-1]
+                    if path:
+                        self._record_include(path)
+
+    def _record_include(self, path: str) -> None:
+        # basename without extension as the local binding name.
+        # ``net/dst.h`` → ``dst``; ``stdio.h`` → ``stdio``.
+        from os.path import basename, splitext
+        local = splitext(basename(path))[0]
+        if local:
+            self.graph.imports[local] = path
+
+    # ------------------------------------------------------------------
+    # Calls
+    # ------------------------------------------------------------------
+
+    def _visit_call(self, node) -> None:
+        # call_expression: function (argument_list)
+        # The "function" field is the first named child before
+        # argument_list.
+        callee_node = None
+        for c in node.children:
+            if c.type == "argument_list":
+                break
+            if c.is_named:
+                callee_node = c
+                break
+        if callee_node is None:
+            return
+
+        chain, is_fn_pointer = self._callee_chain(callee_node)
+        if chain is None:
+            return
+
+        if is_fn_pointer:
+            self.graph.indirection.add(INDIRECTION_FN_POINTER)
+
+        caller = self._enclosing[-1] if self._enclosing else None
+        self.graph.calls.append(CallSite(
+            line=node.start_point[0] + 1,  # tree-sitter is 0-indexed
+            chain=chain,
+            caller=caller,
+        ))
+
+    def _callee_chain(self, node) -> Tuple[Optional[List[str]], bool]:
+        """Resolve the callee expression to an attribute chain.
+
+        Returns (chain, is_fn_pointer). ``chain`` is None when the
+        callee shape isn't statically nameable (lambda result,
+        subscripted array, complex expression).
+        """
+        # Unwrap parenthesised expressions: ``(*fp)(...)`` parses as
+        # call_expression{parenthesized_expression{pointer_expression{
+        # identifier "fp"}}}.
+        if node.type == self._PARENTHESIZED_EXPRESSION:
+            inner = self._first_named_child(node)
+            if inner is None:
+                return None, False
+            chain, _ = self._callee_chain(inner)
+            # Anything inside parens that resolved to a chain is
+            # function-pointer-shaped if we unwrap a pointer_expression
+            # next.
+            return chain, chain is not None and inner.type == self._POINTER_EXPRESSION
+
+        if node.type == self._POINTER_EXPRESSION:
+            # ``*fp`` — the pointed-to is the operand.
+            inner = self._first_named_child(node)
+            if inner is None:
+                return None, False
+            chain, _ = self._callee_chain(inner)
+            return chain, chain is not None
+
+        if node.type == self._IDENTIFIER:
+            return [node.text.decode("utf-8", errors="replace")], False
+
+        if node.type == self._FIELD_EXPRESSION:
+            return self._field_chain(node), False
+
+        return None, False
+
+    def _field_chain(self, node) -> Optional[List[str]]:
+        """Resolve ``a.b.c`` / ``a->b->c`` / mixed → ``["a","b","c"]``."""
+        parts: List[str] = []
+        cur = node
+        # field_expression: argument . | -> field
+        while cur is not None and cur.type == self._FIELD_EXPRESSION:
+            field_node = None
+            for c in cur.children:
+                if c.type == self._FIELD_IDENTIFIER:
+                    field_node = c
+            if field_node is None:
+                return None
+            parts.append(field_node.text.decode("utf-8", errors="replace"))
+            # Operand is the first named child (the "argument" side).
+            operand = None
+            for c in cur.children:
+                if c.is_named and c.type != self._FIELD_IDENTIFIER:
+                    operand = c
+                    break
+            cur = operand
+        if cur is None:
+            return None
+        if cur.type == self._IDENTIFIER:
+            parts.append(cur.text.decode("utf-8", errors="replace"))
+            return list(reversed(parts))
+        # Other tail shapes (subscript, call result) aren't statically
+        # nameable; bail out.
+        return None
+
+    # ------------------------------------------------------------------
+    # Function name extraction
+    # ------------------------------------------------------------------
+
+    def _function_name(self, fn_def_node) -> Optional[str]:
+        """Find the function identifier inside a function_definition.
+
+        The declarator subtree may be wrapped:
+          * ``int foo(...)``           → function_declarator{identifier}
+          * ``int *foo(...)``          → pointer_declarator{
+                                            function_declarator{identifier}}
+          * ``int (*foo)(...)``        → function pointer typedef — NOT a
+                                            function definition; tree-sitter
+                                            parses this differently, so we
+                                            wouldn't be in this branch.
+        """
+        for c in fn_def_node.children:
+            if not c.is_named:
+                continue
+            if c.type == self._FUNCTION_DECLARATOR:
+                return self._declarator_name(c)
+            if c.type == self._POINTER_DECLARATOR:
+                inner = self._find_function_declarator(c)
+                if inner is not None:
+                    return self._declarator_name(inner)
+        return None
+
+    def _declarator_name(self, fn_declarator_node) -> Optional[str]:
+        # function_declarator first named child is the name (identifier)
+        # or another declarator that wraps the name.
+        for c in fn_declarator_node.children:
+            if not c.is_named:
+                continue
+            if c.type == self._IDENTIFIER:
+                return c.text.decode("utf-8", errors="replace")
+            if c.type == self._PARENTHESIZED_DECLARATOR:
+                inner = self._first_named_child(c)
+                if inner is not None and inner.type == self._IDENTIFIER:
+                    return inner.text.decode("utf-8", errors="replace")
+        return None
+
+    def _find_function_declarator(self, node):
+        """Recursively descend through pointer/parenthesized wrappers
+        to the inner function_declarator."""
+        for c in node.children:
+            if c.type == self._FUNCTION_DECLARATOR:
+                return c
+            if c.type in (self._POINTER_DECLARATOR, self._PARENTHESIZED_DECLARATOR):
+                inner = self._find_function_declarator(c)
+                if inner is not None:
+                    return inner
+        return None
+
+    # ------------------------------------------------------------------
+    # Small utilities
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _first_named_child(node):
+        for c in node.children:
+            if c.is_named:
+                return c
+        return None
+
+    @staticmethod
+    def _unwrap_string(string_node) -> Optional[str]:
+        """``"foo/bar.h"`` → ``foo/bar.h``."""
+        for c in string_node.children:
+            if c.type == "string_content":
+                return c.text.decode("utf-8", errors="replace")
+        # Fallback: strip outer quotes from the raw text.
+        raw = string_node.text.decode("utf-8", errors="replace")
+        if len(raw) >= 2 and raw[0] == '"' and raw[-1] == '"':
+            return raw[1:-1]
+        return None
+
+
+# ===========================================================================
+# C++
+# ===========================================================================
+#
+# C++ extends C with classes, namespaces, qualified identifiers,
+# destructors, templates. The walker subclasses ``_CCallGraph`` and
+# overrides the dispatch + the constructs C doesn't have:
+#
+#   * ``class_specifier`` / ``struct_specifier`` → ``ClassDef`` entry,
+#     class stack pushed for inline-method calls to acquire
+#     ``receiver_class``.
+#   * In-class method definitions populate ``ClassDef.methods``.
+#   * Out-of-line definitions (``int Foo::bar() {...}``) emit calls
+#     inside ``bar`` with ``receiver_class="Foo"`` even though the
+#     class body isn't lexically enclosing — the qualified declarator
+#     carries the class.
+#   * ``qualified_identifier`` (``Foo::bar``, ``std::cout``,
+#     ``ns::sub::fn``) → chain with ``::``-joined name components.
+#   * Inside a class body, a bare ``member()`` call is implicit-this;
+#     ``this->member()`` is the explicit form. Both tag the call
+#     with ``receiver_class`` = current class.
+#   * ``~Foo`` (destructor_name) → name ``~Foo``.
+#   * ``template_declaration`` wrappers are descended into; the
+#     template itself doesn't appear in the call graph.
+#   * Lambdas are opaque: the call expression they appear in is still
+#     emitted, but a lambda *call* (``[]{...}()``) returns no chain.
+
+def extract_call_graph_cpp(content: str) -> FileCallGraph:
+    """Walk a C++ source string via tree-sitter-cpp and return its
+    :class:`FileCallGraph`.
+
+    Returns an empty graph when ``tree_sitter_cpp`` isn't installed or
+    the file is unparseable.
+
+    Shapes captured (in addition to all C shapes — see
+    :func:`extract_call_graph_c`):
+
+      * ``Foo::bar(...)`` → chain ``["Foo", "bar"]``
+      * ``std::cout`` (used as a callee chain root) → chain
+        ``["std", "cout", ...]``
+      * ``namespace ns { void f() {...} }`` → ``f`` is recorded
+        bare; we do NOT prepend namespace to the function name
+        (the inventory's resolver matches on bare names today;
+        prepending would create a second namespace-resolution
+        problem for downstream).
+      * ``class Foo { void bar(); }`` → ``ClassDef(name="Foo",
+        methods=[("bar", line), ...])`` in
+        ``FileCallGraph.classes``.
+      * ``int Foo::bar() {...}`` (out-of-line) → ``bar`` is pushed
+        as the caller name (matches the C convention); calls inside
+        bar's body tagged with ``receiver_class="Foo"``.
+      * ``this->member()`` inside class body → chain ``["this",
+        "member"]`` + ``receiver_class`` = enclosing class.
+      * Bare ``member()`` inside class body → chain ``["member"]``;
+        treated as implicit-this only when the name is in the
+        current class's method list — otherwise emitted as a plain
+        call.
+
+    Out of scope at this revision:
+
+      * Template instantiation. ``vector<int>`` callees emit the
+        bare ``vector`` (the type-args are dropped). Method-template
+        calls are emitted with the bare method name.
+      * Operator overloading. ``a + b`` doesn't emit a call to
+        ``operator+`` even though it resolves to one.
+      * Implicit conversion / constructor calls. Only syntactic
+        calls are emitted.
+      * ``using namespace ns;`` doesn't fold ``ns::`` qualifiers off
+        of subsequent calls.
+    """
+    try:
+        import tree_sitter_cpp as ts_cpp
+        from tree_sitter import Language, Parser
+    except ImportError:
+        logger.debug(
+            "call_graph: tree-sitter C++ grammar not installed; "
+            "returning empty graph",
+        )
+        return FileCallGraph()
+
+    try:
+        parser = Parser(Language(ts_cpp.language()))
+        tree = parser.parse(content.encode("utf-8", errors="replace"))
+    except Exception as e:                              # noqa: BLE001
+        logger.debug("call_graph: C++ parse failed (%s)", e)
+        return FileCallGraph()
+
+    walker = _CppCallGraph()
+    walker.walk(tree.root_node)
+    return walker.graph
+
+
+class _CppCallGraph(_CCallGraph):
+    """C++ walker. Reuses C base for includes, field expressions,
+    pointer-call indirection, and ANSI declarator name extraction;
+    adds class/struct/namespace/qualified-id handling."""
+
+    # Class-body constructs.
+    _CLASS_SPECIFIER = "class_specifier"
+    _STRUCT_SPECIFIER = "struct_specifier"
+    _FIELD_DECLARATION_LIST = "field_declaration_list"
+    _BASE_CLASS_CLAUSE = "base_class_clause"
+    _NAMESPACE_DEFINITION = "namespace_definition"
+
+    # Qualified names.
+    _QUALIFIED_IDENTIFIER = "qualified_identifier"
+    _NAMESPACE_IDENTIFIER = "namespace_identifier"
+    _TEMPLATE_TYPE = "template_type"
+    _TEMPLATE_FUNCTION = "template_function"
+    _TEMPLATE_DECLARATION = "template_declaration"
+
+    # Special name shapes.
+    _DESTRUCTOR_NAME = "destructor_name"
+    _OPERATOR_NAME = "operator_name"
+    _TYPE_IDENTIFIER = "type_identifier"
+
+    # tree-sitter-cpp emits the keyword ``this`` as its own node type
+    # named literally ``"this"``. It appears as the operand inside
+    # ``field_expression`` for ``this->member`` / ``this.member``.
+    _THIS = "this"
+
+    # In-class method declaration: ``field_declaration`` wraps a
+    # ``function_declarator``. Tracking these populates
+    # ``ClassDef.methods`` even when the body lives out-of-line.
+    _FIELD_DECLARATION = "field_declaration"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._class_stack: List[ClassDef] = []
+
+    # ------------------------------------------------------------------
+    # Walk dispatch
+    # ------------------------------------------------------------------
+
+    def walk(self, node) -> None:
+        t = node.type
+        if t == self._PREPROC_INCLUDE:
+            self._visit_include(node)
+            return
+        if t in (self._CLASS_SPECIFIER, self._STRUCT_SPECIFIER):
+            self._visit_class_specifier(node)
+            return  # children are visited inside _visit_class_specifier
+        if t == self._FUNCTION_DEFINITION:
+            self._visit_function_definition(node)
+            return
+        if t == self._CALL_EXPRESSION:
+            self._visit_call(node)
+            # Fall through — nested calls in arg list still walked.
+        for child in node.children:
+            self.walk(child)
+
+    # ------------------------------------------------------------------
+    # Class / struct
+    # ------------------------------------------------------------------
+
+    def _visit_class_specifier(self, node) -> None:
+        name = self._class_name(node)
+        if name is None:
+            # Anonymous struct/class — skip class-stack tracking but
+            # still descend so inner calls aren't lost.
+            for c in node.children:
+                self.walk(c)
+            return
+        bases = self._extract_bases(node)
+        cdef = ClassDef(
+            name=name,
+            line=node.start_point[0] + 1,
+            bases=bases,
+            nested=bool(self._class_stack) or bool(self._enclosing),
+        )
+        # Pre-pass: collect method declarations from the class body
+        # before descending. This populates ``cdef.methods`` so that
+        # in-class call-receiver inference works on the very first
+        # call site visited; without this, the methods list would
+        # only fill as inline definitions get walked, leaving early
+        # calls untagged.
+        self._collect_method_declarations(node, cdef)
+        self.graph.classes.append(cdef)
+        self._class_stack.append(cdef)
+        try:
+            for child in node.children:
+                self.walk(child)
+        finally:
+            self._class_stack.pop()
+
+    def _collect_method_declarations(self, class_node, cdef: ClassDef) -> None:
+        """Scan a ``class_specifier`` / ``struct_specifier`` body for
+        method *declarations* (in addition to any inline definitions
+        already in the body). A method declaration is a
+        ``field_declaration`` that wraps a ``function_declarator``.
+
+        Out-of-line definitions don't appear here; the in-class
+        declaration is the load-bearing record for the method's
+        existence as far as receiver-class inference is concerned.
+        """
+        body = None
+        for c in class_node.children:
+            if c.type == self._FIELD_DECLARATION_LIST:
+                body = c
+                break
+        if body is None:
+            return
+        # Methods declared inside a class body come in two shapes:
+        #   * ``field_declaration`` — normal methods (have a return
+        #     type child + function_declarator child).
+        #   * ``declaration`` — destructors and constructors (no
+        #     return type, so the grammar doesn't fit the
+        #     ``field_declaration`` shape).
+        for member in body.children:
+            if member.type not in (self._FIELD_DECLARATION, "declaration"):
+                continue
+            for sub in member.children:
+                if sub.type == self._FUNCTION_DECLARATOR:
+                    name = self._declarator_name_cpp(sub)
+                    if name:
+                        cdef.methods.append(
+                            (name, member.start_point[0] + 1),
+                        )
+
+    def _class_name(self, node) -> Optional[str]:
+        # class_specifier: "class" type_identifier base_class_clause? body
+        for c in node.children:
+            if c.type == self._TYPE_IDENTIFIER:
+                return c.text.decode("utf-8", errors="replace")
+        return None
+
+    def _extract_bases(self, node) -> List[str]:
+        """Parse ``: public Foo, protected Bar`` into ``["Foo",
+        "Bar"]``. Access specifiers are dropped; only the type names
+        survive."""
+        bases: List[str] = []
+        for c in node.children:
+            if c.type != self._BASE_CLASS_CLAUSE:
+                continue
+            for sub in c.children:
+                if not sub.is_named:
+                    continue
+                if sub.type == self._TYPE_IDENTIFIER:
+                    bases.append(sub.text.decode("utf-8", errors="replace"))
+                elif sub.type == self._QUALIFIED_IDENTIFIER:
+                    parts = self._qualified_parts(sub)
+                    if parts:
+                        bases.append("::".join(parts))
+        return bases
+
+    # ------------------------------------------------------------------
+    # Function definitions
+    # ------------------------------------------------------------------
+
+    def _visit_function_definition(self, node) -> None:
+        name = self._function_name(node)
+        qualified_class = self._qualified_class_from_declarator(node)
+        if name is None:
+            # Couldn't resolve; still descend to catch nested calls.
+            for c in node.children:
+                self.walk(c)
+            return
+
+        # In-class inline method: record method on the current class.
+        if self._class_stack and qualified_class is None:
+            self._class_stack[-1].methods.append(
+                (name, node.start_point[0] + 1),
+            )
+
+        # Push enclosing function name. For out-of-line methods, also
+        # synthesise a transient ClassDef-like context so calls inside
+        # tag receiver_class correctly. The synthetic ClassDef
+        # inherits the *real* class's methods list (looked up by name
+        # from already-collected classes); without that inheritance,
+        # bare in-class call inference (e.g. ``setup()`` inside
+        # ``Widget::run``, where ``setup`` is a sibling method) can't
+        # fire because the synthetic's methods list would be empty.
+        # Forward references (out-of-line definition appears before
+        # the class declaration) degrade to empty-methods — a real
+        # but accepted gap; the lookup falls back to the body-walk
+        # collecting the class later in the file, which then helps
+        # any subsequent definitions.
+        synthetic_class: Optional[ClassDef] = None
+        if qualified_class is not None and not self._class_in_stack(qualified_class):
+            real = self._lookup_class(qualified_class)
+            if real is not None:
+                synthetic_class = ClassDef(
+                    name=qualified_class,
+                    line=real.line,
+                    bases=list(real.bases),
+                    methods=list(real.methods),
+                    nested=real.nested,
+                )
+            else:
+                synthetic_class = ClassDef(
+                    name=qualified_class, line=0, nested=False,
+                )
+            self._class_stack.append(synthetic_class)
+        self._enclosing.append(name)
+        try:
+            for c in node.children:
+                self.walk(c)
+        finally:
+            self._enclosing.pop()
+            if synthetic_class is not None:
+                # The synthetic class is the top of the stack iff no
+                # other class_specifier pushed during the body.
+                if (self._class_stack
+                        and self._class_stack[-1] is synthetic_class):
+                    self._class_stack.pop()
+
+    def _class_in_stack(self, name: str) -> bool:
+        return any(c.name == name for c in self._class_stack)
+
+    def _lookup_class(self, name: str) -> Optional[ClassDef]:
+        """Find a previously-recorded class by name. Returns None on
+        forward references (the class hasn't been visited yet)."""
+        for c in self.graph.classes:
+            if c.name == name:
+                return c
+        return None
+
+    def _function_name(self, fn_def_node) -> Optional[str]:
+        """C++ declarators can be qualified (``Foo::bar``), template-
+        parameterised, or destructors (``~Foo``). Walk through wrapping
+        declarators to find the innermost name."""
+        for c in fn_def_node.children:
+            if not c.is_named:
+                continue
+            if c.type == self._FUNCTION_DECLARATOR:
+                return self._declarator_name_cpp(c)
+            if c.type == self._POINTER_DECLARATOR:
+                inner = self._find_function_declarator(c)
+                if inner is not None:
+                    return self._declarator_name_cpp(inner)
+        return None
+
+    def _declarator_name_cpp(self, fn_declarator_node) -> Optional[str]:
+        """Like the C version but accepts qualified_identifier
+        (returns just the trailing name), destructor_name, and
+        operator_name."""
+        for c in fn_declarator_node.children:
+            if not c.is_named:
+                continue
+            if c.type == self._IDENTIFIER:
+                return c.text.decode("utf-8", errors="replace")
+            if c.type == self._FIELD_IDENTIFIER:
+                return c.text.decode("utf-8", errors="replace")
+            if c.type == self._QUALIFIED_IDENTIFIER:
+                parts = self._qualified_parts(c)
+                if parts:
+                    return parts[-1]
+            if c.type == self._DESTRUCTOR_NAME:
+                return c.text.decode("utf-8", errors="replace")
+            if c.type == self._OPERATOR_NAME:
+                return c.text.decode("utf-8", errors="replace")
+            if c.type == self._PARENTHESIZED_DECLARATOR:
+                inner = self._first_named_child(c)
+                if inner is not None:
+                    if inner.type == self._IDENTIFIER:
+                        return inner.text.decode("utf-8", errors="replace")
+                    if inner.type == self._QUALIFIED_IDENTIFIER:
+                        parts = self._qualified_parts(inner)
+                        if parts:
+                            return parts[-1]
+        return None
+
+    def _qualified_class_from_declarator(self, fn_def_node) -> Optional[str]:
+        """If the function's declarator is ``Foo::bar`` (out-of-line
+        method), return ``"Foo"``. Otherwise None."""
+        for c in fn_def_node.children:
+            if not c.is_named:
+                continue
+            if c.type == self._FUNCTION_DECLARATOR:
+                return self._qualified_class_from_fn_declarator(c)
+            if c.type == self._POINTER_DECLARATOR:
+                inner = self._find_function_declarator(c)
+                if inner is not None:
+                    return self._qualified_class_from_fn_declarator(inner)
+        return None
+
+    def _qualified_class_from_fn_declarator(self, fn_declarator_node) -> Optional[str]:
+        for c in fn_declarator_node.children:
+            if not c.is_named:
+                continue
+            if c.type == self._QUALIFIED_IDENTIFIER:
+                parts = self._qualified_parts(c)
+                if len(parts) >= 2:
+                    # ``A::B::method`` → out-of-line method of ``B``.
+                    return parts[-2]
+        return None
+
+    # ------------------------------------------------------------------
+    # Qualified-identifier parsing
+    # ------------------------------------------------------------------
+
+    def _qualified_parts(self, qualified_node) -> List[str]:
+        """``Foo::bar`` → ``["Foo", "bar"]``;
+        ``ns::sub::fn`` → ``["ns", "sub", "fn"]``.
+
+        Tree-sitter-cpp models this recursively: ``qualified_identifier``
+        has ``namespace_identifier`` + nested ``qualified_identifier``
+        or terminal ``identifier`` / ``destructor_name`` /
+        ``field_identifier`` / ``template_function``."""
+        parts: List[str] = []
+        cur = qualified_node
+        while cur is not None and cur.type == self._QUALIFIED_IDENTIFIER:
+            # Pre-order children: namespace_identifier, then nested.
+            head = None
+            tail = None
+            for c in cur.children:
+                if not c.is_named:
+                    continue
+                if head is None:
+                    head = c
+                else:
+                    tail = c
+                    break
+            if head is None:
+                return parts
+            parts.append(self._name_token(head))
+            cur = tail
+        if cur is None:
+            return [p for p in parts if p]
+        # Terminal at the right-hand side.
+        last = self._name_token(cur)
+        if last:
+            parts.append(last)
+        return [p for p in parts if p]
+
+    def _name_token(self, node) -> str:
+        """Extract a printable name from any of the leaf-name node
+        types tree-sitter-cpp uses inside qualified expressions."""
+        if node.type in (
+            self._IDENTIFIER, self._NAMESPACE_IDENTIFIER,
+            self._TYPE_IDENTIFIER, self._FIELD_IDENTIFIER,
+            self._DESTRUCTOR_NAME, self._OPERATOR_NAME,
+        ):
+            return node.text.decode("utf-8", errors="replace")
+        if node.type in (self._TEMPLATE_TYPE, self._TEMPLATE_FUNCTION):
+            # ``vector<int>`` / ``f<T>`` — emit the bare name; drop
+            # template args (out of scope this revision).
+            for c in node.children:
+                if not c.is_named:
+                    continue
+                if c.type in (self._IDENTIFIER, self._TYPE_IDENTIFIER):
+                    return c.text.decode("utf-8", errors="replace")
+            return ""
+        return ""
+
+    # ------------------------------------------------------------------
+    # Calls (override to set receiver_class + handle qualified callees)
+    # ------------------------------------------------------------------
+
+    def _callee_chain(self, node) -> Tuple[Optional[List[str]], bool]:
+        # Extension: qualified_identifier as a callee.
+        if node.type == self._QUALIFIED_IDENTIFIER:
+            parts = self._qualified_parts(node)
+            return (parts if parts else None), False
+        if node.type == self._FIELD_EXPRESSION:
+            # Override C base: field_expression in C++ may root on
+            # ``this`` (own node type) rather than an identifier.
+            return self._field_chain_cpp(node), False
+        return super()._callee_chain(node)
+
+    def _field_chain_cpp(self, node) -> Optional[List[str]]:
+        """C++ ``a.b.c`` / ``a->b->c`` / ``this->member`` resolution.
+
+        Same as the C base's ``_field_chain`` but accepts ``this`` as
+        a terminal (rendered as the literal string ``"this"`` in the
+        chain), and handles a qualified_identifier at the root
+        (``ns::var.field`` is legal C++)."""
+        parts: List[str] = []
+        cur = node
+        while cur is not None and cur.type == self._FIELD_EXPRESSION:
+            field_node = None
+            for c in cur.children:
+                if c.type == self._FIELD_IDENTIFIER:
+                    field_node = c
+            if field_node is None:
+                return None
+            parts.append(field_node.text.decode("utf-8", errors="replace"))
+            operand = None
+            for c in cur.children:
+                if c.is_named and c.type != self._FIELD_IDENTIFIER:
+                    operand = c
+                    break
+            cur = operand
+        if cur is None:
+            return None
+        if cur.type == self._IDENTIFIER:
+            parts.append(cur.text.decode("utf-8", errors="replace"))
+            return list(reversed(parts))
+        if cur.type == self._THIS:
+            parts.append("this")
+            return list(reversed(parts))
+        if cur.type == self._QUALIFIED_IDENTIFIER:
+            head = self._qualified_parts(cur)
+            if not head:
+                return None
+            return head + list(reversed(parts))
+        return None
+
+    def _visit_call(self, node) -> None:
+        callee_node = None
+        for c in node.children:
+            if c.type == "argument_list":
+                break
+            if c.is_named:
+                callee_node = c
+                break
+        if callee_node is None:
+            return
+
+        chain, is_fn_pointer = self._callee_chain(callee_node)
+        if chain is None:
+            return
+
+        if is_fn_pointer:
+            self.graph.indirection.add(INDIRECTION_FN_POINTER)
+
+        caller = self._enclosing[-1] if self._enclosing else None
+        receiver_class = self._infer_receiver_class(chain)
+
+        self.graph.calls.append(CallSite(
+            line=node.start_point[0] + 1,
+            chain=chain,
+            caller=caller,
+            receiver_class=receiver_class,
+        ))
+
+    def _infer_receiver_class(self, chain: List[str]) -> Optional[str]:
+        """Tag ``receiver_class`` when the callee shape pins it.
+
+        Rules (deliberately narrow to avoid wrong tags):
+          * ``this->member`` (chain == ["this", X]) → current class
+          * Inside class body, bare ``X()`` where X is in the
+            class's method list → current class
+          * Out-of-line methods (synthetic class on stack) — same
+            rules apply
+
+        We do NOT tag ``obj.method()`` calls (chain length >= 2 with
+        non-``this`` root) — the receiver type isn't statically
+        resolvable from this walk.
+        """
+        if not self._class_stack:
+            return None
+        top = self._class_stack[-1]
+        if top.nested:
+            # Mirrors Python walker's conservatism for nested classes.
+            return None
+        if len(chain) == 2 and chain[0] == "this":
+            return top.name
+        if len(chain) == 1:
+            method_names = {m[0] for m in top.methods}
+            if chain[0] in method_names:
+                return top.name
+        return None
+
+
 __all__ = [
     "CallSite",
     "FileCallGraph",
@@ -2617,10 +3533,13 @@ __all__ = [
     "INDIRECTION_DUNDER_IMPORT",
     "INDIRECTION_DYNAMIC_IMPORT",
     "INDIRECTION_EVAL",
+    "INDIRECTION_FN_POINTER",
     "INDIRECTION_GETATTR",
     "INDIRECTION_IMPORTLIB",
     "INDIRECTION_REFLECT",
     "INDIRECTION_WILDCARD_IMPORT",
+    "extract_call_graph_c",
+    "extract_call_graph_cpp",
     "extract_call_graph_csharp",
     "extract_call_graph_go",
     "extract_call_graph_java",
