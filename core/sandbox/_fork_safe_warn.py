@@ -16,6 +16,12 @@ Prefix convention: `RAPTOR: ` matches the in-tree style already used at
 core/sandbox/landlock.py:449,453,499,571,587 / seccomp.py / _spawn.py /
 ptrace_probe.py. Operators monitoring sandbox stderr can grep for a
 single prefix across all degraded-mode signals.
+
+This is the W35.C precedent API (single-arg bytes). W36.D cherry-picks
+this helper for rlimit-parity DiD wires; W36.E.1 wires it at the
+mount_ns + preexec DiD sites. Fail-CLOSED sites at landlock / mount_ns /
+preexec use direct ``os.write(2, ...) + os._exit(N)`` per the design
+intent above.
 """
 
 import os

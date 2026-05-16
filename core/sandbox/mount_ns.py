@@ -36,6 +36,8 @@ import ctypes
 import os
 from typing import Iterable, Optional
 
+from ._fork_safe_warn import warn_post_fork
+
 # Linux mount(2) flag bits (from <linux/mount.h>). Values match the
 # kernel UAPI — do not "fix" without checking <sys/mount.h> on target.
 # In particular: MS_PRIVATE = 1<<18 (0x40000), NOT 1<<17 (0x20000 is
@@ -253,8 +255,12 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
         # flag is defence-in-depth rather than the primary control.
         try:
             _mount(target, inside, None, MS_REMOUNT | MS_BIND | MS_RDONLY)
-        except OSError:
-            pass
+        except OSError as exc:
+            warn_post_fork(
+                b"mount_ns: target remount-ro failed (errno=%d); "
+                b"relying on Landlock for read-only enforcement\n"
+                % (exc.errno or 0)
+            )
     if output and output != target and not _shadows_per_ns(output):
         inside = f"{root}{output}"
         os.makedirs(inside, exist_ok=True)
@@ -299,13 +305,48 @@ def setup_mount_ns(target: Optional[str], output: Optional[str],
                 _mount(path, inside, None, MS_BIND)
                 try:
                     _mount(path, inside, None, MS_REMOUNT | MS_BIND | MS_RDONLY)
+                except OSError as exc:
+                    # bytes(path) keeps the message fork-safe (no f-string
+                    # allocation pulling locks); fallback to a placeholder
+                    # if encoding ever fails. errno also encoded as integer.
+                    try:
+                        _path_b = path.encode("utf-8", errors="replace")
+                    except Exception:
+                        _path_b = b"<unencodable>"
+                    warn_post_fork(
+                        b"mount_ns: extra_ro_paths remount-ro failed for "
+                        + _path_b
+                        + b" (errno=%d); relying on Landlock\n"
+                        % (exc.errno or 0)
+                    )
+            except OSError as exc:
+                # Caller explicitly named this path via readable_paths
+                # in the public sandbox API — silently dropping it
+                # leaves a hole the caller did not authorise (the path
+                # is either missing from the sandbox, or worse, still
+                # writable when the caller asked for read-only). Fail-
+                # closed so the parent observes the failed setup
+                # instead of getting a degraded sandbox masquerading
+                # as the requested one.
+                #
+                # Per W35.C convention, fail-CLOSED sites use direct
+                # os.write(2, ...) + os._exit(N) rather than the
+                # warn_post_fork helper (helper is reserved for
+                # DiD warn-only sites).
+                try:
+                    _path_b = path.encode("utf-8", errors="replace")
+                except Exception:
+                    _path_b = b"<unencodable>"
+                try:
+                    os.write(
+                        2,
+                        b"RAPTOR: mount_ns: extra_ro_paths bind failed for "
+                        + _path_b
+                        + b" (errno=%d), exiting\n" % (exc.errno or 0),
+                    )
                 except OSError:
                     pass
-            except OSError:
-                # Best-effort: skip any path that fails to bind. The
-                # caller's sandbox just won't see it — no harder than
-                # if the path didn't exist on the host.
-                continue
+                os._exit(126)
 
     # 9. pivot_root. put_old must be a directory INSIDE new_root.
     os.chdir(root)
