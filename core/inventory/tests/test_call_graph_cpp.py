@@ -702,3 +702,133 @@ class TestDependentNameDisambiguation:
         )
         chains = [c.chain for c in g.calls]
         assert ["c", "put"] in chains
+
+
+# ---------------------------------------------------------------------------
+# callers_of / callees_of index-side fast-path
+# ---------------------------------------------------------------------------
+
+
+class TestCallersCalleesIndexParity:
+    """Index-side equivalent of the function_called
+    fully-qualified-call fast-path: C++ ``ns::Util::helper()`` chains
+    land in the definitive forward/reverse graph (not just
+    method_match_overinclusive) when the dotted chain matches a
+    seeded ``qualified_to_internal`` entry. Without this, callers_of
+    returned the C++ caller in method_match instead of definitive."""
+
+    def test_callers_of_namespace_class_method_definitive(self):
+        from core.inventory.reachability import (
+            callers_of, InternalFunction,
+        )
+
+        util = extract_call_graph_cpp(
+            "namespace ns {\n"
+            "    class Util {\n"
+            "    public:\n"
+            "        static void helper() {}\n"
+            "    };\n"
+            "}\n"
+        ).to_dict()
+        caller = extract_call_graph_cpp(
+            "void use() { ns::Util::helper(); }\n"
+        ).to_dict()
+        inv = {"files": [
+            {"path": "src/util.cpp", "language": "cpp",
+             "call_graph": util,
+             "items": [{"kind": "function", "name": "helper",
+                        "line_start": 4}]},
+            {"path": "src/main.cpp", "language": "cpp",
+             "call_graph": caller,
+             "items": [{"kind": "function", "name": "use",
+                        "line_start": 1}]},
+        ]}
+        target = InternalFunction(
+            file_path="src/util.cpp", name="helper", line=4,
+        )
+        r = callers_of(inv, target, exclude_test_files=False)
+        # Caller must be in definitive, not method_match.
+        assert any(
+            c.file_path == "src/main.cpp" for c in r.definitive
+        ), (
+            f"caller not in definitive — "
+            f"definitive={r.definitive}, "
+            f"method_match={r.method_match_overinclusive}"
+        )
+
+    def test_callees_of_namespace_class_method_definitive(self):
+        """Symmetric: callees_of(use) lists ns::Util::helper as
+        a definitive callee."""
+        from core.inventory.reachability import (
+            callees_of, InternalFunction,
+        )
+
+        util = extract_call_graph_cpp(
+            "namespace ns {\n"
+            "    class Util {\n"
+            "    public:\n"
+            "        static void helper() {}\n"
+            "    };\n"
+            "}\n"
+        ).to_dict()
+        caller = extract_call_graph_cpp(
+            "void use() { ns::Util::helper(); }\n"
+        ).to_dict()
+        inv = {"files": [
+            {"path": "src/util.cpp", "language": "cpp",
+             "call_graph": util,
+             "items": [{"kind": "function", "name": "helper",
+                        "line_start": 4}]},
+            {"path": "src/main.cpp", "language": "cpp",
+             "call_graph": caller,
+             "items": [{"kind": "function", "name": "use",
+                        "line_start": 1}]},
+        ]}
+        source = InternalFunction(
+            file_path="src/main.cpp", name="use", line=1,
+        )
+        r = callees_of(inv, source, exclude_test_files=False)
+        assert any(
+            getattr(c, "file_path", None) == "src/util.cpp"
+            for c in r.definitive
+        )
+
+    def test_partial_chain_stays_in_method_match(self):
+        """Chain ``["Util", "helper"]`` (no namespace prefix) does
+        NOT match the seeded ``ns.Util.helper`` qualified name —
+        falls through to method_match_overinclusive. Strict
+        equality guards against over-promoting partial matches."""
+        from core.inventory.reachability import (
+            callers_of, InternalFunction,
+        )
+
+        util = extract_call_graph_cpp(
+            "namespace ns {\n"
+            "    class Util {\n"
+            "    public:\n"
+            "        static void helper() {}\n"
+            "    };\n"
+            "}\n"
+        ).to_dict()
+        caller = extract_call_graph_cpp(
+            "void use() { Util::helper(); }\n"
+        ).to_dict()
+        inv = {"files": [
+            {"path": "src/util.cpp", "language": "cpp",
+             "call_graph": util,
+             "items": [{"kind": "function", "name": "helper",
+                        "line_start": 4}]},
+            {"path": "src/main.cpp", "language": "cpp",
+             "call_graph": caller,
+             "items": [{"kind": "function", "name": "use",
+                        "line_start": 1}]},
+        ]}
+        target = InternalFunction(
+            file_path="src/util.cpp", name="helper", line=4,
+        )
+        r = callers_of(inv, target, exclude_test_files=False)
+        # Partial chain stays in method_match (over-inclusive),
+        # NOT promoted to definitive.
+        assert not any(
+            c.file_path == "src/main.cpp" for c in r.definitive
+        )

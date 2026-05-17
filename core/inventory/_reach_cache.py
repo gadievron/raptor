@@ -66,7 +66,14 @@ logger = logging.getLogger(__name__)
 # class-qualified queries that the new build would have resolved
 # to ``CALLED``/``NOT_CALLED`` — a real correctness regression on
 # stale caches, so this is a bump-worthy change.
-_CACHE_VERSION = 4
+#
+# V5 (2026-05-17): index pass-2 fully-qualified-call fast-path
+# promotes C++ ``ns::Util::helper()`` chains (and any other
+# language's fully-qualified shape) from method_match_overinclusive
+# to definitive forward/reverse edges. An old V4 cache would have
+# returned these callers in ``method_match_overinclusive`` instead
+# of ``definitive`` — same correctness shift, bump for parity.
+_CACHE_VERSION = 5
 
 _CACHE_DIR = Path.home() / ".cache" / "raptor" / "reachability"
 
@@ -75,7 +82,7 @@ _CACHE_DIR = Path.home() / ".cache" / "raptor" / "reachability"
 # the same name. Also doubles as a cheap "is this a raptor cache
 # file" check before handing bytes to ``pickle.load``. The numeric
 # suffix tracks ``_CACHE_VERSION``.
-_HEADER_MAGIC = b"RAPTOR-REACHABILITY-CACHE-V4\n"
+_HEADER_MAGIC = b"RAPTOR-REACHABILITY-CACHE-V5\n"
 
 
 def compute_fingerprint(inventory: Dict[str, Any]) -> Optional[str]:
