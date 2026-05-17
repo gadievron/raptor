@@ -20,6 +20,7 @@ from core.llm.providers import LLMProvider
 from core.run.safe_io import safe_run_mkdir
 from packages.web.client import WebClient
 from packages.web.crawler import WebCrawler
+from packages.web.ffuf import FfufConfig, FfufRunner
 from packages.web.fuzzer import WebFuzzer
 
 logger = get_logger()
@@ -37,16 +38,19 @@ class WebScanner:
         reveal_secrets: bool = False,
         max_depth: int = 3,
         max_pages: int = 100,
+        ffuf_config: Optional[FfufConfig] = None,
     ):
         self.base_url = base_url
         self.llm = llm
         self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
+        self.ffuf_config = ffuf_config
 
         # Initialize components
         self.client = WebClient(base_url, verify_ssl=verify_ssl, reveal_secrets=reveal_secrets)
         self.crawler = WebCrawler(self.client, max_depth=max_depth, max_pages=max_pages)
         self.fuzzer = WebFuzzer(self.client, llm) if llm else None
+        self.ffuf = FfufRunner(base_url, out_dir, reveal_secrets=reveal_secrets) if ffuf_config else None
 
         logger.info(
             f"Web scanner initialized for {base_url} "
@@ -103,6 +107,12 @@ class WebScanner:
         else:
             logger.warning("Phase 2: Skipping fuzzing (no LLM available)")
 
+        # Optional Phase 2b: explicit ffuf content discovery.
+        ffuf_results = None
+        if self.ffuf and self.ffuf_config:
+            logger.info("Phase 2b: ffuf content discovery")
+            ffuf_results = self.ffuf.run(self.ffuf_config)
+
         # Phase 3: Generate Report
         logger.info("Phase 3: Generating Security Report")
         report = {
@@ -111,6 +121,8 @@ class WebScanner:
             'findings': fuzzing_findings,
             'total_vulnerabilities': len(fuzzing_findings),
         }
+        if ffuf_results is not None:
+            report['ffuf'] = ffuf_results
 
         # Save report
         report_file = self.out_dir / "web_scan_report.json"
@@ -122,11 +134,16 @@ class WebScanner:
         return report
 
 
-def main():
-    """CLI entry point for web scanner."""
+def build_arg_parser():
+    """Build the CLI parser for the web scanner.
+
+    Extracted from main() so tests can drive the argparse plumbing
+    independently. Matches the function shape on origin/main so the
+    ffuf-CLI tests (test_scanner_cli_wires_all_ffuf_options /
+    test_scanner_cli_can_omit_optional_ffuf_match_and_filter_status)
+    keep working after the merge restore.
+    """
     import argparse
-    import time
-    from core.config import RaptorConfig
 
     parser = argparse.ArgumentParser(
         description="RAPTOR Web Application Security Scanner",
@@ -147,12 +164,90 @@ Examples:
     parser.add_argument("--max-pages", type=int, default=100, help="Maximum pages to crawl (default: 100)")
     parser.add_argument("--insecure", action="store_true", help="Skip SSL/TLS certificate verification (INSECURE but you know what you are doing, right?)")
     parser.add_argument(
+        "--ffuf-wordlist",
+        type=Path,
+        help="Opt-in ffuf content discovery wordlist. ffuf is only run when this is set.",
+    )
+    parser.add_argument(
+        "--ffuf-path",
+        default="FUZZ",
+        help="In-scope ffuf URL path/template containing FUZZ (default: FUZZ)",
+    )
+    parser.add_argument("--ffuf-bin", default="ffuf", help="ffuf binary name/path (default: ffuf)")
+    parser.add_argument("--ffuf-threads", type=int, default=10, help="ffuf worker threads (default: 10)")
+    parser.add_argument("--ffuf-rate", type=int, help="Optional ffuf request rate limit")
+    parser.add_argument("--ffuf-timeout", type=int, default=30, help="ffuf per-request timeout in seconds (default: 30)")
+    parser.add_argument(
+        "--ffuf-report-limit",
+        type=int,
+        default=50,
+        help="Maximum ffuf matches to copy into web_scan_report.json; raw JSON is always kept (default: 50)",
+    )
+    parser.add_argument(
+        "--ffuf-max-runtime",
+        type=int,
+        default=300,
+        help="Maximum sandboxed ffuf runtime in seconds (default: 300)",
+    )
+    parser.add_argument(
+        "--ffuf-no-auto-calibration",
+        action="store_true",
+        help="Disable ffuf auto-calibration (-ac is enabled by default)",
+    )
+    parser.add_argument(
+        "--ffuf-match-status",
+        default="200,204,301,302,307,401,403,405,500",
+        help="ffuf match status codes for -mc; pass an empty string to omit -mc",
+    )
+    parser.add_argument(
+        "--ffuf-filter-status",
+        default="404",
+        help="ffuf filter status codes for -fc; pass an empty string to omit -fc",
+    )
+    parser.add_argument(
+        "--ffuf-filter-size",
+        type=int,
+        help="Optional ffuf response size filter for -fs",
+    )
+    parser.add_argument(
         "--reveal-secrets",
         action="store_true",
         help="Preserve secrets in web artifacts for local debugging; defaults to redaction",
     )
+    return parser
 
+
+def build_ffuf_config(args) -> Optional[FfufConfig]:
+    """Convert parsed CLI args into an optional ffuf configuration.
+
+    Returns None when --ffuf-wordlist isn't passed (ffuf is opt-in).
+    """
+    if not args.ffuf_wordlist:
+        return None
+    return FfufConfig(
+        wordlist=args.ffuf_wordlist,
+        path_template=args.ffuf_path,
+        threads=args.ffuf_threads,
+        rate=args.ffuf_rate,
+        timeout=args.ffuf_timeout,
+        max_runtime=args.ffuf_max_runtime,
+        report_limit=args.ffuf_report_limit,
+        binary=args.ffuf_bin,
+        auto_calibration=not args.ffuf_no_auto_calibration,
+        match_status=args.ffuf_match_status or None,
+        filter_status=args.ffuf_filter_status or None,
+        filter_size=args.ffuf_filter_size,
+    )
+
+
+def main():
+    """CLI entry point for web scanner."""
+    import time
+    from core.config import RaptorConfig
+
+    parser = build_arg_parser()
     args = parser.parse_args()
+    ffuf_config = build_ffuf_config(args)
 
     # Determine output directory
     if args.out:
@@ -198,6 +293,7 @@ Examples:
         reveal_secrets=True if args.reveal_secrets else False,
         max_depth=args.max_depth,
         max_pages=args.max_pages,
+        ffuf_config=ffuf_config,
     )
 
     try:
