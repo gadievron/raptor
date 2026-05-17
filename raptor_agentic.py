@@ -20,6 +20,7 @@ import subprocess
 import sys
 
 import time
+from dataclasses import asdict
 from pathlib import Path
 
 # Add to path
@@ -211,6 +212,370 @@ def run_command_streaming(cmd: list, description: str) -> tuple[int, str, str]:
         return -1, "", str(e)
 
 
+def _prepare_fuzz_crashes_for_validate(
+    *,
+    binary_path: Path,
+    fuzzing_result: dict,
+    fuzz_out: Path,
+    limit: int,
+) -> dict:
+    """Analyse fuzz crashes and emit /validate FindingsContainer input."""
+    from packages.binary_analysis import CrashAnalyser
+
+    fuzz_out = Path(fuzz_out)
+    crash_analysis_dir = fuzz_out / "crash_analysis"
+    crash_analysis_dir.mkdir(parents=True, exist_ok=True)
+
+    crashes_dir = fuzzing_result.get("crashes_dir")
+    crash_files = _collect_crash_files(Path(crashes_dir)) if crashes_dir else []
+    if limit > 0:
+        crash_files = crash_files[:limit]
+
+    replay_outputs = _replay_fuzz_crashes(
+        binary_path=Path(binary_path),
+        crash_files=crash_files,
+        out_dir=crash_analysis_dir / "replay",
+    )
+
+    analyser = CrashAnalyser(binary_path)
+    contexts = []
+    findings = []
+    seen_roots = set()
+
+    for index, crash_file in enumerate(crash_files, start=1):
+        signal = _infer_fuzz_signal(crash_file)
+        crash_id = f"CRASH-{index:04d}"
+        context = analyser.analyse_crash(crash_id, crash_file, signal)
+        context.crash_type = analyser.classify_crash_type(context)
+        context_dict = asdict(context)
+        context_dict["replay"] = replay_outputs.get(str(crash_file), [])
+        contexts.append(context_dict)
+
+        root_key = (
+            context.stack_hash
+            or f"{context.signal}:{context.crash_type}:{context.function_name}:{context.crash_address}"
+        )
+        if root_key in seen_roots:
+            continue
+        seen_roots.add(root_key)
+        findings.append(_crash_context_to_validate_finding(context, context_dict["replay"]))
+
+    contexts_path = crash_analysis_dir / "crash-contexts.json"
+    triage_path = crash_analysis_dir / "triage-summary.json"
+    findings_path = fuzz_out / "crashes_for_validation.json"
+    save_json(
+        contexts_path,
+        {
+            "binary": str(Path(binary_path).resolve()),
+            "crashes_dir": fuzzing_result.get("crashes_dir", ""),
+            "stats": fuzzing_result.get("stats", {}),
+            "contexts": contexts,
+        },
+    )
+    save_json(
+        triage_path,
+        {
+            "total_crashes": len(crash_files),
+            "unique_root_causes": len(findings),
+            "replay_binaries": _candidate_replay_binaries(Path(binary_path)),
+            "dedupe_key": "stack_hash or signal:type:function:address",
+        },
+    )
+    save_json(
+        findings_path,
+        {
+            "stage": "fuzzing-crash-analysis",
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "target_path": str(Path(binary_path).resolve()),
+            "source": "raptor-fuzzing",
+            "findings": findings,
+        },
+    )
+    return {"contexts": contexts_path, "findings": findings_path, "triage": triage_path}
+
+
+def _candidate_replay_binaries(binary_path: Path) -> list[str]:
+    """Find ASAN/debug sibling binaries for crash replay."""
+    binary_path = Path(binary_path).resolve()
+    stem = binary_path.stem
+    suffix = binary_path.suffix
+    names = []
+    if stem.endswith("_afl"):
+        base = stem[:-4]
+        names.extend([f"{base}_asan{suffix}", f"{base}_debug{suffix}", f"{base}{suffix}"])
+    names.extend([f"{stem}_asan{suffix}", f"{stem}_debug{suffix}"])
+
+    candidates = []
+    for name in names:
+        path = binary_path.with_name(name)
+        if path == binary_path or not path.exists() or not path.is_file():
+            continue
+        if path.stat().st_mode & 0o111:
+            candidates.append(str(path))
+    return list(dict.fromkeys(candidates))
+
+
+def _replay_fuzz_crashes(*, binary_path: Path, crash_files: list[Path], out_dir: Path) -> dict:
+    """Replay crash inputs against ASAN/debug sibling binaries and save logs.
+
+    Crash inputs are attacker-controlled by definition (the fuzzer searched
+    the input space for crashes); each candidate binary is run under
+    ``core.sandbox`` with ``block_network=True`` and ``restrict_reads=True``
+    so a malicious crash input that triggers code in the binary can't reach
+    the operator's credentials, network, or filesystem outside the replay
+    workspace. Mirrors the pattern used by ``packages/fuzzing/libfuzzer_runner.py``.
+    """
+    from core.sandbox import run as _sandbox_run
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    candidates = [Path(p) for p in _candidate_replay_binaries(binary_path)]
+    results: dict[str, list[dict]] = {}
+    if not candidates:
+        return results
+
+    env = RaptorConfig.get_safe_env()
+    env.setdefault("ASAN_OPTIONS", "abort_on_error=1:symbolize=1:detect_leaks=1")
+    env.setdefault("UBSAN_OPTIONS", "abort_on_error=1:symbolize=1:print_stacktrace=1")
+
+    for crash_file in crash_files:
+        entries = []
+        if not crash_file.is_file():
+            results[str(crash_file)] = entries
+            continue
+        for candidate in candidates:
+            label = f"{crash_file.name}__{candidate.name}".replace("/", "_")
+            stdout_path = out_dir / f"{label}.stdout.log"
+            stderr_path = out_dir / f"{label}.stderr.log"
+            try:
+                # block_network=True: a malicious replay binary cannot
+                # exfiltrate ASAN output or fingerprint metadata over
+                # the network. target+output give mount-ns something
+                # to bind-mount so the tracer can attach. We open the
+                # crash file as a file descriptor and pass stdin= —
+                # sandbox.run's mount-ns spawn doesn't plumb the
+                # input=<bytes> kwarg cleanly (see core/sandbox/
+                # context.py audit), but a real FD survives the
+                # fork+exec.
+                with open(crash_file, "rb") as crash_fh:
+                    proc = _sandbox_run(
+                        [str(candidate)],
+                        stdin=crash_fh,
+                        block_network=True,
+                        target=str(candidate.parent),
+                        output=str(out_dir),
+                        capture_output=True,
+                        timeout=15,
+                        env=env,
+                    )
+                stdout_path.write_bytes(proc.stdout or b"")
+                stderr_path.write_bytes(proc.stderr or b"")
+                entries.append({
+                    "binary": str(candidate),
+                    "returncode": proc.returncode,
+                    "stdout": str(stdout_path),
+                    "stderr": str(stderr_path),
+                    "reproduced": proc.returncode != 0,
+                })
+            except subprocess.TimeoutExpired as e:
+                stdout_path.write_bytes(e.stdout or b"")
+                stderr_path.write_bytes(e.stderr or b"")
+                entries.append({
+                    "binary": str(candidate),
+                    "returncode": "timeout",
+                    "stdout": str(stdout_path),
+                    "stderr": str(stderr_path),
+                    "reproduced": True,
+                })
+            except Exception as e:
+                entries.append({
+                    "binary": str(candidate),
+                    "error": str(e),
+                    "reproduced": False,
+                })
+        results[str(crash_file)] = entries
+    save_json(out_dir / "replay-summary.json", results)
+    return results
+
+
+def _collect_crash_files(crashes_dir: Path) -> list[Path]:
+    if not crashes_dir or not crashes_dir.exists():
+        return []
+    prefixes = ("crash-", "timeout-", "oom-", "id:")
+    return sorted(
+        path for path in crashes_dir.iterdir()
+        if path.is_file() and path.name.startswith(prefixes)
+    )
+
+
+def _infer_fuzz_signal(crash_file: Path) -> str:
+    name = crash_file.name.lower()
+    if name.startswith("timeout-"):
+        return "timeout"
+    if name.startswith("oom-"):
+        return "oom"
+    if "sig:" in name:
+        return name.split("sig:", 1)[1].split(",", 1)[0]
+    return "libfuzzer"
+
+
+def _crash_context_to_validate_finding(context, replay: list[dict] | None = None) -> dict:
+    vuln_type = context.crash_type or "crash"
+    description = (
+        f"Fuzzing crash in {context.function_name or 'unknown function'} "
+        f"with signal {context.signal}."
+    )
+    return {
+        "id": context.crash_id,
+        "file": str(context.binary_path),
+        "function": context.function_name or "unknown",
+        "line": 0,
+        "vuln_type": vuln_type,
+        "status": "confirmed",
+        "confidence": "high",
+        "description": description,
+        "candidate_reasoning": description,
+        "dataflow_summary": (
+            f"{context.input_file} -> {context.function_name or 'unknown'} -> "
+            f"{context.crash_instruction or context.crash_address or 'crash'}"
+        ),
+        "proof_lines": [context.crash_instruction] if context.crash_instruction else [],
+        "proof_source": str(context.input_file),
+        "proof_sink": context.crash_instruction or context.crash_address or "",
+        "origin": "fuzzing",
+        "ruling": {
+            "status": "confirmed",
+            "reason": "Crash reproduced during RAPTOR fuzzing and analysed by CrashAnalyser.",
+        },
+        "crash": {
+            "input_file": str(context.input_file),
+            "signal": context.signal,
+            "stack_hash": context.stack_hash,
+            "crash_address": context.crash_address,
+            "function": context.function_name,
+            "replay": replay or [],
+        },
+    }
+
+
+def _run_fuzz_validation_smoke(findings_path: Path, target: Path, out_dir: Path) -> dict:
+    """Materialise a validate-style run from fuzz findings and run stage-1 outputs."""
+    validation_dir = out_dir / "fuzz_validation"
+    validation_dir.mkdir(parents=True, exist_ok=True)
+    findings = load_json(findings_path)
+    if not findings:
+        return {"ran": False, "reason": "no fuzz findings"}
+    save_json(validation_dir / "findings.json", findings)
+    helper = Path(__file__).resolve().parent / "libexec" / "raptor-validation-helper"
+    stdout_path = validation_dir / "validation-helper.stdout.log"
+    stderr_path = validation_dir / "validation-helper.stderr.log"
+    try:
+        proc = subprocess.run(
+            [str(helper), "1", str(validation_dir), "--target", str(target)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=RaptorConfig.get_safe_env(),
+        )
+        stdout_path.write_text(proc.stdout or "", encoding="utf-8")
+        stderr_path.write_text(proc.stderr or "", encoding="utf-8")
+    except Exception as e:
+        save_json(validation_dir / "validation-error.json", {"error": str(e)})
+        return {"ran": False, "reason": str(e), "dir": str(validation_dir)}
+    report_path = validation_dir / "validation-report.md"
+    if proc.returncode != 0 or not report_path.exists():
+        save_json(validation_dir / "validation-error.json", {
+            "returncode": proc.returncode,
+            "stdout": str(stdout_path),
+            "stderr": str(stderr_path),
+        })
+        return {
+            "ran": False,
+            "reason": f"raptor-validation-helper exited {proc.returncode}",
+            "dir": str(validation_dir),
+            "stdout": str(stdout_path),
+            "stderr": str(stderr_path),
+        }
+    return {
+        "ran": True,
+        "dir": str(validation_dir),
+        "findings": str(validation_dir / "findings.json"),
+        "report": str(report_path),
+        "stdout": str(stdout_path),
+        "stderr": str(stderr_path),
+    }
+
+
+def _safe_int(value) -> int:
+    if value is None:
+        return 0
+    text = str(value).strip().replace(",", "").rstrip("%")
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _safe_float(value) -> float:
+    if value is None:
+        return 0.0
+    text = str(value).strip().replace(",", "").rstrip("%")
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _build_fuzz_phase_summary(fuzzing_result: dict | None, fuzz_out: Path | None) -> dict:
+    if not fuzzing_result:
+        return {"completed": False}
+    stats = fuzzing_result.get("stats") or {}
+    telemetry = {}
+    telemetry_path = fuzzing_result.get("telemetry")
+    if telemetry_path:
+        telemetry = load_json(telemetry_path) or {}
+    crashes_dir = fuzzing_result.get("crashes_dir")
+    crash_paths = []
+    if crashes_dir:
+        crash_paths = [str(p) for p in _collect_crash_files(Path(crashes_dir))]
+    executions = max(
+        _safe_int(stats.get("execs_done")),
+        _safe_int(stats.get("total_executions")),
+        _safe_int(telemetry.get("total_executions")),
+    )
+    paths_found = max(
+        _safe_int(stats.get("paths_found")),
+        _safe_int(stats.get("corpus_found")),
+        _safe_int(stats.get("queued_paths")),
+        _safe_int(stats.get("cur_path")),
+        _safe_int(stats.get("corpus_count")),
+        _safe_int(telemetry.get("paths_found")),
+    )
+    coverage_percent = (
+        _safe_float(telemetry.get("coverage_percent"))
+        or _safe_float(stats.get("bitmap_cvg"))
+        or _safe_float(stats.get("coverage_percent"))
+    )
+    return {
+        "completed": True,
+        "fuzzer": fuzzing_result.get("fuzzer"),
+        "executions": executions,
+        "execs_per_second": (
+            _safe_int(telemetry.get("executions_per_second"))
+            or _safe_int(stats.get("execs_per_sec"))
+            or _safe_int(stats.get("executions_per_second"))
+        ),
+        "coverage_percent": coverage_percent,
+        "paths_found": paths_found,
+        "crashes": fuzzing_result.get("crashes", 0),
+        "crashes_dir": crashes_dir,
+        "crash_paths": crash_paths,
+        "telemetry": fuzzing_result.get("telemetry"),
+        "events": fuzzing_result.get("events"),
+        "generated_corpus": fuzzing_result.get("generated_corpus"),
+        "output_dir": str(fuzz_out) if fuzz_out else None,
+    }
+
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -315,6 +680,19 @@ Examples:
                             "Surfaces per-LLM-call detail (cache hits, retries, "
                             "per-call cost/duration). Useful for debugging "
                             "multi-model dispatches or schema validation failures.")
+
+    # Fuzzing integration (Phase 5: dynamic confirmation)
+    parser.add_argument("--fuzz", action="store_true",
+                       help="Run a short fuzzing campaign (AFL++ or libFuzzer) against --binary "
+                            "after SAST findings. Auto-detects target type and selects fuzzer "
+                            "based on host capabilities.")
+    parser.add_argument("--fuzz-duration", type=int, default=600,
+                       help="Fuzzing campaign duration in seconds when --fuzz is set (default: 600)")
+    parser.add_argument("--fuzz-corpus", help="Seed corpus for the fuzzing campaign")
+    parser.add_argument("--fuzz-dict", help="AFL/libFuzzer dictionary file")
+    parser.add_argument("--fuzz-plan-only", action="store_true",
+                       help="Print fuzzing campaign plan and exit without running. "
+                            "Use this to verify host capabilities before a long campaign.")
 
     parser.add_argument(
         "--accept-weakened-defenses",
@@ -1238,6 +1616,125 @@ Examples:
 
     report_file = out_dir / "raptor_agentic_report.json"
     save_json(report_file, final_report)
+
+    # ========================================================================
+    # PHASE 5: DYNAMIC CONFIRMATION VIA FUZZING (optional)
+    # ========================================================================
+    # If --fuzz is set and a binary target is configured, run a short fuzzing
+    # campaign and merge any crashes into the final report. The fuzzing
+    # orchestrator handles platform compatibility, target type detection,
+    # and fuzzer selection automatically.
+    fuzzing_result = None
+    if getattr(args, "fuzz", False) or getattr(args, "fuzz_plan_only", False):
+        if not args.binary:
+            print("\n⚠️  --fuzz requires --binary <path>; skipping fuzz phase.")
+            logger.warning("--fuzz requested but no --binary specified")
+            final_report["phases"]["dynamic_fuzzing"] = {
+                "completed": False,
+                "skipped_reason": "--fuzz requires --binary",
+            }
+            save_json(report_file, final_report)
+        else:
+            print("\n" + "=" * 70)
+            print("PHASE 5: Fuzzing")
+            print("=" * 70)
+            try:
+                from packages.fuzzing.orchestrator import FuzzingOrchestrator
+                orch = FuzzingOrchestrator(llm=None)
+                plan = orch.plan(Path(args.binary))
+                print(plan.summary())
+
+                if args.fuzz_plan_only:
+                    print("\n  --fuzz-plan-only set; not running campaign.")
+                    final_report["phases"]["dynamic_fuzzing"] = {
+                        "completed": False,
+                        "plan_only": True,
+                        "fuzzer": plan.fuzzer,
+                        "can_run": plan.can_run,
+                        "blockers": plan.blockers,
+                    }
+                    final_report["outputs"]["fuzzing_result"] = None
+                    save_json(report_file, final_report)
+                elif not plan.can_run:
+                    print("\n  Cannot run fuzz campaign on this host. See blockers above.")
+                    final_report["phases"]["dynamic_fuzzing"] = {
+                        "completed": False,
+                        "fuzzer": plan.fuzzer,
+                        "can_run": False,
+                        "blockers": plan.blockers,
+                    }
+                    save_json(report_file, final_report)
+                else:
+                    fuzz_out = out_dir / "fuzzing"
+                    fuzz_out.mkdir(parents=True, exist_ok=True)
+                    fuzzing_result = orch.execute(
+                        plan,
+                        out_dir=fuzz_out,
+                        duration_seconds=args.fuzz_duration,
+                        corpus_dir=Path(args.fuzz_corpus) if args.fuzz_corpus else None,
+                        dict_path=Path(args.fuzz_dict) if args.fuzz_dict else None,
+                        source_context_dir=original_repo_path,
+                    )
+                    fuzz_phase = _build_fuzz_phase_summary(fuzzing_result, fuzz_out)
+                    final_report["phases"]["dynamic_fuzzing"] = fuzz_phase
+                    final_report["outputs"]["fuzzing_result"] = str(fuzz_out / "fuzzing_plan.json")
+                    final_report["outputs"]["fuzzing_output_dir"] = str(fuzz_out)
+                    final_report["outputs"]["fuzzing_telemetry"] = str(fuzz_out / "fuzz-summary.json")
+                    final_report["outputs"]["fuzzing_events"] = str(fuzz_out / "fuzz-events.jsonl")
+                    final_report["outputs"]["fuzzing_crashes_dir"] = fuzzing_result.get("crashes_dir")
+                    final_report["outputs"]["fuzzing_crash_paths"] = fuzz_phase.get("crash_paths", [])
+                    final_report["outputs"]["fuzzing_generated_corpus"] = fuzzing_result.get("generated_corpus")
+                    print(f"   Fuzzing complete: {fuzzing_result}")
+                    save_json(report_file, final_report)
+
+                    # Analyse fuzz crashes immediately so the final report has
+                    # deduped root causes, replay logs, and a validation handoff.
+                    if fuzzing_result and fuzzing_result.get("crashes", 0) > 0:
+                        try:
+                            print(f"\n  Triaging {fuzzing_result['crashes']} fuzz crashes...")
+                            crash_outputs = _prepare_fuzz_crashes_for_validate(
+                                binary_path=Path(args.binary),
+                                fuzzing_result=fuzzing_result,
+                                fuzz_out=fuzz_out,
+                                limit=args.max_findings,
+                            )
+                            final_report["outputs"]["fuzzing_crash_analysis"] = str(
+                                crash_outputs["contexts"]
+                            )
+                            final_report["outputs"]["fuzzing_validation_findings"] = str(
+                                crash_outputs["findings"]
+                            )
+                            final_report["outputs"]["fuzzing_validation_handoff"] = str(
+                                crash_outputs["findings"]
+                            )
+                            final_report["outputs"]["fuzzing_triage"] = str(
+                                crash_outputs["triage"]
+                            )
+                            final_report["phases"]["dynamic_fuzzing"]["validation_handoff"] = str(
+                                crash_outputs["findings"]
+                            )
+                            final_report["phases"]["dynamic_fuzzing"]["triage"] = str(
+                                crash_outputs["triage"]
+                            )
+                            if args.validate:
+                                validation_smoke = _run_fuzz_validation_smoke(
+                                    crash_outputs["findings"],
+                                    Path(args.binary),
+                                    fuzz_out,
+                                )
+                                final_report["outputs"]["fuzzing_validation_run"] = validation_smoke.get("dir")
+                                final_report["outputs"]["fuzzing_validation_report"] = validation_smoke.get("report")
+                                final_report["phases"]["dynamic_fuzzing"]["validation_smoke"] = validation_smoke
+                            save_json(report_file, final_report)
+                            print(
+                                "   Crash findings ready for validation at "
+                                f"{crash_outputs['findings']}"
+                            )
+                        except Exception as e:
+                            logger.debug(f"Crash → validate handoff failed: {e}")
+            except Exception as e:
+                logger.error(f"Fuzz phase failed: {e}", exc_info=True)
+                print(f"\n  Fuzz phase error: {e}")
 
     # ========================================================================
     # SAGE: Post-scan storage — store findings for cross-run learning

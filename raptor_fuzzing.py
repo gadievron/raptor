@@ -59,6 +59,17 @@ def main() -> None:
     ap.add_argument("--memory-file", help="Path to memory file for learning persistence (default: ~/.raptor/fuzzing_memory.json)")
     ap.add_argument("--goal", help="High-level goal to achieve (e.g., 'find heap overflow', 'target parser code')")
 
+    # New orchestrator-driven path: capability detection, libFuzzer support,
+    # binary_understand via radare2, live telemetry. Default on macOS where
+    # AFL++ has shmem issues; can be forced or disabled with these flags.
+    ap.add_argument("--orchestrator", action="store_true",
+                    help="Force the new orchestrator pipeline (libFuzzer + AFL++ "
+                         "with target detection, capability checks, telemetry)")
+    ap.add_argument("--legacy", action="store_true",
+                    help="Force the legacy AFL++-only fuzzing path")
+    ap.add_argument("--plan-only", action="store_true",
+                    help="With --orchestrator, print the plan and exit without running")
+
     from core.sandbox import add_cli_args, apply_cli_args
     add_cli_args(ap)
     args = ap.parse_args()
@@ -95,6 +106,79 @@ def main() -> None:
         out_dir = RaptorConfig.get_out_dir() / f"fuzz_{binary_path.stem}_{unique_run_suffix()}"
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     safe_run_mkdir(out_dir)
+
+    # ========================================================================
+    # ORCHESTRATOR PATH (new): capability detection + libFuzzer/AFL++ + telemetry
+    # ========================================================================
+    use_orchestrator = args.orchestrator
+    if not args.legacy and not args.orchestrator:
+        # Auto-route: if AFL++ isn't usable (e.g. macOS shmem issue) but
+        # libFuzzer or radare2 are available, prefer the orchestrator.
+        try:
+            from packages.fuzzing import probe_capabilities
+            caps = probe_capabilities()
+            if not caps.has_afl() and (caps.has_clang_fuzzer() or caps.radare2):
+                use_orchestrator = True
+                logger.info(
+                    "Auto-selected orchestrator path: AFL++ unavailable, "
+                    "libFuzzer/radare2 present."
+                )
+        except Exception as e:
+            logger.debug(f"Capability probe failed, falling back to legacy: {e}")
+
+    if use_orchestrator:
+        from packages.fuzzing import FuzzingOrchestrator
+        from packages.llm_analysis import get_client
+
+        llm = None
+        try:
+            llm = get_client()
+        except Exception:
+            pass
+
+        orch = FuzzingOrchestrator(llm=llm)
+        plan = orch.plan(binary_path)
+        print(plan.summary())
+
+        if args.plan_only:
+            logger.info("--plan-only set; exiting without running campaign.")
+            sys.exit(0 if plan.can_run else 1)
+
+        if not plan.can_run:
+            logger.error("Cannot run fuzz campaign on this host. See blockers above.")
+            sys.exit(1)
+
+        try:
+            result = orch.execute(
+                plan,
+                out_dir=out_dir,
+                duration_seconds=args.duration,
+                corpus_dir=corpus_dir,
+                dict_path=Path(args.dict) if args.dict else None,
+                source_context_dir=binary_path.parent,
+            )
+        except KeyboardInterrupt:
+            print("\nCampaign interrupted by user.")
+            sys.exit(130)
+        except Exception as e:
+            logger.error(f"Campaign failed: {e}", exc_info=True)
+            sys.exit(1)
+
+        print()
+        print("=" * 70)
+        print("CAMPAIGN COMPLETE")
+        print("=" * 70)
+        for key, value in result.items():
+            print(f"  {key}: {value}")
+        print(f"\nOutput: {out_dir}")
+        print(f"  fuzzing_plan.json     -- target detection and fuzzer choice")
+        print(f"  capability_report.json -- host capability snapshot")
+        print(f"  fuzz-summary.json     -- final campaign telemetry")
+        print(f"  fuzz-events.jsonl     -- full event stream")
+        if (out_dir / "binary-context-map.json").exists():
+            print(f"  binary-context-map.json -- radare2 adversarial analysis")
+        print("=" * 70)
+        sys.exit(0)
 
     logger.info("=" * 70)
     logger.info("RAPTOR FUZZING WORKFLOW STARTED")

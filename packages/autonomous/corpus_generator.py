@@ -9,6 +9,7 @@ Instead of hardcoded seeds, this module:
 - Learns which seed patterns lead to coverage/crashes
 """
 
+import re
 from core.sandbox import run_trusted as _run_trusted  # read-only tools only (strings)
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -26,7 +27,7 @@ class CorpusGenerator:
     to generate targeted test cases.
     """
 
-    def __init__(self, binary_path: Path, memory=None, goal=None):
+    def __init__(self, binary_path: Path, memory=None, goal=None, source_dir: Optional[Path] = None):
         """
         Initialize corpus generator.
 
@@ -36,6 +37,7 @@ class CorpusGenerator:
             goal: Goal object for goal-directed generation (optional)
         """
         self.binary_path = Path(binary_path)
+        self.source_dir = Path(source_dir).resolve() if source_dir else None
         self.memory = memory
         self.goal = goal
         self.binary_strings: Set[str] = set()
@@ -140,6 +142,46 @@ class CorpusGenerator:
         except Exception as e:
             logger.warning(f"Binary analysis failed: {e}")
 
+        if self.source_dir and self.source_dir.exists():
+            source_analysis = self._analyze_source_context()
+            for command in source_analysis.get("commands_detected", []):
+                if command not in self.detected_commands:
+                    self.detected_commands[command] = f"source_command_{command.lower()}"
+            if self.detected_commands:
+                analysis["commands_detected"] = sorted(self.detected_commands.keys())
+
+        return analysis
+
+    def _analyze_source_context(self) -> Dict[str, Any]:
+        """Read nearby source/docs to discover command-style input grammars."""
+        analysis = {"commands_detected": []}
+        commands: Set[str] = set()
+        if not self.source_dir:
+            return analysis
+
+        candidate_suffixes = {".c", ".cc", ".cpp", ".h", ".hpp", ".md", ".txt", ".rst"}
+        try:
+            files = [
+                p for p in self.source_dir.rglob("*")
+                if p.is_file() and p.suffix.lower() in candidate_suffixes
+            ][:200]
+        except OSError:
+            files = []
+
+        for path in files:
+            try:
+                text = path.read_text(errors="replace")[:65536]
+            except OSError:
+                continue
+
+            for match in re.finditer(r'\bstrcmp\s*\([^,]+,\s*"([A-Z][A-Z0-9_-]{1,20})"\s*\)', text):
+                commands.add(match.group(1))
+            for match in re.finditer(r'\b([A-Z][A-Z0-9_-]{1,20}):(?:data|[A-Za-z0-9_{"<%])', text):
+                commands.add(match.group(1))
+
+        analysis["commands_detected"] = sorted(commands)
+        if commands:
+            logger.info(f"Detected source/documented commands: {', '.join(sorted(commands))}")
         return analysis
 
     def _wrap_with_commands(self, seeds: List[bytes]) -> List[bytes]:
@@ -183,9 +225,27 @@ class CorpusGenerator:
 
         corpus_dir.mkdir(parents=True, exist_ok=True)
         seeds_generated = 0
+        seen: Set[bytes] = set()
+
+        def write_seed(prefix: str, seed: bytes) -> bool:
+            nonlocal seeds_generated
+            if seeds_generated >= max_seeds or seed in seen:
+                return False
+            seen.add(seed)
+            seed_file = corpus_dir / f"seed_{prefix}_{seeds_generated:03d}"
+            seed_file.write_bytes(seed)
+            seeds_generated += 1
+            return True
 
         # Analyze binary first (populates self.detected_commands etc as side effects)
         self.analyze_binary()
+
+        command_seeds = self._generate_command_seeds()
+        before = seeds_generated
+        for seed in command_seeds:
+            write_seed("command", seed)
+        if command_seeds:
+            logger.info(f"Generated {seeds_generated - before} command-aware seeds")
 
         # 1. Generate basic seeds (always useful)
         logger.info("Generating basic seed corpus...")
@@ -196,22 +256,20 @@ class CorpusGenerator:
             logger.info(f"Wrapping basic seeds with {len(self.detected_commands)} detected commands")
             basic_seeds = self._wrap_with_commands(basic_seeds)
 
-        for i, seed in enumerate(basic_seeds):
-            seed_file = corpus_dir / f"seed_basic_{i:03d}"
-            seed_file.write_bytes(seed)
-            seeds_generated += 1
-        logger.info(f"Generated {len(basic_seeds)} basic seeds")
+        before = seeds_generated
+        for seed in basic_seeds:
+            write_seed("basic", seed)
+        logger.info(f"Generated {seeds_generated - before} basic seeds")
 
         # 2. Generate format-specific seeds
         if self.detected_formats:
             logger.info(f"Generating format-specific seeds for: {', '.join(self.detected_formats)}")
+            before = seeds_generated
             for format_name in self.detected_formats:
                 format_seeds = self._generate_format_seeds(format_name)
-                for i, seed in enumerate(format_seeds[:5]):  # Max 5 per format
-                    seed_file = corpus_dir / f"seed_{format_name}_{i:03d}"
-                    seed_file.write_bytes(seed)
-                    seeds_generated += 1
-            logger.info(f"Generated {seeds_generated - len(basic_seeds)} format-specific seeds")
+                for seed in format_seeds[:5]:  # Max 5 per format
+                    write_seed(format_name, seed)
+            logger.info(f"Generated {seeds_generated - before} format-specific seeds")
 
         # 3. Generate goal-directed seeds
         if self.goal:
@@ -238,11 +296,10 @@ class CorpusGenerator:
                     # Wrap with all commands if no specific match
                     goal_seeds = self._wrap_with_commands(goal_seeds)
 
-            for i, seed in enumerate(goal_seeds):
-                seed_file = corpus_dir / f"seed_goal_{i:03d}"
-                seed_file.write_bytes(seed)
-                seeds_generated += 1
-            logger.info(f"Generated {len(goal_seeds)} goal-directed seeds")
+            before = seeds_generated
+            for seed in goal_seeds:
+                write_seed("goal", seed)
+            logger.info(f"Generated {seeds_generated - before} goal-directed seeds")
 
         # 4. Load successful seeds from memory
         if self.memory:
@@ -252,6 +309,24 @@ class CorpusGenerator:
 
         logger.info(f"✓ Autonomous corpus generation complete: {seeds_generated} seeds")
         return seeds_generated
+
+    def _generate_command_seeds(self) -> List[bytes]:
+        """Generate seeds that directly satisfy discovered COMMAND:DATA grammars."""
+        seeds: List[bytes] = []
+        payloads = {
+            "STACK": [b"hello\n", b"A" * 80 + b"\n", b"A" * 256 + b"\n"],
+            "HEAP": [b"hello\n", b"A" * 160 + b"\n", b"A" * 512 + b"\n"],
+            "UAF": [b"trigger_use_after_free\n", b"A" * 32 + b"\n"],
+            "JSON": [b'{"key":"value"}\n', b'{"key":"' + b"A" * 96 + b'"}\n'],
+            "XML": [b"<tag>value</tag>\n", b"<" + b"a" * 48 + b">value</tag>\n"],
+            "FMT": [b"%p%p%p\n", b"%s%s%s\n", b"%x%x%x\n"],
+            "INT": [b"1234\n", b"4294967200\n", b"4294967295\n"],
+            "NULL": [b"NAAAAAA\n", b"NULLME\n"],
+        }
+        for command in sorted(self.detected_commands):
+            for payload in payloads.get(command, [b"hello\n", b"A" * 128 + b"\n"]):
+                seeds.append(f"{command}:".encode() + payload)
+        return seeds
 
     def _generate_basic_seeds(self) -> List[bytes]:
         """Generate basic seed corpus that works for most binaries."""
