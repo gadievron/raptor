@@ -26,7 +26,6 @@ FILTERS: dict[str, list[str]] = {
     "python": [
         "core/**",
         "packages/**",
-        "libexec/tests/**",
         ".github/tests/**",
         "test/**",
         "*.py",

@@ -8,8 +8,7 @@ runner — set the marker once here so every test is treated as a
 trusted caller by default.
 
 Tests that exercise the refusal path explicitly pop the marker from
-the subprocess env (see libexec/tests/test_raptor_sca_run.py in the
-SCA branch for the pattern).
+the subprocess env when they spawn the wrapper.
 
 `RAPTOR_DIR` is also set here. Modules that follow the project's
 "hard lookup, no fallbacks" path-safety rule (CLAUDE.md, e.g.

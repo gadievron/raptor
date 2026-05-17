@@ -16,11 +16,12 @@ gate on at least one of the trusted-caller env vars.
 
 from __future__ import annotations
 
+import os
 import unittest
 from pathlib import Path
 
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(os.environ["RAPTOR_DIR"])
 LIBEXEC = REPO / "libexec"
 
 _SENTINEL = "# ─── trust-marker check"

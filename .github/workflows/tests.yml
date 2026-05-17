@@ -265,15 +265,14 @@ jobs:
           path: |
             core/**/__pycache__
             packages/**/__pycache__
-            libexec/tests/**/__pycache__
-          key: pycache-${{ env.PYTHON_VERSION }}-${{ hashFiles('core/**/*.py', 'packages/**/*.py', 'libexec/tests/**/*.py') }}
+          key: pycache-${{ env.PYTHON_VERSION }}-${{ hashFiles('core/**/*.py', 'packages/**/*.py') }}
           restore-keys: |
             pycache-${{ env.PYTHON_VERSION }}-
 
       - name: Compile Python sources
         run: |
           source $VENV_PATH/bin/activate
-          python -m compileall -q core packages libexec/tests *.py
+          python -m compileall -q core packages *.py
 
       - name: Run unit tests (fast tier, group ${{ matrix.group }} of 4)
         run: |
@@ -298,22 +297,14 @@ jobs:
             --ignore=core/orchestration/tests \
             --ignore=core/security/tests/test_prompt_envelope_audit.py
 
-      - name: Run libexec wrapper tests (group 1 only)
-        if: matrix.group == 1
-        run: |
-          source $VENV_PATH/bin/activate
-          # Keep this separate from `pytest core packages` to avoid pytest
-          # import-name collisions with other top-level tests packages.
-          pytest libexec/tests
-
       - name: Run CLI smoke tests (group 1 only)
         if: matrix.group == 1
         run: |
           source $VENV_PATH/bin/activate
           # End-to-end argparse acceptance + entry-point smoke for
           # raptor.py. Ported from the now-retired test/real_tests_fast.sh.
-          # Kept separate from `pytest core packages` for the same reason
-          # as libexec/tests above.
+          # Kept separate from `pytest core packages` to avoid pytest
+          # import-name collisions with the top-level tests package.
           pytest test/test_cli_smoke.py -n auto
 
       # Note: the path-filter coverage tests at `.github/tests/` used to
