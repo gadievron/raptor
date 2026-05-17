@@ -34,32 +34,44 @@ EXPECTED_RULES = {
     "attrs": {
         "attr_access.cocci",
         "attr_alloc_size.cocci",
+        "attr_const.cocci",
         "attr_counted_by.cocci",
+        "attr_deprecated.cocci",
         "attr_malloc.cocci",
         "attr_no_stack_protector.cocci",
+        "attr_nodiscard.cocci",
         "attr_nonnull.cocci",
         "attr_noreturn.cocci",
+        "attr_pure.cocci",
         "attr_returns_nonnull.cocci",
         "attr_warn_unused_result.cocci",
+    },
+    "compile_time": {
+        "no_sanitize_attr.cocci",
     },
     "hazards": {
         "deprecated_functions.cocci",
         "signed_alloc.cocci",
         "type_confusion_cast.cocci",
+        "unsafe_temp_files.cocci",
     },
     "privilege": {
         "capability_check.cocci",
+        "cred_manipulation.cocci",
         "lsm_hooks.cocci",
+        "setuid_setgid.cocci",
         "user_boundary.cocci",
     },
     "proximity": {
         "abort_proximate.cocci",
         "lock_pairs.cocci",
         "null_guards.cocci",
+        "refcount_pairs.cocci",
         "warn_class.cocci",
     },
     "variants": {
         "checked_alloc.cocci",
+        "structural_fingerprint.cocci",
     },
 }
 

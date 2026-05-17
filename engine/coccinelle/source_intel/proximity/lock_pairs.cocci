@@ -73,3 +73,63 @@ for _p in p:
         "message": "lock_release:" + str(unlock_fn),
     }
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
+
+
+// Lock-leak detection — fires when a lock is acquired and a return
+// statement is reachable without intervening unlock on at least
+// one path. Uses cocci `exists` keyword to bind positions on the
+// path-with-leak (without exists, the position metavar doesn't
+// bind on path-operator-driven patterns).
+//
+// Limitations:
+//   * Matches bare `return;` (no value). `return -1;` is matched
+//     by a separate sub-rule below.
+//   * Doesn't catch goto-based leak paths — `goto err_no_unlock;`
+//     would need a separate sub-rule.
+//   * Doesn't track conditional unlocks via different vars.
+
+@mutex_leak exists@
+expression L;
+position p;
+@@
+mutex_lock@p(L);
+... when != mutex_unlock(L)
+    when != mutex_trylock(L)
+    when != L = ...
+return;
+
+@script:python@
+p << mutex_leak.p;
+@@
+import json, sys
+for _p in p:
+    _m = {
+        "file": _p.file,
+        "line": int(_p.line),
+        "rule": "lock_pairs",
+        "message": "lock_leak:mutex_lock",
+    }
+    sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
+
+
+@spin_leak exists@
+expression L;
+position p;
+@@
+spin_lock@p(L);
+... when != spin_unlock(L)
+    when != L = ...
+return;
+
+@script:python@
+p << spin_leak.p;
+@@
+import json, sys
+for _p in p:
+    _m = {
+        "file": _p.file,
+        "line": int(_p.line),
+        "rule": "lock_pairs",
+        "message": "lock_leak:spin_lock",
+    }
+    sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
