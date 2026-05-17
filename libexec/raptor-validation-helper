@@ -506,6 +506,74 @@ def prepare_B(workdir, target=None):
         if not finding.get("origin"):
             print(f"  WARN: {finding['id']} missing origin field")
 
+    # --- ast_view enrichment ---
+    # Attach a compact per-function AST view (signature, calls
+    # inside body, returns, inline-asm flag) to each active finding
+    # so Stage B's LLM can reason about exploitability with the
+    # function's actual shape, not just the line number. The LLM
+    # reading findings.json sees ``ast_view`` as a per-finding
+    # field; the Stage B skill doesn't need updating to know about
+    # it — the field is self-explanatory.
+    #
+    # Best-effort: parse failure / unsupported language / function
+    # not in inventory all leave the finding's ast_view unset.
+    # Disproven findings are skipped (no need to enrich what's
+    # already ruled out). Pre-existing ast_view fields (e.g.
+    # carried forward from /agentic when /validate consumes its
+    # output) are preserved.
+    #
+    # Target resolution: --target arg wins, else fall back to the
+    # findings container's ``target_path``. If neither is known,
+    # skip enrichment with a notice — best to do nothing than to
+    # fabricate paths.
+    ast_target = target or data.get("target_path")
+    ast_enriched = 0
+    ast_skipped = 0
+    if ast_target:
+        target_root = Path(ast_target).resolve()
+        try:
+            from core.ast import view as _ast_view
+        except ImportError:
+            _ast_view = None
+            print("  Note: core.ast not importable; skipping ast_view enrichment")
+        if _ast_view is not None:
+            for finding in findings:
+                if finding.get("status") == "disproven":
+                    continue
+                if finding.get("ast_view"):
+                    continue  # already set (carried forward)
+                fpath = finding.get("file") or ""
+                fname = finding.get("function") or ""
+                fline = finding.get("line") or 0
+                if not (fpath and fname and isinstance(fline, int) and fline > 0):
+                    ast_skipped += 1
+                    continue
+                abs_path = (target_root / fpath).resolve()
+                try:
+                    abs_path.relative_to(target_root)
+                except ValueError:
+                    # Path escapes target_root (file with traversal /
+                    # absolute path). Skip — never enrich something
+                    # outside the project.
+                    ast_skipped += 1
+                    continue
+                if not abs_path.is_file():
+                    ast_skipped += 1
+                    continue
+                try:
+                    fv = _ast_view(abs_path, fname, at_line=fline)
+                    if fv is not None:
+                        finding["ast_view"] = fv.to_dict()
+                        ast_enriched += 1
+                    else:
+                        ast_skipped += 1
+                except Exception:                          # noqa: BLE001
+                    ast_skipped += 1
+        if ast_enriched or ast_skipped:
+            print(f"  ast_view: enriched {ast_enriched}, skipped {ast_skipped}")
+    else:
+        print("  Note: no target_path known; skipping ast_view enrichment")
+
     _save_findings(workdir, data)
 
     # --- Schema validation ---

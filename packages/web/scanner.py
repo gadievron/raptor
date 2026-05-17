@@ -135,14 +135,7 @@ class WebScanner:
 
 
 def build_arg_parser():
-    """Build the CLI parser for the web scanner.
-
-    Extracted from main() so tests can drive the argparse plumbing
-    independently. Matches the function shape on origin/main so the
-    ffuf-CLI tests (test_scanner_cli_wires_all_ffuf_options /
-    test_scanner_cli_can_omit_optional_ffuf_match_and_filter_status)
-    keep working after the merge restore.
-    """
+    """Build the CLI parser for the web scanner."""
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -218,10 +211,7 @@ Examples:
 
 
 def build_ffuf_config(args) -> Optional[FfufConfig]:
-    """Convert parsed CLI args into an optional ffuf configuration.
-
-    Returns None when --ffuf-wordlist isn't passed (ffuf is opt-in).
-    """
+    """Convert parsed CLI args into an optional ffuf configuration."""
     if not args.ffuf_wordlist:
         return None
     return FfufConfig(
@@ -285,6 +275,8 @@ def main():
 
     # Run scan
     verify_ssl = not args.insecure
+    ffuf_config = build_ffuf_config(args)
+
     scanner = WebScanner(
         args.url,
         llm,

@@ -133,11 +133,11 @@ class TestWebScannerNoneLlm(unittest.TestCase):
                 "pages": []
             }
 
-            report = scanner.scan()
+            result = scanner.scan()
 
-            self.assertIn("ffuf", report)
-            self.assertEqual(report["ffuf"]["result_count"], 1)
             ffuf_instance.run.assert_called_once()
+            self.assertEqual(result["ffuf"]["tool"], "ffuf")
+            self.assertEqual(result["ffuf"]["result_count"], 1)
 
 
 if __name__ == "__main__":
