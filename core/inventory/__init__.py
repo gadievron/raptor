@@ -47,8 +47,8 @@ from .coverage import update_coverage, get_coverage_stats, format_coverage_summa
 
 # Public re-export surface. Each name below is imported above purely
 # to make `from core.inventory import X` work for downstream callers
-# (build_inventory.py, packages/exploitability_validation, the
-# validation tests). Without `__all__`, ruff F401 flags them all as
+# (packages/exploitability_validation, the validation tests, the
+# CodeQL prefilter). Without `__all__`, ruff F401 flags them all as
 # "unused import"; with it, ruff recognises the re-export intent and
 # `from core.inventory import *` exposes exactly this list.
 # Order follows the import statements above (grouped by submodule)

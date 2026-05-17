@@ -1,7 +1,6 @@
 """Tests for core.inventory — shared source inventory."""
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -491,41 +490,6 @@ class TestCoverageStats:
         assert "10 files" in summary
         assert "1 excluded" in summary
         assert "1/2" in summary
-
-
-# ── CLI Script ──────────────────────────────────────────────────────
-
-_BUILD_INVENTORY_SCRIPT = (
-    Path(__file__).resolve().parents[3] / "build_inventory.py"
-)
-
-
-class TestCLIScript:
-    def test_build_inventory_script(self, tmp_path):
-        # Anchor the script path to ``__file__`` rather than CWD so
-        # the test passes regardless of where pytest is invoked
-        # (per ``feedback-test-cwd-relative-paths``: pytest workers,
-        # IDE runners, and CI may all start with different cwds).
-        src = tmp_path / "src"
-        src.mkdir()
-        (src / "app.py").write_text("def main(): pass\n")
-
-        result = subprocess.run(
-            [sys.executable, str(_BUILD_INVENTORY_SCRIPT),
-             "--repo", str(src), "--out", str(tmp_path / "out")],
-            capture_output=True, text=True, timeout=30,
-        )
-        assert result.returncode == 0
-        assert "Inventory:" in result.stdout
-        assert (tmp_path / "out" / "checklist.json").exists()
-
-    def test_nonexistent_repo_fails(self, tmp_path):
-        result = subprocess.run(
-            [sys.executable, str(_BUILD_INVENTORY_SCRIPT),
-             "--repo", "/nonexistent", "--out", str(tmp_path)],
-            capture_output=True, text=True, timeout=30,
-        )
-        assert result.returncode == 1
 
 
 # ── CodeItem / FunctionInfo ────────────────────────────────────────

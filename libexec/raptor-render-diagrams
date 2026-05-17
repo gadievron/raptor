@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render Mermaid diagrams from JSON outputs in a directory.
 
-Usage: raptor-render-diagrams <output_dir> [--target <name>]
+Usage: raptor-render-diagrams <output_dir> [--target <name>] [--force]
 """
 import sys
 from pathlib import Path
@@ -23,11 +23,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: raptor-render-diagrams <output_dir> [--target <name>]",
+        print("Usage: raptor-render-diagrams <output_dir> [--target <name>] [--force]",
               file=sys.stderr)
         sys.exit(1)
 
     out_dir = Path(sys.argv[1])
+    # --force opts into clobbering an existing diagrams.md. Without it,
+    # a re-render refuses so an operator's hand-edits aren't silently
+    # overwritten. Ported from the now-deleted generate_diagram.py
+    # (commit a94fd36b) which had the protection but was never the
+    # live entry point.
+    force = "--force" in sys.argv
     target = None
     if "--target" in sys.argv:
         idx = sys.argv.index("--target")
@@ -57,6 +63,16 @@ def main():
 
     if not out_dir.exists():
         print(f"ERROR: directory not found: {out_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    # Pre-flight overwrite check — render_and_write writes to
+    # out_dir/diagrams.md unconditionally; refuse here unless --force.
+    default_out = out_dir / "diagrams.md"
+    if default_out.exists() and not force:
+        print(
+            f"ERROR: {default_out} already exists. Pass --force to overwrite.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     try:

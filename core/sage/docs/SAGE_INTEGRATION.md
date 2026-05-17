@@ -57,7 +57,7 @@ One command does everything; re-runs are safe (see *Reinstall / re-seed* below):
 - Sets `SAGE_ENABLED=true` in `.claude/settings.local.json` so Claude Code
   propagates the flag into RAPTOR subprocesses (Python-pipeline opt-in —
   the MCP side is `.mcp.json`).
-- `docker compose -f docker-compose.sage.yml up -d` — starts SAGE (port
+- `docker compose -f core/sage/docker-compose.yml up -d` — starts SAGE (port
   8090) and Ollama (port 11435, model `nomic-embed-text`).
 - Waits for SAGE health.
 - Seeds institutional knowledge (30+ primitives, 25+ mitigations, system
@@ -100,7 +100,7 @@ libexec/raptor-sage-setup --uninstall
 Stops the docker sidecar, removes the SAGE entry from `.mcp.json` and the
 `SAGE_ENABLED` key from `.claude/settings.local.json` (deletes either file
 if it becomes empty). Data volumes are preserved — use `docker compose -f
-docker-compose.sage.yml down -v` to wipe them.
+core/sage/docker-compose.yml down -v` to wipe them.
 
 ## SAGE Domains
 
@@ -198,13 +198,13 @@ All SAGE operations are wrapped in try/except. If SAGE is unavailable:
 
 ```bash
 # Check if containers are running
-docker compose -f docker-compose.sage.yml ps
+docker compose -f core/sage/docker-compose.yml ps
 
 # Check SAGE health
 curl http://localhost:8090/health
 
 # Check logs
-docker compose -f docker-compose.sage.yml logs sage
+docker compose -f core/sage/docker-compose.yml logs sage
 ```
 
 ### Embedding model not loaded
@@ -214,7 +214,7 @@ docker compose -f docker-compose.sage.yml logs sage
 curl http://localhost:11435/api/tags
 
 # Pull model manually
-docker compose -f docker-compose.sage.yml exec ollama ollama pull nomic-embed-text
+docker compose -f core/sage/docker-compose.yml exec ollama ollama pull nomic-embed-text
 ```
 
 ### Memory not persisting

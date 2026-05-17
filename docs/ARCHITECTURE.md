@@ -218,12 +218,8 @@ raptor/
 ├── raptor_agentic.py               # Source code analysis workflow
 ├── raptor_codeql.py                # CodeQL workflow orchestrator
 ├── raptor_fuzzing.py               # Binary fuzzing workflow
-├── raptor-offset                   # ASCII art banner
-├── hackers-8ball                   # Random security quotes
 ├── requirements.txt                # Python dependencies
 ├── CLAUDE.md                       # Claude Code instructions
-├── CLAUDE_CODE_QUICKSTART.md       # Quick start guide
-├── DEPENDENCIES.md                 # Dependency documentation
 ├── LICENSE                         # License file
 └── README.md                       # Main README
 ```

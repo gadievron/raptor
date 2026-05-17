@@ -64,7 +64,9 @@ build_repo() {
     git config user.email "test@test.com"
 
     # Create raptor-offset (copy real file for accurate box-width testing)
-    cp "$SCRIPT_DIR/raptor-offset" "$REPO/raptor-offset"
+    mkdir -p "$REPO/core/startup/assets"
+    cp "$SCRIPT_DIR/core/startup/assets/raptor-offset" \
+       "$REPO/core/startup/assets/raptor-offset"
 
     # Create core/config.py with realistic VERSION lines
     mkdir -p core
@@ -224,15 +226,16 @@ import sys, re
 tag = sys.argv[1]
 ver = tag.lstrip('v')
 
-# raptor-offset banner
-text = open('raptor-offset').read()
+# raptor-offset banner (lives under core/startup/assets/)
+BANNER = 'core/startup/assets/raptor-offset'
+text = open(BANNER).read()
 def replace_banner(m):
     prefix = m.group(1)
     content = prefix + tag
     pad = 76 - len(content)
     return content + ' ' * pad + '║'
 text = re.sub(r'(║\s+Based on Claude Code - )\S+[^║]*║', replace_banner, text)
-open('raptor-offset', 'w').write(text)
+open(BANNER, 'w').write(text)
 
 # core/config.py VERSION
 text = open('core/config.py').read()
@@ -345,19 +348,20 @@ echo ""
 echo "=== Version stamping ==="
 
 # Save originals
-cp raptor-offset raptor-offset.orig
+BANNER_PATH=core/startup/assets/raptor-offset
+cp "$BANNER_PATH" "$BANNER_PATH.orig"
 cp core/config.py core/config.py.orig
 
 for tag in v3.1.0 v10.20.30; do
     # Restore originals
-    cp raptor-offset.orig raptor-offset
+    cp "$BANNER_PATH.orig" "$BANNER_PATH"
     cp core/config.py.orig core/config.py
 
     stamp_version "$tag"
     ver="${tag#v}"
 
     # raptor-offset: check line contains tag and is correct width
-    BANNER_LINE=$(grep "Based on Claude Code" raptor-offset)
+    BANNER_LINE=$(grep "Based on Claude Code" "$BANNER_PATH")
     BANNER_LEN=${#BANNER_LINE}
     assert_eq      "raptor-offset width for $tag" "77" "$BANNER_LEN"
     assert_contains "raptor-offset contains $tag" "$BANNER_LINE" "$tag"
@@ -371,17 +375,17 @@ for tag in v3.1.0 v10.20.30; do
 done
 
 # Idempotency: stamp same version twice
-cp raptor-offset.orig raptor-offset
+cp "$BANNER_PATH.orig" "$BANNER_PATH"
 cp core/config.py.orig core/config.py
 stamp_version "v3.1.0"
 stamp_version "v3.1.0"
-BANNER_LINE=$(grep "Based on Claude Code" raptor-offset)
+BANNER_LINE=$(grep "Based on Claude Code" "$BANNER_PATH")
 assert_eq "idempotent stamp width" "77" "${#BANNER_LINE}"
 
 # Restore for archive test
-cp raptor-offset.orig raptor-offset
+cp "$BANNER_PATH.orig" "$BANNER_PATH"
 cp core/config.py.orig core/config.py
-rm -f raptor-offset.orig core/config.py.orig
+rm -f "$BANNER_PATH.orig" core/config.py.orig
 echo ""
 
 # ── 6. Archive exclusions ──────────────────────────────────────────────
@@ -397,7 +401,7 @@ ARCHIVE_DIR=$(build_archive v3.0.0 "$TMPDIR_BASE")
 
 # Should be included
 assert_file_exists "raptor.py in archive"           "$ARCHIVE_DIR/raptor.py"
-assert_file_exists "raptor-offset in archive"       "$ARCHIVE_DIR/raptor-offset"
+assert_file_exists "raptor-offset in archive"       "$ARCHIVE_DIR/core/startup/assets/raptor-offset"
 assert_file_exists "core/config.py in archive"      "$ARCHIVE_DIR/core/config.py"
 assert_file_exists "packages/ in archive"           "$ARCHIVE_DIR/packages/__init__.py"
 
@@ -412,7 +416,7 @@ assert_file_missing "docs/img/ excluded"            "$ARCHIVE_DIR/docs/img"
 assert_file_missing "conftest.py excluded"          "$ARCHIVE_DIR/conftest.py"
 
 # Verify stamped version is in the archive
-ARCHIVE_BANNER=$(grep "Based on Claude Code" "$ARCHIVE_DIR/raptor-offset")
+ARCHIVE_BANNER=$(grep "Based on Claude Code" "$ARCHIVE_DIR/core/startup/assets/raptor-offset")
 assert_contains "archive has stamped version"       "$ARCHIVE_BANNER" "v3.0.0"
 ARCHIVE_CONFIG=$(cat "$ARCHIVE_DIR/core/config.py")
 assert_contains "archive config has stamped version" "$ARCHIVE_CONFIG" 'VERSION = "3.0.0"'

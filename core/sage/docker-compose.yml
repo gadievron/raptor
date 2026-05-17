@@ -1,5 +1,5 @@
 # SAGE Memory Sidecar for RAPTOR
-# Usage: docker compose -f docker-compose.sage.yml up -d
+# Usage: docker compose -f core/sage/docker-compose.yml up -d
 #
 # Services:
 #   sage    - SAGE consensus-validated memory (port 8090)

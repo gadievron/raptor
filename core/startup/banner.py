@@ -5,19 +5,20 @@ the terminal banner. No logic, no checks, no side effects.
 """
 
 import random
+from pathlib import Path
 
-from . import REPO_ROOT
+_ASSETS = Path(__file__).resolve().parent / "assets"
 
 
 def read_logo() -> str:
     """Read the ASCII logo from the raptor-offset file."""
-    path = REPO_ROOT / "raptor-offset"
+    path = _ASSETS / "raptor-offset"
     return path.read_text().rstrip() if path.exists() else ""
 
 
 def read_random_quote() -> str:
     """Pick a random quote from the hackers-8ball file."""
-    path = REPO_ROOT / "hackers-8ball"
+    path = _ASSETS / "hackers-8ball"
     if path.exists():
         lines = [l.strip() for l in path.read_text().splitlines() if l.strip()]
         if lines:

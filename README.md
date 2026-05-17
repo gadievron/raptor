@@ -321,7 +321,7 @@ Tell Claude which one to use, e.g. "Use the Binary Exploitation Specialist".
 | `docs/FUZZING_QUICKSTART.md` | Binary fuzzing guide |
 | `docs/ARCHITECTURE.md` | Technical architecture detail |
 | `docs/EXTENDING_LAUNCHER.md` | How to add new capabilities |
-| `DEPENDENCIES.md` | External tools, versions, and licences |
+| `docs/DEPENDENCIES.md` | External tools, versions, and licences |
 | `.claude/commands/oss-forensics.md` | OSS forensics investigation guide |
 | `tiers/personas/README.md` | Persona reference |
 

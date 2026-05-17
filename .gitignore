@@ -6,6 +6,7 @@
 __pycache__/
 .venv/
 .pytest_cache/
+.test_durations
 
 # RAPTOR startup
 .startup-output

@@ -145,15 +145,16 @@ jobs:
           tag = sys.argv[1]
           ver = tag.lstrip('v')
 
-          # raptor-offset banner
-          text = open('raptor-offset').read()
+          # raptor-offset banner (lives under core/startup/assets/)
+          BANNER = 'core/startup/assets/raptor-offset'
+          text = open(BANNER).read()
           def replace_banner(m):
               prefix = m.group(1)
               content = prefix + tag
               pad = 76 - len(content)
               return content + ' ' * pad + '║'
           text = re.sub(r'(║\s+Based on Claude Code - )\S+[^║]*║', replace_banner, text)
-          open('raptor-offset', 'w').write(text)
+          open(BANNER, 'w').write(text)
 
           # core/config.py VERSION
           text = open('core/config.py').read()
@@ -174,7 +175,7 @@ jobs:
           open('README.md', 'w').write(text)
           " "$TAG"
           echo "Stamped:"
-          grep "Based on Claude Code" raptor-offset
+          grep "Based on Claude Code" core/startup/assets/raptor-offset
           grep 'VERSION = ' core/config.py | head -1
           grep "Based on Claude Code" README.md
 
@@ -193,7 +194,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add raptor-offset core/config.py README.md
+          git add core/startup/assets/raptor-offset core/config.py README.md
           if ! git diff --cached --quiet; then
             git commit -m "release: stamp ${TAG}"
             git tag -a -f "${TAG}" -m "Release ${TAG}"
