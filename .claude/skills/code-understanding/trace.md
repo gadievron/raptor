@@ -179,6 +179,25 @@ OUTPUT: `$WORKDIR/flow-trace-<entry-id>.json` (one file per traced flow)
 
 Display the flow to the user as a narrative walkthrough after writing, not just the JSON. Show each step as: `[step N] file:line — what happens — what attacker controls`.
 
+**[TRACE-OUT] Enrich steps with per-function AST views**
+
+After writing all `flow-trace-*.json` files, run the AST-view enricher.
+Uses the inventory to attach an `ast_view` field to each step whose
+`definition` resolves to a function in the inventory: signature,
+calls inside the body, explicit returns, inline-asm flag.
+
+```bash
+libexec/raptor-enrich-flow-trace-ast-view "$WORKDIR"
+```
+
+The enriched flow-trace-*.json files carry machine-derived
+structure (what the function *is* at each hop) alongside the LLM's
+narrative (what the data does as it flows through). Downstream
+consumers — `/validate` Stage B via the understand-bridge, `/audit`
+Phase A — can read this without re-parsing source. Idempotent.
+Skip if `$WORKDIR/checklist.json` doesn't exist or doesn't carry
+`target_path`.
+
 ## Gates
 
 GATES APPLY: U1 [READ-FIRST], U2 [ATTACKER-LENS], U3 [FULL-FLOW], U5 [EVIDENCE-ONLY]
