@@ -19,7 +19,6 @@ duplicate the existing ``compileall`` step in ``.github/workflows/tests.yml``.
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -27,7 +26,12 @@ from pathlib import Path
 import pytest
 
 
-REPO_ROOT = Path(os.environ["RAPTOR_DIR"])
+# parents[3] climbs:
+#   [0] core/startup/tests/  (this file's directory)
+#   [1] core/startup/
+#   [2] core/
+#   [3] <repo root>
+REPO_ROOT = Path(__file__).resolve().parents[3]
 RAPTOR_PY = REPO_ROOT / "raptor.py"
 
 

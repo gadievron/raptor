@@ -18,16 +18,22 @@ Coverage:
 
 from __future__ import annotations
 
-import os
 import sys
+from pathlib import Path
 from unittest import mock
 
 import pytest
 
 
-_RAPTOR_DIR = os.environ["RAPTOR_DIR"]
-if _RAPTOR_DIR not in sys.path:
-    sys.path.insert(0, _RAPTOR_DIR)
+# parents[4] climbs:
+#   [0] packages/code_understanding/tests/dispatch/  (this file's directory)
+#   [1] packages/code_understanding/tests/
+#   [2] packages/code_understanding/
+#   [3] packages/
+#   [4] <repo root>
+_REPO_ROOT = str(Path(__file__).resolve().parents[4])
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 
 from packages.code_understanding.dispatch import hunt_cocci_dispatch as mod

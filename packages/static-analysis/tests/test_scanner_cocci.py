@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 import shutil
 import sys
 from pathlib import Path
@@ -22,12 +21,17 @@ from unittest.mock import patch
 
 import pytest
 
-_RAPTOR_DIR = os.environ["RAPTOR_DIR"]
-if _RAPTOR_DIR not in sys.path:
-    sys.path.insert(0, _RAPTOR_DIR)
+# parents[3] climbs:
+#   [0] packages/static-analysis/tests/  (this file's directory)
+#   [1] packages/static-analysis/
+#   [2] packages/
+#   [3] <repo root>
+_REPO_ROOT = str(Path(__file__).resolve().parents[3])
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 # packages/static-analysis has a hyphen — load via importlib.
-_SCANNER_PATH = Path(_RAPTOR_DIR) / "packages/static-analysis/scanner.py"
+_SCANNER_PATH = Path(_REPO_ROOT) / "packages/static-analysis/scanner.py"
 _spec = importlib.util.spec_from_file_location(
     "static_analysis_scanner_cocci", _SCANNER_PATH,
 )

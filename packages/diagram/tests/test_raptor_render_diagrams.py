@@ -16,7 +16,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 
-REPO_ROOT = Path(os.environ["RAPTOR_DIR"])
+# parents[3] climbs:
+#   [0] packages/diagram/tests/  (this file's directory)
+#   [1] packages/diagram/
+#   [2] packages/
+#   [3] <repo root>
+REPO_ROOT = Path(__file__).resolve().parents[3]
 WRAPPER = REPO_ROOT / "libexec" / "raptor-render-diagrams"
 
 

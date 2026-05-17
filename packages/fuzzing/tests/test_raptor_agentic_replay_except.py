@@ -12,7 +12,6 @@ get swallowed vs which propagate.
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 import tempfile
@@ -21,8 +20,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 
-REPO_ROOT = Path(os.environ["RAPTOR_DIR"])
-sys.path.insert(0, str(REPO_ROOT))
+# parents[3] climbs:
+#   [0] packages/fuzzing/tests/  (this file's directory)
+#   [1] packages/fuzzing/
+#   [2] packages/
+#   [3] <repo root>
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 
 class TestReplayExceptNarrowing(unittest.TestCase):
