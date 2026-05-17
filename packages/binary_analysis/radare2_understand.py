@@ -332,11 +332,27 @@ class BinaryUnderstand:
         self,
         max_decompile: int = 20,
         max_strings: int = 100,
+        quick: bool = False,
     ) -> BinaryContextMap:
         """Run the full analysis pipeline.
 
         max_decompile bounds the number of high-priority functions we ask
         the decompiler for, since decompilation is the slowest step.
+
+        ``quick=True`` skips radare2's ``aaa`` (full auto-analysis)
+        and every step that depends on it: function enumeration,
+        cross-reference tagging, transitive callers, decompilation,
+        prioritisation. Only ``_extract_metadata`` + ``_extract_
+        imports_exports`` run — both work on the static binary
+        without analysis. Use when the caller just needs arch /
+        format + the import list (capability fingerprinting, bump
+        capability-delta), not the cross-ref-derived dangerous_
+        sinks / interesting_functions. Order of magnitude faster
+        on typical binaries (single-digit seconds vs minutes for
+        ``/bin/ls``). ``ctx.dangerous_sinks`` and
+        ``ctx.interesting_functions`` come back empty under
+        quick mode — callers that need them must run the full
+        pipeline.
         """
         import os as _os
         import tempfile as _tempfile
@@ -406,23 +422,35 @@ class BinaryUnderstand:
                     else:
                         _os.environ[k] = v
                 _saved_env = {}  # already restored — finally skips re-restore
-            self._cmd_t(r2, "aaa", self._T_AAA)    # full auto-analysis
-            self._extract_metadata(r2, ctx)
-            self._extract_imports_exports(r2, ctx)
-            self._extract_functions(r2, ctx)
-            self._extract_entry_points(ctx)
-            self._extract_strings(r2, ctx, limit=max_strings)
-            self._tag_dangerous_callers(r2, ctx)
-            # Transitive analysis MUST follow _tag_dangerous_callers
-            # because it reads ctx.dangerous_sinks for the BFS seed
-            # set, and adds transitively_reaches_dangerous /
-            # transitive_distance fields used by the prioritise step.
-            self._tag_transitive_callers(r2, ctx)
-            self._decompile_priorities(r2, ctx, limit=max_decompile)
-            if self.llm:
-                self._llm_prioritise(ctx)
+            if quick:
+                # Fast path: metadata + imports only. Both queries
+                # (``ij`` / ``iij``) read the static binary headers
+                # without needing radare2's analysis pass. Skip
+                # ``aaa`` and every downstream step that depends
+                # on the call graph or function inventory.
+                self._extract_metadata(r2, ctx)
+                self._extract_imports_exports(r2, ctx)
             else:
-                self._heuristic_prioritise(ctx)
+                self._cmd_t(r2, "aaa", self._T_AAA)
+                self._extract_metadata(r2, ctx)
+                self._extract_imports_exports(r2, ctx)
+                self._extract_functions(r2, ctx)
+                self._extract_entry_points(ctx)
+                self._extract_strings(r2, ctx, limit=max_strings)
+                self._tag_dangerous_callers(r2, ctx)
+                # Transitive analysis MUST follow _tag_dangerous_
+                # callers because it reads ctx.dangerous_sinks for
+                # the BFS seed set, and adds transitively_reaches_
+                # dangerous / transitive_distance fields used by
+                # the prioritise step.
+                self._tag_transitive_callers(r2, ctx)
+                self._decompile_priorities(
+                    r2, ctx, limit=max_decompile,
+                )
+                if self.llm:
+                    self._llm_prioritise(ctx)
+                else:
+                    self._heuristic_prioritise(ctx)
         finally:
             if r2 is not None:
                 try:
@@ -955,16 +983,26 @@ def analyse_binary_context(
     llm=None,
     max_decompile: int = 20,
     max_strings: int = 100,
+    quick: bool = False,
 ) -> BinaryContextMap:
     """Run radare2 analysis and optionally persist the context map.
 
     This is the shared entry point other RAPTOR commands should use instead
     of depending on fuzzing internals.
+
+    ``quick=True`` skips ``aaa`` + every analysis-dependent step
+    (function enumeration, cross-refs, transitive callers,
+    decompilation, prioritisation). Use when the caller only
+    needs arch / format + the import list — capability
+    fingerprinting, bump capability-delta. Order of magnitude
+    faster on typical binaries. ``dangerous_sinks`` and
+    ``interesting_functions`` come back empty.
     """
     analyser = BinaryUnderstand(binary_path, llm=llm)
     context = analyser.analyse(
         max_decompile=max_decompile,
         max_strings=max_strings,
+        quick=quick,
     )
     if out_path:
         context.write(out_path)
