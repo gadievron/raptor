@@ -160,6 +160,8 @@ class FixtureResult:
     expected: List[ExpectedSignal] = field(default_factory=list)
     matched: List[ExpectedSignal] = field(default_factory=list)
     missed: List[ExpectedSignal] = field(default_factory=list)
+    parity_ok: bool = True
+    parity_note: str = ""
     note: str = ""
 
 
@@ -280,9 +282,20 @@ def _fixture_safety_check(fixture_root: Path) -> Optional[str]:
     return None
 
 
+@dataclass
+class _ScanArtifacts:
+    """Both renderings produced by a single ``raptor-sca`` invocation
+    on a fixture — the machine-readable findings list and the
+    human-readable markdown report. The parity check compares
+    these two views to catch presentation regressions where the
+    markdown drops or duplicates a finding."""
+    findings: List[Dict[str, Any]]
+    report_md: str = ""
+
+
 def _run_sca(
     fixture_path: Path, *, offline: bool,
-) -> Tuple[Optional[List[Dict[str, Any]]], str]:
+) -> Tuple[Optional["_ScanArtifacts"], str]:
     """Subprocess-invoke ``raptor-sca`` on a COPY of the fixture;
     return the parsed findings.json plus stderr-on-failure.
 
@@ -330,7 +343,70 @@ def _run_sca(
             return None, f"findings.json was not valid JSON: {e}"
         if not isinstance(data, list):
             return None, f"findings.json was {type(data).__name__}, not list"
-        return data, ""
+        report_md = ""
+        report_path = out_dir / "report.md"
+        if report_path.is_file():
+            try:
+                report_md = report_path.read_text(encoding="utf-8")
+            except OSError:
+                report_md = ""
+        return _ScanArtifacts(findings=data, report_md=report_md), ""
+
+
+# Severity-row regex anchored to the report.md summary table shape:
+#   ``| Critical | 1 |``
+# Captures the severity name + the count. Permissive on whitespace
+# so a future renderer that pads cells differently still parses.
+_REPORT_SEVERITY_ROW = re.compile(
+    r"^\|\s*(Critical|High|Medium|Low|Info)\s*\|\s*(\d+)\s*\|\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+
+def _parity_check(art: "_ScanArtifacts") -> Tuple[bool, str]:
+    """Compare the markdown report's severity counts against the
+    findings.json's per-severity counts. Returns ``(ok, note)``;
+    ``ok=False`` means the human-readable rendering disagrees with
+    the machine-readable artefact — a real presentation bug.
+
+    The parity check is non-fatal for the overall PASS / FAIL
+    verdict (it surfaces as a separate column in the report) so a
+    pure parity regression doesn't mask a substantive detection
+    miss.
+    """
+    if not art.report_md:
+        return True, "no report.md to compare"
+    severity_counts: Dict[str, int] = {
+        "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0,
+    }
+    for row in art.findings:
+        if not isinstance(row, dict):
+            continue
+        sev = str(row.get("severity", "info")).lower()
+        if sev in severity_counts:
+            severity_counts[sev] += 1
+    md_counts: Dict[str, int] = {}
+    for m in _REPORT_SEVERITY_ROW.finditer(art.report_md):
+        md_counts[m.group(1).lower()] = int(m.group(2))
+    if not md_counts:
+        # No summary table found — the report renderer must have
+        # changed shape. Don't fail the parity check on this alone;
+        # surface a note so an operator can investigate.
+        return True, "no summary table parsed from report.md"
+    discrepancies: List[str] = []
+    for sev in ("critical", "high", "medium", "low", "info"):
+        expected_count = severity_counts[sev]
+        rendered_count = md_counts.get(sev, 0)
+        # The report.md summary table only includes a row for a
+        # severity when it has at least one finding, so a missing
+        # row is OK when the json count is also zero.
+        if rendered_count != expected_count:
+            discrepancies.append(
+                f"{sev}: json={expected_count} md={rendered_count}"
+            )
+    if discrepancies:
+        return False, "; ".join(discrepancies)
+    return True, ""
 
 
 def _row_matches_expected(
@@ -382,8 +458,8 @@ def _evaluate_fixture(
             note=f"SAFETY REFUSAL: {safety_err}",
         )
 
-    rows, err = _run_sca(fixture_dir / "fixture", offline=offline)
-    if rows is None:
+    art, err = _run_sca(fixture_dir / "fixture", offline=offline)
+    if art is None:
         return FixtureResult(
             name=name, fixture_path=fixture_dir,
             passed=False, expected=expected, missed=expected,
@@ -393,14 +469,16 @@ def _evaluate_fixture(
     matched: List[ExpectedSignal] = []
     missed: List[ExpectedSignal] = []
     for exp in expected:
-        if any(_row_matches_expected(r, exp) for r in rows):
+        if any(_row_matches_expected(r, exp) for r in art.findings):
             matched.append(exp)
         else:
             missed.append(exp)
+    parity_ok, parity_note = _parity_check(art)
     return FixtureResult(
         name=name, fixture_path=fixture_dir,
         passed=len(missed) == 0,
         expected=expected, matched=matched, missed=missed,
+        parity_ok=parity_ok, parity_note=parity_note,
     )
 
 
@@ -417,6 +495,8 @@ def _format_report(
                         {"kind": m.kind, "severity_floor": m.severity_floor}
                         for m in r.missed
                     ],
+                    "parity_ok": r.parity_ok,
+                    "parity_note": r.parity_note,
                     "note": r.note,
                 }
                 for r in results
@@ -429,6 +509,7 @@ def _format_report(
     lines.append("=== compromise-detection report ===")
     for r in results:
         status = "PASS" if r.passed else "FAIL"
+        parity_tag = "  parity:ok" if r.parity_ok else "  parity:MISMATCH"
         suffix = ""
         if r.passed and r.matched:
             suffix = f" ({len(r.matched)}/{len(r.expected)} signals matched)"
@@ -437,12 +518,18 @@ def _format_report(
             suffix = f" — missed: {misses}"
             if r.note:
                 suffix += f" [{r.note[:120]}]"
-        lines.append(f"  {r.name:<{width}}  {status}{suffix}")
+        if not r.parity_ok and r.parity_note:
+            suffix += f" — parity: {r.parity_note}"
+        lines.append(f"  {r.name:<{width}}  {status}{parity_tag}{suffix}")
     passed = sum(1 for r in results if r.passed)
+    parity_ok = sum(1 for r in results if r.parity_ok)
     total = len(results)
     rate = (passed / total * 100) if total else 0
+    parity_rate = (parity_ok / total * 100) if total else 0
     lines.append("")
-    lines.append(f"Catch rate: {passed}/{total} ({rate:.0f}%)")
+    lines.append(f"Catch rate:  {passed}/{total} ({rate:.0f}%)")
+    lines.append(f"Parity rate: {parity_ok}/{total} ({parity_rate:.0f}%) — "
+                 f"report.md summary counts vs findings.json")
     return "\n".join(lines)
 
 
