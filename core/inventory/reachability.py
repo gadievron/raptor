@@ -938,6 +938,26 @@ def _get_or_build_index(
                 _record_call_line(idx, caller_node, callee, line)
                 continue
 
+            # Fully-qualified-call index path: when the chain itself
+            # spells out a project-defined function's qualified name
+            # (e.g. C++ ``ns::Util::helper()`` → chain ``["ns",
+            # "Util", "helper"]``), the import-map path can't see it
+            # because namespace names aren't in the imports dict.
+            # If the dotted-join matches a seeded
+            # ``qualified_to_internal`` entry, record a definitive
+            # internal edge — parity with the function_called
+            # fast-path. Strict equality keeps the rule
+            # over-conservative: chains that don't literally spell
+            # a known qualified name fall through to method_match.
+            if len(chain) >= 2:
+                dotted = ".".join(chain)
+                aliased = qualified_to_internal.get(dotted)
+                if aliased is not None:
+                    idx.forward.setdefault(caller_node, set()).add(aliased)
+                    idx.reverse.setdefault(aliased, set()).add(caller_node)
+                    _record_call_line(idx, caller_node, aliased, line)
+                    continue
+
             # Couldn't resolve via import map. Two sub-cases:
             #   (a) chain head is unbound — likely a method call
             #       (``self.foo()`` / ``obj.foo()``). Tail name is

@@ -1152,3 +1152,162 @@ def test_decorator_call_not_attributed_to_decorated_fn():
     # Must NOT be attributed to ``list_users`` (which would falsely
     # imply ``list_users`` calls ``app.route``).
     assert deco_call.caller is None
+
+
+# ---------------------------------------------------------------------------
+# Fully-qualified-call index fast-path (cross-language)
+# ---------------------------------------------------------------------------
+#
+# When a caller writes the callee's qualified name directly in source
+# (e.g. C++ ``ns::Util::helper()``, Java ``com.example.Util.helper()``,
+# PHP ``\Foo\Bar::method()``, C# ``Foo.Bar.Method()``), the chain head
+# isn't in the file's import map — the dotted prefix is part of the
+# call syntax, not a separately-imported name. The pass-2 edge
+# construction now does a direct ``".".join(chain)`` lookup in
+# ``qualified_to_internal`` after the import-map path fails. Strict
+# equality keeps the rule over-conservative.
+#
+# These tests verify the fast-path is language-agnostic — same shape,
+# same outcome for each target language.
+
+
+class TestFullyQualifiedCallIndexFastPath:
+    """``callers_of(target)`` should return the caller in
+    ``definitive`` (not ``method_match_overinclusive``) when the
+    caller's chain literally spells the target's qualified name."""
+
+    def test_java_fully_qualified(self):
+        import pytest
+        pytest.importorskip("tree_sitter_java")
+        from core.inventory.call_graph import extract_call_graph_java
+
+        util = extract_call_graph_java(
+            "package com.example;\n"
+            "public class Util {\n"
+            "    public static void helper() {}\n"
+            "}\n"
+        ).to_dict()
+        # Fully-qualified call WITHOUT an import (rare but legal Java).
+        caller = extract_call_graph_java(
+            "package com.example.client;\n"
+            "class Client { void m() { com.example.Util.helper(); } }\n"
+        ).to_dict()
+        inv = {"files": [
+            {"path": "src/com/example/Util.java", "language": "java",
+             "call_graph": util,
+             "items": [{"kind": "function", "name": "helper",
+                        "line_start": 3}]},
+            {"path": "src/com/example/client/Client.java",
+             "language": "java", "call_graph": caller,
+             "items": [{"kind": "function", "name": "m",
+                        "line_start": 2}]},
+        ]}
+        target = InternalFunction(
+            file_path="src/com/example/Util.java",
+            name="helper", line=3,
+        )
+        r = callers_of(inv, target, exclude_test_files=False)
+        assert any(
+            c.file_path == "src/com/example/client/Client.java"
+            for c in r.definitive
+        ), (
+            f"Java fully-qualified caller not in definitive — "
+            f"definitive={r.definitive}, "
+            f"method_match={r.method_match_overinclusive}"
+        )
+
+    def test_php_global_qualified(self):
+        import pytest
+        pytest.importorskip("tree_sitter_php")
+        from core.inventory.call_graph import extract_call_graph_php
+
+        util = extract_call_graph_php(
+            "<?php\nnamespace Foo;\n"
+            "class Bar { public static function method() {} }\n"
+        ).to_dict()
+        caller = extract_call_graph_php(
+            "<?php\nfunction use_it() { \\Foo\\Bar::method(); }\n"
+        ).to_dict()
+        inv = {"files": [
+            {"path": "src/Bar.php", "language": "php",
+             "call_graph": util,
+             "items": [{"kind": "function", "name": "method",
+                        "line_start": 3}]},
+            {"path": "src/main.php", "language": "php",
+             "call_graph": caller,
+             "items": [{"kind": "function", "name": "use_it",
+                        "line_start": 2}]},
+        ]}
+        target = InternalFunction(
+            file_path="src/Bar.php", name="method", line=3,
+        )
+        r = callers_of(inv, target, exclude_test_files=False)
+        assert any(
+            c.file_path == "src/main.php" for c in r.definitive
+        )
+
+    def test_csharp_fully_qualified(self):
+        import pytest
+        pytest.importorskip("tree_sitter_c_sharp")
+        from core.inventory.call_graph import extract_call_graph_csharp
+
+        util = extract_call_graph_csharp(
+            "namespace Foo {\n"
+            "    class Bar {\n"
+            "        public static void Method() {}\n"
+            "    }\n"
+            "}\n"
+        ).to_dict()
+        caller = extract_call_graph_csharp(
+            "class Client { void M() { Foo.Bar.Method(); } }\n"
+        ).to_dict()
+        inv = {"files": [
+            {"path": "src/Bar.cs", "language": "csharp",
+             "call_graph": util,
+             "items": [{"kind": "function", "name": "Method",
+                        "line_start": 3}]},
+            {"path": "src/Client.cs", "language": "csharp",
+             "call_graph": caller,
+             "items": [{"kind": "function", "name": "M",
+                        "line_start": 1}]},
+        ]}
+        target = InternalFunction(
+            file_path="src/Bar.cs", name="Method", line=3,
+        )
+        r = callers_of(inv, target, exclude_test_files=False)
+        assert any(
+            c.file_path == "src/Client.cs" for c in r.definitive
+        )
+
+    def test_call_lines_recorded_for_fast_path(self):
+        """The fast-path edge construction calls _record_call_line,
+        so ``call_lines_of(caller, target)`` returns the right line."""
+        import pytest
+        pytest.importorskip("tree_sitter_java")
+        from core.inventory.call_graph import extract_call_graph_java
+
+        util = extract_call_graph_java(
+            "package com.ex;\nclass Util { static void helper() {} }\n"
+        ).to_dict()
+        caller = extract_call_graph_java(
+            "class Client { void m() { com.ex.Util.helper(); } }\n"
+        ).to_dict()
+        inv = {"files": [
+            {"path": "src/Util.java", "language": "java",
+             "call_graph": util,
+             "items": [{"kind": "function", "name": "helper",
+                        "line_start": 2}]},
+            {"path": "src/Client.java", "language": "java",
+             "call_graph": caller,
+             "items": [{"kind": "function", "name": "m",
+                        "line_start": 1}]},
+        ]}
+        target = InternalFunction(
+            file_path="src/Util.java", name="helper", line=2,
+        )
+        caller_fn = InternalFunction(
+            file_path="src/Client.java", name="m", line=1,
+        )
+        lines = call_lines_of(inv, caller_fn, target)
+        # The call ``com.ex.Util.helper()`` is on line 1 of Client.java.
+        assert lines == (1,)
