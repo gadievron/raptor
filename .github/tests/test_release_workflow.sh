@@ -5,12 +5,13 @@
 # Creates a disposable git repo with synthetic commits and tags, then runs
 # each workflow step's logic and asserts expected outcomes.
 #
-# Usage: bash test/test_release_workflow.sh
+# Usage: bash .github/tests/test_release_workflow.sh
 #
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# SCRIPT_DIR resolves to the repo root: .github/tests/<this> -> ../.. = repo root.
+SCRIPT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 TMPDIR_BASE=$(mktemp -d)
 REPO="${TMPDIR_BASE}/test-repo"
 PASS=0

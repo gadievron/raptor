@@ -297,15 +297,13 @@ jobs:
             --ignore=core/orchestration/tests \
             --ignore=core/security/tests/test_prompt_envelope_audit.py
 
-      - name: Run CLI smoke tests (group 1 only)
-        if: matrix.group == 1
-        run: |
-          source $VENV_PATH/bin/activate
-          # End-to-end argparse acceptance + entry-point smoke for
-          # raptor.py. Ported from the now-retired test/real_tests_fast.sh.
-          # Kept separate from `pytest core packages` to avoid pytest
-          # import-name collisions with the top-level tests package.
-          pytest test/test_cli_smoke.py -n auto
+      # Note: the CLI smoke tests for raptor.py used to live at
+      # test/test_cli_smoke.py with a dedicated group-1 step (to dodge
+      # pytest import-name collisions with the top-level tests/ dir
+      # that no longer exists). They now live at
+      # core/startup/tests/test_cli_smoke.py and are collected by the
+      # fast-tier `pytest core packages` step above — pytest-split
+      # distributes them across groups, no dedicated step needed.
 
       # Note: the path-filter coverage tests at `.github/tests/` used to
       # run in this job (group 1 only). They now have their own
