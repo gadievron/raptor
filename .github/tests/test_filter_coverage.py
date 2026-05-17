@@ -185,5 +185,136 @@ class PromptAuditFilterCoverageTests(unittest.TestCase):
             self.fail("\n".join(msg_lines))
 
 
+def _glob_for(path: Path) -> str:
+    """Convert a resolved module path to a sensible filter glob.
+
+    File path → glob is the file itself (`packages/codeql/smt_path_
+    validator.py`). Directory path (package) → broad whole-package
+    glob (`core/json/**`), matching the convention every existing
+    entry in compute_filters.FILTERS already uses.
+    """
+    s = str(path)
+    if s.endswith(".py"):
+        return s
+    return s + "/**"
+
+
+def _compute_per_filter_missing() -> dict[str, list[str]]:
+    """Identify globs that need adding to each subsystem filter.
+
+    Walks every subsystem the same way
+    test_each_subsystem_filter_covers_its_imports does, but returns
+    the missing entries instead of asserting. Returns dict mapping
+    filter_name → sorted-unique list of globs to add.
+    """
+    missing: dict[str, set[str]] = {}
+    for filter_name, pkg_rel in SUBSYSTEMS:
+        pkg_dir = REPO / pkg_rel
+        if not pkg_dir.is_dir():
+            continue
+        globs = compute_filters.FILTERS.get(filter_name)
+        if not globs:
+            continue
+        for imp in sorted(_collect_external_imports(pkg_dir)):
+            path = _module_to_path(imp)
+            if path is None:
+                continue
+            if any(compute_filters.match_glob(str(path), g) for g in globs):
+                continue
+            missing.setdefault(filter_name, set()).add(_glob_for(path))
+    return {k: sorted(v) for k, v in missing.items()}
+
+
+def _insert_globs(source: str, filter_name: str,
+                  new_globs: list[str]) -> str:
+    """Insert globs into FILTERS["<filter_name>"]'s list literal.
+
+    Inserts just before the closing `    ],` line of the block.
+    Preserves all comments, ordering of existing entries, and
+    surrounding whitespace. Minimal-diff: only adds N lines, never
+    rewrites existing content.
+
+    Raises RuntimeError if the block can't be located — caller
+    should treat that as "compute_filters.py shape has drifted,
+    requires manual update."
+    """
+    lines = source.splitlines(keepends=True)
+    start_marker = f'    "{filter_name}": ['
+    end_marker = "    ],"
+    inside = False
+    insert_at: int | None = None
+    for i, line in enumerate(lines):
+        if not inside and line.startswith(start_marker):
+            inside = True
+            continue
+        if inside and line.startswith(end_marker):
+            insert_at = i
+            break
+    if insert_at is None:
+        raise RuntimeError(
+            f"Couldn't find list literal for filter {filter_name!r} in "
+            f"compute_filters.py — file shape drift, update by hand."
+        )
+    new_lines = [f'        "{g}",\n' for g in new_globs]
+    return "".join(lines[:insert_at] + new_lines + lines[insert_at:])
+
+
+def _update_compute_filters() -> dict[str, list[str]]:
+    """Apply missing globs to .github/scripts/compute_filters.py.
+
+    Returns the dict of changes for printing. Empty dict means no
+    update was needed.
+    """
+    missing = _compute_per_filter_missing()
+    if not missing:
+        return missing
+    filter_file = REPO / ".github" / "scripts" / "compute_filters.py"
+    source = filter_file.read_text(encoding="utf-8")
+    for filter_name in sorted(missing):
+        source = _insert_globs(source, filter_name, missing[filter_name])
+    filter_file.write_text(source, encoding="utf-8")
+    return missing
+
+
 if __name__ == "__main__":
-    unittest.main()
+    import argparse
+    parser = argparse.ArgumentParser(
+        description=(
+            "Filter-coverage test. With --update, surgically inserts "
+            "missing globs into .github/scripts/compute_filters.py — "
+            "review the diff before committing. Without --update, "
+            "runs the test suite (the default CI mode)."
+        ),
+    )
+    parser.add_argument(
+        "--update",
+        action="store_true",
+        help=(
+            "Auto-insert missing globs into compute_filters.py and "
+            "exit 0. Mirrors the prompt-envelope audit --update "
+            "workflow (PR #429): see test failure → run --update → "
+            "review diff → commit. Doesn't auto-narrow over-broad "
+            "globs and doesn't remove dead entries — those are still "
+            "manual decisions."
+        ),
+    )
+    args, remaining = parser.parse_known_args()
+    if args.update:
+        missing = _update_compute_filters()
+        if not missing:
+            print(
+                "✓ all subsystem filters already cover their imports "
+                "— no changes"
+            )
+            sys.exit(0)
+        for filter_name, globs in sorted(missing.items()):
+            print(f"updated `{filter_name}`:")
+            for g in globs:
+                print(f"  + {g}")
+        print()
+        print(
+            "Review the diff to .github/scripts/compute_filters.py "
+            "before committing."
+        )
+        sys.exit(0)
+    unittest.main(argv=[sys.argv[0]] + remaining)
