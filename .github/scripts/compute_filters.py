@@ -39,7 +39,6 @@ FILTERS: dict[str, list[str]] = {
     "sandbox": [
         "core/sandbox/**",
         "core/security/**",
-        "core/config.py",
         "core/config/**",
         "core/run/**",
         "libexec/raptor-run-sandboxed",
@@ -47,19 +46,20 @@ FILTERS: dict[str, list[str]] = {
         "requirements*.txt",
         ".github/workflows/tests.yml",
     ],
-    # Direct + transitive deps for exploit_feasibility. ``logging`` and
-    # ``config`` exist as both flat .py and package directory across
-    # branches (#447 in flight) — list both forms so the filter works
-    # on either side of the rebase.
+    # Direct + transitive deps for exploit_feasibility. Note: pre-#447
+    # `core/config.py`, `core/logging.py`, `core/progress.py`,
+    # `core/schema_constants.py` were bare .py files; #447 promoted
+    # each to a package directory. The bare-form globs have been
+    # dropped from every filter below — restore them only if those
+    # files are re-added (current main has package directories only).
     "exploit_feasibility": [
         "packages/exploit_feasibility/**",
         "packages/binary_analysis/**",
         "packages/codeql/smt_path_validator.py",
+        "core/function_taxonomy/**",
         "core/hash/**",
         "core/json/**",
-        "core/logging.py",
         "core/logging/**",
-        "core/config.py",
         "core/config/**",
         "core/orchestration/**",
         "core/sandbox/**",
@@ -84,7 +84,6 @@ FILTERS: dict[str, list[str]] = {
     "codeql": [
         "packages/codeql/**",
         "core/build/**",
-        "core/config.py",
         "core/config/**",
         "core/coverage/**",
         "core/dataflow/**",
@@ -93,7 +92,6 @@ FILTERS: dict[str, list[str]] = {
         "core/inventory/**",
         "core/json/**",
         "core/llm/**",
-        "core/logging.py",
         "core/logging/**",
         "core/orchestration/**",
         "core/run/**",
@@ -116,23 +114,20 @@ FILTERS: dict[str, list[str]] = {
         "packages/fuzzing/**",
         "packages/hypothesis_validation/**",
         "core/annotations/**",
-        "core/config.py",
+        "core/ast/**",
         "core/config/**",
         "core/coverage/**",
         "core/inventory/**",
         "core/json/**",
         "core/llm/**",
-        "core/logging.py",
         "core/logging/**",
         "core/orchestration/**",
-        "core/progress.py",
         "core/progress/**",
         "core/reporting/**",
         "core/run/**",
         "core/sage/**",
         "core/sandbox/**",
         "core/sarif/**",
-        "core/schema_constants.py",
         "core/schema_constants/**",
         "core/security/**",
         "core/smt_solver/**",
@@ -144,7 +139,6 @@ FILTERS: dict[str, list[str]] = {
         "packages/cve_diff/**",
         "packages/nvd/**",
         "packages/osv/**",
-        "core/config.py",
         "core/config/**",
         "core/git/**",
         "core/http/**",
@@ -158,10 +152,11 @@ FILTERS: dict[str, list[str]] = {
     ],
     "fuzzing": [
         "packages/fuzzing/**",
-        "core/config.py",
+        "packages/autonomous/**",
+        "packages/binary_analysis/**",
         "core/config/**",
         "core/hash/**",
-        "core/logging.py",
+        "core/json/**",
         "core/logging/**",
         "core/sandbox/**",
         "requirements*.txt",
@@ -169,11 +164,9 @@ FILTERS: dict[str, list[str]] = {
     ],
     "sage": [
         "core/sage/**",
-        "core/config.py",
         "core/config/**",
         "core/hash/**",
         "core/llm/**",
-        "core/logging.py",
         "core/logging/**",
         "core/sandbox/**",
         "core/security/**",
@@ -185,7 +178,7 @@ FILTERS: dict[str, list[str]] = {
     ],
     "orchestration": [
         "core/orchestration/**",
-        "core/config.py",
+        "core/ast/**",
         "core/config/**",
         "core/hash/**",
         "core/inventory/**",
@@ -193,7 +186,6 @@ FILTERS: dict[str, list[str]] = {
         "core/llm/**",
         "core/run/**",
         "core/sandbox/**",
-        "core/schema_constants.py",
         "core/schema_constants/**",
         "core/security/**",
         "packages/codeql/**",
