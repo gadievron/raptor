@@ -423,3 +423,22 @@ def test_resolver_not_called_when_function_unused():
     }
     r = function_called(inv, "net/http.Get")
     assert r.verdict == Verdict.NOT_CALLED
+
+
+def test_package_clause_captured():
+    """``package mypkg`` at file top → ``graph.package_name``."""
+    g = extract_call_graph_go(
+        'package mypkg\n'
+        'func Hello() {}\n'
+    )
+    assert g.package_name == "mypkg"
+
+
+def test_package_main_captured():
+    """``package main`` is captured — entry-point binaries
+    publish their funcs under ``main.<fn>``."""
+    g = extract_call_graph_go(
+        'package main\n'
+        'func main() {}\n'
+    )
+    assert g.package_name == "main"

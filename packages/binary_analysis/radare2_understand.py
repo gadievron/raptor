@@ -44,71 +44,36 @@ _ANALYSE_ENV_LOCK = threading.Lock()
 logger = logging.getLogger(__name__)
 
 
-# Functions that are high-value sinks for fuzzing -- if the binary
+# Function-name categories are now hoisted to core.function_taxonomy so
+# they're a single source of truth shared with packages/exploit_
+# feasibility. See that module's docstring for the curation policy
+# (in particular, why ubiquitous functions like malloc / printf / read
+# are deliberately NOT in this fuzz-priority composition).
+from core.function_taxonomy import (
+    ALLOC_FUNCS as _T_ALLOC,
+    ENTRY_POINT_HINTS as _ENTRY_POINT_HINTS,
+    EXEC_FUNCS as _T_EXEC,
+    FORMAT_STRING_FUNCS as _T_FMT,
+    INTEGER_PARSE_FUNCS as _T_INT_PARSE,
+    MACOS_DANGEROUS_SUBSTRINGS as _DANGEROUS_MACOS_SUBSTRINGS,
+    MEMORY_COPY_FUNCS as _T_MEMCPY,
+    NETWORK_INGEST_FUNCS as _T_NET,
+    PARSER_FUNCS as _T_PARSER,
+    SCAN_FAMILY_FUNCS as _T_SCAN,
+    STRING_OVERFLOW_FUNCS as _T_STROVF,
+    TOCTOU_FUNCS as _T_TOCTOU,
+)
+
+# Functions that are high-value sinks for fuzzing — if the binary
 # imports any of these, they are interesting to trace flows toward.
-_DANGEROUS_IMPORTS = {
-    # C string handlers with no bounds checking
-    "strcpy", "strcat", "sprintf", "vsprintf", "gets",
-    "scanf", "vscanf", "sscanf",
-    # Memory ops where size can be attacker-controlled
-    "memcpy", "memmove", "bcopy",
-    # System / process execution
-    "system", "popen", "execl", "execv", "execlp", "execvp", "execle", "execve",
-    # Format string risks
-    "printf", "vprintf", "fprintf", "vfprintf", "syslog",
-    # Allocation with size that could underflow/overflow
-    "malloc", "calloc", "realloc", "alloca",
-    # File operations
-    "fopen", "open", "creat", "openat",
-    # Network entry points
-    "recv", "recvfrom", "recvmsg", "read",
-    "accept", "bind", "listen",
-    # Deserialisation / parser entry points
-    "yyparse", "xmlReadMemory", "json_loads",
-    # Windows API equivalents
-    "lstrcpyA", "lstrcpyW", "wsprintfA", "wsprintfW",
-    "DeviceIoControl", "WriteFile", "ReadFile",
-}
-
-# macOS / Apple framework sinks. Swift mangles symbols so we match on
-# substrings of the demangled name rather than exact equality. Stored
-# separately because the matching logic is different.
-_DANGEROUS_MACOS_SUBSTRINGS = {
-    # CoreFoundation parsers
-    "CFPropertyListCreateWithData", "CFPropertyListCreateFromXMLData",
-    "CFReadStreamRead", "CFDataGetBytes",
-    "CFStringCreateWithBytes", "CFURLCreateWithBytes",
-    "CFXMLParserCreate", "CFXMLTreeCreateFromData",
-    # Swift Foundation parsing / IO entry points
-    "Foundation.Data.contentsOf",
-    "Foundation.Data.base64Encoded",
-    "Foundation.Data.write",
-    "Foundation.Data.Iterator",
-    "Foundation.URL.fileURLWithPath",
-    "Foundation.URL.absoluteString",
-    "Foundation.JSONSerialization",
-    "Foundation.PropertyListSerialization",
-    "Foundation.PropertyListDecoder",
-    "Foundation.JSONDecoder",
-    # Apple security framework
-    "SecItemCopyMatching", "SecKeychainItem",
-    # NSData / NSString interop
-    "NSDataReadingOptions", "NSDataBase64DecodingOptions",
-    "NSStringFromBytes",
-}
-
-# Common entry points the fuzzer might want to harness or already exercises.
-# Presence of these strongly hints at the target's input model.
-_ENTRY_POINT_HINTS = {
-    "main": "argc/argv",
-    "_start": "linux_entry",
-    "wmain": "windows_argv",
-    "WinMain": "windows_main",
-    "DllMain": "windows_dll",
-    "LLVMFuzzerTestOneInput": "libfuzzer_harness",
-    "DriverEntry": "windows_driver",
-    "do_main": "common_alias",
-}
+# Composed from the shared taxonomy; the union here defines what
+# "interesting sink" means for THIS consumer (fuzz prioritisation).
+# Other consumers (e.g. exploit_feasibility) compose different
+# subsets for different purposes.
+_DANGEROUS_IMPORTS = frozenset(
+    _T_STROVF | _T_SCAN | _T_MEMCPY | _T_FMT | _T_EXEC | _T_ALLOC
+    | _T_NET | _T_PARSER | _T_INT_PARSE | _T_TOCTOU
+)
 
 
 @dataclass
@@ -138,7 +103,22 @@ class BinaryContextMap:
 
     entry_points: List[FunctionInfo] = field(default_factory=list)
     dangerous_sinks: List[FunctionInfo] = field(default_factory=list)
+
+    # interesting_functions = curated list of REAL CODE functions
+    # worth analysing. Imports (`sym.imp.*`, `imp.*`) and tiny thunks
+    # (size < 8 bytes — typically PLT stubs or alignment padding)
+    # are EXCLUDED at population time. The field name now matches
+    # behaviour: these are actually functions worth attention, not
+    # the full r2 inventory.
+    #
+    # Imported-function records (FunctionInfo with is_imported=True)
+    # live separately in `imported_functions` below. _tag_dangerous_
+    # callers walks `imported_functions` to populate dangerous_sinks,
+    # and walks `interesting_functions` to populate per-function
+    # calls_dangerous via cross-references.
     interesting_functions: List[FunctionInfo] = field(default_factory=list)
+    imported_functions: List[FunctionInfo] = field(default_factory=list)
+
     imports: List[str] = field(default_factory=list)
     exports: List[str] = field(default_factory=list)
     strings_sample: List[str] = field(default_factory=list)
@@ -177,6 +157,7 @@ class BinaryContextMap:
             "dangerous_sinks": sink_details,
             "sink_details": sink_details,
             "interesting_functions": [fn_dict(f) for f in self.interesting_functions],
+            "imported_functions": [fn_dict(f) for f in self.imported_functions],
             "sources": [
                 {
                     "entry": f["name"],
@@ -501,15 +482,26 @@ class BinaryUnderstand:
                 or raw.get("minaddr")
                 or 0
             )
+            size = int(raw.get("size", 0) or 0)
+            is_imported = name.startswith(("sym.imp.", "imp."))
             info = FunctionInfo(
                 name=name,
                 address=int(addr or 0),
-                size=int(raw.get("size", 0) or 0),
+                size=size,
                 type=str(raw.get("type", "fcn")),
-                is_imported=name.startswith(("sym.imp.", "imp.")),
+                is_imported=is_imported,
                 is_exported=name in ctx.exports,
             )
-            ctx.interesting_functions.append(info)
+            # Route imports to their own bucket; real code goes to
+            # interesting_functions only after passing a size filter
+            # (drops PLT stubs / alignment padding which carry no
+            # analyse-able body). The 8-byte threshold matches the
+            # typical PLT entry size on x86_64 / aarch64 and is below
+            # any meaningful function body (even a 1-line return).
+            if is_imported:
+                ctx.imported_functions.append(info)
+            elif size >= 8:
+                ctx.interesting_functions.append(info)
 
     def _extract_entry_points(self, ctx: BinaryContextMap) -> None:
         for fn in ctx.interesting_functions:
@@ -563,10 +555,10 @@ class BinaryUnderstand:
                     return substr
             return None
 
-        # For each function, ask r2 for its xrefs-from (calls out)
+        # For each REAL function, ask r2 for its xrefs-from (calls out).
+        # interesting_functions is now imports-free (see _extract_
+        # functions), so the is_imported skip is no longer needed.
         for fn in ctx.interesting_functions:
-            if fn.is_imported:
-                continue
             try:
                 refs = json.loads(
                     self._cmd_t(r2, f"axffj @ {fn.address}", self._T_XREF)
@@ -584,10 +576,11 @@ class BinaryUnderstand:
                     called.add(hit)
             fn.calls_dangerous = sorted(called)
 
-        # Tag dangerous sinks as those imports themselves
-        for fn in ctx.interesting_functions:
-            if not fn.is_imported:
-                continue
+        # Tag dangerous sinks from the imported-functions bucket.
+        # Pre-PR this walked interesting_functions filtering on
+        # is_imported; the split into imported_functions makes the
+        # iteration's intent explicit at the loop site.
+        for fn in ctx.imported_functions:
             hit = _match_dangerous(fn.name)
             if hit:
                 ctx.dangerous_sinks.append(fn)
