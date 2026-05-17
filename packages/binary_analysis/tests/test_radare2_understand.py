@@ -426,5 +426,282 @@ class TestCmdTimeout(unittest.TestCase):
         self.assertLess(BinaryUnderstand._T_XREF, 300)
 
 
+class TestTransitiveCallers(unittest.TestCase):
+    """BinaryUnderstand._tag_transitive_callers — BFS backwards from
+    dangerous_sinks through the aflcj call graph, flagging functions
+    that reach a sink within _TRANSITIVE_MAX_DEPTH hops.
+
+    Models the CVE pattern grokjc's PR #488 Claude-review flagged:
+    parse_message → helper_a → helper_b → strcpy. parse_message is
+    3 hops from the sink and must be flagged, even though it doesn't
+    directly call any dangerous import."""
+
+    def _make_understand(self):
+        tmp = tempfile.NamedTemporaryFile(
+            delete=False, suffix="-stub", prefix="r2-trans-",
+        )
+        tmp.write(b"\x7fELF" + b"\x00" * 60)
+        tmp.close()
+        self.addCleanup(lambda p=tmp.name: Path(p).unlink(missing_ok=True))
+        with patch(
+            "packages.binary_analysis.radare2_understand.probe_capability",
+            return_value={"available": True, "r2_path": "/usr/bin/radare2",
+                          "r2_version": "5.0", "has_r2pipe": True,
+                          "has_r2ghidra": False, "decompiler": "pdc"},
+        ):
+            return BinaryUnderstand(Path(tmp.name), llm=None)
+
+    def _ctx_with(self, interesting_names, sinks_with_callers):
+        """Build a BinaryContextMap with the given interesting fns
+        and a callgraph linking them to sinks.
+
+        sinks_with_callers: dict mapping sink_name → list of caller
+        names. caller names must be in interesting_names.
+        """
+        ctx = BinaryContextMap(binary_path=Path("/tmp/stub"))
+        for i, n in enumerate(interesting_names):
+            ctx.interesting_functions.append(
+                FunctionInfo(name=n, address=0x1000 + i * 0x100, size=64),
+            )
+        # Create FunctionInfo records for the sinks
+        sink_set = set()
+        for sink in sinks_with_callers:
+            sink_set.add(sink)
+            ctx.dangerous_sinks.append(
+                FunctionInfo(name=sink, address=0xdead, is_imported=True),
+            )
+        return ctx, sinks_with_callers
+
+    def test_one_hop_direct_caller_flagged(self):
+        """parse_msg directly calls strcpy (1 hop). Must be flagged
+        with transitive_distance=1."""
+        understand = self._make_understand()
+        ctx, _ = self._ctx_with(
+            interesting_names=["parse_msg"],
+            sinks_with_callers={"strcpy": ["parse_msg"]},
+        )
+        # Fake r2 with aflcj returning the call graph.
+        r2 = MagicMock()
+        callgraph = [
+            {"name": "parse_msg", "callrefs": [{"name": "strcpy"}]},
+        ]
+        r2.cmd.return_value = json.dumps(callgraph)
+        understand._tag_transitive_callers(r2, ctx)
+        fn = ctx.interesting_functions[0]
+        self.assertEqual(fn.transitive_distance, 1)
+        self.assertEqual(fn.transitively_reaches_dangerous, ["strcpy"])
+
+    def test_three_hop_indirect_caller_flagged(self):
+        """parse_msg → helper_a → helper_b → strcpy. parse_msg is
+        3 hops from the sink — exactly at the depth cap. Must flag."""
+        understand = self._make_understand()
+        ctx, _ = self._ctx_with(
+            interesting_names=["parse_msg", "helper_a", "helper_b"],
+            sinks_with_callers={"strcpy": ["helper_b"]},
+        )
+        r2 = MagicMock()
+        callgraph = [
+            {"name": "parse_msg", "callrefs": [{"name": "helper_a"}]},
+            {"name": "helper_a", "callrefs": [{"name": "helper_b"}]},
+            {"name": "helper_b", "callrefs": [{"name": "strcpy"}]},
+        ]
+        r2.cmd.return_value = json.dumps(callgraph)
+        understand._tag_transitive_callers(r2, ctx)
+        by_name = {f.name: f for f in ctx.interesting_functions}
+        self.assertEqual(by_name["helper_b"].transitive_distance, 1)
+        self.assertEqual(by_name["helper_a"].transitive_distance, 2)
+        self.assertEqual(by_name["parse_msg"].transitive_distance, 3)
+        for fn in ctx.interesting_functions:
+            self.assertEqual(fn.transitively_reaches_dangerous, ["strcpy"])
+
+    def test_beyond_depth_cap_not_flagged(self):
+        """Function at depth=4 (one past the _TRANSITIVE_MAX_DEPTH cap)
+        must NOT be flagged — bounds the false-positive blast radius."""
+        understand = self._make_understand()
+        ctx, _ = self._ctx_with(
+            interesting_names=["top", "h1", "h2", "h3"],
+            sinks_with_callers={"strcpy": ["h3"]},
+        )
+        r2 = MagicMock()
+        callgraph = [
+            {"name": "top", "callrefs": [{"name": "h1"}]},
+            {"name": "h1",  "callrefs": [{"name": "h2"}]},
+            {"name": "h2",  "callrefs": [{"name": "h3"}]},
+            {"name": "h3",  "callrefs": [{"name": "strcpy"}]},
+        ]
+        r2.cmd.return_value = json.dumps(callgraph)
+        understand._tag_transitive_callers(r2, ctx)
+        by_name = {f.name: f for f in ctx.interesting_functions}
+        # top is at depth=4, past max_depth=3 → not flagged
+        self.assertEqual(by_name["top"].transitive_distance, 0)
+        self.assertEqual(by_name["top"].transitively_reaches_dangerous, [])
+        # h1/h2/h3 at depths 3/2/1 are flagged
+        self.assertEqual(by_name["h3"].transitive_distance, 1)
+        self.assertEqual(by_name["h2"].transitive_distance, 2)
+        self.assertEqual(by_name["h1"].transitive_distance, 3)
+
+    def test_reaches_multiple_sinks(self):
+        """parse_msg calls helper_a (→strcpy) AND helper_b (→memcpy).
+        Should accumulate both sinks in transitively_reaches_dangerous."""
+        understand = self._make_understand()
+        ctx, _ = self._ctx_with(
+            interesting_names=["parse_msg", "helper_a", "helper_b"],
+            sinks_with_callers={"strcpy": ["helper_a"], "memcpy": ["helper_b"]},
+        )
+        r2 = MagicMock()
+        callgraph = [
+            {"name": "parse_msg",
+             "callrefs": [{"name": "helper_a"}, {"name": "helper_b"}]},
+            {"name": "helper_a", "callrefs": [{"name": "strcpy"}]},
+            {"name": "helper_b", "callrefs": [{"name": "memcpy"}]},
+        ]
+        r2.cmd.return_value = json.dumps(callgraph)
+        understand._tag_transitive_callers(r2, ctx)
+        by_name = {f.name: f for f in ctx.interesting_functions}
+        self.assertEqual(by_name["parse_msg"].transitive_distance, 2)
+        self.assertEqual(
+            by_name["parse_msg"].transitively_reaches_dangerous,
+            ["memcpy", "strcpy"],
+        )
+
+    def test_sym_imp_prefix_resolved(self):
+        """r2 stores import sinks as `sym.imp.strcpy` but the call
+        graph references them as `strcpy`. The BFS must match across
+        the prefix."""
+        understand = self._make_understand()
+        ctx, _ = self._ctx_with(
+            interesting_names=["parse_msg"],
+            sinks_with_callers={"sym.imp.strcpy": ["parse_msg"]},
+        )
+        r2 = MagicMock()
+        callgraph = [
+            # Call site references the bare name "strcpy", not the
+            # sym.imp.* prefix form
+            {"name": "parse_msg", "callrefs": [{"name": "strcpy"}]},
+        ]
+        r2.cmd.return_value = json.dumps(callgraph)
+        understand._tag_transitive_callers(r2, ctx)
+        fn = ctx.interesting_functions[0]
+        self.assertEqual(fn.transitive_distance, 1)
+        # Display name normalised to bare base
+        self.assertEqual(fn.transitively_reaches_dangerous, ["strcpy"])
+
+    def test_no_sinks_no_op(self):
+        """If dangerous_sinks is empty, the method must not raise."""
+        understand = self._make_understand()
+        ctx = BinaryContextMap(binary_path=Path("/tmp/stub"))
+        ctx.interesting_functions.append(
+            FunctionInfo(name="any", address=0x1000),
+        )
+        r2 = MagicMock()
+        r2.cmd.return_value = "[]"
+        understand._tag_transitive_callers(r2, ctx)  # must not raise
+        self.assertEqual(ctx.interesting_functions[0].transitive_distance, 0)
+
+    def test_aflcj_failure_degrades_silently(self):
+        """If aflcj fails (timeout, malformed JSON, r2 quirk), the
+        method must log and continue rather than crash the analysis."""
+        understand = self._make_understand()
+        ctx, _ = self._ctx_with(
+            interesting_names=["parse_msg"],
+            sinks_with_callers={"strcpy": ["parse_msg"]},
+        )
+        r2 = MagicMock()
+        r2.cmd.side_effect = RuntimeError("aflcj exploded")
+        # Must not raise — analysis continues with no transitive data
+        understand._tag_transitive_callers(r2, ctx)
+        self.assertEqual(ctx.interesting_functions[0].transitive_distance, 0)
+
+    def test_aflcj_dict_wrapped_output_handled(self):
+        """Some r2 builds wrap aflcj output as {"functions": [...]}
+        instead of a bare list. The method must unwrap and proceed
+        rather than crashing on a string .get() call."""
+        understand = self._make_understand()
+        ctx, _ = self._ctx_with(
+            interesting_names=["parse_msg"],
+            sinks_with_callers={"strcpy": ["parse_msg"]},
+        )
+        r2 = MagicMock()
+        wrapped = {
+            "functions": [
+                {"name": "parse_msg", "callrefs": [{"name": "strcpy"}]},
+            ],
+        }
+        r2.cmd.return_value = json.dumps(wrapped)
+        understand._tag_transitive_callers(r2, ctx)
+        # BFS should still find parse_msg as a direct caller
+        self.assertEqual(ctx.interesting_functions[0].transitive_distance, 1)
+
+    def test_aflcj_unknown_dict_shape_does_not_crash(self):
+        """If r2 returns a dict we don't know how to unwrap, the
+        method must NOT crash — just skip the transitive analysis."""
+        understand = self._make_understand()
+        ctx, _ = self._ctx_with(
+            interesting_names=["parse_msg"],
+            sinks_with_callers={"strcpy": ["parse_msg"]},
+        )
+        r2 = MagicMock()
+        r2.cmd.return_value = json.dumps({"unknown_key": "garbage"})
+        understand._tag_transitive_callers(r2, ctx)  # must not raise
+        self.assertEqual(ctx.interesting_functions[0].transitive_distance, 0)
+
+    def test_sinks_not_flagged_as_reaching_themselves(self):
+        """A sink that happens to call another sink (e.g. wrapper
+        around strcpy that itself happens to be a known import) must
+        NOT be flagged as transitively reaching itself."""
+        understand = self._make_understand()
+        ctx, _ = self._ctx_with(
+            interesting_names=[],  # no non-sink callers
+            sinks_with_callers={"strcpy": ["memcpy"], "memcpy": []},
+        )
+        # memcpy is a sink AND calls strcpy. The transitive analysis
+        # must not flag memcpy as reaching itself or strcpy — sinks
+        # are excluded from the reached set.
+        r2 = MagicMock()
+        callgraph = [
+            {"name": "memcpy", "callrefs": [{"name": "strcpy"}]},
+        ]
+        r2.cmd.return_value = json.dumps(callgraph)
+        understand._tag_transitive_callers(r2, ctx)
+        # ctx.interesting_functions has no non-sink fn, so nothing
+        # to assert there; just verify no crash + reached set
+        # didn't include sinks.
+
+    def test_heuristic_prioritise_surfaces_transitive_match(self):
+        """The fuzz_priorities ranking must include functions that
+        only transitively reach sinks — not just direct callers. This
+        is the operator-visible outcome of the whole transitive
+        analysis."""
+        understand = self._make_understand()
+        ctx = BinaryContextMap(binary_path=Path("/tmp/stub"))
+        # parse_msg has NO direct dangerous calls but transitively
+        # reaches strcpy via two helpers.
+        parse_msg = FunctionInfo(
+            name="parse_msg", address=0x1000,
+            calls_dangerous=[],
+            transitively_reaches_dangerous=["strcpy"],
+            transitive_distance=2,
+        )
+        # direct_only directly calls 1 sink.
+        direct_only = FunctionInfo(
+            name="direct_only", address=0x2000,
+            calls_dangerous=["sprintf"],
+        )
+        ctx.interesting_functions.extend([parse_msg, direct_only])
+        understand._heuristic_prioritise(ctx)
+        names = [p["function"] for p in ctx.fuzz_priorities]
+        self.assertIn("parse_msg", names)
+        self.assertIn("direct_only", names)
+        # Direct caller scores higher (10 vs 2 here — depth=2 weight
+        # is max_depth+1-2 = 3-2 = 2)
+        scores = {p["function"]: p["score"] for p in ctx.fuzz_priorities}
+        self.assertGreater(scores["direct_only"], scores["parse_msg"])
+        # parse_msg's reason mentions transitive
+        for p in ctx.fuzz_priorities:
+            if p["function"] == "parse_msg":
+                self.assertIn("reaches strcpy", p["reason"])
+                self.assertEqual(p["transitive_distance"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()

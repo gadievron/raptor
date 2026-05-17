@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
@@ -230,15 +231,30 @@ class HarnessGenerator:
         spec: HarnessSpec,
         language: str = "cpp",
     ) -> str:
+        # shlex.quote every interpolation that carries attacker-
+        # influenced data (target binary symbol names, include paths
+        # parsed from binary metadata, library names from header
+        # inspection, generator-emitted filenames). The compile_command
+        # is stored as a str on GeneratedHarness and consumed by
+        # operators who typically `sh -c` it (or paste into a build
+        # script) — an unquoted `target_function` containing `;` or
+        # `$(...)` would be straight command injection in that flow.
+        # Per PR #488 review.
         compiler = "clang++" if language == "cpp" else "clang"
-        includes = " ".join(f"-I{p}" for p in spec.include_paths) if spec.include_paths else ""
-        lib_link = f"-l{spec.library_name}" if spec.library_name else ""
+        includes = " ".join(
+            f"-I{shlex.quote(str(p))}" for p in spec.include_paths
+        ) if spec.include_paths else ""
+        lib_link = (
+            f"-l{shlex.quote(spec.library_name)}"
+            if spec.library_name else ""
+        )
         sanitisers = "-fsanitize=fuzzer,address,undefined"
         opt = "-g -O1"
 
         return (
             f"{compiler} {sanitisers} {opt} {includes} "
-            f"{harness_filename} {lib_link} -o fuzz_{spec.target_function}"
+            f"{shlex.quote(harness_filename)} {lib_link} "
+            f"-o {shlex.quote(f'fuzz_{spec.target_function}')}"
         ).strip()
 
     def write(self, harness: GeneratedHarness, out_dir: Path) -> Path:
