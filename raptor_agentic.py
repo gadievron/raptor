@@ -386,7 +386,16 @@ def _replay_fuzz_crashes(*, binary_path: Path, crash_files: list[Path], out_dir:
                     "stderr": str(stderr_path),
                     "reproduced": True,
                 })
-            except Exception as e:
+            except (OSError, subprocess.SubprocessError, ValueError) as e:
+                # Narrowed from `except Exception` per PR #488 review.
+                # OSError covers file IO (write_bytes on stdout/stderr
+                # paths, missing binary). subprocess.SubprocessError
+                # covers CalledProcessError + TimeoutExpired.
+                # ValueError covers bad-arg shapes. Anything else
+                # (RuntimeError, MemoryError, KeyboardInterrupt etc.)
+                # propagates — operators see real bugs instead of
+                # silently turning them into "reproduced=False"
+                # replay entries.
                 entries.append({
                     "binary": str(candidate),
                     "error": str(e),

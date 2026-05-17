@@ -86,6 +86,7 @@ def build_patch_prompt_bundle(
     attack_path: Optional[Dict[str, Any]] = None,
     profile: Optional[ModelDefenseProfile] = None,
     extra_blocks: tuple[UntrustedBlock, ...] = (),
+    ast_view: Optional[Dict[str, Any]] = None,
 ) -> PromptBundle:
     """Build the patch prompt as a PromptBundle (system + user, role-separated)."""
     profile = profile or CONSERVATIVE
@@ -124,6 +125,29 @@ def build_patch_prompt_bundle(
                 content=ap,
                 kind="attack-path",
                 origin=f"feasibility:{rule_id}",
+            ))
+
+    # Per-function AST view (signature, calls inside body, returns,
+    # inline-asm flag). Gives the patch-generating LLM the
+    # function's current shape so the fix can preserve existing
+    # call semantics, return paths, and parameter contracts.
+    # Particularly useful for patches that must add a check
+    # without breaking other return paths — the LLM sees every
+    # exit point. Block sits BEFORE vulnerable-code so the LLM
+    # has the function's current contract before editing the
+    # buggy span.
+    if ast_view:
+        from packages.llm_analysis.prompts.analysis import (
+            _render_ast_view_block,
+        )
+        view_text = _render_ast_view_block(
+            ast_view, file_path_override=file_path,
+        )
+        if view_text:
+            blocks.append(UntrustedBlock(
+                content=view_text,
+                kind="ast-view",
+                origin=f"{file_path}:{ast_view.get('function', '?')}",
             ))
 
     if code:
@@ -180,6 +204,9 @@ def build_patch_prompt_bundle_from_finding(
         attack_path=attack_path,
         profile=profile,
         extra_blocks=extra_blocks,
+        # Per-function structured AST view (shared with the
+        # analysis-family tasks via the agent's enrichment loop).
+        ast_view=finding.get("ast_view"),
     )
 
 

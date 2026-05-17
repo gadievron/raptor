@@ -197,6 +197,7 @@ def build_analysis_prompt_bundle(
     function_name: Optional[str] = None,
     file_includes: Iterable[str] = (),
     function_calls_made: Iterable[str] = (),
+    ast_view: Optional[Dict[str, Any]] = None,
 ) -> PromptBundle:
     """Build the analysis prompt as a PromptBundle (system + user, role-separated).
 
@@ -249,6 +250,33 @@ def build_analysis_prompt_bundle(
                 content=meta_text,
                 kind="function-context",
                 origin=file_path,
+            ))
+
+    # Structured per-function AST view: ALL calls inside the host
+    # function body, all explicit returns, inline-asm flag.
+    # Complements ``function-context`` (which is the static profile
+    # of the function's declaration) by giving the LLM a compact
+    # summary of what the body actually does — particularly useful
+    # for large functions where ``surrounding_context`` doesn't
+    # cover sanitiser calls or early returns that affect
+    # exploitability reasoning. See ``core.ast.view`` for the
+    # source; ``packages/llm_analysis/agent.py`` populates the
+    # finding's ``ast_view`` field before this builder runs.
+    if ast_view:
+        # Pass the finding's ``file_path`` as the display path so the
+        # rendered block body matches the block's ``origin``
+        # attribute (and the rest of the prompt's path conventions).
+        # Without this, ``ast_view["file"]`` would be the absolute
+        # path that ``core.ast.view`` saw — operator-facing
+        # inconsistency when scanning prompt logs.
+        view_text = _render_ast_view_block(
+            ast_view, file_path_override=file_path,
+        )
+        if view_text:
+            blocks.append(UntrustedBlock(
+                content=view_text,
+                kind="ast-view",
+                origin=f"{file_path}:{ast_view.get('function', '?')}",
             ))
 
     if has_dataflow and dataflow_source and dataflow_sink:
@@ -490,4 +518,124 @@ def build_analysis_prompt_bundle_from_finding(
         function_calls_made=(
             metadata.get("calls") or metadata.get("callees") or ()
         ),
+        # Per-function structured AST view (populated by
+        # ``packages.llm_analysis.agent`` enrichment loop). Absent
+        # when the function can't be located in the inventory or
+        # the parser doesn't support the language.
+        ast_view=finding.get("ast_view"),
     )
+
+
+# ---------------------------------------------------------------------------
+# AST-view rendering
+# ---------------------------------------------------------------------------
+
+
+# Limits keep the rendered block bounded in pathological cases (a
+# function with hundreds of calls or returns). The LLM doesn't need
+# every call — the first N is enough to detect sanitisers and
+# control-flow shape. Truncation is marked so the LLM knows the
+# list isn't exhaustive.
+_AST_VIEW_MAX_CALLS = 20
+_AST_VIEW_MAX_RETURNS = 10
+
+
+def _render_ast_view_block(
+    ast_view: Dict[str, Any],
+    *,
+    file_path_override: Optional[str] = None,
+) -> str:
+    """Render an ``ast_view`` dict (from ``core.ast.view().to_dict()``)
+    as a compact text summary for inclusion in the analysis prompt.
+
+    ``file_path_override`` lets the caller substitute a display
+    path for ``ast_view["file"]`` — useful when the ast_view's
+    file is an absolute (target-rooted) path that resolves
+    differently from the finding's repo-relative file. Passing
+    the finding's ``file_path`` keeps the block's body consistent
+    with the block's ``origin`` envelope attribute and with every
+    other untrusted block in the prompt. When omitted, falls back
+    to ``ast_view["file"]``.
+
+    Trade-offs:
+      * **Compact, not JSON.** Full ``ast_view`` JSON is 200-500
+        tokens per finding; this rendering is ~50-100 tokens
+        depending on call/return count.
+      * **Calls deduplicated.** Same callee at multiple lines
+        collapses to the callee name with hit count (``execute(x3)``).
+        Preserves the "this function calls a sanitiser N times"
+        signal while shrinking the token cost.
+      * **Lines on returns preserved.** Control-flow reasoning
+        depends on knowing which return is at which line.
+      * **Truncation marked.** Over-cap → ``...`` suffix so the
+        LLM knows the listing isn't exhaustive.
+
+    Returns ``""`` when the view contains nothing worth rendering
+    (no calls, no returns, no signature, asm absent). The caller
+    skips emitting an empty block.
+    """
+    function = ast_view.get("function") or "?"
+    file_str = file_path_override or ast_view.get("file") or "?"
+    lines = ast_view.get("lines") or (0, 0)
+    signature = (ast_view.get("signature") or "").strip()
+    has_asm = bool(ast_view.get("has_inline_asm"))
+
+    out_lines = []
+    if signature:
+        out_lines.append(
+            f"host function: {signature}  [{file_str}:{lines[0]}-{lines[1]}]"
+        )
+    else:
+        out_lines.append(
+            f"host function: {function}  [{file_str}:{lines[0]}-{lines[1]}]"
+        )
+    out_lines.append(f"- inline asm: {'yes' if has_asm else 'no'}")
+
+    # Defensive: callers should hand us a dict matching
+    # FunctionView.to_dict(), but ast_view can travel through JSON
+    # round-trips and corrupted-state caches — wrong types in
+    # ``calls_made`` / ``returns`` shouldn't crash the renderer.
+    # Non-list / non-dict entries are silently dropped.
+    raw_calls = ast_view.get("calls_made") or []
+    calls = [c for c in raw_calls if isinstance(c, dict)] if isinstance(raw_calls, list) else []
+    if calls:
+        # Deduplicate by callee name; record hit counts. ``chain``
+        # is the ordered name components (``["obj", "method"]`` for
+        # ``obj.method()``); render the dotted form.
+        counts: Dict[str, int] = {}
+        order: list = []
+        for c in calls:
+            chain = c.get("chain") or []
+            if not isinstance(chain, list):
+                chain = []
+            name = ".".join(str(p) for p in chain) if chain else "?"
+            if name not in counts:
+                order.append(name)
+                counts[name] = 0
+            counts[name] += 1
+        rendered = []
+        for name in order[:_AST_VIEW_MAX_CALLS]:
+            n = counts[name]
+            rendered.append(f"{name}(x{n})" if n > 1 else name)
+        suffix = "..." if len(order) > _AST_VIEW_MAX_CALLS else ""
+        out_lines.append(
+            f"- calls inside body ({len(calls)}): "
+            f"{', '.join(rendered)}{suffix}"
+        )
+    else:
+        out_lines.append("- calls inside body: (none)")
+
+    raw_returns = ast_view.get("returns") or []
+    returns = [r for r in raw_returns if isinstance(r, dict)] if isinstance(raw_returns, list) else []
+    if returns:
+        head = returns[:_AST_VIEW_MAX_RETURNS]
+        return_lines = ", ".join(str(r.get("line", "?")) for r in head)
+        suffix = "..." if len(returns) > _AST_VIEW_MAX_RETURNS else ""
+        out_lines.append(
+            f"- explicit returns: {len(returns)} "
+            f"(lines {return_lines}{suffix})"
+        )
+    else:
+        out_lines.append("- explicit returns: (none)")
+
+    return "\n".join(out_lines)

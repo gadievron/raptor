@@ -248,6 +248,24 @@ def function_called(
                     file_has_evidence = True
                     evidence.append((path, int(call.get("line", 0) or 0)))
 
+        # Fully-qualified-call fast-path: when the chain itself
+        # spells out the qualified name (e.g. C++ ``ns::Util::
+        # helper()`` → chain ``["ns", "Util", "helper"]``, or Java
+        # ``com.foo.Util.helper()``, or PHP ``\Foo\Bar::method()``),
+        # the import map is bypassed entirely in source. The
+        # import-map path can't see these; receiver_class isn't
+        # set either. Strict equality of the joined dotted form
+        # to the target catches them with no false-positive risk:
+        # if the chain literally spells the target, it IS the
+        # target. Most useful for C/C++ (no symbol-level imports)
+        # and any cross-language fully-qualified call shape.
+        if not file_has_evidence:
+            for call in calls:
+                chain = call.get("chain") or []
+                if len(chain) >= 2 and ".".join(chain) == qualified_name:
+                    file_has_evidence = True
+                    evidence.append((path, int(call.get("line", 0) or 0)))
+
         if file_has_evidence:
             continue
 

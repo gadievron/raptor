@@ -88,6 +88,15 @@ class FunctionInfo:
     is_exported: bool = False
     is_entry: bool = False
     calls_dangerous: List[str] = field(default_factory=list)
+    # Transitive-call reachability — sinks reachable within N hops via
+    # the call graph. calls_dangerous is the depth=1 subset; this is
+    # the union over all depths up to max_depth. Populated by
+    # _tag_transitive_callers. The CVE motivation: a parse_message
+    # routine builds a struct that gets passed through 2-3 internal
+    # helpers before reaching strcpy — calls_dangerous would never
+    # flag parse_message but transitively_reaches_dangerous does.
+    transitively_reaches_dangerous: List[str] = field(default_factory=list)
+    transitive_distance: int = 0  # min hops to any sink (0 = not reachable)
     decompiled: str = ""        # Filled lazily for high-priority functions
     rationale: str = ""         # LLM-supplied if analysed
 
@@ -142,6 +151,9 @@ class BinaryContextMap:
                 "is_exported": f.is_exported,
                 "is_entry": f.is_entry,
                 "calls_dangerous": f.calls_dangerous,
+                "transitively_reaches_dangerous":
+                    f.transitively_reaches_dangerous,
+                "transitive_distance": f.transitive_distance,
                 "rationale": f.rationale,
             }
 
@@ -308,6 +320,13 @@ class BinaryUnderstand:
     _T_DECOMPILE = 120.0    # pdc / pdg per function
     _T_QUERY = 60.0         # ij / iij / iEj / aflj / izj
     _T_XREF = 30.0          # axffj per function (cheap in-memory lookup)
+    _T_CALLGRAPH = 90.0     # aflcj — full call graph as JSON (one-shot)
+
+    # Transitive-call BFS hop limit. The motivating CVE pattern is
+    # "parser builds struct → 2-3 internal helpers → strcpy" — depth
+    # 3 catches that without an explosion of false-positive hub
+    # functions (anything is 5+ hops from anything in a large binary).
+    _TRANSITIVE_MAX_DEPTH = 3
 
     def analyse(
         self,
@@ -394,6 +413,11 @@ class BinaryUnderstand:
             self._extract_entry_points(ctx)
             self._extract_strings(r2, ctx, limit=max_strings)
             self._tag_dangerous_callers(r2, ctx)
+            # Transitive analysis MUST follow _tag_dangerous_callers
+            # because it reads ctx.dangerous_sinks for the BFS seed
+            # set, and adds transitively_reaches_dangerous /
+            # transitive_distance fields used by the prioritise step.
+            self._tag_transitive_callers(r2, ctx)
             self._decompile_priorities(r2, ctx, limit=max_decompile)
             if self.llm:
                 self._llm_prioritise(ctx)
@@ -585,6 +609,148 @@ class BinaryUnderstand:
             if hit:
                 ctx.dangerous_sinks.append(fn)
 
+    def _tag_transitive_callers(self, r2, ctx: BinaryContextMap) -> None:
+        """Walk the call graph backwards from each dangerous sink up to
+        `_TRANSITIVE_MAX_DEPTH` hops and flag every function that can
+        reach a sink within that depth.
+
+        Why: _tag_dangerous_callers above only tags DIRECT callers. The
+        real-world CVE pattern is a parser routine that builds a struct,
+        passes it through 2-3 internal helpers, and only THEN reaches
+        strcpy / memcpy / etc. Those intermediate parsers are exactly
+        what the fuzzer should hammer — but they don't directly call
+        any dangerous import so calls_dangerous wouldn't flag them.
+
+        Approach: single `aflcj` call gets the whole call graph as JSON
+        (one r2 cmd, not 100s of per-function axt calls). BFS backwards
+        from each sink name through the inverted adjacency list. The
+        FunctionInfo records gain transitively_reaches_dangerous (list
+        of sink names) and transitive_distance (min hops to any sink).
+
+        Per-function transitive flag composes additively with
+        calls_dangerous: a function that DIRECTLY calls strcpy AND
+        transitively reaches gets will surface in both lists, with
+        transitive_distance=1.
+        """
+        # 1. Pull the whole call graph in one shot.
+        try:
+            callgraph = json.loads(
+                self._cmd_t(r2, "aflcj", self._T_CALLGRAPH) or "[]"
+            )
+        except Exception as e:
+            logger.debug(f"aflcj call-graph fetch failed: {e}; "
+                         f"skipping transitive analysis")
+            return
+
+        # Defensive: some r2 builds wrap aflcj output as
+        # {"functions": [...]} or {"data": [...]} rather than a bare
+        # list. Unwrap so the per-entry loop below sees a list. If
+        # we can't find a known wrapper key, leave callgraph as-is
+        # and the per-entry loop will get the right type-error fast.
+        if isinstance(callgraph, dict):
+            callgraph = (
+                callgraph.get("functions")
+                or callgraph.get("data")
+                or []
+            )
+
+        if not callgraph or not isinstance(callgraph, list):
+            return
+
+        # 2. Build forward + reverse adjacency by function name.
+        #    aflcj's per-function record exposes callees under multiple
+        #    field names depending on r2 version: `callrefs` (5.x),
+        #    `imports` (some older builds), `calls` (variant). Union
+        #    them defensively so the analysis works across versions.
+        callees: Dict[str, set] = {}
+        for entry in callgraph:
+            name = str(entry.get("name", ""))
+            if not name:
+                continue
+            this_callees = set()
+            for ref_field in ("callrefs", "imports", "calls"):
+                refs = entry.get(ref_field) or []
+                for ref in refs:
+                    if isinstance(ref, dict):
+                        target = ref.get("name") or ref.get("addr")
+                    else:
+                        target = ref
+                    if target:
+                        this_callees.add(str(target))
+            callees[name] = this_callees
+
+        # Build reverse map (called → set of callers) for the BFS.
+        # Also build a name-suffix index so we can match
+        # "sym.imp.strcpy" against just "strcpy" if the call graph
+        # references the import under its bare name (varies by r2
+        # version and binary format).
+        callers: Dict[str, set] = {}
+        for caller_name, called_set in callees.items():
+            for called in called_set:
+                callers.setdefault(called, set()).add(caller_name)
+                # Also index by base name (after last '.') so a call
+                # site recorded as "strcpy" matches a sink stored as
+                # "sym.imp.strcpy".
+                base = called.split(".")[-1]
+                if base != called:
+                    callers.setdefault(base, set()).add(caller_name)
+
+        # 3. BFS backwards from each sink, tracking per-function
+        #    (min-distance, reachable-sinks-set).
+        sink_names = {fn.name for fn in ctx.dangerous_sinks}
+        if not sink_names:
+            return
+        # Map: caller_name → (min_distance, set_of_sinks_reached)
+        reached: Dict[str, tuple] = {}
+        # frontier is set of (current_name, sink_name, depth_from_sink)
+        # — we track which sink each frontier entry came from so the
+        # per-function reachable-sinks list is accurate.
+        frontier = [(s, s, 0) for s in sink_names]
+        next_frontier: list = []
+        depth = 0
+        while frontier and depth < self._TRANSITIVE_MAX_DEPTH:
+            depth += 1
+            next_frontier = []
+            for current, origin_sink, _ in frontier:
+                # Try both the raw name and bare basename — call sites
+                # may reference either.
+                candidates = {current, current.split(".")[-1]}
+                seen_callers = set()
+                for cand in candidates:
+                    seen_callers.update(callers.get(cand, ()))
+                for caller in seen_callers:
+                    # Skip sinks themselves — we don't want a sink that
+                    # happens to call another sink to be flagged as
+                    # "transitively reaches itself".
+                    if caller in sink_names:
+                        continue
+                    prev_dist, prev_sinks = reached.get(
+                        caller, (depth + 1, set()),
+                    )
+                    new_sinks = prev_sinks | {origin_sink}
+                    new_dist = min(prev_dist, depth)
+                    reached[caller] = (new_dist, new_sinks)
+                    # Add to next frontier so we walk further back
+                    # — but only if we haven't already expanded past
+                    # max depth.
+                    if depth < self._TRANSITIVE_MAX_DEPTH:
+                        next_frontier.append((caller, origin_sink, depth))
+            frontier = next_frontier
+
+        # 4. Populate the FunctionInfo records on interesting_functions.
+        #    (Imported functions can't transitively reach anything — they
+        #    ARE the sinks; we skip them.)
+        for fn in ctx.interesting_functions:
+            if fn.name not in reached:
+                continue
+            dist, sink_set = reached[fn.name]
+            # Normalise sink display name to the bare base (strcpy not
+            # sym.imp.strcpy) for readability in fuzz_priorities output.
+            fn.transitively_reaches_dangerous = sorted(
+                s.split(".")[-1] for s in sink_set
+            )
+            fn.transitive_distance = dist
+
     def _decompile_priorities(
         self,
         r2,
@@ -635,21 +801,62 @@ class BinaryUnderstand:
                 fn.decompiled = ""
 
     def _heuristic_prioritise(self, ctx: BinaryContextMap) -> None:
-        """No-LLM fallback: prioritise functions that call dangerous sinks."""
+        """No-LLM fallback: prioritise by direct + transitive dangerous-
+        sink reachability.
+
+        Scoring weights direct calls heaviest because they're the
+        clearest CVE shape, but transitive reachability surfaces the
+        "hub" functions (parser entry points 2-3 hops from a sink)
+        that are exactly what the fuzzer should hammer. Without the
+        transitive term, parse_message-style routines never appear
+        even though they're the dominant CVE pattern.
+
+        score = (direct sinks × 10)
+              + (transitive sinks × (max_depth + 1 - distance))
+
+        So a function that directly calls 1 sink scores 10; a
+        function 2 hops from 4 sinks scores 4 × (3 + 1 - 2) = 8 —
+        comparable but still ranked below direct callers. A "hub"
+        function 1 hop from 5 sinks scores 5 × (4 - 1) = 15, edging
+        out a single-direct-call routine. That weighting matches
+        operator intuition: many-hop-reachable hubs > single direct
+        call > deep-but-narrow reachability.
+        """
+        def _score(fn) -> int:
+            direct = len(fn.calls_dangerous) * 10
+            if fn.transitive_distance > 0:
+                weight = (self._TRANSITIVE_MAX_DEPTH + 1
+                          - fn.transitive_distance)
+                transitive = len(fn.transitively_reaches_dangerous) * weight
+            else:
+                transitive = 0
+            return direct + transitive
+
         priorities = []
-        for fn in sorted(
-            ctx.interesting_functions,
-            key=lambda f: -len(f.calls_dangerous),
-        ):
-            if not fn.calls_dangerous:
+        ranked = sorted(ctx.interesting_functions, key=lambda f: -_score(f))
+        for fn in ranked:
+            score = _score(fn)
+            if score == 0:
                 continue
+            parts = []
+            if fn.calls_dangerous:
+                parts.append(
+                    f"calls {', '.join(fn.calls_dangerous)} directly"
+                )
+            if fn.transitively_reaches_dangerous:
+                parts.append(
+                    f"reaches {', '.join(fn.transitively_reaches_dangerous)} "
+                    f"in {fn.transitive_distance} hop"
+                    f"{'s' if fn.transitive_distance > 1 else ''}"
+                )
             priorities.append({
                 "function": fn.name,
                 "address": hex(fn.address),
-                "reason": (
-                    f"Calls dangerous imports: {', '.join(fn.calls_dangerous)}"
-                ),
-                "score": len(fn.calls_dangerous),
+                "reason": "; ".join(parts),
+                "score": score,
+                "direct_sinks": list(fn.calls_dangerous),
+                "transitive_sinks": list(fn.transitively_reaches_dangerous),
+                "transitive_distance": fn.transitive_distance,
             })
             if len(priorities) >= 20:
                 break
