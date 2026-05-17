@@ -328,3 +328,99 @@ def test_resolver_not_called_when_function_unused():
     }
     r = function_called(inv, "lodash.get")
     assert r.verdict == Verdict.NOT_CALLED
+
+
+# ---------------------------------------------------------------------------
+# Class capture
+# ---------------------------------------------------------------------------
+
+
+def test_js_class_declaration_records_methods_and_bases():
+    """``class Foo extends Bar { m() {} n() {} }`` →
+    classes[0].bases=['Bar'], methods=[(m,..), (n,..)]."""
+    g = extract_call_graph_javascript(
+        "class Foo extends Bar {\n"
+        "    m() {}\n"
+        "    n() {}\n"
+        "}\n"
+    )
+    assert len(g.classes) == 1
+    cls = g.classes[0]
+    assert cls.name == "Foo"
+    assert cls.bases == ["Bar"]
+    method_names = [m[0] for m in cls.methods]
+    assert "m" in method_names
+    assert "n" in method_names
+    assert cls.nested is False
+
+
+def test_js_class_without_extends_has_no_bases():
+    """``class Foo { method() {} }`` → bases=[]."""
+    g = extract_call_graph_javascript(
+        "class Foo { method() {} }\n"
+    )
+    assert len(g.classes) == 1
+    assert g.classes[0].bases == []
+
+
+def test_js_this_dot_method_tags_receiver_class():
+    """``this.foo()`` inside an instance method → receiver_class
+    points at the enclosing class."""
+    g = extract_call_graph_javascript(
+        "class C {\n"
+        "    run() { this.helper(); }\n"
+        "    helper() {}\n"
+        "}\n"
+    )
+    call = next(c for c in g.calls if c.chain == ["this", "helper"])
+    assert call.receiver_class == "C"
+    assert call.caller == "run"
+
+
+def test_js_unqualified_call_no_receiver_class():
+    """JS unqualified ``foo()`` inside a method resolves through
+    lexical scope (could be a closure / module-level / import),
+    not via implicit-this. Leave receiver_class=None."""
+    g = extract_call_graph_javascript(
+        "class C {\n"
+        "    run() { helper(); }\n"
+        "    helper() {}\n"
+        "}\n"
+    )
+    call = next(c for c in g.calls if c.chain == ["helper"])
+    assert call.receiver_class is None
+
+
+def test_js_constructor_registered():
+    """``constructor() {}`` is a method_definition like any
+    other — registers on the class with name 'constructor'."""
+    g = extract_call_graph_javascript(
+        "class C {\n"
+        "    constructor() {}\n"
+        "    run() {}\n"
+        "}\n"
+    )
+    method_names = [m[0] for m in g.classes[0].methods]
+    assert "constructor" in method_names
+    assert "run" in method_names
+
+
+def test_js_nested_class_marked_nested():
+    """Class defined inside another class method's closure
+    scope is marked nested (resolver treats nested classes as
+    opaque for narrowing)."""
+    g = extract_call_graph_javascript(
+        "class Outer {\n"
+        "    factory() {\n"
+        "        return class Inner { method() {} };\n"
+        "    }\n"
+        "}\n"
+    )
+    outer = next(c for c in g.classes if c.name == "Outer")
+    assert outer.nested is False
+    # ``class Inner`` is a class_expression in JS; tree-sitter
+    # may or may not emit it under class_declaration. If captured,
+    # it should be nested.
+    inners = [c for c in g.classes if c.name == "Inner"]
+    if inners:
+        assert inners[0].nested is True

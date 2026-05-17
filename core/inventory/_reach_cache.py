@@ -58,7 +58,15 @@ logger = logging.getLogger(__name__)
 # automatically. Don't bump for pure additive changes that an old
 # cache could still satisfy — the in-process build is fast enough
 # that operators don't need version-skew sympathy.
-_CACHE_VERSION = 3
+#
+# V4 (2026-05-16): per-language alias canonicalisation extended
+# ``qualified_to_internal`` with ``<pkg>.<Class>.<method>`` entries
+# for Java/C#/PHP/Rust/JS-TS/Ruby method definitions. An old V3
+# cache returned ``InternalFunction(verdict=UNCERTAIN)`` for
+# class-qualified queries that the new build would have resolved
+# to ``CALLED``/``NOT_CALLED`` — a real correctness regression on
+# stale caches, so this is a bump-worthy change.
+_CACHE_VERSION = 4
 
 _CACHE_DIR = Path.home() / ".cache" / "raptor" / "reachability"
 
@@ -67,7 +75,7 @@ _CACHE_DIR = Path.home() / ".cache" / "raptor" / "reachability"
 # the same name. Also doubles as a cheap "is this a raptor cache
 # file" check before handing bytes to ``pickle.load``. The numeric
 # suffix tracks ``_CACHE_VERSION``.
-_HEADER_MAGIC = b"RAPTOR-REACHABILITY-CACHE-V3\n"
+_HEADER_MAGIC = b"RAPTOR-REACHABILITY-CACHE-V4\n"
 
 
 def compute_fingerprint(inventory: Dict[str, Any]) -> Optional[str]:

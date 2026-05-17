@@ -165,6 +165,18 @@ class FileCallGraph:
     getattr_targets: Set[str] = field(default_factory=set)
     classes: List[ClassDef] = field(default_factory=list)
     decorated_functions: List[DecoratedFunction] = field(default_factory=list)
+    # Module/package/namespace declared inside this file. The
+    # reachability resolver uses this to canonicalise cross-package
+    # references into project-defined functions for languages where
+    # the source file's package isn't derivable from the file path
+    # alone — Go (``package <name>``), Java (``package com.foo;``),
+    # Rust (``mod`` chains), C# (``namespace Foo.Bar``), PHP
+    # (``namespace Foo\Bar``). For Python this stays ``None``: the
+    # resolver derives the qualified name from the file path
+    # heuristically. For JS/TS each file IS its module — also
+    # path-derivable, so stays ``None``. For Ruby the
+    # module/class nesting at file scope.
+    package_name: Optional[str] = None
     # Relative imports (Python ``from . import x`` /
     # ``from ..pkg import y``). Stored as
     # ``(level, module_or_empty, name, asname_or_None)`` quads. Not
@@ -200,6 +212,7 @@ class FileCallGraph:
                  "decorators": [list(ch) for ch in d.decorators]}
                 for d in self.decorated_functions
             ],
+            "package_name": self.package_name,
             "relative_imports": [list(ri) for ri in self.relative_imports],
         }
 
@@ -244,6 +257,7 @@ class FileCallGraph:
                 )
                 for df in (d.get("decorated_functions") or [])
             ],
+            package_name=d.get("package_name"),
             relative_imports=[
                 (int(r[0]), str(r[1] or ""), str(r[2] or ""),
                  r[3] if len(r) > 3 else None)
@@ -591,10 +605,21 @@ class _JsCallGraph:
         "generator_function_declaration", "generator_function",
     )
     _NEW_NODE = "new_expression"
+    _CLASS_DECL = "class_declaration"
+    _CLASS_EXPR = "class"  # tree-sitter-js node type for class expressions
+    _CLASS_BODY = "class_body"
+    _CLASS_HERITAGE = "class_heritage"
+    _METHOD_DEF = "method_definition"
+    _THIS_NODE = "this"
 
     def __init__(self) -> None:
         self.graph = FileCallGraph()
         self._enclosing: List[str] = []
+        # Class context for ``class Foo { method() { this.x(); } }``.
+        # JS classes are single-inheritance (one ``extends`` target)
+        # but mixin patterns mean class_heritage may carry a call
+        # expression — we capture the surface identifier when present.
+        self._class_stack: List[ClassDef] = []
 
     def walk(self, node) -> None:
         """Recursive descent. We push/pop the enclosing-function
@@ -602,9 +627,51 @@ class _JsCallGraph:
         is the innermost NAMED enclosing function — anonymous
         functions / arrows are walked-through without affecting
         the caller attribution."""
+        if node.type == self._CLASS_DECL:
+            name_node = self._first_child_of_type(node, (self._IDENT_NODE,))
+            if name_node is not None:
+                bases: List[str] = []
+                heritage = self._first_child_of_type(node, (
+                    self._CLASS_HERITAGE,
+                ))
+                if heritage is not None:
+                    # ``extends Foo`` → identifier child; ``extends
+                    # mixin(Base)`` → call_expression. Capture the
+                    # innermost identifier where present.
+                    for hc in heritage.children:
+                        if hc.type == self._IDENT_NODE:
+                            bases.append(hc.text.decode())
+                cdef = ClassDef(
+                    name=name_node.text.decode(),
+                    line=node.start_point[0] + 1,
+                    bases=bases,
+                    nested=bool(self._class_stack) or bool(self._enclosing),
+                )
+                self.graph.classes.append(cdef)
+                self._class_stack.append(cdef)
+                try:
+                    for child in node.children:
+                        self.walk(child)
+                finally:
+                    self._class_stack.pop()
+                return
+            # Anon class — recurse without push.
+            for child in node.children:
+                self.walk(child)
+            return
+
         if node.type in self._FUNC_NODES:
             name = self._function_name(node)
             if name is not None:
+                # Register method on the immediate class (only when
+                # this is a method_definition, not a nested function
+                # or arrow inside a method).
+                if (node.type == self._METHOD_DEF
+                        and self._class_stack
+                        and not self._enclosing):
+                    self._class_stack[-1].methods.append(
+                        (name, node.start_point[0] + 1),
+                    )
                 self._enclosing.append(name)
                 try:
                     for child in node.children:
@@ -677,13 +744,29 @@ class _JsCallGraph:
         self.graph.imports[bound] = f"{module}.{original}"
 
     def _visit_lex_decl(self, node) -> None:
-        """``const x = require('foo')`` / ``const { y } = require('foo')``."""
+        """``const x = require('foo')`` / ``const { y } = require('foo')``
+        / ``const Foo = class extends Bar { ... }``."""
         for declarator in node.children:
             if declarator.type != self._VAR_DECLARATOR_NODE:
                 continue
             value = self._declarator_value(declarator)
             if value is None:
                 continue
+            # ``const Foo = class ... {}`` — synthesise a ClassDef
+            # with the LHS identifier as the class name. Bases come
+            # from class_heritage; methods from the class_body. We
+            # only synthesise metadata here; the walker still
+            # descends into the body so calls inside class methods
+            # are recorded as call sites (just without class
+            # context, since class expressions are anonymous in the
+            # grammar and we don't push class_stack from here).
+            if value.type == self._CLASS_EXPR:
+                target = declarator.children[0] if declarator.children else None
+                if (target is not None
+                        and target.type == self._IDENT_NODE):
+                    self._synthesise_class_from_expr(
+                        value, target.text.decode(),
+                    )
             module = self._require_module_name(value)
             if module is None:
                 continue
@@ -714,6 +797,45 @@ class _JsCallGraph:
                             orig = ids[0].text.decode()
                             alias = ids[1].text.decode()
                             self.graph.imports[alias] = f"{module}.{orig}"
+
+    def _synthesise_class_from_expr(self, cls_node, name: str) -> None:
+        """``const Foo = class extends Bar { method() {} };``
+
+        Pulls bases from class_heritage and method names from
+        class_body.method_definition. Adds a ClassDef carrying
+        ``name`` (taken from the variable_declarator's LHS,
+        since class expressions are anonymous in the grammar).
+        """
+        bases: List[str] = []
+        body = None
+        for c in cls_node.children:
+            if c.type == self._CLASS_HERITAGE:
+                for hc in c.children:
+                    if hc.type == self._IDENT_NODE:
+                        bases.append(hc.text.decode())
+            elif c.type == self._CLASS_BODY:
+                body = c
+        methods: List[Tuple[str, int]] = []
+        if body is not None:
+            for c in body.children:
+                if c.type != self._METHOD_DEF:
+                    continue
+                m_name = self._first_child_of_type(c, (
+                    self._IDENT_NODE, self._PROP_IDENT_NODE,
+                    "private_property_identifier",
+                ))
+                if m_name is not None:
+                    methods.append((
+                        m_name.text.decode(),
+                        c.start_point[0] + 1,
+                    ))
+        self.graph.classes.append(ClassDef(
+            name=name,
+            line=cls_node.start_point[0] + 1,
+            bases=bases,
+            methods=methods,
+            nested=bool(self._class_stack) or bool(self._enclosing),
+        ))
 
     # ------------------------------------------------------------------
     # Calls + indirection
@@ -775,10 +897,21 @@ class _JsCallGraph:
             self.graph.indirection.add(INDIRECTION_DYNAMIC_IMPORT)
 
         caller = self._enclosing[-1] if self._enclosing else None
+        # ``this.foo()`` inside an instance method → narrow to the
+        # enclosing class. Unqualified ``foo()`` inside a method
+        # does NOT — JS unqualified names resolve through the
+        # lexical scope (could be a module-level function, an
+        # import, or a closure variable), not via implicit-this.
+        receiver_class: Optional[str] = None
+        if (self._class_stack and not self._class_stack[-1].nested
+                and self._enclosing
+                and len(chain) >= 2 and chain[0] == "this"):
+            receiver_class = self._class_stack[-1].name
         self.graph.calls.append(CallSite(
             line=node.start_point[0] + 1,
             chain=chain,
             caller=caller,
+            receiver_class=receiver_class,
         ))
 
     # ------------------------------------------------------------------
@@ -811,7 +944,10 @@ class _JsCallGraph:
         if node.type not in named_kinds:
             return None
         ident = self._first_child_of_type(
-            node, (self._IDENT_NODE, self._PROP_IDENT_NODE),
+            node, (
+                self._IDENT_NODE, self._PROP_IDENT_NODE,
+                "private_property_identifier",
+            ),
         )
         if ident is not None:
             return ident.text.decode()
@@ -840,7 +976,8 @@ class _JsCallGraph:
             cur = callee
             while cur is not None and cur.type == self._MEMBER_NODE:
                 prop = self._last_child_of_type(
-                    cur, (self._PROP_IDENT_NODE,),
+                    cur, (self._PROP_IDENT_NODE,
+                          "private_property_identifier"),
                 )
                 if prop is None:
                     return None
@@ -848,6 +985,12 @@ class _JsCallGraph:
                 cur = cur.children[0] if cur.children else None
             if cur is not None and cur.type == self._IDENT_NODE:
                 parts.append(cur.text.decode())
+                return list(reversed(parts))
+            if cur is not None and cur.type == self._THIS_NODE:
+                # ``this.X.Y()`` — preserve ``this`` as the head so
+                # the call site can be tagged with the enclosing
+                # class as receiver_class.
+                parts.append("this")
                 return list(reversed(parts))
             return None
         return None
@@ -1072,6 +1215,7 @@ class _GoCallGraph:
     _ARG_LIST_NODE = "argument_list"
     _FUNC_DECL_NODE = "function_declaration"
     _METHOD_DECL_NODE = "method_declaration"
+    _PKG_CLAUSE_NODE = "package_clause"
 
     def __init__(self) -> None:
         self.graph = FileCallGraph()
@@ -1113,6 +1257,27 @@ class _GoCallGraph:
         if node.type == self._IMPORT_DECL_NODE:
             self._visit_import(node)
             # Don't recurse inside (no calls / functions live there).
+            return
+
+        if node.type == self._PKG_CLAUSE_NODE:
+            # Every Go source file starts with ``package <name>``.
+            # The package name authoritatively identifies cross-
+            # file references; the dir name is NOT canonical.
+            # We store the package-as-declared (a single identifier,
+            # not the full module path — the latter requires
+            # go.mod context which the per-file extractor doesn't
+            # have). The reachability resolver combines this with
+            # the function name to seed ``qualified_to_internal``.
+            pkg_ident = self._first_child_of_type(
+                node, (self._PKG_IDENT_NODE, self._IDENT_NODE),
+            )
+            if pkg_ident is not None:
+                try:
+                    self.graph.package_name = pkg_ident.text.decode(
+                        "utf-8", errors="replace",
+                    ).strip()
+                except Exception:                       # noqa: BLE001
+                    pass
             return
 
         if node.type == self._CALL_NODE:
@@ -1367,6 +1532,7 @@ class _JavaCallGraph:
 
     _METHOD_INVOCATION = "method_invocation"
     _IMPORT_DECL = "import_declaration"
+    _PKG_DECL = "package_declaration"
     _SCOPED_IDENT = "scoped_identifier"
     _IDENT = "identifier"
     _FIELD_ACCESS = "field_access"
@@ -1374,6 +1540,13 @@ class _JavaCallGraph:
     _METHOD_DECL = "method_declaration"
     _CONSTRUCTOR_DECL = "constructor_declaration"
     _CLASS_DECL = "class_declaration"
+    _INTERFACE_DECL = "interface_declaration"
+    _RECORD_DECL = "record_declaration"
+    _ENUM_DECL = "enum_declaration"
+    _SUPERCLASS = "superclass"
+    _SUPER_INTERFACES = "super_interfaces"
+    _EXTENDS_INTERFACES = "extends_interfaces"
+    _TYPE_IDENT = "type_identifier"
     _ASTERISK = "asterisk"
     _STATIC = "static"
     _STRING_LIT = "string_literal"
@@ -1381,15 +1554,27 @@ class _JavaCallGraph:
     def __init__(self) -> None:
         self.graph = FileCallGraph()
         self._enclosing: List[str] = []
+        # Class-context stack — Java methods always live inside a
+        # class. The innermost class is what ``self.method()`` /
+        # ``this.method()`` calls dispatch on. Captured for
+        # class-aware narrowing parity with Python.
+        self._class_stack: List[ClassDef] = []
 
     def walk(self, node) -> None:
         """Recursive descent. Push/pop enclosing-method stack so
         ``CallSite.caller`` carries the innermost named method."""
         if node.type == self._METHOD_DECL:
             name = self._first_child_of_type(node, (self._IDENT,))
-            self._enclosing.append(
-                name.text.decode() if name else "<anon>"
-            )
+            method_name = name.text.decode() if name else "<anon>"
+            # Register the method on the directly-enclosing class
+            # (depth-1 only; nested-class methods stay on the
+            # nested class). ``_enclosing`` is empty here because
+            # methods aren't nested inside methods in Java.
+            if self._class_stack and not self._enclosing:
+                self._class_stack[-1].methods.append(
+                    (method_name, node.start_point[0] + 1),
+                )
+            self._enclosing.append(method_name)
             try:
                 for child in node.children:
                     self.walk(child)
@@ -1400,9 +1585,12 @@ class _JavaCallGraph:
         if node.type == self._CONSTRUCTOR_DECL:
             # Constructors use the class name as the identifier.
             name = self._first_child_of_type(node, (self._IDENT,))
-            self._enclosing.append(
-                name.text.decode() if name else "<ctor>"
-            )
+            ctor_name = name.text.decode() if name else "<ctor>"
+            if self._class_stack and not self._enclosing:
+                self._class_stack[-1].methods.append(
+                    (ctor_name, node.start_point[0] + 1),
+                )
+            self._enclosing.append(ctor_name)
             try:
                 for child in node.children:
                     self.walk(child)
@@ -1412,6 +1600,94 @@ class _JavaCallGraph:
 
         if node.type == self._IMPORT_DECL:
             self._visit_import(node)
+            return
+
+        if node.type == self._PKG_DECL:
+            # ``package com.foo.bar;`` — the dotted prefix every
+            # class in this file lives under. Java's fully-qualified
+            # name is ``<package>.<class>`` (and method invocations
+            # resolve via the import map + class hierarchy).
+            scoped = self._first_child_of_type(node, (
+                self._SCOPED_IDENT, self._IDENT,
+            ))
+            if scoped is not None:
+                if scoped.type == self._SCOPED_IDENT:
+                    pkg = self._scoped_identifier_text(scoped)
+                else:
+                    pkg = scoped.text.decode("utf-8", errors="replace")
+                if pkg:
+                    self.graph.package_name = pkg.strip()
+            return
+
+        if node.type in (self._CLASS_DECL, self._INTERFACE_DECL,
+                         self._RECORD_DECL, self._ENUM_DECL):
+            # Capture for class-aware narrowing. Java's
+            # ``superclass`` + ``super_interfaces`` lists are
+            # the bases; record them so ancestor resolution at
+            # query time can narrow correctly. ``record_declaration``
+            # (Java 14+) and ``enum_declaration`` share the same
+            # body+heritage shape and host method definitions same
+            # as a class.
+            name_node = self._first_child_of_type(node, (
+                self._IDENT, self._TYPE_IDENT,
+            ))
+            cls_name = (
+                name_node.text.decode("utf-8", errors="replace")
+                if name_node is not None else None
+            )
+            bases: List[str] = []
+            for child in node.children:
+                if child.type == self._SUPERCLASS:
+                    # ``extends Base`` — direct type_identifier child.
+                    for sub in child.children:
+                        if sub.type in (self._IDENT, self._TYPE_IDENT,
+                                        self._SCOPED_IDENT):
+                            text = (
+                                self._scoped_identifier_text(sub)
+                                if sub.type == self._SCOPED_IDENT
+                                else sub.text.decode(
+                                    "utf-8", errors="replace",
+                                )
+                            )
+                            if text:
+                                bases.append(text)
+                elif child.type in (self._SUPER_INTERFACES,
+                                    self._EXTENDS_INTERFACES):
+                    # ``implements A, B`` (class) or ``extends A, B``
+                    # (interface) — both wrap a ``type_list``.
+                    for grandchild in child.children:
+                        if grandchild.type != "type_list":
+                            continue
+                        for sub in grandchild.children:
+                            if sub.type in (self._IDENT, self._TYPE_IDENT,
+                                            self._SCOPED_IDENT):
+                                text = (
+                                    self._scoped_identifier_text(sub)
+                                    if sub.type == self._SCOPED_IDENT
+                                    else sub.text.decode(
+                                        "utf-8", errors="replace",
+                                    )
+                                )
+                                if text:
+                                    bases.append(text)
+            if cls_name:
+                cdef = ClassDef(
+                    name=cls_name,
+                    line=node.start_point[0] + 1,
+                    bases=bases,
+                    nested=bool(self._class_stack) or bool(self._enclosing),
+                )
+                self.graph.classes.append(cdef)
+                self._class_stack.append(cdef)
+                try:
+                    for child in node.children:
+                        self.walk(child)
+                finally:
+                    self._class_stack.pop()
+                return
+            # Anon / malformed — recurse without class push
+            for child in node.children:
+                self.walk(child)
             return
 
         if node.type == self._METHOD_INVOCATION:
@@ -1502,10 +1778,25 @@ class _JavaCallGraph:
             self.graph.indirection.add(INDIRECTION_REFLECT)
 
         caller = self._enclosing[-1] if self._enclosing else None
+
+        # Class-aware narrowing. Java implicit-receiver calls
+        # (``foo()`` from inside a method) and ``this.foo()``
+        # dispatch on the innermost non-nested enclosing class.
+        # ``super.foo()`` is the parent — leave receiver_class
+        # None and let the resolver search bases via the hierarchy.
+        receiver_class: Optional[str] = None
+        if (self._class_stack and not self._class_stack[-1].nested
+                and self._enclosing):
+            if len(chain) == 1:
+                receiver_class = self._class_stack[-1].name
+            elif len(chain) == 2 and chain[0] == "this":
+                receiver_class = self._class_stack[-1].name
+
         self.graph.calls.append(CallSite(
             line=node.start_point[0] + 1,
             chain=chain,
             caller=caller,
+            receiver_class=receiver_class,
         ))
 
     def _invocation_chain(self, node) -> Optional[List[str]]:
@@ -1537,7 +1828,8 @@ class _JavaCallGraph:
                 break
             if not child.is_named:
                 continue
-            if child.type in (self._IDENT, self._FIELD_ACCESS):
+            if child.type in (self._IDENT, self._FIELD_ACCESS,
+                              "this", "super"):
                 named_before_args.append(child)
             elif child.type == "type_arguments":
                 # Java generics on the call: ``foo.<T>bar()`` —
@@ -1565,6 +1857,9 @@ class _JavaCallGraph:
 
         if operand.type == self._IDENT:
             return [operand.text.decode(), method_name]
+
+        if operand.type in ("this", "super"):
+            return [operand.type, method_name]
 
         if operand.type == self._FIELD_ACCESS:
             parts = self._field_access_chain(operand)
@@ -1678,20 +1973,47 @@ class _RustCallGraph:
     _IDENT = "identifier"
     _FIELD_IDENT = "field_identifier"
     _FUNCTION_ITEM = "function_item"
+    _FUNCTION_SIG = "function_signature_item"
     _CALL_EXPR = "call_expression"
     _FIELD_EXPR = "field_expression"
     _ARGS = "arguments"
+    _TYPE_IDENT = "type_identifier"
+    _STRUCT_ITEM = "struct_item"
+    _ENUM_ITEM = "enum_item"
+    _UNION_ITEM = "union_item"
+    _TRAIT_ITEM = "trait_item"
+    _IMPL_ITEM = "impl_item"
+    _MOD_ITEM = "mod_item"
+    _DECL_LIST = "declaration_list"
+    _SELF = "self"
 
     def __init__(self) -> None:
         self.graph = FileCallGraph()
         self._enclosing: List[str] = []
+        # Class context for ``impl Foo { fn m() {} }`` — methods
+        # in the impl block belong to ``Foo``. ``impl Trait for
+        # Foo`` also belongs to ``Foo`` (the second type_identifier).
+        # Same convention as Python / Java class_stack.
+        self._class_stack: List[ClassDef] = []
+        # Module nesting for mod_item; not threaded into
+        # package_name (Rust file modules are path-derived) but
+        # used to mark nested classes.
+        self._mod_depth: int = 0
 
     def walk(self, node) -> None:
         if node.type == self._FUNCTION_ITEM:
             name = self._first_child_of_type(node, (self._IDENT,))
-            self._enclosing.append(
-                name.text.decode() if name else "<anon>"
-            )
+            method_name = name.text.decode() if name else "<anon>"
+            # Register the method on the directly-enclosing impl
+            # block (the innermost class on the stack). Skip if
+            # we're inside a nested function (functions can be
+            # nested inside other functions in Rust — those aren't
+            # methods of the outer class).
+            if self._class_stack and not self._enclosing:
+                self._class_stack[-1].methods.append(
+                    (method_name, node.start_point[0] + 1),
+                )
+            self._enclosing.append(method_name)
             try:
                 for c in node.children:
                     self.walk(c)
@@ -1699,8 +2021,129 @@ class _RustCallGraph:
                 self._enclosing.pop()
             return
 
+        if node.type == self._FUNCTION_SIG:
+            # ``fn name(args);`` inside a trait body — no body, no
+            # calls to walk, but does count as a method definition
+            # on the trait.
+            name = self._first_child_of_type(node, (self._IDENT,))
+            if name is not None and self._class_stack:
+                method_name = name.text.decode()
+                self._class_stack[-1].methods.append(
+                    (method_name, node.start_point[0] + 1),
+                )
+            return
+
         if node.type == self._USE_DECL:
             self._handle_use(node)
+            return
+
+        if node.type == self._MOD_ITEM:
+            self._mod_depth += 1
+            try:
+                for c in node.children:
+                    self.walk(c)
+            finally:
+                self._mod_depth -= 1
+            return
+
+        if node.type in (self._STRUCT_ITEM, self._ENUM_ITEM,
+                         self._UNION_ITEM, self._TRAIT_ITEM):
+            # ``struct Foo;`` / ``enum E { ... }`` / ``trait T``
+            # declares the class itself. Bases are the trait
+            # supertraits for trait_item (``trait T: A + B``); for
+            # struct/enum/union there are no bases (impls add them).
+            name_node = self._first_child_of_type(node, (
+                self._TYPE_IDENT,
+            ))
+            bases: List[str] = []
+            if node.type == self._TRAIT_ITEM:
+                # Trait supertraits live inside a ``trait_bounds``
+                # node — collect type_identifiers there.
+                bounds = self._first_child_of_type(node, (
+                    "trait_bounds",
+                ))
+                if bounds is not None:
+                    for sub in bounds.children:
+                        if sub.type == self._TYPE_IDENT:
+                            bases.append(sub.text.decode())
+            if name_node is not None:
+                cdef = ClassDef(
+                    name=name_node.text.decode(),
+                    line=node.start_point[0] + 1,
+                    bases=bases,
+                    nested=(
+                        bool(self._class_stack)
+                        or bool(self._enclosing)
+                        or self._mod_depth > 0
+                    ),
+                )
+                self.graph.classes.append(cdef)
+                # Trait bodies hold method signatures we want
+                # registered; struct/enum bodies don't define
+                # methods (those live in separate impl blocks).
+                self._class_stack.append(cdef)
+                try:
+                    for c in node.children:
+                        self.walk(c)
+                finally:
+                    self._class_stack.pop()
+                return
+            # Anon — recurse without push.
+            for c in node.children:
+                self.walk(c)
+            return
+
+        if node.type == self._IMPL_ITEM:
+            # ``impl Foo`` or ``impl Trait for Foo``. Method
+            # definitions inside belong to ``Foo``. The grammar
+            # emits two type_identifier children for the second
+            # shape; the impl target is the LAST one. Generic
+            # impls (``impl<T> Box<T>``) wrap the target in a
+            # ``generic_type`` node whose first child is the
+            # type_identifier we want.
+            target_names: List[str] = []
+            for c in node.children:
+                if c.type == self._TYPE_IDENT:
+                    target_names.append(c.text.decode())
+                elif c.type == "generic_type":
+                    ti = self._first_child_of_type(c, (self._TYPE_IDENT,))
+                    if ti is not None:
+                        target_names.append(ti.text.decode())
+                elif c.type == self._SCOPED_IDENT:
+                    parts = self._scoped_parts(c)
+                    if parts:
+                        target_names.append(parts[-1])
+            if not target_names:
+                # Unsupported shape — skip class binding, still
+                # recurse so calls inside are still captured.
+                for c in node.children:
+                    self.walk(c)
+                return
+            target = target_names[-1]
+            # Try to bind to the already-recorded ClassDef
+            # (same-file struct/enum) so methods accumulate on a
+            # single ClassDef rather than per-impl. If the impl
+            # target wasn't declared in this file, synthesise an
+            # impl-only ClassDef so cross-file method matching
+            # still works.
+            target_cls = next(
+                (c for c in self.graph.classes if c.name == target),
+                None,
+            )
+            if target_cls is None:
+                target_cls = ClassDef(
+                    name=target,
+                    line=node.start_point[0] + 1,
+                    bases=[],
+                    nested=self._mod_depth > 0,
+                )
+                self.graph.classes.append(target_cls)
+            self._class_stack.append(target_cls)
+            try:
+                for c in node.children:
+                    self.walk(c)
+            finally:
+                self._class_stack.pop()
             return
 
         if node.type == self._CALL_EXPR:
@@ -1708,8 +2151,18 @@ class _RustCallGraph:
             if chain:
                 line = node.start_point[0] + 1
                 caller = self._enclosing[-1] if self._enclosing else None
+                # Class-aware: ``self.foo()`` inside a method
+                # dispatches on the enclosing impl target. The
+                # chain shape is ``["self", "foo"]``.
+                receiver_class: Optional[str] = None
+                if (self._class_stack and self._enclosing
+                        and len(chain) == 2 and chain[0] == "self"):
+                    receiver_class = self._class_stack[-1].name
                 self.graph.calls.append(
-                    CallSite(line=line, chain=chain, caller=caller)
+                    CallSite(
+                        line=line, chain=chain, caller=caller,
+                        receiver_class=receiver_class,
+                    )
                 )
             for c in node.children:
                 self.walk(c)
@@ -1865,6 +2318,9 @@ class _RustCallGraph:
         if cur.type == self._IDENT:
             parts.append(cur.text.decode())
             return list(reversed(parts))
+        if cur.type == self._SELF:
+            parts.append("self")
+            return list(reversed(parts))
         if cur.type == self._SCOPED_IDENT:
             scoped = self._scoped_parts(cur)
             if not scoped:
@@ -1936,12 +2392,17 @@ class _RubyCallGraph:
 
     _CALL = "call"
     _METHOD = "method"
+    _SINGLETON_METHOD = "singleton_method"
     _IDENT = "identifier"
     _CONSTANT = "constant"
     _SCOPE_RES = "scope_resolution"
     _STRING = "string"
     _STRING_CONTENT = "string_content"
     _ARG_LIST = "argument_list"
+    _CLASS_NODE = "class"
+    _MODULE_NODE = "module"
+    _SUPERCLASS = "superclass"
+    _SELF = "self"
 
     _REFLECT_NAMES = {"send", "public_send", "__send__"}
     _CONST_GET_NAMES = {"const_get"}
@@ -1951,13 +2412,94 @@ class _RubyCallGraph:
     def __init__(self) -> None:
         self.graph = FileCallGraph()
         self._enclosing: List[str] = []
+        # Class context. Ruby ``self.foo()`` dispatches on the
+        # innermost ``class`` (modules dispatch to module functions
+        # but those aren't instance-bound, so we don't tag
+        # receiver_class for modules).
+        self._class_stack: List[ClassDef] = []
+        # Module nesting stack — used to build ``package_name``
+        # for nested modules. Ruby's top-level file is its own
+        # module; nested ``module Foo; module Bar; ...`` produce
+        # ``package_name="Foo.Bar"``.
+        self._mod_stack: List[str] = []
 
     def walk(self, node) -> None:
-        if node.type == self._METHOD:
+        if node.type == self._MODULE_NODE:
+            name_node = self._first_child_of_type(node, (
+                self._CONSTANT,
+            ))
+            if name_node is not None:
+                mod_name = name_node.text.decode()
+                self._mod_stack.append(mod_name)
+                # Set graph.package_name to the dotted form of the
+                # current module nesting. Last setter wins per
+                # file — typical Ruby files declare one or two
+                # module nesting levels at file top, so the deepest
+                # nesting is the canonical package.
+                self.graph.package_name = ".".join(self._mod_stack)
+                try:
+                    for c in node.children:
+                        self.walk(c)
+                finally:
+                    self._mod_stack.pop()
+                return
+            for c in node.children:
+                self.walk(c)
+            return
+
+        if node.type == self._CLASS_NODE:
+            name_node = self._first_child_of_type(node, (
+                self._CONSTANT,
+            ))
+            if name_node is not None:
+                bases: List[str] = []
+                # Ruby is single-inheritance — ``superclass`` carries
+                # exactly one base.
+                supercls = self._first_child_of_type(node, (
+                    self._SUPERCLASS,
+                ))
+                if supercls is not None:
+                    base_node = self._first_child_of_type(supercls, (
+                        self._CONSTANT, self._SCOPE_RES,
+                    ))
+                    if base_node is not None:
+                        if base_node.type == self._SCOPE_RES:
+                            bases = [".".join(
+                                self._chain_from_node(base_node)
+                            )]
+                        else:
+                            bases = [base_node.text.decode()]
+                cdef = ClassDef(
+                    name=name_node.text.decode(),
+                    line=node.start_point[0] + 1,
+                    bases=bases,
+                    nested=bool(self._class_stack) or bool(self._enclosing),
+                )
+                self.graph.classes.append(cdef)
+                self._class_stack.append(cdef)
+                try:
+                    for c in node.children:
+                        self.walk(c)
+                finally:
+                    self._class_stack.pop()
+                return
+            for c in node.children:
+                self.walk(c)
+            return
+
+        if node.type in (self._METHOD, self._SINGLETON_METHOD):
+            # ``def helper`` (method) and ``def self.helper`` /
+            # ``def Cls.helper`` (singleton_method) share the same
+            # method-name shape — the first ``identifier`` after the
+            # ``def`` keyword. Singleton methods inside a module
+            # body are the typical ``self.x`` module function form.
             name = self._first_child_of_type(node, (self._IDENT,))
-            self._enclosing.append(
-                name.text.decode() if name else "<anon>"
-            )
+            method_name = name.text.decode() if name else "<anon>"
+            if self._class_stack and not self._enclosing:
+                self._class_stack[-1].methods.append(
+                    (method_name, node.start_point[0] + 1),
+                )
+            self._enclosing.append(method_name)
             try:
                 for c in node.children:
                     self.walk(c)
@@ -2001,6 +2543,10 @@ class _RubyCallGraph:
                         receiver = c
                     else:
                         method = c
+                elif c.type == self._SELF and receiver is None:
+                    # ``self.foo`` — keep ``self`` as the receiver
+                    # so the chain reads ``["self", "foo"]``.
+                    receiver = c
                 elif c.type == self._SCOPE_RES:
                     receiver = c
                 elif c.type == self._CALL:
@@ -2060,6 +2606,8 @@ class _RubyCallGraph:
             return []
         if node.type in (self._IDENT, self._CONSTANT):
             return [node.text.decode()]
+        if node.type == self._SELF:
+            return ["self"]
         if node.type == self._SCOPE_RES:
             parts: List[str] = []
             for c in node.children:
@@ -2098,8 +2646,21 @@ class _RubyCallGraph:
     def _record(self, node, chain: List[str]) -> None:
         line = node.start_point[0] + 1
         caller = self._enclosing[-1] if self._enclosing else None
+        # ``self.foo()`` inside an instance method → narrow to the
+        # enclosing class. Bare-name ``foo()`` resolves through
+        # Ruby's method-lookup chain (could be from a mixin, the
+        # superclass, or the same class); without runtime semantics
+        # we can't narrow it, so leave receiver_class None.
+        receiver_class: Optional[str] = None
+        if (self._class_stack and not self._class_stack[-1].nested
+                and self._enclosing
+                and len(chain) >= 2 and chain[0] == "self"):
+            receiver_class = self._class_stack[-1].name
         self.graph.calls.append(
-            CallSite(line=line, chain=chain, caller=caller)
+            CallSite(
+                line=line, chain=chain, caller=caller,
+                receiver_class=receiver_class,
+            )
         )
 
     @staticmethod
@@ -2166,6 +2727,14 @@ class _CSharpCallGraph:
     _INVOCATION = "invocation_expression"
     _MEMBER_ACCESS = "member_access_expression"
     _ARG_LIST = "argument_list"
+    _NAMESPACE_DECL = "namespace_declaration"
+    _FILE_NAMESPACE_DECL = "file_scoped_namespace_declaration"
+    _CLASS_DECL = "class_declaration"
+    _INTERFACE_DECL = "interface_declaration"
+    _STRUCT_DECL = "struct_declaration"
+    _RECORD_DECL = "record_declaration"
+    _BASE_LIST = "base_list"
+    _THIS = "this_expression"
 
     _REFLECT_METHODS = {
         "Invoke", "GetMethod", "CreateInstance",
@@ -2176,13 +2745,97 @@ class _CSharpCallGraph:
     def __init__(self) -> None:
         self.graph = FileCallGraph()
         self._enclosing: List[str] = []
+        self._class_stack: List[ClassDef] = []
+        # Namespace nesting; can be ``namespace Foo.Bar { ... }``
+        # (one node carrying dotted form) OR nested ``namespace Foo
+        # { namespace Bar { ... } }``. Track each segment separately.
+        self._ns_stack: List[str] = []
 
     def walk(self, node) -> None:
+        if node.type == self._FILE_NAMESPACE_DECL:
+            # C# 10's file-scoped namespace: ``namespace Foo.Bar;``
+            # with no braces. The namespace applies to every
+            # declaration that follows in the same compilation
+            # unit (which are SIBLINGS of this node, not children).
+            # Set ``package_name`` once and let the normal recursion
+            # continue — don't push/pop the stack because the scope
+            # doesn't close.
+            name_node = self._first_child_of_type(node, (
+                self._QUALIFIED, self._IDENT,
+            ))
+            if name_node is not None:
+                if name_node.type == self._QUALIFIED:
+                    parts = self._qualified_parts(name_node)
+                else:
+                    parts = [name_node.text.decode()]
+                self._ns_stack.extend(parts)
+                self.graph.package_name = ".".join(self._ns_stack)
+            return
+
+        if node.type == self._NAMESPACE_DECL:
+            # Braced ``namespace Foo.Bar { ... }`` — applies to the
+            # nested declaration_list only.
+            name_node = self._first_child_of_type(node, (
+                self._QUALIFIED, self._IDENT,
+            ))
+            if name_node is not None:
+                if name_node.type == self._QUALIFIED:
+                    parts = self._qualified_parts(name_node)
+                else:
+                    parts = [name_node.text.decode()]
+                self._ns_stack.extend(parts)
+                self.graph.package_name = ".".join(self._ns_stack)
+                try:
+                    for c in node.children:
+                        self.walk(c)
+                finally:
+                    for _ in parts:
+                        self._ns_stack.pop()
+                return
+            for c in node.children:
+                self.walk(c)
+            return
+
+        if node.type in (self._CLASS_DECL, self._INTERFACE_DECL,
+                         self._STRUCT_DECL, self._RECORD_DECL):
+            name_node = self._first_child_of_type(node, (self._IDENT,))
+            if name_node is not None:
+                bases: List[str] = []
+                bl = self._first_child_of_type(node, (self._BASE_LIST,))
+                if bl is not None:
+                    for sub in bl.children:
+                        if sub.type == self._IDENT:
+                            bases.append(sub.text.decode())
+                        elif sub.type == self._QUALIFIED:
+                            qparts = self._qualified_parts(sub)
+                            if qparts:
+                                bases.append(".".join(qparts))
+                cdef = ClassDef(
+                    name=name_node.text.decode(),
+                    line=node.start_point[0] + 1,
+                    bases=bases,
+                    nested=bool(self._class_stack) or bool(self._enclosing),
+                )
+                self.graph.classes.append(cdef)
+                self._class_stack.append(cdef)
+                try:
+                    for c in node.children:
+                        self.walk(c)
+                finally:
+                    self._class_stack.pop()
+                return
+            for c in node.children:
+                self.walk(c)
+            return
+
         if node.type in (self._METHOD_DECL, self._CONSTRUCTOR_DECL):
             name = self._first_child_of_type(node, (self._IDENT,))
-            self._enclosing.append(
-                name.text.decode() if name else "<anon>"
-            )
+            method_name = name.text.decode() if name else "<anon>"
+            if self._class_stack and not self._enclosing:
+                self._class_stack[-1].methods.append(
+                    (method_name, node.start_point[0] + 1),
+                )
+            self._enclosing.append(method_name)
             try:
                 for c in node.children:
                     self.walk(c)
@@ -2199,8 +2852,24 @@ class _CSharpCallGraph:
             if chain:
                 line = node.start_point[0] + 1
                 caller = self._enclosing[-1] if self._enclosing else None
+                # ``this.X()`` inside an instance method → narrow
+                # to the enclosing class. C# unqualified ``X()``
+                # also dispatches via implicit-this (no module-
+                # level functions in C#), so tag length-1 chains
+                # too when inside a class.
+                receiver_class: Optional[str] = None
+                if (self._class_stack
+                        and not self._class_stack[-1].nested
+                        and self._enclosing):
+                    if len(chain) == 1:
+                        receiver_class = self._class_stack[-1].name
+                    elif len(chain) == 2 and chain[0] == "this":
+                        receiver_class = self._class_stack[-1].name
                 self.graph.calls.append(
-                    CallSite(line=line, chain=chain, caller=caller)
+                    CallSite(
+                        line=line, chain=chain, caller=caller,
+                        receiver_class=receiver_class,
+                    )
                 )
                 # Indirection flags
                 tail = chain[-1]
@@ -2285,12 +2954,35 @@ class _CSharpCallGraph:
         return None
 
     def _member_access_chain(self, node) -> Optional[List[str]]:
-        """``a.b.c`` (member_access_expression)."""
+        """``a.b.c`` (member_access_expression).
+
+        ``this.X`` and ``base.X`` use unnamed keyword tokens for the
+        LHS in tree-sitter-c_sharp — special-cased below."""
         parts: List[str] = []
         cur = node
         while cur is not None and cur.type == self._MEMBER_ACCESS:
-            # member_access: expression + . + name (identifier)
             named = [c for c in cur.children if c.is_named]
+            if len(named) == 1:
+                # Only the trailing name is named — LHS is an
+                # unnamed keyword. Check for ``this`` / ``base``.
+                has_this = any(
+                    not c.is_named and c.type in ("this", "base")
+                    for c in cur.children
+                )
+                if not has_this:
+                    return None
+                tail = named[-1]
+                if tail.type != self._IDENT:
+                    return None
+                parts.append(tail.text.decode())
+                # Synthesise the unnamed-this LHS as the chain head.
+                kw = next(
+                    (c.type for c in cur.children
+                     if not c.is_named and c.type in ("this", "base")),
+                    "this",
+                )
+                parts.append(kw)
+                return list(reversed(parts))
             if len(named) < 2:
                 return None
             tail = named[-1]
@@ -2302,6 +2994,9 @@ class _CSharpCallGraph:
             return None
         if cur.type == self._IDENT:
             parts.append(cur.text.decode())
+            return list(reversed(parts))
+        if cur.type == self._THIS:
+            parts.append("this")
             return list(reversed(parts))
         if cur.type == self._QUALIFIED:
             qparts = self._qualified_parts(cur)
@@ -2413,6 +3108,7 @@ class _PhpCallGraph:
     _NAMESPACE_USE_DECL = "namespace_use_declaration"
     _NAMESPACE_USE_CLAUSE = "namespace_use_clause"
     _NAMESPACE_NAME = "namespace_name"
+    _NAMESPACE_DEF = "namespace_definition"
     _QUALIFIED = "qualified_name"
     _NAME = "name"
     _IDENT = "name"          # PHP grammar uses ``name`` for identifiers
@@ -2424,6 +3120,12 @@ class _PhpCallGraph:
     _MEMBER_ACCESS = "member_access_expression"
     _ARGS = "arguments"
     _VAR = "variable_name"
+    _CLASS_DECL = "class_declaration"
+    _INTERFACE_DECL = "interface_declaration"
+    _TRAIT_DECL = "trait_declaration"
+    _ENUM_DECL = "enum_declaration"
+    _BASE_CLAUSE = "base_clause"
+    _CLASS_INTERFACE_CLAUSE = "class_interface_clause"
 
     _REFLECT_FNS = {
         "call_user_func", "call_user_func_array",
@@ -2437,13 +3139,79 @@ class _PhpCallGraph:
     def __init__(self) -> None:
         self.graph = FileCallGraph()
         self._enclosing: List[str] = []
+        self._class_stack: List[ClassDef] = []
 
     def walk(self, node) -> None:
+        if node.type == self._NAMESPACE_DEF:
+            # ``namespace Foo\Bar;`` — capture as dotted package
+            # name. The namespace_name child carries the parts.
+            ns_name = self._first_child_of_type(node, (
+                self._NAMESPACE_NAME,
+            ))
+            if ns_name is not None:
+                parts = self._namespace_parts(ns_name)
+                if parts:
+                    self.graph.package_name = ".".join(parts)
+            # Descend into the namespace body (declarations live
+            # inside compound_statement if braced, or as siblings).
+            for c in node.children:
+                self.walk(c)
+            return
+
+        if node.type in (self._CLASS_DECL, self._INTERFACE_DECL,
+                         self._TRAIT_DECL, self._ENUM_DECL):
+            name_node = self._first_child_of_type(node, (self._NAME,))
+            if name_node is not None:
+                bases: List[str] = []
+                # ``extends Base`` (single-class inheritance in PHP).
+                bc = self._first_child_of_type(node, (self._BASE_CLAUSE,))
+                if bc is not None:
+                    for sub in bc.children:
+                        if sub.type == self._NAME:
+                            bases.append(sub.text.decode())
+                        elif sub.type == self._QUALIFIED:
+                            qparts = self._namespace_parts(sub)
+                            if qparts:
+                                bases.append(".".join(qparts))
+                # ``implements I1, I2`` (multiple interfaces).
+                cic = self._first_child_of_type(node, (
+                    self._CLASS_INTERFACE_CLAUSE,
+                ))
+                if cic is not None:
+                    for sub in cic.children:
+                        if sub.type == self._NAME:
+                            bases.append(sub.text.decode())
+                        elif sub.type == self._QUALIFIED:
+                            qparts = self._namespace_parts(sub)
+                            if qparts:
+                                bases.append(".".join(qparts))
+                cdef = ClassDef(
+                    name=name_node.text.decode(),
+                    line=node.start_point[0] + 1,
+                    bases=bases,
+                    nested=bool(self._class_stack) or bool(self._enclosing),
+                )
+                self.graph.classes.append(cdef)
+                self._class_stack.append(cdef)
+                try:
+                    for c in node.children:
+                        self.walk(c)
+                finally:
+                    self._class_stack.pop()
+                return
+            for c in node.children:
+                self.walk(c)
+            return
+
         if node.type in (self._FUNCTION_DEF, self._METHOD_DECL):
             name = self._first_child_of_type(node, (self._NAME,))
-            self._enclosing.append(
-                name.text.decode() if name else "<anon>"
-            )
+            method_name = name.text.decode() if name else "<anon>"
+            if (node.type == self._METHOD_DECL
+                    and self._class_stack and not self._enclosing):
+                self._class_stack[-1].methods.append(
+                    (method_name, node.start_point[0] + 1),
+                )
+            self._enclosing.append(method_name)
             try:
                 for c in node.children:
                     self.walk(c)
@@ -2514,8 +3282,30 @@ class _PhpCallGraph:
             return
         line = node.start_point[0] + 1
         caller = self._enclosing[-1] if self._enclosing else None
+        # ``$this->X()`` (already canonicalised to chain ``["this",
+        # "X"]`` by _object_chain stripping the $) inside an
+        # instance method → narrow to the enclosing class. Bare
+        # function calls are NOT implicit-this in PHP — they
+        # resolve to namespaced/global functions.
+        # ``self::X()`` and ``static::X()`` (late-static-binding)
+        # also dispatch on the enclosing class; ``parent::X()``
+        # dispatches on the parent (leave None, let resolver
+        # search bases).
+        receiver_class: Optional[str] = None
+        if (self._class_stack and not self._class_stack[-1].nested
+                and self._enclosing
+                and len(chain) >= 2):
+            if (node.type == self._MEMBER_CALL
+                    and chain[0] == "this"):
+                receiver_class = self._class_stack[-1].name
+            elif (node.type == self._SCOPED_CALL
+                  and chain[0] in ("self", "static")):
+                receiver_class = self._class_stack[-1].name
         self.graph.calls.append(
-            CallSite(line=line, chain=chain, caller=caller)
+            CallSite(
+                line=line, chain=chain, caller=caller,
+                receiver_class=receiver_class,
+            )
         )
         # Indirection flags
         tail = chain[-1]
@@ -2544,7 +3334,11 @@ class _PhpCallGraph:
         return None
 
     def _scoped_call_chain(self, node) -> Optional[List[str]]:
-        # scoped_call_expression: scope (Class) :: name + arguments
+        # scoped_call_expression: scope (Class) :: name + arguments.
+        # PHP's ``self::method()`` / ``static::method()`` /
+        # ``parent::method()`` use a ``relative_scope`` node holding
+        # the keyword. ``Class::method()`` uses a ``name`` or
+        # ``qualified_name`` scope.
         scope = None
         method = None
         for c in node.children:
@@ -2561,6 +3355,18 @@ class _PhpCallGraph:
             scope_parts = [scope.text.decode()]
         elif scope.type in (self._QUALIFIED, self._NAMESPACE_NAME):
             scope_parts = self._namespace_parts(scope)
+        elif scope.type == "relative_scope":
+            # ``self``/``static``/``parent``. Use the keyword as
+            # the chain head so receiver_class can be set when
+            # applicable.
+            kw = None
+            for sub in scope.children:
+                if sub.type in ("self", "static", "parent"):
+                    kw = sub.type
+                    break
+            if kw is None:
+                return None
+            scope_parts = [kw]
         else:
             return None
         return scope_parts + [method.text.decode()]

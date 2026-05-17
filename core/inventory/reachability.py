@@ -214,6 +214,40 @@ def function_called(
                     file_has_evidence = True
                     evidence.append((path, int(call.get("line", 0) or 0)))
 
+        # Class-aware receiver_class fast-path: when the chain
+        # tail is the target_func AND the call carries a
+        # ``receiver_class``, synthesise the qualified name
+        # ``<file_package>.<receiver_class>.<tail>`` and compare
+        # against the target. This catches Java's implicit-this
+        # (``helper()`` inside a class method), Ruby's
+        # ``self.helper``, C#'s implicit-this, etc. — bare calls
+        # the import-map path can't resolve because their head
+        # isn't in imports.
+        if not file_has_evidence:
+            file_pkg = cg.get("package_name")
+            for call in calls:
+                chain = call.get("chain") or []
+                if not chain or chain[-1] != target_func:
+                    continue
+                rc = call.get("receiver_class")
+                if rc is None:
+                    continue
+                # Construct the resolved qualified name. For
+                # languages with a declared package_name the form
+                # is ``<pkg>.<Class>.<method>``. For languages
+                # where the file IS the module (Python / JS /
+                # Ruby class-less), fall back to path-derived form.
+                candidates: List[str] = []
+                if file_pkg:
+                    candidates.append(f"{file_pkg}.{rc}.{target_func}")
+                else:
+                    candidates.extend(
+                        _path_derived_module(path, rc, target_func),
+                    )
+                if qualified_name in candidates:
+                    file_has_evidence = True
+                    evidence.append((path, int(call.get("line", 0) or 0)))
+
         if file_has_evidence:
             continue
 
@@ -760,16 +794,48 @@ def _get_or_build_index(
     #   * ``a/b/__init__.py`` → ``a.b``
     #   * ``src/a/b/c.py`` → also ``a.b.c`` (src-layout)
     #
-    # Limitations (documented; consumer should be aware):
-    #   * Non-Python files: file-path-to-module heuristic doesn't run;
-    #     no internal aliasing for JS/Go/Java/etc.
+    # For non-Python files the qualified-name shape isn't derivable
+    # from the file path alone:
+    #   * Go: ``package <name>`` in the source decides the dotted
+    #     prefix — directory name is NOT authoritative
+    #   * Java: ``package com.foo.bar;`` declared in the source
+    #   * Rust: chain of ``mod foo;`` declarations
+    #   * C#: ``namespace Foo.Bar``
+    #   * PHP: ``namespace Foo\Bar``
+    # Each non-Python extractor that knows its own package
+    # declaration writes it into ``FileCallGraph.package_name``;
+    # we read it here and combine with the function name to seed
+    # ``qualified_to_internal``.
+    file_packages: Dict[str, Optional[str]] = {}
+    for file_record in inventory.get("files", []):
+        if not isinstance(file_record, dict):
+            continue
+        path = file_record.get("path") or ""
+        cg = file_record.get("call_graph")
+        if cg:
+            pkg = cg.get("package_name")
+            if pkg:
+                file_packages[path] = pkg
+
     for (file_path, fn_name), fns in idx.definitions.items():
         # Pick the lowest-line def as canonical — typically the
         # module-level one, which is the only one externally
         # importable. Same-name nested defs aren't reachable from
         # outside; we don't disambiguate further.
         canonical = min(fns, key=lambda f: f.line)
-        for candidate in _candidate_qualified_names(file_path, fn_name):
+        # Class-qualified candidates — for Java / C# / PHP / Rust
+        # impl-blocks / JS classes the externally-visible name is
+        # ``<pkg>.<Class>.<method>`` (or ``<file_module>.<Class>.
+        # <method>`` for path-derived languages). ``class_of_method``
+        # is populated above (line ~743) from each FileCallGraph's
+        # classes[].methods list. Pass None when no class — the
+        # candidate function emits the module-level form.
+        cls_name = idx.class_of_method.get(canonical)
+        for candidate in _candidate_qualified_names(
+                file_path, fn_name,
+                package_name=file_packages.get(file_path),
+                class_name=cls_name,
+        ):
             idx.qualified_to_internal.setdefault(candidate, canonical)
 
     # Pass 1.6: ``__init__.py`` re-export aliasing.
@@ -1305,35 +1371,150 @@ def _apply_reexport_aliases(idx: _AdjacencyIndex) -> int:
     return added
 
 
-def _candidate_qualified_names(file_path: str, fn_name: str) -> List[str]:
-    """Heuristic: derive plausible Python qualified names for an
+def _path_derived_module(
+    file_path: str, class_name: str, fn_name: str,
+) -> List[str]:
+    """Synthesise candidate ``<file_module>.<class_name>.<fn_name>``
+    forms for languages where the file IS the module (Python / JS-TS
+    / Ruby where no top-level module declaration sets
+    ``package_name``).
+
+    Returns one or two candidates — the raw path-derived form, plus
+    a src-stripped form when the path starts with ``src/`` (the
+    common Python src-layout / JS-TS monorepo convention). Empty
+    list when the extension isn't recognised.
+    """
+    base = file_path
+    suffix_match = None
+    for suffix in (".pyi", ".py", ".tsx", ".jsx", ".mjs", ".cjs",
+                    ".ts", ".js", ".rb"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            suffix_match = suffix
+            break
+    if suffix_match is None:
+        return []
+    if base.endswith("/__init__"):
+        base = base[: -len("/__init__")]
+    elif base.endswith("/index"):
+        base = base[: -len("/index")]
+    if not base:
+        return []
+    out: List[str] = [f"{base.replace('/', '.')}.{class_name}.{fn_name}"]
+    if base.startswith("src/"):
+        stripped = base[len("src/"):]
+        if stripped:
+            out.append(
+                f"{stripped.replace('/', '.')}.{class_name}.{fn_name}",
+            )
+    return out
+
+
+def _candidate_qualified_names(
+    file_path: str,
+    fn_name: str,
+    *,
+    package_name: Optional[str] = None,
+    class_name: Optional[str] = None,
+) -> List[str]:
+    """Heuristic: derive plausible qualified names for an
     InternalFunction defined at ``(file_path, fn_name)``.
 
     Returns at most a handful of candidates (typically 1-2). Used by
     the index builder to canonicalise external callee edges that
     actually resolve to project-defined functions.
 
-    Non-Python files: returns empty list. Other-language internal
-    aliasing isn't modelled.
+    Path-based heuristics (Python, JS/TS, Ruby): the file path
+    encodes the module shape:
+      * ``a/b/c.py`` → ``a.b.c``
+      * ``a/b/__init__.py`` → ``a.b``
+      * ``src/a/b/c.py`` → ``a.b.c`` (src-layout)
+      * ``a/b/c.js`` → ``a.b.c`` / ``a/b/c``
+
+    Declaration-based languages (Go, Java, Rust, C#, PHP) need
+    the source's own package declaration to resolve correctly —
+    the dir name is NOT authoritative. Those languages populate
+    ``FileCallGraph.package_name`` from the extractor, and the
+    resolver threads it in via ``package_name``.
+
+    Returns an empty list when the file type isn't recognised and
+    no package_name was supplied. Multiple candidates are returned
+    in priority order; consumers do ``setdefault`` so the highest-
+    confidence form wins.
     """
-    if not (file_path.endswith(".py") or file_path.endswith(".pyi")):
-        return []
-    base = file_path
-    for suffix in (".pyi", ".py"):
-        if base.endswith(suffix):
-            base = base[: -len(suffix)]
-            break
-    if base.endswith("/__init__"):
-        base = base[: -len("/__init__")]
     candidates: List[str] = []
-    if base:
-        candidates.append(f"{base.replace('/', '.')}.{fn_name}")
-    # ``src/`` layout: ``src/mypkg/foo.py`` is imported as
-    # ``mypkg.foo``, not ``src.mypkg.foo``. Generate both candidates.
-    if base.startswith("src/"):
-        stripped = base[len("src/"):]
-        if stripped:
-            candidates.append(f"{stripped.replace('/', '.')}.{fn_name}")
+
+    # Declaration-based path: ``package_name`` from the extractor.
+    # The qualified form depends on whether the language allows
+    # module-level functions:
+    #   * Java: every function lives inside a class. ONLY the
+    #     class-qualified form ``<pkg>.<Class>.<method>`` is a
+    #     valid resolution; the module-level form would falsely
+    #     collide with another file declaring class ``<pkg>``.
+    #   * C# / PHP: methods live inside classes, but module-level
+    #     functions / global functions exist. Emit class-qualified
+    #     first; fall through to module-level when no class.
+    #   * Go / Rust: free functions are the norm; emit module-
+    #     level. (Class-qualified is added too when present —
+    #     Rust impl methods + Go method receivers benefit.)
+    class_required = file_path.endswith(".java")
+    if package_name and class_name:
+        candidates.append(f"{package_name}.{class_name}.{fn_name}")
+    if package_name and not (class_required and class_name is None):
+        # In Java, a method with no class context shouldn't exist
+        # — skip the module-level form to avoid colliding with
+        # other files' class-qualified candidates that happen to
+        # share the dotted prefix (e.g. ``com.example.Util.helper``
+        # where one file's package is ``com.example.Util`` and
+        # another's class is ``Util``).
+        if not class_required:
+            candidates.append(f"{package_name}.{fn_name}")
+
+    # Python path-based heuristic.
+    if file_path.endswith(".py") or file_path.endswith(".pyi"):
+        base = file_path
+        for suffix in (".pyi", ".py"):
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+                break
+        if base.endswith("/__init__"):
+            base = base[: -len("/__init__")]
+        if base:
+            candidates.append(f"{base.replace('/', '.')}.{fn_name}")
+        # src-layout: ``src/mypkg/foo.py`` is imported as ``mypkg.foo``
+        if base.startswith("src/"):
+            stripped = base[len("src/"):]
+            if stripped:
+                candidates.append(
+                    f"{stripped.replace('/', '.')}.{fn_name}",
+                )
+
+    # JS/TS / Ruby: file IS the module. Cross-package call sites
+    # reference the file path (sans extension) or a stripped form.
+    # Both shapes feed the import map.
+    if file_path.endswith((".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+                            ".rb")):
+        base = file_path
+        for suffix in (".tsx", ".mjs", ".cjs", ".jsx", ".js", ".ts", ".rb"):
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+                break
+        if base.endswith("/index"):
+            base = base[: -len("/index")]
+        if base:
+            module_form = base.replace("/", ".")
+            # Class-qualified takes priority — JS / Ruby classes
+            # exported from the file appear as ``<module>.<Class>.
+            # <method>`` to importing callers that reference the
+            # method via the class.
+            if class_name:
+                candidates.append(
+                    f"{module_form}.{class_name}.{fn_name}",
+                )
+            # Dotted form (matches Ruby module nesting + JS's
+            # canonical import-path-to-dotted transform).
+            candidates.append(f"{module_form}.{fn_name}")
+
     return candidates
 
 
