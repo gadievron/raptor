@@ -1,0 +1,21 @@
+# Coord-style fixture: ``raptor-sca diff <baseline> <current>``.
+#
+# baseline.json is empty (no findings); current.json has 2
+# findings (one high-severity ua-parser-js + one medium-severity
+# typosquat). The diff should report both as NEW.
+#
+# Exit code 1: diff's ``--fail-on-severity`` defaults to ``high``,
+# and current.json carries a high-severity finding — the CI gate
+# trips, which is the documented + correct behavior. This is the
+# load-bearing path downstream PR-check workflows rely on. The
+# markdown still goes to stdout regardless of the exit code.
+
+mode: diff
+args:
+  - "${FIXTURE_DIR}/baseline.json"
+  - "${FIXTURE_DIR}/current.json"
+expected:
+  exit_code: 1
+  stdout_contains:
+    - "New"
+    - "ua-parser-js"

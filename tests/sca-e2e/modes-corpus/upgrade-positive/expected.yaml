@@ -1,0 +1,14 @@
+# Coord-style fixture: ``raptor-sca upgrade <eco> <name> <from> <to>``
+# against a net-positive upgrade trade.
+#
+# lodash 4.17.4 has known CVEs (prototype pollution); 4.17.21 has
+# them cleared. Verdict should be net-positive (CVEs resolved, no
+# new ones introduced) → exit 0.
+
+mode: upgrade
+args: [npm, lodash, "4.17.4", "4.17.21"]
+expected:
+  exit_code: 0
+  stdout_contains:
+    - "Resolved"
+    - "lodash"

@@ -84,17 +84,27 @@ def _load_yaml(path: Path) -> Dict[str, Any]:
 
 
 def _discover_fixtures(corpus_dir: Path) -> List[Path]:
-    """Every immediate subdir containing both ``fixture/`` and
-    ``expected.yaml``."""
+    """Every immediate subdir containing ``expected.yaml``. The
+    fixture may be either project-style (has a ``fixture/`` subdir
+    with a manifest tree) or coord-style (no fixture/ subdir; just
+    coordinate args in expected.yaml — for ``check`` / ``upgrade``
+    / ``diff`` which don't operate on project trees)."""
     if not corpus_dir.is_dir():
         return []
     out: List[Path] = []
     for entry in sorted(corpus_dir.iterdir()):
         if not entry.is_dir():
             continue
-        if (entry / "fixture").is_dir() and (entry / "expected.yaml").is_file():
+        if (entry / "expected.yaml").is_file():
             out.append(entry)
     return out
+
+
+def _is_coord_style(fixture_dir: Path) -> bool:
+    """A fixture is coord-style when it has no ``fixture/`` subdir;
+    its expected.yaml carries ``mode`` + ``args`` rather than
+    per-mode (scan/bump/fix) sections."""
+    return not (fixture_dir / "fixture").is_dir()
 
 
 def _env_with_trust() -> Dict[str, str]:
@@ -348,6 +358,54 @@ def _run_fix(
         return ModeResult("fix", True, "")
 
 
+def _run_coord_mode(
+    fixture_dir: Path, spec: Dict[str, Any],
+) -> ModeResult:
+    """Run a coord-style fixture: ``raptor-sca <mode> <args...>``.
+    The fixture's expected.yaml carries ``mode``, ``args`` (list),
+    and ``expected.{exit_code, stdout_contains}``.
+
+    ``${FIXTURE_DIR}`` in args is expanded to the fixture dir path
+    so references to baseline.json / current.json work from any
+    cwd.
+    """
+    mode = str(spec.get("mode", ""))
+    raw_args = spec.get("args") or []
+    if not isinstance(raw_args, list):
+        return ModeResult(mode, False, "expected.yaml args must be a list")
+    args: List[str] = []
+    for a in raw_args:
+        s = str(a)
+        s = s.replace("${FIXTURE_DIR}", str(fixture_dir))
+        args.append(s)
+    expected = spec.get("expected", {}) or {}
+
+    cmd = [sys.executable, "-m", "packages.sca.cli", mode, *args]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=120,
+            env=_env_with_trust(),
+        )
+    except subprocess.TimeoutExpired:
+        return ModeResult(mode, False, "timed out after 120s")
+    exit_expected = int(expected.get("exit_code", 0))
+    if proc.returncode != exit_expected:
+        return ModeResult(
+            mode, False,
+            f"exit {proc.returncode} != {exit_expected}; "
+            f"stderr={proc.stderr[:200]}",
+        )
+    stdout_contains = expected.get("stdout_contains") or []
+    missing = [s for s in stdout_contains if s not in proc.stdout]
+    if missing:
+        return ModeResult(
+            mode, False,
+            f"stdout missing expected substrings: {missing}; "
+            f"stdout_head={proc.stdout[:200]!r}",
+        )
+    return ModeResult(mode, True, "")
+
+
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
@@ -355,11 +413,18 @@ def _run_fix(
 def _evaluate_fixture(
     fixture_dir: Path, *, offline: bool,
 ) -> FixtureResult:
-    """Run every mode against the fixture, collect results."""
+    """Run every mode declared by the fixture's expected.yaml. The
+    fixture is project-style (has a ``fixture/`` subdir; expected.yaml
+    has per-mode scan/bump/fix sections) or coord-style (no
+    ``fixture/`` subdir; expected.yaml has top-level mode + args)."""
     name = fixture_dir.name
     expected = _load_yaml(fixture_dir / "expected.yaml")
-    fixture_root = fixture_dir / "fixture"
     res = FixtureResult(name=name)
+    if _is_coord_style(fixture_dir):
+        logger.info("  %s...", expected.get("mode", "<unknown>"))
+        res.modes.append(_run_coord_mode(fixture_dir, expected))
+        return res
+    fixture_root = fixture_dir / "fixture"
     if "scan" in expected:
         logger.info("  scan...")
         res.modes.append(_run_scan(fixture_root, expected, offline=offline))

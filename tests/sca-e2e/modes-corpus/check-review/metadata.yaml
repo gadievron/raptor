@@ -1,0 +1,11 @@
+name: check-review
+mode_exercised: check
+shape: |
+  Coord-style fixture. The check subcommand evaluates a single
+  package coordinate (ecosystem + name + version) and returns
+  Clean / Review / Block verdict in stdout (always exit 0).
+  This fixture asserts the Review path: requests 2.32.5 has open
+  OSV advisories, verdict should be Review.
+
+  Naturally decays — if requests ever clears every advisory at
+  2.32.5, this fixture starts emitting Clean and needs an update.

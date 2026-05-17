@@ -1,0 +1,12 @@
+name: diff-basic
+mode_exercised: diff
+shape: |
+  Coord-style fixture. ``raptor-sca diff`` compares two findings.json
+  files. baseline.json is empty; current.json carries one vuln_dep +
+  one typosquat_candidate. Asserts the diff surfaces both as
+  NEW entries in its rendered markdown / table output.
+
+  The ``${FIXTURE_DIR}`` placeholder in expected.yaml.args is
+  expanded by the harness to the fixture's own directory path so
+  the baseline.json + current.json references resolve regardless
+  of where the harness runs from.
