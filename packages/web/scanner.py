@@ -237,6 +237,7 @@ def main():
 
     parser = build_arg_parser()
     args = parser.parse_args()
+    ffuf_config = build_ffuf_config(args)
 
     # Determine output directory
     if args.out:
@@ -274,7 +275,6 @@ def main():
 
     # Run scan
     verify_ssl = not args.insecure
-    ffuf_config = build_ffuf_config(args)
 
     scanner = WebScanner(
         args.url,
