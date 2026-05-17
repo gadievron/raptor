@@ -11,8 +11,6 @@ additions only) because the consumer questions differ:
 
 from __future__ import annotations
 
-import pytest
-
 from core.binary.drift import FingerprintDrift, detect_drift
 from core.binary.fingerprint import CapabilityFingerprint
 

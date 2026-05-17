@@ -13,10 +13,7 @@ from typing import List
 
 import pytest
 
-from core.binary.capability_diff import (
-    CapabilityDelta,
-    diff_binary_capabilities,
-)
+from core.binary.capability_diff import diff_binary_capabilities
 from core.binary.fingerprint import bucket_imports
 from packages.binary_analysis.radare2_understand import (
     BinaryContextMap,

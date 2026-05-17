@@ -55,7 +55,7 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import Dict, Iterator, Optional, Tuple
+from typing import Iterator, Optional, Tuple
 
 from core.binary.fingerprint import CapabilityFingerprint
 

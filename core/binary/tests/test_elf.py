@@ -19,10 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from core.binary.elf import (
-    ElfMetadata,
-    parse_elf,
-)
+from core.binary.elf import parse_elf
 
 
 # ---------------------------------------------------------------------------

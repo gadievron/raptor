@@ -8,9 +8,6 @@ missing / schema-skew gracefully.
 from __future__ import annotations
 
 import json
-from pathlib import Path
-
-import pytest
 
 from core.binary.fingerprint import CapabilityFingerprint
 from core.binary.fingerprint_store import (

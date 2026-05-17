@@ -22,13 +22,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 from core.binary.fingerprint import (
-    BUCKETS,
+    BUCKETS,  # noqa: F401  — re-exported for downstream parity
     HIGH_SEVERITY_BUCKETS,
     CapabilityFingerprint,
-    bucket_imports,
+    bucket_imports,  # noqa: F401  — re-exported for downstream parity
 )
 
 logger = logging.getLogger(__name__)
