@@ -28,11 +28,10 @@ heavyweight import path) and asserts the gate condition around the
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
 
-MODULE_PATH = (
-    Path(__file__).resolve().parents[1] / "raptor_agentic.py"
-)
+MODULE_PATH = Path(os.environ["RAPTOR_DIR"]) / "raptor_agentic.py"
 
 
 def test_semgrep_summary_print_is_gated_on_semgrep_metrics() -> None:

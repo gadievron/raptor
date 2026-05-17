@@ -8,7 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(os.environ["RAPTOR_DIR"])
 WRAPPER = REPO_ROOT / "libexec" / "raptor-enrich-flow-trace-ast-view"
 
 
