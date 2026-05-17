@@ -275,7 +275,6 @@ def main():
 
     # Run scan
     verify_ssl = not args.insecure
-    ffuf_config = build_ffuf_config(args)
 
     scanner = WebScanner(
         args.url,
