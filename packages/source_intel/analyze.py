@@ -128,6 +128,37 @@ class AbortEvidence:
 
 
 @dataclass(frozen=True)
+class BoundaryEvidence:
+    """Kernel/user trust-boundary crossing (copy_from_user etc.).
+
+    INFORMATIONAL only — feeds Stage D LLM context. Useful for:
+      * privilege-gradient reasoning (data crossed user→kernel
+        boundary, attacker-controlled at this point)
+      * info-leak (copy_to_user before sink — kernel data may
+        leak to userland)
+      * input-validation analysis (where validation needs to
+        happen given the boundary location)
+    """
+
+    boundary_fn: str  # "copy_from_user", "copy_to_user", etc.
+    location: Tuple[str, int]
+    enclosing_function: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class LsmEvidence:
+    """Linux Security Module hook call site (security_*).
+
+    INFORMATIONAL only. Indicates the kernel code path is subject
+    to LSM policy enforcement (SELinux/AppArmor/Smack/Lockdown).
+    """
+
+    hook_name: str
+    location: Tuple[str, int]
+    enclosing_function: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class WarnEvidence:
     """A single observation of a non-aborting runtime-warning call
     (WARN_ON / pr_warn / KASAN_REPORT etc.).
@@ -337,6 +368,15 @@ class SourceIntelResult:
 
     #: Axis 2 sub-class: explicit NULL-check sites (informational).
     null_guards: Tuple[NullGuardEvidence, ...] = ()
+
+    #: Axis 4 expansion: kernel/user trust-boundary crossings
+    #: (copy_from_user, copy_to_user, get_user, put_user, etc.).
+    #: Informational; feeds Stage D LLM privilege/data-flow context.
+    boundary_crossings: Tuple[BoundaryEvidence, ...] = ()
+
+    #: Axis 4 expansion: LSM (Linux Security Module) hook calls.
+    #: Informational; indicates policy-enforcement points.
+    lsm_hooks: Tuple[LsmEvidence, ...] = ()
 
     #: Axis 6 consumer: build-hardening flags observed in the target's
     #: build configuration. Populated from core.build.build_flags when
@@ -551,6 +591,8 @@ def analyze(
     hazard_observations: List[HazardEvidence] = []
     warn_observations: List[WarnEvidence] = []
     null_guard_observations: List[NullGuardEvidence] = []
+    boundary_observations: List[BoundaryEvidence] = []
+    lsm_observations: List[LsmEvidence] = []
 
     # spatch invocation per axis. ``no_includes=True`` matches the
     # existing PR-3 scan + PR-4 prereqs untrusted-target posture;
@@ -594,6 +636,12 @@ def analyze(
                 null_guard_observations.extend(
                     _parse_match_to_null_guard(match)
                 )
+                boundary_observations.extend(
+                    _parse_match_to_boundary(match)
+                )
+                lsm_observations.extend(
+                    _parse_match_to_lsm(match)
+                )
 
     # Project-specific alias discovery: walk target headers, classify
     # `#define MACRO __attribute__((...))` patterns by family, count
@@ -633,6 +681,8 @@ def analyze(
         hazards=tuple(hazard_observations),
         warns=tuple(warn_observations),
         null_guards=tuple(null_guard_observations),
+        boundary_crossings=tuple(boundary_observations),
+        lsm_hooks=tuple(lsm_observations),
         build_flags=extract_flags(target),
     )
 
@@ -869,6 +919,48 @@ def _parse_match_to_capability(match: Any) -> List[CapabilityEvidence]:
         grade=GRADE_SAME_FUNCTION,
         enclosing_function=enclosing_fn,
         conditional_on=cond,
+    )]
+
+
+def _parse_match_to_boundary(match: Any) -> List[BoundaryEvidence]:
+    """Convert a cocci SpatchMatch from user_boundary.cocci into a
+    BoundaryEvidence record. Message: ``boundary:<fn>``."""
+    msg = (getattr(match, "message", "") or "").strip()
+    if not msg.startswith("boundary:"):
+        return []
+    fn = msg[len("boundary:"):].strip()
+    if not fn:
+        return []
+    file_path = getattr(match, "file", "")
+    line_no = int(getattr(match, "line", 0))
+    enclosing_fn = (
+        _enclosing_function(file_path, line_no) if file_path else None
+    )
+    return [BoundaryEvidence(
+        boundary_fn=fn,
+        location=(file_path, line_no),
+        enclosing_function=enclosing_fn,
+    )]
+
+
+def _parse_match_to_lsm(match: Any) -> List[LsmEvidence]:
+    """Convert a cocci SpatchMatch from lsm_hooks.cocci into an
+    LsmEvidence record. Message: ``lsm:<hook_name>``."""
+    msg = (getattr(match, "message", "") or "").strip()
+    if not msg.startswith("lsm:"):
+        return []
+    hook = msg[len("lsm:"):].strip()
+    if not hook:
+        return []
+    file_path = getattr(match, "file", "")
+    line_no = int(getattr(match, "line", 0))
+    enclosing_fn = (
+        _enclosing_function(file_path, line_no) if file_path else None
+    )
+    return [LsmEvidence(
+        hook_name=hook,
+        location=(file_path, line_no),
+        enclosing_function=enclosing_fn,
     )]
 
 
