@@ -17,9 +17,19 @@ The full radare2 wire-through is gated by ``probe_capability``
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
+
+# parents[3] climbs:
+#   [0] core/binary/tests/  (this file's directory)
+#   [1] core/binary/
+#   [2] core/
+#   [3] <repo root>         (where ``packages/`` lives)
+_REPO_ROOT = str(Path(__file__).resolve().parents[3])
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 from core.binary.fingerprint import (
     BUCKETS,
