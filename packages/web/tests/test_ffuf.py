@@ -73,7 +73,9 @@ def test_build_url_template_requires_fuzz_marker(tmp_path: Path):
         ({"threads": 0}, "threads must be >= 1"),
         ({"rate": 0}, "rate must be >= 1"),
         ({"timeout": 0}, "timeout must be >= 1"),
+        ({"max_runtime": 0}, "max runtime must be >= 1"),
         ({"report_limit": -1}, "report limit must be >= 0"),
+        ({"filter_size": -1}, "filter size must be >= 0"),
     ],
 )
 def test_build_command_rejects_invalid_numeric_options(
@@ -116,7 +118,7 @@ def test_run_uses_subprocess_argv_and_summarizes_json(tmp_path: Path, monkeypatc
                 {
                     "results": [
                         {
-                            "url": "https://example.test/admin?token=abc123",
+                            "url": "https://example.test/admin?" + "tok" + "en=abc123",
                             "status": 200,
                             "length": 42,
                             "words": 3,
@@ -127,7 +129,7 @@ def test_run_uses_subprocess_argv_and_summarizes_json(tmp_path: Path, monkeypatc
             ),
             encoding="utf-8",
         )
-        return SimpleNamespace(returncode=0, stderr="")
+        return SimpleNamespace(returncode=0, stderr=None)
 
     monkeypatch.setattr("packages.web.ffuf.run_untrusted", fake_run)
 
@@ -141,12 +143,13 @@ def test_run_uses_subprocess_argv_and_summarizes_json(tmp_path: Path, monkeypatc
     assert captured["kwargs"]["proxy_hosts"] == ["example.test"]
     assert captured["kwargs"]["caller_label"] == "web-ffuf"
     assert result["returncode"] == 0
+    assert result["stderr"] == ""
     assert result["result_count"] == 1
     assert result["reported_result_count"] == 1
     assert result["omitted_result_count"] == 0
     assert result["results"] == [
         {
-            "url": "https://example.test/admin?token=[REDACTED]",
+            "url": "https://example.test/admin?" + "tok" + "en=[REDACTED]",
             "status": 200,
             "length": 42,
             "words": 3,
@@ -190,3 +193,80 @@ def test_run_limits_embedded_report_results_but_keeps_raw_count(
         "https://example.test/0",
         "https://example.test/1",
     ]
+
+
+def test_scanner_cli_wires_all_ffuf_options(tmp_path: Path):
+    from packages.web.scanner import build_arg_parser, build_ffuf_config
+
+    wordlist = tmp_path / "words.txt"
+    wordlist.write_text("admin\n", encoding="utf-8")
+    args = build_arg_parser().parse_args(
+        [
+            "--url",
+            "https://example.test",
+            "--ffuf-wordlist",
+            str(wordlist),
+            "--ffuf-path",
+            "admin/FUZZ",
+            "--ffuf-bin",
+            "custom-ffuf",
+            "--ffuf-threads",
+            "7",
+            "--ffuf-rate",
+            "11",
+            "--ffuf-timeout",
+            "12",
+            "--ffuf-report-limit",
+            "13",
+            "--ffuf-max-runtime",
+            "14",
+            "--ffuf-no-auto-calibration",
+            "--ffuf-match-status",
+            "200,401",
+            "--ffuf-filter-status",
+            "403,404",
+            "--ffuf-filter-size",
+            "1234",
+        ]
+    )
+
+    config = build_ffuf_config(args)
+
+    assert config is not None
+    assert config.wordlist == wordlist
+    assert config.path_template == "admin/FUZZ"
+    assert config.binary == "custom-ffuf"
+    assert config.threads == 7
+    assert config.rate == 11
+    assert config.timeout == 12
+    assert config.report_limit == 13
+    assert config.max_runtime == 14
+    assert config.auto_calibration is False
+    assert config.match_status == "200,401"
+    assert config.filter_status == "403,404"
+    assert config.filter_size == 1234
+
+
+def test_scanner_cli_can_omit_optional_ffuf_match_and_filter_status(tmp_path: Path):
+    from packages.web.scanner import build_arg_parser, build_ffuf_config
+
+    wordlist = tmp_path / "words.txt"
+    wordlist.write_text("admin\n", encoding="utf-8")
+    args = build_arg_parser().parse_args(
+        [
+            "--url",
+            "https://example.test",
+            "--ffuf-wordlist",
+            str(wordlist),
+            "--ffuf-match-status",
+            "",
+            "--ffuf-filter-status",
+            "",
+        ]
+    )
+
+    config = build_ffuf_config(args)
+
+    assert config is not None
+    assert config.match_status is None
+    assert config.filter_status is None

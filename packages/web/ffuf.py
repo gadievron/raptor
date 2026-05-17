@@ -190,7 +190,7 @@ class FfufRunner:
             "reported_result_count": len(summarized_results),
             "omitted_result_count": max(0, len(results) - len(summarized_results)),
             "results": summarized_results,
-            "stderr": self._redact(completed.stderr.strip()),
+            "stderr": self._redact((completed.stderr or "").strip()),
         }
 
     def _summarize_result(self, result: dict[str, Any]) -> dict[str, Any]:

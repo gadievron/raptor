@@ -134,11 +134,9 @@ class WebScanner:
         return report
 
 
-def main():
-    """CLI entry point for web scanner."""
+def build_arg_parser():
+    """Build the CLI parser for the web scanner."""
     import argparse
-    import time
-    from core.config import RaptorConfig
 
     parser = argparse.ArgumentParser(
         description="RAPTOR Web Application Security Scanner",
@@ -179,11 +177,65 @@ Examples:
         help="Maximum ffuf matches to copy into web_scan_report.json; raw JSON is always kept (default: 50)",
     )
     parser.add_argument(
+        "--ffuf-max-runtime",
+        type=int,
+        default=300,
+        help="Maximum sandboxed ffuf runtime in seconds (default: 300)",
+    )
+    parser.add_argument(
+        "--ffuf-no-auto-calibration",
+        action="store_true",
+        help="Disable ffuf auto-calibration (-ac is enabled by default)",
+    )
+    parser.add_argument(
+        "--ffuf-match-status",
+        default="200,204,301,302,307,401,403,405,500",
+        help="ffuf match status codes for -mc; pass an empty string to omit -mc",
+    )
+    parser.add_argument(
+        "--ffuf-filter-status",
+        default="404",
+        help="ffuf filter status codes for -fc; pass an empty string to omit -fc",
+    )
+    parser.add_argument(
+        "--ffuf-filter-size",
+        type=int,
+        help="Optional ffuf response size filter for -fs",
+    )
+    parser.add_argument(
         "--reveal-secrets",
         action="store_true",
         help="Preserve secrets in web artifacts for local debugging; defaults to redaction",
     )
+    return parser
 
+
+def build_ffuf_config(args) -> Optional[FfufConfig]:
+    """Convert parsed CLI args into an optional ffuf configuration."""
+    if not args.ffuf_wordlist:
+        return None
+    return FfufConfig(
+        wordlist=args.ffuf_wordlist,
+        path_template=args.ffuf_path,
+        threads=args.ffuf_threads,
+        rate=args.ffuf_rate,
+        timeout=args.ffuf_timeout,
+        max_runtime=args.ffuf_max_runtime,
+        report_limit=args.ffuf_report_limit,
+        binary=args.ffuf_bin,
+        auto_calibration=not args.ffuf_no_auto_calibration,
+        match_status=args.ffuf_match_status or None,
+        filter_status=args.ffuf_filter_status or None,
+        filter_size=args.ffuf_filter_size,
+    )
+
+
+def main():
+    """CLI entry point for web scanner."""
+    import time
+    from core.config import RaptorConfig
+
+    parser = build_arg_parser()
     args = parser.parse_args()
 
     # Determine output directory
@@ -222,17 +274,7 @@ Examples:
 
     # Run scan
     verify_ssl = not args.insecure
-    ffuf_config = None
-    if args.ffuf_wordlist:
-        ffuf_config = FfufConfig(
-            wordlist=args.ffuf_wordlist,
-            path_template=args.ffuf_path,
-            threads=args.ffuf_threads,
-            rate=args.ffuf_rate,
-            timeout=args.ffuf_timeout,
-            report_limit=args.ffuf_report_limit,
-            binary=args.ffuf_bin,
-        )
+    ffuf_config = build_ffuf_config(args)
 
     scanner = WebScanner(
         args.url,
