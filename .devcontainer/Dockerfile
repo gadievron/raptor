@@ -69,7 +69,8 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 # SEMGREP (static-analysis, scan, raptor-scan, agentic commands)
 # ============================================================================
 
-RUN pip install --no-cache-dir semgrep==1.161.0
+ARG SEMGREP_VERSION=1.162.0
+RUN pip install --no-cache-dir semgrep==${SEMGREP_VERSION}
 
 # ============================================================================
 # RR DEBUGGER (rr-debugger skill, crash-analysis agents)
@@ -136,12 +137,13 @@ RUN apt-get update \
 # Capture-then-execute the nodesource setup script so a curl failure isn't
 # silently swallowed by the pipeline (curl | bash ignores curl's exit status).
 # Node 22 is the current LTS; Node 20 went EOL April 2026.
+ARG CLAUDE_CODE_VERSION=2.1.138
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource_setup.sh \
     && bash /tmp/nodesource_setup.sh \
     && rm /tmp/nodesource_setup.sh \
     && apt-get install -y --no-install-recommends nodejs \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
-    && npm install -g @anthropic-ai/claude-code@2.1.119
+    && npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
 # ============================================================================
 # JS PACKAGE MANAGERS (npm-managed yarn — apt source + package removed above)
