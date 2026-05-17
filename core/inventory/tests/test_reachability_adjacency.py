@@ -1177,6 +1177,8 @@ class TestFullyQualifiedCallIndexFastPath:
     caller's chain literally spells the target's qualified name."""
 
     def test_java_fully_qualified(self):
+        import pytest
+        pytest.importorskip("tree_sitter_java")
         from core.inventory.call_graph import extract_call_graph_java
 
         util = extract_call_graph_java(
@@ -1215,6 +1217,8 @@ class TestFullyQualifiedCallIndexFastPath:
         )
 
     def test_php_global_qualified(self):
+        import pytest
+        pytest.importorskip("tree_sitter_php")
         from core.inventory.call_graph import extract_call_graph_php
 
         util = extract_call_graph_php(
@@ -1243,6 +1247,8 @@ class TestFullyQualifiedCallIndexFastPath:
         )
 
     def test_csharp_fully_qualified(self):
+        import pytest
+        pytest.importorskip("tree_sitter_c_sharp")
         from core.inventory.call_graph import extract_call_graph_csharp
 
         util = extract_call_graph_csharp(
@@ -1276,6 +1282,8 @@ class TestFullyQualifiedCallIndexFastPath:
     def test_call_lines_recorded_for_fast_path(self):
         """The fast-path edge construction calls _record_call_line,
         so ``call_lines_of(caller, target)`` returns the right line."""
+        import pytest
+        pytest.importorskip("tree_sitter_java")
         from core.inventory.call_graph import extract_call_graph_java
 
         util = extract_call_graph_java(
