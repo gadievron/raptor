@@ -3906,6 +3906,12 @@ class _CppCallGraph(_CCallGraph):
     def __init__(self) -> None:
         super().__init__()
         self._class_stack: List[ClassDef] = []
+        # Namespace nesting stack. Each entry is a segment name
+        # (e.g. ``ns`` for ``namespace ns { ... }``; ``a``, ``b``
+        # for ``namespace a::b { ... }``). The dotted join feeds
+        # ``graph.package_name`` for resolver canonicalisation —
+        # parity with Java/C#/PHP/Ruby/Go.
+        self._ns_stack: List[str] = []
 
     # ------------------------------------------------------------------
     # Walk dispatch
@@ -3916,6 +3922,9 @@ class _CppCallGraph(_CCallGraph):
         if t == self._PREPROC_INCLUDE:
             self._visit_include(node)
             return
+        if t == self._NAMESPACE_DEFINITION:
+            self._visit_namespace_definition(node)
+            return
         if t in (self._CLASS_SPECIFIER, self._STRUCT_SPECIFIER):
             self._visit_class_specifier(node)
             return  # children are visited inside _visit_class_specifier
@@ -3925,8 +3934,52 @@ class _CppCallGraph(_CCallGraph):
         if t == self._CALL_EXPRESSION:
             self._visit_call(node)
             # Fall through — nested calls in arg list still walked.
+        if t == "field_initializer":
+            self._visit_field_initializer(node)
+            # Fall through — nested calls inside the argument_list
+            # (e.g. ``Base(helper())``) still need to be walked.
         for child in node.children:
             self.walk(child)
+
+    # ------------------------------------------------------------------
+    # Namespace
+    # ------------------------------------------------------------------
+
+    def _visit_namespace_definition(self, node) -> None:
+        """``namespace ns { ... }`` / ``namespace a::b { ... }`` —
+        push namespace segments and walk the body. Anonymous
+        namespaces (``namespace { ... }`` with no name) push
+        nothing — the body's symbols have internal linkage but
+        no qualified-name prefix in the call graph."""
+        parts: List[str] = []
+        for c in node.children:
+            if c.type == "namespace_identifier":
+                parts.append(c.text.decode("utf-8", errors="replace"))
+            elif c.type == "nested_namespace_specifier":
+                # ``a::b`` — multiple namespace_identifier children.
+                for sub in c.children:
+                    if sub.type == "namespace_identifier":
+                        parts.append(
+                            sub.text.decode("utf-8", errors="replace"),
+                        )
+        self._ns_stack.extend(parts)
+        if self._ns_stack:
+            self.graph.package_name = ".".join(self._ns_stack)
+        try:
+            for c in node.children:
+                self.walk(c)
+        finally:
+            for _ in parts:
+                self._ns_stack.pop()
+            # Deepest-wins: don't decrement ``package_name`` when a
+            # nested namespace closes. ``namespace outer { namespace
+            # inner { ... } }`` should produce ``package_name=
+            # "outer.inner"`` (the deepest scope, where the class
+            # actually lives). Restoring to the outer dotted form on
+            # close would lose the inner segment that's typically
+            # the more useful canonical form for cross-file
+            # canonicalisation. Matches Ruby's module-nesting
+            # convention.
 
     # ------------------------------------------------------------------
     # Class / struct
@@ -3964,13 +4017,21 @@ class _CppCallGraph(_CCallGraph):
 
     def _collect_method_declarations(self, class_node, cdef: ClassDef) -> None:
         """Scan a ``class_specifier`` / ``struct_specifier`` body for
-        method *declarations* (in addition to any inline definitions
-        already in the body). A method declaration is a
-        ``field_declaration`` that wraps a ``function_declarator``.
+        method *declarations* + *inline definitions*. Populates
+        ``cdef.methods`` BEFORE the body walk so receiver-class
+        inference works on the very first call site visited.
 
-        Out-of-line definitions don't appear here; the in-class
-        declaration is the load-bearing record for the method's
-        existence as far as receiver-class inference is concerned.
+        Three method shapes appear inside a class body:
+          * ``field_declaration`` — declared method (no body); has a
+            return-type child + function_declarator child.
+          * ``declaration`` — destructors / constructors (no return
+            type).
+          * ``function_definition`` — inline method with a body.
+            This is the typical shape for header-defined methods
+            and is what the original PR-527 pre-pass missed —
+            inline ``helper()`` calls from a sibling method
+            walked first would fail to find ``helper`` in the
+            methods set and miss receiver_class tagging.
         """
         body = None
         for c in class_node.children:
@@ -3979,22 +4040,33 @@ class _CppCallGraph(_CCallGraph):
                 break
         if body is None:
             return
-        # Methods declared inside a class body come in two shapes:
-        #   * ``field_declaration`` — normal methods (have a return
-        #     type child + function_declarator child).
-        #   * ``declaration`` — destructors and constructors (no
-        #     return type, so the grammar doesn't fit the
-        #     ``field_declaration`` shape).
         for member in body.children:
-            if member.type not in (self._FIELD_DECLARATION, "declaration"):
+            # ``template<T> T get();`` and ``template<T> void m() {}``
+            # wrap the declaration / function_definition inside a
+            # ``template_declaration`` node. Unwrap one level so the
+            # inner declarator is reachable from the same loop.
+            target = member
+            if target.type == self._TEMPLATE_DECLARATION:
+                for sub in target.children:
+                    if sub.type in (
+                        self._FIELD_DECLARATION, "declaration",
+                        self._FUNCTION_DEFINITION,
+                    ):
+                        target = sub
+                        break
+                else:
+                    continue
+            if target.type not in (self._FIELD_DECLARATION, "declaration",
+                                    self._FUNCTION_DEFINITION):
                 continue
-            for sub in member.children:
+            for sub in target.children:
                 if sub.type == self._FUNCTION_DECLARATOR:
                     name = self._declarator_name_cpp(sub)
                     if name:
                         cdef.methods.append(
-                            (name, member.start_point[0] + 1),
+                            (name, target.start_point[0] + 1),
                         )
+                    break
 
     def _class_name(self, node) -> Optional[str]:
         # class_specifier: "class" type_identifier base_class_clause? body
@@ -4006,7 +4078,9 @@ class _CppCallGraph(_CCallGraph):
     def _extract_bases(self, node) -> List[str]:
         """Parse ``: public Foo, protected Bar`` into ``["Foo",
         "Bar"]``. Access specifiers are dropped; only the type names
-        survive."""
+        survive. ``Foo<T>`` (template_type) base is reduced to
+        ``Foo`` — type args are erased for the same reason
+        template_function callees emit the bare name."""
         bases: List[str] = []
         for c in node.children:
             if c.type != self._BASE_CLASS_CLAUSE:
@@ -4020,6 +4094,16 @@ class _CppCallGraph(_CCallGraph):
                     parts = self._qualified_parts(sub)
                     if parts:
                         bases.append("::".join(parts))
+                elif sub.type == self._TEMPLATE_TYPE:
+                    inner = None
+                    for ti in sub.children:
+                        if ti.type == self._TYPE_IDENTIFIER:
+                            inner = ti
+                            break
+                    if inner is not None:
+                        bases.append(
+                            inner.text.decode("utf-8", errors="replace"),
+                        )
         return bases
 
     # ------------------------------------------------------------------
@@ -4035,11 +4119,19 @@ class _CppCallGraph(_CCallGraph):
                 self.walk(c)
             return
 
-        # In-class inline method: record method on the current class.
+        # In-class inline method: record method on the current
+        # class — UNLESS the pre-pass already captured it
+        # (collect_method_declarations now picks up function_definition
+        # too, so a second append here would duplicate the entry).
         if self._class_stack and qualified_class is None:
-            self._class_stack[-1].methods.append(
-                (name, node.start_point[0] + 1),
+            current_class = self._class_stack[-1]
+            method_line = node.start_point[0] + 1
+            already = any(
+                m_name == name and m_line == method_line
+                for m_name, m_line in current_class.methods
             )
+            if not already:
+                current_class.methods.append((name, method_line))
 
         # Push enclosing function name. For out-of-line methods, also
         # synthesise a transient ClassDef-like context so calls inside
@@ -4235,6 +4327,15 @@ class _CppCallGraph(_CCallGraph):
             # Override C base: field_expression in C++ may root on
             # ``this`` (own node type) rather than an identifier.
             return self._field_chain_cpp(node), False
+        if node.type == self._TEMPLATE_FUNCTION:
+            # ``get<int>()`` — callee is template_function wrapping
+            # an identifier + template_argument_list. Emit just the
+            # identifier; downstream tools match on the bare name,
+            # template args are erased.
+            for c in node.children:
+                if c.type == self._IDENTIFIER:
+                    return [c.text.decode("utf-8", errors="replace")], False
+            return None, False
         return super()._callee_chain(node)
 
     def _field_chain_cpp(self, node) -> Optional[List[str]]:
@@ -4247,16 +4348,42 @@ class _CppCallGraph(_CCallGraph):
         parts: List[str] = []
         cur = node
         while cur is not None and cur.type == self._FIELD_EXPRESSION:
+            # The field side is either a plain ``field_identifier``
+            # (``a.b``) or a ``template_method`` wrapping one
+            # (``a.b<T>()``). For the template case, recover the
+            # inner field_identifier — template args are dropped.
             field_node = None
             for c in cur.children:
                 if c.type == self._FIELD_IDENTIFIER:
                     field_node = c
+                elif c.type == "template_method":
+                    for sub in c.children:
+                        if sub.type == self._FIELD_IDENTIFIER:
+                            field_node = sub
+                            break
+                elif c.type == "dependent_name":
+                    # ``c.template put<int>()`` — dependent-name
+                    # disambiguation. Wraps ``template_method``
+                    # which wraps the field_identifier. Same
+                    # erasure: drop template args, keep the name.
+                    for sub in c.children:
+                        if sub.type == "template_method":
+                            for inner in sub.children:
+                                if inner.type == self._FIELD_IDENTIFIER:
+                                    field_node = inner
+                                    break
+                            break
+                        if sub.type == self._FIELD_IDENTIFIER:
+                            field_node = sub
+                            break
             if field_node is None:
                 return None
             parts.append(field_node.text.decode("utf-8", errors="replace"))
             operand = None
             for c in cur.children:
-                if c.is_named and c.type != self._FIELD_IDENTIFIER:
+                if c.is_named and c.type not in (
+                    self._FIELD_IDENTIFIER, "template_method",
+                ):
                     operand = c
                     break
             cur = operand
@@ -4273,6 +4400,32 @@ class _CppCallGraph(_CCallGraph):
             if not head:
                 return None
             return head + list(reversed(parts))
+        if cur.type == "compound_literal_expression":
+            # ``Foo{}.method()`` / ``vector<int>{}.size()`` — the
+            # operand is an unnamed temporary of type Foo. Recover
+            # the type name for the chain head so a target named
+            # ``Foo.method`` still matches; type args are erased
+            # (same as template_function callee handling). Loses
+            # namespace prefix (we'd need symbol resolution to
+            # know it).
+            type_name = self._compound_literal_type_name(cur)
+            if type_name is not None:
+                parts.append(type_name)
+                return list(reversed(parts))
+            return None
+        return None
+
+    def _compound_literal_type_name(self, node) -> Optional[str]:
+        """Pull the type's bare name from a compound_literal_expression.
+        Handles plain ``Foo{}`` (type_identifier) and templated
+        ``vector<int>{}`` (template_type → type_identifier)."""
+        for c in node.children:
+            if c.type == self._TYPE_IDENTIFIER:
+                return c.text.decode("utf-8", errors="replace")
+            if c.type == self._TEMPLATE_TYPE:
+                for sub in c.children:
+                    if sub.type == self._TYPE_IDENTIFIER:
+                        return sub.text.decode("utf-8", errors="replace")
         return None
 
     def _visit_call(self, node) -> None:
@@ -4301,6 +4454,51 @@ class _CppCallGraph(_CCallGraph):
             chain=chain,
             caller=caller,
             receiver_class=receiver_class,
+        ))
+
+    def _visit_field_initializer(self, node) -> None:
+        """Constructor initialiser list entry: ``Base(x)`` or
+        ``member_(0)``. The field_identifier child names either:
+          * a base class (delegating constructor call) — semantically
+            a call to ``Base::Base``;
+          * a data member (initialiser with value, not a call).
+        Without symbol-table access we can't distinguish, so emit
+        both as CallSite chains. Downstream resolver narrows via
+        the class context — a target named ``Base`` lookup matches
+        the base-constructor case; targets named after the member
+        get a benign no-op (member name isn't in any class's
+        methods list, so reachability returns NOT_CALLED).
+
+        Bare member-init ``m_(0)`` is over-reporting but contained.
+        Base-constructor delegation is the load-bearing case for
+        SCA reachability against subclass-of-known-base sinks.
+        """
+        name_node = None
+        for c in node.children:
+            if c.type == self._FIELD_IDENTIFIER:
+                name_node = c
+                break
+            if c.type == "template_method":
+                # ``Base<T>(args)`` — template form of init list entry.
+                # Drop template args; recover the inner field_identifier.
+                for sub in c.children:
+                    if sub.type == self._FIELD_IDENTIFIER:
+                        name_node = sub
+                        break
+                if name_node is not None:
+                    break
+        if name_node is None:
+            return
+        name = name_node.text.decode("utf-8", errors="replace")
+        caller = self._enclosing[-1] if self._enclosing else None
+        # No receiver_class tag — initialiser-list entries dispatch
+        # on the literal name (base class or member), not on the
+        # enclosing class's method set.
+        self.graph.calls.append(CallSite(
+            line=node.start_point[0] + 1,
+            chain=[name],
+            caller=caller,
+            receiver_class=None,
         ))
 
     def _infer_receiver_class(self, chain: List[str]) -> Optional[str]:
