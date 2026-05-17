@@ -91,10 +91,34 @@ class TestBinaryContextMap(unittest.TestCase):
 
 class TestDangerousImports(unittest.TestCase):
     def test_known_dangerous_imports_present(self):
-        self.assertIn("strcpy", _DANGEROUS_IMPORTS)
-        self.assertIn("system", _DANGEROUS_IMPORTS)
-        self.assertIn("DeviceIoControl", _DANGEROUS_IMPORTS)
-        self.assertIn("memcpy", _DANGEROUS_IMPORTS)
+        # Representatives from each composed category. The full
+        # taxonomy is exhaustively tested in core/tests/
+        # test_function_taxonomy.py; here we just confirm radare2_
+        # understand's composition still includes the major sink
+        # families.
+        self.assertIn("strcpy", _DANGEROUS_IMPORTS)         # string overflow
+        self.assertIn("scanf", _DANGEROUS_IMPORTS)          # scan-family
+        self.assertIn("memcpy", _DANGEROUS_IMPORTS)         # mem copy
+        self.assertIn("syslog", _DANGEROUS_IMPORTS)         # format-string
+        self.assertIn("system", _DANGEROUS_IMPORTS)         # exec
+        self.assertIn("calloc", _DANGEROUS_IMPORTS)         # alloc (size-tainted)
+        self.assertIn("recv", _DANGEROUS_IMPORTS)           # net ingest
+        self.assertIn("XML_Parse", _DANGEROUS_IMPORTS)      # parser
+        self.assertIn("atoi", _DANGEROUS_IMPORTS)           # integer parse
+        self.assertIn("mktemp", _DANGEROUS_IMPORTS)         # TOCTOU
+
+    def test_ubiquitous_functions_deliberately_absent(self):
+        """Curation invariant — ubiquitous fns are NOT in the fuzz-
+        priority composition because their import carries zero
+        signal (every binary has them)."""
+        for ubiq in ("malloc", "realloc", "free", "open", "fopen",
+                     "read", "write", "printf", "fprintf"):
+            self.assertNotIn(
+                ubiq, _DANGEROUS_IMPORTS,
+                msg=(f"{ubiq!r} is ubiquitous — should not be in "
+                     f"_DANGEROUS_IMPORTS. See core/function_taxonomy.py "
+                     f"docstring."),
+            )
 
     def test_entry_point_hints_cover_common_cases(self):
         self.assertIn("main", _ENTRY_POINT_HINTS)
