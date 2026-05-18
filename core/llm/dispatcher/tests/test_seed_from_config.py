@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from core.llm.dispatcher.auth import CredentialStore, seed_from_config
 
 
