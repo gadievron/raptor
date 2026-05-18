@@ -8,6 +8,7 @@ from core.orchestration.agentic_passes import (
     PostpassResult,
     ReachabilityPrepassResult,
 )
+from core.orchestration.funnel import bucket_orchestration_results
 
 __all__ = [
     "run_reachability_prepass",
@@ -16,4 +17,5 @@ __all__ = [
     "PrepassResult",
     "PostpassResult",
     "ReachabilityPrepassResult",
+    "bucket_orchestration_results",
 ]

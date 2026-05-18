@@ -38,6 +38,15 @@ class CCDispatchConfig:
     # thought they were setting. None means "no system prompt"
     # (pass-through).
     system_prompt: Optional[str] = None
+    # Default-True: sub-agents spawned by raptor's dispatch paths
+    # (cc_dispatch, build_detector) don't need MCP servers and
+    # shouldn't inherit the operator's ``~/.claude.json`` config.
+    # Without this, every sub-agent attempts MCP bootstrap, which
+    # under raptor's sandbox egress-allowlist produces a DENY for
+    # every non-allowlisted MCP host AND wastes startup time. Set
+    # False only if a caller genuinely needs MCP servers available
+    # inside the sub-agent (no current consumer does). (gh #549)
+    strict_mcp: bool = True
 
 
 def build_cc_command(config: CCDispatchConfig) -> list[str]:
@@ -64,6 +73,14 @@ def build_cc_command(config: CCDispatchConfig) -> list[str]:
         cmd.extend(["--output-format", "json"])
     if config.json_schema is not None:
         cmd.extend(["--json-schema", json.dumps(config.json_schema)])
+    if config.strict_mcp:
+        # ``--strict-mcp-config`` tells Claude Code to ignore
+        # ``~/.claude.json`` and any project-scope ``.mcp.json``,
+        # using only what's passed via ``--mcp-config``. Pairing it
+        # with an empty config (``{}``) gives a sub-agent zero MCP
+        # servers — the right posture for raptor's per-finding
+        # analysis dispatches.
+        cmd.extend(["--strict-mcp-config", "--mcp-config", "{}"])
     return cmd
 
 

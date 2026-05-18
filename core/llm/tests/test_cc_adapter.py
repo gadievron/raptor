@@ -23,6 +23,17 @@ class TestBuildCCCommand:
         assert cmd[cmd.index("--allowed-tools") + 1] == "Read,Grep,Glob"
         assert cmd[cmd.index("--max-budget-usd") + 1] == "1.00"
         assert "--output-format" in cmd
+        # gh #549: strict_mcp defaults to True so sub-agents don't
+        # inherit the operator's ~/.claude.json MCP servers.
+        assert "--strict-mcp-config" in cmd
+        assert cmd[cmd.index("--mcp-config") + 1] == "{}"
+
+    def test_strict_mcp_can_be_disabled(self):
+        # Opt-out path for any future consumer that genuinely needs MCP.
+        config = CCDispatchConfig(claude_bin="claude", strict_mcp=False)
+        cmd = build_cc_command(config)
+        assert "--strict-mcp-config" not in cmd
+        assert "--mcp-config" not in cmd
 
     def test_no_envelope(self):
         config = CCDispatchConfig(claude_bin="claude", capture_json_envelope=False)
