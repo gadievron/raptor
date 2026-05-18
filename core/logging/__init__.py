@@ -200,30 +200,49 @@ class RaptorLogger:
                 extra[k] = v
         return exc_info, stack_info, extra
 
-    def debug(self, message: str, **kwargs: Any) -> None:
+    # ── Level methods ──────────────────────────────────────────────
+    #
+    # All five accept the standard stdlib `logging.Logger` signature
+    # `(message, *args, **kwargs)` so format strings work natively:
+    #
+    #     logger.info("Processing %s files", count)
+    #     logger.warning("%(host)s failed: %(err)s", {"host": h, "err": e})
+    #
+    # `args` flows through to `self.logger.<level>(...)`; the stdlib
+    # `LogRecord.getMessage()` applies %-formatting lazily (only when
+    # a handler is at the right level), so DEBUG calls cost nothing
+    # when the configured level is WARNING.
+    #
+    # Pre-fix the signature was `(message, **kwargs)` — positional
+    # args raised `TypeError: info() takes 2 positional arguments but
+    # 3 were given`, forcing callers into eagerly-formatted f-strings.
+    # See `get_logger("name")` which already returned a raw stdlib
+    # `logging.Logger`; the two surfaces are now consistent.
+
+    def debug(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Log debug message."""
         exc_info, stack_info, extra = self._split_kwargs(kwargs)
-        self.logger.debug(message, extra=extra, exc_info=exc_info, stack_info=stack_info)
+        self.logger.debug(message, *args, extra=extra, exc_info=exc_info, stack_info=stack_info)
 
-    def info(self, message: str, **kwargs: Any) -> None:
+    def info(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Log info message."""
         exc_info, stack_info, extra = self._split_kwargs(kwargs)
-        self.logger.info(message, extra=extra, exc_info=exc_info, stack_info=stack_info)
+        self.logger.info(message, *args, extra=extra, exc_info=exc_info, stack_info=stack_info)
 
-    def warning(self, message: str, **kwargs: Any) -> None:
+    def warning(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Log warning message."""
         exc_info, stack_info, extra = self._split_kwargs(kwargs)
-        self.logger.warning(message, extra=extra, exc_info=exc_info, stack_info=stack_info)
+        self.logger.warning(message, *args, extra=extra, exc_info=exc_info, stack_info=stack_info)
 
-    def error(self, message: str, **kwargs: Any) -> None:
+    def error(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Log error message."""
         exc_info, stack_info, extra = self._split_kwargs(kwargs)
-        self.logger.error(message, extra=extra, exc_info=exc_info, stack_info=stack_info)
+        self.logger.error(message, *args, extra=extra, exc_info=exc_info, stack_info=stack_info)
 
-    def critical(self, message: str, **kwargs: Any) -> None:
+    def critical(self, message: str, *args: Any, **kwargs: Any) -> None:
         """Log critical message."""
         exc_info, stack_info, extra = self._split_kwargs(kwargs)
-        self.logger.critical(message, extra=extra, exc_info=exc_info, stack_info=stack_info)
+        self.logger.critical(message, *args, extra=extra, exc_info=exc_info, stack_info=stack_info)
 
     def log_job_start(self, job_id: str, tool: str, arguments: Dict[str, Any]) -> None:
         """Log job start event."""
