@@ -195,3 +195,35 @@ def test_discovery_finds_compose_files(tmp_path):
     ]
     assert len(composes) == 2
     assert all(m.ecosystem == "OCI" for m in composes)
+
+
+def test_fragment_file_skipped_quietly(tmp_path, caplog):
+    """Fragment-shape compose files (no top-level ``services:``,
+    first content line is indented) are silently skipped, not
+    WARN-logged. Grafana's ``devenv/docker/blocks/*/docker-compose.yaml``
+    files follow this pattern — they're meant to be ``include``d
+    into a parent compose file. Surfaced by the May 2026
+    200-project sweep against Grafana.
+    """
+    import logging
+    from packages.sca.parsers.compose import parse
+    p = tmp_path / "docker-compose.yaml"
+    p.write_text(
+        "  sensu-backend:\n"
+        "    image: sensu/sensu:latest\n"
+        "    ports:\n"
+        "      - \"3080:3000\"\n",
+        encoding="utf-8",
+    )
+    with caplog.at_level(logging.WARNING):
+        out = parse(p)
+    assert out == []
+    warn = [
+        r for r in caplog.records
+        if r.levelno >= logging.WARNING
+        and "YAML parse failed" in r.getMessage()
+    ]
+    assert warn == [], (
+        f"fragment compose file emitted WARN: "
+        f"{[r.getMessage() for r in warn]}"
+    )

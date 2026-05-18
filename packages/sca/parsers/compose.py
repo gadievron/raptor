@@ -81,13 +81,40 @@ def parse(path: Path) -> List[Dependency]:
             path,
         )
         return []
+    # Pre-check: real docker-compose files start with a top-level
+    # key at column 0 (``services:``, ``version:``, ``networks:``,
+    # ``volumes:``, ``configs:``, ``secrets:``, ``x-...``). Files
+    # whose first non-blank, non-comment line is INDENTED are
+    # fragments — meant to be ``include``d into a parent file,
+    # not parsed standalone. Grafana's ``devenv/docker/blocks/*/
+    # docker-compose.yaml`` files follow this pattern. Demoting
+    # the parse-failure log line to DEBUG for these because the
+    # fragment isn't operator-controllable content (vendored
+    # third-party / generated) and the WARN noise from a real
+    # 200-project sweep dominates the operator's view.
+    is_fragment = False
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        # First content line — if indented, this is a fragment.
+        if line != stripped:
+            is_fragment = True
+        break
+
     try:
         data = safe_load(text)
     except yaml.YAMLError as e:
-        logger.warning(
-            "sca.parsers.compose: YAML parse failed for %s: %s",
-            path, e,
-        )
+        if is_fragment:
+            logger.debug(
+                "sca.parsers.compose: skipping fragment %s: %s",
+                path, e,
+            )
+        else:
+            logger.warning(
+                "sca.parsers.compose: YAML parse failed for %s: %s",
+                path, e,
+            )
         return []
     if not isinstance(data, dict):
         return []
