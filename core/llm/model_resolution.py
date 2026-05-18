@@ -39,6 +39,14 @@ _INVENTORY: Optional[list[str]] = None
 _INVENTORY_PROBED: bool = False
 _INVENTORY_LOCK = threading.Lock()
 
+# Per-process dedupe of resolution log lines. The inventory is cached
+# but the resolver itself runs per-call: multiple readers of
+# ``models.json`` within one process otherwise each emit their own
+# "Resolved alias X -> Y" line, which is noisy and falsely implies
+# repeated network calls. Track which (alias -> resolved) pairs we've
+# already logged so each mapping logs exactly once.
+_LOGGED_RESOLUTIONS: set[tuple[str, str]] = set()
+
 
 def resolve_anthropic(name: str, api_key: Optional[str]) -> str:
     """Return the canonical Anthropic model ID for *name*.
@@ -88,10 +96,13 @@ def resolve_anthropic(name: str, api_key: Optional[str]) -> str:
 
     resolved = max(candidates)
     if resolved != name:
-        logger.info(
-            f"Resolved Anthropic model alias {name} -> {resolved} "
-            f"(from /v1/models inventory)"
-        )
+        pair = (name, resolved)
+        if pair not in _LOGGED_RESOLUTIONS:
+            _LOGGED_RESOLUTIONS.add(pair)
+            logger.info(
+                f"Resolved Anthropic model alias {name} -> {resolved} "
+                f"(from /v1/models inventory)"
+            )
     return resolved
 
 
@@ -161,6 +172,7 @@ def _reset_cache_for_tests() -> None:
     with _INVENTORY_LOCK:
         _INVENTORY = None
         _INVENTORY_PROBED = False
+        _LOGGED_RESOLUTIONS.clear()
 
 
 def _seed_cache_for_tests(inventory: list[str]) -> None:

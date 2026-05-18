@@ -201,9 +201,35 @@ def build_llm_config_from_flags(
 
     def _resolve_model(name: str, role: str):
         provider = provider_of(name)
-        entry: Dict[str, Any] = {"model": name, "provider": provider, "role": role}
+        # Operators may write either ``--model claude-haiku-4-5`` or
+        # ``--model anthropic/claude-haiku-4-5``; ``models.json``
+        # always stores the bare model under a ``provider`` key. When
+        # the input carries a ``provider/`` prefix, also gate the
+        # entry match by provider so two same-named entries under
+        # different providers (e.g. an ``ollama/llama-3`` local entry
+        # and a ``together/llama-3`` cloud entry) don't collide.
+        # Strip the prefix in the constructed entry too — leaving it
+        # in produces ``anthropic/anthropic/claude-haiku-4-5`` when
+        # downstream re-prepends the provider, and the SDK ships that
+        # to Anthropic which rejects it as an unknown model.
+        if "/" in name:
+            req_provider, bare = name.split("/", 1)
+        else:
+            req_provider, bare = None, name
+        entry: Dict[str, Any] = {"model": bare, "provider": provider, "role": role}
         for cfg_entry in _get_configured_models():
-            if cfg_entry.get("model") == name and cfg_entry.get("api_key"):
+            # Match against either the resolved model name or the
+            # operator's original alias. The Anthropic resolver
+            # rewrites ``model`` to the dated snapshot and stashes
+            # the alias in ``_configured_model``; without the alias
+            # compare, an entry whose ``model`` is now
+            # ``claude-haiku-4-5-20251001`` would miss ``--model
+            # claude-haiku-4-5``.
+            if req_provider and cfg_entry.get("provider") != req_provider:
+                continue
+            cfg_name = cfg_entry.get("model")
+            cfg_alias = cfg_entry.get("_configured_model")
+            if (cfg_name == bare or cfg_alias == bare) and cfg_entry.get("api_key"):
                 entry["api_key"] = cfg_entry["api_key"]
                 break
         mc = _model_config_from_entry(entry)
