@@ -247,9 +247,21 @@ def _get_or_start_dispatcher():
     if _active_dispatcher is not None:
         return _active_dispatcher
     try:
+        from core.llm.dispatcher.auth import CredentialStore, seed_from_config
         from core.llm.dispatcher.server import LLMDispatcher
         import uuid, atexit
-        _active_dispatcher = LLMDispatcher(run_id=f"raptor-{uuid.uuid4().hex[:8]}")
+        # CredentialStore.__init__ reads env vars. Operators who keep
+        # keys in ~/.config/raptor/models.json (the documented UX the
+        # startup banner advertises) need the explicit seed pass —
+        # without it the proxy 503s every request even though the
+        # config "looks" populated. Env-set keys win; seed only fills
+        # None slots.
+        creds = CredentialStore()
+        seed_from_config(creds)
+        _active_dispatcher = LLMDispatcher(
+            run_id=f"raptor-{uuid.uuid4().hex[:8]}",
+            creds=creds,
+        )
         atexit.register(_active_dispatcher.shutdown)
         return _active_dispatcher
     except Exception as exc:
